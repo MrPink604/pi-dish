@@ -17,7 +17,7 @@ import { type ProtocolRecord } from './wire-protocol';
 import { type RecoveryObserver } from './session-recovery';
 import type { ExtensionUIState, LaunchOptions, NativeSessionId, RunningToolCall } from './contracts';
 interface RPCLaunchOptions extends LaunchOptions {
-    cwd?: string;
+    cwd?: unknown;
 }
 interface PromptOptions {
     deliverAs?: 'steer' | 'followUp';

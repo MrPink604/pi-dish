@@ -19,12 +19,24 @@ export interface PilotSelectionOptions {
     thinking?: string | null;
     cwd?: string | null;
 }
-export interface NewSessionLaunchOptions extends PilotSelectionOptions {
+/** HTTP pilot selection precedes routine-store validation; no field is trusted yet. */
+export interface PilotValidationInput {
+    model?: unknown;
+    thinking?: unknown;
+    cwd?: unknown;
+}
+export interface NewSessionLaunchOptions {
+    model?: unknown;
+    thinking?: unknown;
+    cwd?: unknown;
     descriptor: HarnessDescriptor;
     name?: string | null;
     target?: HarnessLaunchTarget | null;
 }
-export interface ResumeSessionLaunchOptions extends NewSessionLaunchOptions {
+export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
+    descriptor: HarnessDescriptor;
+    name?: string | null;
+    target?: HarnessLaunchTarget | null;
     sessionFile: string;
 }
 export interface RpcResumeOptions extends PilotSelectionOptions {
@@ -41,8 +53,8 @@ export interface RestartPaneOptions {
 export interface SpawnHarnessOptions {
     descriptor: HarnessDescriptor;
     target: HarnessLaunchTarget;
-    args: readonly string[];
-    cwd?: string | null;
+    args: readonly unknown[];
+    cwd?: unknown;
     name?: string | null;
     hidden?: boolean;
     restartPane?: RestartPaneOptions | null;
@@ -82,11 +94,11 @@ export type LaunchOutcome = {
 };
 export interface SessionLaunchObservations {
     runHarnessModelCommand(descriptor: HarnessDescriptor, options: {
-        cwd?: string | null;
+        cwd?: unknown;
     }): Promise<unknown>;
 }
 export interface SessionLaunch {
-    validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotSelectionOptions): Promise<void>;
+    validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotValidationInput): Promise<void>;
     launchNewSession(options: NewSessionLaunchOptions): Promise<LaunchOutcome>;
     launchResumedSession(options: ResumeSessionLaunchOptions): Promise<LaunchOutcome>;
     resumeRpcSession(options: RpcResumeOptions): Promise<LaunchOutcome>;

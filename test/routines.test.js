@@ -169,6 +169,27 @@ test('deleting a routine keeps its ledger entries', () => {
   assert.equal(store.readInvocations()[0].routineName, 'nightly-review', 'the name is denormalized');
 });
 
+test('external partial records keep their fields and native version arithmetic across updates', () => {
+  const saved = { id: 'external', name: 42, prompt: 'old', promptVersion: '2', versions: [], extra: { retained: true } };
+  fs.writeFileSync(path.join(dishDir, 'routines.json'), JSON.stringify({
+    routines: { external: saved, wrongKey: { id: 'other' } },
+  }));
+  assert.deepEqual(store.listRoutines(), [saved]);
+  const updated = store.updateRoutine('external', { prompt: 'new' });
+  assert.equal(updated.promptVersion, '21');
+  assert.deepEqual(updated.versions, [{ version: '21', prompt: 'new', savedAt: updated.updatedAt }]);
+  assert.deepEqual(updated.extra, saved.extra);
+  assert.equal(updated.name, 42);
+
+  const run = { id: 'external-run', routineId: 'external', startedAt: '100', status: 'running', extra: 'kept' };
+  fs.writeFileSync(path.join(dishDir, 'routine-invocations.json'), JSON.stringify({ invocations: [run, { id: 1 }] }));
+  assert.deepEqual(store.readInvocations(), [run]);
+  const completed = store.updateInvocation(run.id, { status: 'completed', endedAt: '150', extra: 'ignored' });
+  assert.equal(completed.durationMs, 50);
+  assert.equal(completed.endedAt, '150');
+  assert.equal(completed.extra, 'kept');
+});
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------

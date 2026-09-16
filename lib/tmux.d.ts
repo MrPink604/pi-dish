@@ -22,8 +22,8 @@ export interface TmuxServer {
 /** Retain legacy environment interpolation, including undefined values. */
 export type SpawnEnvironment = Readonly<Record<string, unknown>>;
 interface PaneCommand {
-    cwd?: string | null;
-    command: readonly string[];
+    cwd?: unknown;
+    command: readonly unknown[];
     env?: SpawnEnvironment | null;
 }
 export interface SpawnOptions extends PaneCommand {

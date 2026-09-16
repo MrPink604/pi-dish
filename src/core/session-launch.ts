@@ -34,13 +34,26 @@ export interface PilotSelectionOptions {
   cwd?: string | null;
 }
 
-export interface NewSessionLaunchOptions extends PilotSelectionOptions {
+/** HTTP pilot selection precedes routine-store validation; no field is trusted yet. */
+export interface PilotValidationInput {
+  model?: unknown;
+  thinking?: unknown;
+  cwd?: unknown;
+}
+
+export interface NewSessionLaunchOptions {
+  model?: unknown;
+  thinking?: unknown;
+  cwd?: unknown;
   descriptor: HarnessDescriptor;
   name?: string | null;
   target?: HarnessLaunchTarget | null;
 }
 
-export interface ResumeSessionLaunchOptions extends NewSessionLaunchOptions {
+export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
+  descriptor: HarnessDescriptor;
+  name?: string | null;
+  target?: HarnessLaunchTarget | null;
   sessionFile: string;
 }
 
@@ -60,8 +73,8 @@ export interface RestartPaneOptions {
 export interface SpawnHarnessOptions {
   descriptor: HarnessDescriptor;
   target: HarnessLaunchTarget;
-  args: readonly string[];
-  cwd?: string | null;
+  args: readonly unknown[];
+  cwd?: unknown;
   name?: string | null;
   hidden?: boolean;
   restartPane?: RestartPaneOptions | null;
@@ -92,11 +105,11 @@ export type LaunchOutcome =
   | { kind: 'interrupted'; error: LifecycleInterruption; status: number };
 
 export interface SessionLaunchObservations {
-  runHarnessModelCommand(descriptor: HarnessDescriptor, options: { cwd?: string | null }): Promise<unknown>;
+  runHarnessModelCommand(descriptor: HarnessDescriptor, options: { cwd?: unknown }): Promise<unknown>;
 }
 
 export interface SessionLaunch {
-  validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotSelectionOptions): Promise<void>;
+  validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotValidationInput): Promise<void>;
   launchNewSession(options: NewSessionLaunchOptions): Promise<LaunchOutcome>;
   launchResumedSession(options: ResumeSessionLaunchOptions): Promise<LaunchOutcome>;
   resumeRpcSession(options: RpcResumeOptions): Promise<LaunchOutcome>;
@@ -236,7 +249,7 @@ function materializeLaunchWrapper(descriptor: HarnessDescriptor, token: string):
   return wrapperPath;
 }
 
-function injectLaunchWrapper(descriptor: HarnessDescriptor, args: readonly string[], wrapperPath: string | null): readonly string[] {
+function injectLaunchWrapper(descriptor: HarnessDescriptor, args: readonly unknown[], wrapperPath: string | null): readonly unknown[] {
   if (!wrapperPath) return args;
   const index = descriptor.wrapperEntrypoint === null ? -1 : args.indexOf(descriptor.wrapperEntrypoint);
   if (index < 0) throw new BridgeSocketConfigError(`${descriptor.label} launch args do not contain its wrapper entrypoint`);
@@ -254,7 +267,7 @@ function discoveryBridgeInstalled(descriptor: HarnessDescriptor, env: HarnessEnv
   } catch { return false; }
 }
 
-function stripLaunchWrapperArgs(descriptor: HarnessDescriptor, args: readonly string[]): string[] {
+function stripLaunchWrapperArgs(descriptor: HarnessDescriptor, args: readonly unknown[]): unknown[] {
   const index = descriptor.wrapperEntrypoint === null ? -1 : args.indexOf(descriptor.wrapperEntrypoint);
   const flag = args[index - 1];
   if (index < 1 || typeof flag !== 'string' || !flag.startsWith('-')) {
@@ -501,7 +514,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     return run;
   }
 
-  async function validateHarnessPilotSelection(descriptor: HarnessDescriptor, { model, thinking, cwd }: PilotSelectionOptions): Promise<void> {
+  async function validateHarnessPilotSelection(descriptor: HarnessDescriptor, { model, thinking, cwd }: PilotValidationInput): Promise<void> {
     if (descriptor.id !== 'omp' || (!model && !thinking)) return;
     if (thinking && !model) throw new LaunchError('Choose an Oh My Pi model before overriding its thinking level.', 400);
     const models = await observations.runHarnessModelCommand(descriptor, { cwd });
@@ -509,7 +522,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       ? models.find((entry: unknown) => pilotModel(entry) && (entry.selector === model || `${entry.provider}/${entry.id}` === model))
       : undefined;
     if (!pilotModel(selected)) throw new LaunchError(`Model ${model} is not available from Oh My Pi in this working directory.`, 400);
-    if (thinking && !selected.thinking?.includes(thinking)) {
+    if (thinking && !selected.thinking?.some(level => level === thinking)) {
       const valid = selected.thinking?.length ? selected.thinking.join(', ') : 'none';
       throw new LaunchError(`Thinking level ${thinking} is not valid for ${model}; valid levels: ${valid}.`, 400);
     }
@@ -517,7 +530,8 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
 
   async function launchNewSession({ descriptor, name, model, thinking, cwd, target }: NewSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
-      if (cwd && cwd.startsWith('~')) cwd = path.join(process.env.HOME!, cwd.slice(1).replace(/^\//, ''));
+      // Original dynamic calls own malformed-cwd failures; the assertions do not validate cwd.
+      if (cwd && (cwd as string).startsWith('~')) cwd = path.join(process.env.HOME!, (cwd as string).slice(1).replace(/^\//, ''));
       const args = descriptor.argv.new({ model: model ?? undefined, thinking: thinking ?? undefined });
       if (target?.type === 'tmux') return await spawnHarnessInTmux({ descriptor, target, args, cwd, name });
       if (headlessTmuxEnabled(descriptor)) {

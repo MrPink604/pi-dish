@@ -196,6 +196,41 @@ test('RPC startup rejects an unroutable session id without retrying and stops it
   }
 });
 
+test('direct RPC file URL cwd metadata matches the actual child filesystem path', async () => {
+  const { pathToFileURL } = require('node:url');
+  const { createRPCSession } = require('../lib/rpc-session');
+  const directory = path.join(tmpHome, 'cwd space é #');
+  fs.mkdirSync(directory);
+  const rpc = await createRPCSession({ cwd: pathToFileURL(directory) });
+  try {
+    const actual = JSON.parse(fs.readFileSync(rpc.sessionFile, 'utf8').split('\n')[0]).cwd;
+    assert.equal(rpc.cwd, actual, 'published metadata must match the actual child directory');
+    assert.equal(rpc.cwd, directory);
+  } finally {
+    rpc.kill();
+  }
+});
+
+test('unrepresentable cwd metadata cleans its child and does not mask native spawn failure', async (t) => {
+  const childProcess = require('node:child_process');
+  const { createRPCSession } = require('../lib/rpc-session');
+  const nativeSpawn = childProcess.spawn;
+  let spawned;
+  t.mock.method(childProcess, 'spawn', (...args) => {
+    spawned = nativeSpawn(...args);
+    return spawned;
+  });
+  const cwd = Buffer.from(tmpHome);
+  await assert.rejects(createRPCSession({ cwd }), TypeError);
+  assert.equal(typeof spawned.pid, 'number', 'native launch succeeded before metadata failed');
+  assert.equal(processIdentity(spawned.pid), null, 'rejection waits for child cleanup');
+  assert.equal(getAllRPCSessions().some(rpc => rpc.proc.pid === spawned.pid), false);
+
+  const missing = require('node:url').pathToFileURL(path.join(tmpHome, 'missing-native-cwd'));
+  await assert.rejects(createRPCSession({ cwd: missing }), /failed to spawn pi:.*ENOENT/);
+  assert.equal(spawned.pid, undefined, 'native failure must precede metadata normalization');
+});
+
 test('POST /api/sessions/new rejects a blank session name', async () => {
   const { status, body } = await post('/api/sessions/new', { name: '   ' });
   assert.equal(status, 400);

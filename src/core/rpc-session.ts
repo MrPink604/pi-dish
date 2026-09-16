@@ -11,6 +11,8 @@
  * own buffering.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { once } from 'events';
+import { fileURLToPath } from 'url';
 import fs = require('fs');
 import os = require('os');
 import path = require('path');
@@ -25,7 +27,7 @@ import { createSessionObserver, type RecoveryObserver } from './session-recovery
 import type { ExtensionUIState, LaunchOptions, NativeSessionId, RunningToolCall } from './contracts';
 import { validSessionId } from './session-key';
 
-interface RPCLaunchOptions extends LaunchOptions { cwd?: string; }
+interface RPCLaunchOptions extends LaunchOptions { cwd?: unknown; }
 interface PromptOptions { deliverAs?: 'steer' | 'followUp'; images?: unknown[]; }
 type Listener = (data: unknown) => void;
 
@@ -360,7 +362,7 @@ const rpcSessions = new Map<NativeSessionId, RPCSession>(); // sessionId -> RPCS
  * Polls get_state until pi responds (instead of a blind fixed sleep).
  * @returns {Promise<RPCSession>}
  */
-async function _initRPCSession(proc: ChildProcessWithoutNullStreams, opts: RPCLaunchOptions = {}) {
+async function _initRPCSession(proc: ChildProcessWithoutNullStreams, opts: { cwd?: string | null } = {}) {
   const tempId = validatedNativeId(`rpc-${Date.now()}`);
   const session = new RPCSession(tempId, proc);
   session.cwd = opts.cwd || null;
@@ -430,7 +432,7 @@ async function _initRPCSession(proc: ChildProcessWithoutNullStreams, opts: RPCLa
  * @param {object} opts - { cwd, model, thinking }
  * @returns {Promise<RPCSession>}
  */
-function shellQuote(s: string) {
+function shellQuote(s: unknown) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
@@ -516,7 +518,7 @@ function getPiLaunchSpec() {
   return spec;
 }
 
-function spawnPi(args: string[], cwd: string | undefined) {
+function spawnPi(args: unknown[], cwd: unknown) {
   const spec = getPiLaunchSpec();
   const env = { ...process.env, ...spec.env };
   const argv = spec.argv.length ? spec.argv : ['pi'];
@@ -530,25 +532,45 @@ function spawnPi(args: string[], cwd: string | undefined) {
     // `pi` alias — quoting it (`'pi'`) suppresses alias expansion, defeating
     // the whole point of this escape hatch. Args are still quoted.
     const command = ['pi', ...args.map(shellQuote)].join(' ');
-    return spawn(shell, ['-ic', command], { cwd, stdio: ['pipe', 'pipe', 'pipe'], env });
+    // Native spawn owns cwd validation; no first-party coercion before it.
+    return spawn(shell, ['-ic', command], { cwd: cwd as string | undefined, stdio: ['pipe', 'pipe', 'pipe'], env });
   }
 
-  return spawn(argv[0], [...argv.slice(1), ...args], {
-    cwd,
+  // Native spawn retains legacy argument coercion/rejection; this does not validate saved selections.
+  return spawn(argv[0], [...argv.slice(1), ...args] as string[], {
+    cwd: cwd as string | undefined,
     stdio: ['pipe', 'pipe', 'pipe'],
     env,
   });
 }
 
 async function createRPCSession(opts: RPCLaunchOptions = {}) {
-  const args = ['--mode', 'rpc'];
+  const args: unknown[] = ['--mode', 'rpc'];
   if (opts.model) args.push('--model', opts.model);
   if (opts.thinking) args.push('--thinking', opts.thinking);
 
   const cwd = opts.cwd || process.env.HOME;
   const proc = spawnPi(args, cwd);
 
-  return _initRPCSession(proc, { cwd });
+  if (typeof cwd === 'string' || cwd === undefined) return _initRPCSession(proc, { cwd });
+  // A failed native spawn has no pid. Retain the initializer's existing native
+  // error path before attempting any metadata conversion.
+  if (proc.pid === undefined) return _initRPCSession(proc);
+  let metadataCwd: string;
+  try {
+    // File URL metadata is a path, not a URL string. Native-accepted byte cwd
+    // does not have matching decoding in async spawn; never guess its metadata.
+    if (!(cwd instanceof URL)) throw new TypeError('Cannot faithfully represent native RPC cwd metadata');
+    metadataCwd = fileURLToPath(cwd);
+  } catch (error) {
+    // No RPCSession owns this successfully spawned child yet. Await its actual
+    // close, and let any native error take precedence over the metadata failure.
+    const closed = once(proc, 'close');
+    proc.kill('SIGKILL');
+    await closed;
+    throw error;
+  }
+  return _initRPCSession(proc, { cwd: metadataCwd });
 }
 
 /**

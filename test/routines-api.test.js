@@ -25,7 +25,10 @@ process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS = '0';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
 const CMD_LOG = path.join(tmpHome, 'rpc-commands.jsonl');
+const START_LOG = path.join(tmpHome, 'rpc-starts.jsonl');
+process.env.PI_FIXTURE_START_LOG = START_LOG;
 process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} ${process.execPath} ${FIXTURE}`;
+process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp ${process.execPath} ${path.join(__dirname, 'fixtures', 'fake-pi.js')}`;
 
 const server = require('../server.js');
 const { getAllRPCSessions } = require('../lib/rpc-session');
@@ -149,6 +152,47 @@ test('validation errors are 400s and a duplicate name is a 409', async () => {
   assert.equal(second.status, 409);
   assert.match(second.body.error, /already exists/);
   await del('/api/routines/dupe-routine');
+});
+
+test('pilot errors precede definition errors without laundering untrusted selections', async () => {
+  const invalid = definition({ name: 'Invalid name', model: 123, thinking: null, cwd: 42 });
+  const omp = await post('/api/routines', { ...invalid, harness: 'omp' });
+  assert.equal(omp.status, 400);
+  assert.match(omp.body.error, /Model 123 is not available/);
+  const pi = await post('/api/routines', { ...invalid, harness: 'pi' });
+  assert.equal(pi.status, 400);
+  assert.match(pi.body.error, /name must be lowercase/);
+
+  const noModel = await post('/api/routines', { ...invalid, harness: 'omp', model: null, thinking: 7 });
+  assert.equal(noModel.status, 400);
+  assert.match(noModel.body.error, /Choose an Oh My Pi model/);
+  const badThinking = await post('/api/routines', {
+    ...invalid, harness: 'omp', model: 'zai/glm-5.2', thinking: 7,
+  });
+  assert.equal(badThinking.status, 400);
+  assert.match(badThinking.body.error, /Thinking level 7 is not valid/);
+  assert.equal((await get('/api/routines')).body.routines.some(row => row.name === invalid.name), false);
+});
+
+test('routine pilot updates distinguish absent selections from explicit null', async () => {
+  const created = await post('/api/routines', definition({
+    name: 'pilot-update', harness: 'omp', model: 'zai/glm-5.2', thinking: 'high',
+  }));
+  assert.equal(created.status, 201);
+  const resource = `/api/routines/${created.body.routine.id}`;
+  const unchanged = await put(resource, { description: 'same pilot' });
+  assert.equal(unchanged.status, 200);
+  assert.equal(unchanged.body.routine.model, 'zai/glm-5.2');
+  assert.equal(unchanged.body.routine.thinking, 'high');
+  const cleared = await put(resource, { model: null, thinking: null });
+  assert.equal(cleared.status, 200);
+  assert.equal(Object.hasOwn(cleared.body.routine, 'model'), false);
+  assert.equal(Object.hasOwn(cleared.body.routine, 'thinking'), false);
+  const invalidCwd = await put(resource, { cwd: null });
+  assert.equal(invalidCwd.status, 400);
+  assert.match(invalidCwd.body.error, /cwd is required/);
+  assert.equal((await get(resource)).body.routine.cwd, tmpHome);
+  await del(resource);
 });
 
 test('invoke spawns a session, delivers the prompt with the input block, completes and closes', async () => {
@@ -372,4 +416,56 @@ test('deleting a routine keeps its invocations readable', async () => {
   assert.equal(kept.body.invocation.routineName, 'ledger-routine', 'the denormalized name survives');
   assert.equal((await get(`/api/routines/${routine.id}/invocations`)).status, 404);
   assert.equal((await get('/api/routine-invocations/00000000-0000-0000-0000-000000000000')).status, 404);
+});
+
+test('saved raw launch selections retain native argv, cwd failure order and falsy fallback', async () => {
+  const { body: { routine } } = await post('/api/routines', definition({ name: 'raw-launch-routine' }));
+  const file = path.join(tmpHome, '.pi', 'dish', 'routines.json');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  Object.assign(saved.routines[routine.id], { model: 42, thinking: ['one', 'two'] });
+  fs.writeFileSync(file, JSON.stringify(saved));
+
+  const first = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
+  assert.equal(first.status, 200);
+  assert.equal(first.body.invocation.status, 'completed');
+  const started = fs.readFileSync(START_LOG, 'utf8').trim().split('\n').map(JSON.parse);
+  const child = started.find(row => path.basename(row.sessionFile, '.jsonl') === first.body.invocation.sessionId);
+  assert.deepEqual(child.args, ['--mode', 'rpc', '--model', '42', '--thinking', 'one,two']);
+  await waitFor(async () => (await invocation(first.body.invocation.id)).closed);
+
+  saved.routines[routine.id].cwd = 42;
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const before = fs.readFileSync(START_LOG, 'utf8');
+  const failed = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
+  assert.equal(failed.status, 200);
+  assert.equal(failed.body.invocation.status, 'errored');
+  assert.equal(failed.body.invocation.error, 'cwd.startsWith is not a function');
+  assert.equal(failed.body.invocation.sessionId, null);
+  assert.equal(fs.readFileSync(START_LOG, 'utf8'), before, 'cwd failure must precede native launch');
+
+  saved.routines[routine.id].cwd = 0;
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const fallback = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
+  assert.equal(fallback.body.invocation.status, 'completed');
+  const last = JSON.parse(fs.readFileSync(START_LOG, 'utf8').trim().split('\n').at(-1));
+  const header = JSON.parse(fs.readFileSync(last.sessionFile, 'utf8').split('\n')[0]);
+  assert.equal(header.cwd, tmpHome);
+  await waitFor(async () => (await invocation(fallback.body.invocation.id)).closed);
+  await del(`/api/routines/${routine.id}`);
+});
+
+test('raw saved continuation identity falls back to a fresh session without rewriting history', async () => {
+  const { body: { routine } } = await post('/api/routines', definition({ name: 'raw-ledger-routine', mode: 'continue' }));
+  const file = path.join(tmpHome, '.pi', 'dish', 'routine-invocations.json');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved.invocations.unshift({ id: 'external-raw-identity', routineId: routine.id, sessionId: 42, status: 'completed', startedAt: Date.now() - 1000 });
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const run = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
+  assert.equal(run.status, 200);
+  assert.equal(run.body.invocation.status, 'completed');
+  assert.equal(typeof run.body.invocation.sessionId, 'string');
+  assert.equal(run.body.invocation.error, null);
+  assert.equal((await invocation('external-raw-identity')).sessionId, 42);
+  assert.equal((await post(`/api/sessions/${run.body.invocation.sessionId}/close`, {})).status, 200);
+  await del(`/api/routines/${routine.id}`);
 });

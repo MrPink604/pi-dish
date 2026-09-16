@@ -71,8 +71,8 @@ The task documents separate delivered contracts from pending implementation:
    Fable approved implementation `8e89e99` without blocking findings.
 
 Each record separates delivered contracts, preserved behavior and
-verification/review status. Remaining general routes, parser projections, routine
-scheduling and feature stores are not made checked by importing these modules.
+verification/review status. Remaining general routes and feature stores are not
+made checked by importing these modules.
 
 All three plans have [Fable 5.1 high-effort signoff](../BACKLOG.md#next-stage-plan-review)
 for their clarified task definitions. This does not change the implementation
@@ -127,6 +127,8 @@ The integration lead, not this guide, records milestone acceptance.
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
 | `helper-{values,content,models,query,refs}.ts` | Portable shared primitives, content, model and query/reference behavior |
 | `helper-{format,identity,markdown,types}.ts` | Shared escaping/truncation, metadata text, explicit math-renderer provider and structural contracts |
+| `cron.ts`, `routines.ts`, `session-provenance.ts` | Local-time cron matching, raw routine definition/invocation storage and advisory launch provenance |
+| `routine-runner.ts`, `routine-handlers.ts` | Actual scheduling, restart reconciliation, invocation lifetime, prompt/ref composition and eight individually mounted HTTP handlers |
 
 The `session-*-contracts.ts` files describe the implemented source, metadata,
 index and catalog boundaries. Compile-time fixtures assign the real index/resolver
@@ -136,6 +138,25 @@ endpoint-owned host stamping. The legacy `decodeSessionMetadata` wire helper
 remains compatible for external callers and is not the browser state contract.
 Client projection only omits private fields and preserves server `Date` values
 until serialization; wire decoding is a separate boundary.
+
+M2's routine consumers retain raw persisted selections and ledger ids until their
+existing consuming operations. The runner uses the actual lifecycle coordinator
+and M1 reference-expansion implementation, not parallel dependency declarations.
+`server.js` retains registration/startup ordering and supplies observations; its
+former routine prompt and route-policy bodies are removed.
+
+New-launch argv/cwd remain unknown through native spawn/execFile boundaries.
+Resume options and identity/control authority remain typed. Direct RPC file-URL
+cwd now has filesystem-path metadata via `fileURLToPath`, **after** unchanged
+native launch. This is an explicitly authorized metadata-representation correction,
+not unchanged behavior for direct JavaScript callers. String metadata, falsy HOME
+fallback and absent-HOME null metadata are preserved. Node 26 asynchronous spawn
+accepts but ignores Buffer/Uint8Array cwd, unlike spawnSync; no matching byte-path
+decoding was established. Those values fail metadata normalization after native
+launch, await owned-child cleanup and never publish a session. Native launch
+errors retain precedence. No guessed cwd or broader output schema is introduced.
+The [M2 evidence](m2-evidence.json) records baseline comparisons, verification
+and the separate final-review status.
 
 `src/browser/session-state.ts` owns browser list/selection state and the existing
 generation guards. It compiles strictly into the local `public/app.js` bundle;
@@ -200,8 +221,9 @@ decision and packaging checks.
 paths listed by `source-policy.json`. Named type-negative fixtures require their
 diagnostic purpose; tsc still checks that their errors actually occur. Strings and
 template text are not directives. No explicit-any type-utility exception exists.
-The current gate covers `src/core`, `src/browser`, checked `lib/cron.js` and the
-named fixtures, not pending native extensions or remaining JS implementations.
+The current gate covers `src/core`, `src/browser` and the named fixtures, not
+pending native extensions or remaining JS implementations. Cron is now authored
+in `src/core/cron.ts`; its former checked-JS exception is removed.
 Every new migration compiler target must enroll its authored sources and fixtures.
 See the [M0 contract](m0-contracts.md#dependencies-and-authored-source-policy).
 
