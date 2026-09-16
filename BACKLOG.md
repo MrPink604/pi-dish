@@ -82,8 +82,9 @@ controller/port observations.
 | Browser contracts | Implemented, verified and reviewed | Readonly state/cache borrowing, decoded message ports and session-only model loading passed strict checks, 984 backend tests, 286 browser cases and both UI suites. Fable approved `811d473` without blocking findings. |
 | Shared runtime helpers | Implemented, locally verified and reviewed | Actual portable core source serves browser and Node consumers; 121 compatibility exports remain. Strict checks, 984 backend tests, 286 browser cases and UI suites passed. Fable approved `1cbd826` without blocking findings. |
 | Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
-| Remaining server application and feature modules | M1–M5 accepted; M7 pending | Checked reads, routines/provenance, publication/files, features and transport are integrated and verified. Final root implementation/compiler cutover remains M7. |
+| Server application and feature modules | M1–M5 and M7 accepted | Actual implementations and composition are checked; the policy-free root preserves the synchronous native server export. Required R simplifications remain open. |
 | Harness extensions and Electron shell | M6 accepted on Linux x64 | Strict edge programs and generated outputs, installed CLIs, real development/packaged Electron and native harness execution passed. macOS delivery is unverified; startup simplification remains R7. |
+| Test and tooling closure | C1 tools checkpoint accepted; C1/C2 open | Checked build/bootstrap/config bodies and exact-source CI are complete. Runner/support and behavioral-test families still require their own cutovers; R12 owns replacing the vendor loader. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
@@ -241,15 +242,22 @@ The [M3](docs/remaining-migration-plan.md#implementation-record--m3) and
 [M4](docs/remaining-migration-plan.md#implementation-record--m4) records include
 independent real publication/comment/browser and coverage-index refresh proofs,
 combined checks, 1,027 backend tests, 286 browser cases and both complete UI suites.
-M7 now has accepted domain contracts for the remaining checked root cutover.
-Shared root/build integration stays serialized; the mandatory simplification and
+Shared root/build integration remains serialized; the mandatory simplification and
 repository-closure phases remain open.
 
-1. **Finish product migration (M0–M7).** Freeze delivery/compiler contracts; migrate
-   the remaining session read/SDK/projection, routine, publication/file, feature,
-   fleet/terminal and runtime-edge implementations; finish checked server composition.
-   The inventory assigns all 30 remaining authored product JS files and the seven
-   extension TS files not yet covered by the main compiler programs.
+**M7 and the C1 tools checkpoint accepted (2026-09-16):** integrated together at
+`0e8faa1`, with [all five exact-commit CI jobs green](https://github.com/MrPink604/pi-dish/actions/runs/35123904656).
+The [M7 record](docs/remaining-migration-plan.md#implementation-record--m7)
+and [C1 tools record](docs/remaining-migration-plan.md#implementation-record--c1-tools-checkpoint)
+separate exact-source reviews, parent runtime/native-desktop proof and remaining
+closure scope. M0–M7 product migration is accepted. C1 is not complete from this
+tools-only checkpoint; all R packages and final repository closure remain required.
+
+1. **Product migration accepted (M0–M7).** Actual session-read/SDK/projection,
+   routine, publication/file, feature, fleet/terminal, runtime-edge and server
+   composition owners are checked. The original 30 authored product JS files and
+   seven uncovered extension TS files have their implemented compiler/runtime
+   owners; the small root launcher is policy-free and strict-checkJs.
 2. **Deliver simplifying refactors (R1–R12).** Explicit deletion ledgers cover
    duplicate projection/admission/coverage work, file/diff ownership, relay mechanics,
    extension replay/private-adapter ownership, startup/Electron readiness, browser

@@ -9,8 +9,8 @@ files are checked in at the existing `lib/` paths. Edit the TypeScript source,
 run `npm run build:core`, and include both source and generated output in the
 commit. `npm run check` rejects stale output. See [docs/typescript.md](docs/typescript.md)
 for the implemented boundaries. First-party browser application logic is authored
-in strict TypeScript under `src/browser/`; the server application and feature
-stores remain a separate migration stage.
+in strict TypeScript under `src/browser/`. Server composition and feature
+implementations live in `src/core/`; `server.js` is the checked, policy-free launcher.
 Browser session state lives in `src/browser/session-state.ts`; use its writers
 and selection guards from `app.ts` through its `createSessionState` import. Continue
 with vanilla TypeScript modules in `src/browser/`; regenerate and commit
@@ -20,6 +20,13 @@ with vanilla TypeScript modules in `src/browser/`; regenerate and commit
 browser-only helpers remain under `src/browser/`. Rebuild core before browser after
 shared changes; keep the 121 helper CommonJS/browser exports stable. Portability,
 drift and type checks are included in `npm run check`.
+
+Checked build/tool sources use sibling `.ts`/`.mts` files under `scripts/`.
+Run `npm run build:tools` after editing sources enrolled in `tsconfig.tools.json`;
+commit generated runtime files and declarations, preserving modes and shebangs.
+Playwright loads `playwright.config.ts` through its existing host transform;
+`eslint.config.js` is an explicitly retained, strict-checkJs host configuration.
+The remaining test/tool families are tracked separately in the migration plan.
 
 ## Start here
 
@@ -43,7 +50,10 @@ drift and type checks are included in `npm run check`.
 
 ```sh
 npm run check                         # correctness lint + incremental types
+npm run build:tools                   # regenerate checked build/tool entrypoints
 npm run build:core                    # regenerate lib/ after changing src/core/
+npm run build:browser                 # regenerate first-party browser scripts
+npm run build:edges                   # regenerate skill CLI and Electron outputs
 npm test                              # unit, API, bridge and lifecycle suites
 npm test -- test/remote-hosts.test.js   # example focused suite
 npm run test:browser                   # isolated browser scenarios

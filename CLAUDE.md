@@ -4,7 +4,8 @@ Contributor entrypoint: [AGENTS.md](AGENTS.md). Current work order:
 [BACKLOG.md](BACKLOG.md). This document retains the detailed architecture and
 implementation notes; historical task plans may describe superseded behavior.
 
-Web/phone remote control for pi coding-agent sessions. Express server (`server.js`)
+Web/phone remote control for pi coding-agent sessions. Checked Express composition
+(`src/core/server-app.ts`, launched by `server.js`)
 + vanilla TypeScript frontend (`src/browser/`, generated scripts in `public/`), plus an Electron shell (`electron/`) that loads
 the same server. Sessions are discovered three ways: live sessions via the
 pi-dish-bridge extension registry (`~/.pi/dish/sessions/*.json`, one Unix socket
@@ -21,13 +22,14 @@ npm start          # server on http://127.0.0.1:3333 (PORT/HOST env to override;
 npm test           # API + helper unit tests (node:test, test/*.test.js)
 npm run test:browser  # isolated Playwright scenarios
 npm run test:ui    # full desktop/mobile browser smoke
-npm run build:core  # regenerate typed foundation CommonJS/declarations in lib/
+npm run build:tools # regenerate checked scripts/*.ts and *.mts runtime outputs
+npm run build:core  # regenerate checked server CommonJS/declarations in lib/
 npm run build:browser # regenerate all first-party browser scripts in public/
 npm run build:edges   # regenerate skill CLIs, Electron and the OMP ESM share hook
 npm run build:vendor  # regenerate public/vendor/ from node_modules
 ```
 
-## Typed foundation (src/core/)
+## Checked server implementations (src/core/)
 
 `harnesses`, `session-capabilities`, `session-key`, `host-identity`, `dish-store`, `process-identity`,
 `pending-requests`, `wire-protocol`, `rpc-session`, `bridge-session`, `line-splitter`, and `running-tool-calls` are authored in
@@ -37,6 +39,20 @@ files. Edit the sources and run `npm run build:core`. `npm run check` compiles
 into a temporary directory and rejects mismatched or orphaned generated output.
 Node, Electron and harness consumers continue to execute the checked-in JS;
 do not run these sources directly, since runtime-relative paths belong to `lib/`.
+
+`src/core/server-app.ts` owns application composition, session controls, SSE and
+listener policy. Its generated `lib/server-app.js` receives the application root
+explicitly; assets, docs and package metadata must not resolve relative to `lib/`.
+The strict-checkJs launcher is only
+`module.exports = require('./lib/server-app').startServer(__dirname);`.
+It exports the actual initial native `http.Server` synchronously. Startup ordering
+and close behavior are preserved; the readiness redesign remains R7.
+
+`tsconfig.tools.json` checks actual build/tool implementations and emits their
+existing sibling runtime paths through `build:tools`; its generated bootstrap
+works before other tools are built. `tsconfig.configs.json` checks the real ESLint
+host configuration and Playwright TypeScript configuration. These checked tool
+boundaries do not complete the remaining C1 test/tool families.
 
 `src/core/contracts.ts` distinguishes host, native-session and route-session ids
 and describes harness launch/lifecycle metadata and reconnect tool snapshots.
@@ -49,8 +65,8 @@ immutable selection owners for its asynchronous callers. Details: [docs/typescri
 
 Lifecycle implementations now live in `src/core/session-{ownership,launch,operations}.ts`,
 `session-recovery.ts`, `tmux.ts`, `prime-lifecycle.ts`, `recovery-runner.ts` and
-`session-bounces.ts`. `server.js` composes one owner set; it no longer owns launch
-fallback, close/restart/resume flights, quarantine or recovery/Bounce action policy.
+`session-bounces.ts`. `server-app.ts` composes one owner set; launch fallback,
+close/restart/resume flights, quarantine and recovery/Bounce action policy stay with their owners.
 Routines receive the checked coordinator's methods directly. Definitions,
 invocation storage, scheduling, provenance and HTTP/prompt composition now live
 in `src/core/{cron,routines,routine-runner,session-provenance,routine-handlers}.ts`;
@@ -66,7 +82,7 @@ exports and public-artifact relay, retaining main/share-listener order.
 feature responses; root retains settings persistence, model-cache invalidation,
 observation and session mutation/control. Coverage label lookup uses the index
 accessor so appended latest-session data refreshes subsequent index consumers.
-Remaining root policy/checking is M7; coverage/store simplification is later work.
+The remaining root policy is now checked in `server-app.ts`; coverage/store simplification is later work.
 
 Native extension `.ts` files are checked without emission by
 `tsconfig.extensions.json`; use real SDK/TUI/TypeBox types and unknown host-only
@@ -75,7 +91,7 @@ for skills/Electron and ESM for the `.mts` share hook. `build:edges --check`
 is part of `npm run check`; generated CLI modes and first-line shebangs matter.
 `src/core/runtime-resources.ts` owns shipped external resource paths and the
 physical metadata-selected FFF import. Package metadata alone changes main to
-`electron/main.js`; root `server.js` still exports the listening HTTP server.
+`electron/main.js`; root `server.js` still exports the actual initial HTTP server.
 Keep docs/assets/SDK archive paths separate from external harness/skill paths,
 and unpack the complete FFF native dependency closure, not just binary files.
 
@@ -299,7 +315,7 @@ transcript/stat reads use the source and index without a full catalog scan.
 A subagent OMP runs is a full session of its own inside the parent's process
 (`<parent>/<agent>.jsonl`), and only one bridge registers per process — so a
 *working* subagent is never in the registry. `liveSubsessionCandidates`
-(server.js) surfaces them anyway: for each active session whose harness sets
+(`src/core/server-app.ts`) surfaces them anyway: for each active session whose harness sets
 `nestedSubsessions`, `discoverSubsessionCandidates` walks that one session's
 own directory (never the corpus — that is what `active=1` exists to avoid) and
 `readSessionTailEntry` decides liveness from the *last* JSONL entry. The
@@ -464,14 +480,14 @@ row) into one unqualified row, while rows that genuinely differ stay
 separate and carry their host label(s). `usageLimitsHtml` renders that
 merged view; the section vanishes when no host answers with reports.
 
-Server-side session dispatch: `getLiveSession(id)` in server.js is the one
+Server-side session dispatch: `getLiveSession(id)` in `src/core/server-app.ts` is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected
 BridgeSession, else alive RPCSession, else null). Don't re-roll the
 `getRegisteredSession ? getBridgeSession : getRPCSession` dance in routes;
 branch on `instanceof BridgeSession` only for genuinely backend-specific
 calls (setModel arg shapes, runCommand vs the RPC slash emulation).
 
-Remote `/reload` (`reloadBridgeSession` in server.js): the bridge triggers it
+Remote `/reload` (`reloadBridgeSession` in `src/core/server-app.ts`): the bridge triggers it
 via the captured AgentSession's `prompt("/dish-reload")`, **deferred a
 macrotask** — fired in the same tick, the reload's socket teardown outruns
 the run_command response frame. The server keeps two escape hatches: a
@@ -917,7 +933,7 @@ The CLI semantics that shape the server side: `omp config get <key>` is the
 (dotted sub-keys are unsupported, so it is always a whole-value write).
 A naive read(merged) → edit → set() would therefore copy a project's
 `.omp/config.yml` overrides into the global config permanently. So
-`readGlobalConfigValues` (server.js) runs the gets with cwd set to a **freshly
+`readGlobalConfigValues` (`src/core/harness-feature-settings.ts`) runs the gets with cwd set to a **freshly
 mkdtemp'd empty dir** — no project config to overlay, so merged == global — and
 the PUTs patch *that* record. Don't "simplify" it back to reading the cwd.
 Both GETs return the effective and global views; selects bind to global and show
@@ -1070,7 +1086,7 @@ exactly single-host pi-dish.
 Fleet transport is authored in `src/core/remote-hosts.ts`; access, relay and local
 terminal endpoint policy lives in `access-handlers.ts`, `relay-handlers.ts` and
 `terminal-handlers.ts`. Their generated `lib/` modules expose individual handlers;
-`server.js` keeps the original registration positions and upgrade dispatch order.
+`server-app.ts` keeps the original registration positions and upgrade dispatch order.
 Raw API, public artifact and parsed comment relays remain separate policies.
 
 - **Identity**: `GET /api/host` (always unauthenticated) → `{ hostId, label,
@@ -1429,7 +1445,7 @@ pi emits `message_update` on every delta, each carrying the **full message so
 far** — intermediates are droppable. The path is:
 
 1. Bridge extension broadcasts events over the session's Unix socket.
-2. `server.js` SSE (`/api/sessions/:id/stream`) forwards them, coalescing
+2. `src/core/server-app.ts` SSE (`/api/sessions/:id/stream`) forwards them, coalescing
    `message_update` per connection (~50ms window, latest wins). The legacy
    split events (`thinking`/`tool_call`/`tool_result`) are gone — everything
    streams through `message_update`.
@@ -1452,7 +1468,7 @@ a session mid-turn counts from connect.
 
 Extension UI (`extension_ui_request`: widgets, status badges, dialogs) is
 per-session state: the server remembers each live session's current set
-(`trackExtUIState` in server.js) and replays it into every new SSE
+(`trackExtUIState` in `src/core/server-app.ts`) and replays it into every new SSE
 connection; the client wipes the DOM on session switch (`clearExtensionUI`).
 Widget collapse state is remembered per session+key across switches.
 Status lines get their own strip under the header badges (`#extUiStatuses`,

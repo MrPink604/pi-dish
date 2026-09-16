@@ -1174,3 +1174,135 @@ complete product migration, the mandatory R packages, or C1/C2 closure.
 success for all six M3/M4 reviewers, then for both owners. Their histories remain
 available. The exact-commit CI observer exited successfully and its throwaway
 script was removed; its final run/job/step evidence was retained separately.
+
+### Implementation record — M7
+
+**Accepted by the integration lead on 2026-09-16.** Owner: OMP session
+`01a0aac9-75a0-750f-968b-29880a285368`, verified
+`openai-codex/gpt-6-astra`, High.
+
+- Whole reviewed source: `772f01be651d7d0e63f2d0f41c26f1281a7ff41d`.
+- Separate documentation-only attestation:
+  `753b962d0099f96caae4ba4133073bddc4d497f1`.
+- Parent integration with the C1 tools checkpoint:
+  `0e8faa1495065e9fcbdb1b70bea784dfb5baae53`.
+- [All five CI jobs passed on that exact main commit](https://github.com/MrPink604/pi-dish/actions/runs/35123904656):
+  checks/full backend on Node 22.19.0, 22.x, 24.x and 26.x; full browser,
+  all isolated scenarios and desktop/mobile smoke on Node 24. Parent inspected
+  the actual successful required steps, not only the workflow conclusion.
+
+**Delivered:** all remaining root composition policy is authored in
+`src/core/server-app.ts`, with generated flat `lib/server-app.js` and declaration.
+The [frozen inventory](m7-evidence.json) accounts for all 257 original top-level
+statements, all 2,499 original root lines and all 30 original product-policy rows.
+Only the zero-caller `apiIdForCandidate` helper was removed. The checked,
+policy-free root is exactly
+`module.exports = require('./lib/server-app').startServer(__dirname);`.
+It returns the actual initial native `http.Server` synchronously; application
+resources use the supplied root. Existing domain owners, all 113 ordered
+mount/listen calls, ownership/capability proofs, error precedence, cache,
+SSE/replay and listener/close behavior remain intact.
+
+**Independent review:** [all three whole-source ACCEPTs](m7-review.json) apply
+to the same `772f01be`: GLM `01a0aaf1-efa1-742c-82fd-bf048ee982c0`
+(`98335f88`), DeepSeek `01a0aaf1-f8f3-77c7-90a7-a9c83cceead1`
+(`48f38a40`), and Kimi `01a0aaf1-f46a-7381-8a35-594a0d4a6017`
+(`f0916092`). Parent independently read each verdict, resolved the exact
+`zai/glm-5.3`, `opencode-go/deepseek-v4.1-flash`, `kimi-code/k3` models,
+High/OMP provenance, and verified archive hashes, contiguous message indices
+and verbatim verdict equality. No source changed during review.
+DeepSeek and Kimi nevertheless ran compiler/source-policy checks despite the
+requested no-check review protocol; both deviations are retained, not hidden.
+GLM's fabricated-null-body “same 500 path” phrase is not endorsed as HTTP proof:
+some reads precede route try blocks, and mounted body-parser admission prevents
+that direct-handler state. There is no blanket native-error waiver.
+
+**Parent execution:** clean pinned `npm ci`, all four generation commands and
+`npm run check` passed: 258 compiler-owned sources, no explicit-any exceptions,
+all source/type/generated-output/mode gates. Full backend: 1,027 passed,
+zero failures/skips (32.27s). Browser: 286 passed; all eight isolated scenarios
+and full desktop/mobile/multi-host/same-id smoke passed (combined 292.56s).
+An initial build encountered missing declared development type packages in the
+installed tree; clean installation restored them and the entire chain passed.
+The cause of that installed-tree state was not established; no source workaround
+or dependency change was made.
+
+Independent isolated root and custom-root launches proved synchronous native
+server identity, real main/share readiness, API version/static/doc roots,
+publication on both listeners, share API exclusion and closure of both listeners.
+The parent built the Linux unpacked package and exercised actual Electron
+44.4.1/Node 24.21.0 development and packaged windows, local assets, real SDK,
+native PTY, depth-eight native FFF search, external-link dispatch and all three
+installed skill CLIs. Both screenshots were inspected. Native modules in the
+package loaded from `app.asar.unpacked`; evidence/screenshots remain in
+`/tmp/pd-m6c-proof-B78VJn`.
+
+**Additional evidence and limits:** the attestation embeds the complete
+supplemental cwd script/results: 12 raw-cwd variants, 192 real HTTP requests
+and 24 real WebSocket/native-PTY cases across baseline/final, with parity except
+validated random snapshot IDs. Parent read the script and all captured outcomes
+and verified its embedded hash. This is injected-port handler proof, not a claim
+of a full-root malformed-registry test or an additional valid-patch exercise.
+The owner's separate real Pi/OMP/Prime dev/package lifecycle proofs remain
+owner-executed evidence, not represented as parent reruns. macOS is unverified.
+The stale Electron root-checking comment is deliberately reserved for R7;
+repeated direct `startServer()` calls do not redefine the old cached launcher.
+
+**Cleanup and release:** isolated parent servers/windows closed; owned runtime
+fixtures, extracted smoke scripts and desktop fixture homes were removed while
+screenshots/results/logs were retained. No live product sessions or provider
+credentials were used. Contributor ownership/build guidance now reflects the
+checked root and tool bootstrap. M0–M7 product migration is accepted; R1–R12
+and full C1/C2 remain mandatory, separate work.
+
+### Implementation record — C1 tools checkpoint
+
+**Tools checkpoint accepted by the integration lead on 2026-09-16; C1 remains
+open.** Owner: OMP session `01a0aacf-378b-7454-a8ed-c7c5422991b6`,
+verified `openai-codex/gpt-6-astra`, High.
+
+- Reviewed source: `ed61fff9592183e28bb2f18c190ae13e31f7ceb4`.
+- Separate documentation-only attestation:
+  `fb98c2b8ba400d453797218c9cccb75b7f54dc32`.
+- Combined parent integration: `0e8faa1495065e9fcbdb1b70bea784dfb5baae53`,
+  with [all five exact-commit CI jobs and required steps successful](https://github.com/MrPink604/pi-dish/actions/runs/35123904656).
+
+**Delivered:** actual checked tool bodies for build-tools, core, browser, edges,
+vendor, source-policy and CI-failure reporting, with sibling generated runtime
+paths and declarations. The self-bootstrap preserves clean-install command paths,
+shebangs and modes, and rejects stale/missing/orphaned output.
+`tsconfig.tools.json` and `tsconfig.configs.json` check implementations, not
+declaration facades. Playwright uses its existing host transform to load
+`playwright.config.ts`; the named ESLint host exception remains strict-checkJs.
+No Node minimum, runtime TS loader or vendor-loader algorithm changed.
+The [execution inventory and proofs](c1-tools-evidence.json) retain all 247
+classified records, deferred families, original runtime consumers and mapping
+constraints. Their reported unchanged vendor/product bytes apply to the
+tools-only checkpoint, not to the combined M7 product cutover.
+
+**Independent review:** [all three whole-checkpoint ACCEPTs](c1-tools-review.json)
+cover the same `ed61fff`: GLM `01a0aae0-f575-7414-a8a2-41190d242a29`,
+DeepSeek `01a0aae0-fa3a-711d-93e2-45f1587038eb`, and
+Kimi `01a0aae0-fefb-70ac-a2a1-9cc133f9f61b`. Parent independently read final
+verdicts and verified exact models, High/OMP and source provenance.
+
+**Verification:** parent tools bootstrap `--check`, source-policy and actual
+Playwright TS-config discovery passed (286 cases in 54 files), followed by all
+combined builds/checks/backend/browser/scenario/UI/runtime gates recorded above.
+The owner additionally proved actual Node 22.19.0 tool/config execution,
+negative type/source/output/mode cases and explicit-file test forwarding.
+Its initial reserved-port listener failure and subsequent focused/full passes
+remain recorded; they were not hidden or “fixed” by changing product/tests.
+
+**Release boundary:** this accepted vendor-tool source/runner prerequisite and
+the accepted M product gate permit R12. The handwritten highlight loader is
+still present for R12 to remove. Remaining runner/support and behavioral-test
+families require their own checked implementation and stable-contract release;
+Playwright discovery must remain generated-JS-only before TS spec siblings land.
+No blanket tests/scripts exception or full C1/C2 completion is claimed.
+
+**Post-checkpoint work-session cleanup:** semantic graceful-close returned success
+for all three M7 reviewers, all three C1 tools reviewers and the M7 owner. Histories
+remain available; the C1 owner continues the remaining families. The exact-source
+CI observer exited successfully; its throwaway script was removed and its complete
+run/job/step evidence retained in `/tmp/pi-dish-parent-m7-c1-ci-result.json`.

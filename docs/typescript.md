@@ -9,10 +9,10 @@ the persistent index and catalog composition in `src/core/`. Closed session fiel
 and writer-specific patches continue through browser ingress, state and consumers.
 The stage record separates implementation, verification and external review.
 
-The shared foundation is complete within its defined scope. Browser application
-source migration is complete; scope, review and CI requirements are tracked in
-the roadmap. The server application and feature stores remain largely JavaScript.
-The original foundation introduced no UI framework, ESM runtime
+The shared foundation, browser and product server source migrations are
+implemented; their review and delivery gates are tracked in the roadmap.
+Server application and feature implementations are authored in `src/core/`;
+runtime edges have their own checked programs. The original foundation introduced no UI framework, ESM runtime
 migration or wire/store format change. Subsequent browser extractions use
 vanilla TypeScript and ordinary DOM rendering. The subsequent
 [composition cleanup](browser-composition-cleanup.md) bundles direct dependencies
@@ -24,8 +24,8 @@ The browser migration made controller inputs, request/view ownership and deliver
 strictly checked. It intentionally preserved much of the old data flow and
 classic-script composition. The catalog stage removed repeated normalization
 and competing metadata owners; the composition cleanup replaces the classic-script
-facade with ordinary imports and direct controller wiring. Remaining backend
-boundaries still need their own contracts and verification.
+facade with ordinary imports and direct controller wiring. External and deliberately
+opaque data still require the runtime checks at their consumed-field boundaries.
 
 `SessionEntry` exposes readonly closed `SessionFields`, including readonly
 capabilities; opaque external fields live in a separate `extras` object. Lists,
@@ -117,8 +117,8 @@ The task documents separate delivered contracts from pending implementation:
    Fable approved implementation `8e89e99` without blocking findings.
 
 Each record separates delivered contracts, preserved behavior and
-verification/review status. Remaining general routes and feature stores are not
-made checked by importing these modules.
+verification/review status. Those earlier stages alone did not check the remaining
+routes and feature stores; M1–M7 check their actual implementations.
 
 All three plans have [Fable 5.1 high-effort signoff](../BACKLOG.md#next-stage-plan-review)
 for their clarified task definitions. This does not change the implementation
@@ -129,10 +129,10 @@ now scopes the work beyond those delivered stages. M0–M7 finish actual product
 implementation/compiler boundaries; R1–R12 then remove specific duplicated
 responsibilities and awkward coupling, including in the already-typed browser;
 C1–C2 finish tests/tooling and enforce whole-repository coverage and delivery.
-The M0 [frozen delivery and worker contracts](m0-contracts.md) now name current
-and future compiler targets, exact handler modules/ports, native loader and package
-manifests, and the shared projection/artifact semantics. Future targets remain
-unimplemented until their owners land them; M0 does not convert the root launcher.
+The M0 [frozen delivery and worker contracts](m0-contracts.md) record the initial
+compiler targets, exact handler modules/ports, native loader and package
+manifests, and shared projection/artifact semantics. They remain a historical
+baseline, not a substitute for each implemented owner's source and delivery proof.
 The integration lead, not this guide, records milestone acceptance.
 
 ## Implemented foundation inventory
