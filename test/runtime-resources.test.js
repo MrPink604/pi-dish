@@ -1,0 +1,66 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const { runtimeResourcePath, fffImportSpecifier } = require('../lib/runtime-resources');
+
+const root = path.resolve('desktop resources');
+const archive = path.join(root, 'app.asar');
+
+test('checkout resources resolve from the application root, not lib or cwd', () => {
+  for (const resource of ['extensions/pi-dish-bridge-omp/index.ts', 'skills/pi-dish-sessions/scripts/pi-dish-sessions.js', 'lib/session-recovery.js', 'docs/agent/sessions.md']) {
+    assert.equal(runtimeResourcePath(root, resource), path.join(root, resource));
+  }
+});
+
+test('packaged external resources retain the extension, skill and lib sibling layout', () => {
+  const bridge = runtimeResourcePath(archive, 'extensions/pi-dish-bridge/core.ts');
+  const recovery = runtimeResourcePath(archive, 'lib/session-recovery.js');
+  const cli = runtimeResourcePath(archive, 'skills/pi-dish-sessions/scripts/pi-dish-sessions.js');
+  const client = runtimeResourcePath(archive, 'skills/lib/pi-dish-client.js');
+  assert.equal(bridge, path.join(`${archive}.unpacked`, 'extensions/pi-dish-bridge/core.ts'));
+  assert.equal(recovery, path.resolve(path.dirname(bridge), '../../lib/session-recovery.js'));
+  assert.equal(cli, path.join(`${archive}.unpacked`, 'skills/pi-dish-sessions/scripts/pi-dish-sessions.js'));
+  assert.equal(client, path.resolve(path.dirname(cli), '../../lib/pi-dish-client.js'));
+  assert.equal(runtimeResourcePath(`${archive}${path.sep}`, './skills/pi-dish-skill-refine/SKILL.md'),
+    path.join(`${archive}.unpacked`, 'skills/pi-dish-skill-refine/SKILL.md'));
+});
+
+test('packaged docs, assets and SDK paths remain in the archive', () => {
+  for (const resource of ['docs/agent/sessions.md', 'public/app.js', 'server.js', 'node_modules/@earendil-works/pi-coding-agent/dist/index.js', 'skills/../docs/agent/sessions.md', 'extensions-other/index.ts', 'lib/nested/private.js', 'lib/session-recovery.d.ts']) {
+    assert.equal(runtimeResourcePath(archive, resource), path.join(archive, resource));
+  }
+});
+
+test('an unpacked root or an archive-like checkout name is not rewritten', () => {
+  for (const applicationRoot of [`${archive}.unpacked`, `${archive}-checkout`, path.join(archive, 'project')]) {
+    assert.equal(runtimeResourcePath(applicationRoot, 'extensions/pi-dish-bridge-omp/index.ts'),
+      path.join(applicationRoot, 'extensions/pi-dish-bridge-omp/index.ts'));
+  }
+});
+
+test('FFF checkout imports retain standard package resolution without reading metadata', () => {
+  for (const applicationRoot of [root, `${archive}.unpacked`, `${archive}-checkout`]) {
+    assert.equal(fffImportSpecifier(applicationRoot), '@ff-labs/fff-node');
+  }
+});
+
+test('packaged FFF imports the physical import-only export, not main or a guessed entry', async t => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'dish-fff-resource-'));
+  t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
+  const appRoot = path.join(temporary, 'app.asar');
+  const packageRoot = path.join(`${appRoot}.unpacked`, 'node_modules/@ff-labs/fff-node');
+  fs.mkdirSync(packageRoot, { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({
+    type: 'module', main: './wrong.cjs', exports: { '.': { import: './native #entry.mjs' } },
+  }));
+  fs.writeFileSync(path.join(packageRoot, 'wrong.cjs'), 'throw new Error("wrong resolver");');
+  fs.writeFileSync(path.join(packageRoot, 'native #entry.mjs'), 'export const loadedFrom = import.meta.url;');
+  const loaded = await import(fffImportSpecifier(appRoot));
+  assert.equal(require('node:url').fileURLToPath(loaded.loadedFrom), path.join(packageRoot, 'native #entry.mjs'));
+  fs.writeFileSync(path.join(packageRoot, 'package.json'), JSON.stringify({ main: './wrong.cjs' }));
+  assert.throws(() => fffImportSpecifier(appRoot), /no supported ESM import entry/);
+});
