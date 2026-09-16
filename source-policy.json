@@ -1,0 +1,63 @@
+{
+  "programs": [
+    "tsconfig.core.json",
+    "tsconfig.browser.json",
+    "tsconfig.check.json"
+  ],
+  "roots": [
+    "src/core",
+    "src/browser"
+  ],
+  "files": [
+    "lib/cron.js"
+  ],
+  "negativeFixtures": [
+    "test/types/browser-anchored-comments.ts",
+    "test/types/browser-api.ts",
+    "test/types/browser-app.ts",
+    "test/types/browser-artifact-comments.ts",
+    "test/types/browser-bounce.ts",
+    "test/types/browser-composer-autocomplete.ts",
+    "test/types/browser-composer-drafts.ts",
+    "test/types/browser-composer-speech.ts",
+    "test/types/browser-directory.ts",
+    "test/types/browser-discovery.ts",
+    "test/types/browser-display.ts",
+    "test/types/browser-extension-ui.ts",
+    "test/types/browser-file-views.ts",
+    "test/types/browser-harness-settings.ts",
+    "test/types/browser-harnesses.ts",
+    "test/types/browser-hosts.ts",
+    "test/types/browser-live-transcript.ts",
+    "test/types/browser-message-render.ts",
+    "test/types/browser-message-stream.ts",
+    "test/types/browser-model-catalog.ts",
+    "test/types/browser-new-session-options.ts",
+    "test/types/browser-new-session.ts",
+    "test/types/browser-presentation.ts",
+    "test/types/browser-prompt-delivery.ts",
+    "test/types/browser-recovery.ts",
+    "test/types/browser-rich-text.ts",
+    "test/types/browser-routines.ts",
+    "test/types/browser-search-view.ts",
+    "test/types/browser-selectors.ts",
+    "test/types/browser-session-activity.ts",
+    "test/types/browser-session-controls.ts",
+    "test/types/browser-session-info.ts",
+    "test/types/browser-session-navigation.ts",
+    "test/types/browser-session-spawns.ts",
+    "test/types/browser-session-view.ts",
+    "test/types/browser-shared-helpers.ts",
+    "test/types/browser-sidebar-controls.ts",
+    "test/types/browser-sidebar-lists.ts",
+    "test/types/browser-sidebar-render.ts",
+    "test/types/browser-skills.ts",
+    "test/types/browser-state.ts",
+    "test/types/browser-targets.ts",
+    "test/types/browser-terminal.ts",
+    "test/types/browser-transcript-tree.ts",
+    "test/types/browser-transcript.ts",
+    "test/types/browser-usage-view.ts",
+    "test/types/core.ts"
+  ]
+}

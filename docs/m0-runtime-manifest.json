@@ -1,0 +1,62 @@
+{
+  "status": "M6c target contract; deliberately not active M0 builder configuration",
+  "rootPackageMain": "server.js",
+  "packageOnlyExtraMetadata": { "main": "electron/main.js" },
+  "asar": true,
+  "firstPartyFiles": [
+    "server.js",
+    "lib/*.js",
+    "public/**/*",
+    "electron/main.js",
+    "extensions/pi-dish-bridge/package.json",
+    "extensions/pi-dish-bridge/core.ts",
+    "extensions/pi-dish-bridge/index.ts",
+    "extensions/pi-dish-bridge/pi-private.ts",
+    "extensions/pi-dish-bridge-omp/index.ts",
+    "extensions/pi-dish-bridge-omp/native-state.ts",
+    "extensions/pi-dish-bridge-prime/index.ts",
+    "extensions/mood.ts",
+    "extensions/pi-dish-share-omp.mjs",
+    "skills/lib/pi-dish-client.js",
+    "skills/pi-dish-sessions/scripts/pi-dish-sessions.js",
+    "skills/pi-dish-comments/scripts/pi-dish-comments.js",
+    "skills/pi-dish-pages/scripts/pi-dish-pages.js",
+    "skills/*/SKILL.md",
+    "skills/*/agents/**/*",
+    "skills/*/references/**/*",
+    "docs/agent/*.md"
+  ],
+  "exclude": [
+    "src/**/*",
+    "test/**/*",
+    "scripts/**/*",
+    "tsconfig*.json",
+    "source-policy.json",
+    "eslint.config.js",
+    "playwright.config.js",
+    "skills/**/*.ts",
+    "electron/**/*.ts",
+    "extensions/pi-dish-share-omp.mts",
+    "**/*.d.ts",
+    "**/*.d.mts",
+    "**/*.map"
+  ],
+  "unpack": [
+    "lib/*.js",
+    "extensions/**/*",
+    "skills/**/*",
+    "**/*.node",
+    "**/*.so"
+  ],
+  "dependencyCollection": "electron-builder production dependency graph; never blanket node_modules/**/*",
+  "externalResourceRoot": "resources/app.asar.unpacked, preserving extension and skill sibling layout",
+  "inAppResourceRoot": "resources/app.asar",
+  "nativeAcceptance": [
+    "Electron ABI node-pty binary loads and creates isolated PTY",
+    "FFF native shared library loads from a real unpacked filesystem path",
+    "Pi SDK dynamic import works under embedded Node >=22.19.0",
+    "External harness native loader reads real unpacked extension TS paths",
+    "Installed skill scripts run through realpath links without a TS loader"
+  ],
+  "platformAcceptance": { "linux": "M6c actual package/window/feature proof required", "macOS": "not verified by M0 Linux probes" }
+}

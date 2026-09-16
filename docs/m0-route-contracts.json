@@ -1,0 +1,1918 @@
+{
+  "baseline": "37402f03294b51eeec14f893df1f7c72331301fa",
+  "status": "Frozen baseline inventory; future ports, not checked handler implementations",
+  "routes": [
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": null,
+      "lines": [
+        87,
+        99
+      ],
+      "consumes": [
+        "app",
+        "compression"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": null,
+      "lines": [
+        104,
+        109
+      ],
+      "consumes": [
+        "app",
+        "parseJsonBody"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": null,
+      "lines": [
+        190,
+        201
+      ],
+      "consumes": [
+        "AUTH_TOKEN",
+        "allowedOrigins",
+        "app"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": null,
+      "lines": [
+        203,
+        203
+      ],
+      "consumes": [
+        "app",
+        "express",
+        "path"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": "/api",
+      "lines": [
+        209,
+        216
+      ],
+      "consumes": [
+        "AUTH_TOKEN",
+        "HOST_PATH_RE",
+        "STREAM_PATH_RE",
+        "app",
+        "bearerToken",
+        "ticketValid",
+        "tokenMatches"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/host",
+      "lines": [
+        256,
+        263
+      ],
+      "consumes": [
+        "PKG_VERSION",
+        "app",
+        "hostCapabilities",
+        "hostIdentity"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/auth/ticket",
+      "lines": [
+        265,
+        272
+      ],
+      "consumes": [
+        "AUTH_TOKEN",
+        "TICKET_PURPOSES",
+        "app",
+        "mintTicket"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": "/hosts",
+      "lines": [
+        298,
+        304
+      ],
+      "consumes": [
+        "AUTH_TOKEN",
+        "PROXY_STREAM_PATH_RE",
+        "app",
+        "bearerToken",
+        "ticketValid",
+        "tokenMatches"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": "/hosts/:name/api",
+      "lines": [
+        306,
+        312
+      ],
+      "consumes": [
+        "app",
+        "remoteHosts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/fleet-artifacts",
+      "lines": [
+        491,
+        513
+      ],
+      "consumes": [
+        "app",
+        "findRemoteByHostId",
+        "fleetArtifactPayload",
+        "fleetArtifacts",
+        "hostIdentity"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/fleet-artifacts",
+      "lines": [
+        515,
+        522
+      ],
+      "consumes": [
+        "app",
+        "fleetArtifactPayload",
+        "fleetArtifacts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/fleet-artifacts/:token",
+      "lines": [
+        524,
+        528
+      ],
+      "consumes": [
+        "app",
+        "fleetArtifacts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/hosts",
+      "lines": [
+        619,
+        652
+      ],
+      "consumes": [
+        "HOSTS_PROBE_DEADLINE_MS",
+        "PKG_VERSION",
+        "app",
+        "hostCapabilities",
+        "hostIdentity",
+        "remoteHosts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": "/api/sessions/:id",
+      "lines": [
+        708,
+        712
+      ],
+      "consumes": [
+        "app",
+        "sessionOperations"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions",
+      "lines": [
+        1050,
+        1066
+      ],
+      "consumes": [
+        "app",
+        "clientSessionRows",
+        "filterSessionsByQuery"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/resolve",
+      "lines": [
+        1085,
+        1109
+      ],
+      "consumes": [
+        "app",
+        "resolveRefInCatalog",
+        "stableSessionRef"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/related",
+      "lines": [
+        1180,
+        1234
+      ],
+      "consumes": [
+        "app",
+        "buildSessionCatalog",
+        "buildSourceSession",
+        "canonicalSessionPath",
+        "catalogOptions",
+        "getSessionInfo",
+        "historicalAdvice",
+        "path",
+        "relationSessionSummary",
+        "resolveSessionCandidate",
+        "sessionProvenance"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/lineage",
+      "lines": [
+        1242,
+        1326
+      ],
+      "consumes": [
+        "LINEAGE_DEPTH_CAP",
+        "LINEAGE_NODE_CAP_DEFAULT",
+        "app",
+        "buildSessionCatalog",
+        "buildSourceSession",
+        "canonicalSessionPath",
+        "catalogOptions",
+        "getSessionInfo",
+        "historicalAdvice",
+        "path",
+        "relationSessionSummary",
+        "resolveSessionCandidate",
+        "sessionProvenance"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/search",
+      "lines": [
+        1340,
+        1396
+      ],
+      "consumes": [
+        "SEARCH_RESULT_CAP",
+        "app",
+        "buildSessionCatalog",
+        "buildSnippets",
+        "evaluateSessionQuery",
+        "isAutomationSession",
+        "parseSessionQuery",
+        "positiveQueryTokens",
+        "queryAsksForAutomation",
+        "scoreSessionMatch",
+        "sessionIndex",
+        "sourceForIdentity"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/usage-summary",
+      "lines": [
+        1427,
+        1560
+      ],
+      "consumes": [
+        "addUsage",
+        "apiIdForCandidate",
+        "app",
+        "discoverHarnessSessions",
+        "emptyUsage",
+        "localDay",
+        "readDishSettings",
+        "refreshHarnessPricing",
+        "sessionIndex"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/usage-limits",
+      "lines": [
+        1584,
+        1603
+      ],
+      "consumes": [
+        "app",
+        "listHarnesses",
+        "normalizeUsageLimit"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/skills",
+      "lines": [
+        1723,
+        1759
+      ],
+      "consumes": [
+        "DAY_MS",
+        "app",
+        "enumerateSessionCandidates",
+        "knownWorkspaceCwds",
+        "resolveRefineConfig",
+        "sessionIndex",
+        "skillsLib",
+        "usageRollup",
+        "weeklyBuckets"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/skills/activations",
+      "lines": [
+        1764,
+        1787
+      ],
+      "consumes": [
+        "DAY_MS",
+        "WEEK_MS",
+        "app",
+        "enumerateSessionCandidates",
+        "sessionIndex"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/skills/coverage",
+      "lines": [
+        1792,
+        1886
+      ],
+      "consumes": [
+        "app",
+        "coveredLines",
+        "crypto",
+        "enumerateSessionCandidates",
+        "fs",
+        "getSessionInfo",
+        "path",
+        "sessionIndex",
+        "splitSections",
+        "usageRollup",
+        "weeklyBuckets"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/settings",
+      "lines": [
+        1918,
+        1918
+      ],
+      "consumes": [
+        "app",
+        "settingsForClient"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "put",
+      "path": "/api/settings",
+      "lines": [
+        1921,
+        1946
+      ],
+      "consumes": [
+        "DISH_SETTINGS_FILE",
+        "app",
+        "fs",
+        "path",
+        "readDishSettings",
+        "sanitizeSavedFilters",
+        "settingsForClient"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/messages/:messageId/images/:blockIndex",
+      "lines": [
+        1990,
+        2013
+      ],
+      "consumes": [
+        "VALID_ENTRY_ID_RE",
+        "app",
+        "imageBlockBytes",
+        "readSessionMessageById",
+        "readSessionMessages"
+      ],
+      "owner": "M1"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/messages",
+      "lines": [
+        2015,
+        2111
+      ],
+      "consumes": [
+        "BridgeSession",
+        "apiIdForCandidate",
+        "app",
+        "getLiveContextUsage",
+        "getLiveSession",
+        "getRPCSession",
+        "getRegisteredSession",
+        "liveSessionSupports",
+        "liveTreeLeafId",
+        "messageForClient",
+        "parseSessionFile",
+        "readSessionMessages",
+        "readSessionMessagesAtLeaf",
+        "refreshHarnessPricing",
+        "roundPercent",
+        "sessionIdentityFields",
+        "subsessionLabel"
+      ],
+      "owner": "M1"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/search",
+      "lines": [
+        2118,
+        2139
+      ],
+      "consumes": [
+        "app",
+        "extractTextContent",
+        "readSessionMessages"
+      ],
+      "owner": "M1"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/prompt",
+      "lines": [
+        2166,
+        2187
+      ],
+      "consumes": [
+        "app",
+        "expandSessionRefs",
+        "getLiveSession",
+        "liveSessionSupports",
+        "sanitizeImages",
+        "sessionRefDeps"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/steer",
+      "lines": [
+        2189,
+        2204
+      ],
+      "consumes": [
+        "app",
+        "expandSessionRefs",
+        "getLiveSession",
+        "liveSessionSupports",
+        "sanitizeImages",
+        "sessionRefDeps"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/follow-up",
+      "lines": [
+        2208,
+        2223
+      ],
+      "consumes": [
+        "app",
+        "expandSessionRefs",
+        "getLiveSession",
+        "liveSessionSupports",
+        "sanitizeImages",
+        "sessionRefDeps"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/queue/cancel",
+      "lines": [
+        2228,
+        2254
+      ],
+      "consumes": [
+        "BridgeSession",
+        "app",
+        "getLiveSession",
+        "liveSessionSupports"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/thinking",
+      "lines": [
+        2341,
+        2363
+      ],
+      "consumes": [
+        "ALL_THINKING_LEVEL_NAMES",
+        "app",
+        "getLiveSession",
+        "liveSessionSupports",
+        "thinkingLevelNamesFor",
+        "thinkingResult"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/stats",
+      "lines": [
+        2370,
+        2421
+      ],
+      "consumes": [
+        "apiIdForCandidate",
+        "app",
+        "describeRuntime",
+        "getLiveContextUsage",
+        "getRegisteredSession",
+        "getSessionStats",
+        "liveSessionHistoryPending",
+        "parseSessionFile",
+        "refreshHarnessPricing",
+        "sessionIdentityFields"
+      ],
+      "owner": "M1"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/export",
+      "lines": [
+        2444,
+        2462
+      ],
+      "consumes": [
+        "app",
+        "exportSessionHtml",
+        "liveSessionHistoryPending",
+        "os",
+        "path"
+      ],
+      "owner": "M1"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/shares/import",
+      "lines": [
+        2537,
+        2547
+      ],
+      "consumes": [
+        "app",
+        "express",
+        "sharePayload",
+        "shares",
+        "validOmpShareHtml"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/share",
+      "lines": [
+        2549,
+        2562
+      ],
+      "consumes": [
+        "app",
+        "liveSessionHistoryPending",
+        "sharePayload",
+        "shares"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/sessions/:id/share",
+      "lines": [
+        2564,
+        2571
+      ],
+      "consumes": [
+        "app",
+        "shareExportCache",
+        "shares"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/share",
+      "lines": [
+        2573,
+        2577
+      ],
+      "consumes": [
+        "app",
+        "sharePayload",
+        "shares"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/share/:token",
+      "lines": [
+        2580,
+        2580
+      ],
+      "consumes": [
+        "app",
+        "serveSharedSession"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "use",
+      "path": "/api/comments",
+      "lines": [
+        2693,
+        2699
+      ],
+      "consumes": [
+        "app",
+        "fleetPageTokenFor",
+        "remoteHosts"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/comments",
+      "lines": [
+        2750,
+        2767
+      ],
+      "consumes": [
+        "app",
+        "canonicalKnownSessionId",
+        "cleanCommentTarget",
+        "comments",
+        "inferSessionForPath",
+        "pages",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/comments/index",
+      "lines": [
+        2796,
+        2806
+      ],
+      "consumes": [
+        "app",
+        "commentIndexEntry",
+        "comments",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/comments/count",
+      "lines": [
+        2808,
+        2812
+      ],
+      "consumes": [
+        "app",
+        "comments",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/comments/get",
+      "lines": [
+        2816,
+        2830
+      ],
+      "consumes": [
+        "app",
+        "comments",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "patch",
+      "path": "/api/comments/:id",
+      "lines": [
+        2854,
+        2862
+      ],
+      "consumes": [
+        "app",
+        "comments",
+        "resolveOpenComment",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/comments/:id",
+      "lines": [
+        2864,
+        2870
+      ],
+      "consumes": [
+        "app",
+        "comments",
+        "resolveOpenComment"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/comments/:id/ack",
+      "lines": [
+        2872,
+        2882
+      ],
+      "consumes": [
+        "app",
+        "canonicalSessionId",
+        "comments"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/pages",
+      "lines": [
+        2916,
+        2962
+      ],
+      "consumes": [
+        "app",
+        "canonicalKnownSessionId",
+        "fs",
+        "inferSessionForPath",
+        "pagePayload",
+        "pages",
+        "path",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/pages",
+      "lines": [
+        2964,
+        2973
+      ],
+      "consumes": [
+        "app",
+        "canonicalSessionId",
+        "fs",
+        "pagePayload",
+        "pages"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/pages/:token",
+      "lines": [
+        2975,
+        2977
+      ],
+      "consumes": [
+        "app",
+        "pages"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/page/:token",
+      "lines": [
+        3052,
+        3052
+      ],
+      "consumes": [
+        "app",
+        "servePage"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/page/:token/*",
+      "lines": [
+        3053,
+        3058
+      ],
+      "consumes": [
+        "app",
+        "servePage"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/command",
+      "lines": [
+        3174,
+        3236
+      ],
+      "consumes": [
+        "BridgeSession",
+        "app",
+        "getHarness",
+        "getLiveSession",
+        "liveSessionSupports",
+        "parseHostBuiltin",
+        "reloadBridgeSession",
+        "runHostBuiltin",
+        "runRpcSlashCommand"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/ui-response",
+      "lines": [
+        3239,
+        3260
+      ],
+      "consumes": [
+        "app",
+        "getLiveSession",
+        "liveSessionSupports"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/rename",
+      "lines": [
+        3262,
+        3291
+      ],
+      "consumes": [
+        "app",
+        "getLiveSession",
+        "getRegisteredSession",
+        "liveSessionSupports",
+        "piSDK",
+        "tmux"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/model",
+      "lines": [
+        3293,
+        3321
+      ],
+      "consumes": [
+        "BridgeSession",
+        "app",
+        "getLiveSession",
+        "liveSessionSupports",
+        "parseModelId",
+        "piSDK"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/tree",
+      "lines": [
+        3323,
+        3371
+      ],
+      "consumes": [
+        "BridgeSession",
+        "app",
+        "getLiveSession",
+        "liveSessionSupports",
+        "piSDK",
+        "routeIdentity"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/branch",
+      "lines": [
+        3479,
+        3540
+      ],
+      "consumes": [
+        "BridgeSession",
+        "app",
+        "getLiveSession",
+        "liveSessionSupports",
+        "navigateLiveOmpTree",
+        "navigateLiveTree",
+        "piSDK",
+        "routeIdentity"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/harnesses",
+      "lines": [
+        3778,
+        3792
+      ],
+      "consumes": [
+        "agentSettingsSupported",
+        "app",
+        "harnessCommandAvailable",
+        "listHarnesses"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/harnesses/:id/config",
+      "lines": [
+        3795,
+        3809
+      ],
+      "consumes": [
+        "app",
+        "getHarness",
+        "readHarnessPilotConfig"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "put",
+      "path": "/api/harnesses/:id/model-roles",
+      "lines": [
+        3814,
+        3855
+      ],
+      "consumes": [
+        "MODEL_ROLE_KEY",
+        "MODEL_ROLE_VALUE_MAX",
+        "app",
+        "getHarness",
+        "queueHarnessConfigWrite",
+        "readGlobalModelRoles",
+        "runHarnessJsonCommand",
+        "sanitizeModelRoles"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/harnesses/:id/agents",
+      "lines": [
+        3859,
+        3878
+      ],
+      "consumes": [
+        "agentSettingsSupported",
+        "app",
+        "getHarness",
+        "listTaskAgents",
+        "readAgentSettings",
+        "runHarnessJsonCommand"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "put",
+      "path": "/api/harnesses/:id/agents",
+      "lines": [
+        3883,
+        3961
+      ],
+      "consumes": [
+        "AGENT_NAME_KEY",
+        "MODEL_ROLE_VALUE_MAX",
+        "agentSettingKeyList",
+        "agentSettingsSupported",
+        "app",
+        "getHarness",
+        "queueHarnessConfigWrite",
+        "readAgentSettings",
+        "readGlobalConfigValues",
+        "runHarnessJsonCommand",
+        "shapeAgentSettings"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/models",
+      "lines": [
+        3985,
+        4022
+      ],
+      "consumes": [
+        "MODELS_CACHE_TTL",
+        "annotateEnabled",
+        "app",
+        "getHarness",
+        "getSessionModels",
+        "harnessCommandAvailable",
+        "modelsCache",
+        "modelsCacheTime",
+        "piSDK",
+        "routeIdentity",
+        "runHarnessModelCommand",
+        "setModelsCache",
+        "withCatalogThinkingLevels"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "put",
+      "path": "/api/models/enabled",
+      "lines": [
+        4029,
+        4054
+      ],
+      "consumes": [
+        "PI_SETTINGS_FILE",
+        "app",
+        "path",
+        "piSDK"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/commands",
+      "lines": [
+        4114,
+        4152
+      ],
+      "consumes": [
+        "BridgeSession",
+        "RPC_BUILTIN_COMMANDS",
+        "app",
+        "appendHostBuiltins",
+        "filterBridgeCommands",
+        "getHarness",
+        "getLiveSession",
+        "liveSessionSupports",
+        "piSDK",
+        "routeIdentity"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/abort",
+      "lines": [
+        4154,
+        4164
+      ],
+      "consumes": [
+        "app",
+        "getLiveSession",
+        "liveSessionSupports"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/close",
+      "lines": [
+        4166,
+        4169
+      ],
+      "consumes": [
+        "app",
+        "sessionOperations"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/cwds",
+      "lines": [
+        4171,
+        4183
+      ],
+      "consumes": [
+        "app",
+        "knownWorkspaceCwds",
+        "os"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/config",
+      "lines": [
+        4188,
+        4199
+      ],
+      "consumes": [
+        "app",
+        "readDishSettings",
+        "stt",
+        "terminal",
+        "tmux"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/stt",
+      "lines": [
+        4215,
+        4232
+      ],
+      "consumes": [
+        "app",
+        "parseAudioBody",
+        "readDishSettings",
+        "stt"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/agent-docs",
+      "lines": [
+        4270,
+        4286
+      ],
+      "consumes": [
+        "AGENT_DOCS_DIR",
+        "AGENT_DOC_TOPIC_RE",
+        "agentDocSummary",
+        "app",
+        "fs",
+        "path"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/agent-docs/:topic",
+      "lines": [
+        4288,
+        4298
+      ],
+      "consumes": [
+        "AGENT_DOCS_DIR",
+        "AGENT_DOC_TOPIC_RE",
+        "app",
+        "fs",
+        "path"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/themes",
+      "lines": [
+        4308,
+        4325
+      ],
+      "consumes": [
+        "app",
+        "fs",
+        "os",
+        "path"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/tmux/targets",
+      "lines": [
+        4329,
+        4346
+      ],
+      "consumes": [
+        "app",
+        "listRegisteredSessions",
+        "registryIdentity",
+        "routeSessionId",
+        "tmux"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/dirs",
+      "lines": [
+        4349,
+        4355
+      ],
+      "consumes": [
+        "app",
+        "searchHomeDirs"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/dirs/children",
+      "lines": [
+        4360,
+        4367
+      ],
+      "consumes": [
+        "app",
+        "getDirChildren"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/files",
+      "lines": [
+        4384,
+        4397
+      ],
+      "consumes": [
+        "app",
+        "completePath",
+        "isPathCompletionToken",
+        "resolveSessionCwd",
+        "searchFiles"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/file/content",
+      "lines": [
+        4415,
+        4431
+      ],
+      "consumes": [
+        "app",
+        "readFileForViewer",
+        "resolveViewerMention"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/file",
+      "lines": [
+        4437,
+        4458
+      ],
+      "consumes": [
+        "app",
+        "readFileForViewer",
+        "resolveViewerMention"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/diff/patch",
+      "lines": [
+        4490,
+        4519
+      ],
+      "consumes": [
+        "DIFF_SNAPSHOT_TTL_MS",
+        "app",
+        "diffSnapshots",
+        "getDiffVersion",
+        "getFilePatch",
+        "path",
+        "resolveSessionCwd",
+        "staleDiffResponse"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/diff",
+      "lines": [
+        4525,
+        4535
+      ],
+      "consumes": [
+        "DIFF_INLINE_FILE_LIMIT",
+        "aggregateDiffs",
+        "app",
+        "rememberDiffSnapshot",
+        "resolveSessionCwd"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/new",
+      "lines": [
+        4538,
+        4588
+      ],
+      "consumes": [
+        "app",
+        "getHarness",
+        "getRPCSession",
+        "getRegisteredSession",
+        "sessionLaunch",
+        "sessionOperations"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/session-spawns/:id",
+      "lines": [
+        4590,
+        4594
+      ],
+      "consumes": [
+        "app",
+        "sessionOperations"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/resume",
+      "lines": [
+        4597,
+        4600
+      ],
+      "consumes": [
+        "app",
+        "sessionOperations"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/recovery",
+      "lines": [
+        4609,
+        4612
+      ],
+      "consumes": [
+        "app",
+        "recoveryRunner"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "put",
+      "path": "/api/sessions/:id/recovery",
+      "lines": [
+        4613,
+        4624
+      ],
+      "consumes": [
+        "app",
+        "getHarness",
+        "getRPCSession",
+        "getRegisteredSession",
+        "recoveryStore",
+        "routeIdentity"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/recovery/retry",
+      "lines": [
+        4625,
+        4629
+      ],
+      "consumes": [
+        "app",
+        "recoveryRunner"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/restart",
+      "lines": [
+        4632,
+        4635
+      ],
+      "consumes": [
+        "app",
+        "sessionOperations"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/session-bounces/preview",
+      "lines": [
+        4644,
+        4648
+      ],
+      "consumes": [
+        "app",
+        "sessionBounces"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/session-bounces",
+      "lines": [
+        4650,
+        4653
+      ],
+      "consumes": [
+        "app",
+        "sessionBounces"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/session-bounces",
+      "lines": [
+        4655,
+        4658
+      ],
+      "consumes": [
+        "app",
+        "sessionBounces"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/session-bounces/:id",
+      "lines": [
+        4660,
+        4664
+      ],
+      "consumes": [
+        "app",
+        "sessionBounces"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/routines",
+      "lines": [
+        4753,
+        4756
+      ],
+      "consumes": [
+        "app",
+        "routineSummary",
+        "routinesStore"
+      ],
+      "owner": "M2"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/routines",
+      "lines": [
+        4758,
+        4766
+      ],
+      "consumes": [
+        "app",
+        "routineErrorResponse",
+        "routinesStore",
+        "validateRoutinePilot"
+      ],
+      "owner": "M2"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/routines/:id",
+      "lines": [
+        4768,
+        4772
+      ],
+      "consumes": [
+        "app",
+        "routinesStore"
+      ],
+      "owner": "M2"
+    },
+    {
+      "receiver": "app",
+      "method": "put",
+      "path": "/api/routines/:id",
+      "lines": [
+        4774,
+        4789
+      ],
+      "consumes": [
+        "app",
+        "routineErrorResponse",
+        "routinesStore",
+        "validateRoutinePilot"
+      ],
+      "owner": "M2"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/routines/:id",
+      "lines": [
+        4794,
+        4799
+      ],
+      "consumes": [
+        "app",
+        "routinesStore"
+      ],
+      "owner": "M2"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/routines/:id/invoke",
+      "lines": [
+        4801,
+        4832
+      ],
+      "consumes": [
+        "app",
+        "routineErrorResponse",
+        "routineRunner",
+        "routinesStore"
+      ],
+      "owner": "M2"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/routines/:id/invocations",
+      "lines": [
+        4836,
+        4853
+      ],
+      "consumes": [
+        "ROUTINE_INVOCATION_PAGE_MAX",
+        "app",
+        "routinesStore"
+      ],
+      "owner": "M2"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/routine-invocations/:id",
+      "lines": [
+        4855,
+        4859
+      ],
+      "consumes": [
+        "app",
+        "routinesStore"
+      ],
+      "owner": "M2"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/stream",
+      "lines": [
+        4868,
+        5058
+      ],
+      "consumes": [
+        "MESSAGE_UPDATE_COALESCE_MS",
+        "app",
+        "getLiveSession",
+        "sessionSwitchRouteData"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "listen",
+      "path": null,
+      "lines": [
+        5112,
+        5115
+      ],
+      "consumes": [
+        "LOOPBACK",
+        "aliasServer",
+        "app",
+        "port"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "app",
+      "method": "listen",
+      "path": null,
+      "lines": [
+        5173,
+        5176
+      ],
+      "consumes": [
+        "HOST",
+        "PORT",
+        "app",
+        "ensureLoopbackAlias",
+        "main",
+        "onMainListening"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "shareApp",
+      "method": "get",
+      "path": "/share/:token",
+      "lines": [
+        5205,
+        5205
+      ],
+      "consumes": [
+        "serveSharedSession",
+        "shareApp"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "shareApp",
+      "method": "get",
+      "path": "/page/:token",
+      "lines": [
+        5208,
+        5208
+      ],
+      "consumes": [
+        "servePage",
+        "shareApp"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "shareApp",
+      "method": "get",
+      "path": "/page/:token/*",
+      "lines": [
+        5209,
+        5212
+      ],
+      "consumes": [
+        "servePage",
+        "shareApp"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "shareApp",
+      "method": "get",
+      "path": "/style.css",
+      "lines": [
+        5213,
+        5213
+      ],
+      "consumes": [
+        "path",
+        "shareApp"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "shareApp",
+      "method": "get",
+      "path": "/vendor/hljs-theme.min.css",
+      "lines": [
+        5214,
+        5215
+      ],
+      "consumes": [
+        "path",
+        "shareApp"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "shareApp",
+      "method": "use",
+      "path": null,
+      "lines": [
+        5216,
+        5216
+      ],
+      "consumes": [
+        "shareApp"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "shareApp",
+      "method": "listen",
+      "path": null,
+      "lines": [
+        5218,
+        5220
+      ],
+      "consumes": [
+        "shareApp",
+        "shareHost",
+        "shareServer"
+      ],
+      "owner": "M7"
+    },
+    {
+      "receiver": "upgradeHandlers",
+      "method": "push",
+      "path": null,
+      "lines": [
+        5253,
+        5271
+      ],
+      "consumes": [
+        "PROXY_TERMINAL_PATH_RE",
+        "remoteHosts",
+        "upgradeAuthorized",
+        "upgradeHandlers"
+      ],
+      "owner": "M5"
+    },
+    {
+      "receiver": "upgradeHandlers",
+      "method": "push",
+      "path": null,
+      "lines": [
+        5322,
+        5375
+      ],
+      "consumes": [
+        "TERMINAL_PATH_RE",
+        "findSessionFile",
+        "getRPCSession",
+        "getRegisteredSession",
+        "locatePiPane",
+        "resolveSessionCwd",
+        "terminal",
+        "tmux",
+        "upgradeAuthorized",
+        "upgradeHandlers",
+        "wss"
+      ],
+      "owner": "M5"
+    }
+  ]
+}

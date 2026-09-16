@@ -225,6 +225,14 @@ The final policy-free root/checkJs acceptance belongs to M7, not M0. Existing
 build/installer/listener/terminal suites are the initial gates; a successful build
 alone is not acceptance.
 
+M0 owner handoff (acceptance remains with the integration lead):
+[frozen compiler/port/semantics contracts](m0-contracts.md),
+[baseline route-order inventory](m0-route-contracts.json), and
+[M6c target runtime manifest](m0-runtime-manifest.json).
+The implemented authored-source policy runs before lint/types in `npm run check`.
+These contracts do not claim later compiler targets or a working packaged desktop;
+the handoff distinguishes reproduced package defects from completed M0 probes.
+
 ### M1 — Session reads, SDK adapters and index projections
 
 **Depends on:** M0. **Slices:** M1a parser/contracts; M1b pricing/mining; M1c

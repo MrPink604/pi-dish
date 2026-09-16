@@ -81,9 +81,11 @@ now scopes the work beyond those delivered stages. M0–M7 finish actual product
 implementation/compiler boundaries; R1–R12 then remove specific duplicated
 responsibilities and awkward coupling, including in the already-typed browser;
 C1–C2 finish tests/tooling and enforce whole-repository coverage and delivery.
-These are planned packages, not implemented compiler targets or new runtime
-conventions. Native loaders, generated output and package mappings must pass the
-plan's M0 compatibility gate before changing.
+The M0 [frozen delivery and worker contracts](m0-contracts.md) now name current
+and future compiler targets, exact handler modules/ports, native loader and package
+manifests, and the shared projection/artifact semantics. Future targets remain
+unimplemented until their owners land them; M0 does not convert the root launcher.
+The integration lead, not this guide, records milestone acceptance.
 
 ## Implemented foundation inventory
 
@@ -182,6 +184,17 @@ This checked-in output is a deliberate compatibility measure for the bounded
 migration. The new build is needed when editing the foundation, not when
 starting a deployed checkout. Broader build/deployment changes need their own
 decision and packaging checks.
+
+`npm run check` begins with `npm run check:source-policy`. The pinned TypeScript
+7 native parser rejects authored explicit `any` (including JSDoc wildcard types),
+`@ts-ignore`, `@ts-nocheck` and product `@ts-expect-error` in the compiler-owned
+paths listed by `source-policy.json`. Named type-negative fixtures require their
+diagnostic purpose; tsc still checks that their errors actually occur. Strings and
+template text are not directives. No explicit-any type-utility exception exists.
+The current gate covers `src/core`, `src/browser`, checked `lib/cron.js` and the
+named fixtures, not pending native extensions or remaining JS implementations.
+Every new migration compiler target must enroll its authored sources and fixtures.
+See the [M0 contract](m0-contracts.md#dependencies-and-authored-source-policy).
 
 ## Contract conventions
 
