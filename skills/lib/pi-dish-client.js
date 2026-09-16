@@ -65,17 +65,19 @@ const fs = require("node:fs");
 const path = require("node:path");
 const os = require("node:os");
 const node_child_process_1 = require("node:child_process");
-/** A record view does not assert a response schema or coerce field values. */
+/** Preserve native property access: nullish receivers fail; field values stay unknown. */
 function record(value) {
-    return value !== null && typeof value === 'object' ? value : {};
+    if (value == null)
+        throw new TypeError(`Cannot read properties of ${value}`);
+    return Object(value);
 }
 function errorMessage(value) {
-    return String(record(value).message ?? value);
+    return String(record(value ?? {}).message ?? value);
 }
-function errorStatus(value) { return record(value).status; }
-function errorBody(value) { return record(record(value).body); }
+function errorStatus(value) { return record(value ?? {}).status; }
+function errorBody(value) { return record(record(value ?? {}).body ?? {}); }
 function isSessionRow(value) {
-    return typeof record(value).id === 'string' && !!record(value).id;
+    return typeof record(value ?? {}).id === 'string' && !!record(value ?? {}).id;
 }
 function sessionRows(value) {
     return Array.isArray(value) ? value.filter(isSessionRow) : [];
@@ -85,8 +87,6 @@ function fleetRows(value) {
     return Array.isArray(value) ? value : [];
 }
 function fleetHost(value) {
-    if (value == null)
-        throw new TypeError(`Cannot read properties of ${value}`);
     return record(value);
 }
 /** Check only when a caller actually invokes a string operation. */
@@ -96,7 +96,7 @@ function stringValue(value, message) {
     return value;
 }
 function isRegistryEntry(value) {
-    return !!record(value).sessionId;
+    return !!record(value ?? {}).sessionId;
 }
 class HttpError extends Error {
     status;
@@ -195,7 +195,7 @@ function registryEntries() {
 }
 /** The id the HTTP routes speak for a registry entry (harness-qualified). */
 function registryRouteId(entry) {
-    const harnessId = record(entry?.wrapper).harnessId || entry?.harnessId || 'pi';
+    const harnessId = record(entry?.wrapper ?? {}).harnessId || entry?.harnessId || 'pi';
     const nativeSessionId = entry?.nativeSessionId || entry?.sessionId;
     if (harnessId === 'pi')
         return nativeSessionId;
@@ -298,7 +298,7 @@ function authHeaders(extra) {
     return headers;
 }
 function httpError(status, data, statusText) {
-    return new HttpError(String(record(data).error || `HTTP ${status}${statusText ? ` ${statusText}` : ''}`), status, data);
+    return new HttpError(String(record(data ?? {}).error || `HTTP ${status}${statusText ? ` ${statusText}` : ''}`), status, data);
 }
 async function request(base, pathname, init = {}) {
     const response = await fetch(new URL(pathname, base), { ...init, headers: authHeaders(init.headers) });
@@ -374,7 +374,7 @@ let fleetPromise = null;
 function fleetHosts(base) {
     if (!fleetPromise) {
         fleetPromise = request(base, '/api/hosts')
-            .then(({ data }) => fleetRows(record(data).hosts))
+            .then(({ data }) => fleetRows(record(data ?? {}).hosts))
             // A server too old (or too closed) to answer is not an error here: the
             // callers all degrade to capability-absent behaviour.
             .catch(() => null);
@@ -384,7 +384,7 @@ function fleetHosts(base) {
 function resetFleetCache() { fleetPromise = null; }
 /** Absent capability means unsupported — mixed-version fleets are the norm. */
 function hostSupports(value, capability) {
-    const entry = record(value);
+    const entry = record(value ?? {});
     return !!(value && entry.capabilities && record(entry.capabilities)[capability]);
 }
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -602,7 +602,7 @@ function ambiguousRefError(ref, matches) {
         + lines.join('\n'));
 }
 function sessionCatalog(data) {
-    const catalog = record(data);
+    const catalog = record(data ?? {});
     const list = [...sessionRows(catalog.active), ...sessionRows(catalog.previous)];
     const byId = new Map();
     for (const session of list)
@@ -658,7 +658,7 @@ async function resolveSessionRef(base, rawRef, hostFlag) {
     if (hostSupports(entry, 'resolve')) {
         try {
             const response = await api(base, host, `/api/sessions/resolve?id=${encodeURIComponent(ref.id)}`);
-            const data = record(response.data);
+            const data = record(response.data ?? {});
             if (isSessionRow(data.session)) {
                 // The provenance form is machine-produced and whole: the server's
                 // prefix matching must not turn a stale recorded id into a
@@ -801,8 +801,8 @@ const ROLE_HEADINGS = {
  * `session`) and `options`.
  */
 function renderTranscript(input, options = {}) {
-    const payload = record(input);
-    const session = record(payload.session);
+    const payload = record(input ?? {});
+    const session = record(payload.session ?? {});
     const messages = Array.isArray(payload.messages) ? payload.messages : [];
     const out = [];
     const name = session.name || 'Unnamed session';
@@ -864,7 +864,7 @@ function renderTranscript(input, options = {}) {
                 // Mirror the web summary for prime's kernel tool: bash('...') wraps
                 // shell work; otherwise the first code line carries the intent.
                 let args = summarizeToolArgs(block.arguments);
-                const code = record(block.arguments).code;
+                const code = record(block.arguments ?? {}).code;
                 if (block.name === 'ipython' && typeof code === 'string') {
                     const m = /(?:^|[^A-Za-z0-9_])bash\(\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(code);
                     const inner = m ? m[2].replace(/\\(['"\\])/g, '$1') : code.split('\n')[0];

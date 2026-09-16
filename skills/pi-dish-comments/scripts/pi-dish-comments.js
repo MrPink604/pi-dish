@@ -49,9 +49,9 @@ function parseArgs(argv) {
     return args;
 }
 function lineLabel(value) {
-    const anchor = core.record(value);
     if (!value)
         return '';
+    const anchor = core.record(value);
     if (anchor.startLine)
         return `:${anchor.startLine}${Number(anchor.endLine) > Number(anchor.startLine) ? `-${anchor.endLine}` : ''}`;
     const oldPart = anchor.oldStart ? `old ${anchor.oldStart}${Number(anchor.oldEnd) > Number(anchor.oldStart) ? `-${anchor.oldEnd}` : ''}` : '';
@@ -78,7 +78,7 @@ function printBatch(value) {
     for (const value of comments) {
         const comment = core.record(value);
         const target = core.record(comment.target);
-        const anchor = core.record(target.anchor);
+        const anchor = core.record(target.anchor ?? {});
         const quote = anchor.quote || '';
         if (typeof quote !== 'string' || typeof comment.body !== 'string')
             throw new TypeError('comment text must be a string');

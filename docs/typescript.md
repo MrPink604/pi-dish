@@ -241,11 +241,13 @@ SDK resources and application assets retain archive paths. User paths are not
 passed through this resolver.
 
 FFF additionally requires its complete native dependency tree outside ASAR.
-`fffImportSpecifier(applicationRoot)` keeps the bare ESM package in checkout
+`fffImportSpecifier(applicationRoot: string): string` keeps the bare ESM package in checkout
 and reads the real unpacked package's `exports["."].import` in an `app.asar`
 root. It returns a physical file URL rather than guessing an entry filename
-or using CommonJS resolution for an import-only package. Native load acceptance
-requires actual scan/search and PTY execution, not archive presence alone.
+or using CommonJS resolution for an import-only package. M3's checked `loadFff`
+consumer calls this helper without duplicating ASAR detection and preserves its
+lazy import cache and walker fallback. Native load acceptance requires actual
+scan/search and PTY execution, not archive presence alone.
 Linux results do not establish macOS package/runtime support.
 
 

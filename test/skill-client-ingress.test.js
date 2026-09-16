@@ -23,6 +23,13 @@ function fixture(t, entry) {
   };
 }
 
+async function serve(t, respond) {
+  const server = http.createServer(respond);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  return `http://127.0.0.1:${server.address().port}`;
+}
+
 test('ancestor discovery retains truthy identities despite unused malformed metadata', async t => {
   const { env } = fixture(t, {
     sessionId: 42, pid: process.pid, name: { unexpected: true }, model: 17, cwd: 23,
@@ -88,4 +95,95 @@ test('fleet name resolution retains malformed labels but label matching still fa
     run(process.execPath, [cli, 'resolve', 'unknown/peer-session', '--url', base], { env }),
     error => error.code === 1 && /toLowerCase is not a function/.test(error.stderr),
   );
+});
+
+test('pages preserves raw null JSON and absent hub mappings without false human success', async t => {
+  const { home, env } = fixture(t);
+  env.PI_DISH_PUBLIC_VIA = '';
+  const pageCli = path.join(__dirname, '../skills/pi-dish-pages/scripts/pi-dish-pages.js');
+  const file = path.join(home, 'page.html');
+  fs.writeFileSync(file, '<p>page</p>');
+  let page = null;
+  const base = await serve(t, (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(req.url === '/api/host' ? { hostId: 'owner' } : req.url === '/api/pages' ? page : null));
+  });
+  const args = [pageCli, 'publish', file, '--session', 'caller', '--url', base];
+  await assert.rejects(run(process.execPath, args, { env }), error => {
+    assert.equal(error.code, 1);
+    assert.equal(error.stdout, '');
+    assert.match(error.stderr, /TypeError/);
+    return true;
+  });
+  const json = await run(process.execPath, [...args, '--json'], { env });
+  assert.deepEqual(JSON.parse(json.stdout), { hub: null, hubError: null });
+
+  page = { token: 'published', url: 'https://example.invalid/published' };
+  const via = await run(process.execPath, [...args, '--via', 'hub'], { env });
+  assert.equal(via.stdout, 'https://example.invalid/published\n');
+  const viaJson = await run(process.execPath, [...args, '--via', 'hub', '--json'], { env });
+  assert.deepEqual(JSON.parse(viaJson.stdout), { ...page, hub: null, hubError: null });
+});
+
+test('CLI field consumers reject missing response bodies while raw JSON remains readable', async t => {
+  const { env } = fixture(t);
+  const commentsCli = path.join(__dirname, '../skills/pi-dish-comments/scripts/pi-dish-comments.js');
+  const base = await serve(t, (req, res) => {
+    if (req.url.startsWith('/api/comments/count')) return res.end();
+    if (req.url === '/api/comments/get') return res.end('not JSON');
+    if (req.url === '/api/hosts') {
+      res.statusCode = 204;
+      return res.end();
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.end('null');
+  });
+  for (const [script, command] of [
+    [commentsCli, ['count']], [commentsCli, ['get', 'comment']],
+    [cli, ['hosts']], [cli, ['list']],
+  ]) {
+    const args = [script, ...command, '--session', 'caller', '--url', base];
+    await assert.rejects(run(process.execPath, args, { env }), error => {
+      assert.equal(error.code, 1);
+      assert.equal(error.stdout, '');
+      return true;
+    });
+    const json = await run(process.execPath, [...args, '--json'], { env });
+    assert.equal(JSON.parse(json.stdout), null);
+  }
+  for (const format of [[], ['--json']]) {
+    await assert.rejects(
+      run(process.execPath, [cli, 'search', 'needle', '--url', base, ...format], { env }),
+      error => error.code === 1 && error.stdout === '',
+    );
+  }
+});
+
+test('spawn keeps advisory null fallbacks and waits through a bodyless 202', async t => {
+  const { env } = fixture(t);
+  let starting = true;
+  let noWait = false;
+  const base = await serve(t, (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/hosts/peer/api/sessions/new') {
+      return res.end(JSON.stringify(noWait ? null : { spawnId: 'pending' }));
+    }
+    if (req.url === '/hosts/peer/api/session-spawns/pending') {
+      if (starting) {
+        starting = false;
+        res.statusCode = 202;
+        return res.end();
+      }
+      return res.end(JSON.stringify({ status: 'ready', sessionId: 'child' }));
+    }
+    res.end('null');
+  });
+  const args = [cli, 'spawn', '--host', 'peer', '--harness', 'pi', '--session', 'caller', '--url', base, '--json'];
+  const completed = await run(process.execPath, args, { env });
+  assert.deepEqual(JSON.parse(completed.stdout), {
+    status: 'ready', sessionId: 'child', spawnId: 'pending', harness: 'pi', host: 'peer',
+  });
+  noWait = true;
+  const immediate = await run(process.execPath, [...args, '--no-wait'], { env });
+  assert.deepEqual(JSON.parse(immediate.stdout), { harness: 'pi' });
 });

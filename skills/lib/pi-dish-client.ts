@@ -97,17 +97,18 @@ export interface SearchBucket { host?: unknown; results?: readonly SessionRow[] 
 export interface SearchRow { host: unknown; session: SessionRow }
 export interface TranscriptOptions { host?: unknown; ref?: string; limit?: number; thinking?: boolean }
 
-/** A record view does not assert a response schema or coerce field values. */
+/** Preserve native property access: nullish receivers fail; field values stay unknown. */
 export function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
+  if (value == null) throw new TypeError(`Cannot read properties of ${value}`);
+  return Object(value);
 }
 export function errorMessage(value: unknown): string {
-  return String(record(value).message ?? value);
+  return String(record(value ?? {}).message ?? value);
 }
-export function errorStatus(value: unknown): unknown { return record(value).status; }
-export function errorBody(value: unknown): Record<string, unknown> { return record(record(value).body); }
+export function errorStatus(value: unknown): unknown { return record(value ?? {}).status; }
+export function errorBody(value: unknown): Record<string, unknown> { return record(record(value ?? {}).body ?? {}); }
 export function isSessionRow(value: unknown): value is SessionRow {
-  return typeof record(value).id === 'string' && !!record(value).id;
+  return typeof record(value ?? {}).id === 'string' && !!record(value ?? {}).id;
 }
 export function sessionRows(value: unknown): SessionRow[] {
   return Array.isArray(value) ? value.filter(isSessionRow) : [];
@@ -117,7 +118,6 @@ export function fleetRows(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 export function fleetHost(value: unknown): FleetHost {
-  if (value == null) throw new TypeError(`Cannot read properties of ${value}`);
   return record(value);
 }
 /** Check only when a caller actually invokes a string operation. */
@@ -126,7 +126,7 @@ export function stringValue(value: unknown, message: string): string {
   return value;
 }
 function isRegistryEntry(value: unknown): value is RegistryEntry {
-  return !!record(value).sessionId;
+  return !!record(value ?? {}).sessionId;
 }
 class HttpError extends Error {
   constructor(message: string, readonly status: number, readonly body: unknown) { super(message); }
@@ -213,7 +213,7 @@ function registryEntries(): RegistryEntry[] {
 
 /** The id the HTTP routes speak for a registry entry (harness-qualified). */
 function registryRouteId(entry: RegistryEntry): unknown {
-  const harnessId = record(entry?.wrapper).harnessId || entry?.harnessId || 'pi';
+  const harnessId = record(entry?.wrapper ?? {}).harnessId || entry?.harnessId || 'pi';
   const nativeSessionId = entry?.nativeSessionId || entry?.sessionId;
   if (harnessId === 'pi') return nativeSessionId;
   return '~sk1_' + Buffer.from(JSON.stringify([harnessId, nativeSessionId]), 'utf8').toString('base64url');
@@ -304,7 +304,7 @@ function authHeaders(extra?: Record<string, string>) {
 }
 
 function httpError(status: number, data: unknown, statusText?: string) {
-  return new HttpError(String(record(data).error || `HTTP ${status}${statusText ? ` ${statusText}` : ''}`), status, data);
+  return new HttpError(String(record(data ?? {}).error || `HTTP ${status}${statusText ? ` ${statusText}` : ''}`), status, data);
 }
 
 async function request(base: string, pathname: string, init: RequestOptions = {}): Promise<HttpResult> {
@@ -375,7 +375,7 @@ let fleetPromise: Promise<unknown[] | null> | null = null;
 function fleetHosts(base: string): Promise<unknown[] | null> {
   if (!fleetPromise) {
     fleetPromise = request(base, '/api/hosts')
-      .then(({ data }) => fleetRows(record(data).hosts))
+      .then(({ data }) => fleetRows(record(data ?? {}).hosts))
       // A server too old (or too closed) to answer is not an error here: the
       // callers all degrade to capability-absent behaviour.
       .catch(() => null);
@@ -387,7 +387,7 @@ function resetFleetCache() { fleetPromise = null; }
 
 /** Absent capability means unsupported — mixed-version fleets are the norm. */
 function hostSupports(value: unknown, capability: string) {
-  const entry: FleetHost = record(value);
+  const entry: FleetHost = record(value ?? {});
   return !!(value && entry.capabilities && record(entry.capabilities)[capability]);
 }
 
@@ -598,7 +598,7 @@ function ambiguousRefError(ref: unknown, matches: readonly SessionRow[] | null |
 }
 
 function sessionCatalog(data: unknown) {
-  const catalog: SessionCatalog = record(data);
+  const catalog: SessionCatalog = record(data ?? {});
   const list = [...sessionRows(catalog.active), ...sessionRows(catalog.previous)];
   const byId = new Map<string, SessionRow>();
   for (const session of list) if (session?.id && !byId.has(session.id)) byId.set(session.id, session);
@@ -652,7 +652,7 @@ async function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: strin
   if (hostSupports(entry, 'resolve')) {
     try {
       const response = await api(base, host, `/api/sessions/resolve?id=${encodeURIComponent(ref.id)}`);
-      const data: ResolveResponse = record(response.data);
+      const data: ResolveResponse = record(response.data ?? {});
       if (isSessionRow(data.session)) {
         // The provenance form is machine-produced and whole: the server's
         // prefix matching must not turn a stale recorded id into a
@@ -790,8 +790,8 @@ const ROLE_HEADINGS: Readonly<Record<string, string>> = {
  * `session`) and `options`.
  */
 function renderTranscript(input: unknown, options: TranscriptOptions = {}) {
-  const payload: TranscriptPayload = record(input);
-  const session: SessionFields = record(payload.session);
+  const payload: TranscriptPayload = record(input ?? {});
+  const session: SessionFields = record(payload.session ?? {});
   const messages: unknown[] = Array.isArray(payload.messages) ? payload.messages : [];
   const out = [];
   const name = session.name || 'Unnamed session';
@@ -843,7 +843,7 @@ function renderTranscript(input: unknown, options: TranscriptOptions = {}) {
         // Mirror the web summary for prime's kernel tool: bash('...') wraps
         // shell work; otherwise the first code line carries the intent.
         let args = summarizeToolArgs(block.arguments);
-        const code = record(block.arguments).code;
+        const code = record(block.arguments ?? {}).code;
         if (block.name === 'ipython' && typeof code === 'string') {
           const m = /(?:^|[^A-Za-z0-9_])bash\(\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(code);
           const inner = m ? m[2].replace(/\\(['"\\])/g, '$1') : code.split('\n')[0];

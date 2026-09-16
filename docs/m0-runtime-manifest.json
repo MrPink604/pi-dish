@@ -45,12 +45,17 @@
     "lib/*.js",
     "extensions/**/*",
     "skills/**/*",
+    "node_modules/@ff-labs/fff-node/**/*",
+    "node_modules/@ff-labs/fff-bin-*/**/*",
+    "node_modules/ffi-rs/**/*",
+    "node_modules/@yuuang/ffi-rs-*/**/*",
     "**/*.node",
     "**/*.so"
   ],
   "dependencyCollection": "electron-builder production dependency graph; never blanket node_modules/**/*",
   "externalResourceRoot": "resources/app.asar.unpacked, preserving extension and skill sibling layout",
   "inAppResourceRoot": "resources/app.asar",
+  "fffImport": "M6-owned fffImportSpecifier(applicationRoot) preserves checkout bare import; packaged app.asar uses actual unpacked package entry file URL; M3 loadFff consumes it without duplicate package detection",
   "nativeAcceptance": [
     "Electron ABI node-pty binary loads and creates isolated PTY",
     "FFF native shared library loads from a real unpacked filesystem path",

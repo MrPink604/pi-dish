@@ -42,8 +42,6 @@ interface PageArgs {
   session?: string;
   url?: string;
 }
-interface PublishedPage { token?: unknown; path?: unknown; url?: unknown }
-interface HubMapping { path?: unknown; url?: unknown; host?: unknown }
 
 function parseArgs(argv: string[]): PageArgs {
   const args: PageArgs = { command: argv[0] || 'publish', rest: [] };
@@ -60,14 +58,14 @@ function parseArgs(argv: string[]): PageArgs {
   return args;
 }
 
-async function publishViaHub(base: string, hub: string, page: PublishedPage): Promise<HubMapping> {
+async function publishViaHub(base: string, hub: string, page: unknown): Promise<unknown> {
   const { data } = await request(base, '/api/host');
-  const host = core.record(data);
+  const host = core.record(data ?? {});
   if (!host?.hostId) throw new Error('this server did not report a hostId (upgrade pi-dish)');
   try {
     const { data } = await request(base, hostPath(hub, '/api/fleet-artifacts'),
-      jsonInit({ token: page.token, kind: 'page', hostId: host.hostId }));
-    return core.record(data);
+      jsonInit({ token: core.record(page).token, kind: 'page', hostId: host.hostId }));
+    return data;
   } catch (error) {
     if (core.errorStatus(error) === 404) {
       throw new Error(`hub "${hub}" did not accept the mapping — check it is in this host's remotes, `
@@ -96,32 +94,34 @@ async function main() {
   // shrug, not an error: an absent sessionId lets the server infer one from
   // the path, while sending an explicit null would be rejected.
   const sessionId = discoverSessionQuietly(args.session);
-  let page: PublishedPage & Record<string, unknown>;
+  let page: unknown;
   try {
     const { data } = await request(base, '/api/pages',
       jsonInit({ path: abs, title: args.title || null, ...(sessionId ? { sessionId } : {}) }));
-    page = core.record(data);
+    page = data;
   } catch (error) {
     return fail(`could not publish ${abs}: ${core.errorMessage(error)}`);
   }
 
-  let hub: HubMapping | null = null;
+  let hub: unknown = null;
   let hubError: string | null = null;
   if (via) {
     try { hub = await publishViaHub(base, via, page); } catch (error) { hubError = core.errorMessage(error); }
   }
 
+  const hubFields = hub ? core.record(hub) : null;
   if (args.json) {
     // `owner` is the name the hub knows *this* host by, which is what its
     // mapping is keyed on — handy when a fleet map disagrees with itself.
-    const mapping = hub ? { via, path: hub.path, url: hub.url, owner: hub.host || null } : null;
-    process.stdout.write(JSON.stringify({ ...page, hub: mapping, hubError }, null, 2) + '\n');
+    const mapping = hubFields ? { via, path: hubFields.path, url: hubFields.url, owner: hubFields.host || null } : null;
+    process.stdout.write(JSON.stringify({ ...core.record(page ?? {}), hub: mapping, hubError }, null, 2) + '\n');
   } else {
-    process.stdout.write(`${page.url || page.path}\n`);
-    if (hub) {
-      process.stdout.write(hub.url
-        ? `via ${via}: ${hub.url}\n`
-        : `via ${via}: ${hub.path} (on ${via}'s own address — it hands out no absolute URL)\n`);
+    const pageFields = core.record(page);
+    process.stdout.write(`${pageFields.url || pageFields.path}\n`);
+    if (hubFields) {
+      process.stdout.write(hubFields.url
+        ? `via ${via}: ${hubFields.url}\n`
+        : `via ${via}: ${hubFields.path} (on ${via}'s own address — it hands out no absolute URL)\n`);
     }
   }
   // The local link is real either way; a failed hub mapping only costs public

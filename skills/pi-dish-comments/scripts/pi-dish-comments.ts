@@ -70,8 +70,8 @@ function parseArgs(argv: string[]): CommentArgs {
 }
 
 function lineLabel(value: unknown) {
-  const anchor: CommentAnchor = core.record(value);
   if (!value) return '';
+  const anchor: CommentAnchor = core.record(value);
   if (anchor.startLine) return `:${anchor.startLine}${Number(anchor.endLine) > Number(anchor.startLine) ? `-${anchor.endLine}` : ''}`;
   const oldPart = anchor.oldStart ? `old ${anchor.oldStart}${Number(anchor.oldEnd) > Number(anchor.oldStart) ? `-${anchor.oldEnd}` : ''}` : '';
   const newPart = anchor.newStart ? `new ${anchor.newStart}${Number(anchor.newEnd) > Number(anchor.newStart) ? `-${anchor.newEnd}` : ''}` : '';
@@ -96,7 +96,7 @@ function printBatch(value: unknown) {
   for (const value of comments) {
     const comment: Comment = core.record(value);
     const target: CommentTarget = core.record(comment.target);
-    const anchor: CommentAnchor = core.record(target.anchor);
+    const anchor: CommentAnchor = core.record(target.anchor ?? {});
     const quote = anchor.quote || '';
     if (typeof quote !== 'string' || typeof comment.body !== 'string') throw new TypeError('comment text must be a string');
     process.stdout.write(`[${comment.id}] ${target.kind}: ${targetLabel(comment.target)}\n`);

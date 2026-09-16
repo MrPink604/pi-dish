@@ -105,7 +105,7 @@ export interface TranscriptOptions {
     limit?: number;
     thinking?: boolean;
 }
-/** A record view does not assert a response schema or coerce field values. */
+/** Preserve native property access: nullish receivers fail; field values stay unknown. */
 export declare function record(value: unknown): Record<string, unknown>;
 export declare function errorMessage(value: unknown): string;
 export declare function errorStatus(value: unknown): unknown;

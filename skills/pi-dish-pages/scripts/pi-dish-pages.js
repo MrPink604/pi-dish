@@ -54,12 +54,12 @@ function parseArgs(argv) {
 }
 async function publishViaHub(base, hub, page) {
     const { data } = await request(base, '/api/host');
-    const host = core.record(data);
+    const host = core.record(data ?? {});
     if (!host?.hostId)
         throw new Error('this server did not report a hostId (upgrade pi-dish)');
     try {
-        const { data } = await request(base, hostPath(hub, '/api/fleet-artifacts'), jsonInit({ token: page.token, kind: 'page', hostId: host.hostId }));
-        return core.record(data);
+        const { data } = await request(base, hostPath(hub, '/api/fleet-artifacts'), jsonInit({ token: core.record(page).token, kind: 'page', hostId: host.hostId }));
+        return data;
     }
     catch (error) {
         if (core.errorStatus(error) === 404) {
@@ -96,7 +96,7 @@ async function main() {
     let page;
     try {
         const { data } = await request(base, '/api/pages', jsonInit({ path: abs, title: args.title || null, ...(sessionId ? { sessionId } : {}) }));
-        page = core.record(data);
+        page = data;
     }
     catch (error) {
         return fail(`could not publish ${abs}: ${core.errorMessage(error)}`);
@@ -111,18 +111,20 @@ async function main() {
             hubError = core.errorMessage(error);
         }
     }
+    const hubFields = hub ? core.record(hub) : null;
     if (args.json) {
         // `owner` is the name the hub knows *this* host by, which is what its
         // mapping is keyed on — handy when a fleet map disagrees with itself.
-        const mapping = hub ? { via, path: hub.path, url: hub.url, owner: hub.host || null } : null;
-        process.stdout.write(JSON.stringify({ ...page, hub: mapping, hubError }, null, 2) + '\n');
+        const mapping = hubFields ? { via, path: hubFields.path, url: hubFields.url, owner: hubFields.host || null } : null;
+        process.stdout.write(JSON.stringify({ ...core.record(page ?? {}), hub: mapping, hubError }, null, 2) + '\n');
     }
     else {
-        process.stdout.write(`${page.url || page.path}\n`);
-        if (hub) {
-            process.stdout.write(hub.url
-                ? `via ${via}: ${hub.url}\n`
-                : `via ${via}: ${hub.path} (on ${via}'s own address — it hands out no absolute URL)\n`);
+        const pageFields = core.record(page);
+        process.stdout.write(`${pageFields.url || pageFields.path}\n`);
+        if (hubFields) {
+            process.stdout.write(hubFields.url
+                ? `via ${via}: ${hubFields.url}\n`
+                : `via ${via}: ${hubFields.path} (on ${via}'s own address — it hands out no absolute URL)\n`);
         }
     }
     // The local link is real either way; a failed hub mapping only costs public

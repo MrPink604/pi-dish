@@ -355,7 +355,7 @@ function writeSnippets(session) {
 async function qualifyCaller(base, sessionId) {
     try {
         const { data } = await request(base, '/api/host');
-        return core.record(data).hostId ? `${core.record(data).hostId}:${sessionId}` : sessionId;
+        return core.record(data ?? {}).hostId ? `${core.record(data).hostId}:${sessionId}` : sessionId;
     }
     catch {
         return sessionId;
@@ -411,9 +411,11 @@ async function pollSpawn(base, host, spawnId, timeoutMs = 45000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         const result = await api(base, host, `/api/session-spawns/${encodeURIComponent(spawnId)}`);
-        const operation = core.record(result.data);
-        if (result.status !== 202 && operation.status !== 'starting')
-            return operation;
+        if (result.status !== 202) {
+            const operation = core.record(result.data);
+            if (operation.status !== 'starting')
+                return operation;
+        }
         await new Promise(resolve => setTimeout(resolve, 250));
     }
     throw new Error(`spawn ${spawnId} did not finish within ${Math.round(timeoutMs / 1000)}s`);
@@ -435,7 +437,7 @@ async function listDocs(base, host, json) {
             throw new Error(DOCS_UNSUPPORTED);
         throw e;
     }
-    const topics = wireArray(core.record(data).topics);
+    const topics = wireArray(core.record(data ?? {}).topics);
     if (json)
         return print({ topics }, true);
     if (!topics.length) {
@@ -464,7 +466,7 @@ async function showDoc(base, host, topic, json) {
             let names = [];
             try {
                 const { data } = await api(base, host, '/api/agent-docs');
-                names = wireArray(core.record(data).topics).map((t) => core.record(t).name);
+                names = wireArray(core.record(data ?? {}).topics).map((t) => core.record(t).name);
             }
             catch { }
             throw new Error(`unknown docs topic "${topic}"${names.length ? ` (available: ${names.join(', ')})` : ''}`);
@@ -522,7 +524,7 @@ async function fleetSearch(base, query, limit, json) {
     settled.forEach((outcome, i) => {
         const target = targets[i];
         if (outcome.status === 'fulfilled') {
-            const data = core.record(outcome.value.data);
+            const data = core.record(outcome.value.data ?? {});
             const results = core.sessionRows(data.results);
             buckets.push({ host: target.label, results });
             refsByHost.set(target.label, refIndex(results, hosts.find((value) => {
@@ -532,7 +534,7 @@ async function fleetSearch(base, query, limit, json) {
             status[String(target.label)] = { status: 'ok', total: data.total ?? results.length, indexing: !!data.indexing };
         }
         else {
-            const reason = core.record(outcome.reason);
+            const reason = core.record(outcome.reason ?? {});
             const message = reason?.name === 'TimeoutError' ? `timed out after ${FLEET_SEARCH_TIMEOUT_MS / 1000}s`
                 : (reason?.message || 'request failed');
             status[String(target.label)] = { status: 'error', error: message };
@@ -577,7 +579,7 @@ function activeTmuxEntries() {
     const seen = new Set();
     const result = [];
     for (const entry of entries) {
-        const tmux = core.record(entry.tmux);
+        const tmux = core.record(entry.tmux ?? {});
         if (!tmux.socket || !tmux.pane)
             continue;
         const key = `${tmux.socket}#${tmux.pane}`;
@@ -590,7 +592,7 @@ function activeTmuxEntries() {
         }
         catch { }
         result.push({
-            harness: core.record(entry.wrapper).name || entry.harnessId || 'Pi',
+            harness: core.record(entry.wrapper ?? {}).name || entry.harnessId || 'Pi',
             name: entry.name || winName || 'Unnamed',
             state: entry.turnInProgress ? 'working' : (entry.compacting ? 'compacting' : 'idle'),
             cwd: entry.cwd ? core.stringValue(entry.cwd, 'entry.cwd.replace is not a function').replace(os.homedir(), '~') : '',
@@ -794,7 +796,7 @@ async function main() {
                 body.model = args.model;
             const { data } = await createSpawn(base, hostFlag, body, callerId);
             if (args.no_wait)
-                return print({ ...core.record(data), harness }, args.json);
+                return print({ ...core.record(data ?? {}), harness }, args.json);
             const spawnId = core.record(data).spawnId;
             if (typeof spawnId !== 'string')
                 throw new TypeError('spawn response did not report a spawnId');
