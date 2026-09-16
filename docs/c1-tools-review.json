@@ -1,0 +1,561 @@
+{
+  "milestone": "C1 first tools prerequisite",
+  "scope": "Tools/configuration checkpoint only; full C1 and parent acceptance remain pending",
+  "sourceCommit": "ed61fff9592183e28bb2f18c190ae13e31f7ceb4",
+  "baseline": "173b11e8cf9bad3a7f2e8e44550b748cd3b4164b",
+  "branch": "migration/c1-checked-tools",
+  "owner": {
+    "ref": "01a0aacf-378b-7454-a8ed-c7c5422991b6",
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinkingLevel": "high",
+    "verified": "semantic resolve before work"
+  },
+  "sourceFrozenDuringReview": true,
+  "validationEvidence": "docs/c1-tools-evidence.json",
+  "reviewProtocol": {
+    "requirement": "Three fresh durable independent concurrent whole-final-checkpoint reviews, personally read authored/source contract, relevant generated output and evidence; exact-SHA ACCEPT, no unresolved important/blocking findings",
+    "readOnly": true,
+    "validation": "Reviewers instructed to skip all builds/tests/lint/formatters and make no modifications",
+    "delegation": "No delegation permitted; no substitute model or quota/model upgrade",
+    "sourceChangePolicy": "Any code change invalidates all three verdicts and requires renewed whole-final-source review"
+  },
+  "reviewers": [
+    {
+      "ref": "01a0aae0-f575-7414-a8a2-41190d242a29",
+      "model": "zai/glm-5.3",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "identityVerification": "Semantic resolve before substantive review prompt",
+      "initialThinkingLevel": "max",
+      "reasoningCorrection": "Semantic POST /api/sessions/:id/thinking {level:high}, success200, then semantic resolve verified high before review prompt"
+    },
+    {
+      "ref": "01a0aae0-fa3a-711d-93e2-45f1587038eb",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "identityVerification": "Semantic resolve before substantive review prompt",
+      "initialThinkingLevel": "high",
+      "reasoningCorrection": null
+    },
+    {
+      "ref": "01a0aae0-fefb-70ac-a2a1-9cc133f9f61b",
+      "model": "kimi-code/k3",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "identityVerification": "Semantic resolve before substantive review prompt",
+      "initialThinkingLevel": "high",
+      "reasoningCorrection": null
+    }
+  ],
+  "firstPassFindings": [
+    {
+      "reviewer": "kimi-code/k3",
+      "severity": "minor",
+      "finding": "build-core.ts source is executable while runtime build-core.js remains non-executable",
+      "disposition": "No correction required; existing runtime mode preserved exactly, source mode does not affect execution mapping."
+    },
+    {
+      "reviewer": "kimi-code/k3",
+      "severity": "minor",
+      "finding": "Historical docs/m0-runtime-manifest.json retains the original playwright.config.js exclusion",
+      "disposition": "No correction required; frozen M6 target-contract evidence is not active builder configuration. Current package exclusion and checkpoint evidence record the TS cutover."
+    },
+    {
+      "reviewer": "zai/glm-5.3",
+      "severity": "minor",
+      "finding": "Inventory field could be named baselineInventory to make its frozen-baseline role more obvious",
+      "disposition": "No source change; this attestation explicitly defines evidence.inventory as the pre-conversion baseline inventory, while finalSourceOutputMapping and touchedFiles describe final state."
+    },
+    {
+      "reviewer": "zai/glm-5.3",
+      "severity": "minor",
+      "finding": "Former cron checkJs statement in testing docs was stale",
+      "disposition": "Already accurately replaced by this source commit; no further action."
+    },
+    {
+      "reviewer": "zai/glm-5.3",
+      "severity": "minor",
+      "finding": "Bootstrap self-replaces its checked-in output; reviewer raised a non-Linux portability observation",
+      "disposition": "No correction required for the approved supported Linux matrix. No Windows success or failure is established by this checkpoint; non-Linux remains explicitly unverified."
+    },
+    {
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "minor",
+      "finding": "build-core.ts source executable bit differs from its preserved 0644 runtime mode",
+      "disposition": "No correction required; runtime/mode contract matches baseline. Source bit is cosmetic."
+    },
+    {
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "minor",
+      "finding": "Inventory baseline-state vs final-state distinction, including non-tool configuration hashes",
+      "disposition": "No source change; baseline inventory explicitly defined in this attestation. Exact final source commit binds all files; final authored/config/manifest digests are included below."
+    },
+    {
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "minor",
+      "finding": "Contributor context command lists do not yet mention build:tools",
+      "disposition": "No checkpoint blocker; current README/typescript/testing docs describe the command and stale output fails loudly. Parent owns global integration/context reconciliation; not expanding the frozen source revision for this documentation nit."
+    },
+    {
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "minor",
+      "finding": "Historical M0 manifest and parent-owned remaining migration plan retain original Playwright JS path",
+      "disposition": "No source change; historical manifest explicitly inactive, and plan permits host-supported direct TS config. Active package exclusion and command discovery migrated and verified."
+    }
+  ],
+  "finalReviews": [
+    {
+      "model": "kimi-code/k3",
+      "session": "01a0aae0-fefb-70ac-a2a1-9cc133f9f61b",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "sourceCommit": "ed61fff9592183e28bb2f18c190ae13e31f7ceb4",
+      "verdict": "ACCEPT",
+      "unresolvedImportantOrBlockingFindings": [],
+      "receivedMessage": {
+        "session": "01a0aacf-378b-7454-a8ed-c7c5422991b6",
+        "messageId": "6775a53e",
+        "timestamp": 1789573905270,
+        "text": "FINAL CHECKPOINT REVIEW \u2014 C1 first tools prerequisite\nReviewer provenance: provider/model kimi-code/k3, high reasoning; durable independent whole-final-checkpoint reviewer 2 of 3. Read-only review; no builds, tests, lints, commits.\nSource commit reviewed: ed61fff9592183e28bb2f18c190ae13e31f7ceb4 (branch migration/c1-checked-tools, baseline 173b11e8cf9bad3a7f2e8e44550b748cd3b4164b). Tree clean except ignored .amp.\n\nVERDICT: ACCEPT ed61fff9592183e28bb2f18c190ae13e31f7ceb4 \u2014 no unresolved important or blocking findings.\n\nSCOPE PERSONALLY INSPECTED (complete checkpoint, not a subset):\n1. All seven authored bodies in tsconfig.tools.json (build-tools.ts, build-core.ts, build-browser.ts, build-edges.ts, build-vendor.ts, check-source-policy.mts incl. all elided ranges, report-ci-failure.ts).\n2. All 14 generated outputs: full git diff of each new .js/.mjs against its baseline counterpart. Differences are purely tsc NodeNext emit style (indent, double quotes, node_child_process_1 alias, (0, fn) call form, \"use strict\"/__esModule header, generated banner) plus additive strict-typing guards only: build-edges config-shape validation, check-source-policy policy-shape validation (stringList) and a !program guard, eslint node.id null guard. No algorithm, path, argument, mode, banner, or exit-behavior change. check-source-policy exported API (inspectSource/checkPolicy signatures and .mjs path) preserved; consumer test/source-policy.test.js unchanged and compatible.\n3. All .d.ts/.d.mts declarations: export {} for CLIs; real inspectSource/checkPolicy declarations for the policy module.\n4. tsconfig.tools.json (strict NodeNext/ES2022, Node types only, declaration, noEmitOnError, exact 7-file membership) and tsconfig.configs.json (noEmit strict checkJs on the two real config bodies).\n5. eslint.config.js full body: same globals computation and rule sets; createRequire(__filename)('./public/helpers') boundary bounds dynamic exports to Record<string, unknown>; no fake declarations; espree 11.2 real bundled types; no dependency/lock change (package-lock.json untouched in diff).\n6. playwright.config.ts: full body compared to baseline .js \u2014 identical settings, pure CJS->ESM conversion via Playwright's existing host transform; no JS alias; no spec.ts files exist, so default discovery cannot double-count today; the generated-JS-only testMatch gate is correctly recorded in evidence as a required future gate, not applied.\n7. source-policy.json: both new programs and all 9 tool/config files enrolled; package.json: additive build:tools, typecheck prepends build-tools.js --check and appends tsconfig.configs.json; electron-builder files exclusion correctly renamed !playwright.config.ts; CLI paths/arguments unchanged; workflows still call scripts/report-ci-failure.js.\n8. docs/typescript.md, docs/testing.md, README.md changed sections: accurate against the code (bootstrap-after-ci, temp-dir validation, --check never repairs, Node>=22.19.0 unchanged, deferred families stated).\n9. docs/c1-tools-evidence.json in full (all top-level sections): verified all 14 finalSourceOutputMapping sha256+mode entries against the live tree (14/14 OK); inventory section confirmed to be baseline-state (hashes match baseline blobs); spot-verified 4 vendor sha256 digests against public/vendor bytes (OK); negative/bootstrap probes, Node22.19.0 checksum-verified runs, 1027/1027 backend rerun after isolated EADDRINUSE, 286/286 browser plus JS-vs-TS config byte-identical --list all internally consistent with the code I read.\n10. Git modes baseline-vs-final: every preexisting output mode preserved exactly (build-edges.js/check-source-policy.mjs 0755, others 0644); new build-tools.js 0755; shebangs first-line preserved (build-browser/report-ci-failure correctly shebang-less, as baseline). No test/, public/, vendor, fixture, runner, workflow, or lockfile paths touched (diff name-status).\n\nMINOR NOTES (non-blocking, no correction required):\n- scripts/build-core.ts source itself is mode 100755 while its output is 100644; source modes are ungoverned and harmless \u2014 cosmetic only.\n- docs/m0-runtime-manifest.json retains the historical playwright.config.js exclusion; evidence sourceDeltas.packageRuntime already records this as a deliberately unchanged, superseded M6-target-contract entry. Acceptable as-is.\n\nVERIFICATION LIMITS: per instructions I reran nothing; I independently verified file hashes, modes, full baseline-vs-generated diffs, consumer wiring, and internal consistency of the recorded command/probe/suite evidence. Node24/non-Linux/Electron packaging and combined M7/pushed-main CI remain parent-owned gates, as stated in the evidence limits.\n\nNo acceptance of full C1 or parent integration is implied; this accepts only the bounded tools checkpoint at the exact final source commit."
+      },
+      "scope": "Personally inspected complete final authored/source contract, relevant generated output, baseline parity, manifests/configs/docs and complete evidence; read-only static cross-checks, no project validation reruns"
+    },
+    {
+      "model": "zai/glm-5.3",
+      "session": "01a0aae0-f575-7414-a8a2-41190d242a29",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "sourceCommit": "ed61fff9592183e28bb2f18c190ae13e31f7ceb4",
+      "verdict": "ACCEPT",
+      "unresolvedImportantOrBlockingFindings": [],
+      "receivedMessage": {
+        "session": "01a0aacf-378b-7454-a8ed-c7c5422991b6",
+        "messageId": "ca76d07a",
+        "timestamp": 1789573953518,
+        "text": "FINAL WHOLE-CHECKPOINT REVIEW \u2014 C1 first tools prerequisite\nReviewer: independent durable reviewer #<n> of three; model zai/glm-5.3, thinking level high (harness-verified by semantic resolve before this review; provenance as actually launched).\nSubject: ACCEPT ed61fff9592183e28bb2f18c190ae13e31f7ceb4 (baseline 173b11e8cf9bad3a7f2e8e44550b748cd3b4164b), branch migration/c1-checked-tools. No unresolved important or blocking findings. Minor notes below.\n\nPROVENANCE/SCOPE PERSONALLY INSPECTED (read-only; no builds/lint/tests/commits run; no LSP; .amp and credentials untouched):\n- Working tree at ed61fff confirmed via git; only untracked .amp/ present (not inspected, per instruction).\n- Full diff baseline..HEAD mapped: 31 paths, +9941/\u2212309, exactly the approved family. ZERO diff in src/, lib/, public/, test/ \u2014 product, tests, fixtures, vendor untouched.\n- All seven authored bodies read in full: scripts/build-tools.ts, build-core.ts, build-browser.ts, build-edges.ts, build-vendor.ts, check-source-policy.mts, report-ci-failure.ts.\n- All generated outputs read/verified: build-tools.js and check-source-policy.mjs read completely; the other five generated .js diffed line-by-line vs baseline; all six .d.ts plus check-source-policy.d.mts read (script modules are `export {}`; policy keeps inspectSource/checkPolicy API).\n- tsconfig.tools.json (strict, NodeNext, ES2022, declaration, noEmitOnError, LF, types:[\"node\"], exactly the seven files) and tsconfig.configs.json (strict+checkJs+allowJs, noEmit, eslint.config.js + playwright.config.ts only).\n- eslint.config.js actual body; playwright.config.ts vs baseline playwright.config.js (settings identical; require\u2192import/default-export only; no JS alias \u2014 old .js absent from tree).\n- source-policy.json and package.json diffs; package-lock.json unchanged; espree 11.2.0 in node_modules ships real dist/espree.d.cts and .d.ts (verified).\n- README.md, docs/testing.md, docs/typescript.md changed sections.\n- docs/c1-tools-evidence.json: all 25 sections read; every claim below cross-checked programmatically against the tree/git.\n\nINDEPENDENT CROSS-CHECKS I RAN (static, read-only):\n1. finalSourceOutputMapping: all 14 outputs match working-tree sha256 AND mode (0o755 build-tools.js/build-edges.js/check-source-policy.mjs; 0o644 rest). Git tree modes agree (100755/100644); shebang sources carry matching 100755.\n2. Inventory section is the frozen BASELINE execution contract: all 247 entries match baseline blob+mode+sha256; the 10 entries that differ at HEAD are exactly the approved touch set (7 script runtimes + eslint.config.js + package.json + source-policy.json + playwright rename). No unexpected file changed anywhere in the 764-file tree.\n3. Vendor preservation: all 35 public/vendor digests recomputed \u2014 identical to evidence and to baseline.\n4. Algorithm contracts vs baseline (git show of all six existing scripts + both configs): semantics identical; deltas are exactly the approved ones \u2014 tsconfig.edges/tools config-shape validation at unknown boundaries; policy JSON shape validation + stringList; readdirSync explicit encoding:'utf8' (runtime-identical); !program narrowing guard; ESTree node.id null guard; createRequire-typed helper export enumeration (same module resolution as baseline require). Error strings, regexes, thresholds, banners, ordering preserved; vendor bundle header text byte-preserved (\"generated by scripts/build-vendor.js\" intentionally retained so vendor output stays identical). Generated-vs-baseline string-literal sweep shows only tsc conventions (quotes, \"use strict\", __esModule, reindent, node_child_process_1).\n5. Bootstrap (new build-tools.ts): argv contract unchanged pattern; validates tsconfig.files; constrains sources to flat scripts/*.ts|mts non-declaration; duplicate-output detection; pinned tsc to temp dir (noEmitOnError); complete emit mapping check (unexpected/missing); orphan detection via own banner; shebang enforcement for executables; prepare-all-then-write; --check compares bytes+mode without repair; temp cleanup in finally. Mirrors accepted build-edges convention as approved.\n6. source-policy membership: recomputed governed set from source-policy.json = 256, matches the recorded passing run; all seven tools + both config bodies enrolled in files/programs.\n7. Discovery/API preservation: 91 test/*.test.js files identical to baselineNodeTestEnumeration (sorted set equality); 54 test/browser spec.js files, zero spec.ts siblings (future generated-JS-only testMatch gate correctly NOT applied yet \u2014 recorded as required future gate in evidence and docs/typescript.md); test/source-policy.test.js still imports inspectSource from ../scripts/check-source-policy.mjs (export preserved); package.json command names/arguments unchanged (build:tools additive; typecheck gains tools --check first and tsconfig.configs.json last); check:source-policy path unchanged; engines >=22.19.0 unchanged; .github/workflows/tests.yml unchanged (rides npm run check for new gates).\n\nEVIDENCE ADEQUACY: command proofs (clean npm ci; all builds; 200 lib/public files byte-identical; source-policy/strict/lint/drift; full temp-isolated negative probes for stale/missing/orphan/mode/type/member/no-any/suppression/checkJs/DOM; checksum-verified Node22.19.0 bootstrap/check/config-discovery; backend 1027/1027 final with the isolated EADDRINUSE listener case dispositioned via focused 16/16 then clean full rerun without source/test edits; browser 286/286, 8 scenarios, smoke, delayed-rename explicit case; JS-vs-TS Playwright --list byte-identical 286/54) are coherent with, and sufficient for, the frozen tree I verified. I did not rerun them per review instructions; static verification above independently confirms the tree-level claims.\n\nMINOR NOTES (non-blocking):\n1. docs/c1-tools-evidence.json \"inventory\" is the frozen baseline inventory, not a final-tree inventory; final state is covered by finalSourceOutputMapping + touchedFiles. Internally consistent, but a one-word clarification (\"baselineInventory\") would prevent misreading. Documentation nit only.\n2. docs/testing.md previously asserted the lib/cron.js strict-checkJs exception, stale since cron moved to src/core in an earlier accepted milestone; this checkpoint's rewrite is accurate. No action needed.\n3. build-tools.ts regenerates its own running output file (self-replacement) \u2014 standard bootstrap pattern and probe-proven on this POSIX-targeted project; would not work on Windows, which is out of the supported matrix anyway. Observation only.\n\nLIMITS OF THIS REVIEW: no dynamic reruns (builds/check/tests/lint/Playwright listings) per instructions \u2014 proofs taken from the frozen evidence plus my static byte/hash/mode/set verification of the exact commit; Node24/CI matrix, non-Linux, Electron packaging, pushed-main CI, and combined M7 integration remain parent-owned later gates; no acceptance implied beyond this bounded tools checkpoint; full C1 and parent integration explicitly NOT accepted here.\n\nVERDICT: ACCEPT ed61fff9592183e28bb2f18c190ae13e31f7ceb4 for the bounded C1 first tools prerequisite as scoped. No unresolved important or blocking findings; three minor notes above."
+      },
+      "scope": "Personally inspected complete final authored/source contract, relevant generated output, baseline parity, manifests/configs/docs and complete evidence; read-only static cross-checks, no project validation reruns"
+    },
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "session": "01a0aae0-fa3a-711d-93e2-45f1587038eb",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "sourceCommit": "ed61fff9592183e28bb2f18c190ae13e31f7ceb4",
+      "verdict": "ACCEPT",
+      "unresolvedImportantOrBlockingFindings": [],
+      "receivedMessage": {
+        "session": "01a0aacf-378b-7454-a8ed-c7c5422991b6",
+        "messageId": "c8bfe1f1",
+        "timestamp": 1789574048749,
+        "text": "C1 TOOLS CHECKPOINT \u2014 INDEPENDENT WHOLE-FINAL-CHECKPOINT REVIEW (reviewer 1 of 3)\n\nDISPOSITION: ACCEPT ed61fff9592183e28bb2f18c190ae13e31f7ceb4 (accepted baseline 173b11e8cf9bad3a7f2e8e44550b748cd3b4164b). No unresolved important or blocking findings. Minor notes at the end; none require correction before your acceptance decision. This is acceptance of the bounded tools checkpoint only \u2014 not full C1, not M7 integration, not pushed-main CI.\n\nREVIEWER PROVENANCE: harness omp; provider/model opencode-go/deepseek-v4.1-flash; high reasoning; provider/model/high reasoning verified by semantic resolve before the substantive prompt. Read-only in /home/jyarwood/workspace/pi-dish-c1, branch migration/c1-checked-tools. I ran no builds, tests, lint, formatters, or commits; no mutating LSP; no .amp/credentials inspected.\n\nSCOPE PERSONALLY INSPECTED (complete): all seven authored bodies (scripts/build-tools.ts, build-core.ts, build-browser.ts, build-edges.ts, build-vendor.ts, check-source-policy.mts, report-ci-failure.ts) and all fourteen checked-in outputs (build-tools.js/.d.ts, build-core.js/.d.ts, build-browser.js/.d.ts, build-edges.js/.d.ts, build-vendor.js/.d.ts, check-source-policy.mjs/.d.mts, report-ci-failure.js/.d.ts) \u2014 every generated file read in full (directly or as a complete diff against baseline, which is exact for these files); tsconfig.tools.json and tsconfig.configs.json; the actual eslint.config.js and playwright.config.ts bodies; source-policy.json; package.json (full, incl. electron-builder files/asarUnpack); README Development section; docs/typescript.md and docs/testing.md changed sections; docs/c1-tools-evidence.json in full (inventory, commands, probes, vendor digests, discovery, membership, limits); baseline git show of all six existing scripts and playwright.config.js; consumers and gates: test/core-build.test.js, test/edge-build.test.js, test/browser-build.test.js, test/source-policy.test.js, test/runtime-resources.test.js, scripts/run-tests.js, .github/workflows/tests.yml, .gitignore, all six other tsconfigs.\n\nINDEPENDENT VERIFICATIONS (read-only, no reruns of recorded proofs):\n1. git diff baseline..HEAD is exactly 31 paths and equals touchedFiles; lib/ (158 files) + public/ (42) = 200 untouched; test/ untouched, so the 91 .test.js discovery set and every fixture/support byte are intact.\n2. All 14 finalSourceOutputMapping entries match disk exactly in sha256 AND mode; all 35 vendorPreservation digests match, including public/vendor/highlight.js \u2014 so the handwritten __req/__mods loader emission is byte-identical and R12's entry point is untouched.\n3. Modes: build-edges.js 0755 and check-source-policy.mjs 0755 retained; build-browser/core/vendor/report-ci-failure.js stay 0644; new build-tools.js is 0755; index modes and the executables map agree. Shebang stays line 1 wherever baseline had it.\n4. Generated outputs are faithful TS 7.0.2 CJS emit: annotations/imports erased correctly (check-source-policy.mjs elides type Node/SourceFile and keeps type-only exports in the .d.mts; build-tools.js strips unknown/Record/Map generics and the `as string[]` cast), spacing/quotes/`(0, mod.fn)(...)`/else-placement match the sibling checked-in families. The .d.mts/.d.ts first-line shebang is genuine compiler output, not a hand edit \u2014 build-core.d.ts, build-edges.d.ts, build-tools.d.ts, build-vendor.d.ts all carry it too.\n5. source-policy count independently recomputed = 256 (185 files under the two roots + 23 listed + 48 fixtures), exactly the recorded \"256 compiler-owned sources\".\n6. No `any`, no @ts-ignore/@ts-expect-error/@ts-nocheck, no NODE_OPTIONS/--loader/--import anywhere in the changed sources or configs; no package-lock or dependency delta; espree 11.2.0 really ships dist/espree.d.cts, globals 17.6.0 ships index.d.ts, and the typescript/unstable/sync and /ast subpaths resolve to real declarations (dist/api/sync/api.d.ts, dist/ast/index.d.ts) with skipLibCheck as in the other programs.\n7. Node minimum: engines stays >=22.19.0; the recorded tarball digest c0649af18e6a24f6fe5535a3e86b341dd49a8e71117c8b68bde973ef834f16f2 matches nodejs.org SHASUMS256.txt for node-v22.19.0-linux-x64.tar.xz.\n8. Discovery: test/browser holds exactly the 54 *.spec.js files named by the frozen 286-case list; fixtures.js is not discoverable; no .spec.ts or .test.js exist yet, so the recorded future generated-JS-only testMatch gate is correctly deferred and still required.\n9. Packaging closure: electron-builder files already excluded scripts/**, **/*.d.ts, **/*.d.mts and now exclude !playwright.config.ts \u2014 the new sources/declarations cannot leak into the asar.\n10. Behavior parity: build-browser/core/vendor/report-ci-failure are semantic no-ops (formatting/emit only; the esbuild require stays after the tsc status check exactly as baseline); build-edges and check-source-policy add only deterministic validation of parsed-unknown manifests (plus the `!program` guard and explicit `encoding: 'utf8'`). CLI paths, usage strings and the two exported source-policy functions are unchanged; the only command delta is the additive build:tools script and two additive typecheck stages.\n\nVERIFICATION LIMITS: bound by the read-only mandate I did not re-run tsc, npm ci, npm test, Playwright, lint or the negative probes, so byte-reproducibility of the 14 outputs rests on the recorded clean-install/build-tools --check/typecheck evidence cross-checked against on-disk hashes and modes rather than reproduced here. I did not exercise Node 24/26, non-Linux, Electron packaging, the opt-in real-harness canary, or combined M7 integration \u2014 all parent-owned or explicitly out of scope.\n\nMINOR NOTES (non-blocking, no correction required):\na) scripts/build-core.ts is mode 100755 while its generated build-core.js is 0644 and it is absent from the executables map \u2014 the only source-mode outlier (build-edges.ts, check-source-policy.mts, build-tools.ts are 755/755). Output modes match baseline, so the verify contract is correct; only the source bit is cosmetically inconsistent.\nb) docs/c1-tools-evidence.json inventory is a baseline snapshot: I verified 237/247 entries match the working tree and the 10 mismatches are exactly the declared delta (eslint.config.js, package.json, playwright.config.js, the six script JS outputs, source-policy.json). No final-state hash is recorded for the four changed non-tool files. Labeling the inventory as baseline, or adding final hashes, would remove the ambiguity for your attestation.\nc) AGENTS.md and CLAUDE.md still tell contributors only to run build:core; `npm run build:tools` is documented in README and docs/typescript.md. Failure mode is safe (npm run check fails loudly with \"Tool output is stale; run npm run build:tools\"), so this is documentation lag, not a gap.\nd) Historical docs still name the old config path: docs/m0-runtime-manifest.json (explicitly an inactive M6c target contract) and docs/remaining-migration-plan.md:690. Evidence records the packageRuntime exclusion rename as superseding the historical manifest, and the plan's escape clause (\"unless their hosts support a direct TS cutover without a new runtime loader\") is satisfied by Playwright's built-in transform.\n\nStanding by after this report."
+      },
+      "scope": "Personally read all seven authored bodies, all fourteen generated outputs, config/manifests/docs, complete evidence, baseline script/config implementations and actual test/runner/workflow consumers; static hash/mode/count/package cross-checks only"
+    }
+  ],
+  "touchedFiles": [
+    "README.md",
+    "docs/c1-tools-evidence.json",
+    "docs/testing.md",
+    "docs/typescript.md",
+    "eslint.config.js",
+    "package.json",
+    "playwright.config.js",
+    "playwright.config.ts",
+    "scripts/build-browser.d.ts",
+    "scripts/build-browser.js",
+    "scripts/build-browser.ts",
+    "scripts/build-core.d.ts",
+    "scripts/build-core.js",
+    "scripts/build-core.ts",
+    "scripts/build-edges.d.ts",
+    "scripts/build-edges.js",
+    "scripts/build-edges.ts",
+    "scripts/build-tools.d.ts",
+    "scripts/build-tools.js",
+    "scripts/build-tools.ts",
+    "scripts/build-vendor.d.ts",
+    "scripts/build-vendor.js",
+    "scripts/build-vendor.ts",
+    "scripts/check-source-policy.d.mts",
+    "scripts/check-source-policy.mjs",
+    "scripts/check-source-policy.mts",
+    "scripts/report-ci-failure.d.ts",
+    "scripts/report-ci-failure.js",
+    "scripts/report-ci-failure.ts",
+    "source-policy.json",
+    "tsconfig.configs.json",
+    "tsconfig.tools.json"
+  ],
+  "remainingFamilies": [
+    {
+      "family": "runner-support",
+      "release": "Separate parent release; preserve sanitization and discovery before any behavioral-test renames",
+      "paths": [
+        "scripts/run-tests.js",
+        "scripts/run-ui-scenarios.js",
+        "test/test-env.js",
+        "test/sse-reader.js"
+      ]
+    },
+    {
+      "family": "observational-tools",
+      "release": "Accepted M7 and R1/R3/R7 contracts; readme browser evaluations also follow R8/R9/R10",
+      "paths": [
+        "scripts/readme-shots.js",
+        "scripts/session-catalog-baseline.js",
+        "scripts/test-real-lineage-harnesses.js"
+      ]
+    },
+    {
+      "family": "native-fixtures-tests",
+      "release": "Accepted M7 and R6/R7; R11 for CLI/ref cases",
+      "paths": [
+        "test/fixtures/fake-omp-bridge-host.ts",
+        "test/fixtures/fake-omp-export.js",
+        "test/fixtures/fake-omp-models.js",
+        "test/fixtures/fake-omp-tree-host.ts",
+        "test/fixtures/fake-pi.js",
+        "test/fixtures/fake-rpc-pi.js",
+        "test/fixtures/fake-session-switch-host.ts",
+        "test/fixtures/fake-ssh.js",
+        "test/fixtures/listener-server.js",
+        "test/fixtures/omp-entry-tolerance.jsonl",
+        "test/native-extension-boundary.test.js",
+        "test/native-extensions.smoke.js",
+        "test/omp-bridge-btw.test.js",
+        "test/omp-bridge-compact.test.js",
+        "test/omp-bridge-session-switch.test.js",
+        "test/omp-export.test.js",
+        "test/omp-native-projection.test.js",
+        "test/omp-tree-bridge.test.js",
+        "test/omp-web-pilot.test.js",
+        "test/pi-bridge.integration.test.js"
+      ]
+    },
+    {
+      "family": "node-browser-contracts",
+      "release": "Accepted product gate and R8/R9/R10; feature cases also consume R2/R3/R4/R12",
+      "paths": [
+        "test/browser-anchored-comments.test.js",
+        "test/browser-api.test.js",
+        "test/browser-bounce.test.js",
+        "test/browser-build.test.js",
+        "test/browser-composer-autocomplete.test.js",
+        "test/browser-composer-drafts.test.js",
+        "test/browser-directory-catalog.test.js",
+        "test/browser-display.test.js",
+        "test/browser-extension-ui.test.js",
+        "test/browser-file-views.test.js",
+        "test/browser-harness-discovery.test.js",
+        "test/browser-harness-settings.test.js",
+        "test/browser-host-connections.test.js",
+        "test/browser-host-directory.test.js",
+        "test/browser-host-discovery.test.js",
+        "test/browser-host-presentation.test.js",
+        "test/browser-host-session-loader.test.js",
+        "test/browser-host-view.test.js",
+        "test/browser-message-render.test.js",
+        "test/browser-model-catalog.test.js",
+        "test/browser-new-session-options.test.js",
+        "test/browser-recovery.test.js",
+        "test/browser-routines.test.js",
+        "test/browser-search-view.test.js",
+        "test/browser-session-info.test.js",
+        "test/browser-session-navigation.test.js",
+        "test/browser-session-spawns.test.js",
+        "test/browser-session-state.test.js",
+        "test/browser-shared-helpers.test.js",
+        "test/browser-sidebar-render.test.js",
+        "test/browser-skills.test.js",
+        "test/browser-spawn-targets.test.js",
+        "test/browser-terminal.test.js",
+        "test/browser-transcript-tree.test.js",
+        "test/browser-transcript.test.js",
+        "test/browser-usage-view.test.js"
+      ]
+    },
+    {
+      "family": "playwright-and-browser-support",
+      "release": "Accepted product gate and R8/R9/R10; R4/R6/R12 relevant feature contracts; keep browser-evaluation types separate; explicit generated-JS testMatch REQUIRED before .spec.ts siblings",
+      "paths": [
+        "test/browser/anchored-comments.spec.js",
+        "test/browser/api-boundary.spec.js",
+        "test/browser/app-shell.spec.js",
+        "test/browser/artifact-comments.spec.js",
+        "test/browser/bounce.spec.js",
+        "test/browser/composer-autocomplete.spec.js",
+        "test/browser/composer-drafts.spec.js",
+        "test/browser/composer-ownership.spec.js",
+        "test/browser/composer-speech.spec.js",
+        "test/browser/directories.spec.js",
+        "test/browser/display.spec.js",
+        "test/browser/extension-dialogs.spec.js",
+        "test/browser/extension-ui.spec.js",
+        "test/browser/feature-ownership.spec.js",
+        "test/browser/file-views.spec.js",
+        "test/browser/fixtures.js",
+        "test/browser/harness-discovery.spec.js",
+        "test/browser/harness-settings.spec.js",
+        "test/browser/host-discovery.spec.js",
+        "test/browser/host-polls.spec.js",
+        "test/browser/host-settings.spec.js",
+        "test/browser/live-transcript.spec.js",
+        "test/browser/menu-ownership.spec.js",
+        "test/browser/message-render.spec.js",
+        "test/browser/message-stream.spec.js",
+        "test/browser/model-catalog.spec.js",
+        "test/browser/model-selector.spec.js",
+        "test/browser/new-session-options.spec.js",
+        "test/browser/new-session-shell.spec.js",
+        "test/browser/prime-close.spec.js",
+        "test/browser/production-composition.spec.js",
+        "test/browser/prompt-delivery.spec.js",
+        "test/browser/queue-ownership.spec.js",
+        "test/browser/recovery.spec.js",
+        "test/browser/rich-text.spec.js",
+        "test/browser/routines.spec.js",
+        "test/browser/search-view.spec.js",
+        "test/browser/selection-ownership.spec.js",
+        "test/browser/session-activity.spec.js",
+        "test/browser/session-controls.spec.js",
+        "test/browser/session-families.spec.js",
+        "test/browser/session-identity.spec.js",
+        "test/browser/session-info.spec.js",
+        "test/browser/session-navigation.spec.js",
+        "test/browser/session-spawns.spec.js",
+        "test/browser/session-view.spec.js",
+        "test/browser/sidebar-controls.spec.js",
+        "test/browser/sidebar-lists.spec.js",
+        "test/browser/skills.spec.js",
+        "test/browser/spawn-targets.spec.js",
+        "test/browser/terminal-ownership.spec.js",
+        "test/browser/thinking-selector.spec.js",
+        "test/browser/transcript-tree.spec.js",
+        "test/browser/transcript.spec.js",
+        "test/browser/usage-view.spec.js",
+        "test/fixtures/browser-app.js",
+        "test/fixtures/browser-feature-probe.mjs",
+        "test/fixtures/browser-server.js"
+      ]
+    },
+    {
+      "family": "ui-scenarios-and-smoke",
+      "release": "Accepted product gate and R2/R3/R6/R8/R9/R10/R12; shared fixture ownership serialized",
+      "paths": [
+        "test/ui-scenarios/bounce.js",
+        "test/ui-scenarios/drafts.js",
+        "test/ui-scenarios/index.js",
+        "test/ui-scenarios/mobile.js",
+        "test/ui-scenarios/models.js",
+        "test/ui-scenarios/routines.js",
+        "test/ui-scenarios/sidebar.js",
+        "test/ui-scenarios/skills.js",
+        "test/ui-scenarios/usage.js",
+        "test/ui-smoke.js"
+      ]
+    },
+    {
+      "family": "node-session-and-lifecycle",
+      "release": "Accepted M7 and R1/R6/R7; R11 for reference contracts",
+      "paths": [
+        "test/bridge-session.test.js",
+        "test/listener-lifecycle.test.js",
+        "test/recovery-runner.test.js",
+        "test/rpc-session.test.js",
+        "test/session-api.test.js",
+        "test/session-bounces.test.js",
+        "test/session-capabilities.test.js",
+        "test/session-catalog.test.js",
+        "test/session-control-cli.test.js",
+        "test/session-discovery.test.js",
+        "test/session-files.test.js",
+        "test/session-foundation.test.js",
+        "test/session-index.test.js",
+        "test/session-provenance.test.js",
+        "test/session-recovery.test.js",
+        "test/session-refs.test.js",
+        "test/session-source.test.js"
+      ]
+    },
+    {
+      "family": "node-feature-and-infrastructure",
+      "release": "Parent releases disjoint R2/R3/R4/R5/R7/R11 contracts, no early behavioral rename",
+      "paths": [
+        "test/comments-cli.test.js",
+        "test/core-build.test.js",
+        "test/core-contracts.test.js",
+        "test/cron.test.js",
+        "test/edge-build.test.js",
+        "test/file-mention.test.js",
+        "test/fleet-artifacts.test.js",
+        "test/git-diff.test.js",
+        "test/harness-pricing.test.js",
+        "test/helpers.test.js",
+        "test/host-auth.test.js",
+        "test/install.test.js",
+        "test/remote-hosts.test.js",
+        "test/routines-api.test.js",
+        "test/routines.test.js",
+        "test/runtime-resources.test.js",
+        "test/server.test.js",
+        "test/skill-client-ingress.test.js",
+        "test/skill-mining.test.js",
+        "test/skill-sessions-fleet.test.js",
+        "test/skills-cli.test.js",
+        "test/skills-core.test.js",
+        "test/source-policy.test.js",
+        "test/stt.test.js",
+        "test/terminal.test.js",
+        "test/test-env.test.js",
+        "test/tmux-service.test.js",
+        "test/tmux.test.js",
+        "test/transport-frames.test.js"
+      ]
+    },
+    {
+      "family": "existing-compiler-fixtures",
+      "release": "Already checked M/browser fixtures, preserve ownership; add future C1 negatives only for genuine boundaries",
+      "paths": [
+        "test/types/browser-anchored-comments.ts",
+        "test/types/browser-api.ts",
+        "test/types/browser-app.ts",
+        "test/types/browser-artifact-comments.ts",
+        "test/types/browser-bounce.ts",
+        "test/types/browser-composer-autocomplete.ts",
+        "test/types/browser-composer-drafts.ts",
+        "test/types/browser-composer-speech.ts",
+        "test/types/browser-directory.ts",
+        "test/types/browser-discovery.ts",
+        "test/types/browser-display.ts",
+        "test/types/browser-extension-ui.ts",
+        "test/types/browser-file-views.ts",
+        "test/types/browser-harness-settings.ts",
+        "test/types/browser-harnesses.ts",
+        "test/types/browser-hosts.ts",
+        "test/types/browser-live-transcript.ts",
+        "test/types/browser-message-render.ts",
+        "test/types/browser-message-stream.ts",
+        "test/types/browser-model-catalog.ts",
+        "test/types/browser-new-session-options.ts",
+        "test/types/browser-new-session.ts",
+        "test/types/browser-presentation.ts",
+        "test/types/browser-prompt-delivery.ts",
+        "test/types/browser-recovery.ts",
+        "test/types/browser-rich-text.ts",
+        "test/types/browser-routines.ts",
+        "test/types/browser-search-view.ts",
+        "test/types/browser-selectors.ts",
+        "test/types/browser-session-activity.ts",
+        "test/types/browser-session-controls.ts",
+        "test/types/browser-session-info.ts",
+        "test/types/browser-session-navigation.ts",
+        "test/types/browser-session-spawns.ts",
+        "test/types/browser-session-view.ts",
+        "test/types/browser-shared-helpers.ts",
+        "test/types/browser-sidebar-controls.ts",
+        "test/types/browser-sidebar-lists.ts",
+        "test/types/browser-sidebar-render.ts",
+        "test/types/browser-skills.ts",
+        "test/types/browser-state.ts",
+        "test/types/browser-targets.ts",
+        "test/types/browser-terminal.ts",
+        "test/types/browser-transcript-tree.ts",
+        "test/types/browser-transcript.ts",
+        "test/types/browser-usage-view.ts",
+        "test/types/core.ts",
+        "test/types/extensions.ts",
+        "test/types/omp-host.d.ts"
+      ]
+    }
+  ],
+  "acceptanceAuthority": "Parent independently inspects/integrates, observes exact pushed-main CI and writes tools-checkpoint acceptance. No C1 completion or parent acceptance claimed.",
+  "inventoryDefinition": "docs/c1-tools-evidence.json inventory is the complete frozen PRE-CONVERSION BASELINE inventory at 173b11e8; finalSourceOutputMapping and touchedFiles record the final checkpoint mapping/deltas.",
+  "reviewMessageClarifications": [
+    "Kimi called .amp ignored; owner git status records it as untracked. It was preserved and not inspected or staged.",
+    "Reviewer ordinal placeholders/labels are quoted verbatim; identity and independence are established by exact semantic session/model refs, not ordinal prose."
+  ],
+  "finalSemanticProvenance": [
+    {
+      "ref": "01a0aae0-f575-7414-a8a2-41190d242a29",
+      "model": "zai/glm-5.3",
+      "thinkingLevel": "high",
+      "active": true,
+      "turnInProgress": false,
+      "messageCount": 2,
+      "lastActivity": "2026-09-16T15:53:07.030Z"
+    },
+    {
+      "ref": "01a0aae0-fa3a-711d-93e2-45f1587038eb",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "thinkingLevel": "high",
+      "active": true,
+      "turnInProgress": false,
+      "messageCount": 1,
+      "lastActivity": "2026-09-16T15:54:30.643Z"
+    },
+    {
+      "ref": "01a0aae0-fefb-70ac-a2a1-9cc133f9f61b",
+      "model": "kimi-code/k3",
+      "thinkingLevel": "high",
+      "active": true,
+      "turnInProgress": false,
+      "messageCount": 1,
+      "lastActivity": "2026-09-16T15:54:34.629Z"
+    }
+  ],
+  "recordKind": "Attestation only; no authored source or generated runtime change",
+  "reviewedSource": "ed61fff9592183e28bb2f18c190ae13e31f7ceb4",
+  "status": "All three fresh independent exact-model/high reviewers ACCEPT the same entire final source; parent integration, pushed-main CI and tools-checkpoint acceptance remain pending. Full C1 incomplete.",
+  "sourceRevisionsReviewed": [
+    {
+      "sourceCommit": "ed61fff9592183e28bb2f18c190ae13e31f7ceb4",
+      "reviewers": [
+        "zai/glm-5.3",
+        "opencode-go/deepseek-v4.1-flash",
+        "kimi-code/k3"
+      ],
+      "outcome": "Three ACCEPTs; no unresolved important/blocking findings; source unchanged throughout review; no correction cycle required"
+    }
+  ],
+  "finalAuthoredContractDigests": {
+    "README.md": "f2a0be6cdbac4a13ad2610c73d6513351ddb8bcb71461f0e3181482b88a3a9e5",
+    "docs/testing.md": "aa1b9a513e1babb775182c28d475df8c701e660ae6dbc5fb17df3cd4815e11b0",
+    "docs/typescript.md": "04065c94524e3c95c23ecf3f501f136eda871c61163b4707218bafc0d9c8d2aa",
+    "docs/c1-tools-evidence.json": "666540d5072dcec389a30e629f7dc8db96444402ac3ce0a52a979673477a3bc2",
+    "eslint.config.js": "1226ecd1442fe3a90271158c75a7b03db0ee295a3c7cf02728da83f4a97c6e61",
+    "package.json": "2d0ab4d954f36b75251d1d782dd2da370695d2280543f2899483d366a1b6c855",
+    "source-policy.json": "2f85ca492ae4430cfe560f70e769ac12307e6db8f59b0c2df239c3770fabad1d",
+    "playwright.config.ts": "0e31a9bc31633501b0d7605d024d206e985893e644c1dbc2822140953a22caff",
+    "tsconfig.tools.json": "8b1f4f6490757ca5c7e2de9d0e8721ec1d4a9c131eff6961a8ecb43fa6e3ebf2",
+    "tsconfig.configs.json": "593ce57c2d117fcbeb18ff8cdbddbed4f7d098a4860021359eab9f6be345e39d",
+    "scripts/build-tools.ts": "5aaec28b85b644aeab4132a895bf96ddc14e8763779c46a6ba974720aca2916c",
+    "scripts/build-tools.d.ts": "8d8ffd2f706eb590310495287afb09c2d19cbb5875ab43849a3c45ec7cfa630e",
+    "scripts/build-core.ts": "df7597c47f64f8e70fec6ff9c8e62afc58140a1944e6671d22cf24bef4716b68",
+    "scripts/build-core.d.ts": "5344360a3d5c36b21db390e204162364468459b8050d634c79225291f8d272ec",
+    "scripts/build-browser.ts": "c087d2351f138931d2c53aa31d59007876b8ff2231a25fb92ee579fc2c199c38",
+    "scripts/build-browser.d.ts": "5a8f3ec0c358ccf78f74b4b174ce3babc8308c8771f19ad1b73ee8d247b51e23",
+    "scripts/build-edges.ts": "d56496e6e07803d238d82c87b54ff2ae01dfdf524090a18fa806b1a1f63287f4",
+    "scripts/build-edges.d.ts": "c5e40c50a9f6c8a6efa00b615b088584cc188e6e68d8b0afbc9b9959ef3d10ee",
+    "scripts/build-vendor.ts": "699304fb0cd36d6e5186f0705028267cd97461da2cde98124260f95e3f1cfcc8",
+    "scripts/build-vendor.d.ts": "695774d0a5107d37ab44e94c060f23b53823ffaac8862ec75c07a0cf05c22cdc",
+    "scripts/check-source-policy.mts": "78e0d6c43f2adec8a7a71f1d21cba3131880fe9c719642924a0ba35aa5d38d03",
+    "scripts/check-source-policy.d.mts": "a7c6c54c6009e97098dbb59a059e855c0eed8a8dc0737464223c4abcfc37521f",
+    "scripts/report-ci-failure.ts": "db71a8017f3de87b0bcc35ff812e42e8030fa85de90be60d5ba09b8494de5ae6",
+    "scripts/report-ci-failure.d.ts": "15b46d5e6a726c835ed92769ca43ae0a2ae89d22887ce3d0c5cc4e5dbca07e97"
+  },
+  "firstPassFindingsSummary": "Nine non-blocking reviewer observations (including duplicate source-mode and baseline-inventory notes); all dispositioned without source changes. No important/blocking findings or invalidated approvals.",
+  "handoff": {
+    "sourceCommit": "ed61fff9592183e28bb2f18c190ae13e31f7ceb4",
+    "attestationCommit": "The commit containing this record; separate from reviewed source",
+    "evidence": "docs/c1-tools-evidence.json",
+    "reviewRefs": [
+      "01a0aae0-f575-7414-a8a2-41190d242a29",
+      "01a0aae0-fa3a-711d-93e2-45f1587038eb",
+      "01a0aae0-fefb-70ac-a2a1-9cc133f9f61b"
+    ],
+    "requiredNextGate": "Parent independent inspection/integration plus exact pushed-main CI and explicit tools-checkpoint acceptance; R12 also requires accepted product M7. Future C1 family conversion requires separate release."
+  }
+}
