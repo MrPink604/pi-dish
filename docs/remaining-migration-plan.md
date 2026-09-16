@@ -1,6 +1,6 @@
 # Remaining TypeScript migration and simplifying refactors
 
-Status: **implementation underway; M0 accepted, parallel M1–M6 work released**.
+Status: **M0, M1 and M5 accepted; M2, M3, M4 and M6 remain in progress**.
 Baseline: `c46e7c5798d6a678dbb2a5f13ac2603f7f2a9952` (2026-09-15).
 This is the forward plan after the delivered browser, catalog, composition,
 contract, shared-helper and lifecycle stages. Their implementation records remain
@@ -832,8 +832,8 @@ content/link checks, not a claim that the future implementation has passed tests
 [115 ordered registrations and 557 resolved outer-name references](m0-route-contracts.json),
 the [inactive M6c runtime-manifest target](m0-runtime-manifest.json), real declaration
 pins, and the TypeScript-parser-backed source-policy gate wired into `npm run check`.
-The gate currently governs 196 compiler-owned sources; pending implementations
-are not claimed checked. M0 makes no production moves/deletions and introduces
+At M0 acceptance, the gate governed 196 compiler-owned sources; pending
+implementations were not claimed checked. M0 makes no production moves/deletions and introduces
 no runtime shim or wire/store policy change. Its new development script remains
 within C1's checked-tooling obligation.
 
@@ -855,7 +855,7 @@ dispositions. The accidental review-time package extraction, confirmed cause,
 byte-identical restoration and post-restoration check are recorded separately;
 no contaminated working-tree bytes were integrated.
 
-**Retained boundaries:** all M1–M7 implementations remain pending. M6c must fix
+**Retained boundaries at M0 acceptance:** M1–M7 were pending. M6c must fix
 the reproduced package entrypoint, omitted resources and Electron embedded-Node
 incompatibility, and prove real desktop/native/SDK behavior; M0's HTTP-only
 package launch is not desktop acceptance. M0 did not run opt-in real OMP/Prime
@@ -866,3 +866,90 @@ Producer-dependent integration still follows the frozen M1/M3/M5 contracts.
 Private domain mount/deletion patches are proposals reviewed with their consumer
 cutover; only the integration lead applies them to shared main, serially.
 M7 owns the remaining server/root conversion. R and C completion are not implied.
+
+### Implementation record — M1
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0a998-4175-7206-b4a7-e3e0c1fa532e`, verified OMP Astra High.
+Producer `6b10e54d5cd15594a5c58e9abd4f02f6e71a7a8e`, original-position root
+proposal `9d47ed6b02c990c3e832c2456c39ba1521fa6f16`, final reviewed source
+`6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d`, and final attestation-only
+`de99e3d03f6ab08b8093b7f0665c079ea01ff5aa` were integrated with M5 at
+`dd618d6f28ac95d570f0d6d0d6a4f268b0d50fa4`.
+[All five exact-commit CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/35091165431).
+
+**Cutover:** all six M1 libraries now have actual strict `src/core` implementations
+and original-path generated JS/declarations. `SessionReadHandlers` owns messages,
+images, search, stats, export and read-only tree responses. Index/data/discovery
+consumers use the real producers. Root retains observation wiring, not duplicate
+M1 response bodies. Six library moves are not algorithm simplification; obsolete
+unchecked signatures and redundant result adapters were removed, with the raw-leaf
+check and persisted ingress decoders retained. The R1 ledger must credit these
+removals rather than recreate them.
+
+**Preserved and explicit exceptions:** bounded reads/shared parsing, cache/delta
+behavior, whole-tree images versus active-branch display, raw OMP export and
+cost-availability semantics remain. The separately approved finite-counter bug fix
+and field-specific real SDK header-null declaration mismatch are documented in
+[the evidence](m1-evidence.json) and [review record](m1-review.json).
+The raw `SourceLookup` input correction retains the original validator, alias
+bytes and cache key; its post-parser type guard does not add admission policy.
+
+**Verification:** owner full backend 1,002, focused 253 plus final-source 82,
+44 browser cases, eight isolated UI scenarios, full desktop/mobile smoke, actual
+Pi/native OMP exports and an OMP 18.1.21 canary passed. The parent read all three
+final-source verdicts and inspected source/consumer boundaries before a clean
+isolated merge. Combined M1/M5 verification passed clean install, check with
+209 governed sources, 1,003 backend tests, 59 browser cases, eight isolated UI
+scenarios and full desktop/mobile smoke. A real isolated server additionally
+proved host exemption, bearer gating, transcript/search/stats and listener close;
+an AST comparison preserved all 110 Express app/share-app registration identities
+and ordering. Temporary parent probes were removed.
+
+All three exact reviewers — `zai/glm-5.3`,
+`opencode-go/deepseek-v4.1-flash`, `kimi-code/k3` — explicitly accepted final
+source `6d9b3e2`; their refs, findings, corrections and limits are in the record.
+Owner browser/native evidence covers unchanged bodies across the final type-only
+delta; it is not falsely represented as rerun. Remaining domain/root behavior,
+Prime/Electron delivery and Phase R are not accepted by this M1 record.
+
+### Implementation record — M5
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0a998-3cd3-74ec-b7a1-dd8fe395dc15`, verified OMP Astra High.
+Remote producer `57bed24194c0e251d18b58b02041309bf1534439`, handler producer
+`c5d336a1e4e1d069a06306d81b654d703d0ccab0`, root proposal
+`b7970d16dbe88c1bc7857313bf1ff700bdfc3d6b`, final reviewed source
+`cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd`, and attestation-only
+`e9445b0e745d2d05b0123189428570fbcfea17de` are in the combined integration
+`dd618d6f28ac95d570f0d6d0d6a4f268b0d50fa4`.
+[All five exact-commit CI jobs passed](https://github.com/MrPink604/pi-dish/actions/runs/35091165431).
+
+**Cutover:** remote transport, terminal, access, relay and terminal-handler
+implementations are strict core sources with generated original-path outputs.
+Fifteen M5 registration positions are preserved. M3's checked FleetArtifactStore
+producer `d31b67b` was imported unchanged as `e9fc809`; that dependency is not
+acceptance of the whole M3 package. No transport/auth policy adapter, R5 mechanics
+redesign or R7 startup redesign was introduced.
+
+**Verification:** [owner evidence](m5-evidence.json) records check, 999 backend
+tests, 17 terminal cases, 15 host/terminal browser cases, full desktop/mobile smoke
+and isolated real HTTP/SSE/WS/direct/OpenSSH/PTY execution. This includes raw body
+bypass, credential/header policy, first-response deadlines without an SSE idle
+timeout, forwarding reuse, restart/replay and shutdown. The final thrown-value
+parity correction failed a real-WS regression before the fix, then passed;
+success-path smoke and later error-path evidence are distinguished honestly.
+The parent independently checked the final verdicts, dependency/root wiring and
+the combined integration gates recorded under M1 above.
+
+All three exact models explicitly accepted `cf6b948`, not merely the earlier
+freeze. [The review record](m5-review.json) retains their refs, actual source
+rechecks, findings and the withdrawn false baseline-error premise.
+
+**Retained limits:** root composition/other domains remain pending. External
+payload/error properties stay unknown until consumed. No additional SDK, harness,
+CLI, Electron or macOS delivery is claimed by M5. One completed implementation
+peer's graceful close reported residual-process uncertainty and later lacked
+unambiguous live-bridge authority; no manual PID signals were used. That
+work-session cleanup limit is separate from the successfully cleaned test/smoke
+processes and credentials, and is not represented as resolved.

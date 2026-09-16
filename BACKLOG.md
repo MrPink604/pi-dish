@@ -206,8 +206,8 @@ names instead of executable event handlers.
 ## Ordered next work
 
 The [remaining migration and simplification plan](docs/remaining-migration-plan.md)
-is the forward work order. It is a scoped plan, not a claim that its packages are
-implemented. Four Astra workers scoped the boundaries; Kimi K3, GLM 5.3 and
+is the forward work order; acceptance is recorded per milestone rather than
+inferred from planning. Four Astra workers scoped the boundaries; Kimi K3, GLM 5.3 and
 DeepSeek Flash each returned `ready` after independent critique and recheck.
 The [review record](docs/remaining-migration-review-2026-09-15.json) retains the
 initial findings, resolutions and exact reviewed document digests.
@@ -216,10 +216,17 @@ initial findings, resolutions and exact reviewed document digests.
 source-policy gate are integrated at `35ad0c4`, with all three implementation
 reviewers accepting and [all five exact-commit CI jobs green](https://github.com/MrPink604/pi-dish/actions/runs/35079260428).
 See the [M0 implementation record](docs/remaining-migration-plan.md#implementation-record--m0).
-Next: independent M1–M6 slices in isolated Astra High sessions; dependent consumer
-integration and shared server/build changes remain serialized. The reproduced
-Electron entrypoint/resource/embedded-Node defects are explicit M6c obligations,
-not completed fixes. Product migration, simplification and closure remain open.
+
+**M1 and M5 accepted (2026-09-16):** checked read/SDK/projection and
+access/fleet/terminal implementations are integrated together at `dd618d6`,
+with all three exact-model final-source acceptances and
+[all five exact-commit CI jobs green](https://github.com/MrPink604/pi-dish/actions/runs/35091165431).
+The [M1](docs/remaining-migration-plan.md#implementation-record--m1) and
+[M5](docs/remaining-migration-plan.md#implementation-record--m5) records distinguish
+moves, removed adapters, explicit behavior corrections, runtime evidence and limits.
+M2, M3, M4 and M6 continue in isolated Astra High sessions; M7 waits for their
+accepted contracts. Shared root/build integration remains serialized, and the
+mandatory simplification and repository-closure phases remain open.
 
 1. **Finish product migration (M0–M7).** Freeze delivery/compiler contracts; migrate
    the remaining session read/SDK/projection, routine, publication/file, feature,
