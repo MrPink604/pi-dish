@@ -6,8 +6,6 @@ const os = require('os');
 const crypto = require('crypto');
 const piSDK = require('./lib/pi-sdk');
 const { createSessionReadHandlers } = require('./lib/session-read-handlers');
-const { runtimeResourcePath } = require('./lib/runtime-resources');
-const { execFile } = require('child_process');
 const { getAllRPCSessions } = require('./lib/rpc-session');
 const {
   listRegisteredSessions,
@@ -41,24 +39,28 @@ const { composeSessionCatalog, registeredSessionObservation, rpcSessionObservati
 const { getHarness, listHarnesses } = require('./lib/harnesses');
 const { sessionCapabilities } = require('./lib/session-capabilities');
 const { refreshHarnessPricing } = require('./lib/harness-pricing');
-const { listTaskAgents } = require('./lib/harness-agents');
+const { createFeatureHandlers } = require('./lib/feature-handlers');
+const {
+  harnessCommandAvailable, runHarnessModelCommand,
+} = require('./lib/harness-feature-commands');
 const {
   createSessionOwnership, routeIdentity, routeSessionId, registryIdentity,
   sessionSwitchRouteData, liveSessionSupports,
   spawnAllowsManagedClose, spawnAllowsRestart,
 } = require('./lib/session-ownership');
-const { createSessionLaunch, harnessLaunchSpec } = require('./lib/session-launch');
+const { createSessionLaunch } = require('./lib/session-launch');
 const { createSessionOperations } = require('./lib/session-operations');
 const sessionProvenance = require('./lib/session-provenance');
 const routinesStore = require('./lib/routines');
 const { createRoutineRunner } = require('./lib/routine-runner');
 const { createRoutineHandlers, composeRoutinePrompt } = require('./lib/routine-handlers');
 const recoveryStore = require('./lib/session-recovery');
-const { createRecoveryRuntime, recoveryMode } = require('./lib/recovery-runner');
+const { createRecoveryRuntime } = require('./lib/recovery-runner');
 const { createSessionBounceRuntime } = require('./lib/session-bounces');
 const skillsLib = require('./lib/skills');
+const { knownWorkspaceCwds } = require('./lib/skill-feature-handlers');
 const {
-  isModelEnabled, ALL_THINKING_LEVEL_NAMES, thinkingLevelNamesFor, parseModelId,
+  ALL_THINKING_LEVEL_NAMES, thinkingLevelNamesFor, parseModelId,
 } = require('./lib/helper-models.js');
 const { extractTextContent } = require('./lib/helper-content.js');
 const { sessionMetaText } = require('./lib/helper-identity.js');
@@ -149,6 +151,15 @@ const sessionOperations = createSessionOperations({
   getActiveSessions,
   readSessionCwd,
   recordLaunchProvenance: (id, sourceId, operationId) => sessionProvenance.recordLaunch(id, sourceId, operationId),
+});
+const featureHandlers = createFeatureHandlers({
+  readDishSettings, writeDishSettings, buildSessionCatalog,
+  enumerateSessionCandidates, findSessionSource, getSessionModels,
+  getLiveSession, locatePiPane,
+  getModelsCache: () => ({ models: modelsCache, time: modelsCacheTime }),
+  setModelsCache,
+  applicationRoot: __dirname,
+  piSettingsFile: PI_SETTINGS_FILE,
 });
 function apiIdForCandidate(candidate) {
   return candidate.routeId;
@@ -862,212 +873,18 @@ app.get('/api/search', (req, res) => {
   });
 });
 
-const USAGE_COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
-const emptyUsage = () => ({
-  tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
-  costs: Object.fromEntries(USAGE_COST_KEYS.map(key => [key, 0])),
-  costUnavailable: Object.fromEntries(USAGE_COST_KEYS.map(key => [key, 0])),
-  calls: 0, measured: 0, durationMs: 0, slowestMs: 0,
-});
-function addUsage(to, from) {
-  if (!from) return to;
-  for (const k of Object.keys(to.tokens)) to.tokens[k] += from.tokens?.[k] || 0;
-  for (const k of USAGE_COST_KEYS) {
-    to.costUnavailable[k] += from.costUnavailable?.[k] || 0;
-    const value = from.costs?.[k];
-    if (Number.isFinite(value)) {
-      to.costs[k] = (Number.isFinite(to.costs[k]) ? to.costs[k] : 0) + value;
-    }
-  }
-  for (const k of ['calls', 'measured', 'durationMs']) to[k] += from[k] || 0;
-  to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
-  return to;
-}
-function localDay(offset = 0) {
-  const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - offset);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 function readDishSettings() {
   try { const v = JSON.parse(fs.readFileSync(DISH_SETTINGS_FILE, 'utf8')); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
 }
-
-app.get('/api/usage-summary', async (req, res) => {
-  const range = String(req.query.days || '30');
-  if (!['1', '7', '30', 'all'].includes(range)) return res.status(400).json({ error: 'days must be 1, 7, 30, or all' });
-  const sort = String(req.query.sort || 'cost');
-  if (!['cost', 'tokens'].includes(sort)) return res.status(400).json({ error: 'sort must be cost or tokens' });
-  // Multi-select model filter. It has to be applied here, not client-side:
-  // the workspace/session groups are truncated to the top 20 below, and only
-  // the per-session usage.models day buckets can rebuild their totals for a
-  // subset of models. groups.models stays unfiltered — it is the facet list
-  // the client toggles from. Headline KPIs stay global (fixed windows).
-  const modelsRaw = req.query.models == null ? '' : String(req.query.models);
-  if (modelsRaw.length > 4000) return res.status(400).json({ error: 'models filter too long' });
-  const modelRefs = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
-  if (modelRefs.length > 100) return res.status(400).json({ error: 'models filter lists too many models' });
-  const modelFilter = modelRefs.length ? new Set(modelRefs) : null;
-  await Promise.all(['pi', 'omp'].map(harnessId => refreshHarnessPricing(harnessId)));
-  const discovery = discoverHarnessSessions();
-  const candidates = discovery.candidates;
-  const scan = sessionIndex.scanSessions(candidates);
-  const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
-  const totals = emptyUsage(), byModel = new Map(), byWorkspace = new Map(), bySession = new Map();
-  const dailyMap = new Map(), dailyModels = new Map();
-  const headlineUsage = Object.fromEntries(['today', 'days7', 'days30', 'all', 'month'].map(key => [key, emptyUsage()]));
-  const now = new Date(), monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-`;
-  for (const c of candidates) {
-    const info = scan.infos.get(c.file), usage = info?.usage;
-    if (!usage) continue;
-    const selected = emptyUsage();
-    for (const [day, bucket] of Object.entries(usage.days || {})) {
-      const dated = day !== 'unknown';
-      addUsage(headlineUsage.all, bucket);
-      if (dated && day === localDay()) addUsage(headlineUsage.today, bucket);
-      if (dated && day >= localDay(6)) addUsage(headlineUsage.days7, bucket);
-      if (dated && day >= localDay(29)) addUsage(headlineUsage.days30, bucket);
-      if (dated) addUsage(dailyMap.get(day) || (dailyMap.set(day, emptyUsage()), dailyMap.get(day)), bucket);
-      if (dated && day.startsWith(monthPrefix)) addUsage(headlineUsage.month, bucket);
-      // Under a model filter the session's selected usage is rebuilt from its
-      // per-model buckets below; the day buckets can't be split by model.
-      if (!modelFilter && (!cutoff || (dated && day >= cutoff))) addUsage(selected, bucket);
-    }
-    for (const [ref, bucket] of Object.entries(usage.models || {})) {
-      const modelSelected = emptyUsage();
-      if (bucket.days) for (const [day, part] of Object.entries(bucket.days)) {
-        if (day !== 'unknown') {
-          const dayModels = dailyModels.get(day) || (dailyModels.set(day, new Map()), dailyModels.get(day));
-          addUsage(dayModels.get(ref) || (dayModels.set(ref, { provider: bucket.provider, model: bucket.model, ...emptyUsage() }), dayModels.get(ref)), part);
-        }
-        if (!cutoff || (day !== 'unknown' && day >= cutoff)) addUsage(modelSelected, part);
-      }
-      else if (!cutoff) addUsage(modelSelected, bucket); // schema-2 transitional safety
-      if (modelSelected.calls) {
-        addUsage(byModel.get(ref) || (byModel.set(ref, { ...emptyUsage(), provider: bucket.provider, model: bucket.model }), byModel.get(ref)), modelSelected);
-        if (!modelFilter || modelFilter.has(ref)) {
-          if (modelFilter) addUsage(selected, modelSelected);
-        }
-      }
-    }
-    addUsage(totals, selected);
-    if (selected.calls) {
-      addUsage(byWorkspace.get(info.cwd || usage.cwd || '(unknown)') || (byWorkspace.set(info.cwd || usage.cwd || '(unknown)', emptyUsage()), byWorkspace.get(info.cwd || usage.cwd || '(unknown)')), selected);
-      const routeId = apiIdForCandidate(c);
-      bySession.set(routeId, {
-        id: routeId,
-        sessionKey: c.sessionKey,
-        harnessId: c.harnessId,
-        nativeSessionId: c.nativeSessionId,
-        name: info.name || c.nativeSessionId,
-        workspace: info.cwd || usage.cwd || null,
-        ...selected,
-      });
-    }
-  }
-  let unpricedModelCalls = 0;
-  for (const [ref, b] of byModel) {
-    b.priced = !b.costUnavailable.total;
-    b.unpricedCalls = b.costUnavailable.total;
-    // The bottom-of-view notice reflects the filtered totals; the facet list
-    // keeps every model's own unavailable annotation.
-    if (!modelFilter || modelFilter.has(ref)) unpricedModelCalls += b.unpricedCalls;
-  }
-  for (const bucket of [...byWorkspace.values(), ...bySession.values()]) {
-    bucket.priced = !bucket.costUnavailable.total;
-    bucket.unpricedCalls = bucket.costUnavailable.total;
-  }
-  totals.unpricedCalls = unpricedModelCalls;
-  // Rank by the same token total the client displays (reasoning stays out of
-  // the sum there too), so the sorted order matches the numbers on screen.
-  const displayedTokens = t => (t?.input || 0) + (t?.output || 0) + (t?.cacheRead || 0) + (t?.cacheWrite || 0);
-  const compare = (a, b) => {
-    if (sort === 'tokens') return displayedTokens(b.tokens) - displayedTokens(a.tokens) || b.calls - a.calls;
-    const aKnown = Number.isFinite(a.costs?.total), bKnown = Number.isFinite(b.costs?.total);
-    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
-    return (bKnown ? b.costs.total - a.costs.total : 0) || b.calls - a.calls;
-  };
-  const top = map => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort(compare).slice(0, 20);
-  // The daily series spans the requested range (for 'all', from the earliest
-  // dated usage, capped at a year) so the chart always reflects the selected
-  // window. Each day carries a per-model breakdown so the client can stack the
-  // chart by model and open day details without another request.
-  const DAILY_SPAN_CAP = 365;
-  let spanDays = range === 'all' ? 1 : Number(range);
-  if (range === 'all') {
-    let earliest = null;
-    if (modelFilter) {
-      for (const [day, models] of dailyModels) {
-        if ((!earliest || day < earliest) && [...models.keys()].some(ref => modelFilter.has(ref))) earliest = day;
-      }
-    } else for (const day of dailyMap.keys()) if (!earliest || day < earliest) earliest = day;
-    if (earliest) {
-      const [y, m, d] = earliest.split('-').map(Number);
-      const start = new Date(y, m - 1, d, 12), today = new Date(); today.setHours(12, 0, 0, 0);
-      spanDays = Math.min(DAILY_SPAN_CAP, Math.max(1, Math.round((today - start) / 86400000) + 1));
-    }
-  }
-  const daily = Array.from({ length: spanDays }, (_, i) => {
-    const day = localDay(spanDays - 1 - i);
-    const dayEntries = [...(dailyModels.get(day)?.entries() || [])]
-      .filter(([ref]) => !modelFilter || modelFilter.has(ref));
-    const models = dayEntries
-      .map(([ref, b]) => ({ ref, provider: b.provider, model: b.model, calls: b.calls, cost: b.costs.total, costUnavailable: b.costUnavailable, tokens: b.tokens }))
-      .sort((a, b) => Number.isFinite(b.cost) - Number.isFinite(a.cost) || (Number.isFinite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls);
-    if (!modelFilter) return { day, ...(dailyMap.get(day) || emptyUsage()), models };
-    const dayTotal = emptyUsage();
-    for (const [, b] of dayEntries) addUsage(dayTotal, b);
-    return { day, ...dayTotal, models };
-  });
-  const headlineCosts = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs.total]));
-  // Per-component twins of the headline scalars, so the client can pivot
-  // every KPI into read/cached-read/output/cache-write buckets without
-  // another request.
-  const headlineCostsByBucket = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs]));
-  const headlineCostUnavailable = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costUnavailable.total]));
-  res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostsByBucket, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
-});
-
-// Subscription/quota windows (5h/7d utilization, reset times) per provider
-// account, reported by the harness's own CLI — OMP's `usage` reads its auth
-// store and queries the providers directly, so no running session is needed
-// and pi-dish never reimplements provider quota APIs. Harnesses without a
-// `usage` argv (Pi, Prime) simply contribute nothing; a harness whose command
-// fails degrades to an `error` entry rather than failing the route.
-function normalizeUsageLimit(limit) {
-  if (!limit || typeof limit !== 'object') return null;
-  const usedFraction = Number(limit.amount?.usedFraction);
-  if (typeof limit.label !== 'string' || !Number.isFinite(usedFraction)) return null;
-  const resetsAt = Number(limit.window?.resetsAt);
-  return {
-    id: typeof limit.id === 'string' ? limit.id : null,
-    label: limit.label.slice(0, 120),
-    windowLabel: typeof limit.window?.label === 'string' ? limit.window.label.slice(0, 60) : null,
-    resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
-    usedFraction,
-    unit: typeof limit.amount?.unit === 'string' ? limit.amount.unit.slice(0, 30) : null,
-    status: typeof limit.status === 'string' ? limit.status.slice(0, 30) : null,
-  };
+function writeDishSettings(settings) {
+  fs.mkdirSync(path.dirname(DISH_SETTINGS_FILE), { recursive: true });
+  const tmp = `${DISH_SETTINGS_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n'); fs.renameSync(tmp, DISH_SETTINGS_FILE);
 }
 
-app.get('/api/usage-limits', async (_req, res) => {
-  const harnesses = listHarnesses().filter(d => d.argv?.usage && harnessCommandAvailable(d));
-  const results = await Promise.all(harnesses.map(async d => {
-    try {
-      const parsed = await runHarnessJsonCommand(d, d.argv.usage);
-      // Whitelist fields: even --redact output carries partial account ids,
-      // and the raw reports may hold emails — none of it belongs on the wire.
-      const reports = (Array.isArray(parsed.reports) ? parsed.reports : []).map(report => ({
-        provider: String(report?.provider || 'unknown').slice(0, 60),
-        fetchedAt: Number.isFinite(Number(report?.fetchedAt)) ? Number(report.fetchedAt) : null,
-        planType: typeof report?.metadata?.planType === 'string' ? report.metadata.planType.slice(0, 40) : null,
-        limits: (Array.isArray(report?.limits) ? report.limits : []).map(normalizeUsageLimit).filter(Boolean),
-      })).filter(report => report.limits.length);
-      return { harness: d.id, label: d.label, reports };
-    } catch (e) {
-      return { harness: d.id, label: d.label, error: e.message };
-    }
-  }));
-  res.json({ generatedAt: Date.now(), harnesses: results });
-});
+app.get('/api/usage-summary', featureHandlers.usageSummary);
+
+app.get('/api/usage-limits', featureHandlers.usageLimits);
 
 // =========================================================================
 // Skills view (main-pane takeover) — inventory from pi's loader + activation
@@ -1076,341 +893,14 @@ app.get('/api/usage-limits', async (_req, res) => {
 // calls. See TASKS/skills-view-phase1.md.
 // =========================================================================
 
-const DAY_MS = 86400000;
-const WEEK_MS = 7 * DAY_MS;
+app.get('/api/skills', featureHandlers.skills);
+app.get('/api/skills/activations', featureHandlers.skillActivations);
+app.get('/api/skills/coverage', featureHandlers.skillCoverage);
 
-// Distinct project cwds pi-dish knows about — the scope over which skills are
-// discovered (global user skills plus every project root).
-function knownWorkspaceCwds() {
-  const cwds = new Set();
-  try {
-    for (const session of buildSessionCatalog().list) if (session.cwd) cwds.add(session.cwd);
-  } catch {}
-  return [...cwds];
-}
-
-// Which refinement methodology the ✎ button drafts. Env wins over the dish
-// setting; a value with a path separator is a markdown file to read, a bare
-// token is a pi skill name; unset is the vended default skill.
-function resolveRefineConfig(inventory) {
-  const envVal = process.env.PI_DISH_REFINE;
-  const settingVal = readDishSettings().refine;
-  const raw = (envVal != null && envVal !== '') ? envVal
-    : (typeof settingVal === 'string' ? settingVal : '');
-  const names = new Set((inventory?.skills || []).map(s => s.name));
-  if (raw) {
-    if (raw.includes('/') || raw.includes(path.sep)) {
-      const abs = raw.startsWith('~') ? path.join(os.homedir(), raw.slice(1)) : path.resolve(raw);
-      return { mode: 'path', mdPath: abs };
-    }
-    return { mode: 'skill', skillName: raw, discovered: names.has(raw) };
-  }
-  return {
-    mode: 'default',
-    skillName: 'pi-dish-skill-refine',
-    discovered: names.has('pi-dish-skill-refine'),
-    mdPath: runtimeResourcePath(__dirname, 'skills/pi-dish-skill-refine/SKILL.md'),
-  };
-}
-
-// Weekly activation buckets, most-recent-last, `weeks` long. Zero weeks stay
-// as zeros (rendered as --chart-other stubs by the client — never omitted).
-function weeklyBuckets(records, weeks, now = Date.now()) {
-  const out = new Array(weeks).fill(0);
-  for (const r of records) {
-    if (!Number.isFinite(r.ts)) continue;
-    const age = Math.floor((now - r.ts) / WEEK_MS);
-    if (age < 0 || age >= weeks) continue;
-    out[weeks - 1 - age]++;
-  }
-  return out;
-}
-
-function usageRollup(records, now = Date.now()) {
-  const cutoff30 = now - 30 * DAY_MS;
-  let count30 = 0, lastUsedTs = null;
-  const kindSplit = { read: 0, targeted: 0, explicit: 0 };
-  const sessions = new Set(), cwds = new Map();
-  let latest = null;
-  for (const r of records) {
-    kindSplit[r.kind] = (kindSplit[r.kind] || 0) + 1;
-    if (Number.isFinite(r.ts)) {
-      if (r.ts >= cutoff30) count30++;
-      if (lastUsedTs == null || r.ts > lastUsedTs) lastUsedTs = r.ts;
-      if (!latest || r.ts > latest.ts) latest = r;
-    }
-    if (r.sessionId) sessions.add(r.sessionId);
-    if (r.cwd) cwds.set(r.cwd, (cwds.get(r.cwd) || 0) + 1);
-  }
-  const topCwd = [...cwds.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-  return {
-    count30d: count30,
-    lastUsedTs,
-    kindSplit,
-    sessionCount: sessions.size,
-    cwdCount: cwds.size,
-    topCwd,
-    total: records.length,
-    latest: latest ? { sessionId: latest.sessionId, entryId: latest.entryId, ts: latest.ts, model: latest.model, cwd: latest.cwd } : null,
-  };
-}
-
-// Split SKILL.md into markdown sections by heading. Returns 1-indexed line
-// ranges. The preamble before the first heading is its own "(intro)" section.
-function splitSections(content) {
-  const lines = content.split('\n');
-  const sections = [];
-  let cur = { heading: '(intro)', level: 0, startLine: 1, lines: [] };
-  lines.forEach((line, i) => {
-    const m = line.match(/^(#{1,6})\s+(.*)$/);
-    if (m) {
-      if (cur.lines.length) { cur.endLine = cur.startLine + cur.lines.length - 1; sections.push(cur); }
-      cur = { heading: line.trim(), level: m[1].length, startLine: i + 1, lines: [line] };
-    } else {
-      cur.lines.push(line);
-    }
-  });
-  if (cur.lines.length) { cur.endLine = cur.startLine + cur.lines.length - 1; sections.push(cur); }
-  // Drop a leading empty intro (a file starting with a heading).
-  return sections.filter(s => !(s.heading === '(intro)' && s.lines.join('').trim() === ''));
-}
-
-// Line set covered by one ranged/full read record, clamped to lineCount.
-function coveredLines(rec, lineCount) {
-  const set = new Set();
-  const add = (s, e) => { for (let i = Math.max(1, s); i <= Math.min(lineCount, e); i++) set.add(i); };
-  if (rec.kind === 'explicit') { add(1, lineCount); return set; }
-  if (rec.ranges === 'all') { add(1, Number.isFinite(rec.truncatedTo) ? rec.truncatedTo : lineCount); return set; }
-  if (Array.isArray(rec.ranges)) {
-    for (const [s, e] of rec.ranges) add(s, e === -1 ? lineCount : e);
-  }
-  return set;
-}
-
-app.get('/api/skills', async (req, res) => {
-  try {
-    const cwds = knownWorkspaceCwds();
-    const inventory = await skillsLib.getSkillsInventory({ cwds });
-    sessionIndex.setSkillRoots(inventory.skills.map(s => s.filePath));
-    const candidates = enumerateSessionCandidates();
-    const scan = sessionIndex.scanSessions(candidates);
-    const now = Date.now();
-    const skills = inventory.skills.map(s => {
-      const records = sessionIndex.getSkillActivations({ skill: s.filePath });
-      const roll = usageRollup(records, now);
-      return { ...s, usage: { ...roll, weeks12: weeklyBuckets(records, 12, now) } };
-    });
-    const quietCutoff = now - 60 * DAY_MS;
-    const summary = {
-      discovered: inventory.discovered,
-      advertised: inventory.advertised,
-      catalogTokensEst: inventory.catalogTokensEst,
-      preambleTokensEst: inventory.preambleTokensEst,
-      activations30d: skills.reduce((a, s) => a + s.usage.count30d, 0),
-      quiet60d: skills.filter(s => s.usage.lastUsedTs == null || s.usage.lastUsedTs < quietCutoff).length,
-      diagnostics: inventory.diagnostics.length,
-    };
-    res.json({
-      scope: inventory.scope,
-      summary,
-      skills,
-      diagnostics: inventory.diagnostics,
-      refine: resolveRefineConfig(inventory),
-      indexing: scan.indexing,
-      precision: 'estimate',
-    });
-  } catch (e) {
-    console.error('GET /api/skills failed:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// The primitive: raw activation records as an NDJSON stream. No pagination —
-// a pipe for user scripts. Filters: skill, since (ms epoch or 7d/12h/2w),
-// cwd, kind.
-app.get('/api/skills/activations', (req, res) => {
-  // Ensure the corpus is indexed (mines skills as a side effect).
-  sessionIndex.scanSessions(enumerateSessionCandidates());
-  const filter = {};
-  if (req.query.skill) filter.skill = String(req.query.skill);
-  if (req.query.cwd) filter.cwd = String(req.query.cwd);
-  if (req.query.kind) filter.kind = String(req.query.kind);
-  const since = req.query.since != null ? String(req.query.since) : '';
-  if (since) {
-    const rel = since.match(/^(\d+)(h|d|w)$/);
-    if (rel) {
-      const n = Number(rel[1]);
-      const mult = rel[2] === 'h' ? 3600000 : rel[2] === 'd' ? DAY_MS : WEEK_MS;
-      filter.sinceMs = Date.now() - n * mult;
-    } else {
-      const t = /^\d+$/.test(since) ? Number(since) : Date.parse(since);
-      if (Number.isFinite(t)) filter.sinceMs = t;
-    }
-  }
-  const records = sessionIndex.getSkillActivations(filter)
-    .sort((a, b) => (a.ts || 0) - (b.ts || 0));
-  res.type('application/x-ndjson');
-  res.send(records.map(r => JSON.stringify(r)).join('\n') + (records.length ? '\n' : ''));
-});
-
-// Current-version coverage rollup for one skill: sections of SKILL.md with a
-// read fraction over the ranged reads since the file's mtime, plus targeted
-// touch counts and a headline unread-tokens estimate.
-app.get('/api/skills/coverage', (req, res) => {
-  const skill = String(req.query.skill || '');
-  if (!skill || path.basename(skill) !== 'SKILL.md') {
-    return res.status(400).json({ error: 'skill must be an absolute SKILL.md path' });
-  }
-  let content, stat;
-  try { stat = fs.statSync(skill); content = fs.readFileSync(skill, 'utf-8'); }
-  catch { return res.status(404).json({ error: 'skill file not found' }); }
-
-  sessionIndex.scanSessions(enumerateSessionCandidates());
-  const now = Date.now();
-  const all = sessionIndex.getSkillActivations({ skill });
-  const lines = content.split('\n');
-  const lineCount = lines.length;
-  const contentHash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
-
-  // Mapped = ranged/full reads (kind read|explicit) since the last edit.
-  const mapped = all.filter(r => (r.kind === 'read' || r.kind === 'explicit') &&
-    Number.isFinite(r.ts) && r.ts >= stat.mtimeMs);
-  const excludedBeforeMtime = all.filter(r => (r.kind === 'read' || r.kind === 'explicit') &&
-    (!Number.isFinite(r.ts) || r.ts < stat.mtimeMs)).length;
-  const targetedTouches = all.filter(r => r.kind === 'targeted').length;
-
-  // Per-line read count across the mapped reads.
-  const lineHits = new Array(lineCount + 1).fill(0);
-  let anyPartial = false;
-  for (const r of mapped) {
-    const set = coveredLines(r, lineCount);
-    if (set.size < lineCount) anyPartial = true;
-    for (const ln of set) lineHits[ln]++;
-  }
-  const numMapped = mapped.length;
-
-  const sections = splitSections(content).map(sec => {
-    let readsTouching = 0;
-    for (const r of mapped) {
-      const set = coveredLines(r, lineCount);
-      let hit = false;
-      for (let ln = sec.startLine; ln <= sec.endLine; ln++) if (set.has(ln)) { hit = true; break; }
-      if (hit) readsTouching++;
-    }
-    const lineHeat = [];
-    for (let ln = sec.startLine; ln <= sec.endLine; ln++) {
-      lineHeat.push({ text: lines[ln - 1], hits: lineHits[ln] });
-    }
-    return {
-      heading: sec.heading, level: sec.level,
-      startLine: sec.startLine, endLine: sec.endLine,
-      lineCount: sec.endLine - sec.startLine + 1,
-      reads: readsTouching,
-      fraction: numMapped ? readsTouching / numMapped : 0,
-      neverRead: numMapped > 0 && readsTouching === 0,
-      lines: lineHeat,
-    };
-  });
-
-  // Unread token estimate: lines no mapped read ever touched.
-  let unreadChars = 0;
-  for (let ln = 1; ln <= lineCount; ln++) if (!lineHits[ln]) unreadChars += lines[ln - 1].length + 1;
-  const unreadTokensEst = Math.ceil(unreadChars / 4);
-
-  // A short skill that every mapped read loaded in full → render prose, not a map.
-  const flatFullRead = numMapped > 0 && !anyPartial;
-
-  const roll = usageRollup(all, now);
-  // Resolve latest activation's session name for the deep-link label.
-  let latest = roll.latest;
-  if (latest && latest.sessionId) {
-    try {
-      const source = findSessionSource(latest.sessionId);
-      if (source) latest = { ...latest, name: getSessionInfo(source).name || null };
-    } catch {}
-  }
-
-  res.json({
-    skill,
-    mtimeMs: stat.mtimeMs,
-    contentHash,
-    lineCount,
-    numMapped,
-    mappedReads: numMapped,
-    targetedTouches,
-    excludedBeforeMtime,
-    unreadTokensEst,
-    flatFullRead,
-    sections,
-    weeks26: weeklyBuckets(all, 26, now),
-    kindSplit: roll.kindSplit,
-    sessionCount: roll.sessionCount,
-    cwdCount: roll.cwdCount,
-    topCwd: roll.topCwd,
-    latest,
-    precision: 'estimate',
-  });
-});
-
-// Saved sidebar filters ("scopes") are server-global like the budget: the
-// user defines "no subagents" once, every device gets the chip. Which chips
-// are *active* stays device-local (localStorage) — a phone and a desktop can
-// scope differently.
-function sanitizeSavedFilters(value) {
-  if (!Array.isArray(value) || value.length > 50) return null;
-  const out = [];
-  const seen = new Set();
-  for (const f of value) {
-    const name = typeof f?.name === 'string' ? f.name.trim() : '';
-    const query = typeof f?.query === 'string' ? f.query.trim() : '';
-    if (!name || !query || name.length > 60 || query.length > 500 || seen.has(name)) return null;
-    seen.add(name);
-    out.push({ name, query });
-  }
-  return out;
-}
-
-// An allowlist, not a redaction: credential-bearing blocks (`remotes`, the
-// `stt` endpoint + key, `allowedOrigins`) are deliberately file-level config
-// and never travel to a client, in either direction — PUT below writes only
-// allowlisted keys, so an `stt` key in a request body is ignored.
-function settingsForClient(settings = readDishSettings()) {
-  return {
-    monthlyBudgetUsd: settings.monthlyBudgetUsd ?? null,
-    savedFilters: sanitizeSavedFilters(settings.savedFilters) || [],
-    recoveryMode: recoveryMode(settings.recoveryMode),
-  };
-}
-
-app.get('/api/settings', (_req, res) => res.json(settingsForClient()));
+app.get('/api/settings', featureHandlers.settings);
 // Partial update: only the keys present in the body change, so the budget
 // form and the saved-filters UI can't clobber each other's setting.
-app.put('/api/settings', (req, res) => {
-  const body = req.body || {};
-  const settings = readDishSettings();
-  if ('monthlyBudgetUsd' in body) {
-    const value = body.monthlyBudgetUsd;
-    if (value !== null && (!Number.isFinite(value) || value <= 0 || value > 1_000_000)) return res.status(400).json({ error: 'monthlyBudgetUsd must be null or a positive number at most 1000000' });
-    if (value === null) delete settings.monthlyBudgetUsd; else settings.monthlyBudgetUsd = value;
-  }
-  if ('savedFilters' in body) {
-    const filters = sanitizeSavedFilters(body.savedFilters);
-    if (!filters) return res.status(400).json({ error: 'savedFilters must be up to 50 { name, query } entries with unique non-empty names (≤60 chars) and queries (≤500 chars)' });
-    if (filters.length === 0) delete settings.savedFilters; else settings.savedFilters = filters;
-  }
-  if ('recoveryMode' in body) {
-    if (!['off', 'restore', 'continue'].includes(body.recoveryMode)) {
-      return res.status(400).json({ error: 'recoveryMode must be off, restore, or continue' });
-    }
-    settings.recoveryMode = body.recoveryMode;
-  }
-  try {
-    fs.mkdirSync(path.dirname(DISH_SETTINGS_FILE), { recursive: true });
-    const tmp = `${DISH_SETTINGS_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n'); fs.renameSync(tmp, DISH_SETTINGS_FILE);
-    res.json(settingsForClient(settings));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.put('/api/settings', featureHandlers.updateSettings);
 
 
 app.get('/api/sessions/:id/messages/:messageId/images/:blockIndex', sessionReadHandlers.image);
@@ -1534,18 +1024,6 @@ app.post('/api/sessions/:id/queue/cancel', async (req, res) => {
   }
 });
 
-// Built-in commands pi-dish can execute on RPC-managed sessions by mapping
-// them to RPC protocol commands.
-const RPC_BUILTIN_COMMANDS = [
-  { name: 'compact', description: 'Manually compact the session context', args: '[instructions]' },
-  { name: 'model', description: 'Switch model (usage: /model provider/model-id)', args: '<model>' },
-  { name: 'name', description: 'Set session display name', args: '<name>' },
-  { name: 'thinking', description: 'Set thinking level', args: '<off|minimal|low|medium|high|xhigh>' },
-  { name: 'abort', description: 'Abort the current agent operation' },
-  { name: 'new', description: 'Start a new session' },
-  { name: 'export', description: 'Export session to HTML', args: '[path]' },
-  { name: 'reload', description: 'Reload extensions, skills, and prompt templates' },
-];
 
 async function runRpcSlashCommand(rpc, message) {
   const spaceIdx = message.indexOf(' ');
@@ -2175,9 +1653,6 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
 
 let modelsCache = null;
 let modelsCacheTime = 0;
-const MODELS_CACHE_TTL = 60000;
-const harnessModelsCache = new Map(); // resolved harness+cwd -> { models?, time?, inFlight? }
-const HARNESS_JSON_EXIT_GRACE_MS = 250;
 
 function setModelsCache(models) {
   modelsCache = models;
@@ -2185,605 +1660,40 @@ function setModelsCache(models) {
   contextWindowMemo.clear(); // windows may differ under the fresh registry
 }
 
-// pi's scoped models (/scoped-models in the TUI) persist as enabledModels
-// patterns in ~/.pi/agent/settings.json. Read fresh per request — the TUI
-// may rewrite the file at any time.
-function readPiSettings() {
-  try { return JSON.parse(fs.readFileSync(PI_SETTINGS_FILE, 'utf-8')); } catch { return {}; }
-}
-
-function getEnabledModelPatterns() {
-  const patterns = readPiSettings().enabledModels;
-  return Array.isArray(patterns) && patterns.length ? patterns : null;
-}
-
-// Annotate at response time (not in the cache) so a settings change made by
-// the TUI or by PUT /api/models/enabled shows up on the next fetch.
-function annotateEnabled(models) {
-  const patterns = getEnabledModelPatterns();
-  return models.map(m => ({ ...m, enabled: isModelEnabled(patterns, m) }));
-}
 
 
-function harnessCommandAvailable(descriptor) {
-  const spec = harnessLaunchSpec(descriptor);
-  const command = spec.argv[0];
-  if (!command) return false;
-  const environment = { ...process.env, ...spec.env };
-  const executable = (file) => { try { fs.accessSync(file, fs.constants.X_OK); return true; } catch { return false; } };
-  if (command.includes(path.sep)) return executable(path.resolve(command));
-  return String(environment.PATH || '').split(path.delimiter)
-    .some(dir => dir && executable(path.join(dir, command)));
-}
 
-function resolveHarnessCwd(value) {
-  const home = process.env.HOME || os.homedir();
-  if (typeof value !== 'string' || !value.trim()) return process.cwd();
-  const trimmed = value.trim();
-  const expanded = trimmed === '~' ? home
-    : trimmed.startsWith('~/') ? path.join(home, trimmed.slice(2)) : trimmed;
-  return path.resolve(expanded);
-}
-
-function runHarnessJsonCommand(descriptor, commandArgs, { cwd, acceptCompleteJson = false } = {}) {
-  const spec = harnessLaunchSpec(descriptor);
-  const args = [...spec.argv.slice(1), ...commandArgs];
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let completeJsonTimer = null;
-    let streamedStdout = '';
-    let child;
-    const settle = (callback, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(completeJsonTimer);
-      callback(value);
-    };
-    const acceptStreamedJson = () => {
-      if (!acceptCompleteJson || completeJsonTimer || !/[\r\n]\s*$/.test(streamedStdout)) return;
-      let parsed;
-      try { parsed = JSON.parse(streamedStdout.trim()); } catch { return; }
-      // OMP has already emitted the complete machine-readable response at
-      // this point. Give normal shutdown a short grace period, then stop a
-      // CLI whose extensions left the event loop alive instead of making the
-      // web pilot wait for the full process timeout.
-      completeJsonTimer = setTimeout(() => {
-        settle(resolve, parsed);
-        child.kill();
-      }, HARNESS_JSON_EXIT_GRACE_MS);
-    };
-    child = execFile(spec.argv[0], args, {
-      env: { ...process.env, ...spec.env },
-      cwd: resolveHarnessCwd(cwd),
-      timeout: 15_000,
-      maxBuffer: 10 * 1024 * 1024,
-    }, (error, stdout, stderr) => {
-      if (settled) return;
-      if (error) return settle(reject, new Error((stderr || error.message).trim()));
-      try {
-        settle(resolve, JSON.parse(stdout.trim() || '{}'));
-      } catch (parseError) {
-        settle(reject, new Error(`Could not parse ${descriptor.label} command output: ${parseError.message}`));
-      }
-    });
-    if (acceptCompleteJson) {
-      child.stdout.setEncoding('utf8');
-      child.stdout.on('data', chunk => {
-        if (streamedStdout.length <= 10 * 1024 * 1024) streamedStdout += chunk;
-        acceptStreamedJson();
-      });
-    }
-  });
-}
-
-async function runHarnessModelCommand(descriptor, { cwd } = {}) {
-  const cacheKey = `${descriptor.id}\0${resolveHarnessCwd(cwd)}`;
-  const cached = harnessModelsCache.get(cacheKey);
-  if (cached && Object.hasOwn(cached, 'models')
-      && Date.now() - cached.time < MODELS_CACHE_TTL) return cached.models;
-  if (cached?.inFlight) return cached.inFlight;
-
-  const entry = cached || {};
-  entry.inFlight = runHarnessJsonCommand(
-    descriptor, descriptor.argv.models, { cwd, acceptCompleteJson: true },
-  ).then(parsed => {
-    entry.models = normalizeModels(parsed.models || parsed);
-    entry.time = Date.now();
-    return entry.models;
-  }).finally(() => { delete entry.inFlight; });
-  harnessModelsCache.set(cacheKey, entry);
-  return entry.inFlight;
-}
+app.get('/api/harnesses', featureHandlers.harnesses);
 
 
-const MODEL_ROLE_KEY = /^[a-zA-Z][\w.-]{0,63}$/;
-const MODEL_ROLE_VALUE_MAX = 200;
-const AGENT_NAME_KEY = /^[A-Za-z0-9][\w.-]{0,63}$/;
-
-function sanitizeModelRoles(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value)
-    .filter(([, model]) => typeof model === 'string' && model.trim()));
-}
-
-// `config get <key>` returns the merged project-over-global view for the cwd,
-// while `config set <key>` rewrites the whole value in the *global* config —
-// so a read(merged) → edit → set() round trip would silently copy a project's
-// `.omp/config.yml` overrides into the global config. An empty temp dir has no
-// project config to overlay, so reading there yields global alone.
-async function readGlobalConfigValues(descriptor, keys) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-global-'));
-  try {
-    const values = await Promise.all(keys.map(key => runHarnessJsonCommand(
-      descriptor, descriptor.argv.configGet(key), { cwd: dir })));
-    return values.map(result => result?.value);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-async function readGlobalModelRoles(descriptor) {
-  const [value] = await readGlobalConfigValues(descriptor, [descriptor.pilotConfig.modelRoles]);
-  return sanitizeModelRoles(value);
-}
-
-async function readHarnessPilotConfig(descriptor, cwd) {
-  const keys = descriptor.pilotConfig;
-  if (!keys || typeof descriptor.argv.configGet !== 'function') return null;
-  const [rolesResult, thinkingResult, globalModelRoles] = await Promise.all([
-    runHarnessJsonCommand(descriptor, descriptor.argv.configGet(keys.modelRoles), { cwd }),
-    runHarnessJsonCommand(descriptor, descriptor.argv.configGet(keys.defaultThinkingLevel), { cwd }),
-    readGlobalModelRoles(descriptor),
-  ]);
-  const modelRoles = sanitizeModelRoles(rolesResult?.value);
-  const defaultModel = typeof modelRoles.default === 'string' ? modelRoles.default : null;
-  const defaultThinkingLevel = typeof thinkingResult?.value === 'string'
-    ? thinkingResult.value : null;
-  return { defaultModel, defaultThinkingLevel, modelRoles, globalModelRoles };
-}
-
-// --- Task-agent settings (OMP's /agents hub: one array + three records) ---
-
-const AGENT_SETTING_KEYS = ['disabledAgents', 'agentModelOverrides', 'agentPrewalk', 'agentAdvisor'];
-
-function agentSettingsSupported(descriptor) {
-  const keys = descriptor.pilotConfig;
-  return !!(keys && descriptor.taskAgents && AGENT_SETTING_KEYS.every(key => keys[key]));
-}
-
-function sanitizeNameList(value) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter(name => typeof name === 'string' && AGENT_NAME_KEY.test(name)))];
-}
-
-// OMP stores these per-agent toggles as `record`s and stringifies booleans it
-// has normalized once ("on"/"off"), so a read sees either form; both collapse
-// to a boolean for the wire, and writes go back out as booleans (which the
-// harness accepts and normalizes itself).
-function sanitizeFlagRecord(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const flags = {};
-  for (const [name, flag] of Object.entries(value)) {
-    if (!AGENT_NAME_KEY.test(name)) continue;
-    if (typeof flag === 'boolean') flags[name] = flag;
-    else if (flag === 'on' || flag === 'true') flags[name] = true;
-    else if (flag === 'off' || flag === 'false') flags[name] = false;
-  }
-  return flags;
-}
-
-function shapeAgentSettings([disabled, modelOverrides, prewalk, advisor]) {
-  return {
-    disabled: sanitizeNameList(disabled),
-    modelOverrides: sanitizeModelRoles(modelOverrides),
-    prewalk: sanitizeFlagRecord(prewalk),
-    advisor: sanitizeFlagRecord(advisor),
-  };
-}
-
-function agentSettingKeyList(descriptor) {
-  return AGENT_SETTING_KEYS.map(key => descriptor.pilotConfig[key]);
-}
-
-// Effective (project-over-global, for `cwd`) and global-only settings, the
-// same split the model-role editor uses: rows edit global, and a differing
-// effective value is a project override the harness wins with in that cwd.
-async function readAgentSettings(descriptor, cwd) {
-  const keys = agentSettingKeyList(descriptor);
-  const [effective, global] = await Promise.all([
-    Promise.all(keys.map(key => runHarnessJsonCommand(
-      descriptor, descriptor.argv.configGet(key), { cwd }).then(result => result?.value))),
-    readGlobalConfigValues(descriptor, keys),
-  ]);
-  return { settings: shapeAgentSettings(effective), globalSettings: shapeAgentSettings(global) };
-}
-
-// Every config write here is a read-modify-write of one whole value, so two
-// concurrent PUTs would drop one another's patch. One chain per harness.
-const harnessConfigWrites = new Map();
-function queueHarnessConfigWrite(harnessId, task) {
-  // The stored link is always failure-swallowed, so one failed write can't
-  // reject every queued one behind it.
-  const chained = (harnessConfigWrites.get(harnessId) || Promise.resolve()).then(() => task());
-  harnessConfigWrites.set(harnessId, chained.catch(() => {}));
-  return chained;
-}
-
-app.get('/api/harnesses', (_req, res) => {
-  res.json({
-    harnesses: listHarnesses().map(descriptor => ({
-      id: descriptor.id,
-      label: descriptor.label,
-      available: harnessCommandAvailable(descriptor),
-      rpcFallback: descriptor.rpcFallback,
-      closeMode: descriptor.closeMode,
-      // Does this harness have a settings view at all: pilot defaults plus
-      // model roles, and (OMP only so far) the task-agent hub.
-      pilotConfig: !!descriptor.pilotConfig,
-      taskAgents: agentSettingsSupported(descriptor),
-    })),
-  });
-});
-
-
-app.get('/api/harnesses/:id/config', async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!descriptor.pilotConfig) {
-    return res.status(501).json({ error: `Pilot config is not supported for ${descriptor.label}.` });
-  }
-  if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  try {
-    res.json(await readHarnessPilotConfig(descriptor, req.query.cwd));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/harnesses/:id/config', featureHandlers.harnessConfig);
 
 // Patch role → model assignments in the harness's *global* config. Values are
 // stored verbatim: the harness resolves model refs itself, and a rewrite here
 // would only invent a second dialect.
-app.put('/api/harnesses/:id/model-roles', async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!descriptor.pilotConfig || typeof descriptor.argv.configSet !== 'function') {
-    return res.status(501).json({ error: `Model roles are not editable for ${descriptor.label}.` });
-  }
-  const { roles, cwd } = req.body || {};
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  if (!roles || typeof roles !== 'object' || Array.isArray(roles)) {
-    return res.status(400).json({ error: 'roles must be an object mapping role names to model refs' });
-  }
-  const patch = Object.entries(roles);
-  if (!patch.length) return res.status(400).json({ error: 'roles must name at least one role' });
-  for (const [role, model] of patch) {
-    if (!MODEL_ROLE_KEY.test(role)) {
-      return res.status(400).json({ error: `Invalid role name: ${role}` });
-    }
-    if (model === null) continue;
-    if (typeof model !== 'string' || !model.trim() || model.length > MODEL_ROLE_VALUE_MAX) {
-      return res.status(400).json({ error: `Invalid model for role ${role}: expected null or a non-empty model ref of at most ${MODEL_ROLE_VALUE_MAX} characters` });
-    }
-  }
-  try {
-    res.json(await queueHarnessConfigWrite(descriptor.id, async () => {
-      const record = await readGlobalModelRoles(descriptor);
-      for (const [role, model] of patch) {
-        if (model === null) delete record[role]; else record[role] = model;
-      }
-      await runHarnessJsonCommand(descriptor,
-        descriptor.argv.configSet(descriptor.pilotConfig.modelRoles, JSON.stringify(record)));
-      const [globalModelRoles, effective] = await Promise.all([
-        readGlobalModelRoles(descriptor),
-        runHarnessJsonCommand(descriptor, descriptor.argv.configGet(descriptor.pilotConfig.modelRoles), { cwd }),
-      ]);
-      return { globalModelRoles, modelRoles: sanitizeModelRoles(effective?.value) };
-    }));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.put('/api/harnesses/:id/model-roles', featureHandlers.updateModelRoles);
 
 // Task-agent inventory (bundled + user + project definitions) with the
 // per-agent settings the harness's own agents hub edits.
-app.get('/api/harnesses/:id/agents', async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!agentSettingsSupported(descriptor)) {
-    return res.status(501).json({ error: `Task agents are not configurable for ${descriptor.label}.` });
-  }
-  const cwd = req.query.cwd;
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  try {
-    const [agents, settings] = await Promise.all([
-      listTaskAgents(descriptor, runHarnessJsonCommand, { cwd }),
-      readAgentSettings(descriptor, cwd),
-    ]);
-    res.json({ agents, ...settings, cwd: cwd || '' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/harnesses/:id/agents', featureHandlers.harnessAgents);
 
 // Patch per-agent settings in the harness's *global* config. Each field is
 // tri-state: `disabled` toggles array membership, and `model`/`prewalk`/
 // `advisor` take a value or null to drop the override and inherit again.
-app.put('/api/harnesses/:id/agents', async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!agentSettingsSupported(descriptor) || typeof descriptor.argv.configSet !== 'function') {
-    return res.status(501).json({ error: `Task agents are not configurable for ${descriptor.label}.` });
-  }
-  const { agents, cwd } = req.body || {};
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  if (!agents || typeof agents !== 'object' || Array.isArray(agents)) {
-    return res.status(400).json({ error: 'agents must be an object mapping agent names to settings' });
-  }
-  const patch = Object.entries(agents);
-  if (!patch.length) return res.status(400).json({ error: 'agents must name at least one agent' });
-  for (const [name, settings] of patch) {
-    if (!AGENT_NAME_KEY.test(name)) return res.status(400).json({ error: `Invalid agent name: ${name}` });
-    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
-      return res.status(400).json({ error: `Invalid settings for agent ${name}` });
-    }
-    for (const field of ['disabled', 'prewalk', 'advisor']) {
-      const value = settings[field];
-      if (value !== undefined && value !== null && typeof value !== 'boolean') {
-        return res.status(400).json({ error: `Invalid ${field} for agent ${name}: expected a boolean or null` });
-      }
-    }
-    const model = settings.model;
-    if (model !== undefined && model !== null
-        && (typeof model !== 'string' || !model.trim() || model.length > MODEL_ROLE_VALUE_MAX)) {
-      return res.status(400).json({ error: `Invalid model for agent ${name}: expected null or a non-empty model ref of at most ${MODEL_ROLE_VALUE_MAX} characters` });
-    }
-  }
-  try {
-    res.json(await queueHarnessConfigWrite(descriptor.id, async () => {
-      const keys = agentSettingKeyList(descriptor);
-      const record = shapeAgentSettings(await readGlobalConfigValues(descriptor, keys));
-      const disabled = new Set(record.disabled);
-      const dirty = new Set();
-      const setOverride = (bucket, key, name, value) => {
-        if (value === undefined) return;
-        if (value === null) {
-          if (!Object.hasOwn(bucket, name)) return;
-          delete bucket[name];
-        } else {
-          if (bucket[name] === value) return;
-          bucket[name] = value;
-        }
-        dirty.add(key);
-      };
-      for (const [name, settings] of patch) {
-        if (settings.disabled !== undefined && settings.disabled !== null
-            && settings.disabled !== disabled.has(name)) {
-          if (settings.disabled) disabled.add(name); else disabled.delete(name);
-          dirty.add(descriptor.pilotConfig.disabledAgents);
-        }
-        setOverride(record.modelOverrides, descriptor.pilotConfig.agentModelOverrides, name, settings.model);
-        setOverride(record.prewalk, descriptor.pilotConfig.agentPrewalk, name, settings.prewalk);
-        setOverride(record.advisor, descriptor.pilotConfig.agentAdvisor, name, settings.advisor);
-      }
-      const values = {
-        [descriptor.pilotConfig.disabledAgents]: [...disabled],
-        [descriptor.pilotConfig.agentModelOverrides]: record.modelOverrides,
-        [descriptor.pilotConfig.agentPrewalk]: record.prewalk,
-        [descriptor.pilotConfig.agentAdvisor]: record.advisor,
-      };
-      // Only the records a patch actually moved are rewritten: every `config
-      // set` is a whole-value write, so touching an untouched key would
-      // materialize a global copy of whatever the read returned.
-      for (const key of keys) {
-        if (dirty.has(key)) {
-          await runHarnessJsonCommand(descriptor, descriptor.argv.configSet(key, JSON.stringify(values[key])));
-        }
-      }
-      return readAgentSettings(descriptor, cwd);
-    }));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.put('/api/harnesses/:id/agents', featureHandlers.updateHarnessAgents);
 
-// A live OMP session's model registry doesn't carry the per-model thinking
-// level list that `omp models --json` has — merge it in from the (cached)
-// catalog by selector, so the thinking dropdown can offer only what the
-// session's model supports.
-async function withCatalogThinkingLevels(models, descriptor) {
-  if (descriptor?.modelCatalog !== 'command') return models;
-  if (!models.some(m => m && !Array.isArray(m.thinking))) return models;
-  try {
-    const catalog = await runHarnessModelCommand(descriptor, {});
-    const levelsBySelector = new Map(
-      catalog.filter(m => m && Array.isArray(m.thinking)).map(m => [m.selector, m.thinking]));
-    return models.map(m => {
-      if (!m || Array.isArray(m.thinking)) return m;
-      const thinking = levelsBySelector.get(m.selector)
-        ?? levelsBySelector.get(`${m.provider}/${m.id}`);
-      return thinking ? { ...m, thinking } : m;
-    });
-  } catch {
-    return models;
-  }
-}
 
-app.get('/api/models', async (req, res) => {
-  try {
-    const sessionId = req.query.sessionId;
-    if (sessionId) {
-      const identity = routeIdentity(sessionId);
-      if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
-      const sessionModels = await getSessionModels(sessionId);
-      if (sessionModels) {
-        if (identity.harnessId === 'pi') return res.json(annotateEnabled(sessionModels));
-        return res.json(await withCatalogThinkingLevels(sessionModels, getHarness(identity.harnessId)));
-      }
-      if (identity.harnessId !== 'pi') {
-        return res.status(409).json({ error: `Model discovery is unavailable for this ${getHarness(identity.harnessId).label} session.` });
-      }
-    }
-
-    const harnessId = req.query.harness || 'pi';
-    const descriptor = getHarness(harnessId);
-    if (!descriptor) return res.status(400).json({ error: `Unknown harness: ${harnessId}` });
-    if (descriptor.modelCatalog === 'command') {
-      if (!harnessCommandAvailable(descriptor)) return res.status(503).json({ error: `${descriptor.label} is not installed.` });
-      if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
-        return res.status(400).json({ error: 'cwd must be a string' });
-      }
-      return res.json(await runHarnessModelCommand(descriptor, { cwd: req.query.cwd }));
-    }
-    if (descriptor.modelCatalog !== 'pi-sdk') {
-      return res.status(501).json({ error: `New-session model discovery is not supported for ${descriptor.label}.` });
-    }
-
-    if (!modelsCache || Date.now() - modelsCacheTime > MODELS_CACHE_TTL) {
-      setModelsCache(await piSDK.getAvailableModels());
-    }
-    res.json(annotateEnabled(modelsCache));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/models', featureHandlers.models);
 
 // Persist the scoped-models set the same way pi's /scoped-models selector
 // does: explicit "provider/id" strings in settings.enabledModels, absent when
 // everything is enabled. Use pi's SettingsManager rather than rewriting its
 // file ourselves: it locks, re-reads, and merges only the modified field, so
 // concurrent settings writes from a running pi keep their unrelated fields.
-app.put('/api/models/enabled', async (req, res) => {
-  const { enabledIds } = req.body || {};
-  const clearing = enabledIds == null;
-  if (!clearing && (!Array.isArray(enabledIds) ||
-      !enabledIds.every(id => typeof id === 'string' && id.trim()))) {
-    return res.status(400).json({ error: 'enabledIds must be null or an array of model ids' });
-  }
-  const normalizedIds = clearing ? undefined : enabledIds.map(id => id.trim());
-  if (normalizedIds && new Set(normalizedIds).size !== normalizedIds.length) {
-    return res.status(400).json({ error: 'enabledIds must not contain duplicate model ids' });
-  }
-  try {
-    const sdk = await piSDK.getSDK();
-    const settingsManager = sdk.SettingsManager.create(
-      process.cwd(), path.dirname(PI_SETTINGS_FILE), { projectTrusted: false },
-    );
-    const patterns = normalizedIds?.length ? normalizedIds : undefined;
-    settingsManager.setEnabledModels(patterns);
-    await settingsManager.flush();
-    const errors = settingsManager.drainErrors();
-    if (errors.length) throw errors[0].error;
-    res.json({ success: true, enabledModels: patterns || null });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.put('/api/models/enabled', featureHandlers.updateEnabledModels);
 
-const BRIDGE_COMMAND_CAPABILITIES = {
-  compact: 'compact',
-  tree: 'treeNavigation',
-  model: 'setModel',
-  name: 'rename',
-  thinking: 'setThinking',
-  abort: 'abort',
-  reload: 'reload',
-  btw: 'btw',
-};
 
-function filterBridgeCommands(sess, commands) {
-  // Pi keeps its established full TUI list. Alternative harnesses fail
-  // closed: retain skills/templates and bridge commands explicitly marked as
-  // executable, plus built-ins pi-dish maps to an advertised bridge operation.
-  // Export/share stay out because their web-native controls preserve download
-  // and share-token semantics that a slash-command mapping would change.
-  if (sess.harnessId === 'pi') return commands;
-  return commands.filter((command) => command.supported === true
-    || (BRIDGE_COMMAND_CAPABILITIES[command.name]
-      && liveSessionSupports(sess, BRIDGE_COMMAND_CAPABILITIES[command.name])));
-}
-
-async function appendHostBuiltins(sessionId, sess, commands) {
-  const descriptor = getHarness(sess.harnessId);
-  const available = [];
-  // One pane lookup covers both surfaces: the descriptor's curated host
-  // builtins and OMP's /reload. OMP's bridge reload capability stays false
-  // because its public API cannot invoke command handlers remotely — a
-  // reachable pane is the actual capability. The command route maps /reload
-  // to the bridge's /dish-reload command in that exact TUI, where OMP
-  // supplies a legal command context for ctx.reload.
-  const wantsPane = descriptor?.hostBuiltins?.length || sess.harnessId === 'omp';
-  const pane = wantsPane ? await locatePiPane(sessionId) : null;
-  if (pane && descriptor?.hostBuiltins?.length) {
-    // allowedArgs/blockedArgs/freeArgs/requireArgs are server-side validation
-    // rules; clients only need the name, description and arg hint.
-    available.push(...descriptor.hostBuiltins.map(
-      ({ allowedArgs, blockedArgs, freeArgs, requireArgs, ...command }) => ({
-        ...command, source: 'host', supported: true,
-      })));
-  }
-  if (sess.harnessId === 'omp' && pane) {
-    available.push({
-      name: 'reload',
-      description: 'Reload the current Oh My Pi session/runtime state',
-      source: 'host',
-      supported: true,
-    });
-  }
-  if (!available.length) return commands;
-  const hostNames = new Set(available.map(command => command.name));
-  return [
-    ...commands.filter(command => !hostNames.has(command.name)),
-    ...available,
-  ];
-}
-
-app.get('/api/commands', async (req, res) => {
-  try {
-    const sessionId = req.query.sessionId;
-    if (sessionId) {
-      // Ask the live session — it knows exactly which commands exist there.
-      try {
-        const sess = await getLiveSession(sessionId);
-        if (sess instanceof BridgeSession) {
-          if (!liveSessionSupports(sess, 'commands')) {
-            return res.status(409).json({ error: 'This session does not support command discovery.' });
-          }
-          const data = await sess.getCommands();
-          if (data?.commands) {
-            const commands = filterBridgeCommands(sess, data.commands);
-            return res.json(await appendHostBuiltins(sessionId, sess, commands));
-          }
-        } else if (sess) {
-          const data = await sess.getCommands();
-          const commands = [
-            ...RPC_BUILTIN_COMMANDS.map(c => ({ ...c, source: 'builtin', supported: true })),
-            ...(data?.commands || []).map(c => ({ ...c, supported: true })),
-          ];
-          return res.json(commands);
-        }
-      } catch (e) {
-        console.warn(`Live command list failed for ${sessionId}:`, e.message);
-      }
-      const identity = routeIdentity(sessionId);
-      if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
-      if (identity.harnessId !== 'pi') {
-        return res.status(409).json({ error: `Command discovery is unavailable for this ${getHarness(identity.harnessId).label} session.` });
-      }
-    }
-    const commands = await piSDK.getCommands();
-    res.json(commands);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/commands', featureHandlers.commands);
 
 app.post('/api/sessions/:id/abort', async (req, res) => {
   try {
@@ -2804,7 +1714,7 @@ app.post('/api/sessions/:id/close', async (req, res) => {
 
 app.get('/api/cwds', (req, res) => {
   try {
-    const cwdSet = new Set(knownWorkspaceCwds());
+    const cwdSet = new Set(knownWorkspaceCwds(buildSessionCatalog));
     const home = os.homedir();
     const cwds = [...cwdSet].sort().map(c => ({
       path: c,
@@ -2846,24 +1756,7 @@ app.get('/api/config', (req, res) => {
 // /hosts/:name/api/stt proxy relays the bytes untouched.
 const parseAudioBody = express.raw({ type: ['audio/*', 'video/webm'], limit: '25mb' });
 
-app.post('/api/stt', parseAudioBody, async (req, res) => {
-  const config = stt.resolveSttConfig(readDishSettings());
-  if (!config) return res.status(503).json({ error: 'Speech-to-text is not configured on this host' });
-  // Type before body: the raw parser above only claims audio/* and
-  // video/webm, so anything else never becomes a Buffer at all and would
-  // otherwise be reported as a missing body rather than a wrong format.
-  const contentType = req.headers['content-type'] || '';
-  if (!stt.sttFilename(contentType)) {
-    return res.status(415).json({ error: `unsupported audio type ${stt.baseMimeType(contentType) || 'unknown'}` });
-  }
-  if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'audio body required' });
-  try {
-    const { text } = await stt.transcribe(config, { bytes: req.body, contentType });
-    res.json({ text });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message });
-  }
-});
+app.post('/api/stt', parseAudioBody, featureHandlers.transcribe);
 
 // =========================================================================
 // Agent docs: GET /api/agent-docs, GET /api/agent-docs/:topic
@@ -3495,7 +2388,7 @@ function onMainListening(main) {
   // (references/*) reads attribute to their skill from the cold pass. Failure
   // is harmless — SKILL.md reads and explicit /skill: blocks are detected
   // without roots, and the inventory re-primes on the first /api/skills hit.
-  skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds() })
+  skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds(buildSessionCatalog) })
     .then(paths => sessionIndex.setSkillRoots(paths))
     .catch(() => {});
   sessionBounces.start();

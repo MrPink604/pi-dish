@@ -68,6 +68,14 @@ The private root composition and producer provenance are recorded in
 [`m3-evidence.json`](m3-evidence.json); parent integration and acceptance remain
 separate from these implemented boundaries.
 
+M4's feature slice checks task-agent discovery, the interactive harness JSON/model
+runner, harness settings, STT, application settings/limits, indexed usage, SDK
+skills/coverage, scoped models and command-list responses. It consumes the actual
+checked M1 producers and M6 bundled-resource resolver. The private root proposal
+mounts all sixteen handlers at their original positions; settings persistence,
+model-cache invalidation and session mutation/control remain root-owned. Coverage
+algorithms are preserved, not simplified. Package acceptance remains parent-owned.
+
 See the [stage plan](session-catalog-migration.md) for scope, field authority,
 dependencies, deletion criteria and verification. Lifecycle authority, host and
 selection ownership, local assets and checked-in runtime delivery remain
@@ -129,6 +137,14 @@ The integration lead, not this guide, records milestone acceptance.
 | `session-launch.ts` | Descriptor-based wrappers, argv/env, registration, cleanup and explicit backend/uncertainty outcomes |
 | `session-operations.ts` | Create/resume/close/restart, durable close intent, distinct flights, canonical-file quarantine and HTTP outcome projection |
 | `recovery-runner.ts`, `session-bounces.ts` | Actual runners plus checked production restore/delivery and idle/execute/reload policies |
+| `harness-agents.ts` | Bounded project/user/bundled agent inventory and temporary unpack cleanup |
+| `harness-feature-commands.ts` | Interactive JSON/model command execution, cwd-qualified model cache and thinking-level overlay; separate from pricing execution |
+| `harness-feature-settings.ts` | Harness config/agent responses, serialized global-only partial writes and project overlays |
+| `stt.ts` | Server-side transcription configuration, MIME mapping, multipart transport and safe transport errors |
+| `feature-handlers.ts` | Sixteen named feature response handlers and narrow root observation/persistence ports |
+| `skills.ts`, `skill-feature-handlers.ts` | Actual SDK skill inventory, bounded bundle/catalog estimates, activation NDJSON and current-version coverage projections |
+| `usage-feature-handler.ts` | Indexed usage summaries, known subtotals/unknown counters, model facets and local-day windows |
+| `model-feature-handlers.ts` | SDK/command/live model discovery, scoped-model persistence and capability-filtered command listings; no delivery |
 | `session-files.ts` | Cached display parser, stable-ID image lookup, search/stats/usage projections and bounded cwd/tail reads |
 | `harness-pricing.ts`, `skill-mining.ts` | Optional pricing refresh/override revisions and whole-file/batch-local skill evidence |
 | `pi-sdk.ts`, `omp-export.ts`, `session-refs.ts` | Real bundled SDK adapters, raw native OMP HTML export and lazy prompt-reference expansion |
@@ -329,7 +345,6 @@ consumer calls this helper without duplicating ASAR detection and preserves its
 lazy import cache and walker fallback. Native load acceptance requires actual
 scan/search and PTY execution, not archive presence alone.
 Linux results do not establish macOS package/runtime support.
-
 ## Contract conventions
 
 - `NativeSessionId`, `SessionId` and `HostId` are distinct branded strings.
