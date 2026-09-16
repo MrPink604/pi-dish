@@ -1061,3 +1061,116 @@ The concurrent call's error did not identify its session; residual-process
 cleanup is therefore not claimed complete. No manual PID signals or repeated
 close requests without live authority were used. This limit concerns work
 sessions, not the isolated product/harness proofs above.
+
+### Implementation record — M3
+
+**Accepted by the integration lead on 2026-09-16.** Owner: OMP session
+`01a0a998-4b0e-76ce-9490-995db584afd2`, verified
+`openai-codex/gpt-6-astra`, High.
+
+- Final reviewed source: `8570631fb8047afab998538a479fed7257ab2263`.
+- Documentation-only attestation: `df372295542d3209b9465f4ad29a0ad4f8234e62`.
+- Initial parent integration: `ebfdadd7a5bc3d4ef0717128d33faa6d0e87844f`.
+  Final combined M3/M4 integration: `940d669dd884d800c368977ef1e44c2d30b70895`.
+- [All five CI jobs passed on that exact combined source](https://github.com/MrPink604/pi-dish/actions/runs/35112220471):
+  checks and full backend suites on Node 22.19.0, 22.x, 24.x and 26.x;
+  full browser cases, eight isolated scenarios and desktop/mobile smoke on Node 24.
+
+**Delivered:** ten checked core modules and twenty generated JS/declaration
+outputs cover the eight publication/file libraries and the two handler factories.
+The [owner evidence](m3-evidence.json) records the source/output inventory,
+original-position consumers, early fleet/search producer transfers and actual
+M1 export, M5 relay and M6 native-resource dependencies. Parent integration
+retained the accepted producers and one instance of each factory. It removed the
+obsolete root file/publication bodies and the orphaned M5 relay/header copies;
+early access/relay middleware and restricted share-listener order remain intact.
+Distinct page/share/comment stores, inert raw previews, ownership checks,
+captured diff snapshots and both stale-version checks remain distinct policies.
+
+**Independent review:** [all three exact-model reviewers](m3-review.json)
+explicitly accepted the entire final source: GLM session
+`01a0a9e4-5ccb-7348-9bb0-da6dca4412c2`, DeepSeek session
+`01a0a9e4-6667-712c-963a-fa32d9b2ec59`, and Kimi session
+`01a0a9e4-6191-736d-965b-64f2690861b3`. Parent read the final decisions directly
+and verified actual models. Kimi's personal review and delegated-read provenance
+were checked separately, including the ten recorded resolved Kimi model identities.
+The malformed-message finding was fixed, not waived: direct native property
+access again preserves null/undefined errors, with a focused regression.
+Historical approvals remain historical; attestation is not reviewed source.
+
+**Parent execution:** isolated actual Node/HTTP and browser execution proved
+file previews/raw `nosniff`, captured git patches and stale `409`, annotated main
+versus unannotated public HTML, public API `404`, persisted anchored-comment
+editing, acknowledgement removal from the open index, and revocation to public
+`404`. Browser screenshots and saved HTTP results confirmed the actual surface.
+After M4 integration, `npm run check` passed with 247 compiler-owned sources and
+no explicit-any exceptions; all generated/type gates passed. Full backend:
+1,027 passed, zero failed/skipped (32.06s). Full browser: 286 passed (3.0m).
+All eight fresh-fixture scenarios and full desktop/mobile/multi-host/same-id UI
+smoke passed; the combined browser/scenario/UI command took 294.66s. A disposable
+native-Node AST comparison preserved all 113 main/share application calls in
+method/path/order against accepted `709830d`, including listener construction.
+Runtime: Node 26.8.2, npm 12.0.2, TypeScript 7.0.2, Playwright 1.63.0,
+Chromium 153.0.8010.12, Linux x64.
+
+**Cleanup and limits:** the browser was closed, isolated publication server
+stopped, and owned smoke scripts/HOME removed. Its supervised stop exited 143;
+no separate graceful-close banner was observed. No live product sessions or
+provider credentials were used. Persisted legacy members and external SDK/tool
+payloads remain explicitly opaque. Root implementation checking remains M7;
+R4/R5 simplification and repository closure are not claimed. Native packaging
+evidence remains scoped to the accepted M6 Linux record, not macOS.
+
+### Implementation record — M4
+
+**Accepted by the integration lead on 2026-09-16.** Owner: OMP session
+`01a0a998-4fc3-744f-9e90-c6cda55bbd71`, verified
+`openai-codex/gpt-6-astra`, High.
+
+- Independent implementation: `8abe0b88b17c87f310c644effed254a4a9de5ad7`.
+- Complete consumer cutover: `ab8627b2040c090c162353bf3daf908049e34ac8`.
+- Final reviewed parity correction: `880b47fe3f6548bd829798c2909d238f882d1a9a`.
+- Documentation-only attestation: `2c391d86178e08a2706e2f195c3d40e84aa31ac8`.
+- Parent integration: `940d669dd884d800c368977ef1e44c2d30b70895`,
+  with [all five exact-source CI jobs successful](https://github.com/MrPink604/pi-dish/actions/runs/35112220471).
+
+**Delivered:** nine checked core implementations and eighteen generated outputs
+own harness agents, interactive feature commands/settings, STT, usage, skills,
+models and all sixteen feature responses. The [owner evidence](m4-evidence.json)
+distinguishes the original fourteen registrations from the two parent-approved
+application-settings registrations, inventories the twelve consumed ports, and
+records actual M1/M6 producer provenance. Root mounts remain at their original
+positions. Old response/helper copies and obsolete imports are removed;
+`knownWorkspaceCwds` is one checked helper for skills, cwd listing and startup.
+Root retains settings persistence, model-cache/context-window invalidation,
+observation and session mutation/control. Pane presence is listing advice only.
+
+**Independent review:** [the renewed whole-source decisions](m4-review.json)
+are GLM `01a0a9e4-52f9-73ef-9864-4d689e70fd18:161`,
+DeepSeek `01a0a9e4-49c5-7196-980e-4e2cec62a7c7:230`, and
+Kimi `01a0a9e4-4e39-72e2-8a8d-a0ef9889a177:107`. Parent read each exact final
+ACCEPT and verified its model. The coverage index side-effect/performance finding
+was fixed by using the existing index accessor; the empty-array cache observation
+was explicitly retracted. Prior-source approvals were not transferred silently.
+
+**Parent execution:** all combined checks/backend/browser/scenario/UI and exact
+CI gates above passed. An additional real Express HTTP coverage/NDJSON probe used
+the actual index, source descriptor and an appended Pi JSONL deliberately excluded
+from enumeration. Coverage refreshed that source: subsequent NDJSON contained
+both `first` and `second` activations, the next coverage reported two mapped
+reads and the latest timestamp, and the session label remained unchanged.
+The owner record separately retains the failing pre-correction reproduction and
+its passing corrected result, plus scoped SDK/JSONL/STT/installed-OMP proofs.
+Those historical native commands are not represented as parent reruns.
+
+**Cleanup and limits:** the disposable parent probe and isolated HOME were
+removed after success; no live product sessions or provider credentials were
+used. The coverage algorithm and repeated per-section line sets remain unchanged
+for R3. Raw bridge/CLI payloads and actual SDK/Express ingress retain their opaque
+boundaries; remaining root behavior belongs to M7. M0–M6 acceptance does not
+complete product migration, the mandatory R packages, or C1/C2 closure.
+
+**Post-acceptance work-session cleanup:** semantic graceful-close returned
+success for all six M3/M4 reviewers, then for both owners. Their histories remain
+available. The exact-commit CI observer exited successfully and its throwaway
+script was removed; its final run/job/step evidence was retained separately.

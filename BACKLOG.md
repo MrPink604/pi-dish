@@ -82,7 +82,7 @@ controller/port observations.
 | Browser contracts | Implemented, verified and reviewed | Readonly state/cache borrowing, decoded message ports and session-only model loading passed strict checks, 984 backend tests, 286 browser cases and both UI suites. Fable approved `811d473` without blocking findings. |
 | Shared runtime helpers | Implemented, locally verified and reviewed | Actual portable core source serves browser and Node consumers; 121 compatibility exports remain. Strict checks, 984 backend tests, 286 browser cases and UI suites passed. Fable approved `1cbd826` without blocking findings. |
 | Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
-| Remaining server application and feature modules | M1/M2/M5 accepted; M3/M4/M7 pending | Checked reads, routines/provenance and transport are integrated and verified. Publication/file and feature packages await parent acceptance; final root conversion follows. |
+| Remaining server application and feature modules | M1–M5 accepted; M7 pending | Checked reads, routines/provenance, publication/files, features and transport are integrated and verified. Final root implementation/compiler cutover remains M7. |
 | Harness extensions and Electron shell | M6 accepted on Linux x64 | Strict edge programs and generated outputs, installed CLIs, real development/packaged Electron and native harness execution passed. macOS delivery is unverified; startup simplification remains R7. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
@@ -233,9 +233,17 @@ The [M2](docs/remaining-migration-plan.md#implementation-record--m2) and
 [M6](docs/remaining-migration-plan.md#implementation-record--m6) records include
 independent routine/browser, real packaged-desktop and native harness proof,
 the initial CI failure and its correction, and the Linux-only delivery limit.
-M3 and M4 continue in isolated Astra High sessions; M7 waits for their accepted
-contracts. Shared root/build integration remains serialized, and the mandatory
-simplification and repository-closure phases remain open.
+
+**M3 and M4 accepted (2026-09-16):** publication/file and feature implementations
+are integrated together at `940d669`, with all three exact-model final-source
+acceptances and [all five exact-commit CI jobs green](https://github.com/MrPink604/pi-dish/actions/runs/35112220471).
+The [M3](docs/remaining-migration-plan.md#implementation-record--m3) and
+[M4](docs/remaining-migration-plan.md#implementation-record--m4) records include
+independent real publication/comment/browser and coverage-index refresh proofs,
+combined checks, 1,027 backend tests, 286 browser cases and both complete UI suites.
+M7 now has accepted domain contracts for the remaining checked root cutover.
+Shared root/build integration stays serialized; the mandatory simplification and
+repository-closure phases remain open.
 
 1. **Finish product migration (M0–M7).** Freeze delivery/compiler contracts; migrate
    the remaining session read/SDK/projection, routine, publication/file, feature,

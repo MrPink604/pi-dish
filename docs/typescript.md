@@ -64,17 +64,20 @@ boundary; walker fallback is not evidence of native packaging.
 Legacy store members and external payloads remain explicitly opaque where the
 old implementation passed them through. This migration does not unify the
 stores or move remaining root/application ownership into these factories.
-The private root composition and producer provenance are recorded in
-[`m3-evidence.json`](m3-evidence.json); parent integration and acceptance remain
-separate from these implemented boundaries.
+The original root proposal and producer provenance are recorded in
+[`m3-evidence.json`](m3-evidence.json); the
+[M3 implementation record](remaining-migration-plan.md#implementation-record--m3)
+records accepted parent integration and exact-source delivery evidence.
 
 M4's feature slice checks task-agent discovery, the interactive harness JSON/model
 runner, harness settings, STT, application settings/limits, indexed usage, SDK
 skills/coverage, scoped models and command-list responses. It consumes the actual
-checked M1 producers and M6 bundled-resource resolver. The private root proposal
+checked M1 producers and M6 bundled-resource resolver. The integrated root
 mounts all sixteen handlers at their original positions; settings persistence,
 model-cache invalidation and session mutation/control remain root-owned. Coverage
-algorithms are preserved, not simplified. Package acceptance remains parent-owned.
+algorithms are preserved, not simplified. The
+[M4 implementation record](remaining-migration-plan.md#implementation-record--m4)
+records parent acceptance; remaining root policy/checking belongs to M7.
 
 See the [stage plan](session-catalog-migration.md) for scope, field authority,
 dependencies, deletion criteria and verification. Lifecycle authority, host and

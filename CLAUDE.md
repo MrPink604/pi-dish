@@ -58,6 +58,16 @@ the coordinator remains the only launch/resume/close authority. The
 [lifecycle record](docs/session-lifecycle-migration.md) retains the asymmetric
 arrival-order matrix, compatibility limits and runtime evidence.
 
+Publication/file stores and HTTP production now live in checked
+`pages`, `shares`, `comments`, `fleet-artifacts`, `file-*`, `git-diff` and
+`publication-handlers` core modules. Root mounts consume the actual bound read
+exports and public-artifact relay, retaining main/share-listener order.
+`feature-handlers` and its usage/skill/model/harness owners provide sixteen
+feature responses; root retains settings persistence, model-cache invalidation,
+observation and session mutation/control. Coverage label lookup uses the index
+accessor so appended latest-session data refreshes subsequent index consumers.
+Remaining root policy/checking is M7; coverage/store simplification is later work.
+
 Native extension `.ts` files are checked without emission by
 `tsconfig.extensions.json`; use real SDK/TUI/TypeBox types and unknown host-only
 imports with guards. `tsconfig.edges.json` emits sibling CommonJS/declarations
