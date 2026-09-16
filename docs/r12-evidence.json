@@ -1,0 +1,784 @@
+{
+  "milestone": "R12",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r12-vendor-loader",
+  "status": "Implementation and all local verification complete; ready for independent exact-source review, not parent acceptance",
+  "owner": {
+    "ref": "01a0ab39-8f64-7161-b4d1-32502c535e23",
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinkingLevel": "high",
+    "verification": "Semantic resolve confirmed before edits"
+  },
+  "prerequisites": {
+    "acceptedProduct": "M0\u2013M7 accepted; no re-investigation",
+    "acceptedTools": "C1 tools checkpoint accepted; build-vendor.ts owned by R12; remaining C1 excluded",
+    "records": [
+      "docs/remaining-migration-plan.md R12, deliberate limits, verification policy, M7 and C1 tools acceptance",
+      "docs/c1-tools-evidence.json",
+      "AGENTS.md",
+      "CLAUDE.md checked tools and frontend libraries"
+    ]
+  },
+  "ownership": {
+    "authored": [
+      "scripts/build-vendor.ts"
+    ],
+    "generated": [
+      "scripts/build-vendor.js",
+      "scripts/build-vendor.d.ts (expected byte-identical)",
+      "public/vendor/highlight.js"
+    ],
+    "evidence": [
+      "docs/r12-evidence.json",
+      "docs/r12-review.json (separate attestation)"
+    ],
+    "sharedMutations": [],
+    "compiler": "tsconfig.tools.json; existing build:tools command; no compiler/host exception",
+    "lsp": "No language servers configured; tool exports no symbols"
+  },
+  "callers": [
+    {
+      "path": "package.json",
+      "contract": "build:vendor runs node scripts/build-vendor.js unchanged; esbuild 0.28.1 already pinned"
+    },
+    {
+      "path": "src/browser/app.ts",
+      "contract": "global hljs passed lazily to rich text; no consumer changes"
+    },
+    {
+      "path": "src/browser/rich-text.ts",
+      "contract": "lazy vendor/highlight.js and theme; highlightElement only after final render; retain pending source guards/disposal/copy/diagram behavior"
+    },
+    {
+      "path": "src/browser/rich-text-vendors.ts",
+      "contract": "HighlightRuntime.highlightElement(HTMLElement): void unchanged"
+    },
+    {
+      "path": "src/browser/browser-assets.ts",
+      "contract": "local script loading unchanged"
+    },
+    {
+      "path": "src/core/file-page.ts",
+      "contract": "server-side highlight.js package import unchanged; not vendor bundle consumer"
+    },
+    {
+      "path": "src/core/publication-handlers.ts",
+      "contract": "shared highlight CSS serving unchanged"
+    },
+    {
+      "path": "public/index.html",
+      "contract": "local deferred scripts; highlighting absent from cold page unchanged"
+    },
+    {
+      "path": "test/ui-smoke.js",
+      "contract": "lazy highlighting plus rendered code/copy assertions retained"
+    },
+    {
+      "path": "test/browser/rich-text.spec.js",
+      "contract": "rich text disposal/lazy asset retry/markdown/diagram behavior retained"
+    },
+    {
+      "path": "test/server.test.js",
+      "contract": "cold assets and server rendering/shared theme routes retained"
+    }
+  ],
+  "producer": {
+    "path": "node_modules/highlight.js/lib/common.js",
+    "behavior": "registers 36 common languages using core and language CJS requires; exports hljs with self aliases HighlightJS and default"
+  },
+  "frozenBehavior": [
+    "Expose actual common CJS export as window.hljs, including aliases/API/language registry",
+    "Preserve full highlight.js LICENSE and version/source URL banner",
+    "Preserve lazy local/offline final-render highlighting and theme",
+    "Unrelated vendor CSS/fonts/scripts byte-identical; no dependency/package/config change"
+  ],
+  "deliberateDifferences": [
+    "Replace handwritten regex dependency collector, relative path resolver, module table/cache/require generator with existing esbuild browser IIFE",
+    "Generated highlight bundle bytes/format and build success log may change; no custom module count collection",
+    "No minification or new bundler abstraction"
+  ],
+  "deletionLedger": [
+    {
+      "owner": "scripts/build-vendor.ts",
+      "delete": "collect(), modules Map, id(), generated __mods/__cache/__req and runtime relative path normalization",
+      "replacement": "single direct esbuild.buildSync call; esbuild owns native CJS bundling"
+    }
+  ],
+  "checksLedger": {
+    "retained": [
+      "strict tool compilation and generated drift",
+      "full backend",
+      "full browser",
+      "all 8 isolated UI scenarios",
+      "full desktop/mobile smoke"
+    ],
+    "deleted": [],
+    "newPermanentTests": [],
+    "rationale": "No obsolete manual-loader tests found; ephemeral parity/byte/browser probes prove changed surface without implementation-count assertions"
+  },
+  "requiredProofs": [
+    "npm ci; build:tools; build:vendor",
+    "npm run check; npm test",
+    "npm run test:browser; npm run test:ui:scenarios; npm run test:ui",
+    "Real isolated production app in Chromium with external requests blocked, local highlight load and visible highlighted code",
+    "Browser offline-after-load highlighting; common-language/API/sample-output parity against baseline",
+    "Vendor SHA256 byte inventory; license equality; manual wrapper deletion; deterministic rebuild"
+  ],
+  "vendorBefore": [
+    {
+      "path": "public/vendor/fonts/KaTeX_AMS-Regular.woff2",
+      "bytes": 28076,
+      "sha256": "0cdd387c9590a1a9f9794560022dbb59654a7d86f187aa0c81495ad42d3a7308"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Caligraphic-Bold.woff2",
+      "bytes": 6912,
+      "sha256": "de7701e42cf1f4cf0b766c03fb27977207eee2f4fd5d76fa82188406da43ea4c"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Caligraphic-Regular.woff2",
+      "bytes": 6908,
+      "sha256": "5d53e70ad607c2352162dec9e0923fb54ecdafaccbf604cd8dcf7d00facb989b"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Fraktur-Bold.woff2",
+      "bytes": 11348,
+      "sha256": "74444efd593c005e3f4573b44524704c0af0a937fe911cca9e94068d0d140d3f"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Fraktur-Regular.woff2",
+      "bytes": 11316,
+      "sha256": "51814d270d06ff0255dba0799994fa4d8c84d11f09951d47595f4abb1f3602dc"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Main-Bold.woff2",
+      "bytes": 25324,
+      "sha256": "0f60d1b897938ec918c8ce073092411baf9438f6739465693ff18b0f9d20b021"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Main-BoldItalic.woff2",
+      "bytes": 16780,
+      "sha256": "99cd42a3c072d918f2f44984a807cf7aa16e13545fd0875fc07c6c65f99e715b"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Main-Italic.woff2",
+      "bytes": 16988,
+      "sha256": "97479ca6cce906abc961ecac96faa5f9ca2e61b8e7670d475826bcdee9a7c267"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Main-Regular.woff2",
+      "bytes": 26272,
+      "sha256": "c2342cd8b869e01752a9321dc17213fc40d4d04c79688c1d43f2cf316abd7866"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Math-BoldItalic.woff2",
+      "bytes": 16400,
+      "sha256": "dc47344dbb6cb5b655c8460d561f4df5f501b90c804ad3c6cec65fe322351ab1"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Math-Italic.woff2",
+      "bytes": 16440,
+      "sha256": "7af58c5ec8f132a2ddde9027c6d7814decce4d3b822a11192a42a20e2e973264"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_SansSerif-Bold.woff2",
+      "bytes": 12216,
+      "sha256": "e99ae51144bf1232efcc1bfe5add36262c6866b0faab24fa75740e1b98577a62"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_SansSerif-Italic.woff2",
+      "bytes": 12028,
+      "sha256": "00b26ac825e2095056396e0553b8ac26d3f8ad158c3826e28b4c45b385c4714a"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_SansSerif-Regular.woff2",
+      "bytes": 10344,
+      "sha256": "68e8c73ef42afd3ccec58bf0fba302cce448938e7fc020a5e31f8a952eee1342"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Script-Regular.woff2",
+      "bytes": 9644,
+      "sha256": "036d4e95149b69ff9bcc0cd55771efeb25ffa3947293e69acd78d5ac328c684b"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Size1-Regular.woff2",
+      "bytes": 5468,
+      "sha256": "6b47c40166b6dbe21a5dfca7718413f2147fd2399be1ba605d8ad39cedf25dfe"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Size2-Regular.woff2",
+      "bytes": 5208,
+      "sha256": "d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Size3-Regular.woff2",
+      "bytes": 3624,
+      "sha256": "73d591271b1604960cb10bb90fee021670af7297017e0e98480b332d11f51995"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Size4-Regular.woff2",
+      "bytes": 4928,
+      "sha256": "a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Typewriter-Regular.woff2",
+      "bytes": 13568,
+      "sha256": "71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b"
+    },
+    {
+      "path": "public/vendor/harness-icons-LICENSE",
+      "bytes": 1603,
+      "sha256": "b4546bd56963afc8bae6711af3ffa22fa198bcaa43192659f7375848a84cf200"
+    },
+    {
+      "path": "public/vendor/harness-omp.svg",
+      "bytes": 429,
+      "sha256": "1b6f7679ab4f1e339b143104be9cab0b1485e101284d48e53cd598b977658050"
+    },
+    {
+      "path": "public/vendor/harness-pi.svg",
+      "bytes": 363,
+      "sha256": "951336b8072383fce74429d666603b4de2836ee548c13b14ab3d0e45a3068c12"
+    },
+    {
+      "path": "public/vendor/harness-prime.svg",
+      "bytes": 2327,
+      "sha256": "e3b61e244c9d13e3b52f84c9caebf39bb78ae50a964ec49faa78e9a806ca5a0b"
+    },
+    {
+      "path": "public/vendor/highlight.js",
+      "bytes": 352131,
+      "sha256": "ce643bcc476eb0ca34f3dbeb3b17cc6ace5948eb014c1c3a0e59758659ba1546"
+    },
+    {
+      "path": "public/vendor/hljs-theme.min.css",
+      "bytes": 1411,
+      "sha256": "04b57f0ad5f80cd85293bf5425fe354c898622c06c8f62d6c185079ba20ac802"
+    },
+    {
+      "path": "public/vendor/katex.min.css",
+      "bytes": 22593,
+      "sha256": "012a04cc949cc3a171c467965933772e41c7ca99c7887f98442be049657506cc"
+    },
+    {
+      "path": "public/vendor/katex.min.js",
+      "bytes": 272179,
+      "sha256": "2ec5916941ef4383e0314eaabcc712301b06001d9fb68e08d751d2bae5a27a1a"
+    },
+    {
+      "path": "public/vendor/marked.min.js",
+      "bytes": 35418,
+      "sha256": "cb4cf2efefd2b1f602bf2f27d594fc0a26340d2661b60cddfcaac7a7b9261886"
+    },
+    {
+      "path": "public/vendor/mermaid.min.js",
+      "bytes": 3572661,
+      "sha256": "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8"
+    },
+    {
+      "path": "public/vendor/nerd-symbols-LICENSE",
+      "bytes": 1082,
+      "sha256": "84a7a98c82140fb12c37fe42b93805baa16024cb3e5acc599b7ffe612c55d847"
+    },
+    {
+      "path": "public/vendor/nerd-symbols.woff2",
+      "bytes": 1194820,
+      "sha256": "c780e18b3ca277203aa5332a5afdd796de22e04abba28ff05367326fa64e40de"
+    },
+    {
+      "path": "public/vendor/xterm-addon-fit.js",
+      "bytes": 1521,
+      "sha256": "ba3ea256ce0620a0992a197d6c9baea64823fc93d8da07a9e366ca9943c18527"
+    },
+    {
+      "path": "public/vendor/xterm.css",
+      "bytes": 7112,
+      "sha256": "854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6"
+    },
+    {
+      "path": "public/vendor/xterm.js",
+      "bytes": 488663,
+      "sha256": "14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972"
+    }
+  ],
+  "results": [
+    {
+      "command": "npm ci",
+      "result": "passed; 798 packages installed; existing install-script policy blocked 6 package scripts; esbuild executed successfully without policy changes"
+    },
+    {
+      "command": "npm run build:tools && npm run build:vendor",
+      "result": "passed; generated tool runtime and highlight bundle"
+    },
+    {
+      "command": "node /tmp/r12-parity.cjs",
+      "result": {
+        "languages": [
+          "xml",
+          "bash",
+          "c",
+          "cpp",
+          "csharp",
+          "css",
+          "markdown",
+          "diff",
+          "ruby",
+          "go",
+          "graphql",
+          "ini",
+          "java",
+          "javascript",
+          "json",
+          "kotlin",
+          "less",
+          "lua",
+          "makefile",
+          "perl",
+          "objectivec",
+          "php",
+          "php-template",
+          "plaintext",
+          "python",
+          "python-repl",
+          "r",
+          "rust",
+          "scss",
+          "shell",
+          "sql",
+          "swift",
+          "yaml",
+          "typescript",
+          "vbnet",
+          "wasm"
+        ],
+        "api": [
+          "APOS_STRING_MODE",
+          "BACKSLASH_ESCAPE",
+          "BINARY_NUMBER_MODE",
+          "BINARY_NUMBER_RE",
+          "COMMENT",
+          "C_BLOCK_COMMENT_MODE",
+          "C_LINE_COMMENT_MODE",
+          "C_NUMBER_MODE",
+          "C_NUMBER_RE",
+          "END_SAME_AS_BEGIN",
+          "HASH_COMMENT_MODE",
+          "HighlightJS",
+          "IDENT_RE",
+          "MATCH_NOTHING_RE",
+          "METHOD_GUARD",
+          "NUMBER_MODE",
+          "NUMBER_RE",
+          "PHRASAL_WORDS_MODE",
+          "QUOTE_STRING_MODE",
+          "REGEXP_MODE",
+          "RE_STARTERS_RE",
+          "SHEBANG",
+          "TITLE_MODE",
+          "UNDERSCORE_IDENT_RE",
+          "UNDERSCORE_TITLE_MODE",
+          "addPlugin",
+          "autoDetection",
+          "configure",
+          "debugMode",
+          "default",
+          "getLanguage",
+          "highlight",
+          "highlightAll",
+          "highlightAuto",
+          "highlightBlock",
+          "highlightElement",
+          "inherit",
+          "initHighlighting",
+          "initHighlightingOnLoad",
+          "listLanguages",
+          "newInstance",
+          "regex",
+          "registerAliases",
+          "registerLanguage",
+          "removePlugin",
+          "safeMode",
+          "unregisterLanguage",
+          "versionString"
+        ],
+        "version": "11.9.0",
+        "cases": 296,
+        "unknownLanguageErrorPreserved": true,
+        "licensePreserved": true,
+        "manualLoaderAbsent": true,
+        "baselineBytes": 352131,
+        "currentBytes": 376926
+      }
+    },
+    {
+      "command": "actual production app via browser.open, localhost-only request interception, then Chromium offline mode",
+      "result": {
+        "requests": [
+          "http://127.0.0.1:46081/",
+          "http://127.0.0.1:46081/theme-prepaint.js",
+          "http://127.0.0.1:46081/style.css",
+          "http://127.0.0.1:46081/vendor/marked.min.js",
+          "http://127.0.0.1:46081/app.js",
+          "http://127.0.0.1:46081/api/host",
+          "http://127.0.0.1:46081/api/hosts",
+          "http://127.0.0.1:46081/api/config",
+          "http://127.0.0.1:46081/api/themes",
+          "http://127.0.0.1:46081/api/settings",
+          "http://127.0.0.1:46081/api/sessions?active=1&view=client",
+          "http://127.0.0.1:46081/api/sessions?view=client",
+          "http://127.0.0.1:46081/vendor/katex.min.css",
+          "http://127.0.0.1:46081/vendor/katex.min.js",
+          "http://127.0.0.1:46081/api/pages?sessionId=2026-09-16T00-00-00-r12-offline",
+          "http://127.0.0.1:46081/api/sessions/2026-09-16T00-00-00-r12-offline/share",
+          "http://127.0.0.1:46081/api/sessions/2026-09-16T00-00-00-r12-offline/lineage",
+          "http://127.0.0.1:46081/api/sessions/2026-09-16T00-00-00-r12-offline/messages?limit=50",
+          "http://127.0.0.1:46081/vendor/harness-pi.svg",
+          "http://127.0.0.1:46081/api/sessions?view=client",
+          "http://127.0.0.1:46081/vendor/hljs-theme.min.css",
+          "http://127.0.0.1:46081/vendor/highlight.js",
+          "http://127.0.0.1:46081/api/pages?sessionId=2026-09-16T00-00-00-r12-offline",
+          "http://127.0.0.1:46081/api/sessions/2026-09-16T00-00-00-r12-offline/share",
+          "http://127.0.0.1:46081/api/sessions/2026-09-16T00-00-00-r12-offline/lineage",
+          "http://127.0.0.1:46081/api/sessions/2026-09-16T00-00-00-r12-offline/messages?after=1"
+        ],
+        "errors": [],
+        "rendered": [
+          {
+            "text": "const answer = 42;\nconsole.log(answer);\n",
+            "html": "<span class=\"hljs-keyword\">const</span> answer = <span class=\"hljs-number\">42</span>;\n<span class=\"hljs-variable language_\">console</span>.<span class=\"hljs-title function_\">log</span>(answer);\n",
+            "highlighted": "yes",
+            "classes": "language-javascript hljs"
+          },
+          {
+            "text": "def greet(name):\n    return f\"Hello {name}\"\n",
+            "html": "<span class=\"hljs-keyword\">def</span> <span class=\"hljs-title function_\">greet</span>(<span class=\"hljs-params\">name</span>):\n    <span class=\"hljs-keyword\">return</span> <span class=\"hljs-string\">f\"Hello <span class=\"hljs-subst\">{name}</span>\"</span>\n",
+            "highlighted": "yes",
+            "classes": "language-python hljs"
+          }
+        ],
+        "offline": {
+          "online": false,
+          "html": "<span class=\"hljs-keyword\">fn</span> <span class=\"hljs-title function_\">main</span>() { <span class=\"hljs-built_in\">println!</span>(<span class=\"hljs-string\">\"offline\"</span>); }",
+          "classes": "language-rust hljs",
+          "languages": [
+            "xml",
+            "bash",
+            "c",
+            "cpp",
+            "csharp",
+            "css",
+            "markdown",
+            "diff",
+            "ruby",
+            "go",
+            "graphql",
+            "ini",
+            "java",
+            "javascript",
+            "json",
+            "kotlin",
+            "less",
+            "lua",
+            "makefile",
+            "perl",
+            "objectivec",
+            "php",
+            "php-template",
+            "plaintext",
+            "python",
+            "python-repl",
+            "r",
+            "rust",
+            "scss",
+            "shell",
+            "sql",
+            "swift",
+            "yaml",
+            "typescript",
+            "vbnet",
+            "wasm"
+          ],
+          "version": "11.9.0",
+          "aliases": true
+        }
+      },
+      "screenshot": {
+        "path": "/tmp/r12-offline-render.png",
+        "sha256": "de8c667ddde282c18676283c0856e05bb9170fe342101ed6a2c74c655ad2e730",
+        "inspected": "JavaScript and Python code visibly syntax-colored in normal production transcript with copy buttons"
+      },
+      "limitations": "Offline LAN semantics during load: only fixture loopback allowed, all external requests aborted. Fully offline mode after local assets load additionally executed real Rust highlightElement with navigator.onLine false."
+    },
+    {
+      "command": "npm run build:vendor (second invocation)",
+      "result": "All 35 vendor file paths, sizes and SHA256 hashes exactly identical to first rebuilt output"
+    },
+    {
+      "command": "npm run check",
+      "result": "passed: 258 compiler-owned sources, no explicit-any exceptions, lint/type and generated output/mode checks"
+    },
+    {
+      "command": "npm test",
+      "result": "1027 passed; 0 failed/cancelled/skipped/todo; 32109.609406ms"
+    },
+    {
+      "command": "npm run test:browser",
+      "result": "286 passed; 2 workers; 3.7m"
+    },
+    {
+      "command": "npm run test:ui:scenarios",
+      "result": "all 8 passed: models, drafts, sidebar, usage, skills, routines, bounce, mobile"
+    },
+    {
+      "command": "npm run test:ui",
+      "result": "passed full desktop/mobile, code highlight/copy, retained transcript, multi-host/same-id smoke"
+    }
+  ],
+  "limits": [
+    "Linux only; no macOS claim",
+    "No lifecycle, host/route identity, parser, SSE or shared interface changes"
+  ],
+  "vendorAfter": [
+    {
+      "path": "public/vendor/fonts/KaTeX_AMS-Regular.woff2",
+      "bytes": 28076,
+      "sha256": "0cdd387c9590a1a9f9794560022dbb59654a7d86f187aa0c81495ad42d3a7308"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Caligraphic-Bold.woff2",
+      "bytes": 6912,
+      "sha256": "de7701e42cf1f4cf0b766c03fb27977207eee2f4fd5d76fa82188406da43ea4c"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Caligraphic-Regular.woff2",
+      "bytes": 6908,
+      "sha256": "5d53e70ad607c2352162dec9e0923fb54ecdafaccbf604cd8dcf7d00facb989b"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Fraktur-Bold.woff2",
+      "bytes": 11348,
+      "sha256": "74444efd593c005e3f4573b44524704c0af0a937fe911cca9e94068d0d140d3f"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Fraktur-Regular.woff2",
+      "bytes": 11316,
+      "sha256": "51814d270d06ff0255dba0799994fa4d8c84d11f09951d47595f4abb1f3602dc"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Main-Bold.woff2",
+      "bytes": 25324,
+      "sha256": "0f60d1b897938ec918c8ce073092411baf9438f6739465693ff18b0f9d20b021"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Main-BoldItalic.woff2",
+      "bytes": 16780,
+      "sha256": "99cd42a3c072d918f2f44984a807cf7aa16e13545fd0875fc07c6c65f99e715b"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Main-Italic.woff2",
+      "bytes": 16988,
+      "sha256": "97479ca6cce906abc961ecac96faa5f9ca2e61b8e7670d475826bcdee9a7c267"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Main-Regular.woff2",
+      "bytes": 26272,
+      "sha256": "c2342cd8b869e01752a9321dc17213fc40d4d04c79688c1d43f2cf316abd7866"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Math-BoldItalic.woff2",
+      "bytes": 16400,
+      "sha256": "dc47344dbb6cb5b655c8460d561f4df5f501b90c804ad3c6cec65fe322351ab1"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Math-Italic.woff2",
+      "bytes": 16440,
+      "sha256": "7af58c5ec8f132a2ddde9027c6d7814decce4d3b822a11192a42a20e2e973264"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_SansSerif-Bold.woff2",
+      "bytes": 12216,
+      "sha256": "e99ae51144bf1232efcc1bfe5add36262c6866b0faab24fa75740e1b98577a62"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_SansSerif-Italic.woff2",
+      "bytes": 12028,
+      "sha256": "00b26ac825e2095056396e0553b8ac26d3f8ad158c3826e28b4c45b385c4714a"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_SansSerif-Regular.woff2",
+      "bytes": 10344,
+      "sha256": "68e8c73ef42afd3ccec58bf0fba302cce448938e7fc020a5e31f8a952eee1342"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Script-Regular.woff2",
+      "bytes": 9644,
+      "sha256": "036d4e95149b69ff9bcc0cd55771efeb25ffa3947293e69acd78d5ac328c684b"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Size1-Regular.woff2",
+      "bytes": 5468,
+      "sha256": "6b47c40166b6dbe21a5dfca7718413f2147fd2399be1ba605d8ad39cedf25dfe"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Size2-Regular.woff2",
+      "bytes": 5208,
+      "sha256": "d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Size3-Regular.woff2",
+      "bytes": 3624,
+      "sha256": "73d591271b1604960cb10bb90fee021670af7297017e0e98480b332d11f51995"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Size4-Regular.woff2",
+      "bytes": 4928,
+      "sha256": "a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0"
+    },
+    {
+      "path": "public/vendor/fonts/KaTeX_Typewriter-Regular.woff2",
+      "bytes": 13568,
+      "sha256": "71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b"
+    },
+    {
+      "path": "public/vendor/harness-icons-LICENSE",
+      "bytes": 1603,
+      "sha256": "b4546bd56963afc8bae6711af3ffa22fa198bcaa43192659f7375848a84cf200"
+    },
+    {
+      "path": "public/vendor/harness-omp.svg",
+      "bytes": 429,
+      "sha256": "1b6f7679ab4f1e339b143104be9cab0b1485e101284d48e53cd598b977658050"
+    },
+    {
+      "path": "public/vendor/harness-pi.svg",
+      "bytes": 363,
+      "sha256": "951336b8072383fce74429d666603b4de2836ee548c13b14ab3d0e45a3068c12"
+    },
+    {
+      "path": "public/vendor/harness-prime.svg",
+      "bytes": 2327,
+      "sha256": "e3b61e244c9d13e3b52f84c9caebf39bb78ae50a964ec49faa78e9a806ca5a0b"
+    },
+    {
+      "path": "public/vendor/highlight.js",
+      "bytes": 376926,
+      "sha256": "137d079c7c4c16a15b207fe7ed2f977ed1cde0094fbee67306e237d168508830"
+    },
+    {
+      "path": "public/vendor/hljs-theme.min.css",
+      "bytes": 1411,
+      "sha256": "04b57f0ad5f80cd85293bf5425fe354c898622c06c8f62d6c185079ba20ac802"
+    },
+    {
+      "path": "public/vendor/katex.min.css",
+      "bytes": 22593,
+      "sha256": "012a04cc949cc3a171c467965933772e41c7ca99c7887f98442be049657506cc"
+    },
+    {
+      "path": "public/vendor/katex.min.js",
+      "bytes": 272179,
+      "sha256": "2ec5916941ef4383e0314eaabcc712301b06001d9fb68e08d751d2bae5a27a1a"
+    },
+    {
+      "path": "public/vendor/marked.min.js",
+      "bytes": 35418,
+      "sha256": "cb4cf2efefd2b1f602bf2f27d594fc0a26340d2661b60cddfcaac7a7b9261886"
+    },
+    {
+      "path": "public/vendor/mermaid.min.js",
+      "bytes": 3572661,
+      "sha256": "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8"
+    },
+    {
+      "path": "public/vendor/nerd-symbols-LICENSE",
+      "bytes": 1082,
+      "sha256": "84a7a98c82140fb12c37fe42b93805baa16024cb3e5acc599b7ffe612c55d847"
+    },
+    {
+      "path": "public/vendor/nerd-symbols.woff2",
+      "bytes": 1194820,
+      "sha256": "c780e18b3ca277203aa5332a5afdd796de22e04abba28ff05367326fa64e40de"
+    },
+    {
+      "path": "public/vendor/xterm-addon-fit.js",
+      "bytes": 1521,
+      "sha256": "ba3ea256ce0620a0992a197d6c9baea64823fc93d8da07a9e366ca9943c18527"
+    },
+    {
+      "path": "public/vendor/xterm.css",
+      "bytes": 7112,
+      "sha256": "854a7c0fb70e8b1a083c16797ab827299fb18744f5ad34f227b48337e33293c6"
+    },
+    {
+      "path": "public/vendor/xterm.js",
+      "bytes": 488663,
+      "sha256": "14903579ff54664cd72f8e8699e6961a6272c21863ec1c3b118cdc8af5d4a972"
+    }
+  ],
+  "vendorByteProof": {
+    "files": 35,
+    "changed": [
+      "public/vendor/highlight.js"
+    ],
+    "unchanged": 34
+  },
+  "probeSources": {
+    "r12-runtime.cjs": {
+      "sha256": "dc2ff48b434d1d1b59bafc8a839310df6cbbab95f5ed65654902039f9b085133",
+      "source": "const fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst root = '/home/jyarwood/workspace/pi-dish-r12';\nrequire(root + '/test/test-env').applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-r12-offline-'));\nprocess.env.HOME = home;\nprocess.env.TMUX_TMPDIR = path.join(home, 'tmux');\nprocess.env.PI_DISH_INDEX_SYNC_BUDGET = '1000';\nfs.mkdirSync(process.env.TMUX_TMPDIR);\nconst dir = path.join(home, '.pi/agent/sessions/project');\nfs.mkdirSync(dir, { recursive: true });\nconst id = '2026-09-16T00-00-00-r12-offline';\nconst source = '# Offline highlighting\\n\\n```javascript\\nconst answer = 42;\\nconsole.log(answer);\\n```\\n\\n```python\\ndef greet(name):\\n    return f\"Hello {name}\"\\n```';\nfs.writeFileSync(path.join(dir, id + '.jsonl'), [\n  {type:'session',cwd:home,timestamp:'2026-09-16T00:00:00.000Z'},\n  {type:'message',message:{role:'user',content:'R12 offline common-language rendering'}},\n  {type:'message',id:'offline-answer',message:{role:'assistant',content:[{type:'text',text:source}],timestamp:Date.parse('2026-09-16T00:00:01.000Z')}}\n].map(x=>JSON.stringify(x)).join('\\n')+'\\n');\nconst server = require(root + '/server.js');\nserver.on('listening', () => {\n  const result = {base:'http://127.0.0.1:'+server.address().port,home,id};\n  fs.writeFileSync('/tmp/r12-runtime.json',JSON.stringify(result));\n  console.log('R12_READY ' + JSON.stringify(result));\n});\nprocess.on('SIGTERM', () => {\n  server.close(() => { fs.rmSync(home,{recursive:true,force:true}); process.exit(0); });\n  server.closeAllConnections();\n});\n"
+    },
+    "r12-parity.cjs": {
+      "sha256": "3e52454989f7fca52b9370b94aeb34d19a2326237a7bfcae4950011b99d1354d",
+      "source": "const fs = require('node:fs');\nconst vm = require('node:vm');\nconst assert = require('node:assert/strict');\nconst { execFileSync } = require('node:child_process');\nconst root = '/home/jyarwood/workspace/pi-dish-r12';\nconst baseline = execFileSync('git',['show','dc4ae84568fda976cfb136082b1dda405ccf54d8:public/vendor/highlight.js'],{cwd:root,encoding:'utf8'});\nconst current = fs.readFileSync(root+'/public/vendor/highlight.js','utf8');\nfunction load(source) { const context = {window:{},console:{log(){},warn(){},error(){}}};vm.runInNewContext(source,context);return context.window.hljs; }\nconst old = load(baseline), next = load(current);\nassert.deepEqual(Object.keys(next).sort(),Object.keys(old).sort());\nassert.deepEqual(Array.from(next.listLanguages()),Array.from(old.listLanguages()));\nassert.equal(next.versionString,old.versionString);\nassert.equal(next.default,next);assert.equal(next.HighlightJS,next);\nconst samples = ['const answer = 42; console.log(answer);','def greet(name):\\n    return f\"Hello {name}\"','<div class=\"x\">&amp;</div>','fn main() { println!(\"offline\"); }','SELECT * FROM users WHERE id = 1;','{\"name\":\"offline\",\"value\":42}','#!/bin/bash\\necho \"$HOME\"','<script>alert(\"inert\")</script>'];\nlet cases = 0;\nfor (const language of old.listLanguages()) for (const code of samples) {\n  const a=old.highlight(code,{language}),b=next.highlight(code,{language});\n  for (const field of ['value','language','relevance','illegal','code']) assert.equal(b[field],a[field]);\n  cases++;\n}\nfor (const code of samples) {\n const a=old.highlightAuto(code),b=next.highlightAuto(code);\n for (const field of ['value','language','relevance','illegal']) assert.equal(b[field],a[field]);\n cases++;\n}\nfor (const runtime of [old,next]) assert.throws(()=>runtime.highlight('x',{language:'missing-r12-language'}),/Unknown language/);\nconst license=fs.readFileSync(root+'/node_modules/highlight.js/LICENSE','utf8').trim();\nassert.ok(current.includes(license));\nassert.ok(baseline.includes(license));\nassert.equal(/__mods|__cache|__req\\(/.test(current),false);\nconst result={languages:Array.from(next.listLanguages()),api:Object.keys(next).sort(),version:next.versionString,cases,unknownLanguageErrorPreserved:true,licensePreserved:true,manualLoaderAbsent:true,baselineBytes:Buffer.byteLength(baseline),currentBytes:Buffer.byteLength(current)};\nfs.writeFileSync('/tmp/r12-parity-result.json',JSON.stringify(result,null,2)+'\\n');\nconsole.log(JSON.stringify(result,null,2));\n"
+    }
+  },
+  "toolIssues": [
+    "Initial raw Puppeteer page.getByRole was unsupported (Playwright-only API); switched to Puppeteer selectors.",
+    "Raw page.waitForSelector failed in tool proxy; used waitForFunction. Raw page.evaluate saw isolated realm lacking window.hljs; direct tab.evaluate saw correct production runtime. Reported to xd://report_issue. Final browser proof rerun completed successfully."
+  ],
+  "cleanup": {
+    "throwawayScripts": "embedded with hashes in evidence, removed from /tmp after successful smoke",
+    "fixtureHome": "removed after supervised server stopped",
+    "screenshotAndResults": "retained under /tmp/r12-*",
+    "packageSpecificDocs": "Tool header updated; global CLAUDE/plan acceptance edits reserved for parent; no redundant markdown report added.",
+    "suiteScreenshots": "Three suite-created Prime screenshots moved from untracked .amp/in/artifacts to /tmp/r12-suite-artifacts; not staged"
+  },
+  "environment": {
+    "node": "26.8.2",
+    "npm": "12.0.2",
+    "typescript": "7.0.2",
+    "esbuild": "0.28.1",
+    "os": "Linux x64",
+    "suiteChromium": "153.0.8010.12"
+  },
+  "validationLog": {
+    "path": "/tmp/r12-validation.log",
+    "sha256": "4376b180fe466d170b199a41d6606c5b35b4ad810ee98ff8ed873ad63707f8da",
+    "combinedWallSeconds": 378.36,
+    "source": "artifact://28",
+    "fullText": "npm notice run pi-dish@1.0.0 check\nnpm notice run npm run check:source-policy && npm run lint && npm run typecheck\nnpm notice run pi-dish@1.0.0 check:source-policy\nnpm notice run node scripts/check-source-policy.mjs\nAuthored source policy passed (258 compiler-owned sources; no explicit-any exceptions).\nnpm notice run pi-dish@1.0.0 lint\nnpm notice run eslint .\nnpm notice run pi-dish@1.0.0 typecheck\nnpm notice run node scripts/build-tools.js --check && node scripts/build-core.js --check && node scripts/build-browser.js --check && node scripts/build-edges.js --check && tsc -p tsconfig.extensions.json && tsc -p tsconfig.helpers.json && tsc -p tsconfig.check.json && tsc -p tsconfig.configs.json\nTool types, generated output and modes match.\nCore types and generated output match.\nBrowser types and generated outputs match.\nEdge types, generated output and modes match.\nnpm notice run pi-dish@1.0.0 test\nnpm notice run node scripts/run-tests.js\n\u2714 send() resolves matched responses and times out on unanswered commands (110.677729ms)\n\u2714 registry scan prunes a current entry whose process starttime does not match (1.129222ms)\n\u2714 legacy registry compatibility is limited to Pi (2.305414ms)\n\u2714 registry scan rejects contradictory alternate wrapper identity (0.390697ms)\n\u2714 pruning an inspected claim preserves a replacement bridge registry entry (0.295869ms)\n\u2714 tracks compacting state from the hello and compaction events (46.696547ms)\n\u2714 tracks running tools, including update-only phases, until a completion boundary (0.542615ms)\n\u2714 captures extension UI replay before server listeners attach (0.458736ms)\n\u2714 protocol-v2 connections reject a hello from a different registry claim (4.457669ms)\n\u25b6 alternate protocol-v2 connections reject every changed static claim field\n  \u2714 wrapper identity (3.37236ms)\n  \u2714 capabilities (2.563511ms)\n  \u2714 socket path (2.751166ms)\n  \u2714 contradictory outer harness (2.201117ms)\n\u2714 alternate protocol-v2 connections reject every changed static claim field (12.384101ms)\n\u2714 alternate protocol-v2 connections accept an exact static claim (1.596606ms)\n\u2714 protocol-v2 events before hello cannot rewrite the claim used to prove the socket (1.340342ms)\n\u2714 protocol-v2 replay starts only after an exact hello and valid later events still flow (2.630869ms)\n\u2714 registry scanning rejects malformed native ids and socket paths before filesystem use (0.664866ms)\n\u2714 malformed identity updates preserve the selected bridge and valid switches preserve emit ordering (0.255102ms)\n\u2714 legacy hello with an invalid native id reports a protocol error and destroys its socket (0.228492ms)\n\u2714 anchored comment decoders narrow target kinds, identity and positive line coordinates (0.848242ms)\n\u2714 quote matching uses surrounding context and preserves exact whitespace extent (0.249211ms)\n\u2714 browser transport snapshots host routing and preserves supported header/signal forms (2.655646ms)\n\u2714 typed session requests preserve the originating owner and server-local preference scope (1.731219ms)\n\u2714 typed reads reject malformed successes and retain HTTP error status (1.457884ms)\n\u2714 session list ingress separates opaque extras and omits malformed presentation values (0.590044ms)\n\u2714 bounce previews narrow eligibility and copy valid blocker text (1.380016ms)\n\u2714 bounce operations reject unusable top levels and narrow each result (0.278546ms)\n\u2714 browser build detects stale output and preserves it on type failure (3535.269134ms)\n\u2714 autocomplete wire data narrows command and file fields without mutating input (0.82057ms)\n\u2714 session refs use target-host naming and keep exact host-id references unambiguous (1.010388ms)\n\u2714 composer image payloads are copied and exclude unsupported or malformed media (0.722644ms)\n\u2714 restored composer text preserves both distinct drafts without duplicating equal text (0.141687ms)\n\u2714 directory boundaries narrow only the fields consumed by the views (1.419291ms)\n\u2714 known directory rows disappear immediately when their selected host changes (0.438037ms)\n\u2714 an older host request cannot replace the current host directory catalog (0.186502ms)\n\u2714 directory body reads retire after a new request, close, or changed credentials (0.286741ms)\n\u2714 failed directory refresh retains only the same host previous catalog (0.215226ms)\n\u2714 display payloads narrow theme tokens, filters and supported metadata modes (1.441453ms)\n\u2714 pre-paint output tolerates unavailable storage and uses only custom-property strings (1.592157ms)\n\u2714 extension payloads narrow malformed fields and strip ANSI without mutating the wire object (0.978839ms)\n\u2714 extension state identities retain raw keys while empty fields clear projected state (0.143762ms)\n\u2714 file and diff wire decoding rejects missing file paths and narrows nested fields (1.220906ms)\n\u2714 diff render escapes repository and file attributes while preserving deferred snapshot identity (0.578132ms)\n\u2714 retired picker success cannot change rows or cache (1.70493ms)\n\u2714 retired picker failure cannot change rows or cache (0.246426ms)\n\u2714 switching hosts retires picker writes; cache keys capture the self alias before awaiting (0.199677ms)\n\u2714 background discovery shares requests per host and retries failure independently (0.453196ms)\n\u2714 a delayed background catalog cannot replace a newer picker catalog (0.266444ms)\n\u2714 malformed rows are isolated, missing flags remain optional, and failed discovery retains the cache (0.277714ms)\n\u2714 harness settings decode owned string role records and reject malformed top levels (1.721171ms)\n\u2714 agent settings narrow rows and copy maps without inherited agent names (0.460289ms)\n\u2714 host connection policy seeds unknown peers without replacing observations and always polls self (1.432926ms)\n\u2714 host connection notifications track visible changes while retries retain the failure ladder (0.214535ms)\n\u2714 host connection pruning forgets only removed hosts (0.130607ms)\n\u2714 host lookup preserves self fallback while exact lookups reject unknown hosts (1.516253ms)\n\u2714 effective host caching preserves source precedence and fills only absent metadata (0.518379ms)\n\u2714 saving unrelated catalog edits preserves source objects; replacement retires them (0.472583ms)\n\u2714 catalog add/remove/token operations normalize persistence and invalidate cached endpoints (0.908817ms)\n\u2714 discovery writes only its owned source, persists only catalog fields and leaves wire metadata opaque (0.366212ms)\n\u2714 fleet discovery uses normalized bases and never persists or mutates the supplied fleet payload (0.242759ms)\n\u2714 descriptor decoding validates identity and preserves opaque capability/version values (1.464055ms)\n\u2714 self identity accepts only the latest request and preserves older-server fallback (0.768041ms)\n\u2714 a superseded descriptor success cannot replace newer metadata or connection state (0.428129ms)\n\u2714 a superseded descriptor 401 cannot replace newer metadata or connection state (0.173648ms)\n\u2714 removed and re-added sources cannot inherit the old descriptor request (0.149663ms)\n\u2714 in-place credential changes retire requests and routing was captured before awaiting (0.173437ms)\n\u2714 an entry hidden by a new effective route cannot publish a descriptor (0.155594ms)\n\u2714 ownership is rechecked after delayed response body decoding (0.166454ms)\n\u2714 current descriptor failures are isolated and remembered descriptors skip non-refresh reads (0.378605ms)\n\u2714 fleet results reject old completions, isolate malformed rows and preserve refresh timing (0.458045ms)\n\u2714 a failed newer fleet refresh preserves the render owed by the current published list (0.230786ms)\n\u2714 a persistence failure after learning identity still reports failure for the owned source (0.143351ms)\n\u2714 a superseded fleet waiter stays pending until the latest load settles (4.922838ms)\n\u2714 fleet waiters follow repeated replacements without allowing old publication callbacks (0.72017ms)\n\u2714 saving a catalog preserves unrelated source owners while removing changed or extra fields (0.618008ms)\n\u2714 host presentation owns stable first-seen colors and sanitized overrides (2.323568ms)\n\u2714 color state retains runtime updates when preference persistence fails (0.521886ms)\n\u2714 self color fallback follows the learned host id without moving other slots (0.283666ms)\n\u2714 color lookup never mistakes inherited property names for an override (0.358948ms)\n\u2714 host chips retain escaped labels, offline notes and single-host visibility (0.442286ms)\n\u2714 persistence callbacks can retain stable color and order snapshots (0.202402ms)\n\u2714 identical host polls share a request and publish for the newest joining query (2.526773ms)\n\u2714 superseded responses cannot publish or clear a newer in-flight request (0.395147ms)\n\u2714 hosts publish independently and an obsolete fan-out cannot change cached rows (0.316688ms)\n\u2714 active polls preserve advisory family hints and merge live children until a full refresh (0.646301ms)\n\u2714 failed and unauthorized polls retain cached rows and report the current host state (0.496988ms)\n\u2714 pruning retires old requests even when the same host is added again (0.366131ms)\n\u2714 a changed host endpoint starts a new request and a retired 401 cannot block its success (0.285649ms)\n\u2714 active-only hints preserve prior parent and family for undefined while full scans replace them (0.299455ms)\n\u2714 active-only hints preserve prior parent and family for null while full scans replace them (0.278316ms)\n\u2714 active-only hints preserve prior parent and family for  while full scans replace them (0.252237ms)\n\u2714 acknowledged metadata survives failed fan-out and partial child replay through sidebar publication (24.142528ms)\n\u2714 host presentation narrows labels and capabilities without mutating discovery metadata (1.304454ms)\n\u2714 static shell markup uses registered typed actions and contains no executable event attributes (1.001812ms)\n\u2714 message projection preserves text/image content but narrows identifiers and telemetry (1.031889ms)\n\u2714 custom-message projection separates hidden state, structured advisor notes and job metadata (0.251926ms)\n\u2714 message timestamps retain accepted formats without borrowing an external Date (0.351614ms)\n\u2714 model cache keys retain self compatibility and separate remote harnesses (0.734247ms)\n\u2714 model catalog rejects superseded responses and captures the request endpoint (0.645509ms)\n\u2714 retired or invalid model owners cannot publish success or failure (0.320555ms)\n\u2714 cached models remain visible during a cwd refresh while the stale request cannot publish (0.215117ms)\n\u2714 model edit writers preserve persisted snapshots and provider filtering (0.869192ms)\n\u2714 model option grouping supports literal prototype names and escapes labels (0.368577ms)\n\u2714 malformed cached rows leave no catalog scope or owner (0.342387ms)\n\u2714 harness defaults narrow wire fields and copy valid custom role names (2.760013ms)\n\u2714 config preview binds delayed bodies to the original cwd and retires editor actions immediately (0.713749ms)\n\u2714 preview request captures endpoint credentials and ignores token rotation, close and old failures (0.205368ms)\n\u2714 successful preview exposes copied scope and current errors without showing unsupported harness actions (0.259761ms)\n\u2714 recovery wire data narrows rows and mode values without borrowing malformed payloads (1.737241ms)\n\u2714 routine decoding retains literal prompt versions and stamps immutable host endpoints (1.040205ms)\n\u2714 routine invocation decoding rejects malformed rows and cursor types (0.432166ms)\n\u2714 search payloads narrow rows and merge with the actual host identity (2.216016ms)\n\u2714 host pruning uses only positive host terms and keeps supplied row identity (0.521395ms)\n\u2714 session stats retain unavailable prices and narrow context and runtime metadata (1.019055ms)\n\u2714 published artifact payloads reject error envelopes and malformed identities (0.240374ms)\n\u2714 session lineage narrows nested identities and decodes the tree recursively (1.393873ms)\n\u2714 session search rejects invalid indices before DOM navigation (0.438508ms)\n\u2714 spawn wire decoders reject untyped ids and narrow readiness (1.726832ms)\n\u2714 submitted spawns copy their host, target and draft before acceptance and keep replacement views (1.028793ms)\n\u2714 identical operation ids from different hosts remain distinct and readiness selects only the current one (0.664035ms)\n\u2714 a failed background spawn discards only its composer while the current failure preserves its draft (0.494634ms)\n\u2714 browser lookups without a session id tolerate an empty selection (1.189507ms)\n\u2714 browser state resolves colliding ids by host and prefers active rows of the same identity (0.211289ms)\n\u2714 browser state patches exactly one host across active, previous and selected snapshots (0.704491ms)\n\u2714 browser transcript metadata stays detached from registry lists and cannot overwrite the host (0.270922ms)\n\u2714 browser state keeps selected metadata when filtered lists omit it and clears on explicit selection miss (0.161104ms)\n\u2714 browser state stamps discovered host identity and rejects peer-provided host claims (0.154913ms)\n\u2714 browser selection generations reject stale work across same-id hosts, reloads and provisional views (0.116179ms)\n\u2714 captured browser ownership is immutable and distinguishes hosts even within the same generation (0.162707ms)\n\u2714 transcript merges reject stale ownership after host switches and same-session reloads (0.215207ms)\n\u2714 state writers filter identity, capability, family and extras independently of permitted metadata (0.638927ms)\n\u2714 list replacement and detached selection preserve omission without swallowing explicit null or false (0.175281ms)\n\u2714 publication detaches external rows, capabilities and list membership while retaining opaque extras (0.177896ms)\n\u2714 ordered host publications keep borrowed rows independent when reused under a different host (0.155464ms)\n\u2714 the generated helper entry publishes its CommonJS API as ordinary browser globals (4.570633ms)\n\u2714 a retained browser math extension uses a renderer that arrives after construction (2.581145ms)\n\u2714 content helpers narrow malformed block fields without inventing text or image sources (0.872618ms)\n\u2714 prototype-like role and harness names remain literal values (0.352075ms)\n\u2714 sidebar presents decoded optional fields and retains explicit null family boundaries (2.612214ms)\n\u2714 host-qualified workspace collapse and family status stay independent for identical ids and paths (7.228924ms)\n\u2714 server content search stays authoritative while scopes and automation remain visible in audit notes (0.792677ms)\n\u2714 skills directory owns decoded rows, counters and refine settings (1.484284ms)\n\u2714 skill coverage narrows sections, fractions and activation identities (0.328421ms)\n\u2714 tmux payload decoder narrows server/session identity and preserves pinned order (1.123291ms)\n\u2714 target choices restore preferences and validate the new tmux session name (0.757771ms)\n\u2714 targets retire old host requests and route saved resume choices to their catalog owner (0.251154ms)\n\u2714 target body reads cannot publish after close, token change or replacement (0.288335ms)\n\u2714 refresh immediately clears old targets and failed reads leave resume headless (0.252857ms)\n\u2714 unsupported or removed hosts do not read or inherit target choices (0.109757ms)\n\u2714 terminal wire messages narrow output and attachment metadata before rendering (1.093175ms)\n\u2714 tree decoding bounds indentation and narrows ids, roles and tool summaries (1.013875ms)\n\u2714 transcript pages require message arrays and narrow cursors without accepting wire identity (1.28665ms)\n\u2714 transcript decoding preserves authoritative indexed empty assistant entries (0.161034ms)\n\u2714 transcript patches preserve present display values and exclude list authority and extras (0.556431ms)\n\u2714 usage decoding preserves unavailable prices and qualifies even a single answering host (1.057818ms)\n\u2714 usage limits discard malformed reports and fractions (0.740278ms)\n\u2714 disposing the fan-out queue retires both pending and subsequent renders (0.203644ms)\n\u2714 comments CLI discovers its ancestor pi session, pages, and acknowledges (520.184406ms)\n\u2714 comments CLI reports the canonical route for an alternative registry entry (73.313769ms)\n\u2714 core build detects stale runtime/declarations and never repairs them in check mode (1365.162677ms)\n\u2714 canonical route ids retain legacy Pi bytes and distinguish alternate harnesses (1.69396ms)\n\u2714 socket framing preserves split UTF-8 and JSON Unicode separators (0.474776ms)\n\u2714 request correlation distinguishes numeric/string ids and ignores late responses (0.954753ms)\n\u2714 request timeout and socket failure reject and release their pending entries (5.917257ms)\n\u2714 host identity and core stores follow temporary HOME changes (1.370389ms)\n\u2714 process proofs preserve birth identity and fail closed for incomplete input (0.468856ms)\n\u2714 parses the plain fields and matches the exact minute (1.160963ms)\n\u2714 lists, ranges and steps (4.646947ms)\n\u2714 three-letter month and day names, and Sunday as both 0 and 7 (0.363737ms)\n\u2714 @ aliases expand to their expressions (0.172726ms)\n\u2714 dom/dow use the either-rule only when both are restricted (0.144683ms)\n\u2714 invalid expressions throw a message worth returning as a 400 (0.657481ms)\n\u2714 nextCronMatch walks forward across hour, day, month and year boundaries (0.492039ms)\n\u2714 an expression that can never fire returns null (0.171273ms)\n\u2714 edge delivery preserves executable CJS and ESM, rejects drift and leaves outputs intact on failure (1792.487766ms)\n\u2714 normalizeMention strips decorations and extracts :line (1.582629ms)\n\u2714 extractSessionPaths mines structured args, bash tokens, and dirnames (0.601877ms)\n\u2714 extractSessionPaths rejects a null message instead of silently losing its trail (0.50785ms)\n\u2714 bare basename resolves to the most recently tool-touched file, not the cwd one (0.600063ms)\n\u2714 qualified mention prefers the exact cwd-relative file (0.330404ms)\n\u2714 siblings of tool-touched files resolve by basename (1.285848ms)\n\u2714 files outside the cwd resolve only via the tool trail (76.205902ms)\n\u2714 traversal and absolute paths outside the session reach are rejected (12.882462ms)\n\u2714 falls back to file search under cwd for untracked files (1.024775ms)\n\u2714 mentions carry :line through resolution (0.535401ms)\n\u2714 readFileForViewer: text, truncation flag, binary rejection, images (0.680004ms)\n\u2714 boot a peer, a counting remote and two hubs that know about them (2275.22341ms)\n\u2714 a session export downloads through the proxy, and only through it (41.346021ms)\n\u2714 a proxied export is gated by the hub token like any other /hosts path (580.932059ms)\n\u2714 a share created through the proxy is mapped to the peer and re-addressed to the hub (8.558334ms)\n\u2714 a hub with a public base url rewrites the share url to its own (6.637006ms)\n\u2714 the hub serves the peer's export at its own /share/:token (13.680869ms)\n\u2714 the hub's public share listener serves fleet shares too (7.485859ms)\n\u2714 an agent on the peer maps its page onto the hub by hostId (15.622657ms)\n\u2714 a hostId no configured remote claims is a 404 (3.81734ms)\n\u2714 the hub serves the peer's page, its assets and its trailing-slash redirect (9.195939ms)\n\u2714 a single-file page survives a slash-form fetch: redirect, no prune (14.954285ms)\n\u2714 the hub's main app makes a fleet page commentable; its public listener does not (3.274825ms)\n\u2714 an unmapped token is an instant bare 404 that contacts nobody (3.262882ms)\n\u2714 a comment on a fleet page files on the peer, where its agent reads it (15.641493ms)\n\u2714 revoking on the owner 404s the hub and prunes the mapping (6.07309ms)\n\u2714 a revoke proxied through the hub prunes the mapping directly (12.467056ms)\n\u2714 the hub can unmap an artifact without touching the owner's copy (5.539572ms)\n\u2714 the pages skill publishes locally and maps onto a hub with --via (706.311143ms)\n\u2714 splitPatch splits per file and counts only inside hunks (1.083316ms)\n\u2714 splitPatch resolves deletions and renames (0.189438ms)\n\u2714 parseNumstat handles ordinary, renamed, and binary records (0.91622ms)\n\u2714 findGitRepos finds nested repos but skips heavies and repo interiors (34.362291ms)\n\u2714 aggregateDiffs collects modified, untracked, and clean repos across the tree (69.615295ms)\n\u2714 cwd that is itself a repo reports as \".\"; staged changes count (36.061561ms)\n\u2714 binary untracked files get a stub entry, not a patch (19.598446ms)\n\u2714 repo with no commits yet synthesizes everything as new files (9.49882ms)\n\u2714 a non-repo cwd with no repos below returns an empty list (0.509202ms)\n\u2714 inline limit returns numstat summaries and generates one selected patch on demand (21.9992ms)\n\u2714 OMP catalog command is cached, persisted, and prices tokens including cache reads (61.151728ms)\n\u2714 Pi registry rates are cached and backfill zero-cost JSONL usage (3.125563ms)\n\u2714 OMP catalog uses valid JSON already printed when the command times out (2.717934ms)\n\u2714 stale last-known OMP catalog survives refresh failure; missing catalog stays unpriced (11.915144ms)\n\u2714 OMP session usage is catalog-priced while unknown models remain unavailable (1.273656ms)\n\u2714 OMP subscription-plan zero rates stay unpriced while free tiers remain free (1.919325ms)\n\u2714 OMP session usage keeps recorded costs when catalog pricing is unavailable (0.699752ms)\n\u2714 OMP models.yml rate card prices dead ids and beats catalog rows (18.209022ms)\n\u2714 escapeHtml escapes markup and attribute-breaking quotes (2.208251ms)\n\u2714 stripAnsi removes CSI colors, OSC sequences, and stray escapes (0.326036ms)\n\u2714 formatTokens abbreviates thousands (0.149202ms)\n\u2714 formatTokSpeed formats rates and rejects meaningless samples (0.154142ms)\n\u2714 formatCacheStat shows hit rate and flags unreported writes (0.170371ms)\n\u2714 formatRuntime names each backend and degrades to partial tmux info (0.283185ms)\n\u2714 formatRelativeTime buckets by age (0.301049ms)\n\u2714 formatDuration renders m:ss below an hour, h:mm:ss above (0.156316ms)\n\u2714 shortCwd collapses the home directory (0.194558ms)\n\u2714 truncate stays on one line and passes short text through (0.305306ms)\n\u2714 contextClass buckets context pressure (0.127851ms)\n\u2714 sessionMetaText joins the searchable fields lowercased (0.099307ms)\n\u2714 parseModelId splits provider/id refs; formatModelRef joins them back (0.658414ms)\n\u2714 extractTextContent handles string, block-array, and junk (0.137439ms)\n\u2714 extractTextBlocks ignores non-text blocks entirely (0.133412ms)\n\u2714 getToolSummary picks the right field per tool (0.122962ms)\n\u2714 getToolSummary surfaces prime ipython shell work and code lines (0.230956ms)\n\u2714 parseIpythonResult unwraps BashResult reprs only when complete (0.895111ms)\n\u2714 getToolOutputText concatenates text blocks only (0.130175ms)\n\u2714 extractImageBlocks accepts inline and resource-backed images (0.223863ms)\n\u2714 groupByWorkspace groups by cwd and sorts by recency (0.267826ms)\n\u2714 groupByWorkspace sinks collapsed groups below expanded ones (0.134164ms)\n\u2714 buildWorkspaceTree shows a shared prefix once with distinguishing tails as children (0.426385ms)\n\u2714 buildWorkspaceTree flattens multi-segment chains below a divergence point (0.597809ms)\n\u2714 buildWorkspaceTree keeps unrelated workspaces as flat single nodes (0.234784ms)\n\u2714 buildWorkspaceTree keeps sessions living at a prefix that also has children (0.128472ms)\n\u2714 buildWorkspaceTree sinks collapsed nodes below expanded siblings per level (0.096292ms)\n\u2714 buildWorkspaceTree hoists a bare home root \u2014 ~/x groups stay top-level (0.107072ms)\n\u2714 collectTreeSessions gathers all descendant sessions (1.393232ms)\n\u2714 buildSessionFamilies keeps parents first and sorts whole blocks by newest descendant (0.409653ms)\n\u2714 session family cycles degrade to standalone roots (0.105429ms)\n\u2714 session families preserve colliding ids and resolve parents only on their owning host (0.297682ms)\n\u2714 partitionPinnedFamilies pins and orders the whole family from any member id (0.161996ms)\n\u2714 partitionPinnedFamilies matches pins by host + session key (0.177375ms)\n\u2714 sortRelations ranks singular lineage links ahead of child lists, stable within a kind (0.192614ms)\n\u2714 isChildRelation treats native and pi-dish child lineage as child fan-outs (0.070954ms)\n\u2714 groupRelations groups by kind in rank order and skips nothing (0.161465ms)\n\u2714 partitionPinned splits in pinned order and skips unknown ids (0.146366ms)\n\u2714 applyLocalFilter requires every token across name/cwd/model/id (0.489745ms)\n\u2714 parseSessionQuery splits terms, negation, fields, quotes, and dates (0.224745ms)\n\u2714 parseSessionQuery keeps unknown prefixes and bad dates literal (0.115398ms)\n\u2714 parseSessionQuery accepts only real ISO calendar dates (0.091543ms)\n\u2714 parseSessionQuery ANDs repeated date bounds (max since, min before) (0.151917ms)\n\u2714 evaluateSessionQuery: fields scope, negation is metadata-only, content widens plain terms (0.175522ms)\n\u2714 evaluateSessionQuery: is:active tests liveness, not substrings (0.083969ms)\n\u2714 parseSessionQuery treats host: as a field term, negated and quoted alike (0.053ms)\n\u2714 evaluateSessionQuery: host: matches the label, falls back to the host id (0.066165ms)\n\u2714 host: composes with is:active, since: and plain terms (0.101121ms)\n\u2714 routine: is a field term over the session's routine stamp (0.111801ms)\n\u2714 is:automation tests routine provenance; queryAsksForAutomation is positive-only (0.170211ms)\n\u2714 stripQueryField removes a field's tokens and leaves the rest tokenized as parsed (0.121489ms)\n\u2714 applyHostTerms filters on host terms alone, ignoring the rest of the query (0.139103ms)\n\u2714 buildSnippets returns multiple windows and a total occurrence count (0.198596ms)\n\u2714 positiveQueryTokens extracts only plain positive terms (0.067678ms)\n\u2714 applyLocalFilter understands the query grammar (0.071234ms)\n\u2714 scoreSessionMatch: distinct-keyword coverage beats repeating one keyword (0.128172ms)\n\u2714 scoreSessionMatch: metadata outranks content, name outranks the rest (0.103275ms)\n\u2714 scoreSessionMatch: only positive plain terms score (0.104127ms)\n\u2714 applyLocalFilter orders matches by relevance, then recency (0.13752ms)\n\u2714 groupSessionsByDate buckets by recency with undated sunk last (13.018329ms)\n\u2714 groupSessionsByDate: Monday belongs to This week, Sunday before to Last week (0.171133ms)\n\n[Artifact storage: ~/.omp/agent/sessions/-workspace-pi-dish-r12/2026-09-16T17-17-51-332Z_01a0ab39-8f64-7161-b4d1-32502c535e23/28.bash-original.log (193.5KB). Use artifact://28:N-M to page, artifact://28:raw:N-M for verbatim chunks, and the artifact file path for search/copy workflows.]\n\n[Showing lines 1-300 of 2414. Use :301 to continue]"
+  },
+  "sourceInventory": [
+    {
+      "path": "public/vendor/highlight.js",
+      "bytes": 376926,
+      "sha256": "137d079c7c4c16a15b207fe7ed2f977ed1cde0094fbee67306e237d168508830"
+    },
+    {
+      "path": "scripts/build-vendor.d.ts",
+      "bytes": 125,
+      "sha256": "695774d0a5107d37ab44e94c060f23b53823ffaac8862ec75c07a0cf05c22cdc"
+    },
+    {
+      "path": "scripts/build-vendor.js",
+      "bytes": 4563,
+      "sha256": "141e3e206f2f7436a41973fe9690b820340e79d57e833e2726569f517c0daae1"
+    },
+    {
+      "path": "scripts/build-vendor.ts",
+      "bytes": 4454,
+      "sha256": "daf0523fa558cd0abc4a7365c4548949ea9a5bc8eba33a8d29c67e99e983b2fc"
+    }
+  ]
+}
