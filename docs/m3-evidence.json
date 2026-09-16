@@ -1,6 +1,6 @@
 {
   "milestone": "M3",
-  "status": "Implementation and local verification complete; final three-model review and parent acceptance pending",
+  "status": "Owner implementation, validation and three exact-model final-source reviews complete; parent integration and package acceptance pending",
   "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "branch": "migration/m3-publication",
   "ownerSession": "01a0a998-4b0e-76ce-9490-995db584afd2",
@@ -531,7 +531,7 @@
     "pages": "Live root references; root-idempotent token; title pass-through; absent-vs-null metadata; explicit session association validation precedes mutation; directory redirects and contained assets; public local-first fallback; main annotation versus raw share listener.",
     "shares": "Session references distinct from immutable imported native HTML; import payload validation; atomic HTML write and rollback; canonical alias behavior; revoke HTML/cache cleanup; mtime/size/live-snapshot export cache.",
     "comments": "File/diff/page target variants; anchor caps; page session inheritance and deepest unique live cwd inference; canonical known identity; index/get reads never acknowledge; session guard and acknowledged edit/delete conflict.",
-    "fleet-artifacts": "M3-owned get/record/remove/listByHost/token/kind guards; M5 actual remote-name guard; invalid timestamp null; remap preserves timestamp; valid host-scoped unmapping; newest-first; mapping is reachability only.",
+    "fleet-artifacts": "M3-owned get/record/remove/listByHost/token/kind guards; M5 actual remote-name guard; invalid timestamp null; remap preserves valid timestamps while null createdAt retains baseline Date.now() fallback; valid host-scoped unmapping; newest-first; mapping is reachability only.",
     "files": "Lazy native FFF SDK/fallback; four finders; bounded directory walker; typed path completion bypasses FFF; mention reach/ranking/symlink semantics; text/image limits; raw HTML/SVG inert.",
     "diff": "Bounded repo/patch/untracked reads; summary vs deferred patch absent fields; four-entry snapshots, sliding TTL; request paths select captured entries; both version comparisons; stale409."
   },
@@ -627,13 +627,34 @@
     }
   ],
   "cleanup": "Updated existing docs/typescript.md implementation inventory and opaque boundaries; removed the four owner-created independent/fleet/search/surface throwaway directories after their proofs. Historical snapshot paths and process-local output references identify executed evidence, not retained fixtures. No permanent test scaffolding or browser bundle changes added.",
-  "reviews": [],
+  "reviews": [
+    {
+      "model": "zai/glm-5.3",
+      "sessionRef": "01a0a9e4-5ccb-7348-9bb0-da6dca4412c2",
+      "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+      "verdict": "ACCEPT"
+    },
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "sessionRef": "01a0a9e4-6667-712c-963a-fa32d9b2ec59",
+      "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+      "verdict": "ACCEPT"
+    },
+    {
+      "model": "kimi-code/k3",
+      "sessionRef": "01a0a9e4-6191-736d-965b-64f2690861b3",
+      "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+      "verdict": "ACCEPT"
+    }
+  ],
+  "reviewRecord": "m3-review.json",
+  "attestationBoundary": "This evidence update and m3-review.json are review/provenance-only followups to the exact reviewed source; no runtime source or generated output changes. Parent alone owns integrated CI and package acceptance.",
   "reviewCorrection": {
     "initialReviewedSource": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
     "initialVerdicts": "All three required exact-model reviewers explicitly ACCEPTed this revision; Kimi and DeepSeek identified a non-blocking malformed-message error difference.",
     "resolution": "Owner chose exact baseline preservation: extractSessionPaths now performs direct property access through a documented narrow structural assertion, retaining native null/undefined errors without special-case error construction. Generated output and one focused regression updated.",
     "rootDisposition": "The unused M5-owned serveFleetArtifact body and PAGE_COMMENTS_HEADER remain for parent deletion with M5 root coalescing; no M3 ownership expansion.",
-    "finalRechecks": "All three explicit final corrected-source rechecks are required; their binding is recorded in the subsequent attestation-only update."
+    "finalRechecks": "All three required exact models explicitly ACCEPTed the entire corrected M3 implementation at 8570631fb8047afab998538a479fed7257ab2263. Kimi supplied its own verdict and personal-versus-delegated provenance statement after the authorized quota reset; no old-source acceptance or request delivery was counted."
   },
   "remainingOpaqueBoundaries": [
     "Root server startup, observation callbacks and out-of-scope M1/M5 route bodies remain JavaScript under their existing owners; parent coalesces actual factory instances when integrating their separate root proposals.",
@@ -641,5 +662,5 @@
     "Third-party SDK/native/Express runtime values and arbitrary session/tool payloads remain external boundaries; no ambient SDK facsimiles or explicit-any exceptions added.",
     "No R4 ownership consolidation, R5 shared store mechanics, store format migration, browser framework adoption or algorithm-simplification claim."
   ],
-  "sourceCommit": null
+  "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263"
 }
