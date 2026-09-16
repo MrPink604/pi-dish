@@ -14,6 +14,7 @@ const {
   parseTargetedRanges,
   classifySkillPath,
   mineSkillsFromContent,
+  mineSkillsFromEntries,
 } = require('../lib/skill-mining.js');
 
 const SKILL = '/home/u/.pi/agent/skills/demo/SKILL.md';
@@ -129,4 +130,29 @@ test('mine: a non-skill read produces no records', () => {
     session, assistantRead('e6', { path: '/home/u/proj/src/index.js', offset: 1, limit: 40 }),
   ]), { sessionId: 's6', skillCtx: ctx });
   assert.equal(recs.length, 0);
+});
+
+test('mine: truncation evidence is batch-local until a full re-index', () => {
+  const calls = [
+    session, modelChange,
+    assistantRead('whole', { path: SKILL }),
+    assistantRead('offset', { path: SKILL, offset: 7 }),
+  ];
+  const results = [
+    toolResult('tc_whole', '[Showing lines 1-13 of 50. Use offset=14 to continue.]'),
+    toolResult('tc_offset', '[Showing lines 7-13 of 50. Use offset=14 to continue.]'),
+  ];
+  const options = { sessionId: 'batched', skillCtx: ctx };
+  const first = mineSkillsFromEntries(calls, options);
+  assert.equal(first.records[0].ranges, 'all');
+  assert.equal(Object.hasOwn(first.records[0], 'truncatedTo'), false);
+  assert.deepEqual(first.records[1].ranges, [[7, -1]]);
+  const appended = mineSkillsFromEntries(results, { ...options, initialState: first.state });
+  assert.deepEqual(appended.records, [], 'a later result does not manufacture another activation');
+  assert.equal(Object.hasOwn(first.records[0], 'truncatedTo'), false, 'earlier records remain unchanged');
+  assert.deepEqual(first.records[1].ranges, [[7, -1]]);
+
+  const rebuilt = mineSkillsFromEntries([...calls, ...results], options);
+  assert.equal(rebuilt.records[0].truncatedTo, 13);
+  assert.deepEqual(rebuilt.records[1].ranges, [[7, 13]]);
 });

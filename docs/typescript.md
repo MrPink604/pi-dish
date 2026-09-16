@@ -42,13 +42,15 @@ First-party nested values are readonly; mutable `Date` timestamps detach at ingr
 Opaque tool values remain unknown. Browser compilation also checks unused locals
 and parameters.
 
-Discovery, source resolution, metadata accumulation, indexing and catalog
-composition have checked implementations. Lifecycle ownership, launch and operation
-coordination, recovery and Bounce now also have checked implementations.
-`server.js` supplies captured observations and composes those owners; consumed
-external fields are narrowed at their boundaries. General JSONL/tree/message
-parsing, usage projections, skill mining and feature stores remain JavaScript.
-The index validates the values it consumes without claiming those algorithms are migrated.
+Discovery, source resolution, metadata accumulation, indexing, catalog composition,
+lifecycle ownership and recovery have checked implementations. M1 also authors
+the six session-read/SDK/pricing/mining implementations in `src/core/` and generates
+their existing `lib/` entrypoints. The index imports those implementations directly;
+closed usage buckets and persisted decoders retain sparse day/model fields and
+legacy absent continuity. `session-read-handlers.ts` owns transcript/image/search,
+stats, read-only tree and export response production, plus the bound native share
+snapshot/export callbacks. The root still supplies narrow observation ports and
+mounts each handler at its original registration position.
 
 See the [stage plan](session-catalog-migration.md) for scope, field authority,
 dependencies, deletion criteria and verification. Lifecycle authority, host and
@@ -98,7 +100,7 @@ The integration lead, not this guide, records milestone acceptance.
 | `session-api.ts` | Closed session fields and patches, wire ingress decoders, model DTOs and client projection |
 | `session-discovery.ts`, `session-source.ts` | Bounded discovery and header identity; explicit source descriptors and route/cache consistency |
 | `session-metadata.ts` | One metadata accumulator for full and appended entries; persisted metadata validation |
-| `session-index.ts`, `session-index-data.ts` | Persistent metadata/text/skills index, bounded backfill and validated JS projection boundaries |
+| `session-index.ts`, `session-index-data.ts` | Persistent metadata/text/skills index, bounded backfill, closed usage buckets and persisted projection validation |
 | `session-catalog.ts` | Captured observation ingress, active/history/child projection, context and relationship/routine annotations |
 | `wire-protocol.ts` | RPC/bridge envelope validation and response/event distinctions; feature payloads remain unknown |
 | `rpc-session.ts` | RPC child lifecycle, request methods, stream reconstruction and native-id pool |
@@ -109,6 +111,10 @@ The integration lead, not this guide, records milestone acceptance.
 | `session-launch.ts` | Descriptor-based wrappers, argv/env, registration, cleanup and explicit backend/uncertainty outcomes |
 | `session-operations.ts` | Create/resume/close/restart, durable close intent, distinct flights, canonical-file quarantine and HTTP outcome projection |
 | `recovery-runner.ts`, `session-bounces.ts` | Actual runners plus checked production restore/delivery and idle/execute/reload policies |
+| `session-files.ts` | Cached display parser, stable-ID image lookup, search/stats/usage projections and bounded cwd/tail reads |
+| `harness-pricing.ts`, `skill-mining.ts` | Optional pricing refresh/override revisions and whole-file/batch-local skill evidence |
+| `pi-sdk.ts`, `omp-export.ts`, `session-refs.ts` | Real bundled SDK adapters, raw native OMP HTML export and lazy prompt-reference expansion |
+| `session-read-handlers.ts` | Individual Express read handlers and bound share snapshot/export operations |
 | `host-identity.ts` | Stable host id and host label |
 | `host-colors.ts` | Shared pure color sanitization, palette assignment and RGB conversion |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
@@ -197,6 +203,31 @@ pending native extensions or remaining JS implementations. Cron is now authored
 in `src/core/cron.ts`; its former checked-JS exception is removed.
 Every new migration compiler target must enroll its authored sources and fixtures.
 See the [M0 contract](m0-contracts.md#dependencies-and-authored-source-policy).
+
+### M1 read and SDK boundaries
+
+New M1 sources enter the existing core compiler and authored-source policy through
+their configured `src/core` root; no alternate program, runtime loader or handwritten
+declaration facade is added. Browser helper runtime exports are unchanged.
+Display entries/tool payloads and live bridge responses remain unknown until their
+consumed members are narrowed. The lossy display parser is never used for native
+OMP export. Existing 8 KiB cwd, 16 KiB discovery-header, 64 KiB tail and streamed
+fail-closed recovery paths remain separate.
+
+The parent explicitly authorized one bounded M1 defect correction: nonnumeric or
+nonfinite raw token/reasoning operands now contribute zero instead of concatenating
+strings or contaminating sums. Finite negatives/fractions remain unchanged; raw
+usage still reaches the existing retry and pricing policies. Finite operands do
+not guarantee finite sums, and overflow is not saturated. Persisted consumed
+nonnumeric/nonfinite counters are rejected. This is not the later R1 reducer
+refactor. M1 evidence records the before/after regression and review disposition.
+
+The bundled SDK's `ProviderHeaders` permits null tombstones, while its 0.85.1
+branch-summary option declaration omits null. The SDK adapter documents one narrow
+call-site assertion to that actual SDK option type after inspecting the runtime
+forwarding chain. The original header object and null suppression semantics are
+preserved; no filtering, replacement ambient declaration or alternate SDK model
+is introduced. This external declaration mismatch remains an explicit boundary.
 
 ## Contract conventions
 

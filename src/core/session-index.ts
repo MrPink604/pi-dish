@@ -35,47 +35,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { SessionSource } from './session-source-contracts';
-import type { SessionInfo, SessionEntries } from './session-metadata-contracts';
+import type { SessionInfo } from './session-metadata-contracts';
 import { sessionInfoFromEntries, extendSessionInfoFromEntries, decodeSessionInfo, isRecord } from './session-metadata';
-import { checkedEntries, checkedSearch, checkedSkills, checkedUsage, decodeUsage, decodeSkillRecords, decodeSkillState, finite } from './session-index-data';
+import { checkSearchLeaf, decodeUsage, decodeSkillRecords, decodeSkillState, finite } from './session-index-data';
 import type { IndexedUsage, SkillActivation, SkillState } from './session-index-data';
 import { encodeSessionKey, canonicalSessionId, resolveSessionRoute } from './session-key';
 
-// Unmigrated projections return unknown. Their consumed fields are validated at
-// this boundary; a handwritten require signature is not a runtime decoder.
-const fileHelpers: {
-  parseSessionEntries(content: string): unknown;
-  buildSearchIndexFromEntries(entries: SessionEntries): unknown;
-  extendSearchIndexFromEntries(entries: SessionEntries, tree: boolean, leafId: string | null): unknown;
-  buildIndexedUsageFromEntries(entries: SessionEntries, source: SessionSource): unknown;
-  extendIndexedUsageFromEntries(usage: IndexedUsage, entries: SessionEntries, source: SessionSource): unknown;
-  SEARCH_TEXT_SESSION_CAP: unknown;
-} = require('./session-files.js');
-const { mineSkillsFromEntries }: {
-  mineSkillsFromEntries(entries: SessionEntries, options: {
-    sessionId: string; skillCtx: { roots: Map<string, string> }; initialState?: SkillState;
-  }): unknown;
-} = require('./skill-mining.js');
-const pricing: { pricingRevision(harnessId: string): unknown } = require('./harness-pricing.js');
-function pricingRevision(harnessId: string): string {
-  const value = pricing.pricingRevision(harnessId);
-  if (typeof value !== 'string') throw new TypeError('Invalid pricing revision');
-  return value;
-}
-function searchTextCap(value: unknown): number {
-  if (!finite(value) || value < 0) throw new TypeError('Invalid search text cap');
-  return value;
-}
-const SEARCH_TEXT_SESSION_CAP = searchTextCap(fileHelpers.SEARCH_TEXT_SESSION_CAP);
-const parseSessionEntries = (content: string): SessionEntries => checkedEntries(fileHelpers.parseSessionEntries(content));
-const buildSearchIndexFromEntries = (entries: SessionEntries) => checkedSearch(fileHelpers.buildSearchIndexFromEntries(entries));
-const extendSearchIndexFromEntries = (entries: SessionEntries, tree: boolean, leafId: string | null) => {
-  const result = fileHelpers.extendSearchIndexFromEntries(entries, tree, leafId);
-  return result === null ? null : checkedSearch(result);
-};
-const buildIndexedUsageFromEntries = (entries: SessionEntries, source: SessionSource) => checkedUsage(fileHelpers.buildIndexedUsageFromEntries(entries, source));
-const extendIndexedUsageFromEntries = (usage: IndexedUsage, entries: SessionEntries, source: SessionSource) =>
-  checkedUsage(fileHelpers.extendIndexedUsageFromEntries(usage, entries, source));
+import {
+  parseSessionEntries, buildSearchIndexFromEntries, extendSearchIndexFromEntries,
+  buildIndexedUsageFromEntries, extendIndexedUsageFromEntries, SEARCH_TEXT_SESSION_CAP,
+} from './session-files.js';
+import { mineSkillsFromEntries } from './skill-mining.js';
+import { pricingRevision } from './harness-pricing.js';
 
 export interface IndexedSessionInfo extends SessionInfo {
   sessionKey: SessionSource['sessionKey'];
@@ -343,6 +314,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats): I
     usage: buildIndexedUsageFromEntries(entries, candidate),
   };
   const search = buildSearchIndexFromEntries(entries);
+  checkSearchLeaf(search);
   setEntry(st.meta, st.metaLog, file,
     { mtimeMs: stats.mtimeMs, size: stats.size, version: META_SCHEMA_VERSION, profileId: candidate.profileId, profileVersion: candidate.profileVersion, pricingRevision: pricingRevision(candidate.harnessId), info }, encodeMeta);
   setEntry(st.text, st.textLog, file,
@@ -355,14 +327,14 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats): I
       leafId: search.leafId,
       endsNl: content.endsWith('\n'),
     }, encodeText);
-  const mined = checkedSkills(mineSkillsFromEntries(entries, {
+  const mined = mineSkillsFromEntries(entries, {
     // Generic nested session.jsonl children carry their authoritative identity
     // in the Pi header; traditional session files retain the basename identity.
     // Public Pi routes and existing persisted associations remain raw IDs;
     // alternate harnesses need the encoded tuple to avoid cross-corpus clashes.
     sessionId: candidate.harnessId === 'pi' ? nativeSessionId : sessionKey,
     skillCtx,
-  }));
+  });
   setEntry(st.skills, st.skillsLog, file,
     { mtimeMs: stats.mtimeMs, size: stats.size, version: SKILLS_SCHEMA_VERSION, records: mined.records, state: mined.state }, encodeSkills);
   return info;
@@ -421,16 +393,17 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
     delta = readByteRange(file, meta.size, stats.size);
     entries = parseSessionEntries(delta);
     extension = extendSearchIndexFromEntries(entries, text.tree, text.leafId);
+    if (extension) checkSearchLeaf(extension);
   } catch { return null; }
   if (!extension) return null;
   try {
     extendSessionInfoFromEntries(meta.info, entries, stats.mtime, candidate);
     extendIndexedUsageFromEntries(meta.info.usage, entries, candidate);
-    const mined = checkedSkills(mineSkillsFromEntries(entries, {
+    const mined = mineSkillsFromEntries(entries, {
       sessionId: candidate.harnessId === 'pi' ? meta.info.nativeSessionId : meta.info.sessionKey,
       skillCtx,
       initialState: skills.state,
-    }));
+    });
     if (mined.records.length) skills.records = skills.records.concat(mined.records);
     skills.state = mined.state;
   } catch {

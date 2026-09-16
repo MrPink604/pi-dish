@@ -1,15 +1,52 @@
 // Generated from src/core/session-index-data.ts; edit that source and run npm run build:core.
-/** Narrow boundaries for the projections still implemented in JavaScript.
- * Usage bucket contents remain opaque: their consumer is the unmigrated usage
- * summary, not the metadata index. Only continuity state is used here. */
-import type { SessionEntries } from './session-metadata-contracts';
 export interface UsageState {
     provider: string | null;
     model: string;
 }
+export interface UsageTokens {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    reasoning: number;
+}
+export interface UsageCosts {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+}
+/** Day/model buckets omit zero-valued counters until their first observation. */
+export interface UsageBucket {
+    tokens?: Partial<UsageTokens>;
+    costs?: Partial<UsageCosts>;
+    costUnavailable?: Partial<UsageCosts>;
+    calls?: number;
+    measured?: number;
+    durationMs?: number;
+    slowestMs?: number;
+}
+export interface UsageTotal extends UsageBucket {
+    tokens: UsageTokens;
+    costs: UsageCosts;
+    costUnavailable: UsageCosts;
+    calls: number;
+    measured: number;
+    durationMs: number;
+    slowestMs: number;
+}
+export interface UsageModel extends UsageBucket {
+    provider: string;
+    model: string;
+    days: Record<string, UsageBucket>;
+}
 export interface IndexedUsage {
+    total: UsageTotal;
+    days: Record<string, UsageBucket>;
+    models: Record<string, UsageModel>;
+    cwd: string | null;
     state?: UsageState;
-    readonly [field: string]: unknown;
 }
 export interface SkillState extends UsageState {
     cwd: string | null;
@@ -31,6 +68,12 @@ export interface SearchProjection {
     tree: boolean;
     leafId: string | null;
 }
+/** Only tree identity remains untrusted after the typed parser's search projection. */
+export declare function checkSearchLeaf(value: {
+    leafId: unknown;
+}): asserts value is {
+    leafId: string | null;
+};
 export interface SkillProjection {
     records: SkillActivation[];
     state: SkillState | null;
@@ -39,7 +82,3 @@ export declare function finite(value: unknown): value is number;
 export declare function decodeUsage(value: unknown): IndexedUsage | null;
 export declare function decodeSkillState(value: unknown): SkillState | null;
 export declare function decodeSkillRecords(value: unknown): SkillActivation[] | null;
-export declare function checkedSkills(value: unknown): SkillProjection;
-export declare function checkedSearch(value: unknown): SearchProjection;
-export declare function checkedEntries(value: unknown): SessionEntries;
-export declare function checkedUsage(value: unknown): IndexedUsage;

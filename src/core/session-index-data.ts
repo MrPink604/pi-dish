@@ -1,13 +1,51 @@
-/** Narrow boundaries for the projections still implemented in JavaScript.
- * Usage bucket contents remain opaque: their consumer is the unmigrated usage
- * summary, not the metadata index. Only continuity state is used here. */
-import type { SessionEntries } from './session-metadata-contracts';
+/** Persisted index projections and their consumed disk-ingress validation. */
 import { isRecord } from './session-metadata';
 
 export interface UsageState { provider: string | null; model: string }
+export interface UsageTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  reasoning: number;
+}
+export interface UsageCosts {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+}
+/** Day/model buckets omit zero-valued counters until their first observation. */
+export interface UsageBucket {
+  tokens?: Partial<UsageTokens>;
+  costs?: Partial<UsageCosts>;
+  costUnavailable?: Partial<UsageCosts>;
+  calls?: number;
+  measured?: number;
+  durationMs?: number;
+  slowestMs?: number;
+}
+export interface UsageTotal extends UsageBucket {
+  tokens: UsageTokens;
+  costs: UsageCosts;
+  costUnavailable: UsageCosts;
+  calls: number;
+  measured: number;
+  durationMs: number;
+  slowestMs: number;
+}
+export interface UsageModel extends UsageBucket {
+  provider: string;
+  model: string;
+  days: Record<string, UsageBucket>;
+}
 export interface IndexedUsage {
+  total: UsageTotal;
+  days: Record<string, UsageBucket>;
+  models: Record<string, UsageModel>;
+  cwd: string | null;
   state?: UsageState;
-  readonly [field: string]: unknown;
 }
 export interface SkillState extends UsageState { cwd: string | null }
 export interface SkillActivation {
@@ -23,18 +61,51 @@ export interface SkillActivation {
   model: string;
 }
 export interface SearchProjection { text: string; tree: boolean; leafId: string | null }
+/** Only tree identity remains untrusted after the typed parser's search projection. */
+export function checkSearchLeaf(value: { leafId: unknown }): asserts value is { leafId: string | null } {
+  if (value.leafId !== null && typeof value.leafId !== 'string') throw new TypeError('Invalid search projection');
+}
 export interface SkillProjection { records: SkillActivation[]; state: SkillState | null }
 export function finite(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value); }
 function nullableString(value: unknown): value is string | null { return value === null || typeof value === 'string'; }
 function usageState(value: unknown): value is UsageState {
   return isRecord(value) && nullableString(value.provider) && typeof value.model === 'string';
 }
+const TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'] as const;
+const COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
+const COUNTER_KEYS = ['calls', 'measured', 'durationMs', 'slowestMs'] as const;
+function numericFields(value: unknown, keys: readonly string[], required: boolean): boolean {
+  return isRecord(value) && keys.every(key => (!required && value[key] === undefined) || finite(value[key]));
+}
+function usageBucket(value: unknown): value is UsageBucket {
+  return isRecord(value) &&
+    COUNTER_KEYS.every(key => value[key] === undefined || finite(value[key])) &&
+    (value.tokens === undefined || numericFields(value.tokens, TOKEN_KEYS, false)) &&
+    (value.costs === undefined || numericFields(value.costs, COST_KEYS, false)) &&
+    (value.costUnavailable === undefined || numericFields(value.costUnavailable, COST_KEYS, false));
+}
+function usageTotal(value: unknown): value is UsageTotal {
+  return isRecord(value) && numericFields(value, COUNTER_KEYS, true) &&
+    numericFields(value.tokens, TOKEN_KEYS, true) &&
+    numericFields(value.costs, COST_KEYS, true) &&
+    numericFields(value.costUnavailable, COST_KEYS, true);
+}
+function usageDays(value: unknown): value is Record<string, UsageBucket> {
+  return isRecord(value) && Object.values(value).every(usageBucket);
+}
+function usageModel(value: unknown): value is UsageModel {
+  return isRecord(value) && usageBucket(value) &&
+    typeof value.provider === 'string' && typeof value.model === 'string' && usageDays(value.days);
+}
+function indexedUsage(value: unknown): value is IndexedUsage {
+  return isRecord(value) && usageTotal(value.total) && usageDays(value.days) && isRecord(value.models) &&
+    Object.values(value.models).every(usageModel) && nullableString(value.cwd) &&
+    (value.state === undefined || usageState(value.state));
+}
 export function decodeUsage(value: unknown): IndexedUsage | null {
-  if (!isRecord(value) || !isRecord(value.total) || !isRecord(value.days) || !isRecord(value.models) ||
-      !nullableString(value.cwd) || (value.state !== undefined && !usageState(value.state))) return null;
-  // Keep bucket values and cost availability exactly as the JS projection wrote
-  // them. Missing continuity is a valid old snapshot, but cannot be extended.
-  return value as IndexedUsage;
+  // Retain absent legacy continuity and sparse day/model counters without
+  // filling zeroes or copying the persisted buckets. Only state permits delta reads.
+  return indexedUsage(value) ? value : null;
 }
 export function decodeSkillState(value: unknown): SkillState | null {
   if (!isRecord(value) || !nullableString(value.cwd) || !usageState(value)) return null;
@@ -52,29 +123,4 @@ function skillActivation(value: unknown): value is SkillActivation {
 }
 export function decodeSkillRecords(value: unknown): SkillActivation[] | null {
   return Array.isArray(value) && value.every(skillActivation) ? value : null;
-}
-export function checkedSkills(value: unknown): SkillProjection {
-  if (!isRecord(value)) throw new TypeError('Invalid skill projection');
-  const records = decodeSkillRecords(value.records);
-  const state = decodeSkillState(value.state);
-  if (!records || !state) throw new TypeError('Invalid skill projection');
-  return { records, state };
-}
-export function checkedSearch(value: unknown): SearchProjection {
-  if (!isRecord(value) || typeof value.text !== 'string' || typeof value.tree !== 'boolean' ||
-      !nullableString(value.leafId)) throw new TypeError('Invalid search projection');
-  return { text: value.text, tree: value.tree, leafId: value.leafId };
-}
-export function checkedEntries(value: unknown): SessionEntries {
-  if (!Array.isArray(value)) throw new TypeError('Invalid parsed entries');
-  const framing: unknown = Reflect.get(value, 'firstEntryOnFirstLine');
-  if (framing !== undefined && typeof framing !== 'boolean') throw new TypeError('Invalid parsed framing');
-  // Preserve the parser's array and physical-first-line marker without copying
-  // entries or asserting a universal harness-event schema.
-  return value;
-}
-export function checkedUsage(value: unknown): IndexedUsage {
-  const result = decodeUsage(value);
-  if (!result) throw new TypeError('Invalid usage projection');
-  return result;
 }

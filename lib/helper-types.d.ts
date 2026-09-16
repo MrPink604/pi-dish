@@ -39,7 +39,7 @@ export interface RefContextEntry {
     readonly name?: string;
     readonly host?: string;
     readonly cwd?: string;
-    readonly isActive?: boolean;
+    readonly isActive?: boolean | null;
 }
 export interface ImageBlock {
     readonly url?: string;
