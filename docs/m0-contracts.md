@@ -88,11 +88,11 @@ Libraries owned by a domain are ordinary imports, not injected whole-module bags
 
 | Package / exact new module | Factory / named ports | Consumed non-domain inputs and ownership |
 | --- | --- | --- |
-| M1 `session-read-handlers.ts` | `createSessionReadHandlers`, `SessionReadPorts`, `SessionReadHandlers` | `findSessionSource(id,{exact?})`, `liveSessionHistoryPending(id)`, `getRegisteredSession(id)`, `getRPCSession(id)`, `getLiveSession(id)`, `liveTreeLeafId(session)`, `getLiveContextUsage(id)`, `getContextWindow(model)`, `getSessionModels(id)`; capture source/live identity before awaits. Export `exportSessionHtml(source,outputPath,options)` and `getOmpShareSnapshot(source)` for M3; actual implementations, not JS callbacks containing response policy. |
+| M1 `session-read-handlers.ts` | `createSessionReadHandlers`, `SessionReadPorts`, `SessionReadHandlers` | `findSessionSource(id,{exact?})`, `liveSessionHistoryPending(id)`, `getRegisteredSession(id)`, `getRPCSession(id)`, `getLiveSession(id)`, `liveTreeLeafId(session)`, `getLiveContextUsage(id)`, `getContextWindow(model)`, `getSessionModels(id)`, checked ownership `describeRuntime(id): Promise<RuntimeDescription \| null>`; capture source/live identity before awaits. Own read-only GET tree response. Return named `exportSessionHtml(source,outputPath,options)` and `getOmpShareSnapshot(source)` operations on `SessionReadHandlers` for M3; actual checked implementations closing over read ports, not globals or JS response-policy callbacks. |
 | M2 `routine-handlers.ts` | `createRoutineHandlers`, `RoutineHandlerPorts`, `RoutineHandlers` | Checked routine runner (`invoke`, `nextRunAt` and actual route-consumed methods), launch `validateHarnessPilotSelection`, lazy `SessionRefDependencies` below. Move `composeRoutinePrompt`, `expandRoutineCwd`, `validateRoutinePilot`, `routineStats`, `routineSummary`, `routineErrorResponse` here. Runner continues consuming lifecycle coordinator methods directly, never a second launch authority. |
 | M3 `publication-handlers.ts` | `createPublicationHandlers`, `PublicationPorts`, `PublicationHandlers` | Source lookup/history-pending, catalog for session/path inference, registered/RPC observations for `canonicalKnownSessionId`, M1 export/snapshot, M5 `PublicArtifactRelay`, public base URL and app resource root. Own public share/page handlers, payloads, comment target validation/projection and stores. |
 | M3 `file-handlers.ts` | `createFileHandlers`, `FileHandlerPorts`, `FileHandlers` | `resolveSessionCwd`, source/known-session lookup, root for rendered file resources. Own directory completion, file search/view/content and both diff snapshot/version checks; no lifecycle capabilities granted by cwd. |
-| M4 `feature-handlers.ts` | `createFeatureHandlers`, `FeaturePorts`, `FeatureHandlers` | `buildSessionCatalog`, `enumerateSessionCandidates`, `findSessionSource(id,{exact?})` (including skill-coverage latest-session lookup), `getSessionModels`, `getLiveSession`, settings read/write, model cache get/set/context invalidation, root resource paths; M1 actual SDK/pricing/mining/index projection imports. Own usage/limits/skills/STT and harness config/agent/model/command listing response bodies plus their command runners. Session mutation/control handlers remain M7 (rename/model/thinking/command/tree/branch). |
+| M4 `feature-handlers.ts` | `createFeatureHandlers`, `FeaturePorts`, `FeatureHandlers` | `buildSessionCatalog`, `enumerateSessionCandidates`, `findSessionSource(id,{exact?})` (including skill-coverage latest-session lookup), `getSessionModels`, `getLiveSession`, settings read/write, model cache get/set/context invalidation, root resource paths; M1 actual SDK/pricing/mining/index projection imports. Own usage/limits/skills/STT, GET/PUT application settings with projection/sanitization, and harness config/agent/model/command listing response bodies plus their command runners. M7 retains settings persistence/path composition and session mutation/control (rename/model/thinking/command/tree navigation/branch). |
 | M5 `access-handlers.ts` | `createAccessHandlers`, `AccessPorts`, `AccessHandlers` | Immutable startup token/config; `readDishSettings()` allowed origins, host identity/label/version/capability observations. Own compression/body-parser bypass, CORS/API/ticket/host gates and WS `upgradeAuthorized`; no shared generic policy framework. |
 | M5 `relay-handlers.ts` | `createRelayHandlers`, `RelayPorts`, `RelayHandlers`, `PublicArtifactRelay` | M3 artifact store port below, local page existence lookup, public base URL, M5 access callback. Own raw API proxy, JSON artifact interception, public artifact and comment relay policies, fleet descriptor mapping and peer upgrade. |
 | M5 `terminal-handlers.ts` | `createTerminalHandlers`, `TerminalPorts`, `TerminalHandlers` | `upgradeAuthorized`, `getRegisteredSession`, `getRPCSession`, `findSessionFile`, `resolveSessionCwd`, `locatePiPane`; actual typed tmux `attachPaneArgv/getPrefixKey`, terminal attach/kill imports. Return claimed/unclaimed upgrade callback and shutdown callback for M7 listener wiring. |
@@ -102,9 +102,48 @@ Ports are owner-defined consumed subsets of existing `SessionSource`,
 copies of the whole server. Optional/null/failure outcomes retain their existing
 meaning. The JSON inventory's `consumes` column also names constants, direct
 imports and domain-local helpers; it is not a requirement to inject those names.
-M1 owns read-only tree projection/SDK serialization; M7 owns live tree control
-routing and branch actions. M4 owns command *listing* and feature executable
-adapters; M7 owns command *delivery*. M1/M4 must serialize shared SDK edits.
+M1 owns read-only tree projection/SDK serialization, including the GET tree route;
+M7 owns tree navigation/branch mutations. M4 owns command *listing* and feature
+executable adapters; M7 owns command *delivery*. M1/M4 serialize shared SDK edits.
+
+### Post-M0 integration clarifications (2026-09-16)
+
+These parent-approved amendments follow the accepted M0 revision; they do not
+retroactively alter what its reviewers accepted. The route inventory corrects
+only three planned-owner labels: GET session tree to M1, GET/PUT application
+settings to M4. All 115 registrations retain their baseline method/path/order,
+line ranges and consumed-name evidence.
+
+M1 imports the real `RuntimeDescription` ownership type for the stats callback.
+Its factory-returned export/snapshot functions are passed directly into M3's
+named ports. Preserve unavailable snapshots as `undefined`, and preserve
+`snapshotResolved` so an already-resolved share does not trigger a second lookup.
+The existing nullable reference-activity wire value remains nullable in its
+consumed type; do not drop null to satisfy an optional-boolean declaration.
+
+M4 moves `settingsForClient` and `sanitizeSavedFilters` with the GET/PUT bodies.
+Keep response allowlisting, credential exclusion, partial updates, deletion and
+error precedence unchanged. Storage/path ownership stays with M7; its supplied
+ports must not retain feature validation or response policy in unchecked callbacks.
+
+M2 may correct only the pilot-validation input boundary to a named
+`PilotValidationInput` with unknown model/thinking/cwd. Typed launch/resume
+`PilotSelectionOptions` remains unchanged. The model-command observation accepts
+unknown cwd; M4 retains the existing `resolveHarnessCwd` fallback. Preserve exact
+model/thinking comparison and validation/command/error order. Raw saved-routine
+launch/native-argv mismatches require a separate proposal, not this authorization.
+
+**Explicit bounded M1 bug-fix authorization:** the baseline token/reasoning
+accumulators concatenate malformed strings and coerce objects through `+=`.
+Use finite-number raw operands at those existing sites, in the same pass;
+absent/null and invalid nonnumeric/nonfinite operands contribute zero. Preserve
+all valid finite values, pricing/reported-cost/availability policy, retry/call
+classification and malformed metadata behavior. Do not sanitize the entire raw
+usage message before those other policies, add arbitrary clamping, or infer
+finite-sum guarantees solely from finite operands. Reject malformed persisted
+numeric buckets. Record old/new malformed outcomes and retain mixed-input,
+full/delta and persistence regressions; obtain the package's three implementation
+reviews. This is not an R1 reducer/cache redesign or a general validation waiver.
 
 ### Registration order is part of the contract
 
@@ -293,6 +332,25 @@ only known extension/skill resource consumers use it. In a checkout it returns t
 application-root path; in a packaged app it selects the explicit unpacked sibling
 for those external resources. Do not use it for arbitrary user paths or SDK data.
 The integration owner serializes its harness descriptor/root consumer edits.
+
+**M6/M3 native FFF amendment (2026-09-16):** a dependency-only Electron 44
+probe reproduced `dlopen` failure when FFF resolved its library through virtual
+ASAR paths despite `.so` unpacking. Importing its real unpacked package entry
+with complete FFF/ffi-rs/platform dependency trees unpacked successfully created
+an index, waited for its scan, found a marker file and mapped the unpacked `.so`.
+That experiment is not full product package acceptance.
+
+M6 owns the targeted dependency-tree unpacking and one additional named export
+`fffImportSpecifier(applicationRoot: string): string` in `runtime-resources`.
+It returns the unchanged bare `@ff-labs/fff-node` specifier in a checkout, and the
+actual unpacked package-entry file URL only for the packaged `app.asar` root.
+Resolve the physical package entry; FFF's bare exports are import-only, so bare
+CommonJS `require.resolve` is not an equivalent lookup. M3's lazy `loadFff`
+consumes that helper without duplicating archive-root detection. Preserve import
+caching/fallback, but fallback never counts as native execution proof. The generic
+`runtimeResourcePath` contract is not expanded to arbitrary SDK or user paths.
+M6 must publish the checked resolver producer before M3 consumer integration,
+then prove the real product's packaged native search with the other M6c gates.
 
 ### Reproduced baseline defects (not desktop acceptance)
 

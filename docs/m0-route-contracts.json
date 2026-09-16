@@ -441,7 +441,7 @@
         "app",
         "settingsForClient"
       ],
-      "owner": "M7"
+      "owner": "M4"
     },
     {
       "receiver": "app",
@@ -460,7 +460,7 @@
         "sanitizeSavedFilters",
         "settingsForClient"
       ],
-      "owner": "M7"
+      "owner": "M4"
     },
     {
       "receiver": "app",
@@ -1030,7 +1030,7 @@
         "piSDK",
         "routeIdentity"
       ],
-      "owner": "M7"
+      "owner": "M1"
     },
     {
       "receiver": "app",

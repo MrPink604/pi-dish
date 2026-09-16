@@ -431,8 +431,9 @@ The integration owner may land already-ready route families incrementally;
 the final gate waits for all product implementations, including M6.
 
 Move remaining root-server behavior into the M0 checked application owner:
-session control/prompt/queue/tree/model/command routes; configuration/themes/docs/
-directory utilities; session relations and catalog integration; SSE replay and
+session control/prompt/queue/tree-mutation/model/command routes; settings
+persistence/composition, themes/docs/directory utilities; session relations and
+catalog integration; SSE replay and
 listener/startup/shutdown construction. Preserve route registration order,
 `/sessions/resolve` precedence, lifecycle admission middleware, share-only listener
 restrictions, request limits and error/status projection. Use narrow domain ports,
