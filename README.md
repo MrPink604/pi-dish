@@ -668,9 +668,10 @@ for what crosses the bridge and what stays TUI-only.
 ## Development
 
 ```bash
-npm run check         # correctness lint, strict core/browser types and generated output
+npm run check         # correctness lint, strict types, source policy and output drift
 npm run build:core    # regenerate lib/ after editing src/core/
 npm run build:browser # regenerate first-party public/ scripts after src/browser/ edits
+npm run build:tools   # regenerate checked script siblings after scripts/*.ts or *.mts edits
 npm test              # API + unit tests (node:test)
 npm run test:browser  # isolated browser scenarios (Playwright)
 npm run test:ui:scenarios # feature scenarios, each with fresh fixtures
@@ -698,6 +699,14 @@ scripts: `public/app.js`, `public/browser.js`, `public/helpers.js`,
 `public/artifact-comments.js` and `public/theme-prepaint.js`. `npm run check`
 verifies strict types and byte-for-byte output consistency. Normal startup and
 Electron packaging use the committed scripts directly.
+
+Build-tool implementations are authored as sibling TypeScript in `scripts/`;
+their checked-in `.js`/`.mjs` outputs retain the existing direct command paths.
+`npm run build:tools` bootstraps from checked-in JavaScript after `npm ci`, using
+the pinned compiler and temporary output validation. Host configuration bodies
+are checked too: ESLint retains strict-checkJs `eslint.config.js`, while
+`playwright.config.ts` uses Playwright's built-in configuration transform.
+This tools checkpoint does not complete the separately gated C1 test families.
 
 Browser setup is reproducible from the lockfile:
 

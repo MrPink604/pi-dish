@@ -66,9 +66,15 @@ CommonJS files. Run `npm run build:core` to regenerate after source edits.
 
 The same command checks compile-only consumers in `test/types/core.ts`, including
 negative cases for mixed identity types and unvalidated response/store payloads.
-It also retains strict `checkJs` without emission for `lib/cron.js`; JSDoc covers
-parser inputs, parsed fields, matching, and next-run results. Most application
-and remaining JavaScript modules are not yet type checked.
+It also checks the build-tool implementations and their checked-in runtime output
+through `tsconfig.tools.json` and `npm run build:tools -- --check`. Missing,
+stale, orphaned and wrong-mode tool outputs fail without being repaired.
+`tsconfig.configs.json` strictly checks the actual `eslint.config.js` body and
+`playwright.config.ts`; the latter uses Playwright's existing host transform.
+No TypeScript runtime loader or Node minimum change is required.
+Behavioral tests, remaining runner/support implementations and observational
+tools are still separate C1 families; see the
+[frozen execution inventory](c1-tools-evidence.json).
 All browser implementation in `src/browser/` compiles strictly, including the
 application entrypoint, static bindings, state, transport and feature controllers. See
 [TypeScript migration guide](typescript.md) for the exact migrated scope.

@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-// Generated tool from scripts/build-vendor.ts; edit that source and run npm run build:tools.
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
 /**
  * Builds public/vendor/ from node_modules so the frontend has zero CDN
  * dependencies (phones on the LAN may not have internet; a missing CDN
@@ -23,17 +20,27 @@ Object.defineProperty(exports, "__esModule", { value: true });
  *   public/vendor/mermaid.min.js     — mermaid IIFE build (diagram rendering,
  *                                      loaded lazily on the first diagram)
  */
-const fs = require("fs");
-const path = require("path");
+import fs = require('fs');
+import path = require('path');
+
 const root = path.join(__dirname, '..');
 const outDir = path.join(root, 'public', 'vendor');
 fs.mkdirSync(outDir, { recursive: true });
+
 // --- marked: ships a browser UMD build, just copy it ---
-fs.copyFileSync(path.join(root, 'node_modules', 'marked', 'marked.min.js'), path.join(outDir, 'marked.min.js'));
+fs.copyFileSync(
+  path.join(root, 'node_modules', 'marked', 'marked.min.js'),
+  path.join(outDir, 'marked.min.js'),
+);
+
 // --- katex: copy browser bundle, css, and fonts ---
-fs.copyFileSync(path.join(root, 'node_modules', 'katex', 'dist', 'katex.min.js'), path.join(outDir, 'katex.min.js'));
-const katexCss = fs.readFileSync(path.join(root, 'node_modules', 'katex', 'dist', 'katex.min.css'), 'utf8')
-    .replace(/,url\(([^)]*\.woff)\) format\("woff"\),url\(([^)]*\.ttf)\) format\("truetype"\)/g, '');
+fs.copyFileSync(
+  path.join(root, 'node_modules', 'katex', 'dist', 'katex.min.js'),
+  path.join(outDir, 'katex.min.js'),
+);
+const katexCss = fs.readFileSync(
+  path.join(root, 'node_modules', 'katex', 'dist', 'katex.min.css'), 'utf8')
+  .replace(/,url\(([^)]*\.woff)\) format\("woff"\),url\(([^)]*\.ttf)\) format\("truetype"\)/g, '');
 fs.writeFileSync(path.join(outDir, 'katex.min.css'), katexCss);
 const fontsIn = path.join(root, 'node_modules', 'katex', 'dist', 'fonts');
 const fontsOut = path.join(outDir, 'fonts');
@@ -42,39 +49,58 @@ const fontsOut = path.join(outDir, 'fonts');
 fs.rmSync(fontsOut, { recursive: true, force: true });
 fs.mkdirSync(fontsOut, { recursive: true });
 for (const font of fs.readdirSync(fontsIn)) {
-    if (font.endsWith('.woff2'))
-        fs.copyFileSync(path.join(fontsIn, font), path.join(fontsOut, font));
+  if (font.endsWith('.woff2')) fs.copyFileSync(path.join(fontsIn, font), path.join(fontsOut, font));
 }
+
 // --- mermaid: dist/mermaid.min.js is a self-contained IIFE that assigns
 // globalThis.mermaid (the .esm build splits into chunks that a plain <script>
 // can't resolve). 3.5MB, so app.js loads it lazily on the first diagram. ---
-fs.copyFileSync(path.join(root, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js'), path.join(outDir, 'mermaid.min.js'));
+fs.copyFileSync(
+  path.join(root, 'node_modules', 'mermaid', 'dist', 'mermaid.min.js'),
+  path.join(outDir, 'mermaid.min.js'),
+);
+
 // --- xterm.js: ships browser UMD builds, just copy them ---
-fs.copyFileSync(path.join(root, 'node_modules', '@xterm', 'xterm', 'lib', 'xterm.js'), path.join(outDir, 'xterm.js'));
-fs.copyFileSync(path.join(root, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'), path.join(outDir, 'xterm.css'));
-fs.copyFileSync(path.join(root, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js'), path.join(outDir, 'xterm-addon-fit.js'));
+fs.copyFileSync(
+  path.join(root, 'node_modules', '@xterm', 'xterm', 'lib', 'xterm.js'),
+  path.join(outDir, 'xterm.js'),
+);
+fs.copyFileSync(
+  path.join(root, 'node_modules', '@xterm', 'xterm', 'css', 'xterm.css'),
+  path.join(outDir, 'xterm.css'),
+);
+fs.copyFileSync(
+  path.join(root, 'node_modules', '@xterm', 'addon-fit', 'lib', 'addon-fit.js'),
+  path.join(outDir, 'xterm-addon-fit.js'),
+);
+
 // --- highlight.js theme css ---
-fs.copyFileSync(path.join(root, 'node_modules', 'highlight.js', 'styles', 'base16', 'solarized-dark.min.css'), path.join(outDir, 'hljs-theme.min.css'));
+fs.copyFileSync(
+  path.join(root, 'node_modules', 'highlight.js', 'styles', 'base16', 'solarized-dark.min.css'),
+  path.join(outDir, 'hljs-theme.min.css'),
+);
+
 // --- highlight.js: bundle lib/common.js (CJS, relative requires only) ---
 const hljsLib = path.join(root, 'node_modules', 'highlight.js', 'lib');
-const modules = new Map(); // absolute path -> source
-function collect(file) {
-    if (modules.has(file))
-        return;
-    const src = fs.readFileSync(file, 'utf-8');
-    modules.set(file, src);
-    for (const m of src.matchAll(/require\(['"](\.[^'"]+)['"]\)/g)) {
-        let dep = path.resolve(path.dirname(file), m[1]);
-        if (!dep.endsWith('.js'))
-            dep += '.js';
-        collect(dep);
-    }
+const modules = new Map<string, string>(); // absolute path -> source
+
+function collect(file: string): void {
+  if (modules.has(file)) return;
+  const src = fs.readFileSync(file, 'utf-8');
+  modules.set(file, src);
+  for (const m of src.matchAll(/require\(['"](\.[^'"]+)['"]\)/g)) {
+    let dep = path.resolve(path.dirname(file), m[1]);
+    if (!dep.endsWith('.js')) dep += '.js';
+    collect(dep);
+  }
 }
 const entry = path.join(hljsLib, 'common.js');
 collect(entry);
-const id = (file) => JSON.stringify(path.relative(hljsLib, file));
-const hljsPkg = require(path.join(root, 'node_modules', 'highlight.js', 'package.json'));
-const hljsLicense = fs.readFileSync(path.join(root, 'node_modules', 'highlight.js', 'LICENSE'), 'utf-8').trim();
+
+const id = (file: string): string => JSON.stringify(path.relative(hljsLib, file));
+const hljsPkg: Record<string, unknown> = require(path.join(root, 'node_modules', 'highlight.js', 'package.json'));
+const hljsLicense = fs.readFileSync(
+  path.join(root, 'node_modules', 'highlight.js', 'LICENSE'), 'utf-8').trim();
 let out = '/* highlight.js common bundle — generated by scripts/build-vendor.js */\n';
 out += `/*!\nhighlight.js v${hljsPkg.version}\nhttps://github.com/highlightjs/highlight.js\n\n${hljsLicense}\n*/\n`;
 out += '(function(){\nvar __mods = {};\nvar __cache = {};\n';
@@ -96,9 +122,10 @@ out += '  __mods[key](mod, mod.exports, function(r){ return __req(key, r); });\n
 out += '  return mod.exports;\n';
 out += '}\n';
 for (const [file, src] of modules) {
-    out += `__mods[${id(file)}] = function(module, exports, require){\n${src}\n};\n`;
+  out += `__mods[${id(file)}] = function(module, exports, require){\n${src}\n};\n`;
 }
 out += `window.hljs = __req(".", ${id(entry)});\n`;
 out += '})();\n';
+
 fs.writeFileSync(path.join(outDir, 'highlight.js'), out);
 console.log(`vendor bundle written: ${modules.size} hljs modules, marked, katex (woff2), xterm, mermaid, hljs theme css`);

@@ -4,13 +4,24 @@
     "tsconfig.browser.json",
     "tsconfig.check.json",
     "tsconfig.edges.json",
-    "tsconfig.extensions.json"
+    "tsconfig.extensions.json",
+    "tsconfig.tools.json",
+    "tsconfig.configs.json"
   ],
   "roots": [
     "src/core",
     "src/browser"
   ],
   "files": [
+    "scripts/build-tools.ts",
+    "scripts/build-core.ts",
+    "scripts/build-browser.ts",
+    "scripts/build-edges.ts",
+    "scripts/build-vendor.ts",
+    "scripts/check-source-policy.mts",
+    "scripts/report-ci-failure.ts",
+    "eslint.config.js",
+    "playwright.config.ts",
     "skills/lib/pi-dish-client.ts",
     "skills/pi-dish-sessions/scripts/pi-dish-sessions.ts",
     "skills/pi-dish-comments/scripts/pi-dish-comments.ts",

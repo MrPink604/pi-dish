@@ -1,24 +1,32 @@
 const fs = require('node:fs');
+const { createRequire } = require('node:module');
 const espree = require('espree');
 const globals = require('globals');
 
 // Isolated tests load the independent helper and factory entrypoints. The
 // production application bundles its dependencies and shares no app bindings.
+/** @param {string} file */
 function scriptGlobals(file) {
   const helperAst = espree.parse(fs.readFileSync(file, 'utf8'), { ecmaVersion: 'latest', sourceType: 'script' });
+  /** @type {Record<string, 'readonly'>} */
   const helperGlobals = {};
   for (const node of helperAst.body) {
-    if (node.type === 'FunctionDeclaration') helperGlobals[node.id.name] = 'readonly';
+    if (node.type === 'FunctionDeclaration' && node.id) helperGlobals[node.id.name] = 'readonly';
     if (node.type === 'VariableDeclaration') for (const decl of node.declarations) {
       if (decl.id.type === 'Identifier') helperGlobals[decl.id.name] = 'readonly';
     }
   }
   return helperGlobals;
 }
+// Inspect the generated bundle's export names, not its erased implementation.
+// The implementation is already checked by the browser/core compiler programs.
+/** @type {Record<string, unknown>} */
+const helperExports = createRequire(__filename)('./public/helpers');
 const helperGlobals = { ...scriptGlobals('public/helpers.js'),
-  ...Object.fromEntries(Object.keys(require('./public/helpers')).map(name => [name, 'readonly'])),
+  ...Object.fromEntries(Object.keys(helperExports).map(name => [name, 'readonly'])),
 };
 const browserGlobals = scriptGlobals('public/browser.js');
+/** @type {import('eslint').Linter.Config[]} */
 module.exports = [
   { linterOptions: { reportUnusedDisableDirectives: 'off' } },
   { ignores: ['.claude/**', '.agents/**', '.codex/**', 'node_modules/**', 'public/vendor/**', 'dist/**', 'test-results/**', 'playwright-report/**', 'docs/**', 'pd-scratch/**'] },

@@ -1,53 +1,63 @@
+// Generated tool from scripts/build-browser.ts; edit that source and run npm run build:tools.
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
 // Checked-in local browser bundle. Type failures and check mode never rewrite it.
-const fs = require('node:fs');
-const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const fs = require("node:fs");
+const path = require("node:path");
+const node_child_process_1 = require("node:child_process");
 const root = path.resolve(__dirname, '..');
 const check = process.argv.includes('--check');
-if (process.argv.slice(2).some(arg => arg !== '--check')) throw new Error('Usage: node scripts/build-browser.js [--check]');
-const compiled = spawnSync(process.execPath, [path.join(root, 'node_modules/typescript/bin/tsc'), '-p', 'tsconfig.browser.json'], { cwd: root, stdio: 'inherit' });
-if (compiled.error) throw compiled.error;
-if (compiled.status !== 0) process.exit(compiled.status || 1);
-const esbuild = require('esbuild');
+if (process.argv.slice(2).some(arg => arg !== '--check'))
+    throw new Error('Usage: node scripts/build-browser.js [--check]');
+const compiled = (0, node_child_process_1.spawnSync)(process.execPath, [path.join(root, 'node_modules/typescript/bin/tsc'), '-p', 'tsconfig.browser.json'], { cwd: root, stdio: 'inherit' });
+if (compiled.error)
+    throw compiled.error;
+if (compiled.status !== 0)
+    process.exit(compiled.status || 1);
+const esbuild = require("esbuild");
 const entries = [
-  { source: 'src/browser/app.ts', target: 'public/app.js' },
-  { source: 'src/browser/theme-prepaint.ts', target: 'public/theme-prepaint.js' },
-  { source: 'src/browser/index.ts', target: 'public/browser.js', globalName: 'PiDishBrowser' },
-  { source: 'src/browser/artifact-comments.ts', target: 'public/artifact-comments.js' },
-  { source: 'src/browser/shared-helpers.ts', target: 'public/helpers.js', globalName: 'PiDishHelpers',
-    footer: 'if (typeof module !== \"undefined\" && module.exports) module.exports = PiDishHelpers; else Object.assign(globalThis, PiDishHelpers);' },
+    { source: 'src/browser/app.ts', target: 'public/app.js' },
+    { source: 'src/browser/theme-prepaint.ts', target: 'public/theme-prepaint.js' },
+    { source: 'src/browser/index.ts', target: 'public/browser.js', globalName: 'PiDishBrowser' },
+    { source: 'src/browser/artifact-comments.ts', target: 'public/artifact-comments.js' },
+    { source: 'src/browser/shared-helpers.ts', target: 'public/helpers.js', globalName: 'PiDishHelpers',
+        footer: 'if (typeof module !== \"undefined\" && module.exports) module.exports = PiDishHelpers; else Object.assign(globalThis, PiDishHelpers);' },
 ];
 const outputs = entries.map(entry => {
-  const result = esbuild.buildSync({
-    absWorkingDir: root, entryPoints: [entry.source], bundle: true,
-    platform: 'browser', format: 'iife', globalName: entry.globalName, target: 'es2022',
-    outfile: entry.target, write: false, metafile: true,
-    footer: entry.footer ? { js: entry.footer } : undefined,
-    banner: { js: '// Generated from src/browser/; edit sources and run npm run build:browser.' },
-  });
-  if (Object.keys(result.metafile.inputs).some(input => !input.startsWith('src/'))) {
-    throw new Error('Browser runtime imports must stay in src/; legacy script imports must be type-only');
-  }
-  for (const [input, metadata] of Object.entries(result.metafile.inputs)) {
-    if (input.startsWith('src/core/helper-')
-        && metadata.imports.some(dependency => !dependency.path.startsWith('src/core/helper-'))) {
-      throw new Error(`Shared helper runtime dependencies must stay in the portable core helper closure: ${input}`);
+    const result = esbuild.buildSync({
+        absWorkingDir: root, entryPoints: [entry.source], bundle: true,
+        platform: 'browser', format: 'iife', globalName: entry.globalName, target: 'es2022',
+        outfile: entry.target, write: false, metafile: true,
+        footer: entry.footer ? { js: entry.footer } : undefined,
+        banner: { js: '// Generated from src/browser/; edit sources and run npm run build:browser.' },
+    });
+    if (Object.keys(result.metafile.inputs).some(input => !input.startsWith('src/'))) {
+        throw new Error('Browser runtime imports must stay in src/; legacy script imports must be type-only');
     }
-  }
-  if (result.outputFiles.length !== 1 || Object.values(result.metafile.outputs).some(out => out.imports.length)) {
-    throw new Error('Each browser entrypoint must produce one self-contained local script');
-  }
-  return { target: path.join(root, entry.target), contents: result.outputFiles[0].contents };
+    for (const [input, metadata] of Object.entries(result.metafile.inputs)) {
+        if (input.startsWith('src/core/helper-')
+            && metadata.imports.some(dependency => !dependency.path.startsWith('src/core/helper-'))) {
+            throw new Error(`Shared helper runtime dependencies must stay in the portable core helper closure: ${input}`);
+        }
+    }
+    if (result.outputFiles.length !== 1 || Object.values(result.metafile.outputs).some(out => out.imports.length)) {
+        throw new Error('Each browser entrypoint must produce one self-contained local script');
+    }
+    return { target: path.join(root, entry.target), contents: result.outputFiles[0].contents };
 });
 // Validate every entry before writing any output, including in check mode.
 if (check) {
-  const stale = outputs.filter(output => !fs.existsSync(output.target)
-    || !fs.readFileSync(output.target).equals(output.contents));
-  if (stale.length) {
-    console.error('Browser output is stale; run npm run build:browser');
-    process.exitCode = 1;
-  } else console.log('Browser types and generated outputs match.');
-} else {
-  for (const output of outputs) fs.writeFileSync(output.target, output.contents);
-  console.log('Browser scripts generated.');
+    const stale = outputs.filter(output => !fs.existsSync(output.target)
+        || !fs.readFileSync(output.target).equals(output.contents));
+    if (stale.length) {
+        console.error('Browser output is stale; run npm run build:browser');
+        process.exitCode = 1;
+    }
+    else
+        console.log('Browser types and generated outputs match.');
+}
+else {
+    for (const output of outputs)
+        fs.writeFileSync(output.target, output.contents);
+    console.log('Browser scripts generated.');
 }

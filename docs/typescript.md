@@ -267,10 +267,50 @@ paths listed by `source-policy.json`. Named type-negative fixtures require their
 diagnostic purpose; tsc still checks that their errors actually occur. Strings and
 template text are not directives. No explicit-any type-utility exception exists.
 The current gate covers `src/core`, `src/browser`, the exact edge/native source
-lists and named fixtures, not remaining JS implementations. Cron is now authored
-in `src/core/cron.ts`; its former checked-JS exception is removed.
+lists, checked tool/configuration bodies and named fixtures, not remaining JS
+implementations. Cron is authored in `src/core/cron.ts`; its former checked-JS
+exception is removed.
 Every new migration compiler target must enroll its authored sources and fixtures.
 See the [M0 contract](m0-contracts.md#dependencies-and-authored-source-policy).
+
+### Checked build tools and host configurations
+
+The C1 tools prerequisite uses strict NodeNext/ES2022, Node-only
+`tsconfig.tools.json` for sibling sources in `scripts/`: `build-tools`,
+`build-core`, `build-browser`, `build-edges`, `build-vendor`,
+`check-source-policy` and `report-ci-failure`. The policy source is `.mts`
+and keeps its `.mjs` API/command path; the others are `.ts` with existing
+CommonJS `.js` command paths. Generated JavaScript and declarations are checked in.
+
+After `npm ci`, `npm run build:tools` executes the checked-in
+`scripts/build-tools.js`, not unbuilt TypeScript. It invokes the pinned compiler
+in a temporary directory, validates the complete output mapping before writing,
+and preserves first-line shebangs and the existing executable modes.
+`npm run build:tools -- --check` rejects missing, stale, orphaned or wrong-mode
+outputs without repairing them; `npm run typecheck` includes this gate.
+Commit sources and generated outputs together. This compiler is specific to
+the tool siblings; core/browser/edge build algorithms and output locations stay
+unchanged. The vendor tool retains its handwritten highlight loader until R12.
+
+`tsconfig.configs.json` checks the actual host configuration bodies without
+emission. `eslint.config.js` is the named strict-`checkJs` exception because
+direct TypeScript configuration under supported Node 22 would need an additional
+ESLint loader. It uses Espree's bundled declarations and inspects the generated
+helper export names via a runtime `createRequire` boundary; the helper bodies
+remain owned by the existing core/browser compiler programs.
+`playwright.config.ts` uses Playwright's existing configuration transform, with
+no JS alias or additional runtime loader. Both configurations and all seven
+tool implementations are enrolled in `source-policy.json`.
+
+This is not full C1 completion. Test runners, support/fixture implementations,
+observational tools and behavioral test families remain separately gated.
+The frozen inventory and proposed family/runtime mapping are recorded in
+[`c1-tools-evidence.json`](c1-tools-evidence.json). Later sibling test compilation
+must preserve `.test.js`/`.spec.js`, explicit-file arguments and resource paths.
+Before Playwright source siblings land, configure generated-JS-only discovery:
+its default would otherwise discover both `.spec.ts` and `.spec.js`.
+Browser-evaluation bodies need their own DOM compiler environment, not DOM
+globals in the Node tool program.
 
 ### M1 read and SDK boundaries
 

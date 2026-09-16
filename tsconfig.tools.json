@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "strict": true,
+    "noEmitOnError": true,
+    "declaration": true,
+    "newLine": "lf",
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "files": [
+    "scripts/build-tools.ts",
+    "scripts/build-core.ts",
+    "scripts/build-browser.ts",
+    "scripts/build-edges.ts",
+    "scripts/build-vendor.ts",
+    "scripts/check-source-policy.mts",
+    "scripts/report-ci-failure.ts"
+  ]
+}
