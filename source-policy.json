@@ -8,9 +8,7 @@
     "src/core",
     "src/browser"
   ],
-  "files": [
-    "lib/cron.js"
-  ],
+  "files": [],
   "negativeFixtures": [
     "test/types/browser-anchored-comments.ts",
     "test/types/browser-api.ts",

@@ -118,6 +118,7 @@ The integration lead, not this guide, records milestone acceptance.
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
 | `helper-{values,content,models,query,refs}.ts` | Portable shared primitives, content, model and query/reference behavior |
 | `helper-{format,identity,markdown,types}.ts` | Shared escaping/truncation, metadata text, explicit math-renderer provider and structural contracts |
+| `cron.ts`, `routines.ts`, `session-provenance.ts` | Local-time cron matching, routine definitions/invocation storage and advisory launch provenance; scheduling/HTTP composition remains a separate caller cutover |
 
 The `session-*-contracts.ts` files describe the implemented source, metadata,
 index and catalog boundaries. Compile-time fixtures assign the real index/resolver
@@ -191,8 +192,9 @@ decision and packaging checks.
 paths listed by `source-policy.json`. Named type-negative fixtures require their
 diagnostic purpose; tsc still checks that their errors actually occur. Strings and
 template text are not directives. No explicit-any type-utility exception exists.
-The current gate covers `src/core`, `src/browser`, checked `lib/cron.js` and the
-named fixtures, not pending native extensions or remaining JS implementations.
+The current gate covers `src/core`, `src/browser` and the named fixtures, not
+pending native extensions or remaining JS implementations. Cron is now authored
+in `src/core/cron.ts`; its former checked-JS exception is removed.
 Every new migration compiler target must enroll its authored sources and fixtures.
 See the [M0 contract](m0-contracts.md#dependencies-and-authored-source-policy).
 
