@@ -49,8 +49,10 @@ their existing `lib/` entrypoints. The index imports those implementations direc
 closed usage buckets and persisted decoders retain sparse day/model fields and
 legacy absent continuity. `session-read-handlers.ts` owns transcript/image/search,
 stats, read-only tree and export response production, plus the bound native share
-snapshot/export callbacks. The root still supplies narrow observation ports and
-mounts each handler at its original registration position.
+snapshot/export callbacks. Its root mounts and narrow observation ports are a
+separate M1 integration proposal; this M4 branch imports the approved producers
+without that root patch. Parent owns applying those mounts at their original
+registration positions.
 
 M4's feature slice checks task-agent discovery, the interactive harness JSON/model
 runner, harness settings, STT, application settings/limits, indexed usage, SDK

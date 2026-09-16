@@ -1,6 +1,6 @@
 {
   "milestone": "M4",
-  "status": "Complete source and consumer validation; frozen-source reviews pending; package acceptance remains parent-owned",
+  "status": "Complete checked source and consumer cutover; all three exact-model reviewers ACCEPT final source; parent-owned integration/package acceptance remains pending",
   "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "branch": "migration/m4-features",
   "frozenRegistrations": [
@@ -370,10 +370,54 @@
       "command": "npm run test:ui",
       "scope": "Complete source and real root consumer proposal",
       "result": "PASS all good: full desktop/mobile, multi-host and same-id cross-host surfaces; 62.90s"
+    },
+    {
+      "command": "npm run build:core",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "result": "PASS; generated runtime correction, public declaration unchanged"
+    },
+    {
+      "command": "node /tmp/pi-dish-m4-coverage-refresh.cjs",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "scope": "Real Express HTTP coverage and NDJSON handlers, real checked session-index, appended real Pi JSONL excluded from candidate enumeration; isolated temporary HOME and sanitized empty environment; no provider credentials/live sessions",
+      "result": "Before ab8627b: HTTP200 but subsequent activations1 != expected2 (FAIL). After correction: HTTP200, subsequent activations2, mappedReads2/latest timestamp and unchanged label (PASS). Script and temporary HOME removed."
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS",
+      "details": "213 compiler-owned sources; no explicit-any exceptions; ESLint/types/core and browser generated drift checks",
+      "seconds": 5.91,
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a"
+    },
+    {
+      "command": "npm test",
+      "result": "PASS",
+      "passed": 1008,
+      "failed": 0,
+      "skipped": 0,
+      "seconds": 32.34,
+      "artifact": "artifact://207",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a"
+    },
+    {
+      "command": "npm run test:browser -- skills.spec.js usage-view.spec.js",
+      "result": "PASS",
+      "passed": 9,
+      "failed": 0,
+      "seconds": 8.89,
+      "artifact": "artifact://205",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a"
+    },
+    {
+      "command": "npm run test:ui",
+      "result": "PASS",
+      "details": "Full desktop/mobile/multihost/same-id-cross-host smoke: all good",
+      "seconds": 62.89,
+      "artifact": "artifact://211",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a"
     }
   ],
   "remaining": [
-    "Freeze exact complete source commit and obtain three new exact-model explicit final-revision reviews",
     "Parent-owned independent integration, shared-root/config application, exact integrated CI and acceptance ledger"
   ],
   "approvedContractChanges": [
@@ -448,7 +492,9 @@
     "Updated existing docs/typescript.md complete ownership inventory; did not edit global acceptance ledger/BACKLOG",
     "Removed successful projection smoke script and disposable HOME; prior feature/native scripts already removed",
     "No permanent tests added merely for migration; retained genuine existing and producer regression tests",
-    "Core/browser outputs regenerated only from checked-in source; no hand-edited outputs"
+    "Core/browser outputs regenerated only from checked-in source; no hand-edited outputs",
+    "Removed disposable coverage-index parity probe and isolated HOME after before/after proof; added no implementation-pinning tests",
+    "Final source review dispositions and historical approvals preserved in docs/m4-review.json; attestation-only documentation changes are distinct from reviewed source"
   ],
   "deletionMoveLedger": {
     "moved": [
@@ -527,7 +573,7 @@
   "evidenceLimits": [
     "Earlier independent checkpoint commands are labeled separately and are not claimed rerun on final source",
     "Actual installed OMP 18.1.21 agent/config smoke belongs to unchanged independent slice; final focused/full suites exercise its consumers",
-    "No paid/provider-authenticated model completions or live sessions used",
+    "No paid/provider-authenticated model completions or live sessions used by product validation; exact review sessions and read-only quota inspection are review coordination, not product-validation proofs",
     "No claim of complete Electron/macOS packaging acceptance: M6 owns that package; M4 directly exercises checkout bundled-refine response and includes actual resource producer regressions"
   ],
   "approvedAdditionalRegistrations": {
@@ -536,5 +582,124 @@
       "PUT /api/settings"
     ],
     "reason": "Parent-approved M4 response/validation ownership; originally assigned to M7 in frozen baseline; root persistence remains M7"
-  }
+  },
+  "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+  "reviewRecord": "docs/m4-review.json",
+  "validationHistory": {
+    "independentStageCompletedBy": "8abe0b88b17c87f310c644effed254a4a9de5ad7",
+    "independentCheckIndexes": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "completeMilestoneBeforeParityCorrection": "ab8627b2040c090c162353bf3daf908049e34ac8",
+    "completeCheckIndexes": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16
+    ],
+    "finalParityCorrection": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+    "detail": "Earlier installed OMP/native and broader browser/scenario proofs remain historical and are not represented as rerun after the two-file parity correction"
+  },
+  "parityCorrection": {
+    "historicalSource": "ab8627b2040c090c162353bf3daf908049e34ac8",
+    "approval": "Parent explicitly approved minimal parity correction before final handoff; known index side-effect/performance drift not waived",
+    "sourceChange": [
+      "Remove direct session-files getSessionInfo import",
+      "Use existing sessionIndex.getSessionInfo(source) in coverage latest-label lookup"
+    ],
+    "build": {
+      "command": "npm run build:core",
+      "result": "PASS"
+    },
+    "probe": {
+      "command": "node /tmp/pi-dish-m4-coverage-refresh.cjs",
+      "surface": "Real Express HTTP coverage and NDJSON handlers, real checked session-index, appended real Pi JSONL excluded from candidate enumeration; isolated temporary HOME and sanitized empty environment; no provider credentials/live sessions",
+      "before": {
+        "source": "ab8627b2040c090c162353bf3daf908049e34ac8",
+        "exitCode": 1,
+        "coverageStatus": 200,
+        "activationsBefore": 1,
+        "activationsAfter": 1,
+        "expectedAfter": 2
+      },
+      "after": {
+        "exitCode": 0,
+        "coverageStatus": 200,
+        "activationsBefore": 1,
+        "activationsAfter": 2,
+        "subsequentMappedReads": 2,
+        "labelUnchanged": true
+      },
+      "permanentTestAdded": false,
+      "removedAfterProof": true
+    },
+    "checks": [
+      {
+        "command": "npm run check",
+        "result": "PASS",
+        "details": "213 compiler-owned sources; no explicit-any exceptions; ESLint/types/core and browser generated drift checks",
+        "seconds": 5.91
+      },
+      {
+        "command": "npm test",
+        "result": "PASS",
+        "passed": 1008,
+        "failed": 0,
+        "skipped": 0,
+        "seconds": 32.34,
+        "artifact": "artifact://207"
+      },
+      {
+        "command": "npm run test:browser -- skills.spec.js usage-view.spec.js",
+        "result": "PASS",
+        "passed": 9,
+        "failed": 0,
+        "seconds": 8.89,
+        "artifact": "artifact://205"
+      },
+      {
+        "command": "npm run test:ui",
+        "result": "PASS",
+        "details": "Full desktop/mobile/multihost/same-id-cross-host smoke: all good",
+        "seconds": 62.89,
+        "artifact": "artifact://211"
+      }
+    ],
+    "frozenSource": "880b47fe3f6548bd829798c2909d238f882d1a9a"
+  },
+  "reviewSummary": [
+    {
+      "model": "zai/glm-5.3",
+      "sessionRef": "01a0a9e4-52f9-73ef-9864-4d689e70fd18",
+      "decision": "ACCEPT",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "finalTranscriptRef": "01a0a9e4-52f9-73ef-9864-4d689e70fd18:161"
+    },
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "sessionRef": "01a0a9e4-49c5-7196-980e-4e2cec62a7c7",
+      "decision": "ACCEPT",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "finalTranscriptRef": "01a0a9e4-49c5-7196-980e-4e2cec62a7c7:230"
+    },
+    {
+      "model": "kimi-code/k3",
+      "sessionRef": "01a0a9e4-4e39-72e2-8a8d-a0ef9889a177",
+      "decision": "ACCEPT",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "finalTranscriptRef": "01a0a9e4-4e39-72e2-8a8d-a0ef9889a177:107"
+    }
+  ]
 }

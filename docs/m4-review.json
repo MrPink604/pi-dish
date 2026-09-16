@@ -1,0 +1,354 @@
+{
+  "milestone": "M4",
+  "reviewedSource": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+  "branch": "migration/m4-features",
+  "acceptedBaseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "reviewScope": "Complete nine-module M4 source plus all sixteen real root consumers, generated outputs, approved dependency provenance and recorded execution evidence; not parent package/integration acceptance",
+  "reviewers": [
+    {
+      "requiredModel": "zai/glm-5.3",
+      "verifiedModel": "zai/glm-5.3",
+      "harness": "omp",
+      "sessionRef": "01a0a9e4-52f9-73ef-9864-4d689e70fd18",
+      "semanticRef": "01a0a9e4-52",
+      "modelVerification": "pi-dish semantic resolve",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "decision": "ACCEPT",
+      "modelReverifiedForRevision": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "findings": [],
+      "blockers": [],
+      "scope": "ENTIRE final M4/consumer implementation; complete correction inspected; all other files confirmed unchanged and prior entire-source inspection carried forward",
+      "carryForward": "Historical non-string session query observation remains behavior-equivalent; empty-array cache note remains explicitly retracted",
+      "evidenceLimits": [
+        "Read-only review; owner supplied build/probe/check/backend/browser/UI results not rerun",
+        "Generated source/output parity inspected; original dependency/route/source-policy inspection carried forward",
+        "Parent owns package/integration acceptance"
+      ],
+      "finalTranscriptRef": "01a0a9e4-52f9-73ef-9864-4d689e70fd18:161"
+    },
+    {
+      "requiredModel": "opencode-go/deepseek-v4.1-flash",
+      "verifiedModel": "opencode-go/deepseek-v4.1-flash",
+      "harness": "omp",
+      "sessionRef": "01a0a9e4-49c5-7196-980e-4e2cec62a7c7",
+      "semanticRef": "01a0a9e4-49",
+      "modelVerification": "pi-dish semantic resolve",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "decision": "ACCEPT",
+      "modelReverifiedForRevision": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "findings": [
+        {
+          "id": "deepseek-corrected-index-work",
+          "severity": "nonblocking",
+          "location": "src/core/skill-feature-handlers.ts:273",
+          "detail": "Coverage can now extend or re-index a latest source excluded from candidate enumeration and remove its backlog entry",
+          "disposition": "Intended restoration of baseline index-coherence behavior, not a new regression; no further change"
+        }
+      ],
+      "blockers": [],
+      "scope": "ENTIRE M4/consumer implementation; complete correction verified, unchanged-source applicability revalidated against accepted baseline",
+      "carryForward": "Historical baseline-only and root-ownership observations retained in historical review round; inherited M1 root-scope wording clarified in docs-only attestation",
+      "evidenceLimits": [
+        "No owner build/check/backend/browser/UI/probe rerun; supplied results accepted as owner evidence",
+        "Exact before/after divergence not independently reproduced; canonical accessor/coherent index inspected and generated CommonJS module load exercised without server/provider calls",
+        "Unchanged generated libraries structurally checked, not independently rebuilt; native OMP proof not rerun",
+        "Parent owns package/integration acceptance"
+      ],
+      "finalTranscriptRef": "01a0a9e4-49c5-7196-980e-4e2cec62a7c7:230"
+    },
+    {
+      "requiredModel": "kimi-code/k3",
+      "verifiedModel": "kimi-code/k3",
+      "harness": "omp",
+      "sessionRef": "01a0a9e4-4e39-72e2-8a8d-a0ef9889a177",
+      "semanticRef": "01a0a9e4-4e",
+      "modelVerification": "pi-dish semantic resolve",
+      "sourceCommit": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "decision": "ACCEPT",
+      "modelReverifiedForRevision": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+      "findings": [],
+      "blockers": [],
+      "resolvedPriorFindings": [
+        {
+          "id": "kimi-coverage-label-index-side-effect",
+          "disposition": "Resolved in 880b47fe3f6548bd829798c2909d238f882d1a9a by restoring baseline sessionIndex.getSessionInfo(source) and removing unused direct-reader import",
+          "location": "src/core/skill-feature-handlers.ts:273",
+          "observableProof": "Actual HTTP coverage now refreshes the real index for subsequent NDJSON/coverage consumers of appended non-enumerated Pi JSONL"
+        }
+      ],
+      "scope": "ENTIRE final M4/consumer implementation; complete correction inspected and unchanged prior entire-source inspection explicitly carried forward",
+      "evidenceLimits": [
+        "Read-only static review of diff and affected files; no builds/tests rerun",
+        "Owner supplied corrected real-path proof and executed validation accepted as supplied",
+        "Generated drift verified by inspection, not rebuild; parent owns integration acceptance"
+      ],
+      "finalTranscriptRef": "01a0a9e4-4e39-72e2-8a8d-a0ef9889a177:107"
+    }
+  ],
+  "dependencies": [
+    {
+      "owner": "M1",
+      "producer": "6b10e54d5cd15594a5c58e9abd4f02f6e71a7a8e",
+      "privateCommit": "7085aaae1c93430525de23c27e20c70e187233aa",
+      "scope": "Actual parsed/mined/usage/pricing/SDK/source/read-handler producers and outputs; only docs/typescript.md additive inventory conflict resolved; no producer source edits; root 9d47 excluded"
+    },
+    {
+      "owner": "M1",
+      "producer": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "privateCommit": "45aba2ff433565124d8bcbef5d188aa370177367",
+      "scope": "Parent-approved four-file final SourceLookup raw route delta; clean transfer"
+    },
+    {
+      "owner": "M6",
+      "producer": "707a2e34b2cce1619fb3379ab7af3217d6b16691",
+      "privateCommit": "ed14c776c10642cbfa9524c1cb582f8b9b072a5f",
+      "scope": "Parent-approved runtime-resources source, JS/declarations and regressions; clean transfer; bundled refine default only, explicit settings/env paths unchanged"
+    }
+  ],
+  "sharedContractRevisions": [
+    "de0496c9ec09a18d21a7d970c67beab9550cb897",
+    "b7526dd3398aefd8415bbb74a43ac4b96aaf220c"
+  ],
+  "evidence": "docs/m4-evidence.json",
+  "attestationOnly": true,
+  "status": "All three required exact-model reviewers explicitly ACCEPT entire final M4 source and consumer implementation; parent package/integration acceptance pending",
+  "historicalReviewRounds": [
+    {
+      "sourceCommit": "ab8627b2040c090c162353bf3daf908049e34ac8",
+      "reviewers": [
+        {
+          "requiredModel": "zai/glm-5.3",
+          "verifiedModel": "zai/glm-5.3",
+          "harness": "omp",
+          "sessionRef": "01a0a9e4-52f9-73ef-9864-4d689e70fd18",
+          "semanticRef": "01a0a9e4-52",
+          "modelVerification": "pi-dish semantic resolve",
+          "sourceCommit": "ab8627b2040c090c162353bf3daf908049e34ac8",
+          "decision": "ACCEPT",
+          "blockers": [],
+          "evidenceLimits": [
+            "Read-only static and export inspection; owner builds/backend/browser/UI/smokes not rerun",
+            "Generated freshness relies on owner drift check plus reviewer spot checks"
+          ],
+          "findings": [
+            {
+              "id": "glm-empty-model-cache",
+              "severity": "nonblocking",
+              "disposition": "RETRACTED by reviewer after executable JavaScript truthiness proof; no source change needed; checks equivalent for every reachable CatalogModel[] cache entry",
+              "detail": "Empty arrays are truthy: executed Node Boolean([]) and Boolean(({models:[]}).models) both true; cache entries come from normalizeModels returning CatalogModel[]; [] is served inside TTL",
+              "location": "src/core/harness-feature-commands.ts:99"
+            },
+            {
+              "id": "glm-nonstring-session-query",
+              "severity": "nonblocking",
+              "disposition": "No revision; typed guard preserves owner null/no-op result for non-string query and HTTP fallback gate",
+              "detail": "Model command listing avoids calling string-only getLiveSession for an invalid non-string query",
+              "location": "src/core/model-feature-handlers.ts:164"
+            }
+          ],
+          "finalTranscriptRef": "01a0a9e4-52f9-73ef-9864-4d689e70fd18:142-143",
+          "correction": "Reviewer explicitly retracted empty-catalog note and reaffirmed ACCEPT for ab8627b2040c090c162353bf3daf908049e34ac8"
+        },
+        {
+          "requiredModel": "opencode-go/deepseek-v4.1-flash",
+          "verifiedModel": "opencode-go/deepseek-v4.1-flash",
+          "harness": "omp",
+          "sessionRef": "01a0a9e4-49c5-7196-980e-4e2cec62a7c7",
+          "semanticRef": "01a0a9e4-49",
+          "modelVerification": "pi-dish semantic resolve",
+          "sourceCommit": "ab8627b2040c090c162353bf3daf908049e34ac8",
+          "decision": "ACCEPT",
+          "blockers": [],
+          "evidenceLimits": [
+            "Read-only static review; owner-executed validation not rerun",
+            "Generated outputs checked structurally, not regenerated",
+            "No mounted-server runtime or native OMP rerun"
+          ],
+          "findings": [
+            {
+              "id": "deepseek-stt-upstream-text",
+              "severity": "nonblocking",
+              "disposition": "Unchanged baseline behavior; future hardening outside this migration",
+              "detail": "Upstream STT error body can pass to client; existing behavior retained",
+              "location": "src/core/stt.ts:74-90"
+            },
+            {
+              "id": "deepseek-settings-body-order",
+              "severity": "nonblocking",
+              "disposition": "No change; strict root express.json excludes primitive body and root readDishSettings is nonthrowing",
+              "detail": "Typed body precheck precedes settings read",
+              "location": "src/core/feature-handlers.ts:133-135"
+            },
+            {
+              "id": "deepseek-primitive-throws",
+              "severity": "nonblocking",
+              "disposition": "Recorded as reviewer advice; no demonstrated normal producer-path regression or requested source change",
+              "detail": "Skill handler error message projection only reads object-shaped thrown errors",
+              "location": "src/core/skill-feature-handlers.ts:167-169"
+            },
+            {
+              "id": "deepseek-m1-root-scope",
+              "severity": "nonblocking",
+              "disposition": "Not an M4 blocker: approved imports exclude M1 root proposal; docs/typescript.md clarified in this documentation-only attestation",
+              "detail": "Inherited docs/typescript M1 paragraph can imply read handlers already mounted; clarify in documentation-only attestation after review freeze ends",
+              "location": "docs/typescript.md:45-53"
+            },
+            {
+              "id": "deepseek-m7-pane-uses",
+              "severity": "nonblocking",
+              "disposition": "Existing root delivery/tree/terminal pane observations remain M7-owned and unchanged",
+              "detail": "M4 locatePiPane port is used only for listing advice",
+              "location": "server.js existing non-M4 delivery/tree/terminal handlers"
+            }
+          ],
+          "finalTranscriptRef": "01a0a9e4-49c5-7196-980e-4e2cec62a7c7:201-203"
+        },
+        {
+          "requiredModel": "kimi-code/k3",
+          "verifiedModel": "kimi-code/k3",
+          "harness": "omp",
+          "sessionRef": "01a0a9e4-4e39-72e2-8a8d-a0ef9889a177",
+          "semanticRef": "01a0a9e4-4e",
+          "modelVerification": "pi-dish semantic resolve",
+          "sourceCommit": "ab8627b2040c090c162353bf3daf908049e34ac8",
+          "decision": "ACCEPT",
+          "blockers": [],
+          "finalTranscriptRef": "01a0a9e4-4e39-72e2-8a8d-a0ef9889a177:97",
+          "evidenceLimits": [
+            "Read-only static review; no builds/tests/lint rerun; owner executed validation accepted as supplied",
+            "Generated-output drift verified by inspection, not rebuild",
+            "No live sessions or provider completions claimed; owner source-review gate only, not whole-project integration acceptance"
+          ],
+          "findings": [
+            {
+              "id": "kimi-coverage-label-index-side-effect",
+              "severity": "nonblocking",
+              "location": "src/core/skill-feature-handlers.ts:11,274",
+              "detail": "Coverage label uses session-files.getSessionInfo instead of baseline sessionIndex.getSessionInfo. Wire name/stat/error behavior identical, but baseline incremental re-index/backlog-removal side effect is lost, and growing latest file is whole-file reparsed.",
+              "recommendation": "Use already-imported sessionIndex.getSessionInfo(source) at coverage label call and remove unused direct import.",
+              "disposition": "Parent required correction rather than waiver; resolved by reviewed final source 880b47fe3f6548bd829798c2909d238f882d1a9a, preserving the historical ACCEPT as historical only"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "parityCorrection": {
+    "historicalSource": "ab8627b2040c090c162353bf3daf908049e34ac8",
+    "approval": "Parent explicitly approved minimal parity correction before final handoff; known index side-effect/performance drift not waived",
+    "sourceChange": [
+      "Remove direct session-files getSessionInfo import",
+      "Use existing sessionIndex.getSessionInfo(source) in coverage latest-label lookup"
+    ],
+    "build": {
+      "command": "npm run build:core",
+      "result": "PASS"
+    },
+    "probe": {
+      "command": "node /tmp/pi-dish-m4-coverage-refresh.cjs",
+      "surface": "Real Express HTTP coverage and NDJSON handlers, real checked session-index, appended real Pi JSONL excluded from candidate enumeration; isolated temporary HOME and sanitized empty environment; no provider credentials/live sessions",
+      "before": {
+        "source": "ab8627b2040c090c162353bf3daf908049e34ac8",
+        "exitCode": 1,
+        "coverageStatus": 200,
+        "activationsBefore": 1,
+        "activationsAfter": 1,
+        "expectedAfter": 2
+      },
+      "after": {
+        "exitCode": 0,
+        "coverageStatus": 200,
+        "activationsBefore": 1,
+        "activationsAfter": 2,
+        "subsequentMappedReads": 2,
+        "labelUnchanged": true
+      },
+      "permanentTestAdded": false,
+      "removedAfterProof": true
+    },
+    "checks": [
+      {
+        "command": "npm run check",
+        "result": "PASS",
+        "details": "213 compiler-owned sources; no explicit-any exceptions; ESLint/types/core and browser generated drift checks",
+        "seconds": 5.91
+      },
+      {
+        "command": "npm test",
+        "result": "PASS",
+        "passed": 1008,
+        "failed": 0,
+        "skipped": 0,
+        "seconds": 32.34,
+        "artifact": "artifact://207"
+      },
+      {
+        "command": "npm run test:browser -- skills.spec.js usage-view.spec.js",
+        "result": "PASS",
+        "passed": 9,
+        "failed": 0,
+        "seconds": 8.89,
+        "artifact": "artifact://205"
+      },
+      {
+        "command": "npm run test:ui",
+        "result": "PASS",
+        "details": "Full desktop/mobile/multihost/same-id-cross-host smoke: all good",
+        "seconds": 62.89,
+        "artifact": "artifact://211"
+      }
+    ],
+    "frozenSource": "880b47fe3f6548bd829798c2909d238f882d1a9a"
+  },
+  "quotaInterruption": {
+    "model": "kimi-code/k3",
+    "sessionRef": "01a0a9e4-4e39-72e2-8a8d-a0ef9889a177",
+    "error": "403 permission_error: reached five-hour usage limit; reset time not provided",
+    "observedAt": "2026-09-16T11:26:03Z",
+    "resumeAttemptAt": "2026-09-16T11:39:42Z",
+    "resumeResult": "Same provider quota denial; no final review decision",
+    "coordination": "Parent notified; no model substitution or paid upgrade authorized; same reviewer will resume when exact model is available",
+    "resetAt": "2026-09-16T14:23:17.755Z",
+    "quotaObservation": {
+      "command": "/home/jyarwood/.local/bin/omp usage --provider kimi-code --json --redact",
+      "purpose": "Read-only operational availability inspection, not product validation",
+      "sampledAt": "2026-09-16T11:45:26.152Z",
+      "fiveHourUsedFraction": 1,
+      "remainingAccounts": 0,
+      "weeklyUsedFraction": 0.3
+    },
+    "scheduledDelivery": {
+      "supervisor": "hub",
+      "name": "m4-kimi-resume-142337",
+      "targetAt": "2026-09-16T14:23:37.000Z",
+      "scheduledAt": "2026-09-16T12:29:19.113Z",
+      "oneShot": true,
+      "restart": "no",
+      "state": "Delivered exactly once; same reviewer subsequently ACCEPTed historical and corrected source revisions",
+      "guard": "Same ref, exact kimi-code/k3, OMP, assigned M4 cwd",
+      "approval": false,
+      "deliveredAt": "2026-09-16T14:23:37.315Z",
+      "result": {
+        "success": true,
+        "queued": false,
+        "exitCode": 0,
+        "restarts": 0
+      }
+    },
+    "resolvedAt": "2026-09-16T14:30:42Z",
+    "resolution": "Same reviewer resumed after quota reset and issued explicit entire-source ACCEPT; no substitute or purchase"
+  },
+  "ownerSessionRef": "01a0a998-4fc3-744f-9e90-c6cda55bbd71",
+  "attestationScope": {
+    "reviewedSource": "880b47fe3f6548bd829798c2909d238f882d1a9a",
+    "files": [
+      "docs/m4-review.json",
+      "docs/m4-evidence.json",
+      "docs/typescript.md"
+    ],
+    "runtimeChanges": false,
+    "sourceReviewAccepted": true,
+    "packageAcceptance": "Parent-owned; not claimed by this attestation",
+    "commitIdentity": "The documentation-only commit containing this record is reported separately in the owner handoff; it is not the reviewed source revision"
+  }
+}
