@@ -616,10 +616,25 @@
       "screenshots": ["/tmp/omp-sshots-1581c561f87a28cc.webp"],
       "isolation": "No live agent sessions or provider credentials. Browser released and isolated listener stopped after proof.",
       "limits": "No browser bundle change. Native Electron packaging evidence is the separate M6-owned actual-product proof above, not walker fallback or a merely named app.asar directory."
+    },
+    {
+      "scope": "Post-review exact malformed-message error parity correction",
+      "commands": ["npm run build:core", "npm run check", "npm test", "npm run test:browser -- file-views.spec.js composer-autocomplete.spec.js", "npm run test:ui:scenarios", "npm run test:ui"],
+      "result": "All exit 0. Check: 219 governed sources, no explicit-any exceptions, generated output match. Full backend: 1010 passed, 0 failed, 0 skipped, 32250.60484 ms. Affected browser paths: 15 passed in 12.8 seconds. All eight isolated UI scenarios and full desktop/mobile smoke passed.",
+      "outputs": ["artifact://175", "artifact://173", "artifact://180", "artifact://181"],
+      "runtimeSmoke": "Four actual baseline-JavaScript versus corrected-generated-module comparisons passed: null and undefined retain identical native TypeError names/messages; primitive entries remain ignored and valid tool-call paths remain unchanged. Inline throwaway script left no files.",
+      "regression": "test/file-mention.test.js now asserts a null message raises TypeError rather than silently dropping the malformed entry; no error wording or source text is pinned."
     }
   ],
   "cleanup": "Updated existing docs/typescript.md implementation inventory and opaque boundaries; removed the four owner-created independent/fleet/search/surface throwaway directories after their proofs. Historical snapshot paths and process-local output references identify executed evidence, not retained fixtures. No permanent test scaffolding or browser bundle changes added.",
   "reviews": [],
+  "reviewCorrection": {
+    "initialReviewedSource": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
+    "initialVerdicts": "All three required exact-model reviewers explicitly ACCEPTed this revision; Kimi and DeepSeek identified a non-blocking malformed-message error difference.",
+    "resolution": "Owner chose exact baseline preservation: extractSessionPaths now performs direct property access through a documented narrow structural assertion, retaining native null/undefined errors without special-case error construction. Generated output and one focused regression updated.",
+    "rootDisposition": "The unused M5-owned serveFleetArtifact body and PAGE_COMMENTS_HEADER remain for parent deletion with M5 root coalescing; no M3 ownership expansion.",
+    "finalRechecks": "All three explicit final corrected-source rechecks are required; their binding is recorded in the subsequent attestation-only update."
+  },
   "remainingOpaqueBoundaries": [
     "Root server startup, observation callbacks and out-of-scope M1/M5 route bodies remain JavaScript under their existing owners; parent coalesces actual factory instances when integrating their separate root proposals.",
     "Legacy persisted page/share/comment members preserve existing primitive/array/object coercion and absent/null distinctions through unknown fields; valid writes and disk-read DTOs stay distinct.",
