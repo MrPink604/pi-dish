@@ -1,0 +1,263 @@
+{
+  "milestone": "M5",
+  "status": "All three exact-model reviewers explicitly ACCEPT final source; parent integration acceptance pending",
+  "sourceCommit": "cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd",
+  "sourceCommits": [
+    "57bed24194c0e251d18b58b02041309bf1534439",
+    "c5d336a1e4e1d069a06306d81b654d703d0ccab0",
+    "b7970d16dbe88c1bc7857313bf1ff700bdfc3d6b",
+    "cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd"
+  ],
+  "acceptedBaseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "dependency": {
+    "owner": "M3",
+    "originalCommit": "d31b67bc6bfd1d5fc0e6f27820f5a65065813494",
+    "privateCopyCommit": "e9fc8096ab2928ac1e53789f40ef836ff04a9048",
+    "authorization": "Explicit parent approval for private development transfer; source/output bytes unchanged",
+    "contract": "ArtifactKind/FleetArtifactRecord/FleetArtifactListEntry/FleetArtifactStore"
+  },
+  "reviewers": [
+    {
+      "name": "M5 review GLM",
+      "expectedModel": "zai/glm-5.3",
+      "actualModel": "zai/glm-5.3",
+      "thinkingLevel": "max",
+      "cwd": "/home/jyarwood/workspace/pi-dish-m5",
+      "sessionRef": "01a0a9b7-f44a-714f-9241-c80fe64cd788"
+    },
+    {
+      "name": "M5 review DeepSeek",
+      "expectedModel": "opencode-go/deepseek-v4.1-flash",
+      "actualModel": "opencode-go/deepseek-v4.1-flash",
+      "thinkingLevel": "high",
+      "cwd": "/home/jyarwood/workspace/pi-dish-m5",
+      "sessionRef": "01a0a9b7-f8d8-70ba-b229-93977bae9b45"
+    },
+    {
+      "name": "M5 review Kimi",
+      "expectedModel": "kimi-code/k3",
+      "actualModel": "kimi-code/k3",
+      "thinkingLevel": "high",
+      "cwd": "/home/jyarwood/workspace/pi-dish-m5",
+      "sessionRef": "01a0a9b7-fdac-7270-b76f-89e03ad3adf0"
+    }
+  ],
+  "results": [
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "sessionRef": "01a0a9b7-f8d8-70ba-b229-93977bae9b45",
+      "sourceCommit": "b7970d16dbe88c1bc7857313bf1ff700bdfc3d6b",
+      "verdict": "ACCEPT",
+      "kind": "Full source/consumer read-only review",
+      "limits": "No builds/tests rerun; inspected committed diff, all source/output pairs, evidence hashes and gate code"
+    },
+    {
+      "model": "zai/glm-5.3",
+      "sessionRef": "01a0a9b7-f44a-714f-9241-c80fe64cd788",
+      "sourceCommit": "b7970d16dbe88c1bc7857313bf1ff700bdfc3d6b",
+      "verdict": "ACCEPT",
+      "kind": "Full source/consumer read-only review",
+      "limits": "No builds/tests rerun; inspected full baseline diff,15registrations,source/evidence hashes and actual M3 byte-identical transfer"
+    },
+    {
+      "model": "kimi-code/k3",
+      "sessionRef": "01a0a9b7-fdac-7270-b76f-89e03ad3adf0",
+      "sourceCommit": "b7970d16dbe88c1bc7857313bf1ff700bdfc3d6b",
+      "verdict": "ACCEPT",
+      "kind": "Full source/consumer read-only review",
+      "limits": "No builds/tests rerun; full five-source/base-body comparison, generated counterparts, registration inventory, dependency bytes and evidence hashes"
+    },
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "sessionRef": "01a0a9b7-f8d8-70ba-b229-93977bae9b45",
+      "sourceCommit": "cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd",
+      "verdict": "ACCEPT",
+      "kind": "Actual final-source re-review of six-file delta plus binding complete previously reviewed milestone",
+      "limits": "No commands rerun; source,generated output,test,evidence hashes and unchanged dependency/policy source compared read-only",
+      "clarification": "Reviewer retracted its contradictory baseline-uncaught-error documentation note and explicitly retained ACCEPT for the unchanged final source."
+    },
+    {
+      "model": "zai/glm-5.3",
+      "sessionRef": "01a0a9b7-f44a-714f-9241-c80fe64cd788",
+      "sourceCommit": "cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd",
+      "verdict": "ACCEPT",
+      "kind": "Actual final-source six-file delta re-review bound to full baseline milestone review",
+      "limits": "No builds/tests rerun; source/generated/test semantics,seven source hashes,unchanged M3 transfer and remaining source checked read-only"
+    },
+    {
+      "model": "kimi-code/k3",
+      "sessionRef": "01a0a9b7-fdac-7270-b76f-89e03ad3adf0",
+      "sourceCommit": "cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd",
+      "verdict": "ACCEPT",
+      "kind": "Actual final-source every-line six-file delta re-review bound to complete baseline milestone",
+      "limits": "No commands rerun; all changed source/output/test/evidence read,unchanged producer/dependency/policy source verified by hashes/diff"
+    }
+  ],
+  "findings": [
+    {
+      "id": "D1",
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "nonblocking",
+      "path": "src/core/terminal-handlers.ts:77-79",
+      "finding": "record(error) narrowed thrown values versus legacy raw .message; null/undefined now sends an empty error frame rather than only closing, and functions with message lose that property",
+      "disposition": "Fixed by restoring direct unknown-message property access inside the existing inner try/catch. Real WS regression failed pre-fix with unexpected {type:error} frame for null; post-fix full terminal suite17/17 passed, covering null/no-frame and function-carried message with1011 close.",
+      "corroboratedBy": "zai/glm-5.3"
+    },
+    {
+      "id": "D2",
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "observation",
+      "path": "src/core/terminal.ts:200-201",
+      "finding": "Number(value)|0 differs for synthetic BigInt from original bitwise coercion",
+      "disposition": "No change: ingress is JSON.parse without reviver; every JSON-representable dimension has identical coercion and BigInt cannot reach this path"
+    },
+    {
+      "id": "D3",
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "observation",
+      "path": "src/core/terminal.ts:89-91",
+      "finding": "record(ptyLoadError) vs optional .message excludes function errors",
+      "disposition": "Fixed by restoring optional unknown-message property access exactly. Disposable native-loader failure injection retained a function-carried message and correctly disabled availability; exit0."
+    },
+    {
+      "id": "D4",
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "observation",
+      "finding": "publicUrlFor and PAGE_COMMENTS_HEADER retained in root publication bodies as well as relay",
+      "disposition": "Intentional M3 local-publication ownership pending its cutover; unchanged protocol values. M5 does not extract another domain or perform R5 mechanics sharing"
+    },
+    {
+      "id": "D5",
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "observation",
+      "finding": "hostIdentity direct checked import rather than callback in M0 wording",
+      "disposition": "Existing typed ordinary owner import; no new identity policy or authority. M0 permits domain libraries as direct imports and supplies external capability observations through AccessPorts"
+    },
+    {
+      "id": "D6",
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "evidence wording",
+      "finding": "Early policy check row reports201 whereas final HEAD has202 governed sources",
+      "disposition": "Both historical runs are correct:201 before authorized M3 FleetArtifactStore import;202 final full check. Clarify chronology in attestation, not rerun source or claim mismatch"
+    },
+    {
+      "id": "D7",
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "observation",
+      "finding": "probes[i] drops baseline ||{} fallback",
+      "disposition": "No behavior change: Promise.all preserves one fulfilled probe/fallback for every captured remotes entry; index array cannot be absent in this path"
+    },
+    {
+      "id": "K1",
+      "reviewer": "kimi-code/k3",
+      "severity": "observation",
+      "finding": "Root feature gate plus disabled terminal factory path are redundant",
+      "disposition": "Preserved root registration gate and safe inert factory boundary; no policy change or startup redesign"
+    },
+    {
+      "id": "K2",
+      "reviewer": "kimi-code/k3",
+      "severity": "observation",
+      "finding": "new Error(reason ?? undefined) vs baseline new Error(reason)",
+      "disposition": "No behavior change: throw requires !pty, which guarantees non-null unavailable reason"
+    },
+    {
+      "id": "D8",
+      "reviewer": "opencode-go/deepseek-v4.1-flash",
+      "severity": "nonblocking documentation suggestion",
+      "finding": "Final note incorrectly claimed baseline null/undefined .message escaped the terminal callback as uncaught TypeError",
+      "ownerEvidence": "Baseline35ad0c4 server.js5368-5371 reads e.message inside inner try/catch before ws.close1011, so it is swallowed exactly like final source",
+      "disposition": "WITHDRAWN by reviewer after rereading exact baseline35ad0c4 server.js5364-5372. Both baseline and final access .message inside inner try/catch, skip frame on null/undefined and close1011. Reviewer explicitly retained unqualified final-source ACCEPT; no evidence/source divergence note added."
+    }
+  ],
+  "integrity": "Source frozen with clean worktree for both concurrent read-only review rounds. No edits during review; git status --porcelain empty after all final verdicts and before this attestation-only file. Producer validation used a separate disposable baseline-archive directory, removed after verification; no archive extraction overwrote repository-root files and reviewers performed no archive extraction.",
+  "implementationPeerCleanup": [
+    {
+      "sessionRef": "01a0a99a-23ab-7160-a0e5-9018049363ef",
+      "result": "semantic close success"
+    },
+    {
+      "sessionRef": "01a0a99a-1f1b-741a-aac3-5a30bbada46b",
+      "result": "semantic close failed: pane gone but four reported owned process identities still alive at cleanup deadline",
+      "reportedProcessIdentities": [
+        "2615914@29815547",
+        "2615978@29815593",
+        "2616058@29815629",
+        "2625883@29827069"
+      ],
+      "disposition": "No manual process signals or live-session testing; report cleanup uncertainty to parent. This is work-session cleanup, not an M5 transport smoke failure.",
+      "followup": "A later semantic close found no single unambiguous live bridge instance; no supported fresh close authority remains. No manual signal or claim that descendant cleanup succeeded."
+    }
+  ],
+  "correction": {
+    "reason": "Strict absent/null/error parity beyond initially nonblocking review observation",
+    "sourcePaths": [
+      "src/core/terminal.ts",
+      "src/core/terminal-handlers.ts"
+    ],
+    "regression": "test/terminal.test.js: native failures preserve absent and function-carried messages",
+    "preFixResult": "Focused real-WebSocket regression failed: actual [{type:error}], expected [] for null native spawn failure",
+    "postFixResult": "Official core generation then entire terminal suite17/17 passed,0skips; function native-load failure smoke passed",
+    "contractsChanged": false,
+    "sourceCommit": "cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd"
+  },
+  "initialSourceCommit": "b7970d16dbe88c1bc7857313bf1ff700bdfc3d6b",
+  "finalAcceptedRevision": "cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd",
+  "sourceReviewComplete": true,
+  "milestoneAcceptedByOwner": false,
+  "attestationScope": "This record is a documentation-only followup. Reviewed source is cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd. Initial b7970d1 acceptances are historical and do not substitute for the three actual final-source re-reviews.",
+  "verificationEvidence": [
+    "docs/m5-evidence.json",
+    "docs/m5-producer-evidence.json",
+    "docs/m3-fleet-producer-evidence.json"
+  ],
+  "changedFiles": [
+    "CLAUDE.md",
+    "docs/m3-fleet-producer-evidence.json",
+    "docs/m5-evidence.json",
+    "docs/m5-producer-evidence.json",
+    "docs/typescript.md",
+    "lib/access-handlers.d.ts",
+    "lib/access-handlers.js",
+    "lib/fleet-artifacts.d.ts",
+    "lib/fleet-artifacts.js",
+    "lib/relay-handlers.d.ts",
+    "lib/relay-handlers.js",
+    "lib/remote-hosts.d.ts",
+    "lib/remote-hosts.js",
+    "lib/terminal-handlers.d.ts",
+    "lib/terminal-handlers.js",
+    "lib/terminal.d.ts",
+    "lib/terminal.js",
+    "server.js",
+    "src/core/access-handlers.ts",
+    "src/core/fleet-artifacts.ts",
+    "src/core/relay-handlers.ts",
+    "src/core/remote-hosts.ts",
+    "src/core/terminal-handlers.ts",
+    "src/core/terminal.ts",
+    "test/terminal.test.js"
+  ],
+  "handoff": {
+    "branch": "migration/m5-transport",
+    "pushedSourceCommit": "cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd",
+    "producerTransfer": "c5d336a1e4e1d069a06306d81b654d703d0ccab0 supplies actual source/output without root/docs patch; terminal error-parity correctioncf6b948 must accompany final M5 integration",
+    "rootProposalCommit": "b7970d16dbe88c1bc7857313bf1ff700bdfc3d6b",
+    "rootAuthority": "Parent alone serially applies/integrates shared server proposal; unchanged original M0 registration order",
+    "registrationAndHelperInventory": "docs/m5-evidence.json registrationInventory/helperOwnership/rootProposal",
+    "requiredParentGates": [
+      "Independently inspect final source/attestation and dependency provenance",
+      "Serially integrate root/config proposals without duplicate domain policy",
+      "Run exact integrated-commit CI",
+      "Write global acceptance ledger/BACKLOG only after acceptance"
+    ],
+    "remainingUnchecked": "Root composition and other domain bodies remain intentionally M7-owned; no claim whole-server checking. M3 store is checked imported dependency. External payload/error properties remain unknown until consumed.",
+    "skipsAndLimits": [
+      "No M5 functional test skips:999backend and15browser cases passed; desktop/mobile UI passed",
+      "Native-harness/SDK/skillCLI/Electron delivery unchanged and not re-proven by M5",
+      "Playwright used supported Ubuntu24.04 fallback binary on unsupported host distro",
+      "Six dependency install scripts blocked by existing allowScripts policy; successful builds/native PTY smoke subsequently proved used tooling",
+      "Work-session graceful close uncertainty recorded separately above; all actual test/smoke daemons and temporary credentials/scaffolds were cleaned up"
+    ]
+  }
+}
