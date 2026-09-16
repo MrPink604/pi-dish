@@ -39,13 +39,15 @@ Other outcomes:
 
 | Status | Meaning |
 |---|---|
+| 400 | `source` is not a string of at most 100 characters, or contains control characters |
 | 404 | no routine by that id or name |
 | 409 | the routine is busy and its `onBusy` is `skip`; the body carries the running `invocation` |
 | 413 | `input` serializes to more than 32 KB |
 | 429 | `minIntervalSec` has not elapsed; the body carries `retryAfterSec` and `lastInvocation` |
 
-A 429 is not recorded — an invoke storm would otherwise fill the ledger with
-nothing but its own rejections.
+Admission checks routine existence, input size, source, rate limit, then busy
+state, in that order. These rejections create no invocation row — an invoke
+storm must not fill the ledger with its own rejections.
 
 ## The input block
 

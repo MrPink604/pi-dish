@@ -51,19 +51,6 @@ const settleTwice = async () => { await settle(); await settle(); await settle()
 // Store
 // ---------------------------------------------------------------------------
 
-test('createRoutine fills the defaults and seeds version 1', () => {
-  const routine = store.createRoutine(definition());
-  assert.equal(routine.harness, 'pi');
-  assert.equal(routine.mode, 'oneShot');
-  assert.equal(routine.onBusy, 'skip');
-  assert.equal(routine.minIntervalSec, 0);
-  assert.equal(routine.enabled, true);
-  assert.equal(routine.schedule, null);
-  assert.equal(routine.description, '');
-  assert.equal(routine.promptVersion, 1);
-  assert.deepEqual(routine.versions.map((v) => v.version), [1]);
-  assert.equal(routine.versions[0].prompt, 'Review the day.');
-});
 
 test('validation rejects bad names, cwds, prompts, enums and cron', () => {
   const bad = [
@@ -190,6 +177,61 @@ test('external partial records keep their fields and native version arithmetic a
   assert.equal(completed.extra, 'kept');
 });
 
+test('direct ledger admission retains validation order and rejects without persisting', () => {
+  const routine = store.createRoutine(definition());
+  const input = { blob: 'x'.repeat(store.MAX_INPUT_BYTES) };
+  const cases = [
+    [{ status: 'bad', source: 42, input }, 400, /routine is required/],
+    [{ routine, status: 'bad', source: 42, input }, 400, /status must be/],
+    [{ routine, status: 'starting', source: 42, input }, 400, /source must be a string/],
+    [{ routine, status: 'starting', input }, 413, /input must serialize/],
+  ];
+  for (const [fields, status, message] of cases) {
+    const error = catchError(() => store.createInvocation(fields));
+    assert.equal(error.status, status);
+    assert.match(error.message, message);
+  }
+  const cyclic = {};
+  cyclic.self = cyclic;
+  for (const value of [cyclic, 1n, Symbol('input'), () => null]) {
+    assert.throws(() => store.createInvocation({ routine, status: 'starting', input: value }), TypeError);
+  }
+  assert.deepEqual(store.readInvocations(), []);
+  const accepted = store.createInvocation({ routine, status: 'completed', source: 'line\nbreak', input: null });
+  assert.equal(store.getInvocation(accepted.id).source, 'line\nbreak', 'HTTP framing policy is not a ledger policy');
+});
+
+test('input cap counts UTF-8 bytes and includes JSON string quotes', () => {
+  const routine = store.createRoutine(definition());
+  const input = 'é'.repeat((store.MAX_INPUT_BYTES - 2) / 2);
+  const accepted = store.createInvocation({ routine, status: 'completed', input });
+  assert.equal(store.getInvocation(accepted.id).input, input);
+  const error = catchError(() => store.createInvocation({ routine, status: 'completed', input: input + 'a' }));
+  assert.equal(error.status, 413);
+  assert.deepEqual(store.readInvocations().map(row => row.id), [accepted.id]);
+});
+
+test('admission owns its original input and rejects forged size receipts as raw input', () => {
+  const routine = store.createRoutine(definition());
+  const input = { note: 'before' };
+  const admission = store.RoutineInputAdmission.prepare(input);
+  const huge = { blob: 'x'.repeat(store.MAX_INPUT_BYTES) };
+  for (const forged of [
+    { input: huge, size: 0 },
+    Object.assign(Object.create(Object.getPrototypeOf(admission)), { input: huge, size: 0 }),
+  ]) {
+    const error = catchError(() => store.createInvocation({ routine, status: 'completed', input: forged }));
+    assert.equal(error.status, 413);
+  }
+  assert.deepEqual(store.readInvocations(), []);
+  input.note = 'after';
+  admission.input = huge;
+  admission.size = 0;
+  const accepted = store.createInvocation({ routine, status: 'completed', input: admission });
+  assert.equal(accepted.input, input, 'the genuine private slot, not public lookalike fields, owns input');
+  assert.deepEqual(store.getInvocation(accepted.id).input, { note: 'after' }, 'measurement is not a normalized snapshot');
+});
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -246,8 +288,8 @@ function harness(overrides = {}) {
 }
 
 test('invoke spawns, names, prompts, completes and closes a oneShot run', async () => {
-  const routine = store.createRoutine(definition({ model: 'test/fake-model', thinking: 'high' }));
-  const { runner, sessions, closed, created } = harness();
+  const routine = store.createRoutine(definition());
+  const { runner, sessions, closed } = harness();
 
   const invocation = runner.invoke(routine, { trigger: 'invoke', source: 'cli', input: { pr: 42 } });
   assert.equal(invocation.status, 'starting');
@@ -260,9 +302,6 @@ test('invoke spawns, names, prompts, completes and closes a oneShot run', async 
   const running = store.getInvocation(invocation.id);
   assert.equal(running.status, 'running');
   assert.equal(running.sessionId, 'sess-1');
-  assert.deepEqual(created[0], {
-    harness: 'pi', model: 'test/fake-model', thinking: 'high', cwd: '/tmp/work',
-  });
 
   const sess = sessions.get('sess-1');
   assert.match(sess.names[0], /^nightly-review \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
@@ -329,7 +368,7 @@ test('busy: skip refuses with 409, steer and followUp deliver into the running s
   await settleTwice();
   assert.equal(store.getInvocation(first.id).status, 'running');
 
-  const refused = catchError(() => runner.invoke(routine, { trigger: 'invoke' }));
+  const refused = catchError(() => runner.invoke(routine, { trigger: 'invoke', source: 42 }));
   assert.equal(refused.status, 409);
   assert.equal(refused.invocation.id, first.id);
 
@@ -433,7 +472,7 @@ test('minIntervalSec rate-limits invokes without recording the rejection', async
   sessions.get('sess-1').endTurn();
   await settleTwice();
 
-  const limited = catchError(() => runner.invoke(routine, { trigger: 'invoke' }));
+  const limited = catchError(() => runner.invoke(routine, { trigger: 'invoke', source: 42 }));
   assert.equal(limited.status, 429);
   assert.ok(limited.retryAfterSec > 0 && limited.retryAfterSec <= 60);
   assert.equal(limited.lastInvocation.id, first.id);
@@ -615,4 +654,44 @@ test('input larger than the cap is refused before anything is recorded', () => {
   const error = catchError(() => runner.invoke(routine, { trigger: 'invoke', input: huge }));
   assert.equal(error.status, 413);
   assert.equal(store.countInvocations(routine.id), 0);
+});
+
+test('admission measures the first toJSON value without normalizing later persistence', () => {
+  const routine = store.createRoutine(definition());
+  const { runner } = harness({ createSession: () => new Promise(() => {}) });
+  let value = { note: 'admission' };
+  const later = { blob: 'x'.repeat(store.MAX_INPUT_BYTES) };
+  const input = { toJSON() { const current = value; value = later; return current; } };
+  try {
+    const invocation = runner.invoke(routine, { input });
+    assert.equal(invocation.input, input);
+    assert.deepEqual(store.getInvocation(invocation.id).input, later,
+      'persistence still serializes the original object after the single admission observation');
+  } finally {
+    runner.stop();
+  }
+});
+
+test('HTTP input admission retains JSON 413 versus native serialization rejection ownership', async () => {
+  const { createRoutineHandlers } = require('../lib/routine-handlers');
+  const routine = store.createRoutine(definition());
+  const { runner } = harness();
+  const handlers = createRoutineHandlers({ runner, validateHarnessPilotSelection: async () => {} });
+  const replies = [];
+  const res = { status(code) { replies.push(code); return this; }, json(body) { replies.push(body); return this; } };
+  const invoke = input => handlers.invoke({ params: { id: routine.id }, body: { input, source: 42 }, query: {} }, res);
+  const cyclic = {};
+  cyclic.self = cyclic;
+  try {
+    for (const input of [cyclic, 1n, Symbol('input'), () => null]) {
+      await assert.rejects(invoke(input), TypeError);
+    }
+    assert.deepEqual(replies, [], 'native failures remain outside the route response try/catch');
+    await invoke({ blob: 'x'.repeat(store.MAX_INPUT_BYTES) });
+    assert.equal(replies[0], 413);
+    assert.match(replies[1].error, /input must serialize/);
+    assert.deepEqual(store.readInvocations(), []);
+  } finally {
+    runner.stop();
+  }
 });

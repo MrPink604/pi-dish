@@ -135,7 +135,11 @@ export function listRoutines(): Routine[] {
 /** Routines are addressed by uuid or by their (case-insensitive) unique name. */
 export function getRoutine(ref: unknown): Routine | null {
   if (typeof ref !== 'string' || !ref) return null;
-  const routines = readRoutines();
+  return lookupRoutine(readRoutines(), ref);
+}
+
+function lookupRoutine(routines: Record<string, Routine>, ref: unknown): Routine | null {
+  if (typeof ref !== 'string' || !ref) return null;
   if (routines[ref]) return routines[ref];
   const wanted = ref.toLowerCase();
   return Object.values(routines).find((routine) => String(routine.name).toLowerCase() === wanted) || null;
@@ -242,7 +246,7 @@ export function createRoutine(input: unknown = {}): Routine {
 /** Only changed prompt text appends a version; ordinary edits do not. */
 export function updateRoutine(ref: unknown, patch: unknown = {}): Routine | null {
   const routines = readRoutines();
-  const existing = getRoutine(ref);
+  const existing = lookupRoutine(routines, ref);
   if (!existing) return null;
   const routine = { ...routines[existing.id] };
 
@@ -290,9 +294,9 @@ export function updateRoutine(ref: unknown, patch: unknown = {}): Routine | null
 }
 
 export function deleteRoutine(ref: unknown): Routine | null {
-  const existing = getRoutine(ref);
-  if (!existing) return null;
   const routines = readRoutines();
+  const existing = lookupRoutine(routines, ref);
+  if (!existing) return null;
   delete routines[existing.id];
   writeRoutines(routines);
   return existing;
@@ -322,10 +326,33 @@ function writeInvocations(invocations: RoutineInvocation[]): void {
   writeStore(INVOCATIONS_FILE, { version: 1, invocations: invocations.slice(0, MAX_INVOCATIONS) });
 }
 
-export function serializedInputSize(input: unknown): number {
-  if (input === undefined || input === null) return 0;
-  // JSON.stringify may return undefined; retain Buffer.byteLength's native failure.
-  return Buffer.byteLength(JSON.stringify(input), 'utf8');
+/**
+ * One admission measurement, not an immutable snapshot of caller data.
+ * Only this private brand can carry a prior measurement through the input slot;
+ * the captured reference is also the exact value the ledger receives.
+ */
+export class RoutineInputAdmission {
+  readonly #input: unknown;
+  readonly #size: number;
+
+  private constructor(input: unknown) {
+    this.#input = input;
+    // JSON.stringify may return undefined; retain byteLength's native failure.
+    this.#size = input === undefined || input === null
+      ? 0 : Buffer.byteLength(JSON.stringify(input), 'utf8');
+  }
+
+  /** Null means oversized; native serialization errors still escape to the caller. */
+  static prepare(input: unknown): RoutineInputAdmission | null {
+    const admission = input !== null && typeof input === 'object' && #input in input
+      ? input : new RoutineInputAdmission(input);
+    return admission.#size > MAX_INPUT_BYTES ? null : admission;
+  }
+
+  /** Read the private slot, never a caller-overridable value getter. */
+  static value(admission: RoutineInputAdmission): unknown {
+    return admission.#input;
+  }
 }
 
 export function createInvocation(fields: unknown = {}): CreatedRoutineInvocation {
@@ -334,7 +361,8 @@ export function createInvocation(fields: unknown = {}): CreatedRoutineInvocation
   if (!includes(STATUSES, property(fields, 'status'))) throw fail(`status must be one of: ${STATUSES.join(', ')}`);
   const source = property(fields, 'source') == null ? null : validateOptionalString(property(fields, 'source'), 'source', MAX_SOURCE) || null;
   const input = property(fields, 'input') === undefined ? null : property(fields, 'input');
-  if (serializedInputSize(input) > MAX_INPUT_BYTES) {
+  const admission = RoutineInputAdmission.prepare(input);
+  if (!admission) {
     throw fail(`input must serialize to at most ${MAX_INPUT_BYTES} bytes`, 413);
   }
   const startedAt = Number.isFinite(property(fields, 'startedAt')) ? property(fields, 'startedAt') : Date.now();
@@ -356,7 +384,7 @@ export function createInvocation(fields: unknown = {}): CreatedRoutineInvocation
     endedAt: terminal ? startedAt : null,
     durationMs: terminal ? 0 : null,
     error: property(fields, 'error') || null,
-    input,
+    input: RoutineInputAdmission.value(admission),
     summary: null,
     closed: false,
     closeError: null,
@@ -461,7 +489,7 @@ export interface RoutineStore {
   activeInvocations: typeof activeInvocations;
   countActive: typeof countActive;
   invocationsBySessionId: typeof invocationsBySessionId;
-  serializedInputSize: typeof serializedInputSize;
+  RoutineInputAdmission: typeof RoutineInputAdmission;
   MAX_INVOCATIONS: typeof MAX_INVOCATIONS;
   MAX_VERSIONS: typeof MAX_VERSIONS;
   MAX_PROMPT: typeof MAX_PROMPT;
