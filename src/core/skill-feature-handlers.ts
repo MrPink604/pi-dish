@@ -1,4 +1,3 @@
-import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -90,46 +89,6 @@ function usageRollup(records: readonly SkillActivation[], now = Date.now()) {
   };
 }
 
-interface SkillSection {
-  heading: string;
-  level: number;
-  startLine: number;
-  endLine: number;
-  lines: string[];
-}
-
-// Split SKILL.md into markdown sections by heading. Returns 1-indexed line
-// ranges. The preamble before the first heading is its own "(intro)" section.
-function splitSections(content: string): SkillSection[] {
-  const lines = content.split('\n');
-  const sections: SkillSection[] = [];
-  let cur: SkillSection = { heading: '(intro)', level: 0, startLine: 1, endLine: 0, lines: [] };
-  lines.forEach((line, i) => {
-    const m = line.match(/^(#{1,6})\s+(.*)$/);
-    if (m) {
-      if (cur.lines.length) { cur.endLine = cur.startLine + cur.lines.length - 1; sections.push(cur); }
-      cur = { heading: line.trim(), level: m[1].length, startLine: i + 1, endLine: 0, lines: [line] };
-    } else {
-      cur.lines.push(line);
-    }
-  });
-  if (cur.lines.length) { cur.endLine = cur.startLine + cur.lines.length - 1; sections.push(cur); }
-  // Drop a leading empty intro (a file starting with a heading).
-  return sections.filter(s => !(s.heading === '(intro)' && s.lines.join('').trim() === ''));
-}
-
-// Line set covered by one ranged/full read record, clamped to lineCount.
-function coveredLines(rec: SkillActivation, lineCount: number): Set<number> {
-  const set = new Set<number>();
-  const add = (s: number, e: number) => { for (let i = Math.max(1, s); i <= Math.min(lineCount, e); i++) set.add(i); };
-  if (rec.kind === 'explicit') { add(1, lineCount); return set; }
-  if (rec.ranges === 'all') { add(1, finite(rec.truncatedTo) ? rec.truncatedTo : lineCount); return set; }
-  if (Array.isArray(rec.ranges)) {
-    for (const [s, e] of rec.ranges) add(s, e === -1 ? lineCount : e);
-  }
-  return set;
-}
-
 export function createSkillFeatureHandlers(ports: FeaturePorts): Pick<FeatureHandlers, 'skills' | 'skillActivations' | 'skillCoverage'> {
   const skills: FeatureHandler = async (_req, res) => {
     try {
@@ -212,57 +171,7 @@ export function createSkillFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
     sessionIndex.scanSessions(ports.enumerateSessionCandidates());
     const now = Date.now();
     const all = sessionIndex.getSkillActivations({ skill });
-    const lines = content.split('\n');
-    const lineCount = lines.length;
-    const contentHash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
-
-    // Mapped = ranged/full reads (kind read|explicit) since the last edit.
-    const mapped = all.filter(r => (r.kind === 'read' || r.kind === 'explicit') &&
-      finite(r.ts) && r.ts >= stat.mtimeMs);
-    const excludedBeforeMtime = all.filter(r => (r.kind === 'read' || r.kind === 'explicit') &&
-      (!finite(r.ts) || r.ts < stat.mtimeMs)).length;
-    const targetedTouches = all.filter(r => r.kind === 'targeted').length;
-
-    // Per-line read count across the mapped reads.
-    const lineHits = new Array<number>(lineCount + 1).fill(0);
-    let anyPartial = false;
-    for (const r of mapped) {
-      const set = coveredLines(r, lineCount);
-      if (set.size < lineCount) anyPartial = true;
-      for (const ln of set) lineHits[ln]++;
-    }
-    const numMapped = mapped.length;
-
-    const sections = splitSections(content).map(sec => {
-      let readsTouching = 0;
-      for (const r of mapped) {
-        const set = coveredLines(r, lineCount);
-        let hit = false;
-        for (let ln = sec.startLine; ln <= sec.endLine; ln++) if (set.has(ln)) { hit = true; break; }
-        if (hit) readsTouching++;
-      }
-      const lineHeat = [];
-      for (let ln = sec.startLine; ln <= sec.endLine; ln++) {
-        lineHeat.push({ text: lines[ln - 1], hits: lineHits[ln] });
-      }
-      return {
-        heading: sec.heading, level: sec.level,
-        startLine: sec.startLine, endLine: sec.endLine,
-        lineCount: sec.endLine - sec.startLine + 1,
-        reads: readsTouching,
-        fraction: numMapped ? readsTouching / numMapped : 0,
-        neverRead: numMapped > 0 && readsTouching === 0,
-        lines: lineHeat,
-      };
-    });
-
-    // Unread token estimate: lines no mapped read ever touched.
-    let unreadChars = 0;
-    for (let ln = 1; ln <= lineCount; ln++) if (!lineHits[ln]) unreadChars += lines[ln - 1].length + 1;
-    const unreadTokensEst = Math.ceil(unreadChars / 4);
-
-    // A short skill that every mapped read loaded in full → render prose, not a map.
-    const flatFullRead = numMapped > 0 && !anyPartial;
+    const coverage = skillsLib.projectSkillCoverage(content, stat.mtimeMs, all);
 
     const roll = usageRollup(all, now);
     // Resolve latest activation's session name for the deep-link label.
@@ -277,15 +186,7 @@ export function createSkillFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
     res.json({
       skill,
       mtimeMs: stat.mtimeMs,
-      contentHash,
-      lineCount,
-      numMapped,
-      mappedReads: numMapped,
-      targetedTouches,
-      excludedBeforeMtime,
-      unreadTokensEst,
-      flatFullRead,
-      sections,
+      ...coverage,
       weeks26: weeklyBuckets(all, 26, now),
       kindSplit: roll.kindSplit,
       sessionCount: roll.sessionCount,

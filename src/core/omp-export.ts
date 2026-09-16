@@ -31,11 +31,11 @@ export interface OmpExportOptions {
 
 const SESSION_DATA_RE = /(<script\b(?=[^>]*\bid=["']session-data["'])[^>]*>)([\s\S]*?)(<\/script>)/i;
 
-function sessionDataMatch(html: string): { match: RegExpExecArray; data: OmpExportData } {
+function sessionDataMatch(html: string, policy: 'export' | 'import' = 'export'): { match: RegExpExecArray; data: OmpExportData } {
   const match = SESSION_DATA_RE.exec(html);
   if (!match) throw new Error('OMP export has no embedded session data');
   const encoded = match[2].trim();
-  if (!encoded || !/^[A-Za-z0-9+/=\s]+$/.test(encoded)) {
+  if (policy === 'export' && (!encoded || !/^[A-Za-z0-9+/=\s]+$/.test(encoded))) {
     throw new Error('OMP export has invalid embedded session data');
   }
   let data: unknown;
@@ -50,8 +50,9 @@ function sessionDataMatch(html: string): { match: RegExpExecArray; data: OmpExpo
   return { match, data: data as OmpExportData };
 }
 
-export function readOmpExportData(html: string): OmpExportData {
-  return sessionDataMatch(html).data;
+/** Imports retain Buffer's permissive base64 decoding; exports enforce the alphabet. */
+export function readOmpExportData(html: string, policy: 'export' | 'import' = 'export'): OmpExportData {
+  return sessionDataMatch(html, policy).data;
 }
 
 export function normalizeSnapshot(snapshot: unknown): OmpShareSnapshot | null {

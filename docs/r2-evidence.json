@@ -1,0 +1,289 @@
+{
+  "package": "R2",
+  "status": "Complete source/consumer cutover and owner proofs; ready for independent exact-source review, not parent acceptance",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r2-routine-admission",
+  "worktree": "/home/jyarwood/workspace/pi-dish-r2",
+  "owner": {
+    "session": "01a0ab39-7c1b-768c-a142-60b465d84cca",
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinking": "high",
+    "provenance": "Verified before substantive assignment by parent and independently via semantic resolve during freeze; actual harnessId omp, model openai-codex/gpt-6-astra, thinkingLevel high, assigned cwd"
+  },
+  "sourceInventory": [
+    {
+      "source": "src/core/routines.ts",
+      "outputs": [
+        "lib/routines.js",
+        "lib/routines.d.ts"
+      ],
+      "program": "tsconfig.core.json",
+      "symbols": [
+        "getRoutine",
+        "lookupRoutine",
+        "updateRoutine",
+        "deleteRoutine",
+        "createInvocation",
+        "RoutineInputAdmission",
+        "RoutineStore"
+      ],
+      "removed": [
+        "serializedInputSize export and store member"
+      ]
+    },
+    {
+      "source": "src/core/routine-runner.ts",
+      "outputs": [
+        "lib/routine-runner.js"
+      ],
+      "program": "tsconfig.core.json",
+      "symbols": [
+        "createRoutineRunner.invoke"
+      ],
+      "unchangedContract": "RoutineInvokeOptions and RoutineRunner declarations remain unchanged; input is still unknown"
+    },
+    {
+      "source": "src/core/routine-handlers.ts",
+      "outputs": [
+        "lib/routine-handlers.js"
+      ],
+      "program": "tsconfig.core.json",
+      "symbols": [
+        "createRoutineHandlers.remove",
+        "createRoutineHandlers.invoke"
+      ],
+      "unchangedContract": "Handler declarations and HTTP shapes unchanged"
+    }
+  ],
+  "consumers": {
+    "production": [
+      "src/core/server-app.ts imports and composes store/runner/handlers directly at lines 2193-2208",
+      "src/core/routine-runner.ts invoke and scheduled tick",
+      "src/core/routine-handlers.ts update/remove/invoke",
+      "src/browser/routines-view.ts consumes unchanged routine HTTP shapes; no browser edits"
+    ],
+    "tests": [
+      "test/routines.test.js direct store and runner callers",
+      "test/routines-api.test.js real HTTP plus fake RPC child",
+      "test/cron.test.js",
+      "test/session-provenance.test.js",
+      "test/browser-routines.test.js"
+    ],
+    "documentation": [
+      "docs/agent/routines.md",
+      "TASKS/routines.md historical contract",
+      "CLAUDE.md routine section read-only",
+      "docs/remaining-migration-plan.md R2/limits/verification read-only"
+    ],
+    "lsp": "xd://lsp status reports No language servers configured for this project; exact scoped source and test searches used instead; no mutating LSP"
+  },
+  "existingBehavior": {
+    "definitionMutation": "updateRoutine reads a map then getRoutine rereads; deleteRoutine gets a row then rereads the map. Lookups accept nonempty string id or case-insensitive name and retain existing prototype/native String semantics. Update copies the owned row, validates changed fields in existing order and preserves extra unknown fields/version arithmetic. markScheduled already reads once.",
+    "httpUpdate": "Preflight getRoutine and asynchronous pilot validation precede a fresh synchronous updateRoutine read. Retain this distinct preflight/current-mutation boundary; never hold a stale map across await.",
+    "httpDelete": "Synchronous getRoutine then deleteRoutine produces redundant definition reads; deletion can return the actual removed row for existing success/count response. History and sessions survive deletion.",
+    "httpAdmissionOrder": [
+      "definition lookup/404",
+      "body.input normalization",
+      "input byte cap/413",
+      "source string/length then control-character validation/400",
+      "runner admission: rate/429 then busy/409",
+      "ledger creation and detached lifecycle"
+    ],
+    "runnerAdmissionOrder": [
+      "destructure raw options and now()",
+      "input size/413 including disabled schedule",
+      "disabled schedule produces skipped row with null input",
+      "invoke minIntervalSec/429",
+      "busy invoke/409 or scheduled busy skipped row",
+      "ledger source validation/400 then creation"
+    ],
+    "directLedgerOrder": [
+      "fields.routine required",
+      "status enum",
+      "source null normalization/string/length",
+      "input undefined-to-null and size cap",
+      "timestamp/delivery/row creation",
+      "ledger read/write"
+    ],
+    "rawInputs": "JSON.stringify and Buffer.byteLength retain native cyclic/bigint/function/symbol/toJSON errors. Primitive boxing, null failures, persisted unknown fields, source direct-ledger control-character tolerance and operator coercions remain distinct.",
+    "lifetimePolicies": "No changes to lifecycle coordinator ownership, oneShot/continue delivery close, watchdog detach without close, restart uncertainty refusal, or deleted-definition recovery behavior. Scheduling evaluates current local minute only and persists its mark before admission."
+  },
+  "contracts": {
+    "snapshotLookup": "Private lookup(routines, ref) resolves against the caller-owned map. getRoutine retains early invalid-ref return; update/delete perform one map read per synchronous mutation.",
+    "admission": "RoutineInputAdmission owns private input/size slots. Its private constructor computes size from the exact original reference/native value. prepare recognizes only the genuine ECMAScript private brand, otherwise measures raw input, and returns null for oversized input. Route, runner and ledger pass this branded value in the existing input slot. No independent receipt/raw-input pair exists; ledger unwrap reads the private slot rather than an overridable getter. Repeated prepare calls reuse the captured measurement, not a global cache. Native stringify/byteLength errors escape at their original locations; route handles the null oversize result outside its existing try, preserving JSON 413 versus native rejection ownership.",
+    "parentApproval": "Parent explicitly approved revised existing-input-slot private-brand contract before admission implementation: captured measurement, NOT immutable snapshot; preserve original reference/native value; one size/toJSON validation replaces three; persistence/prompt serialization remain; keep all three ingress error orderings; no unchecked ledger operation.",
+    "deliberateDifference": "Mutable input and stateful toJSON are observed once for admission. Captured measurement does not constrain later mutations or later persistence/response serialization, and never claims the persisted representation is an immutable <=32KiB snapshot. No JSON normalization or deep freeze. Normal HTTP ingress is parsed JSON; the explicit native JavaScript regression demonstrates first-validation behavior without normalization.",
+    "serializationAccounting": "Baseline measured 3 compact root-input size serializations per accepted HTTP invocation; final measures 1. Final explicit toJSON probe observes 3 original-object calls when including initial containing-ledger persistence and response JSON serialization: size + persistence + response. Prompt composition remains a later serialization of reread persisted input. This is not a claim that every serialization/toJSON executes once.",
+    "crossOwnerChanges": "None planned; no shared configs, source-policy, type fixtures or server composition edits. Parent approval required if this changes."
+  },
+  "deletionLedger": [
+    {
+      "remove": "updateRoutine/deleteRoutine calls back through public getRoutine after or before map read",
+      "retain": "private snapshot lookup and existing public lookup"
+    },
+    {
+      "remove": "HTTP delete preliminary lookup",
+      "retain": "returned deleted row, 404 and surviving history count"
+    },
+    {
+      "remove": "three separate input sizing computations across route/runner/ledger and serializedInputSize public export",
+      "retain": "one routines-owned private-brand result plus each ingress error order"
+    },
+    {
+      "remove": "redundant createRoutine default-field test and mocked createSession field-forwarding assertion",
+      "retain": "observable prompt version transitions, actual RPC launch API coverage, lifecycle behavior and uncertain admission boundary regressions"
+    }
+  ],
+  "retainedCheckLedger": [
+    "HTTP source framing validation remains stricter than direct ledger",
+    "routine/status/source direct-ledger validation",
+    "HTTP pilot validation preflight and fresh post-await mutation",
+    "rate/busy checks reject without creating a row",
+    "all lifecycle capability/launch/process authority stays with coordinator"
+  ],
+  "requiredProofs": [
+    "throwaway baseline/post work-count probe: definition map reads and accepted input sizing",
+    "focused routine/API/cron/provenance suites",
+    "isolated real admission and scheduled execution smoke with sanitizeTestEnv, temporary HOME and fake RPC child",
+    "rejected input/source/rate/busy leave no ledger row; deletion retains readable history",
+    "npm run build:core",
+    "npm run check",
+    "full npm test"
+  ],
+  "conditionalProofs": "Full browser/scenarios/UI if browser source or runtime mapping changes; neither planned. No Electron/native packaging change or macOS claim.",
+  "acceptedEvidence": [
+    "docs/m2-evidence.json preserved raw boundary, complete cutover and exact final checks",
+    "docs/m2-review.json historical and renewed integrated whole-source ACCEPTs",
+    "accepted baseline M0-M7/C1 approval supplied in assignment; not reopened"
+  ],
+  "opaqueBoundaries": [
+    "Persisted routine fields remain unknown except established id",
+    "Persisted invocation fields remain unknown except string id",
+    "Raw invocation input remains unknown; admission records one byte-size measurement, not a schema, immutable snapshot or lifecycle authority",
+    "No browser/runtime mapping change; no Electron/native packaging or macOS verification claim"
+  ],
+  "verification": [
+    {
+      "phase": "baseline",
+      "command": "npm ci --no-audit --no-fund",
+      "result": "exit 0; 798 packages, node-pty rebuilt; six pre-existing install scripts blocked by allowScripts policy"
+    },
+    {
+      "phase": "baseline",
+      "command": "node /tmp/pi-dish-r2-work-count.cjs baseline",
+      "result": "exit 0; update definition reads 2, delete 2, HTTP delete 3, accepted HTTP input sizing 3"
+    },
+    {
+      "phase": "baseline",
+      "command": "npm test -- test/routines.test.js test/routines-api.test.js",
+      "result": "43 passed, zero failures/skips; native error and ingress-order regression additions agree with accepted generated baseline"
+    },
+    {
+      "phase": "baseline",
+      "command": "node /tmp/pi-dish-r2-runtime-smoke.cjs",
+      "result": "exit 0; real isolated HTTP admission, fake RPC child prompt/completion/owned close, no-row refusals, actual scheduled runner through HTTP lifecycle coordinator, same-minute recreated runner suppression, readable retained ledger"
+    },
+    {
+      "phase": "snapshot-mutation checkpoint",
+      "command": "npm run build:core && node /tmp/pi-dish-r2-work-count.cjs mutation-only",
+      "result": "exit 0; update/delete/HTTP delete now each read definitions once; admission still three sizing computations before its separate cutover"
+    },
+    {
+      "phase": "snapshot-mutation checkpoint",
+      "command": "npm test -- test/routines.test.js test/routines-api.test.js test/cron.test.js test/session-provenance.test.js",
+      "result": "57 passed, zero failures/skips; before later removal of redundant default-field test"
+    },
+    {
+      "phase": "complete implementation before final cleanup",
+      "command": "npm run check",
+      "result": "exit 0; 258 governed sources, no explicit-any exceptions; lint, strict types and tool/core/browser/edge drift all pass"
+    },
+    {
+      "phase": "complete implementation before final cleanup",
+      "command": "npm test",
+      "result": "1031 passed, zero failures/cancelled/skips; 32395.351628ms"
+    },
+    {
+      "phase": "complete implementation",
+      "command": "node /tmp/pi-dish-r2-runtime-smoke.cjs",
+      "result": "exit 0; same real isolated admission/RPC/coordinator/schedule/restart/deletion path as baseline; 1.41s"
+    },
+    {
+      "phase": "final",
+      "command": "npm run build:core && npm run check && node /tmp/pi-dish-r2-work-count.cjs final",
+      "result": "exit 0; 258 governed sources, lint/types/all drift checks pass. create/markScheduled/update/delete/HTTP delete each read definitions once. HTTP/raw runner/direct ledger/busy-schedule/disabled-schedule accepted object input each compute size once. HTTP original toJSON calls including initial persistence and response = 3."
+    },
+    {
+      "phase": "invalid concurrent verification attempt",
+      "command": "npm test (incorrectly overlapped with build:core)",
+      "result": "1022 passed, 9 failed. Eight session-source cases observed listHarnesses not a function while generated outputs were being rewritten; one listener alias startup hit EADDRINUSE 127.0.0.1:42249. Not accepted as a settled-tree proof. No unrelated product changes made. [INFERENCE] partial CommonJS load failures caused by concurrent output regeneration; alias conflict was observed, not attributed to R2."
+    },
+    {
+      "phase": "final settled tree",
+      "command": "npm test",
+      "result": "1031 passed, zero failures/cancelled/skips; 32299.05956ms; run after generation finished with no concurrent writers"
+    },
+    {
+      "phase": "final",
+      "command": "npm test -- test/routines.test.js test/routines-api.test.js test/cron.test.js test/session-provenance.test.js",
+      "result": "59 passed, zero failures/cancelled/skips; 7793.422911ms"
+    },
+    {
+      "phase": "final",
+      "command": "node /tmp/pi-dish-r2-runtime-smoke.cjs",
+      "result": "exit 0; actual isolated HTTP admission, RPC child prompt/completion/owned close, rejected size/source no rows, real scheduled runner through lifecycle HTTP coordinator, recreated-runner same-minute suppression, retained readable history; 1.00s"
+    },
+    {
+      "phase": "final",
+      "command": "node /tmp/pi-dish-r2-boundary-probe.cjs",
+      "result": "exit 0; even direct JavaScript constructor invocation cannot supply a forged zero size; oversized genuine private-brand value rejected without a ledger row. Real invalid checked uses rejected by pinned compiler: TS2673 private constructor and TS2741 missing private brand.",
+      "probeDevelopment": "Initial probe assumed legacy TypeScript JS API and diagnostic exit code 2; pinned TypeScript 7 has a native CLI and exit code 1. Repaired the disposable probe only; no product/compiler/config/declaration changes."
+    }
+  ],
+  "review": {
+    "status": "ready after source commit/push",
+    "capacity": "Parent grants three-reviewer slot; no reviewers spawned before grant",
+    "requiredModels": [
+      "zai/glm-5.3",
+      "opencode-go/deepseek-v4.1-flash",
+      "kimi-code/k3"
+    ],
+    "thinking": "high",
+    "harness": "omp"
+  },
+  "runtime": {
+    "node": "26.8.2",
+    "npm": "12.0.2",
+    "typescript": "7.0.2",
+    "platform": "Linux x64"
+  },
+  "contributorPath": {
+    "before": "Changing routine input size enforcement required keeping route, runner and ledger serializers aligned; mutation lookup could read a different definition map from the map being written.",
+    "after": "RoutineInputAdmission owns one measured value and its private-brand reuse. Ingress-specific precedence remains at each ingress; no unchecked ledger path exists. Definition mutations resolve and write one owned synchronous map. HTTP pilot update preflight still crosses await and deliberately does not reuse a stale map."
+  },
+  "disposableProbes": [
+    {
+      "name": "work-count",
+      "command": "node /tmp/pi-dish-r2-work-count.cjs final",
+      "sha256": "6a86c0e147149baf4294f06dd90f557acf431b287e5086e9bc1713830fbacb26",
+      "source": "const assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst root = '/home/jyarwood/workspace/pi-dish-r2';\nrequire(root + '/test/test-env').applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-r2-count-'));\nprocess.env.HOME = home;\nconst store = require(root + '/lib/routines');\nconst { createRoutineRunner } = require(root + '/lib/routine-runner');\nconst { createRoutineHandlers } = require(root + '/lib/routine-handlers');\nconst originalRead = fs.readFileSync;\nconst originalStringify = JSON.stringify;\nlet reads = 0;\nlet sizes = 0;\nlet input;\nlet toJSONCalls = 0;\nfs.readFileSync = function(file, ...args) {\n  if (String(file).endsWith('/routines.json')) reads++;\n  return originalRead.call(this, file, ...args);\n};\nJSON.stringify = function(value, ...args) {\n  if (value === input) sizes++;\n  return originalStringify.call(this, value, ...args);\n};\nconst runner = createRoutineRunner({ store, createSession: () => new Promise(() => {}), resumeSession: async () => null,\n  getLiveSession: async () => null, closeSession: async () => { throw new Error('unexpected close'); }, composePrompt: () => '', log: { error() {} } });\nconst handlers = createRoutineHandlers({ runner, validateHarnessPilotSelection: async () => {} });\nconst definition = name => ({ name, cwd: home, prompt: 'R2 work-count probe' });\nconst counts = {};\nfunction measure(name, fn) { reads = sizes = 0; const value = fn(); counts[name] = { definitionReads: reads, inputSizes: sizes }; return value; }\n(async () => {\n  try {\n    const first = measure('create', () => store.createRoutine(definition('mutation')));\n    measure('markScheduled', () => store.markScheduled(first.id, 60000));\n    measure('update', () => store.updateRoutine('MUTATION', { description: 'owned snapshot' }));\n    measure('delete', () => store.deleteRoutine(first.id));\n    store.createRoutine(definition('route-delete'));\n    measure('routeDelete', () => handlers.remove({ params: { id: 'ROUTE-DELETE' } }, { status() { return this; }, json(body) { assert.equal(body.success, true); } }));\n    const second = store.createRoutine(definition('admit'));\n    input = { toJSON() { toJSONCalls++; return { message: 'one sizing pass', unicode: '\u00e9' }; } };\n    reads = sizes = 0;\n    let status = 200;\n    await handlers.invoke({ params: { id: second.id }, body: { input, source: 'probe' }, query: {} }, {\n      status(value) { status = value; return this; }, json(body) {\n        assert.equal(body.invocation.input, input);\n        JSON.stringify(body); // Response serialization, distinct from sizing/persistence.\n      }\n    });\n    counts.routeAdmission = { definitionReads: reads, inputSizes: sizes, originalToJSONCalls: toJSONCalls };\n    assert.equal(status, 202);\n    const direct = store.createRoutine(definition('direct-admit'));\n    measure('runnerAdmission', () => runner.invoke(direct, { input }));\n    measure('ledgerAdmission', () => store.createInvocation({ routine: direct, status: 'completed', input }));\n    const disabled = store.createRoutine({ ...definition('disabled'), enabled: false });\n    const skipped = measure('disabledSchedule', () => runner.invoke(disabled, { trigger: 'schedule', input }));\n    assert.equal(skipped.input, null);\n    measure('busySchedule', () => runner.invoke(direct, { trigger: 'schedule', input }));\n    const expected = process.argv[2];\n    if (expected === 'baseline') {\n      assert.equal(counts.update.definitionReads, 2);\n      assert.equal(counts.delete.definitionReads, 2);\n      assert.equal(counts.routeDelete.definitionReads, 3);\n      assert.equal(counts.routeAdmission.inputSizes, 3);\n    } else if (expected === 'final') {\n      assert.equal(counts.update.definitionReads, 1);\n      assert.equal(counts.delete.definitionReads, 1);\n      assert.equal(counts.routeDelete.definitionReads, 1);\n      assert.equal(counts.routeAdmission.inputSizes, 1);\n      assert.equal(counts.routeAdmission.originalToJSONCalls, 3, 'size + initial persistence + response');\n      assert.equal(counts.create.definitionReads, 1);\n      assert.equal(counts.markScheduled.definitionReads, 1);\n      for (const key of ['runnerAdmission', 'ledgerAdmission', 'disabledSchedule', 'busySchedule']) {\n        assert.equal(counts[key].inputSizes, 1, key);\n      }\n    }\n    console.log(JSON.stringify({ phase: expected, counts }));\n  } finally {\n    runner.stop(); fs.readFileSync = originalRead; JSON.stringify = originalStringify;\n    fs.rmSync(home, { recursive: true, force: true });\n  }\n})().catch(error => { console.error(error); process.exitCode = 1; });\n",
+      "cleanup": "Executed script removed after preserving source/hash and observed result in this evidence; temporary HOME cleaned by finally."
+    },
+    {
+      "name": "runtime-smoke",
+      "command": "node /tmp/pi-dish-r2-runtime-smoke.cjs",
+      "sha256": "f92be44e1edc6b41ae963bb51b0d067a565dd61242287e1cab20ab0e4ecd28f0",
+      "source": "const assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst root = '/home/jyarwood/workspace/pi-dish-r2';\nrequire(root + '/test/test-env').applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-r2-runtime-'));\nprocess.env.HOME = home;\nprocess.env.PI_DISH_HEADLESS = 'rpc';\nprocess.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS = '0';\nprocess.env.PI_DISH_PI_COMMAND = `${process.execPath} ${root}/test/fixtures/fake-rpc-pi.js`;\nprocess.env.PI_FIXTURE_LOG = path.join(home, 'commands.jsonl');\nfor (const key of Object.keys(process.env)) if (/API_KEY|AUTH_TOKEN|PROVIDER|CREDENTIAL/.test(key)) delete process.env[key];\nconst server = require(root + '/server');\nconst store = require(root + '/lib/routines');\nconst { getAllRPCSessions } = require(root + '/lib/rpc-session');\nconst { createRoutineRunner } = require(root + '/lib/routine-runner');\nconst { composeRoutinePrompt } = require(root + '/lib/routine-handlers');\nconst { once } = require('node:events');\nlet runner;\nlet base;\nasync function request(method, route, body) {\n  const response = await fetch(base + route, { method, ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) });\n  return { status: response.status, body: await response.json() };\n}\nasync function waitFor(fn) {\n  const end = Date.now() + 20000;\n  while (Date.now() < end) { const value = await fn(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 25)); }\n  throw new Error('smoke timed out');\n}\n(async () => {\n  try {\n    if (!server.listening) await once(server, 'listening');\n    base = `http://127.0.0.1:${server.address().port}`;\n    const made = await request('POST', '/api/routines', { name: 'r2-admission', cwd: home, prompt: 'R2 admitted input.' });\n    assert.equal(made.status, 201);\n    const routine = made.body.routine;\n    const endpoint = `/api/routines/${routine.id}/invoke`;\n    assert.equal((await request('POST', endpoint, { input: 'x'.repeat(40000), source: 42 })).status, 413);\n    assert.equal((await request('POST', endpoint, { source: 'bad\\nsource' })).status, 400);\n    assert.equal(store.countInvocations(routine.id), 0);\n    const started = await request('POST', endpoint, { input: { unicode: '\u00e9', task: 'r2' }, source: 'isolated-smoke' });\n    assert.equal(started.status, 202);\n    const finished = await waitFor(() => { const row = store.getInvocation(started.body.invocation.id); return row?.status === 'completed' && row.closed && row; });\n    assert.equal(finished.error, null);\n    const commands = fs.readFileSync(process.env.PI_FIXTURE_LOG, 'utf8').trim().split('\\n').map(JSON.parse);\n    assert.ok(commands.some(command => command.type === 'prompt' && command.message.includes('isolated-smoke') && command.message.includes('\"unicode\": \"\u00e9\"')));\n    assert.equal((await request('DELETE', `/api/routines/${routine.id}`)).body.invocations, 1);\n    assert.equal((await request('GET', `/api/routine-invocations/${finished.id}`)).body.invocation.routineName, 'r2-admission');\n\n    const at = new Date(Date.now() + 5 * 60000); at.setSeconds(0, 0);\n    const scheduled = store.createRoutine({ name: 'r2-schedule', cwd: home, prompt: 'R2 scheduled invocation.', schedule: { cron: `${at.getMinutes()} ${at.getHours()} * * *` } });\n    const ports = { store,\n      createSession: async spec => { const result = await request('POST', '/api/sessions/new', spec); assert.equal(result.status, 200, JSON.stringify(result.body)); return result.body.id; },\n      resumeSession: async id => { const result = await request('POST', `/api/sessions/${id}/resume`, {}); assert.equal(result.status, 200); return result.body; },\n      getLiveSession: async id => getAllRPCSessions().find(session => session.id === id) || null,\n      closeSession: id => request('POST', `/api/sessions/${id}/close`, {}),\n      composePrompt: (definition, invocation) => composeRoutinePrompt(definition, invocation, { selfHostId: 'isolated', resolveLocal: () => null, fleetNames: () => [] }),\n      now: () => at.getTime()\n    };\n    runner = createRoutineRunner(ports);\n    runner.tick(at.getTime());\n    const scheduledDone = await waitFor(() => { const row = store.lastInvocation(scheduled.id); return row?.status === 'completed' && row.closed && row; });\n    assert.equal(scheduledDone.trigger, 'schedule');\n    assert.equal(store.getRoutine(scheduled.id).lastScheduledMinute, at.getTime());\n    runner.stop(); runner = createRoutineRunner(ports);\n    await runner.recoverAfterRestart();\n    runner.tick(at.getTime() + 15000);\n    assert.equal(store.countInvocations(scheduled.id), 1);\n    const deleted = store.deleteRoutine('R2-SCHEDULE');\n    assert.equal(deleted.id, scheduled.id);\n    assert.equal(store.getInvocation(scheduledDone.id).routineName, 'r2-schedule');\n    console.log(JSON.stringify({ admission: 'real HTTP\u2192runner\u2192RPC prompt\u2192completion\u2192owned close', rejection: '413 before invalid source; 400 framing; no rows', schedule: 'actual runner\u2192HTTP lifecycle coordinator\u2192RPC child; completion and close; recreated runner same-minute suppression', deletion: 'history readable for both runs', home: 'temporary, removed in finally', platform: process.platform, node: process.version }));\n  } finally {\n    runner?.stop();\n    const children = getAllRPCSessions();\n    for (const session of children) session.kill();\n    await new Promise(resolve => server.close(resolve));\n    fs.rmSync(home, { recursive: true, force: true });\n  }\n})().catch(error => { console.error(error); process.exitCode = 1; });\n",
+      "cleanup": "Executed script removed after preserving source/hash and observed result in this evidence; temporary HOME cleaned by finally."
+    },
+    {
+      "name": "boundary",
+      "command": "node /tmp/pi-dish-r2-boundary-probe.cjs",
+      "sha256": "9ac643ed6d2d20bb0a69b3b4725535a7ecd167aa1f49d92d1c85c7002e676b3f",
+      "source": "const assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst root = '/home/jyarwood/workspace/pi-dish-r2';\nrequire(root + '/test/test-env').applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-r2-boundary-'));\nprocess.env.HOME = home;\ntry {\n  const store = require(root + '/lib/routines');\n  const routine = store.createRoutine({ name: 'boundary', cwd: home, prompt: 'private brand' });\n  // TypeScript privacy is not a runtime guard: even a direct JS constructor call must measure input.\n  const rawConstructed = new store.RoutineInputAdmission({ data: 'x'.repeat(store.MAX_INPUT_BYTES) }, 0);\n  assert.equal(store.RoutineInputAdmission.prepare(rawConstructed), null);\n  assert.throws(() => store.createInvocation({ routine, status: 'completed', input: rawConstructed }), { status: 413 });\n  assert.deepEqual(store.readInvocations(), []);\n  const { spawnSync } = require('node:child_process');\n  const file = path.join(home, 'admission-negative.ts');\n  fs.writeFileSync(file, `import { RoutineInputAdmission } from '${root}/lib/routines';\\nnew RoutineInputAdmission({ payload: 'unchecked' });\\nconst forged: RoutineInputAdmission = {};\\nvoid forged;\\n`);\n  const checked = spawnSync(process.execPath, [root + '/node_modules/typescript/bin/tsc',\n    '--ignoreConfig', '--noEmit', '--strict', '--skipLibCheck', '--target', 'es2022',\n    '--module', 'nodenext', '--typeRoots', root + '/node_modules/@types', file], { encoding: 'utf8' });\n  assert.notEqual(checked.status, 0, checked.stdout + checked.stderr);\n  assert.match(checked.stdout, /TS2673/, 'private constructor rejects unchecked construction');\n  assert.match(checked.stdout, /TS2741|TS2739/, 'structural shape cannot forge private slots');\n  console.log(JSON.stringify({ runtime: 'direct JS constructor cannot assert arbitrary size; oversized genuine brand rejected; no row', typeNegatives: checked.stdout.trim() }));\n} finally { fs.rmSync(home, { recursive: true, force: true }); }\n",
+      "cleanup": "Executed script removed after preserving source/hash and observed result in this evidence; temporary HOME cleaned by finally."
+    }
+  ],
+  "cleanup": "Agent API docs now state source refusal and unchanged error precedence/no-row policy. Removed redundant default-field and mock-forwarding assertions; uncertain admission/error/persistence regressions retained. No scaffold, config exception or throwaway test file remains."
+}

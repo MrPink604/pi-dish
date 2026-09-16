@@ -1,6 +1,7 @@
 // Type-only dependency: alternate wrappers execute this core without loading
 // upstream Pi's AgentSession implementation at runtime.
 import type { ContextUsage, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { PiPrivateOperations } from "./pi-private.js";
 import * as cp from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -200,7 +201,7 @@ export const PI_EVENT_PROFILE = [
   // queue_update is deliberately NOT here: pi never routes it through the
   // extension runner (verified pi 0.80.3), so on("queue_update") never
   // fires. The real source is the AgentSession.subscribe() listener installed
-  // in ensureSessionSubscription() — see the capture patch at module scope.
+  // in ensureSessionSubscription() through the Pi-private adapter.
   "auto_retry_start",
   "auto_retry_end",
   "extension_error",
@@ -294,17 +295,6 @@ function stripFrontmatter(content: string): string {
   return match ? content.slice(match[0].length) : content;
 }
 
-// --- Live AgentSession capture (for the steering/follow-up queue) ------------
-//
-// pi never routes its `queue_update` event through the extension runner
-// (verified pi 0.80.3) — it reaches only AgentSession.subscribe() listeners.
-// To observe (and edit) the queue we need the live AgentSession instance. Both
-// `subscribe` and `prompt` run with `this` bound to that instance, so a
-// one-time prototype patch wrapping them stashes `this` into a *global* holder.
-// The holder is global (not a module local) on purpose: pi's /reload
-// re-evaluates this extension but keeps the same AgentSession instance — a
-// fresh bridge load must still find the previously captured one. Everything
-// downstream feature-detects, so a patch failure only loses queue editing.
 export type BridgeDescriptor = {
   harnessId: string;
   name: string;
@@ -312,7 +302,7 @@ export type BridgeDescriptor = {
   wrapperVersion: string;
   eventProfile: readonly string[];
   capabilities: Record<string, boolean>;
-  getPrivateSession?: () => unknown;
+  piPrivate?: PiPrivateOperations;
   nativeProjection?: {
     get: () => unknown;
     subscribe: (listener: (projection: unknown) => void) => (() => void);
@@ -412,18 +402,6 @@ function deriveSessionIdentity(
     }
   }
   return { sessionFile, sessionId, cwd: ctx.cwd };
-}
-
-// Extract the delivery-match text of a queued message the way AgentSession's
-// private _getUserMessageText does: a string is itself; otherwise join the
-// text parts of the content array. Handles both raw content (compaction
-// buffer) and AgentMessage-shaped entries (agent-core queues).
-function queueEntryText(entry: unknown): string {
-  if (typeof entry === "string") return entry;
-  const content = Array.isArray(entry) ? entry : field(entry, "content");
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) return treeEntryText(content);
-  return "";
 }
 
 function treeEntryText(content: unknown): string {
@@ -750,9 +728,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
   async function acquireCommandCtx(): Promise<void> {
     if (commandCtx) return;
     if (!descriptor.selfPrime) return;
-    const s = getCapturedSession();
-    if (!s || typeof s.prompt !== "function") return;
-    try { await callHost(s, "prompt", "/dish-prime"); } catch {}
+    const prime = descriptor.piPrivate?.captureCommand("/dish-prime");
+    if (!prime) return;
+    try { await prime(); } catch {}
   }
 
   registerCommand("dish-prime", {
@@ -902,10 +880,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // uncaptured session — nothing has called prompt/subscribe since load.)
   let compactionEventsLive = false;
 
-  // Steering/follow-up queue, mirrored from the live AgentSession's own
-  // queue_update events (see the capture patch at module scope). `lastQueue`
-  // is the fallback snapshot; live reads via getCapturedSession() are preferred
-  // when the instance is available.
+  // Steering/follow-up queue mirrored from Pi's private event subscription.
+  // Prefer the adapter's live snapshot; lastQueue remains the fallback.
   let lastQueue: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
   let queueUnsub: (() => void) | null = null;
   let nativeProjectionUnsub: (() => void) | null = null;
@@ -986,38 +962,17 @@ export function createBridge(descriptor: BridgeDescriptor) {
     try { sock.write(JSON.stringify(obj) + "\n"); } catch {}
   }
 
-  // The live AgentSession, if the module-scope capture patch stashed one and it
-  // still looks like an AgentSession. All queue features feature-detect on this.
-  function getCapturedSession(): HostObject | null {
-    try {
-      const s = descriptor.getPrivateSession?.();
-      if (isObject(s) && isHostMethod(s.subscribe)) return s;
-    } catch {}
-    return null;
-  }
-
   // Current queue as clients should see it: pi's steering/follow-up queues
   // (live read when the instance is captured, else the mirrored fallback) plus
   // any messages we're holding through compaction — a send during compaction
   // should be just as visible and cancellable as a real queued one.
   function mergedQueue(): { steering: string[]; followUp: string[] } {
-    let steering: string[];
-    let followUp: string[];
-    const s = getCapturedSession();
-    if (s) {
-      try {
-        steering = [...stringArray(callHost(s, "getSteeringMessages"))];
-        followUp = [...stringArray(callHost(s, "getFollowUpMessages"))];
-      } catch {
-        steering = [...lastQueue.steering];
-        followUp = [...lastQueue.followUp];
-      }
-    } else {
-      steering = [...lastQueue.steering];
-      followUp = [...lastQueue.followUp];
-    }
-    for (const entry of compactionQueue) followUp.push(queueEntryText(entry));
-    return { steering, followUp };
+    const queue = descriptor.piPrivate?.readQueue() ?? {
+      steering: [...lastQueue.steering],
+      followUp: [...lastQueue.followUp],
+    };
+    for (const entry of compactionQueue) queue.followUp.push(treeEntryText(entry));
+    return queue;
   }
 
   function broadcastQueue(): void {
@@ -1036,10 +991,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
   //    compaction actually stops instead of waiting out the stuck timer.
   function ensureSessionSubscription(): void {
     if (queueUnsub) return;
-    const s = getCapturedSession();
-    if (!s) return;
     try {
-      const unsub = callHost(s, "subscribe", (value: unknown) => {
+      const unsub = descriptor.piPrivate?.subscribe((value: unknown) => {
         if (!isObject(value)) return;
         const event = value;
         if (event?.type === "queue_update") {
@@ -1076,8 +1029,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
           }, 0);
         }
       });
-      if (typeof unsub === "function") {
-        queueUnsub = () => { Reflect.apply(unsub, undefined, []); };
+      if (unsub) {
+        queueUnsub = unsub;
         compactionEventsLive = true;
       }
     } catch (e) {
@@ -1737,7 +1690,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       // running, the two race that rewrite and corrupt the session. Refuse
       // instead; isCompacting is pi's own authoritative flag (it also covers
       // branch summarization, which the same race applies to).
-      if (compacting || getCapturedSession()?.isCompacting) {
+      if (compacting || descriptor.piPrivate?.isCompacting()) {
         return { ok: false, error: "Compaction already in progress — wait for it to finish." };
       }
       // Raise the gate before the async events land so two rapid /compact
@@ -1798,7 +1751,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
       }
       if (!lastCtx) return { ok: false, error: "no active context" };
-      abortCompactionIfRunning();
+      descriptor.piPrivate?.abortCompactionIfRunning(compacting);
       optionalHostCall(callHost(lastCtx, "abort"), "catch", (e: unknown) => console.error("[pi-dish-bridge] abort failed:", errorText(e)));
       return { ok: true, info: "Aborted" };
     }
@@ -1854,12 +1807,12 @@ export function createBridge(descriptor: BridgeDescriptor) {
       // beat further: fired in this tick, the teardown outruns the
       // run_command response frame and the server sees "socket closed" for a
       // reload that ran.
-      const s = getCapturedSession();
-      if (!s || typeof s.prompt !== "function") {
+      const reload = descriptor.piPrivate?.captureCommand("/dish-reload");
+      if (!reload) {
         return { ok: false, error: "pi's extension API can't trigger /reload on this session remotely — run /reload in the TUI." };
       }
       setTimeout(() => {
-        optionalHostCall(callHost(s, "prompt", "/dish-reload"), "catch", (e: unknown) => console.error("[pi-dish-bridge] reload failed:", errorText(e)));
+        optionalHostCall(reload(), "catch", (e: unknown) => console.error("[pi-dish-bridge] reload failed:", errorText(e)));
       }, 50);
       return { ok: true, info: "Reload started" };
     }
@@ -1969,17 +1922,6 @@ export function createBridge(descriptor: BridgeDescriptor) {
     })();
   }
 
-  // pi keeps compaction on its own abort controller — plain abort() leaves a
-  // running compaction untouched. A user hitting Stop mid-compaction expects
-  // it to stop, so cancel that too. Feature-detected; the resulting
-  // compaction_end (aborted) releases the gate and informs clients.
-  function abortCompactionIfRunning(): void {
-    const s = getCapturedSession();
-    if ((compacting || s?.isCompacting) && typeof s?.abortCompaction === "function") {
-      try { callHost(s, "abortCompaction"); } catch {}
-    }
-  }
-
   // Raise the compaction gate: buffer user sends until it releases, and
   // (re-)arm the stuck-timer net. Idempotent — the manual /compact trigger,
   // the AgentSession compaction_start event, and the session_before_compact
@@ -2063,8 +2005,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
           return;
 
         case "guarded_reload": {
-          const captured = getCapturedSession();
-          if (!captured || typeof captured.prompt !== "function") {
+          const reload = descriptor.piPrivate?.captureCommand("/dish-bounce-reload");
+          if (!reload) {
             return respond(false, undefined, "The bridge cannot acquire a reload command context.");
           }
           if (guardedReloadReply) return respond(false, undefined, "A guarded reload is already pending.");
@@ -2077,7 +2019,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
               respond(false, undefined, "Session changed before reload; no reload was started.");
               return;
             }
-            Promise.resolve().then(() => callHost(captured, "prompt", "/dish-bounce-reload")).then(() => {
+            Promise.resolve().then(reload).then(() => {
               if (guardedReloadReply === respond) {
                 guardedReloadReply = null;
                 respond(false, undefined, "The runtime did not execute its reload command.");
@@ -2158,10 +2100,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
           if (!descriptor.capabilities.queueCancel) {
             return respond(false, undefined, `unsupported command cancel_queued: ${descriptor.harnessId} wrapper does not support queue cancellation`);
           }
-          // Remove a not-yet-delivered queued message so pi-dish can return its
-          // text to the composer. Splices pi's private queue arrays directly
-          // (feature-detected, version-sensitive — verified pi 0.81.1) then
-          // re-emits so the TUI's own display and our subscription reconcile.
+          // Return the selected queued text to the composer. The Pi adapter
+          // owns aligned native cancellation; compaction buffering stays here.
           try {
             const kind = cmd?.kind;
             const text = typeof cmd?.text === "string" ? cmd.text : "";
@@ -2178,16 +2118,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
             // the selected merged-row index to the exact compaction buffer row;
             // matching by text would cancel the wrong duplicate.
             if (kind === "followUp") {
-              const captured = getCapturedSession();
-              let piFollowUpCount = lastQueue.followUp.length;
-              try {
-                const visible = optionalHostCall(captured, "getFollowUpMessages");
-                if (Array.isArray(visible)) piFollowUpCount = visible.length;
-              } catch {}
+              const piFollowUpCount = descriptor.piPrivate?.followUpCount() ?? lastQueue.followUp.length;
               const compactionIndex = index - piFollowUpCount;
               if (compactionIndex >= 0) {
                 if (compactionIndex >= compactionQueue.length ||
-                    queueEntryText(compactionQueue[compactionIndex]) !== text) {
+                    treeEntryText(compactionQueue[compactionIndex]) !== text) {
                   return respond(false, undefined, "message already delivered or queue changed");
                 }
                 compactionQueue.splice(compactionIndex, 1);
@@ -2196,31 +2131,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
               }
             }
 
-            const s = getCapturedSession();
-            const unavailable = "queue editing unavailable (pi internals changed — update pi-dish-bridge)";
-            if (!s) return respond(false, undefined, unavailable);
-            const arr = kind === "steering" ? s._steeringMessages : s._followUpMessages;
-            if (!Array.isArray(arr) || typeof s._emitQueueUpdate !== "function") {
-              return respond(false, undefined, unavailable);
+            if (!descriptor.piPrivate) {
+              return respond(false, undefined, "queue editing unavailable (pi internals changed — update pi-dish-bridge)");
             }
-            const coreQueue = field(field(s.agent, kind === "steering" ? "steeringQueue" : "followUpQueue"), "messages");
-            if (!Array.isArray(coreQueue)) {
-              return respond(false, undefined, unavailable);
-            }
-            // AgentSession keeps text-only display mirrors alongside the agent
-            // core's full messages (which may carry images/metadata). They must
-            // remain index-aligned: validate both projections before mutating
-            // either array, then remove the selected index from both.
-            if (arr.length !== coreQueue.length) {
-              return respond(false, undefined, "queue editing unavailable (pi queues are out of sync — retry after the next queue update)");
-            }
-            if (index >= arr.length || queueEntryText(arr[index]) !== text ||
-                queueEntryText(coreQueue[index]) !== text) {
-              return respond(false, undefined, "message already delivered or queue changed");
-            }
-            arr.splice(index, 1);
-            coreQueue.splice(index, 1);
-            callHost(s, "_emitQueueUpdate");
+            descriptor.piPrivate.cancelQueued(kind, index, text);
             return respond(true, { text });
           } catch (e: unknown) {
             return respond(false, undefined, errorText(e));
@@ -2229,7 +2143,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
         case "abort": {
           if (!lastCtx) return respond(false, undefined, "no active context");
-          abortCompactionIfRunning();
+          descriptor.piPrivate?.abortCompactionIfRunning(compacting);
           await callHost(lastCtx, "abort");
           respond(true);
           return;
@@ -2355,7 +2269,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
           if (turnInProgress) return respond(false, undefined, "cannot navigate the tree while a turn is in progress");
           // Compaction (and branch summarization) rewrite the message list;
           // navigating the tree concurrently races that rewrite.
-          if (compacting || getCapturedSession()?.isCompacting) {
+          if (compacting || descriptor.piPrivate?.isCompacting()) {
             return respond(false, undefined, "cannot navigate the tree while compaction is in progress");
           }
           const targetId = typeof cmd.targetId === "string" ? cmd.targetId : "";

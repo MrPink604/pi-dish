@@ -1,5 +1,5 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import { createSessionApi, sendJson } from './api-client';
+import { setSessionModel, setSessionThinking, renameSession, sendJson } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { createModelCatalog } from './model-catalog';
 import { mountModelSelector } from './model-selector';
@@ -29,7 +29,7 @@ export function createSessionControls(options: {
   function capture(): Owner | null { const selection = sessionState.captureSelection(); if (disposed || !selection) return null; const endpoint = options.host(selection.host); return endpoint ? { selection, endpoint: Object.freeze({ ...endpoint }) } : null; }
   function endpointCurrent(owner: Owner) { const endpoint = options.host(owner.selection.host); return !disposed && endpoint && endpoint.base === owner.endpoint.base ? { ...owner.endpoint, token: endpoint.token } : null; }
   function owns(owner: Owner | null): owner is Owner { return !!owner && !!endpointCurrent(owner) && sessionState.ownsSelection(owner.selection); }
-  function api(owner: Owner) { const endpoint = endpointCurrent(owner); if (!endpoint) throw new Error('Host connection changed'); return createSessionApi((_host, path, init) => options.request(endpoint, path, init)); }
+  function mutationEndpoint(owner: Owner) { const endpoint = endpointCurrent(owner); if (!endpoint) throw new Error('Host connection changed'); return endpoint; }
   function mutation(owner: Owner, kind: string) {
     const key = sessionKey(owner.selection.host, owner.selection.id) + ':' + kind, token = Symbol(kind); mutations.set(key, token);
     return () => endpointCurrent(owner) && mutations.get(key) === token;
@@ -96,7 +96,7 @@ export function createSessionControls(options: {
     if (!owner || !session || !sessionSupports(session, 'setModel') || selector === session.model) return;
     const current = mutation(owner, 'model'); options.status('Switching model...', 'working');
     try {
-      await api(owner).setModel(owner.selection, selector); if (!current()) return;
+      await setSessionModel(options.request, mutationEndpoint(owner), owner.selection.id, selector); if (!current()) return;
       sessionState.patchSession(owner.selection.id, { model: selector }, owner.selection.host);
       if (owns(owner)) options.status('Model switched to ' + selector);
     } catch (error) { if (current() && owns(owner)) options.status('Model switch failed: ' + errorText(error), 'error'); }
@@ -125,7 +125,7 @@ export function createSessionControls(options: {
     const session = header(), owner = capture(); closeThinking();
     if (!owner || !session || !sessionSupports(session, 'setThinking')) return; const current = mutation(owner, 'thinking');
     try {
-      const result = await api(owner).setThinking(owner.selection, level); if (!current()) return;
+      const result = await setSessionThinking(options.request, mutationEndpoint(owner), owner.selection.id, level); if (!current()) return;
       const reported = result.level || level; sessionState.patchSession(owner.selection.id, { thinkingLevel: reported }, owner.selection.host);
       if (owns(owner)) options.status(reported !== level ? `Thinking level: ${reported} (model doesn't support ${level})` : `Thinking level: ${reported}`);
     } catch (error) { if (current() && owns(owner)) options.status('Thinking level failed: ' + errorText(error), 'error'); }
@@ -144,7 +144,7 @@ export function createSessionControls(options: {
     const owner = renameOwner, value = element<HTMLInputElement>('sessionNameInput').value.trim(); cancelRename();
     const session = header(); if (!owns(owner) || !session?.isActive || !sessionSupports(session, 'rename') || !value || value === session.name) return;
     const current = mutation(owner, 'rename');
-    try { await api(owner).rename(owner.selection, value); if (current()) sessionState.patchSession(owner.selection.id, { name: value }, owner.selection.host); }
+    try { await renameSession(options.request, mutationEndpoint(owner), owner.selection.id, value); if (current()) sessionState.patchSession(owner.selection.id, { name: value }, owner.selection.host); }
     catch (error) { if (current() && owns(owner)) options.status('Rename failed: ' + errorText(error), 'error'); }
   }
   function download(blob: Blob, name: string) {

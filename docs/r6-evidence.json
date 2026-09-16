@@ -1,0 +1,354 @@
+{
+  "milestone": "R6",
+  "status": "Both subpackages implemented; isolated runtime proofs passed; aggregate suites and frozen-source reviews pending",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r6-replay-private-adapter",
+  "owner": "01a0ab39-6d9c-7296-b065-aa7eb90d56b9",
+  "provenance": {
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinking": "high",
+    "verification": "Owner preverified by parent; workers resolved through semantic CLI before substantive prompt"
+  },
+  "acceptedEvidence": [
+    "docs/remaining-migration-plan.md R6 entire package, invariants, package contract and verification policy",
+    "docs/remaining-migration-plan.md accepted M6 and M7 records",
+    "docs/m6-evidence.json native harness and final validation records",
+    "AGENTS.md",
+    "CLAUDE.md checked implementation, queue, replay, lifecycle and verification sections"
+  ],
+  "ownership": {
+    "R6a": {
+      "worker": "01a0ab3b-bc72-7243-af00-a43859436359",
+      "provenance": "semantic resolve: omp, openai-codex/gpt-6-astra, high, assigned cwd",
+      "writes": [
+        "src/core/extension-ui-state.ts",
+        "src/core/bridge-session.ts",
+        "src/core/rpc-session.ts",
+        "test/bridge-session.test.js",
+        "test/rpc-session.test.js"
+      ],
+      "contract": "createExtensionUIState(): ExtensionUIState; reduceExtensionUIState(state, event: string, data: unknown): void; removeExtensionUIDialog(state, id: unknown): void. Same state object and Maps live on each sess.extUIState. Both transports reduce admitted events before emit, never in listeners. Remove extUIStateTracked declarations; composition owns its observer WeakSet."
+    },
+    "R6b": {
+      "worker": "01a0ab3b-b794-753e-b457-61cafad73ae5",
+      "provenance": "semantic resolve: omp, openai-codex/gpt-6-astra, high, assigned cwd",
+      "writes": [
+        "extensions/pi-dish-bridge/core.ts",
+        "extensions/pi-dish-bridge/pi-private.ts",
+        "extensions/pi-dish-bridge/index.ts",
+        "test/types/extensions.ts",
+        "test/native-extension-boundary.test.js"
+      ],
+      "contract": "Pi-private owns only consumed private queue read/count/cancel, private event subscription, compaction-active/abort and captured command-prime operations. Named Pi-only port owned in pi-private and imported type-only by core. No raw private session escapes. Capture reload command operation before deferred execution to retain original receiver ownership. Cross-harness protocol, subscription event policy, recovery and compaction buffer stay core. Inspect actual SDK producers before defining consumed outputs."
+    },
+    "integrationOwnerOnly": [
+      "src/core/server-app.ts",
+      "test/server.test.js",
+      "extensions/pi-dish-bridge/README.md",
+      "docs/r6-evidence.json",
+      "docs/r6-review.json",
+      "all generated outputs",
+      "all validation and commits"
+    ],
+    "sharedFiles": "No package, compiler, source-policy, contracts.ts or other owner's file mutation planned. test/types/extensions.ts proposal owns only removed private-capture negative and consumed Pi operations negatives. Parent owns global acceptance documents. R7 server-app writes remain held until parent releases replay cutover.",
+    "workerRules": "No build, lint, formatter, test, validation, commit or push. No nested delegation. Workers hand off evidence and stop; owner integrates and validates settled tree."
+  },
+  "piPrivatePortFreeze": {
+    "owner": "extensions/pi-dish-bridge/pi-private.ts PiPrivateOperations",
+    "consumer": "core.ts type-only import and BridgeDescriptor.piPrivate optional port; Pi index supplies implementation",
+    "operations": [
+      "readQueue(): {steering:string[];followUp:string[]}|null detached snapshot",
+      "followUpCount(): number|null, independent array-length-only fallback",
+      "cancelQueued(kind:'steering'|'followUp', index:number, text:string): void, existing errors",
+      "subscribe(listener:(event:unknown)=>void): (()=>void)|null",
+      "isCompacting(): boolean",
+      "abortCompactionIfRunning(buffering:boolean): void",
+      "captureCommand(command:'/dish-prime'|'/dish-reload'|'/dish-bounce-reload'): (()=>unknown)|null"
+    ],
+    "capturedOwnership": "Command operation captures original session receiver but reads prompt at invocation; deferred getter behavior preserved. selfPrime remains shared-core policy flag.",
+    "producerEvidence": "Actual installed AgentSession mirrors _steeringMessages/_followUpMessages in _queueSteer/_queueFollowUp before agent-core queued full content; getSteeringMessages/getFollowUpMessages return live mirrors. _emitQueueUpdate publishes detached mirror arrays. Both selected index text projections and equal lengths are checked before either cancellation splice."
+  },
+  "inventory": {
+    "serverWriters": [
+      "BridgeSession constructor/_handle in src/core/bridge-session.ts",
+      "RPCSession _handleMessage and respondExtensionUI in src/core/rpc-session.ts",
+      "server-app trackExtUIState duplicate event listeners, switch clears, stale-ask deletion, ui-response deletion"
+    ],
+    "serverConsumers": [
+      "server-app ownership onLive, stale asks, session-switch adoption, ui-response and SSE replay/dedup/pending dialog sentinel",
+      "src/core/session-ownership.ts LiveSession and onLive dispatch",
+      "src/core/session-bounces.ts blockers and lifecycle pendingDialogs",
+      "src/core/contracts.ts ExtensionUIState unknown map contract",
+      "test/bridge-session.test.js ingress/switch/pre-hello proofs",
+      "test/rpc-session.test.js RPC/SSE/response proofs",
+      "test/server.test.js remembered extension UI silent-bridge SSE reconnect"
+    ],
+    "privateWritersAndConsumers": [
+      "pi-private prototype subscribe/prompt capture and getPiPrivateSession",
+      "Pi index descriptor getPrivateSession",
+      "core getCapturedSession/mergedQueue/ensureSessionSubscription",
+      "core acquireCommandCtx and reload/guarded_reload captured prompt",
+      "core compact/tree navigation isCompacting and abortCompactionIfRunning",
+      "core cancel_queued aligned display/core queue mutation and follow-up compaction offset",
+      "core queueEntryText versus treeEntryText",
+      "OMP and Prime BridgeDescriptor consumers remain Pi-runtime-import-free",
+      "test/types/extensions.ts private exposure negative"
+    ],
+    "runtimeMapping": "New server reducer is strict core source emitted flat to lib/extension-ui-state.js and .d.ts by existing build:core. Changed bridge/rpc/server-app generated outputs regenerated there. Native extension .ts remains strict no-emit and host-loaded; no runtime loader or package mapping change.",
+    "gates": [
+      "test/bridge-session.test.js",
+      "test/rpc-session.test.js",
+      "test/server.test.js",
+      "test/session-bounces.test.js",
+      "test/pi-bridge.integration.test.js",
+      "test/native-extension-boundary.test.js",
+      "test/omp-bridge-compact.test.js",
+      "test/omp-bridge-session-switch.test.js",
+      "test/omp-tree-bridge.test.js",
+      "test/browser-extension-ui.test.js",
+      "browser extension-dialog scenarios",
+      "scripts/test-real-lineage-harnesses.js"
+    ],
+    "finalTouchedFiles": [
+      "extensions/pi-dish-bridge/README.md",
+      "extensions/pi-dish-bridge/core.ts",
+      "extensions/pi-dish-bridge/index.ts",
+      "extensions/pi-dish-bridge/pi-private.ts",
+      "lib/bridge-session.d.ts",
+      "lib/bridge-session.js",
+      "lib/rpc-session.d.ts",
+      "lib/rpc-session.js",
+      "lib/server-app.js",
+      "lib/extension-ui-state.d.ts",
+      "lib/extension-ui-state.js",
+      "src/core/bridge-session.ts",
+      "src/core/rpc-session.ts",
+      "src/core/server-app.ts",
+      "src/core/extension-ui-state.ts",
+      "test/bridge-session.test.js",
+      "test/native-extension-boundary.test.js",
+      "test/rpc-session.test.js",
+      "test/types/extensions.ts",
+      "docs/r6-evidence.json"
+    ],
+    "unrelatedLocalState": "Untracked .amp/ appeared during work; preserved and excluded from source staging."
+  },
+  "preservedBehavior": [
+    "Transport reducer writes same sess.extUIState object/maps; SSE reconnect works without fresh bridge replay. Harness uiState/replayExtensionUI(sock) survives in separate process.",
+    "Bridge v2 admission before state mutation, snapshots before connect resolution, session switch clears before emit and changes identity after emit; malformed switch rejection unchanged.",
+    "Widgets require nonempty array; status truthiness and default keys retained; select/confirm/input/editor/ask id keyed dialogs; absent/null/malformed wire remains opaque unless consumed.",
+    "Explicit dialog removal on successful HTTP answer also covers RPC's no-resolved-event protocol; no fabricated resolved event for RPC answer.",
+    "Application stale ask cancellation runs at idle lookup and turn/agent end; switch adoption remains composition policy, not transport reducer policy.",
+    "Bounce reads pending dialog state directly from transport-owned map, no secondary cache.",
+    "Pi native receiver binding, capture across reload, subscription cleanup, private willRetry, compaction deferred release and captured reload operations preserved.",
+    "Both Pi aligned cancellation arrays validated before either mutates; selected duplicate index and associated image identity retained. Compaction queue offset uses private follow-up length with existing fallback.",
+    "No cross-socket protocol, universal harness adapter, new compiler exception, broad normalization, raw-entry cache, any, suppressions or SDK facade."
+  ],
+  "deletionLedger": [
+    {
+      "remove": "server-app extension replay tracking/reduction and route-side direct map writes",
+      "retain": "application stale ask lifecycle, switch adoption, SSE replay read/dedupe"
+    },
+    {
+      "remove": "BridgeSession inline duplicate UI reduction and direct replay clears",
+      "retain": "single shared ingress reduction and independent live activity resets"
+    },
+    {
+      "remove": "extUIStateTracked declarations and composition state initialization",
+      "retain": "composition-only WeakSet for idempotent lifecycle observers"
+    },
+    {
+      "remove": "getPiPrivateSession export and descriptor getPrivateSession/raw capture accessor",
+      "retain": "private module local capture and only consumed operation port"
+    },
+    {
+      "remove": "Pi private field names and direct mutations from shared core",
+      "retain": "harness socket replay plus shared compaction buffering/protocol policy"
+    },
+    {
+      "remove": "Shared-core abortCompactionIfRunning forwarding wrapper",
+      "retain": "Pi-private separate-controller abort operation; original command and RPC capability/admission/await policy"
+    }
+  ],
+  "checksLedger": {
+    "retain": "Observable existing queue duplicate/images, real native capture/self-prime/reload, bridge replay/switch/admission, server silent-bridge SSE, RPC response, Bounce and browser dialogs",
+    "delete": "Obsolete raw-private-exposure type negative; replace only with invalid consumed-port use. No permanent source/count/wiring assertions added.",
+    "newRegressions": "Only uncertain observable ingress-before-listener/RPC answer state and malformed aligned-array nonmutation cases as needed",
+    "throwawayProofs": "Actual isolated server HTTP/SSE and browser dialog reconnect with no socket replay, distinct server-socket native replay; real Pi/OMP/Prime smoke; native private queue cancellation edge probe if not already covered"
+  },
+  "verification": [
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "result": "exit 0; 798 packages installed; existing six blocked lifecycle scripts reported; native node-pty rebuild completed"
+    },
+    {
+      "command": "LSP status",
+      "result": "No language servers configured; grounded exact-file search fallback required for references; no mutating LSP used"
+    },
+    {
+      "command": "npm run build:core",
+      "result": "PASS exit0, 0.50s; only affected checked core outputs regenerated"
+    },
+    {
+      "command": "npm test -- test/bridge-session.test.js test/rpc-session.test.js test/native-extension-boundary.test.js test/session-bounces.test.js",
+      "result": "64/65 passed; new native test import-only SDK require.resolve failed before exercising native behavior. Existing Bridge/RPC/Bounce and new RPC regressions passed."
+    },
+    {
+      "command": "npm test -- test/native-extension-boundary.test.js",
+      "result": "PASS 2/2 after fixture import resolution correction",
+      "correction": "Resolve ESM SDK against exact adapter module URL, then agent-core against resolved SDK; directory parent wrongly selected Bun global cache, causing different AgentSession prototype. No product source workaround."
+    },
+    {
+      "command": "npm run check && npm test",
+      "result": "PASS exit0, 37.55s total; 259 compiler-owned sources/no explicit-any exceptions; all strict/drift/mode gates; backend1030 passed,0failed/0skipped",
+      "backendDurationMs": 32459.703556,
+      "output": "artifact://47"
+    },
+    {
+      "command": "npm run test:browser && npm run test:ui:scenarios && npm run test:ui",
+      "result": "PASS exit0,298.25s;286 browser tests,all8 isolated scenarios,full desktop/mobile including same-id multi-host",
+      "output": "artifact://52",
+      "sourceNote": "Before final native-only snapshot wrapper reuse; repeat complete final gate below."
+    },
+    {
+      "command": "node .r6-pi-smoke.cjs after final native snapshot refinement",
+      "result": "PASS exit0; native socket replay and answer repeated",
+      "stdout": "{\"result\":\"PASS\",\"harness\":\"real Pi\",\"source\":\"/home/jyarwood/workspace/pi-dish-r6\",\"proof\":[\"native loader and private capture\",\"native UI request before server reconnect\",\"separate server socket native harness replay\",\"pending input preserved across socket replacement\",\"remote answer resolves native dialog and status\"],\"providerRequests\":0,\"sessionId\":\"2026-09-16T17-39-16-502Z_01a0ab4d-2b95-7468-9d29-f25856facb20\"}\n"
+    },
+    {
+      "command": "node --eval <embedded .r6-pi-smoke.cjs source> after final wrapper deletion",
+      "result": "PASS exit0",
+      "stdout": "{\"result\":\"PASS\",\"harness\":\"real Pi\",\"source\":\"/home/jyarwood/workspace/pi-dish-r6\",\"proof\":[\"native loader and private capture\",\"native UI request before server reconnect\",\"separate server socket native harness replay\",\"pending input preserved across socket replacement\",\"remote answer resolves native dialog and status\"],\"providerRequests\":0,\"sessionId\":\"2026-09-16T17-41-04-221Z_01a0ab4e-d05d-7738-b951-7da13147813f\"}\n"
+    },
+    {
+      "command": "npm run check && npm test && npm run test:lineage",
+      "result": "PASS exit0,52.83s, after final source edits;source policy259 compiler-owned sources/no explicit-any exceptions;ESLint;all tool/core/browser/edge type/output/mode checks;strict extension negatives;all1030 backend/API/bridge/lifecycle/native tests,0 skipped;real OMP and Prime all gates",
+      "output": "artifact://63",
+      "environment": {
+        "PI_DISH_PI_COMMAND": "/home/jyarwood/.local/bin/pi",
+        "PI_DISH_REAL_OMP_BIN": "/home/jyarwood/.local/bin/omp",
+        "PI_DISH_REAL_PRIME_BIN": "/home/jyarwood/.local/bin/prime-agent",
+        "PI_DISH_REAL_BUN_BIN_DIR": "/home/jyarwood/.bun/bin"
+      },
+      "backendDurationMs": 32075.963819,
+      "realLineage": {
+        "omp": "omp/18.1.21",
+        "prime": "CLI stdout0.9.4; structured version empty",
+        "fakeProviderRequests": 10,
+        "ompGates": "persisted assistant/live tree/inactive refusal/close/resume/history/btw",
+        "primeGates": "token/worker split/root close/busy close/same-pane restart/busy restart/postrestart persistence/other-root survival/client-exit close/manual-discovery/manual-close refusal/resume persistence"
+      }
+    },
+    {
+      "command": "npm run test:browser && npm run test:ui:scenarios && npm run test:ui",
+      "result": "PASS exit0,299.03s;286 Playwright tests;all8 isolated scenarios;full desktop/mobile/host-aware smoke",
+      "output": "artifact://65",
+      "sourceTiming": "Browser and core runtime remained final throughout this run. Native-only redundant forwarding wrapper removed during run; final npm run check/full backend/native integration/real lineage plus real Pi socket smoke were rerun after that last native source edit."
+    }
+  ],
+  "workerHandoffs": [
+    {
+      "worker": "01a0ab3b-bc72-7243-af00-a43859436359",
+      "status": "R6a five assigned files delivered; no validation run; no contract departures",
+      "regressions": "reentrant request-listener resolution; resolved listener sees removed dialog; RPC pre-composition ingress and HTTP answer without fabricated resolved event",
+      "close": "Semantic graceful-close returned failure: pane %83 gone but processes 155416@32558490,157323@32558581,158952@32558656 still alive. Parent informed. No manual signals or blind retry; cleanup not claimed."
+    },
+    {
+      "worker": "01a0ab3b-b794-753e-b457-61cafad73ae5",
+      "status": "Five assigned files delivered, no worker validation, no contract departures",
+      "close": "Semantic graceful close success"
+    }
+  ],
+  "limits": [
+    "Linux execution only; macOS unverified",
+    "Persisted/external unconsumed payloads remain unknown",
+    "Parent alone accepts milestone after integration and exact pushed-main CI"
+  ],
+  "runtimeProofs": {
+    "scripts": [
+      {
+        "file": ".r6-runtime-smoke.cjs",
+        "sha256": "bf5f76019f216c0b4021485eaf1b6804c82de1aa5b712cf822573e3e42e9bf78",
+        "source": "const fs = require('node:fs');\nconst path = require('node:path');\nconst os = require('node:os');\nconst net = require('node:net');\nconst http = require('node:http');\nconst { once } = require('node:events');\nrequire('./test/test-env').applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-r6-'));\nprocess.env.HOME = home;\nprocess.env.PORT = '0';\nprocess.env.TMUX_TMPDIR = path.join(home, 'tmux');\nfs.mkdirSync(process.env.TMUX_TMPDIR);\nprocess.env.PI_DISH_PI_COMMAND = `${process.execPath} ${path.resolve('test/fixtures/fake-rpc-pi.js')}`;\nconst id = 'r6-replay-smoke';\nconst cwd = path.join(home, 'workspace');\nconst sessions = path.join(home, '.pi', 'agent', 'sessions', 'smoke');\nconst registry = path.join(home, '.pi', 'dish', 'sessions');\nfor (const dir of [cwd, sessions, registry]) fs.mkdirSync(dir, { recursive: true });\nconst sessionFile = path.join(sessions, id + '.jsonl');\nfs.writeFileSync(sessionFile, [\n  { type: 'session', id, cwd, timestamp: new Date().toISOString() },\n  { type: 'message', id: 'hello', message: { role: 'assistant', content: [{ type: 'text', text: 'R6 isolated replay fixture.' }], timestamp: Date.now() } },\n].map(value => JSON.stringify(value)).join('\\n') + '\\n');\nconst socketPath = path.join(home, 'bridge.sock');\nconst clients = new Set();\nconst responses = [];\nlet connections = 0;\nlet replay = [];\nconst send = (sock, value) => sock.write(JSON.stringify(value) + '\\n');\nconst emit = (event, data) => { for (const sock of clients) send(sock, { type: 'event', event, data }); };\nconst bridge = net.createServer(sock => {\n  connections++;\n  clients.add(sock);\n  sock.on('close', () => clients.delete(sock));\n  sock.on('error', () => {});\n  send(sock, { type: 'hello', turnInProgress: true, queue: { steering: [], followUp: [] } });\n  for (const data of replay) send(sock, { type: 'event', event: 'extension_ui_request', data });\n  let buffer = '';\n  sock.on('data', chunk => {\n    buffer += chunk;\n    let end;\n    while ((end = buffer.indexOf('\\n')) >= 0) {\n      const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);\n      if (!line) continue;\n      const command = JSON.parse(line);\n      let data = {};\n      if (command.command === 'get_available_models') data = { models: [{ provider: 'test', id: 'r6', name: 'R6 smoke', contextWindow: 200000 }] };\n      if (command.command === 'get_commands') data = [];\n      if (command.command === 'tree_leaf') data = { leafId: 'hello' };\n      if (command.command === 'get_state') data = { sessionId: id, sessionFile, cwd, turnInProgress: true };\n      if (command.command === 'extension_ui_response') responses.push(command);\n      send(sock, { type: 'response', id: command.id, success: true, data });\n    }\n  });\n});\n(async () => {\n  bridge.listen(socketPath); await once(bridge, 'listening');\n  fs.writeFileSync(path.join(registry, id + '.json'), JSON.stringify({ sessionId: id, socketPath, sessionFile, cwd, pid: process.pid, name: 'R6 replay smoke', turnInProgress: true, model: 'test/r6' }));\n  const server = require('./server');\n  if (!server.listening) await once(server, 'listening');\n  const control = http.createServer(async (req, res) => {\n    if (req.method === 'POST') {\n      let raw = ''; for await (const chunk of req) raw += chunk;\n      const body = raw ? JSON.parse(raw) : {};\n      if (req.url === '/emit') emit(body.event, body.data);\n      if (req.url === '/reconnect') { replay = body.replay || []; for (const sock of clients) sock.destroy(); }\n    }\n    res.setHeader('Content-Type', 'application/json');\n    res.end(JSON.stringify({ connections, clients: clients.size, responses, home, sessionId: id }));\n  });\n  control.listen(0, '127.0.0.1'); await once(control, 'listening');\n  console.log('R6_READY ' + JSON.stringify({ base: `http://127.0.0.1:${server.address().port}`, control: `http://127.0.0.1:${control.address().port}`, id, home }));\n  let stopping = false;\n  const stop = () => {\n    if (stopping) return; stopping = true;\n    for (const sock of clients) sock.destroy();\n    control.close(); bridge.close(); server.close();\n    fs.rmSync(home, { recursive: true, force: true });\n  };\n  process.on('SIGTERM', stop);\n  process.on('SIGINT', stop);\n})().catch(error => { console.error(error); process.exitCode = 1; });\n"
+      },
+      {
+        "file": ".r6-pi-smoke.cjs",
+        "sha256": "b051f8217057e7703013d2b84028b55b2760ae0e0d8c26987e5b047e0a07bad0",
+        "source": "const assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst os = require('node:os');\nconst { spawn } = require('node:child_process');\nconst { once } = require('node:events');\nconst { sanitizeTestEnv } = require('./test/test-env');\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-r6-native-'));\nconst env = sanitizeTestEnv({ PATH: process.env.PATH, HOME: home, TMUX: '', TMUX_PANE: '' });\nenv.PI_DISH_SOCKET_DIR = path.join(home, 's');\nconst agentDir = path.join(home, '.pi', 'agent');\nconst extensions = path.join(agentDir, 'extensions');\nfs.mkdirSync(extensions, { recursive: true });\nfs.symlinkSync(path.resolve('extensions/pi-dish-bridge'), path.join(extensions, 'pi-dish-bridge'));\nfs.writeFileSync(path.join(agentDir, 'models.json'), JSON.stringify({ providers: { isolated: { baseUrl: 'http://127.0.0.1:1', apiKey: 'not-a-credential', api: 'anthropic-messages', models: [{ id: 'no-provider-call', name: 'Isolated', contextWindow: 200000, maxTokens: 8192 }] } } }));\nfs.writeFileSync(path.join(extensions, 'r6-dialog.ts'), `export default function(pi) { pi.registerCommand('r6-ui', { description: 'Isolated R6 proof', handler: async (_args, ctx) => { ctx.ui.setWidget('r6-native', ['native socket replay']); ctx.ui.setStatus('r6-native', 'native status'); const answer = await ctx.ui.input('R6 native pending input'); ctx.ui.setStatus('r6-answer', answer || 'cancelled'); } }); }`);\nconst child = spawn('/home/jyarwood/.local/bin/pi', ['--mode', 'rpc', '--model', 'isolated/no-provider-call'], { cwd: home, env, stdio: ['pipe', 'pipe', 'pipe'] });\nlet stderr = '';\nchild.stderr.on('data', chunk => { stderr += chunk; });\nchild.stdout.resume();\nconst waitFor = async (predicate, label) => {\n  const deadline = Date.now() + 30000;\n  while (Date.now() < deadline) {\n    const value = predicate(); if (value) return value;\n    if (child.exitCode !== null) throw new Error('Pi exited: ' + stderr);\n    await new Promise(resolve => setTimeout(resolve, 25));\n  }\n  throw new Error('Timeout: ' + label + '\\n' + stderr);\n};\nlet first, second;\n(async () => {\n  const claim = await waitFor(() => {\n    try {\n      const dir = path.join(home, '.pi', 'dish', 'sessions');\n      const file = fs.readdirSync(dir).find(name => name.endsWith('.json'));\n      return file && JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));\n    } catch { return null; }\n  }, 'native registration');\n  const { BridgeSession } = require('./lib/bridge-session');\n  first = await new BridgeSession(claim).connect();\n  child.stdin.write(JSON.stringify({ type: 'prompt', id: 'r6-command', message: '/r6-ui' }) + '\\n');\n  await waitFor(() => first.extUIState.dialogs.size === 1, 'first native dialog');\n  assert.deepEqual(first.extUIState.widgets.get('r6-native').widgetLines, ['native socket replay']);\n  const dialog = [...first.extUIState.dialogs.values()][0];\n  assert.equal(dialog.title, 'R6 native pending input');\n  first.close();\n  second = await new BridgeSession(claim).connect();\n  await waitFor(() => second.extUIState.dialogs.has(dialog.id), 'harness replay into new server socket');\n  assert.deepEqual(second.extUIState.widgets.get('r6-native').widgetLines, ['native socket replay']);\n  assert.equal(second.extUIState.statuses.get('r6-native').statusText, 'native status');\n  await second.respondExtensionUI(dialog.id, { value: 'native-answer' });\n  await waitFor(() => second.extUIState.dialogs.size === 0 && second.extUIState.statuses.get('r6-answer')?.statusText === 'native-answer', 'native answer resolution');\n  console.log(JSON.stringify({ result: 'PASS', harness: 'real Pi', source: process.cwd(), proof: ['native loader and private capture', 'native UI request before server reconnect', 'separate server socket native harness replay', 'pending input preserved across socket replacement', 'remote answer resolves native dialog and status'], providerRequests: 0, sessionId: claim.sessionId }));\n})().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {\n  first?.close(); second?.close();\n  if (child.exitCode === null) { const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited; }\n  fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });\n});\n"
+      }
+    ],
+    "browser": {
+      "result": "PASS",
+      "surface": "Unmodified production bundle in actual managed Chromium tab",
+      "base": "http://127.0.0.1:42635",
+      "control": "http://127.0.0.1:42471",
+      "observations": [
+        "Initial live widget/input delivered",
+        "Full page navigation reconnect restored pending dialog and widget with bridge connections still exactly 1 and no socket replay",
+        "Submitted captured answer to request r6-input",
+        "Another full navigation retained widget and did not resurrect answered dialog"
+      ],
+      "answer": {
+        "id": 5,
+        "command": "extension_ui_response",
+        "requestId": "r6-input",
+        "value": "captured answer"
+      },
+      "screenshots": [
+        {
+          "path": "/tmp/omp-sshots-15821ef0ef3cd1dc.webp",
+          "sha256": "cdadbabafdc36efd11e62a3b820928c686c31cc01f2b0b2716b940e52282c1eb"
+        },
+        {
+          "path": "/tmp/omp-sshots-15821f0cec7cd1dd.webp",
+          "sha256": "6fef68d73ffeb0efc6654d8e488565770ffd40b2136271025911bf666d7f79b8"
+        }
+      ]
+    },
+    "pi": {
+      "command": "node .r6-pi-smoke.cjs",
+      "result": "PASS exit 0, 0.74s",
+      "proof": "Real Pi native extension loads; initial widget/status/input on first server socket; replacement BridgeSession connection receives harness-owned UI replay including same pending input; answer resolves native dialog and changes status. No provider calls.",
+      "sessionId": "2026-09-16T17-28-49-592Z_01a0ab43-9ab8-7777-9b54-f3d94d3c5c67"
+    },
+    "lineage": {
+      "command": "npm run test:lineage",
+      "result": "PASS exit 0, 18.88s",
+      "environment": {
+        "PI_DISH_REAL_OMP_BIN": "/home/jyarwood/.local/bin/omp",
+        "PI_DISH_REAL_PRIME_BIN": "/home/jyarwood/.local/bin/prime-agent",
+        "PI_DISH_REAL_BUN_BIN_DIR": "/home/jyarwood/.bun/bin"
+      },
+      "runtime": "OMP 18.1.21; Prime executable printed 0.9.4; structured Prime version field was empty, not represented as separate parsed version proof",
+      "proof": "OMP stream/persist/tree/refusal/close/resume/history/btw; Prime token/worker-client ownership/idle and busy root close+restart/other-root survival/client-exit/manual discovery/refusal/resume; 10 local fake-provider requests"
+    },
+    "cleanup": "Native Pi process gracefully exited and its isolated home removed; browser tab closed; supervised fixture stopped exit143. No live sessions/provider credentials used. After supervised process exit, owner removed the browser fixture home explicitly (root shutdown had exited before its fixture cleanup)."
+  },
+  "implementationArchives": [
+    {
+      "ref": "01a0ab3b-bc72-7243-af00-a43859436359",
+      "path": "/tmp/pi-dish-r6-worker-01a0ab3b-bc72-7243-af00-a43859436359.json",
+      "sha256": "a5accfd23d16b6df9d4ae66879f67daf46e4f6137e94e1c554e0b619e9a9835c",
+      "count": 50,
+      "total": 50,
+      "firstIndex": 0,
+      "lastIndex": 49,
+      "hasMore": false,
+      "contiguous": true
+    },
+    {
+      "ref": "01a0ab3b-b794-753e-b457-61cafad73ae5",
+      "path": "/tmp/pi-dish-r6-worker-01a0ab3b-b794-753e-b457-61cafad73ae5.json",
+      "sha256": "f9fecc0e55e4dbbb5e24426fa2014d1d39b15e02d4d42143703b933db965e494",
+      "count": 62,
+      "total": 62,
+      "firstIndex": 0,
+      "lastIndex": 61,
+      "hasMore": false,
+      "contiguous": true
+    }
+  ],
+  "finalRefinement": "mergedQueue returns the detached adapter snapshot after appending buffer text instead of allocating a second identical {steering,followUp} wrapper. Fallback still detaches both arrays. No extra queue array copy or whole-queue native validation added. Removed the now-weightless shared-core abortCompactionIfRunning forwarding function; both existing abort policy branches call the Pi-private operation directly, keeping their distinct await/fire-and-forget host abort behavior.",
+  "freezeStatus": "Implementation, generated output, consumers and runtime/aggregate proofs complete; source commit next. Not an R6 acceptance attestation; three independent exact-source reviews still required."
+}

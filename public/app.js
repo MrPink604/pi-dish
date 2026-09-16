@@ -1251,11 +1251,18 @@
     if (cwd) params.set("cwd", cwd);
     return "/api/models?" + params.toString();
   }
+  async function setSessionModel(request, endpoint, sessionId, modelId) {
+    const body = { modelId };
+    return decodeMutationResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/model`, body));
+  }
+  async function setSessionThinking(request, endpoint, sessionId, level) {
+    const body = { level };
+    return decodeThinkingResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/thinking`, body));
+  }
+  async function renameSession(request, endpoint, sessionId, name) {
+    return decodeMutationResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/rename`, { name }));
+  }
   function createSessionApi(request) {
-    function mutate(owner, operation, body) {
-      const { host, id } = owner;
-      return sendJson(request, host, `/api/sessions/${encodeURIComponent(id)}/${operation}`, body);
-    }
     return {
       async list(host, path, options2) {
         return decodeSessionList(await jsonResponse(await request(host, path, options2), "HTTP request failed"));
@@ -1264,17 +1271,6 @@
         const { sessionId, harnessId = "pi", cwd } = options2;
         const path = sessionId ? "/api/models?sessionId=" + encodeURIComponent(sessionId) : harnessId !== "pi" ? modelCatalogUrl(harnessId, cwd) : "/api/models";
         return decodeModelCatalog(await jsonResponse(await request(host, path), "Model catalog request failed"));
-      },
-      async setModel(owner, modelId) {
-        const body = { modelId };
-        return decodeMutationResult(await mutate(owner, "model", body));
-      },
-      async setThinking(owner, level) {
-        const body = { level };
-        return decodeThinkingResult(await mutate(owner, "thinking", body));
-      },
-      async rename(owner, name) {
-        return decodeMutationResult(await mutate(owner, "rename", { name }));
       },
       async setEnabledModels(enabledIds) {
         const body = { enabledIds: enabledIds && [...enabledIds] };
@@ -4518,6 +4514,32 @@
     } };
   }
 
+  // src/browser/main-pane.ts
+  function createMainPane(policies) {
+    const takeovers = Object.values(policies.takeovers);
+    const surfaces = Object.values(policies.sessionSurfaces);
+    const sessionOverlays = Object.values(policies.overlays.session);
+    const overlays = policies.overlays;
+    return {
+      beforeTakeover(name) {
+        const entering = policies.takeovers[name];
+        if (entering.clearsSessionSurfaces) overlays.settings();
+        overlays.sidebar();
+        for (const takeover of takeovers) if (takeover !== entering) takeover.close();
+        overlays.bounce();
+        if (entering.clearsSessionSurfaces) {
+          for (const surface of surfaces) if (surface.closeOnTakeover) surface.close();
+        }
+      },
+      beforeSelection(keepBounce) {
+        for (const surface of surfaces) surface.close();
+        for (const close of sessionOverlays) close();
+        for (const takeover of takeovers) takeover.close();
+        if (!keepBounce) overlays.bounce();
+      }
+    };
+  }
+
   // src/browser/session-resume.ts
   function createSessionResume(options2) {
     const { document: document2, sessionState: sessionState2 } = options2, api = createSessionApi(options2.request);
@@ -6024,10 +6046,10 @@
     function owns(owner) {
       return !!owner && !!endpointCurrent(owner) && sessionState2.ownsSelection(owner.selection);
     }
-    function api(owner) {
+    function mutationEndpoint(owner) {
       const endpoint = endpointCurrent(owner);
       if (!endpoint) throw new Error("Host connection changed");
-      return createSessionApi((_host, path, init) => options2.request(endpoint, path, init));
+      return endpoint;
     }
     function mutation(owner, kind) {
       const key = sessionKey(owner.selection.host, owner.selection.id) + ":" + kind, token = Symbol(kind);
@@ -6176,7 +6198,7 @@
       const current = mutation(owner, "model");
       options2.status("Switching model...", "working");
       try {
-        await api(owner).setModel(owner.selection, selector);
+        await setSessionModel(options2.request, mutationEndpoint(owner), owner.selection.id, selector);
         if (!current()) return;
         sessionState2.patchSession(owner.selection.id, { model: selector }, owner.selection.host);
         if (owns(owner)) options2.status("Model switched to " + selector);
@@ -6228,7 +6250,7 @@
       if (!owner || !session || !sessionSupports2(session, "setThinking")) return;
       const current = mutation(owner, "thinking");
       try {
-        const result = await api(owner).setThinking(owner.selection, level);
+        const result = await setSessionThinking(options2.request, mutationEndpoint(owner), owner.selection.id, level);
         if (!current()) return;
         const reported = result.level || level;
         sessionState2.patchSession(owner.selection.id, { thinkingLevel: reported }, owner.selection.host);
@@ -6276,7 +6298,7 @@
       if (!owns(owner) || !session?.isActive || !sessionSupports2(session, "rename") || !value || value === session.name) return;
       const current = mutation(owner, "rename");
       try {
-        await api(owner).rename(owner.selection, value);
+        await renameSession(options2.request, mutationEndpoint(owner), owner.selection.id, value);
         if (current()) sessionState2.patchSession(owner.selection.id, { name: value }, owner.selection.host);
       } catch (error) {
         if (current() && owns(owner)) options2.status("Rename failed: " + errorText(error), "error");
@@ -18260,24 +18282,7 @@ ${restored}`;
     stopFollowing: () => {
       appChrome.stopFollowing();
     },
-    closeViews: (_pending, keepBounce) => {
-      sessionSearch.close();
-      fileViews.closeDiff();
-      fileViews.closeFile();
-      sessionInfo.closeStats();
-      transcriptTree.close();
-      sessionControls.closeModels();
-      sessionControls.closeThinking();
-      sessionInfo.closeArtifacts();
-      usageController.close();
-      searchViewController.close();
-      subagentsController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      if (!keepBounce) bounceController.close();
-    },
+    closeViews: (_pending, keepBounce) => mainPane.beforeSelection(keepBounce),
     closeTerminal: () => terminalController.close(),
     clearExtension: () => extensionUI.clear(),
     clearRelations: () => sessionRelationsController.clear(),
@@ -18419,19 +18424,7 @@ ${restored}`;
     refreshFleet: (...args) => hostDiscovery.loadFleet(...args),
     selectedHost: () => sessionState.currentSession?.host || null,
     settingsOpen: () => document.getElementById("settingsModal").style.display !== "none",
-    closeOtherViews: () => {
-      closeSettingsModal();
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      searchViewController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      bounceController.close();
-      fileViews.closeDiff();
-      fileViews.closeFile();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("recovery"),
     confirm: (message3) => confirm(message3)
   });
   var hostSettings = createHostSettings({
@@ -18474,16 +18467,7 @@ ${restored}`;
       else noteHostFailure(host, error);
     },
     hostChip: (...args) => hostPresentation.chipHtml(...args),
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("search"),
     loadPrevious: () => sidebarLists.load(void 0, { withPrevious: true }),
     selectSession: (id, options2) => sessionView.select(id, options2),
     sessionSearch
@@ -18496,16 +18480,7 @@ ${restored}`;
     sessionState,
     loadPrevious: () => sidebarLists.load(void 0, { withPrevious: true }),
     selectSession: (id, options2) => sessionView.select(id, options2),
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      searchViewController.close();
-      newSessionController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("skills"),
     refine: ({ cwd, draft, host }) => {
       newSessionController.setHostId(host);
       newSessionController.open({ cwd, draft });
@@ -18521,16 +18496,7 @@ ${restored}`;
     hosts: fanoutHosts,
     host: hostEntryFor,
     multiHost: isMultiHost,
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      searchViewController.close();
-      subagentsController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("usage"),
     connection: (host, event, error) => {
       if (event === "success") noteHostReachable(host);
       else if (event === "blocked") noteHostBlocked(host);
@@ -18608,19 +18574,7 @@ ${restored}`;
     request: (host, path, init) => apiTransport.request(host, path, init),
     sessionState,
     endpoint: hostEntryFor,
-    closeOtherViews: () => {
-      closeSettingsModal();
-      sidebarQuery.close();
-      usageController.close();
-      searchViewController.close();
-      newSessionController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-      fileViews.closeDiff();
-      fileViews.closeFile();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("subagents"),
     loadPrevious: () => sidebarLists.load(void 0, { withPrevious: true }),
     selectSession: (id, options2) => sessionView.select(id, options2),
     status: setStatus,
@@ -18772,16 +18726,7 @@ ${restored}`;
     currentSpawn: () => sessionView.spawnId,
     spawns: pendingSessionSpawns,
     models: modelCatalog,
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      searchViewController.close();
-      skillsController.close();
-      routinesController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("newSession"),
     closeSettings: () => harnessSettingsController.close(),
     harnessCacheChanged: () => {
       if (sessionState.currentSession) sessionHeader.update();
@@ -19071,16 +19016,7 @@ ${restored}`;
     config: () => appConfig,
     multiHost: isMultiHost,
     hostChip: (host) => hostPresentation.chipHtml(host),
-    closeOtherViews: () => {
-      sidebarQuery.close();
-      usageController.close();
-      subagentsController.close();
-      searchViewController.close();
-      newSessionController.close();
-      skillsController.close();
-      recoveryController.close();
-      bounceController.close();
-    },
+    closeOtherViews: () => mainPane.beforeTakeover("routines"),
     connection: (host, event, error) => {
       if (event === "success") noteHostReachable(host);
       else if (event === "blocked") noteHostBlocked(host);
@@ -19102,6 +19038,34 @@ ${restored}`;
     refreshSessions: (...args) => sidebarLists.refresh(...args),
     loadPrevious: () => sidebarLists.load(void 0, { withPrevious: true }),
     selectSession: (...args) => sessionView.select(...args)
+  });
+  var mainPane = createMainPane({
+    takeovers: {
+      usage: { close: () => usageController.close() },
+      search: { close: () => searchViewController.close() },
+      subagents: { close: () => subagentsController.close(), clearsSessionSurfaces: true },
+      newSession: { close: () => newSessionController.close() },
+      skills: { close: () => skillsController.close() },
+      routines: { close: () => routinesController.close() },
+      recovery: { close: () => recoveryController.close(), clearsSessionSurfaces: true }
+    },
+    sessionSurfaces: {
+      search: { close: () => sessionSearch.close() },
+      diff: { close: () => fileViews.closeDiff(), closeOnTakeover: true },
+      file: { close: () => fileViews.closeFile(), closeOnTakeover: true }
+    },
+    overlays: {
+      settings: () => closeSettingsModal(),
+      sidebar: () => sidebarQuery.close(),
+      session: {
+        stats: () => sessionInfo.closeStats(),
+        tree: () => transcriptTree.close(),
+        models: () => sessionControls.closeModels(),
+        thinking: () => sessionControls.closeThinking(),
+        artifacts: () => sessionInfo.closeArtifacts()
+      },
+      bounce: () => bounceController.close()
+    }
   });
   createAppBindings({ document, actions: {
     openUsageView: () => usageController.open(),

@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createBridge, PI_EVENT_PROFILE } from "./core.js";
-import { getPiPrivateSession } from "./pi-private.js";
+import { piPrivate } from "./pi-private.js";
 
 export default createBridge({
   harnessId: "pi", name: "Pi", hostVersion: "0.85.x", wrapperVersion: "0.2.0",
@@ -11,7 +11,7 @@ export default createBridge({
     commands: true, reload: true, queueRead: true, queueCancel: true,
     treeRead: true, treeNavigation: true, extensionUI: true,
   },
-  getPrivateSession: getPiPrivateSession,
+  piPrivate,
   selfPrime: true,
   piLifecycleEvents: true,
   standDownUnderForeignHost: true,

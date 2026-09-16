@@ -24,6 +24,7 @@
     "scripts/run-ui-scenarios.ts",
     "test/test-env.ts",
     "test/ui-scenarios/index.ts",
+    "test/native-extensions.smoke.ts",
     "eslint.config.js",
     "playwright.config.ts",
     "server.js",

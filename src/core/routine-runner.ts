@@ -223,7 +223,8 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
    */
   function invoke(routine: Routine, { trigger = 'invoke', source = null, input = null }: RoutineInvokeOptions = {}): RoutineInvocation {
     const at = now();
-    if (store.serializedInputSize(input) > store.MAX_INPUT_BYTES) {
+    const admission = store.RoutineInputAdmission.prepare(input);
+    if (!admission) {
       throw coded(`input must serialize to at most ${store.MAX_INPUT_BYTES} bytes`, 413);
     }
 
@@ -255,7 +256,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       if (trigger === 'schedule' || routine.onBusy === 'skip') {
         if (trigger === 'schedule') {
           return store.createInvocation({
-            routine, trigger, source, input, status: 'skipped', skipReason: 'busy', startedAt: at,
+            routine, trigger, source, input: admission, status: 'skipped', skipReason: 'busy', startedAt: at,
           });
         }
         throw coded(`Routine "${routine.name}" is already running`, 409, { invocation: busy });
@@ -264,7 +265,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     }
 
     const invocation = store.createInvocation({
-      routine, trigger, source, input, delivery, status: 'starting', startedAt: at,
+      routine, trigger, source, input: admission, delivery, status: 'starting', startedAt: at,
     });
     run(routine, invocation, busy).catch((error) => {
       log.error?.(`Routine ${routine.name} invocation failed: ${property(error, 'message')}`);

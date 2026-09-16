@@ -20,6 +20,7 @@ import { PendingRequests } from './pending-requests';
 import { decodeBridgeFrame, isRecord, type ProtocolRecord } from './wire-protocol';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { trackRunningToolCalls } from './running-tool-calls';
+import { createExtensionUIState, reduceExtensionUIState } from './extension-ui-state';
 import { listHarnesses } from './harnesses';
 
 import { validSessionId } from './session-key';
@@ -320,8 +321,6 @@ function refreshRegisteredSession(sessionId: NativeSessionId) {
   return getRegisteredSession(sessionId);
 }
 
-const EXT_UI_DIALOG_METHODS = new Set(['select', 'confirm', 'input', 'editor', 'ask']);
-
 /**
  * A live connection to a bridge socket. Mirrors the surface that server.js
  * previously expected from RPCSession: on(event, cb), prompt, abort, setModel,
@@ -349,7 +348,6 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   declare queueState: unknown;
   declare runningToolCalls: Map<string, RunningToolCall>;
   declare extUIState: ExtensionUIState;
-  declare extUIStateTracked?: boolean;
   declare treeLeafUnsupported?: boolean;
   declare alive: boolean;
   declare sock: net.Socket | null;
@@ -383,7 +381,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     this.runningToolCalls = new Map();
     // Populate this inside _handle(), before connect() resolves, so bridge
     // state replay cannot outrun server-side listeners on the first socket.
-    this.extUIState = { widgets: new Map(), statuses: new Map(), dialogs: new Map() };
+    this.extUIState = createExtensionUIState();
 
     this.alive = false;
     this.sock = null;
@@ -540,22 +538,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
       else if (ev === 'compaction_start') this.compacting = true;
       else if (ev === 'compaction_end') this.compacting = false;
       else if (ev === 'queue_update') this.queueState = frame.data;
-      if (ev === 'extension_ui_request' && data?.method) {
-        if (data.method === 'setWidget') {
-          const key = data.widgetKey || 'default';
-          if (Array.isArray(data.widgetLines) && data.widgetLines.length) this.extUIState.widgets.set(key, data);
-          else this.extUIState.widgets.delete(key);
-        } else if (data.method === 'setStatus') {
-          const key = data.statusKey || 'default';
-          if (data.statusText) this.extUIState.statuses.set(key, data);
-          else this.extUIState.statuses.delete(key);
-        } else if (typeof data.method === 'string' && EXT_UI_DIALOG_METHODS.has(data.method) && data.id) {
-          this.extUIState.dialogs.set(data.id, data);
-        }
-      } else if (ev === 'extension_ui_resolved' && data?.id) {
-        this.extUIState.dialogs.delete(data.id);
-      }
-      else if (ev === 'session_switch') {
+      if (ev === 'session_switch') {
         // The preserved socket now controls a different logical session.
         // Clear session-owned live state before listeners re-key server state;
         // identity fields are updated after emit so listeners can still use
@@ -564,10 +547,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
         this.compacting = false;
         this.queueState = null;
         this.runningToolCalls.clear();
-        this.extUIState.widgets.clear();
-        this.extUIState.statuses.clear();
-        this.extUIState.dialogs.clear();
       }
+      reduceExtensionUIState(this.extUIState, ev, frame.data);
       this.emit(ev, frame.data);
       if (switchedId) {
         this.id = switchedId;

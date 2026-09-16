@@ -71,7 +71,19 @@ export declare function deleteRoutine(ref: unknown): Routine | null;
 /** Persist the fired minute to prevent double-firing after a same-minute restart. */
 export declare function markScheduled(id: unknown, minuteMs: unknown): Routine | null;
 export declare function readInvocations(): RoutineInvocation[];
-export declare function serializedInputSize(input: unknown): number;
+/**
+ * One admission measurement, not an immutable snapshot of caller data.
+ * Only this private brand can carry a prior measurement through the input slot;
+ * the captured reference is also the exact value the ledger receives.
+ */
+export declare class RoutineInputAdmission {
+    #private;
+    private constructor();
+    /** Null means oversized; native serialization errors still escape to the caller. */
+    static prepare(input: unknown): RoutineInputAdmission | null;
+    /** Read the private slot, never a caller-overridable value getter. */
+    static value(admission: RoutineInputAdmission): unknown;
+}
 export declare function createInvocation(fields?: unknown): CreatedRoutineInvocation;
 /** Read-modify-write of one entry. Every status change hits disk. */
 export declare function updateInvocation(id: unknown, patch?: unknown): RoutineInvocation | null;
@@ -106,7 +118,7 @@ export interface RoutineStore {
     activeInvocations: typeof activeInvocations;
     countActive: typeof countActive;
     invocationsBySessionId: typeof invocationsBySessionId;
-    serializedInputSize: typeof serializedInputSize;
+    RoutineInputAdmission: typeof RoutineInputAdmission;
     MAX_INVOCATIONS: typeof MAX_INVOCATIONS;
     MAX_VERSIONS: typeof MAX_VERSIONS;
     MAX_PROMPT: typeof MAX_PROMPT;

@@ -21,6 +21,7 @@ import { createLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
 import { decodeRPCFrame, isRecord, type ProtocolRecord } from './wire-protocol';
 import { trackRunningToolCalls } from './running-tool-calls';
+import { createExtensionUIState, reduceExtensionUIState } from './extension-ui-state';
 import { safeHeaderSessionId } from './session-discovery';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { createSessionObserver, type RecoveryObserver } from './session-recovery';
@@ -63,8 +64,7 @@ class RPCSession {
   declare recoveryObserver: RecoveryObserver;
   declare bounceExecuting?: boolean;
   declare bounceActivityRevision?: number;
-  declare extUIState?: ExtensionUIState;
-  declare extUIStateTracked?: boolean;
+  declare extUIState: ExtensionUIState;
   declare lastStats?: unknown;
 
   constructor(id: NativeSessionId, proc: ChildProcessWithoutNullStreams) {
@@ -92,6 +92,7 @@ class RPCSession {
     // continue forwarding a complete message on every update.
     this.streamingAssistantMessage = null;
     this.runningToolCalls = new Map();
+    this.extUIState = createExtensionUIState();
     this.recoveryBridgeOwned = false;
     this.recoveryInstanceId = crypto.randomUUID();
     this.recoveryStartTime = processIdentity(proc.pid)?.startTime ?? null;
@@ -243,6 +244,7 @@ class RPCSession {
     }
 
     // Stream all agent events
+    reduceExtensionUIState(this.extUIState, frame.event, msg);
     this._emit(frame.event, msg);
     if (msg.type === 'message_end' && isRecord(msg.message) && msg.message.role === 'assistant') {
       this.streamingAssistantMessage = null;

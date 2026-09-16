@@ -313,6 +313,8 @@ test('a busy routine skips with 409, then steers once onBusy says so', async () 
   const refused = await post(`/api/routines/${routine.id}/invoke`, {});
   assert.equal(refused.status, 409, JSON.stringify(refused.body));
   assert.match(refused.body.error, /already running/);
+  const invalidBeforeBusy = await post(`/api/routines/${routine.id}/invoke`, { source: 42 });
+  assert.equal(invalidBeforeBusy.status, 400, 'HTTP source validation precedes the busy guard');
   assert.equal(refused.body.invocation.id, first.body.invocation.id);
   assert.equal((await get(`/api/routines/${routine.id}/invocations`)).body.invocations.length, 1,
     'the refusal is not recorded');
@@ -378,6 +380,8 @@ test('minIntervalSec answers 429 with a retry hint and records nothing', async (
   assert.equal(limited.status, 429, JSON.stringify(limited.body));
   assert.ok(limited.body.retryAfterSec > 0 && limited.body.retryAfterSec <= 300);
   assert.equal(limited.body.lastInvocation.id, first.body.invocation.id);
+  const invalidBeforeRate = await post(`/api/routines/${routine.id}/invoke`, { source: 42 });
+  assert.equal(invalidBeforeRate.status, 400, 'HTTP source validation precedes the rate guard');
   assert.equal((await get(`/api/routines/${routine.id}/invocations`)).body.invocations.length, 1);
 
   await waitForStatus(first.body.invocation.id, 'completed');
@@ -387,7 +391,8 @@ test('minIntervalSec answers 429 with a retry hint and records nothing', async (
 
 test('oversized input is a 413 and a bad source a 400, neither recorded', async () => {
   const { body: { routine } } = await post('/api/routines', definition({ name: 'guard-routine' }));
-  const huge = await post(`/api/routines/${routine.id}/invoke`, { input: { blob: 'x'.repeat(40000) } });
+  const huge = await post(`/api/routines/${routine.id}/invoke`,
+    { input: { blob: 'x'.repeat(40000) }, source: 'x'.repeat(200) });
   assert.equal(huge.status, 413);
   assert.match(huge.body.error, /at most/);
 
@@ -395,8 +400,13 @@ test('oversized input is a 413 and a bad source a 400, neither recorded', async 
   assert.equal(badSource.status, 400);
   assert.match(badSource.body.error, /source must be a string/);
 
+  const badFraming = await post(`/api/routines/${routine.id}/invoke`, { source: 'line\nbreak' });
+  assert.equal(badFraming.status, 400);
+  assert.match(badFraming.body.error, /control characters/);
+
   assert.equal((await get(`/api/routines/${routine.id}/invocations`)).body.invocations.length, 0);
-  assert.equal((await post('/api/routines/ghost-routine/invoke', {})).status, 404);
+  assert.equal((await post('/api/routines/ghost-routine/invoke',
+    { input: { blob: 'x'.repeat(40000) }, source: 42 })).status, 404);
   await del(`/api/routines/${routine.id}`);
 });
 

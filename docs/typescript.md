@@ -154,6 +154,7 @@ The integration lead, not this guide, records milestone acceptance.
 | `wire-protocol.ts` | RPC/bridge envelope validation and response/event distinctions; feature payloads remain unknown |
 | `rpc-session.ts` | RPC child lifecycle, request methods, stream reconstruction and native-id pool |
 | `bridge-session.ts` | Registry discovery/claims, socket handshake and pool, request methods and reconnect snapshots |
+| `extension-ui-state.ts` | One server-side replay reducer, consumed at admitted bridge/RPC ingress before listener emission |
 | `session-recovery.ts` | Durable observation/control separation, saved-byte checkpoints and observer lifecycle |
 | `tmux.ts`, `prime-lifecycle.ts` | Placement persistence, exact process/pane operations and owned Prime supervisor stop |
 | `session-ownership.ts` | Live/source lookup, weak runtime advice, distinct captures, fresh revalidation and saved recovery validation |
@@ -165,12 +166,12 @@ The integration lead, not this guide, records milestone acceptance.
 | `harness-feature-settings.ts` | Harness config/agent responses, serialized global-only partial writes and project overlays |
 | `stt.ts` | Server-side transcription configuration, MIME mapping, multipart transport and safe transport errors |
 | `feature-handlers.ts` | Sixteen named feature response handlers and narrow root observation/persistence ports |
-| `skills.ts`, `skill-feature-handlers.ts` | Actual SDK skill inventory, bounded bundle/catalog estimates, activation NDJSON and current-version coverage projections |
+| `skills.ts`, `skill-feature-handlers.ts` | SDK skill inventory, bundle/catalog estimates, activation NDJSON and coverage reusing one covered-line set per mapped activation |
 | `usage-feature-handler.ts` | Indexed usage summaries, known subtotals/unknown counters, model facets and local-day windows |
 | `model-feature-handlers.ts` | SDK/command/live model discovery, scoped-model persistence and capability-filtered command listings; no delivery |
-| `session-files.ts` | Cached display parser, stable-ID image lookup, search/stats/usage projections and bounded cwd/tail reads |
-| `harness-pricing.ts`, `skill-mining.ts` | Optional pricing refresh/override revisions and whole-file/batch-local skill evidence |
-| `pi-sdk.ts`, `omp-export.ts`, `session-refs.ts` | Real bundled SDK adapters, raw native OMP HTML export and lazy prompt-reference expansion |
+| `session-files.ts` | Cached display parser, policy-separated chronological display/usage model changes, stable-ID lookup and search/stats/usage projections |
+| `harness-pricing.ts`, `skill-mining.ts` | Pricing refresh/override revisions and skill evidence through the established session parser; truncation remains batch-local |
+| `pi-sdk.ts`, `omp-export.ts`, `session-refs.ts` | Bundled SDK adapters, raw native OMP export, shared embedded-data decoding with distinct import/export policies and lazy prompt-reference expansion |
 | `session-read-handlers.ts` | Individual Express read handlers and bound share snapshot/export operations |
 | `pages.ts`, `shares.ts`, `comments.ts` | Distinct live page references, immutable imported share snapshots and anchored comments with ownership/acknowledgement rules |
 | `fleet-artifacts.ts` | Host-scoped artifact reachability mappings and persisted timestamp compatibility |
@@ -191,7 +192,7 @@ The integration lead, not this guide, records milestone acceptance.
 | `running-tool-calls.ts` | Shared bridge/RPC reconnect snapshots |
 | `helper-{values,content,models,query,refs}.ts` | Portable shared primitives, content, model and query/reference behavior |
 | `helper-{format,identity,markdown,types}.ts` | Shared escaping/truncation, metadata text, explicit math-renderer provider and structural contracts |
-| `cron.ts`, `routines.ts`, `session-provenance.ts` | Local-time cron matching, raw routine definition/invocation storage and advisory launch provenance |
+| `cron.ts`, `routines.ts`, `session-provenance.ts` | Local-time cron, owned definition snapshots for mutations, branded one-measurement input admission, raw persistence and advisory launch provenance |
 | `routine-runner.ts`, `routine-handlers.ts` | Actual scheduling, restart reconciliation, invocation lifetime, prompt/ref composition and eight individually mounted HTTP handlers |
 
 The `session-*-contracts.ts` files describe the implemented source, metadata,
@@ -340,10 +341,20 @@ the eight scenario modules in the same order. Its values are `unknown`: the
 runner only enumerates keys. This is not a callable schema or a claim that
 those behavioral JavaScript bodies are checked. Their eventual callable types
 must come from actual checked producers, not declaration-only assertions.
-The bootstrap admits only the two named support paths outside `scripts/`;
-banner-only orphan checks cover their existing output directories without
-classifying other authored test files as generated. Family proof is recorded in
+The bootstrap admits only the explicitly named support/canary paths outside
+`scripts/`; banner-only orphan checks cover their output directories without
+classifying other authored test files as generated. Runner/support proof is in
 [`c1-runners-evidence.json`](c1-runners-evidence.json).
+
+`test/native-extensions.smoke.ts` adds the standalone native mood/share canary
+as the twelfth checked tool body. Its existing opt-in `.js` command retains
+mode 0755 and its shebang; the generated `.d.ts` is 0644. The type-only
+`.d.mjs` specifier selects the actual generated share `.d.mts` through standard
+NodeNext extension substitution, without a runtime alias, new loader or
+re-enrolling the edge-owned implementation. The canary exercises pinned Pi mood
+and real OMP sharing against an isolated local provider. This does not convert
+other native fixtures or tests; see
+[`c1-native-canary-evidence.json`](c1-native-canary-evidence.json).
 
 This is not full C1 completion. Remaining support/fixture implementations,
 observational tools and behavioral test families remain separately gated.
@@ -710,6 +721,12 @@ Portability is checked jointly by core NodeNext, browser Bundler/DOM with
 retains Node ambient types; it does not establish browser compatibility alone.
 Atomic browser output validation and drift checks still cover all five entrypoints.
 
+`main-pane.ts` owns the registered takeover/session-surface/overlay exclusion
+policy used by `app.ts`. Controllers keep their close/dispose/request-generation
+implementations. Recovery and subagents retire additional file/diff/settings
+surfaces; ordinary takeovers retain them, and selection can retain Bounce.
+This is not a router or a replacement for selection and stream ownership.
+
 `new-session.ts` owns the new-session takeover itself, including its view
 lifecycle, selected host/harness, refine draft, workspace listeners and the
 configuration/discovery controllers it composes. `app.js` supplies host/session
@@ -800,6 +817,10 @@ menus, rename editors, field-specific mutation ordering, serving-host preference
 saves and export resource lifetimes. Existing typed selector components retain DOM
 ownership. Tokenless exports navigate; authenticated exports retain captured bytes
 and filenames while status feedback follows the originating selection.
+Mutations use endpoint-explicit operations from `api-client.ts`, carrying the
+captured endpoint and session identity instead of allocating a per-mutation
+`createSessionApi` with an ignored-host closure. That factory now exposes reads
+only; selection, endpoint and latest-operation guards remain in session controls.
 
 Dictation lives in `composer-speech.ts`, which retains permission/take/transcription
 owners and releases streams, listeners and timers on cancellation or disposal.

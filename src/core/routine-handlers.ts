@@ -142,9 +142,8 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
 
   // Definition deletion retains its ledger and never controls its sessions.
   const remove: RoutineHandler = (req, res) => {
-    const existing = routinesStore.getRoutine(req.params.id);
+    const existing = routinesStore.deleteRoutine(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Routine not found' });
-    routinesStore.deleteRoutine(existing.id);
     res.json({ success: true, invocations: routinesStore.countInvocations(existing.id) });
   };
 
@@ -152,8 +151,9 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
     const routine = routinesStore.getRoutine(req.params.id);
     if (!routine) return res.status(404).json({ error: 'Routine not found' });
     const body = req.body || {};
-    const input = property(body, 'input') === undefined ? null : property(body, 'input');
-    if (routinesStore.serializedInputSize(input) > routinesStore.MAX_INPUT_BYTES) {
+    const input = routinesStore.RoutineInputAdmission.prepare(
+      property(body, 'input') === undefined ? null : property(body, 'input'));
+    if (!input) {
       return res.status(413).json({ error: `input must serialize to at most ${routinesStore.MAX_INPUT_BYTES} bytes` });
     }
     let source: string | null = null;

@@ -1,0 +1,293 @@
+{
+  "milestone": "R3",
+  "status": "Complete source/consumer cutover and required runtime proofs; ready for independent review, parent acceptance pending",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r3-skill-coverage",
+  "owner": {
+    "session": "01a0ab39-725b-76e3-8133-95f93e585787",
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinking": "high",
+    "provenance": "Parent pre-prompt verification plus semantic resolve observed omp/openai-codex/gpt-6-astra/thinkingLevel high in assigned cwd"
+  },
+  "scope": "Compute coverage once per mapped record in the existing skills projection owner; no mining/index/browser policy changes",
+  "inventory": {
+    "authoredChanges": [
+      "src/core/skills.ts",
+      "src/core/skill-feature-handlers.ts"
+    ],
+    "generatedOutputs": [
+      "lib/skills.js",
+      "lib/skills.d.ts",
+      "lib/skill-feature-handlers.js",
+      "lib/skill-feature-handlers.d.ts"
+    ],
+    "compiler": "tsconfig.core.json via npm run build:core; no compiler or source-policy exception",
+    "unchangedProducers": [
+      "src/core/skill-mining.ts:mineSkillsFromEntries",
+      "src/core/session-index-data.ts:SkillActivation,decodeSkillRecords,finite",
+      "src/core/session-index.ts:scanSessions,getSkillActivations,getSessionInfo"
+    ],
+    "unchangedConsumers": [
+      "src/core/feature-handlers.ts:createFeatureHandlers",
+      "src/core/server-app.ts:/api/skills,/api/skills/activations,/api/skills/coverage and startup roots",
+      "src/browser/skills-data.ts:decodeSkillCoverage",
+      "src/browser/skills.ts:openSkillDetail,renderSkillDetail,heatClass,refine draft",
+      "skills/pi-dish-skill-refine/SKILL.md:evidence URLs"
+    ],
+    "behaviorChecks": [
+      "test/server.test.js:skills routes",
+      "test/session-index.test.js:skills persistence and append",
+      "test/skill-mining.test.js",
+      "test/browser-skills.test.js",
+      "test/browser/skills.spec.js",
+      "test/ui-scenarios/skills.js",
+      "test/ui-smoke.js:real skill fixture"
+    ],
+    "lsp": "xd://lsp status reports No language servers configured for this project; grounded exact-file reference search used, no mutating LSP",
+    "addedTests": [
+      "test/skills-coverage.test.js:overlap/mtime/targeted/heatmap and whitespace-intro/full-read boundary regressions"
+    ],
+    "changedGeneratedOutputs": [
+      "lib/skills.js",
+      "lib/skills.d.ts",
+      "lib/skill-feature-handlers.js"
+    ],
+    "unchangedGeneratedOutputs": [
+      "lib/skill-feature-handlers.d.ts:public handler signature unchanged"
+    ]
+  },
+  "ownershipContract": {
+    "skills.ts": "Own pure projectSkillCoverage(content, mtimeMs, readonly SkillActivation[]) and section/line derivation; consume actual existing SkillActivation rather than introduce a mining DTO",
+    "skill-feature-handlers.ts": "Retain path coercion/errors, filesystem stat/read, scan/get activation ordering, usage/week rollups, latest session lookup via sessionIndex.getSessionInfo, and HTTP response composition",
+    "crossOwnerChanges": "None. No mining/index/root/browser/shared config/type fixture edits required.",
+    "lifetime": "One transient covered-line Set per mapped record reused for line hits and all section counts; not retained in arrays/cache/output",
+    "algorithm": "Split current content once; preserve section boundary/intro rules. For each mapped record construct its set once, update line hits and section touch counts, discard set. Assemble existing section fractions/heatmap and unread estimate from accumulated counts."
+  },
+  "consumedBehavior": {
+    "identity": "Skill query String coercion and basename SKILL.md validation unchanged; skill is file path, not session authority",
+    "mapping": "Only read/explicit with finite ts >= mtime; targeted counted at all ages but never mapped; null/nonfinite/pre-mtime read/explicit excluded",
+    "ranges": "Explicit covers full file; all respects finite truncatedTo; arrays clamp 1..lineCount and -1 means through EOF; overlaps counted once per read; null/empty/reversed/out-of-file ranges retain empty behavior; fractional numeric boundaries retain existing set semantics",
+    "sections": "1-indexed inclusive ranges; markdown headings 1..6; whitespace-only intro omitted; trailing newline remains a line; empty file remains one line but no visible section; each touched section counted once per mapped read",
+    "output": "Preserve SHA1 first 12 hex chars, lineCount, numMapped/mappedReads alias, targetedTouches, excludedBeforeMtime, unreadTokensEst ceil((untouched line lengths + one per line)/4), flatFullRead, section heading/level/ranges/lineCount/reads/fraction/neverRead/text/hits",
+    "activity": "Usage totals, weekly bins, latest tie ordering, session/cwd counts and topCwd unchanged",
+    "indexSideEffect": "After collecting current records, latest label resolution must retain sessionIndex.getSessionInfo(source); appended latest-session data excluded from enumeration refreshes subsequent NDJSON/index consumers, not retroactively the already-snapshotted response",
+    "opaqueBoundaries": "Raw JSONL/NDJSON ingress validation stays with existing mining/index owners; browser payload remains unknown until existing decoder; no universal schema or reflection policy"
+  },
+  "acceptedEvidence": [
+    "AGENTS.md supplied context",
+    "CLAUDE.md checked server and skills ownership sections",
+    "docs/remaining-migration-plan.md full R3 package, deliberate limits, verification policy and accepted M4 record",
+    "docs/m4-evidence.json parityCorrection and reviewSummary",
+    "docs/m4-review.json final exact-source decisions and parityCorrection"
+  ],
+  "deletionLedger": {
+    "remove": [
+      "handler-local SkillSection and splitSections",
+      "handler-local coveredLines",
+      "handler-local coverage filtering/line-hit/section/unread assembly",
+      "handler crypto import"
+    ],
+    "moveAndSimplify": [
+      "Section and range semantics move into skills.ts; repeated coveredLines(mapped record) calls inside per-section loop disappear rather than being wrapped"
+    ],
+    "retainedChecks": [
+      "Existing skills route/malformed-path/index/mining/browser/host ownership tests unchanged",
+      "No permanent allocation/count/source/wiring assertion"
+    ],
+    "contributorPath": "Before: coverage changes require handler-local parsing/aggregation. After: skills.ts is the only line/section projection owner; handler retains HTTP/index orchestration.",
+    "actualOutcome": [
+      "Handler-local SkillSection, splitSections, coveredLines, all per-line/section/unread derivation and crypto import deleted.",
+      "Mapped array and repeated per-section coveredLines reconstructions deleted; pure skills projection owns counts.",
+      "Single content split feeds section extraction and heatmap; baseline split twice.",
+      "No cache/raw-entry ownership/DTO/host exception introduced. Existing handler latest index accessor retained."
+    ]
+  },
+  "requiredProofs": [
+    "Dynamic before/after work-count probe: line-set construction mappedReads*(1+sections) to mappedReads for varying section counts, with response parity",
+    "Deterministic parity matrix including overlaps, mtime, truncation, explicit/full, null/empty/reversed/fractional ranges, whitespace intro, headings, empty and trailing newline",
+    "Real isolated Express coverage/NDJSON/index append smoke preserving latest refresh side effect",
+    "Actual skills browser scenario and heatmap behavior",
+    "npm run build:core",
+    "npm run check",
+    "npm test",
+    "npm run test:browser",
+    "npm run test:ui:scenarios",
+    "npm run test:ui"
+  ],
+  "verification": [
+    {
+      "command": "npm ci",
+      "result": "PASS",
+      "notes": "Private worktree initially lacked TypeScript; first build failed MODULE_NOT_FOUND. Pinned install restored prerequisite; no dependency changes."
+    },
+    {
+      "command": "npm run build:core",
+      "result": "PASS",
+      "notes": "Only affected core outputs regenerated; no browser, edge or tool source changes."
+    },
+    {
+      "command": "node /tmp/pi-dish-r3-work-count.cjs",
+      "result": "PASS",
+      "sha256": "f11ce973a61d9d4891cef26b96e07a0ba706ab80b0ed40bf2ff7d3b3c020c184",
+      "parityCases": 126,
+      "method": "Execute accepted-baseline generated handler and final generated skills projection in isolated VM contexts. Count Set construction only when native constructor stack includes coveredLines; compare all projection fields as JSON. Baseline code read with git show, never modified.",
+      "work": [
+        {
+          "sections": 1,
+          "mapped": 8,
+          "baselineSets": 16,
+          "finalSets": 8
+        },
+        {
+          "sections": 10,
+          "mapped": 8,
+          "baselineSets": 88,
+          "finalSets": 8
+        },
+        {
+          "sections": 100,
+          "mapped": 8,
+          "baselineSets": 808,
+          "finalSets": 8
+        }
+      ],
+      "cases": "Empty/whitespace/headings/trailing newline/CRLF; overlaps/-1/fractional/reversed/out-of-file/null/empty ranges; full/truncated/explicit; finite boundary/pre-mtime/null/NaN/Infinity timestamps; targeted excluded from map."
+    },
+    {
+      "command": "npm test -- test/skills-coverage.test.js test/session-index.test.js test/skill-mining.test.js test/browser-skills.test.js",
+      "result": "PASS",
+      "passed": 41,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "command": "node /tmp/pi-dish-r3-runtime.cjs",
+      "result": "PASS",
+      "sha256": "0219724dc26d5e2b47ea994fd813f048289349eb8b88f5083dced2474b1e0455",
+      "surface": "Actual Express handlers and session-index with real on-disk Pi JSONL, empty candidate enumeration, sanitizeTestEnv empty credential environment and temporary HOME/tmux directory",
+      "observed": {
+        "beforeCoverageNDJSON": 1,
+        "firstSnapshotMapped": 1,
+        "afterCoverageNDJSON": [
+          "first",
+          "second"
+        ],
+        "subsequentMapped": 2,
+        "latestEntryId": "second",
+        "latestName": "R3 label",
+        "sectionReads": [
+          1,
+          1
+        ],
+        "lineHits": [
+          1,
+          1,
+          1,
+          1,
+          0
+        ]
+      }
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS",
+      "sourcePolicyCount": 258,
+      "details": "ESLint; strict tools/core/browser/edges/extensions/helpers/check/configs; generated drift and modes all matched"
+    },
+    {
+      "command": "npm test",
+      "result": "PASS",
+      "passed": 1029,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 33725.010364
+    },
+    {
+      "command": "node /tmp/pi-dish-r3-browser.cjs + managed Chromium browser interaction",
+      "result": "PASS",
+      "sha256": "4fa154e439eec621576e7c78ca771b9fb2ae6409e2ffc19318506b13cad5f32c",
+      "surface": "Unmodified production server.js and public/app.js, isolated sanitized HOME/real JSONL/skill fixture. Open directory and detail; expand warm/cold sections.",
+      "observed": {
+        "intro": "1/1",
+        "warm": "1/1",
+        "cold": "0/1 never read",
+        "coldHeatLines": 3,
+        "unreadTokensEstimate": 6,
+        "latestLabel": "R3 isolated coverage"
+      },
+      "screenshots": [
+        "/tmp/omp-sshots-15821d86ca54ff5a.webp",
+        "/tmp/omp-sshots-15821d99ff94ff5b.webp"
+      ],
+      "notes": "CSS tab.click helper timed out despite visible row; native Puppeteer page.click succeeded. Reported helper inconsistency to xd://report_issue. Browser and fixture server closed."
+    },
+    {
+      "command": "npm run test:browser",
+      "result": "PASS",
+      "passed": 286,
+      "failed": 0,
+      "skipped": 0,
+      "duration": "4.0m",
+      "notes": "Full suite including actual skills scenarios; first command in combined pipeline completed successfully."
+    },
+    {
+      "command": "npm run test:ui:scenarios",
+      "result": "PASS",
+      "scenarios": [
+        "models",
+        "drafts",
+        "sidebar",
+        "usage",
+        "skills",
+        "routines",
+        "bounce",
+        "mobile"
+      ],
+      "notes": "All eight independent fresh-fixture scenarios printed all good; skills includes actual directory/detail/cold-section/week bins/refine draft."
+    },
+    {
+      "command": "npm run test:ui",
+      "result": "PASS",
+      "durationSeconds": 62.91,
+      "artifact": "artifact://40",
+      "notes": "Full desktop/mobile/skills/refine/RPC restart-close/multihost/same-id ownership completed all good on unchanged source; earlier isolated lifecycle timeout retained in verificationHistory."
+    }
+  ],
+  "limits": [
+    "No live sessions or provider credentials in proofs",
+    "Linux execution only; no macOS claim",
+    "No native Electron/harness implementation changed; no new package execution claim",
+    "Parent alone integrates main and observes exact-main CI before acceptance"
+  ],
+  "review": "Pending source commit/push and parent capacity grant for three exact-model whole-source read-only reviewers",
+  "runtime": {
+    "node": "26.8.2",
+    "platform": "Linux x64",
+    "browser": "Managed Chromium through Playwright and harness browser; exact version to be captured from installed tooling",
+    "npm": "12.0.2",
+    "typescript": "7.0.2",
+    "playwright": "1.63.0",
+    "chromium": "/home/jyarwood/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome",
+    "chromiumVersion": "Google Chrome for Testing 153.0.8010.12"
+  },
+  "cleanup": [
+    "All three disposable probe scripts removed after successful execution and recorded hashes/results.",
+    "Temporary HTTP fixture HOME removed in finally; production browser fixture HOME removed on exit.",
+    "Managed browser closed and isolated supervised server stopped.",
+    "No generated browser/runtime mapping edits; no shared docs/config/mining edits."
+  ],
+  "verificationHistory": [
+    {
+      "command": "npm run test:browser && npm run test:ui:scenarios && npm run test:ui",
+      "result": "Tool deadline 300s interrupted only final full UI after browser 286 and all eight scenarios passed. No failed assertion before interruption. Full UI rerun standalone with 180s deadline."
+    },
+    {
+      "command": "npm run test:ui",
+      "result": "FAIL",
+      "artifact": "artifact://36",
+      "durationSeconds": 71.11,
+      "observed": "All skills and mobile scenarios passed. Unchanged final RPC restart/close section replaced the child successfully, then #resumeBar remained hidden at test/ui-smoke.js:3383 after closing the restarted child. Full standalone rerun launched without source changes; parent informed."
+    }
+  ]
+}

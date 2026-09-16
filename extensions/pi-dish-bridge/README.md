@@ -94,16 +94,22 @@ the manual-review boundaries. Recovery does not configure host autostart.
 2. **Re-emitting unchanged content is safe and encouraged.** The bridge
    dedupes identical `setWidget`/`setStatus` re-emissions and replays current
    state to late-joining clients, so a 1-second render tick costs nothing on
-   the wire and keeps freshly opened browsers current. The pi-dish server
-   additionally remembers each session's widgets/statuses/pending dialogs
-   (`trackExtUIState` in server.js) and replays them to every new SSE
-   connection — switching sessions in the web UI restores this session's
-   elements without the bridge re-emitting.
+   the wire and keeps freshly opened browsers current. Separately, the pi-dish
+   server reduces Bridge/RPC ingress into the session's `extUIState` before
+   emitting events (`src/core/extension-ui-state.ts`). Every new browser SSE
+   connection replays that same state, even when the bridge socket stays silent.
+   The harness's socket replay remains independent and serves reconnecting servers.
 3. **ANSI styling is stripped for the web.** `theme.fg(...)` output renders
    as plain text in pi-dish — fine to use for the TUI, but don't let color
    be the only carrier of meaning.
 4. **Widgets are keyed.** One card per `key`, updated in place; collapse
    state survives updates. Clear with `setWidget(key, [])` or `undefined`.
+
+Pi's private queue arrays, event subscription and captured command receiver belong
+to `pi-private.ts`. Shared bridge core consumes only its queue/subscription/
+compaction/command operations; it owns protocol handling and the compaction send
+buffer, not Pi's private session. Cancellation checks both aligned native queues
+before removing the selected index, preserving duplicate messages and images.
 
 ## One bridge install only
 

@@ -236,12 +236,15 @@ drops its provider slug (`shortModelName`) before it ellipsizes —
 ## Main-pane takeovers are the norm; modals are the exception
 
 Content-rich or exploratory surfaces swap into the main viewing pane and get
-the full width/height: the diff view and file viewer (classes on
-`.session-view`), and the `<main>`-level siblings that aren't session-scoped —
-the usage view (`.main.usage-open`), the advanced-search view
-(`.main.search-open`), and the new-session view (`.main.new-session-open`).
-The three `<main>`-level takeovers are mutually exclusive: opening any closes
-the others. Each has a header row (title, ⟳ where refresh makes sense, ✕),
+the full width/height: the session-scoped diff view and file viewer, and seven
+`<main>`-level takeovers — usage, advanced search, new session, skills, routines,
+subagents and recovery. `src/browser/main-pane.ts` owns their exclusion policy,
+registered once in `app.ts`; controllers retain their own close, disposal and
+request-generation behavior. Opening one takeover closes its peers, not itself.
+Recovery and subagents also retire file/diff/settings surfaces; ordinary
+takeovers preserve those surfaces. Session selection retires the registered
+surfaces and overlays, retaining Bounce only when `keepBounceView` requests it.
+Each takeover has a header row (title, ⟳ where refresh makes sense, ✕),
 closes on Escape and on session switch, and hides the panes beneath via CSS
 `!important` (several carry JS-managed inline display). New surfaces of this
 kind should follow that pattern — a takeover pane, not a modal. Modals stay for small, focused interactions (session
@@ -1468,9 +1471,12 @@ mobile badge shows the timer only). Timing is client-side by design — opening
 a session mid-turn counts from connect.
 
 Extension UI (`extension_ui_request`: widgets, status badges, dialogs) is
-per-session state: the server remembers each live session's current set
-(`trackExtUIState` in `src/core/server-app.ts`) and replays it into every new SSE
-connection; the client wipes the DOM on session switch (`clearExtensionUI`).
+per-session state. `BridgeSession` and `RPCSession` reduce admitted events through
+`src/core/extension-ui-state.ts` before emitting them to listeners. Server
+composition observes lifecycle, removes acknowledged dialogs and replays the
+live maps into each new SSE connection; it does not maintain another reducer.
+The harness process's own `uiState`/socket replay remains separate. The browser
+wipes the rendered DOM on session switch (`clearExtensionUI`).
 Widget collapse state is remembered per session+key across switches.
 Status lines get their own strip under the header badges (`#extUiStatuses`,
 `showExtStatus`), never a badge inside the badge row: a host status is a

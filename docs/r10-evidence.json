@@ -1,0 +1,87 @@
+{
+  "package": "R10",
+  "status": "complete-source-and-proofs-awaiting-independent-review",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r10-endpoint-mutations",
+  "owner": "01a0ab39-942c-779f-b7a5-490b56e98c59",
+  "ownerProvenance": { "semanticResolve": "omp / openai-codex/gpt-6-astra / high / /home/jyarwood/workspace/pi-dish-r10", "verifiedDuringWork": true },
+  "acceptedPrerequisite": { "product": "M0-M7 formally accepted", "combinedSource": "0e8faa1495065e9fcbdb1b70bea784dfb5baae53", "ci": "35123904656", "record": "docs/remaining-migration-plan.md Implementation record — M7" },
+  "sourceInventory": [
+    { "path": "src/browser/api-client.ts", "change": "Export endpoint-explicit setSessionModel, setSessionThinking and renameSession; delete SelectionOwner dependency, factory-local mutate and the three obsolete factory methods. Preserve createSessionApi list/models/setEnabledModels, generic sendJson and transport." },
+    { "path": "src/browser/session-controls.ts", "change": "Replace per-mutation factory/ignored-host closure with endpoint validation and direct operation calls; preserve controller ownership transitions." },
+    { "path": "src/browser/index.ts", "change": "Export all three standalone operations." },
+    { "path": "test/types/browser-api.ts", "change": "Replace obsolete owner/generation mutation fixtures with endpoint/id/string-payload negatives and generation-free positives." },
+    { "path": "test/browser-api.test.js", "change": "Migrate API consumer; replace mocked mutation-forwarding assertions with real HTTP transport/response evidence." },
+    { "path": "test/browser/session-controls.spec.js", "change": "Replace patch-spy ordering assertion with observable original-host state; cover endpoint rotation and changed-base retirement." },
+    { "path": "public/app.js", "change": "Generated browser build." },
+    { "path": "public/browser.js", "change": "Generated browser build." },
+    { "path": "docs/r10-evidence.json", "change": "Freeze and actual proof/deletion/ownership ledger." },
+    { "path": "docs/r10-review.json", "change": "Separate post-review attestation only." }
+  ],
+  "unchangedConsumers": [
+    "src/browser/app.ts: sessionApi.models only; sessionControls request/host ports unchanged; R8 exclusive owner, no app fragment required",
+    "src/browser/session-resume.ts: api.models",
+    "src/browser/sidebar-lists.ts: api.list",
+    "test/types/browser-model-catalog.ts: api.models",
+    "test/types/browser-session-controls.ts: unchanged controller public signatures",
+    "test/browser/session-identity.spec.js: delayed model/thinking/rename responses",
+    "test/browser/api-boundary.spec.js and menu-ownership.spec.js: ingress/menu selection ownership"
+  ],
+  "producerInventory": [
+    "src/core/server-app.ts: POST /api/sessions/:id/model and /rename return success:true; thinking returns thinkingResult(data, requested)",
+    "src/core/session-api.ts: ModelChangeRequest, ThinkingChangeRequest, decodeMutationResult, decodeThinkingResult",
+    "src/browser/host-directory.ts: resolveHost returns explicit endpoint directly; string host resolution remains for reads",
+    "src/browser/session-state.ts: captureSelection, ownsSelection, patchSession retain host/id/generation ownership"
+  ],
+  "contract": {
+    "owner": "src/browser/api-client.ts",
+    "operations": ["setSessionModel(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, modelId: string)", "setSessionThinking(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, level: string)", "renameSession(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, name: string)"],
+    "identity": "Captured endpoint plus route session id address requests. Selection host/generation never becomes a transport requirement.",
+    "coordination": "Parent explicitly approved the proposed standalone signatures, no app.ts fragment/R8 dependency, and API-mutation exports only in shared index.ts. Parent serializes shared exports at integration.",
+    "lsp": "xd://lsp status reports No language servers configured for this project; exact textual exported callers inventoried instead. No mutating LSP."
+  },
+  "behaviorMatrix": [
+    "Controls capture immutable selection plus copied frozen endpoint; rename captures at editor open, model/thinking at action dispatch.",
+    "Dispatch re-resolves original host, requires identical endpoint base, refreshes token only. Changed/missing endpoint rejects dispatch and completion; tokens may rotate without retiring same-base completion.",
+    "Per host/id/field mutation symbols preserve latest operation ordering independently of selection generation.",
+    "Success patches captured original host/id after selection changes; feedback requires current selection ownership.",
+    "POST paths encode route id; request body names modelId/level/name unchanged; JSON decoding and HTTP error status/message unchanged.",
+    "Thinking consumes server-reported nonempty level; model/rename patch submitted values, not arbitrary response fields.",
+    "Capability gates, active-session checks, same-model/name no-op, name trim, disposal, menus, enabled preference debounce and export remain unchanged.",
+    "Enabled models remain serving-instance scoped; read clients retain host targets, model URL and decoder behavior."
+  ],
+  "deliberateDifferences": ["Transport API no longer accepts a SelectionOwner or requires generation; explicit endpoint is mandatory. No intended observable product behavior change."],
+  "deletionLedger": ["Per-mutation createSessionApi allocation and ignored-host request closure", "Factory-local mutate closure and three factory mutation methods", "API SelectionOwner import", "Obsolete type-fixture owner/generation requirements", "Mocked mutation-forwarding test assertions and patch-write spy replaced by observable evidence"],
+  "retainedChecks": ["endpoint base equality and fresh dispatch token", "latest-operation symbol by host/id/field", "selection ownership for UI feedback", "original host/id state patch", "capabilities/disposal", "HTTP status and strict mutation response decoding"],
+  "opaqueBoundaries": ["Raw response JSON remains unknown until existing decoder; no DTO expansion", "Native registry/harness/lifecycle/relay policies are unchanged", "No compiler, loader, host exception or new source-policy entry"],
+  "requiredProofs": ["npm run build:browser", "npm test -- test/browser-api.test.js", "Focused API/control/identity/menu/endpoint browser cases", "Actual isolated production-bundle multi-host UI mutation smoke with temporary homes and fixture bridges", "Throwaway allocation/work probe for per-mutation factory elimination, not permanent implementation-count tests", "npm run check", "npm test", "npm run test:browser", "npm run test:ui:scenarios", "npm run test:ui"],
+  "contributorPath": {
+    "before": "Changing a model/thinking/rename transport required following controls.api(owner), an ignored-host closure, createSessionApi's factory-local mutate and a factory mutation method. Every dispatch allocated the entire factory even though only one method was used.",
+    "after": "Controls validates/refreshes its captured endpoint, then calls the named API operation with request/endpoint/id/value. API owns wire serialization and response decoding; controls alone owns selection/generation/order/patch policy. No new facade or duplicate policy owner."
+  },
+  "validation": [
+    { "command": "npm ci", "result": "798 pinned packages installed; no manifest/lockfile changes. Initial build before installation failed because worktree lacked typescript/bin/tsc; installation restored declared tooling." },
+    { "command": "npm run build:browser", "result": "passed; affected app.js and browser.js regenerated using existing build" },
+    { "command": "npm test -- test/browser-api.test.js", "result": "4 passed, 0 skipped; real loopback HTTP endpoint, route encoding, bearer, model/thinking/rename and malformed/error cases" },
+    { "command": "npm run test:browser -- session-controls.spec.js session-identity.spec.js api-boundary.spec.js menu-ownership.spec.js", "result": "27 passed (20.4s)" },
+    { "command": "npm run check", "result": "passed; 258 compiler-owned sources, no explicit-any exceptions; lint/types/core/browser/edge/tools drift and modes match" },
+    { "command": "npm test", "result": "1027 passed, 0 failures, 0 skips (33.99s)" },
+    { "command": "npm run test:browser", "result": "Initial full run: 287 passed, 1 failure in new credential test. It waited for DOM after mocked rename and an unrelated real transcript/poll refresh could overwrite it. Fixed test to snapshot header and both host rows atomically upon mutation completion; no product change." },
+    { "command": "npm run check && npm run test:browser && npm run test:ui:scenarios && npm run test:ui", "result": "Final run passed: check with 258 governed sources; all 288 browser cases (3.6m), all eight independently isolated scenarios, complete desktop/mobile/multi-host/same-id UI smoke. Combined command 331.70s. Chromium 153.0.8010.12. No skips.", "output": "artifact://39" },
+    { "command": "node /tmp/r10-work-probe.cjs", "result": "300 model/thinking/rename dispatches per version. Baseline: 300 factory calls, 300 original-endpoint requests, 300 patches. Final: 0 factory calls, 300 original-endpoint requests, 300 patches. In-memory instrumentation only; not a timing/heap-size benchmark or permanent test." },
+    { "command": "hub start r10-smoke: node /tmp/r10-runtime-smoke.cjs; browser production desktop/mobile interaction", "result": "Two actual isolated server.js processes, same route id, temporary HOME/socket/tmux roots and sanitized environment; real bridge sockets, no intercepted mutation routes, no fixtureApp global. Desktop peer renamed to R10 peer renamed, model fixture/second, thinking high. Mobile self renamed to R10 self mobile; final real HTTP lists prove self retained fixture/first/low and peer retained fixture/second/high. Both screenshots inspected." }
+  ],
+  "runtimeProof": {
+    "desktopScreenshot": "/tmp/r10-peer-desktop.png",
+    "mobileScreenshot": "/tmp/r10-self-mobile.png",
+    "httpResult": "/tmp/r10-smoke-result.json",
+    "scriptArchive": { "path": "/tmp/r10-runtime-proof-archive.json", "sha256": "91c73a44373013645121964a54e98137327ec5b0b53d05fa37bc2f3ed79adb7c", "contents": "Complete corrected smoke and work-probe scripts plus raw result JSON, each with SHA-256" },
+    "workResult": "/tmp/r10-work-result.json",
+    "fixtureCorrection": "Initial throwaway bridge used set_name instead of actual set_session_name, so its registry reverted successful rename on poll. Corrected only the throwaway fixture and reran all real mutations; final native command log includes set_session_name.",
+    "toolLimit": "Direct browser tab.click timed out despite visible elements; raw Puppeteer page.click via tab.run succeeded. Reported to xd://report_issue. Opening mobile viewport directly avoided coordinate issues after changing an existing tab's raw viewport.",
+    "displayLimit": "Minimal JSONL fixture has no model_change entry; transcript header can project unknown after selection even though authoritative registry/list model remains fixture/first. Same-id isolation was checked against real host lists.",
+    "platform": "Linux x64, Node 26.8.2; no macOS/Electron or real external-provider execution claimed for this browser-only change.",
+    "cleanup": "Both managed browser tabs released; hub stopped fixture process successfully with exit 0; temporary homes removed. Corrected throwaway scripts and raw results archived with hashes, then both executable probe scripts removed."
+  },
+  "review": "Source must be committed/pushed before parent grants capacity for three exact-model durable independent whole-source reviewers."
+}

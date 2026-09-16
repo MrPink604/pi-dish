@@ -58,6 +58,17 @@ test('OMP export data injection rejects malformed native HTML', () => {
   assert.throws(() => injectOmpExportSnapshot(malformed, { systemPrompt: 'x' }), /Could not parse/);
 });
 
+test('native decoding preserves import tolerance without weakening export validation', () => {
+  const data = { header: { id: 'native' }, entries: [{ type: 'novel', privatePayload: [1, null] }] };
+  const encoded = Buffer.from(JSON.stringify(data)).toString('base64');
+  const html = `<html><script data-native="yes" id='session-data'>!${encoded}</script></html>`;
+  assert.deepEqual(readOmpExportData(html, 'import'), data);
+  assert.throws(() => readOmpExportData(html), /invalid embedded session data/);
+  assert.throws(() => injectOmpExportSnapshot(html, { systemPrompt: 'x' }), /invalid embedded session data/);
+  const badShape = `<html><script id="session-data">${Buffer.from('{"header":{},"entries":{}}').toString('base64')}</script></html>`;
+  assert.throws(() => readOmpExportData(badShape, 'import'), /invalid shape/);
+});
+
 test('OMP exporter command failures are reported', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-export-fail-'));
   const sessionFile = path.join(root, 'session.jsonl');

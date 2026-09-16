@@ -3,7 +3,7 @@ import type OmpHost from '@oh-my-pi/pi-coding-agent';
 import mood from '../../extensions/mood.js';
 import piBridge from '../../extensions/pi-dish-bridge/index.js';
 import { createBridge, type BridgeDescriptor } from '../../extensions/pi-dish-bridge/core.js';
-import { getPiPrivateSession } from '../../extensions/pi-dish-bridge/pi-private.js';
+import { piPrivate } from '../../extensions/pi-dish-bridge/pi-private.js';
 import ompBridge, { bridgeDescriptor as ompDescriptor, createHarnessBridge as createOmpBridge } from '../../extensions/pi-dish-bridge-omp/index.js';
 import primeBridge, { bridgeDescriptor as primeDescriptor, createHarnessBridge as createPrimeBridge } from '../../extensions/pi-dish-bridge-prime/index.js';
 import { getOmpNativeSession, patchOmpAgentSession, subscribeOmpNativeProjection } from '../../extensions/pi-dish-bridge-omp/native-state.js';
@@ -35,14 +35,16 @@ if (captured) {
   // @ts-expect-error A captured host's member is unknown, not a modeled Pi method.
   captured.runEphemeralTurn({ promptText: 'question' });
 }
-// @ts-expect-error Private capture is opaque outside the Pi module, never an alternate host SDK facade.
-const fakePiApi: ExtensionAPI = getPiPrivateSession();
+// @ts-expect-error Captured Pi command operations accept only the three bridge-owned commands.
+piPrivate.captureCommand('/arbitrary-command');
+// @ts-expect-error Queue cancellation requires the consumed numeric index, not a wire string.
+piPrivate.cancelQueued('steering', '0', 'queued message');
 // @ts-expect-error Advertised capabilities must be booleans, not truthy strings.
 createBridge({ ...ompDescriptor, capabilities: { compact: 'yes' } });
 // @ts-expect-error Native projection subscription must provide an unsubscribe function.
 createBridge({ ...ompDescriptor, nativeProjection: { get: () => null, subscribe: () => undefined } });
 
-void [piExtensions, nativeExtensions, descriptors, unsubscribe, fakePiApi];
+void [piExtensions, nativeExtensions, descriptors, unsubscribe];
 
 // The alternate context intentionally does not satisfy Pi's compact or thinking
 // contracts. This exercises the checked wrapper seam, including a host switch,
