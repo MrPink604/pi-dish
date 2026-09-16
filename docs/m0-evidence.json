@@ -42,6 +42,7 @@
   ],
   "archiveInspection": {
     "path": "/tmp/pi-dish-m0-baseline-package/linux-unpacked/resources/app.asar",
+    "sha256": "e09af8de537f9c40bbec684ca706521d031ecf8a6dcf6b53139518c2392595a7",
     "observed": "node-pty build/Release/pty.node is unpacked; FFF Linux gnu/musl shared libraries exist in archive listing",
     "limits": "File presence is not native-load proof. M6c must inspect and load native binaries/shared libraries from supported real paths. Baseline package process stopped; temporary runtime HOME removed. Archive retained temporarily for read-only review."
   },
@@ -58,5 +59,38 @@
     "No M6 desktop acceptance, native resource execution or macOS package acceptance claimed",
     "Exact pushed-commit CI/integration acceptance remains parent-owned"
   ],
-  "deletionMoveLedger": { "productionMoves": [], "productionDeletions": [], "runtimeShims": [], "newBehavior": "development-time parser source policy only" }
+  "deletionMoveLedger": { "productionMoves": [], "productionDeletions": [], "runtimeShims": [], "newBehavior": "development-time parser source policy only" },
+  "verifiedImplementationCommit": "9988d5a0256f13ac4025a72c7dbfafb93885077f",
+  "verifiedImplementationTree": "204bf7f3dc768580eecdaa3e7c1b4850c0716d95",
+  "revisionBinding": "Behavior checks/probes precede and apply to this committed implementation. Final contract revision and independent rechecks are bound separately by docs/m0-review.json; later contract/attestation-only commits do not claim new runtime verification.",
+  "reviewIntegrityIncident": {
+    "reviewer": "kimi-code/k3",
+    "sessionRef": "01a0a975-982e-73d3-b85e-83b7b7d174b1",
+    "causeConfirmed": true,
+    "command": "npx asar extract-file /tmp/pi-dish-m0-baseline-package/linux-unpacked/resources/app.asar package.json",
+    "cwd": "/home/jyarwood/workspace/pi-dish-m0",
+    "mechanism": "asar CLI extract-file writes path.basename(filename) into cwd, not stdout; reviewer issued three attempts, then used the read-only extractFile API.",
+    "affectedTrackedFiles": [
+      "package.json"
+    ],
+    "accidentalSha256": "d44ddfdcd64ab1ff0d78f1efe0246bbd799c065d0eca85468094c22a9a463c23",
+    "committedAndRestoredSha256": "5bb70d9f9a2d0b71d53891ae4ea80daa5026d49a8097ec5d9459b2a6aa49551c",
+    "diffSummary": "Packaged metadata removed scripts, build and devDependencies; root main and runtime dependency versions were not changed. Accidental bytes preserved outside worktree, then package.json restored byte-identically from git show 9988d5a:package.json.",
+    "inspection": "After restoration and before intended docs corrections, git status --short --untracked-files=all and git diff --name-only 9988d5a both produced no output. No other tracked/untracked writes discovered; nothing unrelated deleted.",
+    "acceptanceScope": "All original ACCEPT verdicts bind committed 9988d5a bytes, not contaminated working-tree package metadata. Reviewer acknowledged cause and retained committed-source acceptance. Owner validation in this record occurred before the incident and remains unaffected.",
+    "prevention": "Recheck reviewers must use read-only asar API or disposable extraction cwd, never worktree extraction."
+  },
+  "contractCorrection": {
+    "reason": "Include hoisted helpers and full registration-line outer dependencies; explicitly name M4 session-source lookup.",
+    "changedInventoryRows": 24,
+    "addedReferences": 27,
+    "removedSameStatementLocals": [
+      "main (5173)",
+      "shareServer (5218)"
+    ],
+    "totalReferences": 557,
+    "runtimeSourceChange": false,
+    "reviewReconciliation": "Initial reviewer text scan reported 26 rows/29 instances, then corrected its arithmetic to 30 and withdrew three path object-key false positives. Scope-resolved full-line inventory adds 27 outer-name entries across 23 rows, removes same-statement main/shareServer locals in two rows (one overlaps an added row), hence 24 changed rows and 557 total entries. Original findings/dispositions are retained in final review attestation."
+  },
+  "postIncidentVerification": "npm run check passed after byte-identical package restoration. Integrity audit before corrections was clean; subsequent diff/status contained only docs/m0-contracts.md, docs/m0-route-contracts.json and docs/m0-evidence.json. No production or policy source bytes changed from verifiedImplementationCommit."
 }

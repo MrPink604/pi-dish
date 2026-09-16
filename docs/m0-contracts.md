@@ -70,8 +70,11 @@ Resource root is the passed application root, not `lib/` or `src/core/`.
 
 [The route inventory](m0-route-contracts.json) freezes all 115 baseline main/share
 registrations and upgrade registrations in source order, their line ranges,
-package owner and lexically consumed outer names. It is baseline evidence, not a
-runtime router generator. Lines refer only to the named baseline. Root-owned
+package owner and lexically consumed outer names, including hoisted declarations
+after each registration. Dependencies are resolved across the full published line
+range; enclosing calls on the same line (such as `ownServer(app.listen(...))`)
+count, while bindings declared inside that range do not. It is baseline evidence,
+not a runtime router generator. Lines refer only to the named baseline. Root-owned
 helpers called from a domain must become checked in that domain or be supplied
 through the narrow owner port below; imported JS is not implementation coverage.
 
@@ -89,7 +92,7 @@ Libraries owned by a domain are ordinary imports, not injected whole-module bags
 | M2 `routine-handlers.ts` | `createRoutineHandlers`, `RoutineHandlerPorts`, `RoutineHandlers` | Checked routine runner (`invoke`, `nextRunAt` and actual route-consumed methods), launch `validateHarnessPilotSelection`, lazy `SessionRefDependencies` below. Move `composeRoutinePrompt`, `expandRoutineCwd`, `validateRoutinePilot`, `routineStats`, `routineSummary`, `routineErrorResponse` here. Runner continues consuming lifecycle coordinator methods directly, never a second launch authority. |
 | M3 `publication-handlers.ts` | `createPublicationHandlers`, `PublicationPorts`, `PublicationHandlers` | Source lookup/history-pending, catalog for session/path inference, registered/RPC observations for `canonicalKnownSessionId`, M1 export/snapshot, M5 `PublicArtifactRelay`, public base URL and app resource root. Own public share/page handlers, payloads, comment target validation/projection and stores. |
 | M3 `file-handlers.ts` | `createFileHandlers`, `FileHandlerPorts`, `FileHandlers` | `resolveSessionCwd`, source/known-session lookup, root for rendered file resources. Own directory completion, file search/view/content and both diff snapshot/version checks; no lifecycle capabilities granted by cwd. |
-| M4 `feature-handlers.ts` | `createFeatureHandlers`, `FeaturePorts`, `FeatureHandlers` | `buildSessionCatalog`, `enumerateSessionCandidates`, `getSessionModels`, `getLiveSession`, settings read/write, model cache get/set/context invalidation, root resource paths; M1 actual SDK/pricing/mining/index projection imports. Own usage/limits/skills/STT and harness config/agent/model/command listing response bodies plus their command runners. Session mutation/control handlers remain M7 (rename/model/thinking/command/tree/branch). |
+| M4 `feature-handlers.ts` | `createFeatureHandlers`, `FeaturePorts`, `FeatureHandlers` | `buildSessionCatalog`, `enumerateSessionCandidates`, `findSessionSource(id,{exact?})` (including skill-coverage latest-session lookup), `getSessionModels`, `getLiveSession`, settings read/write, model cache get/set/context invalidation, root resource paths; M1 actual SDK/pricing/mining/index projection imports. Own usage/limits/skills/STT and harness config/agent/model/command listing response bodies plus their command runners. Session mutation/control handlers remain M7 (rename/model/thinking/command/tree/branch). |
 | M5 `access-handlers.ts` | `createAccessHandlers`, `AccessPorts`, `AccessHandlers` | Immutable startup token/config; `readDishSettings()` allowed origins, host identity/label/version/capability observations. Own compression/body-parser bypass, CORS/API/ticket/host gates and WS `upgradeAuthorized`; no shared generic policy framework. |
 | M5 `relay-handlers.ts` | `createRelayHandlers`, `RelayPorts`, `RelayHandlers`, `PublicArtifactRelay` | M3 artifact store port below, local page existence lookup, public base URL, M5 access callback. Own raw API proxy, JSON artifact interception, public artifact and comment relay policies, fleet descriptor mapping and peer upgrade. |
 | M5 `terminal-handlers.ts` | `createTerminalHandlers`, `TerminalPorts`, `TerminalHandlers` | `upgradeAuthorized`, `getRegisteredSession`, `getRPCSession`, `findSessionFile`, `resolveSessionCwd`, `locatePiPane`; actual typed tmux `attachPaneArgv/getPrefixKey`, terminal attach/kill imports. Return claimed/unclaimed upgrade callback and shutdown callback for M7 listener wiring. |

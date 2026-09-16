@@ -91,7 +91,8 @@
         "PKG_VERSION",
         "app",
         "hostCapabilities",
-        "hostIdentity"
+        "hostIdentity",
+        "readDishSettings"
       ],
       "owner": "M5"
     },
@@ -139,6 +140,8 @@
       ],
       "consumes": [
         "app",
+        "fleetArtifactHook",
+        "proxyToRemote",
         "remoteHosts"
       ],
       "owner": "M5"
@@ -203,6 +206,7 @@
         "app",
         "hostCapabilities",
         "hostIdentity",
+        "readDishSettings",
         "remoteHosts"
       ],
       "owner": "M5"
@@ -231,6 +235,7 @@
       ],
       "consumes": [
         "app",
+        "buildSessionCatalog",
         "clientSessionRows",
         "filterSessionsByQuery"
       ],
@@ -246,6 +251,7 @@
       ],
       "consumes": [
         "app",
+        "buildSessionCatalog",
         "resolveRefInCatalog",
         "stableSessionRef"
       ],
@@ -354,8 +360,10 @@
       ],
       "consumes": [
         "app",
+        "harnessCommandAvailable",
         "listHarnesses",
-        "normalizeUsageLimit"
+        "normalizeUsageLimit",
+        "runHarnessJsonCommand"
       ],
       "owner": "M4"
     },
@@ -410,6 +418,7 @@
         "coveredLines",
         "crypto",
         "enumerateSessionCandidates",
+        "findSessionSource",
         "fs",
         "getSessionInfo",
         "path",
@@ -464,6 +473,7 @@
       "consumes": [
         "VALID_ENTRY_ID_RE",
         "app",
+        "findSessionSource",
         "imageBlockBytes",
         "readSessionMessageById",
         "readSessionMessages"
@@ -482,6 +492,7 @@
         "BridgeSession",
         "apiIdForCandidate",
         "app",
+        "findSessionSource",
         "getLiveContextUsage",
         "getLiveSession",
         "getRPCSession",
@@ -510,6 +521,7 @@
       "consumes": [
         "app",
         "extractTextContent",
+        "findSessionSource",
         "readSessionMessages"
       ],
       "owner": "M1"
@@ -614,6 +626,7 @@
         "apiIdForCandidate",
         "app",
         "describeRuntime",
+        "findSessionSource",
         "getLiveContextUsage",
         "getRegisteredSession",
         "getSessionStats",
@@ -635,6 +648,7 @@
       "consumes": [
         "app",
         "exportSessionHtml",
+        "findSessionSource",
         "liveSessionHistoryPending",
         "os",
         "path"
@@ -668,6 +682,7 @@
       ],
       "consumes": [
         "app",
+        "findSessionSource",
         "liveSessionHistoryPending",
         "sharePayload",
         "shares"
@@ -729,6 +744,7 @@
       "consumes": [
         "app",
         "fleetPageTokenFor",
+        "proxyCommentToOwner",
         "remoteHosts"
       ],
       "owner": "M5"
@@ -969,6 +985,7 @@
       ],
       "consumes": [
         "app",
+        "findSessionSource",
         "getLiveSession",
         "getRegisteredSession",
         "liveSessionSupports",
@@ -988,6 +1005,7 @@
       "consumes": [
         "BridgeSession",
         "app",
+        "findSessionSource",
         "getLiveSession",
         "liveSessionSupports",
         "parseModelId",
@@ -1006,6 +1024,7 @@
       "consumes": [
         "BridgeSession",
         "app",
+        "findSessionSource",
         "getLiveSession",
         "liveSessionSupports",
         "piSDK",
@@ -1024,6 +1043,7 @@
       "consumes": [
         "BridgeSession",
         "app",
+        "findSessionSource",
         "getLiveSession",
         "liveSessionSupports",
         "navigateLiveOmpTree",
@@ -1455,6 +1475,7 @@
       ],
       "consumes": [
         "app",
+        "findSessionFile",
         "getHarness",
         "getRPCSession",
         "getRegisteredSession",
@@ -1515,6 +1536,7 @@
       ],
       "consumes": [
         "app",
+        "findSessionSource",
         "getHarness",
         "getRPCSession",
         "getRegisteredSession",
@@ -1755,7 +1777,10 @@
         "LOOPBACK",
         "aliasServer",
         "app",
-        "port"
+        "ownServer",
+        "port",
+        "server",
+        "updateAgentUrl"
       ],
       "owner": "M7"
     },
@@ -1772,8 +1797,8 @@
         "PORT",
         "app",
         "ensureLoopbackAlias",
-        "main",
-        "onMainListening"
+        "onMainListening",
+        "ownServer"
       ],
       "owner": "M7"
     },
@@ -1870,8 +1895,7 @@
       ],
       "consumes": [
         "shareApp",
-        "shareHost",
-        "shareServer"
+        "shareHost"
       ],
       "owner": "M7"
     },
@@ -1885,6 +1909,7 @@
       ],
       "consumes": [
         "PROXY_TERMINAL_PATH_RE",
+        "proxyUpgrade",
         "remoteHosts",
         "upgradeAuthorized",
         "upgradeHandlers"
