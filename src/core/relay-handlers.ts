@@ -1,4 +1,4 @@
-import type { IncomingMessage, OutgoingHttpHeaders } from 'http';
+import type { ClientRequest, IncomingMessage, OutgoingHttpHeaders } from 'http';
 import type { Duplex } from 'stream';
 import hostIdentity = require('./host-identity');
 import * as remoteHosts from './remote-hosts';
@@ -52,6 +52,44 @@ const HOP_BY_HOP_HEADERS: Record<string, true> = {
   trailer: true, upgrade: true, 'proxy-authenticate': true,
 };
 
+// The request promise includes SSH setup. Arm only once it yields a request;
+// a response clears the deadline permanently, including for idle SSE streams.
+function relayFirstResponse(
+  opening: Promise<ClientRequest>,
+  timeoutMs: number,
+  send: (upstream: ClientRequest) => void,
+  respond: (peerRes: IncomingMessage) => void,
+  onFailure: (reason: unknown) => void,
+  classifyError: ((error: unknown) => unknown) | null,
+): void {
+  let settled = false;
+  const fail = (reason: unknown) => {
+    if (settled) return;
+    settled = true;
+    onFailure(reason);
+  };
+  const error = (cause: unknown) => fail(classifyError ? classifyError(cause) : undefined);
+  opening.then((upstream) => {
+    const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail('timeout'); }, timeoutMs);
+    upstream.on('error', (cause) => { clearTimeout(timer); error(cause); });
+    upstream.on('response', (peerRes) => {
+      clearTimeout(timer);
+      if (settled) return peerRes.resume();
+      settled = true;
+      respond(peerRes);
+    });
+    send(upstream);
+  }).catch(error);
+}
+
+function copyRelayResponseHeaders(peerRes: IncomingMessage, res: TransportResponse): void {
+  for (const [key, value] of Object.entries(peerRes.headers)) {
+    const lower = key.toLowerCase();
+    if (HOP_BY_HOP_HEADERS[lower] === true || lower.startsWith('access-control-')) continue;
+    res.setHeader(key, value!);
+  }
+}
+
 export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   const { fleetArtifacts } = ports;
   const rawApi: TransportHandler = (req, res) => {
@@ -63,21 +101,9 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   };
 
   function proxyToRemote(remote: Remote, req: TransportRequest, res: TransportResponse, hook: ArtifactHook | null = null) {
-    let settled = false;
     const unreachable = (reason: unknown) => {
-      settled = true;
       res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
     };
-    const fail = (reason: unknown) => {
-      if (settled) return;
-      // Every fail() here is transport-class (the dial rejected, the socket
-      // errored, or nothing arrived inside the first-byte window) — an HTTP
-      // answer from the peer, 401 and 500 included, leaves via 'response'. So
-      // this is real traffic telling the breaker what a probe would have.
-      remoteHosts.noteTransportFailure(remote, reason);
-      unreachable(reason);
-    };
-
     // A peer already known down within its backoff slot answers instantly. A
     // sleeping tailscale machine black-holes the connect rather than refusing
     // it, so dialing anyway costs the whole first-byte timer on every request;
@@ -88,22 +114,16 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     // A hooked response is read, not relayed byte for byte, so the peer must
     // not compress it.
     const headers = hook ? { ...req.headers, 'accept-encoding': 'identity' } : req.headers;
-    remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers })
-      .then((upstream) => {
-        // Bounds time-to-first-byte only: a proxied SSE stream may then idle
-        // for minutes, and an idle-socket timeout would cut it.
-        const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail('timeout'); }, PROXY_RESPONSE_TIMEOUT_MS);
-        upstream.on('error', (e) => { clearTimeout(timer); fail(remoteHosts.errorCode(e)); });
-        upstream.on('response', (peerRes) => {
-          clearTimeout(timer);
-          if (settled) return peerRes.resume();
-          settled = true;
+    relayFirstResponse(
+      remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers }),
+      PROXY_RESPONSE_TIMEOUT_MS,
+      (upstream) => {
+        req.on('aborted', () => { try { upstream.destroy(); } catch {} });
+        req.pipe(upstream);
+      },
+      (peerRes) => {
           res.status(peerRes.statusCode!);
-          for (const [key, value] of Object.entries(peerRes.headers)) {
-            const lower = key.toLowerCase();
-            if (HOP_BY_HOP_HEADERS[lower] === true || lower.startsWith('access-control-')) continue;
-            res.setHeader(key, value!);
-          }
+          copyRelayResponseHeaders(peerRes, res);
           if (hook && String(peerRes.headers['content-type'] || '').includes('application/json')) {
             // The body is about to change length (and may be rewritten).
             res.removeHeader('Content-Length');
@@ -114,11 +134,15 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
           if (String(peerRes.headers['content-type'] || '').startsWith('text/event-stream')) res.flushHeaders();
           peerRes.pipe(res);
           res.on('close', () => { try { peerRes.destroy(); } catch {} });
-        });
-        req.on('aborted', () => { try { upstream.destroy(); } catch {} });
-        req.pipe(upstream);
-      })
-      .catch((e) => fail(remoteHosts.errorCode(e)));
+      },
+      (reason) => {
+        // Only transport failures reach here; peer HTTP statuses do not
+        // update the breaker.
+        remoteHosts.noteTransportFailure(remote, reason);
+        unreachable(reason);
+      },
+      remoteHosts.errorCode,
+    );
   }
 
   // Buffering a proxied response is the documented exception to the byte-relay
@@ -297,21 +321,11 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     // (an older peer ignores the header and its overlay simply stays inert).
     if (kind === 'page' && !annotate) headers[PAGE_COMMENTS_HEADER] = 'off';
 
-    let settled = false;
-    const fail = () => {
-      if (settled) return;
-      settled = true;
-      res.status(502).type('text/plain').send('Host unavailable');
-    };
-
-    remoteHosts.request(remote, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', path: peerPath, headers })
-      .then((upstream) => {
-        const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail(); }, PUBLIC_ARTIFACT_TIMEOUT_MS);
-        upstream.on('error', () => { clearTimeout(timer); fail(); });
-        upstream.on('response', (peerRes) => {
-          clearTimeout(timer);
-          if (settled) return peerRes.resume();
-          settled = true;
+    relayFirstResponse(
+      remoteHosts.request(remote, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', path: peerPath, headers }),
+      PUBLIC_ARTIFACT_TIMEOUT_MS,
+      (upstream) => upstream.end(),
+      (peerRes) => {
           if (peerRes.statusCode === 404) {
             // Revoked on the owner: the mapping is dead, and this reader gets
             // the same bare 404 an unknown token gets. Only the token's own
@@ -344,17 +358,13 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
             return notFound();
           }
           res.status(peerRes.statusCode!);
-          for (const [key, value] of Object.entries(peerRes.headers)) {
-            const lower = key.toLowerCase();
-            if (HOP_BY_HOP_HEADERS[lower] === true || lower.startsWith('access-control-')) continue;
-            res.setHeader(key, value!);
-          }
+          copyRelayResponseHeaders(peerRes, res);
           peerRes.pipe(res);
           res.on('close', () => { try { peerRes.destroy(); } catch {} });
-        });
-        upstream.end();
-      })
-      .catch(fail);
+      },
+      () => { res.status(502).type('text/plain').send('Host unavailable'); },
+      null,
+    );
   }
 
   const hosts: TransportHandler = async (_req, res) => {
@@ -423,21 +433,14 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       headers['content-length'] = String(Buffer.byteLength(payload));
     }
 
-    let settled = false;
-    const fail = (reason: unknown) => {
-      if (settled) return;
-      settled = true;
-      res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
-    };
-
-    remoteHosts.request(remote, { method: req.method, path: `/api/comments${rest}`, headers })
-      .then((upstream) => {
-        const timer = setTimeout(() => { try { upstream.destroy(); } catch {} fail('timeout'); }, PROXY_RESPONSE_TIMEOUT_MS);
-        upstream.on('error', (e) => { clearTimeout(timer); fail(remoteHosts.errorCode(e)); });
-        upstream.on('response', (peerRes) => {
-          clearTimeout(timer);
-          if (settled) return peerRes.resume();
-          settled = true;
+    relayFirstResponse(
+      remoteHosts.request(remote, { method: req.method, path: `/api/comments${rest}`, headers }),
+      PROXY_RESPONSE_TIMEOUT_MS,
+      (upstream) => {
+        if (payload !== null) upstream.write(payload);
+        upstream.end();
+      },
+      (peerRes) => {
           let raw = '';
           let overflow = false;
           peerRes.setEncoding('utf8');
@@ -453,11 +456,10 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
             if (!overflow) res.status(peerRes.statusCode!).type('application/json').send(raw || '{}');
           });
           peerRes.on('error', () => { try { res.end(); } catch {} });
-        });
-        if (payload !== null) upstream.write(payload);
-        upstream.end();
-      })
-      .catch((e) => fail(remoteHosts.errorCode(e)));
+      },
+      (reason) => { res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason }); },
+      remoteHosts.errorCode,
+    );
   }
 
   // Proxied terminals work even when this host's own terminal feature is off:
