@@ -1,0 +1,149 @@
+{
+  "milestone": "M0",
+  "milestoneStatus": "All three exact-model reviewers accept final implementation revision; ready for parent integration and acceptance decision, not milestone acceptance.",
+  "baseline": "37402f03294b51eeec14f893df1f7c72331301fa",
+  "implementationCommit": "9988d5a0256f13ac4025a72c7dbfafb93885077f",
+  "finalReviewedRevision": "5305af19fb674a624a17a267812bb3ed436089c6",
+  "recordKind": "Review-attestation-only followup; no source/contract mutation after final reviewed revision",
+  "branch": "migration/m0-contracts",
+  "worktree": "/home/jyarwood/workspace/pi-dish-m0",
+  "identityVerification": "Each durable session spawned with --harness omp --model <exact provider/model>; CLI resolve semantic session metadata confirmed harness, actual canonical model, cwd and thinking level. No substitutions.",
+  "reviews": [
+    {
+      "sessionRef": "01a0a975-9cd1-70b1-972f-75d8f58031bf",
+      "model": "zai/glm-5.3",
+      "harness": "omp",
+      "thinkingLevel": "max",
+      "cwd": "/home/jyarwood/workspace/pi-dish-m0",
+      "initialRevision": "9988d5a0256f13ac4025a72c7dbfafb93885077f",
+      "initialVerdict": "ACCEPT",
+      "originalFindings": [
+        {
+          "severity": "LOW",
+          "path": "scripts/check-source-policy.mjs:72",
+          "finding": "Missing negative-fixture paths report generic missing compiler-owned source rather than dedicated stale-fixture text.",
+          "disposition": "Intentionally unchanged: fails closed; no behavior defect."
+        },
+        {
+          "severity": "LOW",
+          "path": "scripts/check-source-policy.mjs:70",
+          "finding": "programs.find/getSourceFileNames membership scanning is O(files x sources).",
+          "disposition": "Intentionally unchanged at current 196 sources; no speculative optimization."
+        },
+        {
+          "severity": "INFO",
+          "finding": "ExtensionAPI is a real SDK type-only export, not runtime value; consumes includes receiver names.",
+          "disposition": "Accurate declaration/lexical inventory scope retained."
+        }
+      ],
+      "finalRevision": "5305af19fb674a624a17a267812bb3ed436089c6",
+      "finalVerdict": "ACCEPT",
+      "finalRecheck": "Confirmed exactly three docs paths differ, all 115 route identities unchanged, +27/-2 entries and 557 total, all 13 added names genuinely outer, M4 lookup explicit, commit/tree/archive/restoration hashes match. Prior LOW findings remain non-blocking; no new source defect.",
+      "limitations": [
+        "No formatter/linter/build/suite rerun on docs-only final revision.",
+        "Attestation forward reference supplied by this followup.",
+        "Initial full npm ci/backend/browser/runtime results remain owner evidence; reviewer independently ran targeted policy tests and read-only archive probes."
+      ],
+      "finalMetadataVerified": true,
+      "transcriptCommand": "node ~/.omp/agent/skills/pi-dish-sessions/scripts/pi-dish-sessions.js read 01a0a975-9cd1-70b1-972f-75d8f58031bf"
+    },
+    {
+      "sessionRef": "01a0a975-a19e-70e2-b1bf-cbd031401953",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "cwd": "/home/jyarwood/workspace/pi-dish-m0",
+      "initialRevision": "9988d5a0256f13ac4025a72c7dbfafb93885077f",
+      "initialVerdict": "ACCEPT",
+      "originalFindings": [
+        {
+          "severity": "LOW",
+          "path": "docs/m0-route-contracts.json; docs/m0-contracts.md M4 row",
+          "finding": "Initial report: hoisted helper omissions in 26/115 entries (14 names/29 instances); M4 omitted explicit findSessionSource port.",
+          "sourcePremiseCorrection": "Reviewer corrected arithmetic to 30 instances and withdrew three object-key path false positives. Scope-resolved full-line correction is 27 added outer-name entries over 23 rows, plus removal of same-statement main/shareServer locals; 24 rows change, total 557.",
+          "disposition": "Fixed in 5305af19fb674a624a17a267812bb3ed436089c6; M4 lookup explicitly named."
+        },
+        {
+          "severity": "LOW",
+          "path": "docs/m0-evidence.json",
+          "finding": "Evidence lacked commit/tree binding and retained archive was at ephemeral /tmp path.",
+          "disposition": "Bound initial verified implementation/tree, archived SHA256 and durable observation summaries; final revision bound by this attestation. Archive path explicitly temporary, not durable artifact hosting."
+        },
+        {
+          "severity": "INFO",
+          "path": "source-policy.json; scripts/check-source-policy.mjs",
+          "finding": "No configurable type-utility exception mechanism despite plan permitting reviewed exceptions.",
+          "disposition": "No exceptions exist; intentionally hard-fail. A future legitimate exception requires a named reviewed gate change, not a preemptive escape hatch."
+        }
+      ],
+      "finalRevision": "5305af19fb674a624a17a267812bb3ed436089c6",
+      "finalVerdict": "ACCEPT",
+      "finalTree": "947281b57a110765954b4b64dfc5f2f45070456c",
+      "finalRecheck": "Verified committed-object diff is exactly three docs files, 115 route identities unchanged, 557 outer-name entries (+27/-2), M4 source lookup explicit, archive/accidental/restored hashes match; original F1/F2 fixed. No residual blocking findings.",
+      "limitations": [
+        "No lint/build/test rerun on docs-only recheck.",
+        "Independent consumes cross-check approximate rather than eslint-scope, agreeing on all corrected names.",
+        "Attestation file was a forward reference at reviewed revision; this followup supplies it.",
+        "Accidental-bytes provenance verified through read-only archive API and hashes; preserved scratch-copy path not inspected."
+      ],
+      "finalMetadataVerified": true,
+      "transcriptCommand": "node ~/.omp/agent/skills/pi-dish-sessions/scripts/pi-dish-sessions.js read 01a0a975-a19e-70e2-b1bf-cbd031401953"
+    },
+    {
+      "sessionRef": "01a0a975-982e-73d3-b85e-83b7b7d174b1",
+      "model": "kimi-code/k3",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "cwd": "/home/jyarwood/workspace/pi-dish-m0",
+      "initialRevision": "9988d5a0256f13ac4025a72c7dbfafb93885077f",
+      "initialVerdict": "ACCEPT",
+      "originalFindings": [],
+      "finalRevision": "5305af19fb674a624a17a267812bb3ed436089c6",
+      "finalVerdict": "ACCEPT",
+      "finalRecheck": "Confirmed committed/restored package hash, clean worktree, implementation tree/archive hash, incident attribution, unchanged 115 route identities, 24 changed rows (+27/-2, total 557), all added names lexically present and M4 source lookup explicit; no new findings.",
+      "limitations": [
+        "No npm run check or suites rerun at docs-only revision.",
+        "Added names verified lexically rather than independently scope-resolved.",
+        "Archive rehashed, not re-enumerated.",
+        "Initial reviewer violated read-only instruction by asar CLI extraction; admitted and reconciled incident, then used read-only recheck operations."
+      ],
+      "finalMetadataVerified": true,
+      "transcriptCommand": "node ~/.omp/agent/skills/pi-dish-sessions/scripts/pi-dish-sessions.js read 01a0a975-982e-73d3-b85e-83b7b7d174b1"
+    }
+  ],
+  "honestLimitations": [
+    "Parent integration/acceptance and exact pushed-commit CI remain pending.",
+    "Reviewer Kimi accidentally overwrote package.json during baseline archive inspection; acknowledged cause, preserved evidence, byte-identical restoration, clean integrity audit and post-restoration check recorded in docs/m0-evidence.json. All verdicts bind committed bytes.",
+    "Original reviewers ran targeted read-only/scratch policy/archive probes, not owner-wide validation. Their exact claims/limits are retained in durable session transcripts.",
+    "No M1-M7 implementation, R simplification, working packaged desktop/native feature proof or macOS acceptance claimed."
+  ],
+  "proposedM0Record": {
+    "sourceCommits": [
+      "9988d5a0256f13ac4025a72c7dbfafb93885077f",
+      "5305af19fb674a624a17a267812bb3ed436089c6"
+    ],
+    "owner": "01a0a963-f44d-71d2-b8d6-fe6d7807db69",
+    "contracts": "docs/m0-contracts.md",
+    "routeOrderingAndConsumedPorts": "docs/m0-route-contracts.json",
+    "runtimeManifestTarget": "docs/m0-runtime-manifest.json",
+    "actualVerification": "docs/m0-evidence.json",
+    "deletions": [],
+    "moves": [],
+    "retainedBoundaries": "Existing JS/server/native implementations pending M1-M7; native extension any remains explicitly M6a-owned; package main/resources/embedded-Node defects remain M6c obligations."
+  },
+  "integrityEvidence": {
+    "restorationSource": "9988d5a0256f13ac4025a72c7dbfafb93885077f:package.json",
+    "removedTopLevelKeys": [
+      "build",
+      "devDependencies",
+      "scripts"
+    ],
+    "addedTopLevelKeys": [],
+    "changedRetainedTopLevelKeys": [],
+    "accidentalCopy": "/tmp/dish-m0-review-integrity-hl49kq13/extracted-package.json",
+    "scope": "Package extraction incident only, not an intended source change; see hash/command/provenance in docs/m0-evidence.json."
+  },
+  "finalReviewedTree": "947281b57a110765954b4b64dfc5f2f45070456c",
+  "attestationDate": "2026-09-16",
+  "attestationScope": "This record alone is added after the final reviewed revision. No previously reviewed source, policy, dependency, test, contract or evidence file changes in this attestation commit."
+}
