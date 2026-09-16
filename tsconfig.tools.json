@@ -23,6 +23,7 @@
     "scripts/run-tests.ts",
     "scripts/run-ui-scenarios.ts",
     "test/test-env.ts",
-    "test/ui-scenarios/index.ts"
+    "test/ui-scenarios/index.ts",
+    "test/native-extensions.smoke.ts"
   ]
 }

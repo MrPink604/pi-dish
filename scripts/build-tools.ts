@@ -24,11 +24,13 @@ const executables: Record<string, true | undefined> = {
   'scripts/build-edges.ts': true,
   'scripts/check-source-policy.mts': true,
   'scripts/run-tests.ts': true,
+  'test/native-extensions.smoke.ts': true,
 };
 const outputs = new Map<string, { source: string; executable: boolean }>();
 for (const source of config.files as string[]) {
   if ((!/^scripts\/[^/]+\.(?:ts|mts)$/.test(source)
-      && source !== 'test/test-env.ts' && source !== 'test/ui-scenarios/index.ts')
+      && source !== 'test/test-env.ts' && source !== 'test/ui-scenarios/index.ts'
+      && source !== 'test/native-extensions.smoke.ts')
       || /\.d\.(?:ts|mts)$/.test(source)) {
     throw new Error(`Unsupported tool source: ${source}`);
   }
