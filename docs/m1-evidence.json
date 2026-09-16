@@ -1,6 +1,6 @@
 {
   "milestone": "M1",
-  "status": "Owner implementation verified; producer candidate, not integration acceptance",
+  "status": "Owner implementation verified and all three reviewers ACCEPT exact source9d47ed6; not integration acceptance",
   "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "branch": "migration/m1-reads",
   "worktree": "/home/jyarwood/workspace/pi-dish-m1",
@@ -147,8 +147,39 @@
       "result": "exit0; OMP18.1.21; commands21/models55; actual streamed turn, persisted assistant, live tree read, inactive tree refusal, close200, same-route resume/history read and btw answer pass; two localhost fake-provider requests, no paid credentials"
     }
   ],
-  "sourceCommits": [],
-  "reviewers": [],
+  "sourceCommits": [
+    {
+      "commit": "6b10e54d5cd15594a5c58e9abd4f02f6e71a7a8e",
+      "role": "Checked producers, handlers, generated outputs and consumer cutover; no server root patch"
+    },
+    {
+      "commit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "role": "Private root mount/body-deletion proposal; combined source revision exercised by recorded validation"
+    }
+  ],
+  "reviewers": [
+    {
+      "session": "01a0a9ac-9115-72c8-9bd7-995f642457a5",
+      "model": "zai/glm-5.3",
+      "harness": "omp",
+      "verdict": "ACCEPT",
+      "sourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16"
+    },
+    {
+      "session": "01a0a9ac-9629-7271-8f6a-39e3ba7e7337",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "harness": "omp",
+      "verdict": "ACCEPT",
+      "sourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16"
+    },
+    {
+      "session": "01a0a9ac-8cc9-70f7-8746-9ff05d3b5c96",
+      "model": "kimi-code/k3",
+      "harness": "omp",
+      "verdict": "ACCEPT",
+      "sourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16"
+    }
+  ],
   "acceptanceOwner": "Parent integration controller; no acceptance claimed here",
   "compilerCutover": {
     "program": "tsconfig.core.json",
@@ -234,5 +265,9 @@
     "Packaged Electron/native archive proof remains M6; actual checkout SDK and OMP native export executed.",
     "Parent integrated exact-commit CI and milestone acceptance remain pending."
   ],
-  "cleanup": "Isolated smoke server stopped exit143, browser tab closed; temporary smoke script/fixtures removed after recording results."
+  "cleanup": "Isolated smoke server stopped exit143, browser tab closed; temporary smoke script/fixtures removed after recording results.",
+  "reviewRecord": "docs/m1-review.json",
+  "contractAmendment": "de0496c9ec09a18d21a7d970c67beab9550cb897",
+  "revisionBinding": "All recorded runtime checks apply to combined source9d47ed6. Subsequent review/evidence attestation is documentation-only, not newly reviewed runtime source. Producer-only private transfers are parent-approved; the root proposal and package acceptance remain parent-owned.",
+  "pendingSourceCoordination": "M2 raw-ledger SourceLookup.route unknown followup proposed with concrete existing validator-chain evidence; parent hold not yet released. No such source edit is included in9d47ed6 or claimed reviewed by this record."
 }
