@@ -84,7 +84,7 @@ controller/port observations.
 | Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
 | Server application and feature modules | M1–M5 and M7 accepted | Actual implementations and composition are checked; the policy-free root preserves the synchronous native server export. Required R simplifications remain open. |
 | Harness extensions and Electron shell | M6 accepted on Linux x64 | Strict edge programs and generated outputs, installed CLIs, real development/packaged Electron and native harness execution passed. macOS delivery is unverified; startup simplification remains R7. |
-| Test and tooling closure | C1 tools checkpoint accepted; C1/C2 open | Checked build/bootstrap/config bodies and exact-source CI are complete. Runner/support and behavioral-test families still require their own cutovers; R12 owns replacing the vendor loader. |
+| Test and tooling closure | C1 tools and runner/support checkpoints accepted; C1/C2 open | Checked build/bootstrap/config and runner/support bodies have exact-source CI proof. Behavioral tests, remaining fixtures/tools and scenario bodies still require their cutovers. R12's handwritten vendor loader is removed. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
@@ -250,8 +250,18 @@ repository-closure phases remain open.
 The [M7 record](docs/remaining-migration-plan.md#implementation-record--m7)
 and [C1 tools record](docs/remaining-migration-plan.md#implementation-record--c1-tools-checkpoint)
 separate exact-source reviews, parent runtime/native-desktop proof and remaining
-closure scope. M0–M7 product migration is accepted. C1 is not complete from this
-tools-only checkpoint; all R packages and final repository closure remain required.
+closure scope. M0–M7 product migration is accepted. C1 is not complete from its
+bounded checkpoints; the remaining R packages and final repository closure are required.
+
+**R5, R12 and the C1 runner/support checkpoint accepted (2026-09-16):**
+main `6f521cc` passed [all five exact-commit CI jobs](https://github.com/MrPink604/pi-dish/actions/runs/35137099031).
+The [implementation ledger](docs/remaining-migration-plan.md#implementation-record--r5)
+records parent HTTP/WebSocket/SSE proof, real offline highlighting, 1,027 backend
+tests, 286 browser cases and both complete UI suites. Relay mechanics no longer
+duplicate settlement/header handling, authorization policies remain separate,
+and the handwritten highlight loader is replaced by the pinned bundler.
+This acceptance does not include R1/R8 or their dependent packages, the other
+unfinished R packages, or full C1/C2 closure.
 
 1. **Product migration accepted (M0–M7).** Actual session-read/SDK/projection,
    routine, publication/file, feature, fleet/terminal, runtime-edge and server

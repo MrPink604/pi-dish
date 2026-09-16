@@ -1306,3 +1306,125 @@ for all three M7 reviewers, all three C1 tools reviewers and the M7 owner. Histo
 remain available; the C1 owner continues the remaining families. The exact-source
 CI observer exited successfully; its throwaway script was removed and its complete
 run/job/step evidence retained in `/tmp/pi-dish-parent-m7-c1-ci-result.json`.
+
+### Implementation record — R5
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0ab39-98f6-7731-8053-0cb5bd29828e`, verified OMP
+`openai-codex/gpt-6-astra`, High. Reviewed source:
+`359e85ef22eeb5fe80568f3dfc89a925b4630abd`.
+
+**Delivered:** `relayFirstResponse` privately owns the three equivalent
+first-response settlement/timer/error paths in `src/core/relay-handlers.ts`;
+`copyRelayResponseHeaders` owns the two equivalent safe response-header loops.
+Authorization, credential replacement, public admission, API breaker policy,
+comment buffering, SSE streaming and the distinct public slash/404 recheck remain
+with their original handlers. No exported contract or universal proxy layer was
+introduced. [Evidence](r5-evidence.json) and the
+[separate complete review record](r5-review.json) retain the deletion/check
+ledger, original under-scoped reports and their whole-source renewals.
+
+**Independent review:** GLM `01a0ab4c-0f`, DeepSeek `01a0ab4c-0a` and
+Kimi `01a0ab4c-1` accepted the same frozen source. Parent independently verified
+actual exact models, High/OMP/cwd, complete semantic archive hashes and indices,
+verbatim decisions and complete authored/generated read coverage. Initial
+partial coverage was not treated as a passing gate.
+
+**Parent runtime proof:** 11 isolated groups exercised real HTTP and WebSocket
+paths, raw request bodies, credential/header policy, bounded comment responses,
+artifact rewriting/overflow, 404 ownership pruning, breaker asymmetry and
+unbuffered SSE. SSE delivered its first event in 171ms and remained open beyond
+the first-response window (10,669ms total); API timeout was 10,152ms.
+A delayed Unix-forward fixture separated 3,000ms setup from an 8,000ms peer
+response (11,229ms total). This proves the timer boundary, **not** operation
+against a real SSH daemon. Linux-only; no performance-improvement claim.
+Complete parent proof is retained in `/tmp/pi-dish-parent-r5-smoke-result.json`.
+
+**Combined delivery:** main
+`6f521cc39cd6e612c146cedbcc2a3b23f02bf4d8` includes R5, R12 and the C1
+runner/support checkpoint. Parent vendor regeneration, strict checks over 262
+governed sources, 1,027 backend tests (zero failures/skips), 286 browser cases,
+all eight isolated UI scenarios and full desktop/mobile smoke passed.
+The code was checked at `40716810245f5742f1697daa3512701eba53bed1`; the
+subsequent commit changes only vendor documentation.
+[All five jobs and required steps passed on the exact pushed `6f521cc`](https://github.com/MrPink604/pi-dish/actions/runs/35137099031):
+backend/check on Node 22.19.0, 22.x, 24.x and 26.x; browser/scenarios/full UI
+on Node 24. Full parent records are retained in
+`/tmp/pi-dish-parent-ready-local-result.json` and
+`/tmp/pi-dish-parent-ready-ci-result.json`.
+
+### Implementation record — R12
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0ab39-8f64-7161-b4d1-32502c535e23`, verified OMP
+`openai-codex/gpt-6-astra`, High. Reviewed source:
+`a5e2c172fa95cb2d0450cfc6aa66db118825edcb`.
+
+**Delivered:** the checked vendor tool uses the existing pinned esbuild for
+highlight.js common languages. Its handwritten dependency collector and
+`__mods`/`__cache`/`__req` implementation are deleted; the generated local bundle
+still supplies `window.hljs`. Other vendor assets, license delivery, CSS/fonts,
+lazy loading and offline behavior are unchanged.
+[Evidence](r12-evidence.json) and [review record](r12-review.json) retain the
+source/output mapping and every historical report and gap disposition.
+
+**Independent review:** GLM `01a0ab4a-18`, DeepSeek `01a0ab4a-1d` and
+Kimi `01a0ab4a-2` accepted the same source. Parent verified exact
+model/High/OMP/cwd provenance, complete archives and actual source-byte
+coverage; Kimi's initial gap required same-session completion before acceptance.
+
+**Parent proof:** 296 baseline/current VM comparisons preserved all 36 common
+languages, public API/self aliases, version 11.9.0, native errors and license.
+Actual uninstrumented production Chromium rendered JavaScript and Python after
+lazy, local-only loading; a subsequent Rust block highlighted with networking
+disabled and `navigator.onLine === false`. Screenshots were inspected.
+The bundle grows from 352,131 to 376,926 bytes; no size or performance gain is
+claimed. A browser evaluation-context correction affected only the probe,
+not product code. Complete proofs remain in
+`/tmp/pi-dish-parent-r12-parity-result.json` and
+`/tmp/pi-dish-parent-r12-browser-proof.json`.
+
+**Delivery:** R12 is included in the exact `6f521cc` integration and successful
+five-job CI run recorded under R5 above. Parent also ran the actual vendor build.
+Temporary runtime/parity scripts, fixture homes and browser processes were
+removed after proof capture. No CDN or new bundler abstraction was introduced.
+
+### Implementation record — C1 runner/support checkpoint
+
+**Runner/support checkpoint accepted by the integration lead on 2026-09-16;
+C1 remains open.** Owner: `01a0aacf-378b-7454-a8ed-c7c5422991b6`,
+verified OMP `openai-codex/gpt-6-astra`, High. Reviewed source:
+`f5df06e40e925bf93c417dcdacf463848391a494`.
+
+**Delivered:** actual checked bodies for `scripts/run-tests.ts`,
+`scripts/run-ui-scenarios.ts`, `test/test-env.ts` and
+`test/ui-scenarios/index.ts`, with sibling generated CommonJS/declarations in
+the existing Node-only strict tools program. Executable mode, JS command paths,
+explicit test-file/flag forwarding, environment sanitization, signal/exit
+behavior and ordered scenario loading are preserved. The eagerly loaded
+scenario registry is intentionally opaque to its `Object.keys`-only consumer;
+it does not assert unchecked callable implementations for deferred scenario
+bodies. Exact mapping, mode and generated-banner orphan checks cover the three
+owned directories. [Evidence](c1-runners-evidence.json) and
+[review record](c1-runners-review.json) retain the complete contract and limits.
+
+**Independent review:** GLM `01a0ab49-197c`, DeepSeek `01a0ab49-097e` and
+Kimi `01a0ab49-1342` accepted the same frozen checkpoint. Parent verified
+actual exact-model/High/OMP/cwd provenance, complete semantic archives,
+verbatim reports and final source-byte coverage, including the required Kimi
+completion rather than reusing an incomplete report.
+
+**Parent execution and delivery:** the combined 1,027-test backend run and
+all eight isolated scenarios exercised the actual new runner/support paths.
+All strict drift/type/mode checks, browser and desktop/mobile gates passed;
+the exact pushed `6f521cc` CI matrix above also exercised these installed JS
+paths on all supported Node lines. Historical temporary read-only comparison
+probes and review limitations remain disclosed in the record.
+
+**Remaining boundary:** behavioral tests/specs, other fixtures/canaries,
+observational tools, real-lineage runner and the eight scenario bodies still
+need their checked implementations and stable-contract release. R12 is now
+accepted separately; R11's canonical-client work remains independently gated.
+Before any Playwright TS spec siblings land, discovery must become
+generated-JS-only, and browser-evaluated code needs its own compiler boundary.
+There is no full C1/C2 acceptance or release of unaccepted R1/R8 dependencies.
