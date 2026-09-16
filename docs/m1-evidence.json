@@ -1,6 +1,6 @@
 {
   "milestone": "M1",
-  "status": "Owner implementation verified and all three reviewers ACCEPT exact source9d47ed6; not integration acceptance",
+  "status": "Owner M1 deliverable complete; all three exact models ACCEPT final source6d9b3e2; parent integration acceptance pending",
   "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "branch": "migration/m1-reads",
   "worktree": "/home/jyarwood/workspace/pi-dish-m1",
@@ -145,6 +145,31 @@
     {
       "command": "PI_DISH_REAL_OMP_BIN=/home/jyarwood/.local/bin/omp PI_DISH_REAL_BUN_BIN_DIR=/home/jyarwood/.bun/bin npm run test:lineage -- omp",
       "result": "exit0; OMP18.1.21; commands21/models55; actual streamed turn, persisted assistant, live tree read, inactive tree refusal, close200, same-route resume/history read and btw answer pass; two localhost fake-provider requests, no paid credentials"
+    },
+    {
+      "command": "npm run build:core (approved raw lookup checkpoint)",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "exit0; exact four-file source/output delta generated"
+    },
+    {
+      "command": "npm run check (final source)",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "exit0; 203 compiler-owned sources/no-any, lint, core/browser drift, portable-helper and checked-JS types pass"
+    },
+    {
+      "command": "npm test -- test/session-source.test.js test/session-discovery.test.js test/session-foundation.test.js test/session-files.test.js test/session-index.test.js",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "82 passed,0failed,0skipped;0.39seconds"
+    },
+    {
+      "command": "npm test (final source)",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "1002 passed,0failed,0skipped;32.13seconds"
+    },
+    {
+      "command": "Throwaway Node resolver smoke with env-isolated temporary HOME and explicit temporary harness roots",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "42,[],{},null,undefined,custom-toString object reject:6; custom object not coerced; partial lookup succeeds; encoded-Pi alias and explicit exact lookup remain exact after partial-cache warm; temporary root removed"
     }
   ],
   "sourceCommits": [
@@ -155,6 +180,10 @@
     {
       "commit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
       "role": "Private root mount/body-deletion proposal; combined source revision exercised by recorded validation"
+    },
+    {
+      "commit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "role": "Separate parent-approved four-file raw SourceLookup producer delta, without server root changes"
     }
   ],
   "reviewers": [
@@ -163,21 +192,27 @@
       "model": "zai/glm-5.3",
       "harness": "omp",
       "verdict": "ACCEPT",
-      "sourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16"
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "initialSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "finalRecheck": "Actual source delta reviewed; same exact semantic model reverified"
     },
     {
       "session": "01a0a9ac-9629-7271-8f6a-39e3ba7e7337",
       "model": "opencode-go/deepseek-v4.1-flash",
       "harness": "omp",
       "verdict": "ACCEPT",
-      "sourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16"
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "initialSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "finalRecheck": "Actual source delta reviewed; same exact semantic model reverified"
     },
     {
       "session": "01a0a9ac-8cc9-70f7-8746-9ff05d3b5c96",
       "model": "kimi-code/k3",
       "harness": "omp",
       "verdict": "ACCEPT",
-      "sourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16"
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "initialSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "finalRecheck": "Actual source delta reviewed; same exact semantic model reverified"
     }
   ],
   "acceptanceOwner": "Parent integration controller; no acceptance claimed here",
@@ -198,7 +233,8 @@
       "session-index.ts actual imports and shared parse projections",
       "session-index-data.ts closed usage and persisted decoder",
       "session-discovery.ts actual bounded tail-reader import",
-      "server.js six original-position handler registrations and direct bound share callbacks"
+      "server.js six original-position handler registrations and direct bound share callbacks",
+      "session-source-contracts.ts unknown raw route input and session-source.ts post-parser narrowing; original validation and raw alias bytes preserved"
     ],
     "unchangedConsumers": [
       "session-metadata.ts and session-metadata-contracts.ts reused without modifications",
@@ -268,6 +304,67 @@
   "cleanup": "Isolated smoke server stopped exit143, browser tab closed; temporary smoke script/fixtures removed after recording results.",
   "reviewRecord": "docs/m1-review.json",
   "contractAmendment": "de0496c9ec09a18d21a7d970c67beab9550cb897",
-  "revisionBinding": "All recorded runtime checks apply to combined source9d47ed6. Subsequent review/evidence attestation is documentation-only, not newly reviewed runtime source. Producer-only private transfers are parent-approved; the root proposal and package acceptance remain parent-owned.",
-  "pendingSourceCoordination": "M2 raw-ledger SourceLookup.route unknown followup proposed with concrete existing validator-chain evidence; parent hold not yet released. No such source edit is included in9d47ed6 or claimed reviewed by this record."
+  "revisionBinding": "Original core/browser/focused253/full1002/browser44/all8isolatedUI/fullUI/actualSDK-nativeexport/OMPcanary results bind source9d47ed6. Final source6d9b3e2 changes only raw lookup input typing and its provably redundant post-parser string guard; owner reran build/check/focused82/full1002 and six-case resolver smoke on that final source. All three reviewers explicitly accepted both original full source and actual final delta. No UI/native rerun for the delta is claimed. This subsequent JSON update is attestation-only, not a new runtime revision.",
+  "finalSourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+  "attestationHistory": [
+    {
+      "commit": "2b0a49bc38597498c9690ac75f3ddffcd5a50ba5",
+      "role": "Documentation-only original9d47ed6 review attestation, not runtime source"
+    }
+  ],
+  "sourceLookupFollowup": {
+    "authorization": "Parent explicitly approved M1 exclusive ownership after original three-review barrier completed",
+    "change": "Only SourceLookup.route unknown and post-parser typeof-string narrowing at existing startsWith exactness expression; original raw bytes/cache key, validator try/catch, all other fields and admission/error behavior unchanged",
+    "files": [
+      "src/core/session-source-contracts.ts",
+      "src/core/session-source.ts",
+      "lib/session-source-contracts.d.ts",
+      "lib/session-source.js"
+    ],
+    "commit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+    "review": "Each original exact-model reviewer inspected the actual final source delta and explicitly ACCEPTed the final revision; not merely an attestation acknowledgment"
+  },
+  "changedFiles": [
+    "docs/m1-evidence.json",
+    "docs/m1-review.json",
+    "docs/typescript.md",
+    "lib/harness-pricing.d.ts",
+    "lib/harness-pricing.js",
+    "lib/helper-types.d.ts",
+    "lib/omp-export.d.ts",
+    "lib/omp-export.js",
+    "lib/pi-sdk.d.ts",
+    "lib/pi-sdk.js",
+    "lib/session-discovery.js",
+    "lib/session-files.d.ts",
+    "lib/session-files.js",
+    "lib/session-index-data.d.ts",
+    "lib/session-index-data.js",
+    "lib/session-index.js",
+    "lib/session-read-handlers.d.ts",
+    "lib/session-read-handlers.js",
+    "lib/session-refs.d.ts",
+    "lib/session-refs.js",
+    "lib/session-source-contracts.d.ts",
+    "lib/session-source.js",
+    "lib/skill-mining.d.ts",
+    "lib/skill-mining.js",
+    "server.js",
+    "src/core/harness-pricing.ts",
+    "src/core/helper-types.ts",
+    "src/core/omp-export.ts",
+    "src/core/pi-sdk.ts",
+    "src/core/session-discovery.ts",
+    "src/core/session-files.ts",
+    "src/core/session-index-data.ts",
+    "src/core/session-index.ts",
+    "src/core/session-read-handlers.ts",
+    "src/core/session-refs.ts",
+    "src/core/session-source-contracts.ts",
+    "src/core/session-source.ts",
+    "src/core/skill-mining.ts",
+    "test/session-files.test.js",
+    "test/session-index.test.js",
+    "test/skill-mining.test.js"
+  ]
 }
