@@ -218,6 +218,7 @@ test('captures extension UI replay before server listeners attach', () => {
   const sess = new BridgeSession({
     sessionId: 'ui-state-session', socketPath: '/unused', pid: process.pid, cwd: tmpDir,
   });
+  const { widgets, statuses, dialogs } = sess.extUIState;
   sess._handle({ type: 'event', event: 'extension_ui_request', data: {
     method: 'setWidget', widgetKey: 'Todos', widgetLines: ['[>] Verify browser'],
   } });
@@ -228,15 +229,32 @@ test('captures extension UI replay before server listeners attach', () => {
     method: 'ask', id: 'ask-1', questions: [{ id: 'q', question: 'Continue?' }],
   } });
 
-  assert.deepEqual(sess.extUIState.widgets.get('Todos').widgetLines, ['[>] Verify browser']);
-  assert.equal(sess.extUIState.statuses.get('planmode').statusText, 'Plan mode · parallel');
-  assert.equal(sess.extUIState.dialogs.get('ask-1').method, 'ask');
+  assert.deepEqual(widgets.get('Todos').widgetLines, ['[>] Verify browser']);
+  assert.equal(statuses.get('planmode').statusText, 'Plan mode · parallel');
+  assert.equal(dialogs.get('ask-1').method, 'ask');
 
+  const resolved = [];
+  sess.on('extension_ui_resolved', ({ id }) => resolved.push(dialogs.has(id)));
   sess._handle({ type: 'event', event: 'extension_ui_resolved', data: { id: 'ask-1' } });
-  assert.equal(sess.extUIState.dialogs.has('ask-1'), false);
+  assert.deepEqual(resolved, [false], 'resolution listeners must not replay the answered dialog');
   sess._handle({ type: 'event', event: 'session_switch', data: {} });
-  assert.equal(sess.extUIState.widgets.size, 0);
-  assert.equal(sess.extUIState.statuses.size, 0);
+  assert.equal(widgets.size, 0);
+  assert.equal(statuses.size, 0);
+});
+
+test('extension UI listeners can resolve a newly admitted dialog without it reappearing', () => {
+  const sess = new BridgeSession({
+    sessionId: 'ui-listener-session', socketPath: '/unused', pid: process.pid, cwd: tmpDir,
+  });
+  const observed = [];
+  sess.on('extension_ui_request', data => {
+    observed.push(sess.extUIState.dialogs.get(data.id));
+    sess._handle({ type: 'event', event: 'extension_ui_resolved', data: { id: data.id } });
+  });
+  const dialog = { method: 'confirm', id: 'confirm-1', title: 'Continue?' };
+  sess._handle({ type: 'event', event: 'extension_ui_request', data: dialog });
+  assert.deepEqual(observed, [dialog], 'listeners see the admitted dialog before acting on it');
+  assert.equal(sess.extUIState.dialogs.has(dialog.id), false, 'ingress must not restore a dialog resolved by a listener');
 });
 
 test('protocol-v2 connections reject a hello from a different registry claim', async () => {

@@ -46,8 +46,7 @@ declare class RPCSession {
     recoveryObserver: RecoveryObserver;
     bounceExecuting?: boolean;
     bounceActivityRevision?: number;
-    extUIState?: ExtensionUIState;
-    extUIStateTracked?: boolean;
+    extUIState: ExtensionUIState;
     lastStats?: unknown;
     constructor(id: NativeSessionId, proc: ChildProcessWithoutNullStreams);
     _canObserveRecovery(): boolean;

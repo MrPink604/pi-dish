@@ -384,6 +384,47 @@ test('RPC SSE reconnect replays a running tool start and latest update', async (
   }
 });
 
+test('RPC remembers dialogs before observers attach and HTTP answers retire their SSE replay without a resolved event', async () => {
+  const { createRPCSession } = require('../lib/rpc-session');
+  const rpc = await createRPCSession();
+  const dialog = { type: 'extension_ui_request', method: 'confirm', id: 'rpc-confirm', title: 'Continue?' };
+  const observed = [];
+  const resolved = [];
+  const offRequest = rpc.on('extension_ui_request', data => observed.push(rpc.extUIState.dialogs.get(data.id)));
+  const offResolved = rpc.on('extension_ui_resolved', data => resolved.push(data));
+  let first;
+  let reconnect;
+  try {
+    rpc._handleMessage({ type: 'turn_start' });
+    rpc._handleMessage(dialog);
+    assert.deepEqual(observed, [dialog], 'transport listeners see admitted replay state without composition observers');
+
+    first = sseReader(`${base}/api/sessions/${rpc.id}/stream`);
+    const replay = await first.waitFor(e => e.event === 'extension_ui_request' && e.data?.id === dialog.id);
+    assert.deepEqual(replay.data, dialog);
+    const pending = await first.waitFor(e => e.event === 'extension_ui_state');
+    assert.deepEqual(pending.data.dialogs, [dialog.id]);
+    first.close();
+
+    const answer = await post(`/api/sessions/${rpc.id}/ui-response`, { requestId: dialog.id, confirmed: true });
+    assert.equal(answer.status, 200, JSON.stringify(answer.body));
+    assert.equal(rpc.extUIState.dialogs.has(dialog.id), false, 'successful HTTP answer releases the pending-dialog blocker');
+    assert.deepEqual(resolved, [], 'RPC answers do not fabricate a resolved event');
+
+    reconnect = sseReader(`${base}/api/sessions/${rpc.id}/stream`);
+    const remaining = await reconnect.waitFor(e => e.event === 'extension_ui_state');
+    assert.deepEqual(remaining.data.dialogs, []);
+    assert.equal(reconnect.events.some(e => e.event === 'extension_ui_request' && e.data?.id === dialog.id), false,
+      'an answered RPC dialog must not return on reconnect');
+  } finally {
+    first?.close();
+    reconnect?.close();
+    offRequest();
+    offResolved();
+    rpc.kill();
+  }
+});
+
 test('a prompt sent mid-turn is delivered with steer behavior', async () => {
   const sse = sseReader(`${base}/api/sessions/${sessionId}/stream`);
   try {

@@ -93,7 +93,7 @@ import type { RPCSession } from './rpc-session';
 import type { HarnessDescriptor, HostBuiltin } from './contracts';
 import type { BranchSessionOptions } from './pi-sdk';
 import type { ProtocolRecord } from './wire-protocol';
-import type { ExtensionUIState } from './contracts';
+import { removeExtensionUIDialog } from './extension-ui-state';
 
 interface CatalogListResponse extends Pick<SessionCatalog, 'indexing' | 'discoveryTruncated' | 'discoverySkipped'> {
   active: readonly (SessionFields<Date | string | number> & { id: string })[];
@@ -199,7 +199,7 @@ export function startServer(rootDirectory: string): Server {
   // =========================================================================
 
   const ownership = createSessionOwnership({
-    onLive: session => { trackExtUIState(session); },
+    onLive: observeSessionLifecycle,
     onRetired: route => { fileHandlers.retireSession(route); },
     readSessionTailEntry,
   });
@@ -287,60 +287,32 @@ export function startServer(rootDirectory: string): Server {
     return (result == null ? undefined : property(result, 'leafId')) ?? null;
   }
 
-  // Extension UI is per-session state, but SSE connections come and go with
-  // every session switch in the client. Remember each live session's current
-  // widgets, statuses, and unresolved dialogs here so the stream route can
-  // replay them to a client that just (re)connected — the bridge only replays
-  // its state when *our* socket connects, which happens once per session.
-  // Attached once per session object; the state dies with the connection,
-  // matching the bridge-side replay on reconnect.
-  const EXT_UI_DIALOG_METHODS = new Set<unknown>(['select', 'confirm', 'input', 'editor', 'ask']);
+  // Application policy stays separate from transport-owned replay reduction.
+  // Native asks cannot wait outside an active turn; switch adoption rekeys the
+  // application only after the transport has cleared its old replay state.
+  const observedSessions = new WeakSet<LiveSession>();
 
-  function trackExtUIState<T extends LiveSession | null | undefined>(sess: T): T {
-    if (!sess) return sess;
-    const state: ExtensionUIState = sess.extUIState || { widgets: new Map(), statuses: new Map(), dialogs: new Map() };
-    sess.extUIState = state;
+  function observeSessionLifecycle(sess: LiveSession): void {
     const dismissAskDialogs = (source: string) => {
-      for (const [id, data] of state.dialogs) {
+      for (const [id, data] of sess.extUIState.dialogs) {
         if ((data == null ? undefined : property(data, 'method')) !== 'ask') continue;
-        state.dialogs.delete(id);
-        (sess as { emit(event: string, data: unknown): unknown }).emit('extension_ui_resolved', { id, source });
+        removeExtensionUIDialog(sess.extUIState, id);
+        // Keep the existing native ask dispatch; only bridge asks use this path.
+        const emitter = sess as { emit(event: string, data: unknown): unknown };
+        emitter.emit('extension_ui_resolved', { id, source });
         if (typeof sess.respondExtensionUI === 'function') {
           Promise.resolve(sess.respondExtensionUI(id as string, { cancelled: true })).catch(() => {});
         }
       }
     };
-    // A native ask tool can only wait during an active turn. A replayed ask on
-    // an idle OMP session is orphaned state from a failed/reloaded UI wrapper.
+    // A replayed ask on an idle OMP session is orphaned state from a
+    // failed/reloaded UI wrapper. Recheck even when observers already exist.
     if (!sess.turnInProgress) dismissAskDialogs('idle');
-    if (sess.extUIStateTracked) return sess;
-    sess.extUIStateTracked = true;
-    sess.on('session_switch', (data) => {
-      state.widgets.clear();
-      state.statuses.clear();
-      state.dialogs.clear();
-      adoptBridgeSessionSwitch(sess, data);
-    });
-    sess.on('extension_ui_request', (data) => {
-      if (!data || !property(data, 'method')) return;
-      if (property(data, 'method') === 'setWidget') {
-        const key = property(data, 'widgetKey') || 'default';
-        if (Array.isArray(property(data, 'widgetLines')) && property(property(data, 'widgetLines'), 'length')) state.widgets.set(key, data);
-        else state.widgets.delete(key);
-      } else if (property(data, 'method') === 'setStatus') {
-        const key = property(data, 'statusKey') || 'default';
-        if (property(data, 'statusText')) state.statuses.set(key, data);
-        else state.statuses.delete(key);
-      } else if (EXT_UI_DIALOG_METHODS.has(property(data, 'method')) && property(data, 'id')) {
-        state.dialogs.set(property(data, 'id'), data);
-      }
-    });
-    sess.on('extension_ui_resolved', (data) => {
-      if (data == null ? undefined : property(data, 'id')) state.dialogs.delete(property(data, 'id'));
-    });
+    if (observedSessions.has(sess)) return;
+    observedSessions.add(sess);
+    sess.on('session_switch', data => adoptBridgeSessionSwitch(sess, data));
     sess.on('turn_end', () => dismissAskDialogs('turn-end'));
     sess.on('agent_end', () => dismissAskDialogs('agent-end'));
-    return sess;
   }
 
 
@@ -1517,9 +1489,8 @@ export function startServer(rootDirectory: string): Server {
         return res.status(409).json({ error: 'This session does not support remote extension UI.' });
       }
       await sess.respondExtensionUI(requestId as string, response);
-      // RPC sessions never emit extension_ui_resolved (the bridge does), so
-      // drop the answered dialog from the replay state here.
-      sess.extUIState?.dialogs.delete(requestId);
+      // RPC has no resolved event; acknowledge against the captured session.
+      removeExtensionUIDialog(sess.extUIState, requestId);
       res.json({ success: true });
     } catch (e) {
       res.status(500).json({ error: property(e, 'message') });
@@ -2375,7 +2346,7 @@ export function startServer(rootDirectory: string): Server {
     });
     sub('extension_ui_resolved', (data) => send('extension_ui_resolved', data));
 
-    // Replay the session's remembered extension UI (see trackExtUIState) so a
+    // Replay the transport-owned extension UI so a
     // client that just connected — typically one that switched sessions — shows
     // this session's widgets/statuses/pending dialogs instead of waiting for
     // the next live emission. Seeding the dedupe signatures keeps the bridge's
