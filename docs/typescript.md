@@ -50,6 +50,13 @@ external fields are narrowed at their boundaries. General JSONL/tree/message
 parsing, usage projections, skill mining and feature stores remain JavaScript.
 The index validates the values it consumes without claiming those algorithms are migrated.
 
+M4's independent feature slice now checks task-agent discovery, the interactive
+harness JSON/model runner, harness settings responses, STT and application
+settings/limits responses. The private root mount proposal consumes those
+generated handlers in their existing positions; settings persistence remains
+root-owned. Usage/skills/SDK-backed response migration awaits M1's checked
+producers. This is implementation progress, not M4 package acceptance.
+
 See the [stage plan](session-catalog-migration.md) for scope, field authority,
 dependencies, deletion criteria and verification. Lifecycle authority, host and
 selection ownership, local assets and checked-in runtime delivery remain
@@ -109,6 +116,11 @@ The integration lead, not this guide, records milestone acceptance.
 | `session-launch.ts` | Descriptor-based wrappers, argv/env, registration, cleanup and explicit backend/uncertainty outcomes |
 | `session-operations.ts` | Create/resume/close/restart, durable close intent, distinct flights, canonical-file quarantine and HTTP outcome projection |
 | `recovery-runner.ts`, `session-bounces.ts` | Actual runners plus checked production restore/delivery and idle/execute/reload policies |
+| `harness-agents.ts` | Bounded project/user/bundled agent inventory and temporary unpack cleanup |
+| `harness-feature-commands.ts` | Interactive JSON/model command execution, cwd-qualified model cache and thinking-level overlay; separate from pricing execution |
+| `harness-feature-settings.ts` | Harness config/agent responses, serialized global-only partial writes and project overlays |
+| `stt.ts` | Server-side transcription configuration, MIME mapping, multipart transport and safe transport errors |
+| `feature-handlers.ts` | Named feature response handlers and narrow root ports; independent settings/STT/limits cutover, pending M1-backed projections |
 | `host-identity.ts` | Stable host id and host label |
 | `host-colors.ts` | Shared pure color sanitization, palette assignment and RGB conversion |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |

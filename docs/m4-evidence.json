@@ -1,0 +1,403 @@
+{
+  "milestone": "M4",
+  "status": "In progress; not accepted",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "branch": "migration/m4-features",
+  "frozenRegistrations": [
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/usage-summary",
+      "lines": [
+        1427,
+        1560
+      ],
+      "consumes": [
+        "addUsage",
+        "apiIdForCandidate",
+        "app",
+        "discoverHarnessSessions",
+        "emptyUsage",
+        "localDay",
+        "readDishSettings",
+        "refreshHarnessPricing",
+        "sessionIndex"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/usage-limits",
+      "lines": [
+        1584,
+        1603
+      ],
+      "consumes": [
+        "app",
+        "harnessCommandAvailable",
+        "listHarnesses",
+        "normalizeUsageLimit",
+        "runHarnessJsonCommand"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/skills",
+      "lines": [
+        1723,
+        1759
+      ],
+      "consumes": [
+        "DAY_MS",
+        "app",
+        "enumerateSessionCandidates",
+        "knownWorkspaceCwds",
+        "resolveRefineConfig",
+        "sessionIndex",
+        "skillsLib",
+        "usageRollup",
+        "weeklyBuckets"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/skills/activations",
+      "lines": [
+        1764,
+        1787
+      ],
+      "consumes": [
+        "DAY_MS",
+        "WEEK_MS",
+        "app",
+        "enumerateSessionCandidates",
+        "sessionIndex"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/skills/coverage",
+      "lines": [
+        1792,
+        1886
+      ],
+      "consumes": [
+        "app",
+        "coveredLines",
+        "crypto",
+        "enumerateSessionCandidates",
+        "findSessionSource",
+        "fs",
+        "getSessionInfo",
+        "path",
+        "sessionIndex",
+        "splitSections",
+        "usageRollup",
+        "weeklyBuckets"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/harnesses",
+      "lines": [
+        3778,
+        3792
+      ],
+      "consumes": [
+        "agentSettingsSupported",
+        "app",
+        "harnessCommandAvailable",
+        "listHarnesses"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/harnesses/:id/config",
+      "lines": [
+        3795,
+        3809
+      ],
+      "consumes": [
+        "app",
+        "getHarness",
+        "readHarnessPilotConfig"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "put",
+      "path": "/api/harnesses/:id/model-roles",
+      "lines": [
+        3814,
+        3855
+      ],
+      "consumes": [
+        "MODEL_ROLE_KEY",
+        "MODEL_ROLE_VALUE_MAX",
+        "app",
+        "getHarness",
+        "queueHarnessConfigWrite",
+        "readGlobalModelRoles",
+        "runHarnessJsonCommand",
+        "sanitizeModelRoles"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/harnesses/:id/agents",
+      "lines": [
+        3859,
+        3878
+      ],
+      "consumes": [
+        "agentSettingsSupported",
+        "app",
+        "getHarness",
+        "listTaskAgents",
+        "readAgentSettings",
+        "runHarnessJsonCommand"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "put",
+      "path": "/api/harnesses/:id/agents",
+      "lines": [
+        3883,
+        3961
+      ],
+      "consumes": [
+        "AGENT_NAME_KEY",
+        "MODEL_ROLE_VALUE_MAX",
+        "agentSettingKeyList",
+        "agentSettingsSupported",
+        "app",
+        "getHarness",
+        "queueHarnessConfigWrite",
+        "readAgentSettings",
+        "readGlobalConfigValues",
+        "runHarnessJsonCommand",
+        "shapeAgentSettings"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/models",
+      "lines": [
+        3985,
+        4022
+      ],
+      "consumes": [
+        "MODELS_CACHE_TTL",
+        "annotateEnabled",
+        "app",
+        "getHarness",
+        "getSessionModels",
+        "harnessCommandAvailable",
+        "modelsCache",
+        "modelsCacheTime",
+        "piSDK",
+        "routeIdentity",
+        "runHarnessModelCommand",
+        "setModelsCache",
+        "withCatalogThinkingLevels"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "put",
+      "path": "/api/models/enabled",
+      "lines": [
+        4029,
+        4054
+      ],
+      "consumes": [
+        "PI_SETTINGS_FILE",
+        "app",
+        "path",
+        "piSDK"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/commands",
+      "lines": [
+        4114,
+        4152
+      ],
+      "consumes": [
+        "BridgeSession",
+        "RPC_BUILTIN_COMMANDS",
+        "app",
+        "appendHostBuiltins",
+        "filterBridgeCommands",
+        "getHarness",
+        "getLiveSession",
+        "liveSessionSupports",
+        "piSDK",
+        "routeIdentity"
+      ],
+      "owner": "M4"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/stt",
+      "lines": [
+        4215,
+        4232
+      ],
+      "consumes": [
+        "app",
+        "parseAudioBody",
+        "readDishSettings",
+        "stt"
+      ],
+      "owner": "M4"
+    }
+  ],
+  "pendingContractClarifications": [
+    "FeaturePorts.locatePiPane needs explicit addition for command-list host builtins/reload presentation; actual checked SessionOwnership method, weak advice only. Parent asked before use."
+  ],
+  "preservedContracts": {
+    "agents": "project > user > bundled; 200-file scan bound; 60s bundled cache; temp cleanup; global writes from fresh cwd, partial dirty writes and serialized per-harness queue",
+    "stt": "server-only secret settings; HTTP(S) endpoint; per-field env precedence; language filter; MIME before body; local raw 25mb; multipart names; 60s classified timeout; partial/text error handling",
+    "usage": "indexed summaries, known-cost subtotals and unknown counters, finite local-day exclusions, per-model filters and partial results",
+    "skills": "actual SDK discovery; path identity; bounded bundle scan; estimate-only token/coverage; mining cross-batch limitation preserved",
+    "commands": "listing only; M7 delivery unchanged; interactive command timeout/linger and pricing runner separate"
+  },
+  "dependencyOwners": {
+    "M1a": "01a0a999-b509-7178-ae80-1d49d7a27d63",
+    "M1b": "01a0a999-b9e2-72dc-96fe-8d901ea09db0",
+    "M1c": "01a0a999-be6d-7666-9d08-afd239eb9f23",
+    "M6": "01a0a998-4644-742f-bbf6-102bc6f53c99"
+  },
+  "checks": [
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "result": "pass; 916 packages; node-pty rebuilt; six dependency lifecycle scripts blocked per existing allowScripts policy"
+    },
+    {
+      "command": "npm run build:core",
+      "scope": "harness-agents/stt only",
+      "result": "pass"
+    },
+    {
+      "command": "npm test -- test/stt.test.js test/omp-web-pilot.test.js",
+      "scope": "harness-agents/stt generated libraries with baseline root consumers",
+      "result": "20 passed, 0 failed, 0 skipped"
+    },
+    {
+      "command": "npm test -- test/stt.test.js test/omp-web-pilot.test.js test/server.test.js",
+      "scope": "actual checked harness/STT/settings/limits consumers mounted in private root proposal",
+      "result": "154 passed, 0 failed, 0 skipped; 8.76s"
+    },
+    {
+      "command": "node /tmp/pi-dish-m4-feature-smoke.cjs",
+      "result": "PASS Node v26.8.2; actual isolated server settings allowlist/partial write, loopback multipart STT, agent inventory executable, global roles write and command-model catalog",
+      "isolation": "sanitizeTestEnv on minimal PATH/HOME; new HOME/TMUX; no provider credentials; HOME removed"
+    },
+    {
+      "command": "npm run test:browser -- harness-settings.spec.js host-settings.spec.js composer-speech.spec.js",
+      "result": "17 passed; 11.5s; Playwright ubuntu24.04 fallback browser on unsupported host distribution"
+    },
+    {
+      "command": "node /tmp/pi-dish-m4-native-smoke.cjs",
+      "result": "PASS actual /home/jyarwood/.local/bin/omp; bundled reviewer/scout/security-reviewer/sonic/task; unpack temp dirs removed; real config get returns key/value/type/description",
+      "isolation": "minimal sanitized PATH/HOME plus disposable OMP_AGENT_DIR/PI_CODING_AGENT_DIR/TMUX; no authenticated model calls or native sessions"
+    },
+    {
+      "command": "npm run build:core && npm run check",
+      "result": "PASS; 201 compiler-owned sources; source policy, ESLint, core/browser drift and helper/checkJs types"
+    },
+    {
+      "command": "npm test",
+      "scope": "independent M4 source/consumer checkpoint; M1 still baseline JS",
+      "result": "998 passed, 0 failed, 0 skipped; 31.84s"
+    },
+    {
+      "command": "npm run test:ui",
+      "scope": "full existing desktop/mobile smoke against independent M4 source/consumer checkpoint",
+      "result": "PASS all good; 62.38s; includes scoped models, speech, usage, skills, terminal and multi-host surfaces"
+    }
+  ],
+  "remaining": [
+    "M1 actual producers pending parent-coordinated transfer",
+    "complete feature aggregate source and root consumer cutover",
+    "final required check/backend/UI/smoke verification",
+    "frozen source commit and exact three-model reviews",
+    "M6 checked runtimeResourcePath producer: bundled refinement default only; explicit paths unchanged"
+  ],
+  "approvedContractChanges": [
+    "Parent approved M4 settingsForClient/sanitizeSavedFilters and original-position GET/PUT /api/settings; M7 retains store path/read-write persistence and composition. Exact docs revision pending.",
+    "Parent-approved M1 raw token/reasoning bug fix keeps number members: nonnumeric/nonfinite operands contribute no amount; finite negatives/fractions retained; pricing/cost/retry inputs unchanged. M4 adds no coercion layer.",
+    "Parent approved M2 model-runner consumed options.cwd unknown; M4 runner must match while retaining resolveHarnessCwd typechecks/fallback/cache behavior. session-launch.ts delta owned exclusively by M2."
+  ],
+  "compilerCoverage": {
+    "program": "tsconfig.core.json existing src/core/**/*.ts membership",
+    "sourcePolicy": "source-policy.json existing src/core recursive root automatically enrolls five new authored sources; checked source count 196 -> 201",
+    "outputs": "lib/{harness-agents,stt,harness-feature-commands,harness-feature-settings,feature-handlers}.{js,d.ts}",
+    "independentRootMounts": [
+      "GET /api/usage-limits",
+      "GET /api/settings",
+      "PUT /api/settings",
+      "GET /api/harnesses",
+      "GET /api/harnesses/:id/config",
+      "PUT /api/harnesses/:id/model-roles",
+      "GET /api/harnesses/:id/agents",
+      "PUT /api/harnesses/:id/agents",
+      "POST /api/stt"
+    ]
+  },
+  "runtime": {
+    "node": "26.8.2",
+    "omp": "18.1.21",
+    "npm": "12.0.2",
+    "typescript": "7.0.2",
+    "playwright": "1.63.0",
+    "platform": "Linux x64"
+  },
+  "cleanup": [
+    "Updated existing docs/typescript.md with implemented independent source/output ownership and explicit remaining M1 dependency limits",
+    "Removed both successful throwaway smoke scripts; all temporary HOMEs/unpack directories removed by scripts"
+  ],
+  "deletionMoveLedger": {
+    "moved": [
+      "lib/harness-agents.js authored body -> src/core/harness-agents.ts; lib now generated",
+      "lib/stt.js authored body -> src/core/stt.ts; lib now generated",
+      "root interactive CLI/model cache/thinking overlay -> harness-feature-commands.ts",
+      "root harness config/agent handlers and helpers -> harness-feature-settings.ts",
+      "root settings allowlist/validation/response, limits normalization/response and STT response -> feature-handlers.ts"
+    ],
+    "deleted": [
+      "old root copies of migrated helpers and response bodies",
+      "obsolete root execFile/listTaskAgents/harnessLaunchSpec/recoveryMode imports"
+    ],
+    "retained": [
+      "root settings storage path/read/write persistence",
+      "root Pi model cache and M1-dependent usage/skills/model/command-list responses pending producer transfer",
+      "root lifecycle/command delivery and other domain bodies are not M4 ownership"
+    ],
+    "algorithmSimplificationClaim": false
+  }
+}

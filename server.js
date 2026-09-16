@@ -6,7 +6,6 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const piSDK = require('./lib/pi-sdk');
-const { execFile } = require('child_process');
 const { getAllRPCSessions } = require('./lib/rpc-session');
 const {
   listRegisteredSessions,
@@ -45,19 +44,23 @@ const { canonicalSessionId } = require('./lib/session-key');
 const { getHarness, listHarnesses } = require('./lib/harnesses');
 const { sessionCapabilities } = require('./lib/session-capabilities');
 const { refreshHarnessPricing } = require('./lib/harness-pricing');
-const { listTaskAgents } = require('./lib/harness-agents');
+const { createFeatureHandlers } = require('./lib/feature-handlers');
+const {
+  harnessCommandAvailable, runHarnessModelCommand,
+  withCatalogThinkingLevels, MODELS_CACHE_TTL,
+} = require('./lib/harness-feature-commands');
 const {
   createSessionOwnership, routeIdentity, routeSessionId, registryIdentity,
   sessionIdentityFields, sessionSwitchRouteData, liveSessionSupports,
   spawnAllowsManagedClose, spawnAllowsRestart,
 } = require('./lib/session-ownership');
-const { createSessionLaunch, harnessLaunchSpec } = require('./lib/session-launch');
+const { createSessionLaunch } = require('./lib/session-launch');
 const { createSessionOperations } = require('./lib/session-operations');
 const sessionProvenance = require('./lib/session-provenance');
 const routinesStore = require('./lib/routines');
 const { createRoutineRunner } = require('./lib/routine-runner');
 const recoveryStore = require('./lib/session-recovery');
-const { createRecoveryRuntime, recoveryMode } = require('./lib/recovery-runner');
+const { createRecoveryRuntime } = require('./lib/recovery-runner');
 const { createSessionBounceRuntime } = require('./lib/session-bounces');
 const skillsLib = require('./lib/skills');
 const {
@@ -74,6 +77,7 @@ const { resolveSessionRefAmong, stableSessionRef } = require('./lib/helper-refs.
 const { expandSessionRefs } = require('./lib/session-refs');
 
 const app = express();
+const featureHandlers = createFeatureHandlers({ readDishSettings, writeDishSettings });
 const PORT = Number.isFinite(Number(process.env.PORT)) ? Number(process.env.PORT) : 3333;
 // Localhost-only by default; opt in to LAN/VPN exposure explicitly, e.g.
 // HOST=0.0.0.0 (all interfaces) or HOST=<tailscale ip>. Auth is opt-in (see
@@ -1423,6 +1427,11 @@ function localDay(offset = 0) {
 function readDishSettings() {
   try { const v = JSON.parse(fs.readFileSync(DISH_SETTINGS_FILE, 'utf8')); return v && typeof v === 'object' ? v : {}; } catch { return {}; }
 }
+function writeDishSettings(settings) {
+  fs.mkdirSync(path.dirname(DISH_SETTINGS_FILE), { recursive: true });
+  const tmp = `${DISH_SETTINGS_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n'); fs.renameSync(tmp, DISH_SETTINGS_FILE);
+}
 
 app.get('/api/usage-summary', async (req, res) => {
   const range = String(req.query.days || '30');
@@ -1559,48 +1568,7 @@ app.get('/api/usage-summary', async (req, res) => {
   res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostsByBucket, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
 });
 
-// Subscription/quota windows (5h/7d utilization, reset times) per provider
-// account, reported by the harness's own CLI — OMP's `usage` reads its auth
-// store and queries the providers directly, so no running session is needed
-// and pi-dish never reimplements provider quota APIs. Harnesses without a
-// `usage` argv (Pi, Prime) simply contribute nothing; a harness whose command
-// fails degrades to an `error` entry rather than failing the route.
-function normalizeUsageLimit(limit) {
-  if (!limit || typeof limit !== 'object') return null;
-  const usedFraction = Number(limit.amount?.usedFraction);
-  if (typeof limit.label !== 'string' || !Number.isFinite(usedFraction)) return null;
-  const resetsAt = Number(limit.window?.resetsAt);
-  return {
-    id: typeof limit.id === 'string' ? limit.id : null,
-    label: limit.label.slice(0, 120),
-    windowLabel: typeof limit.window?.label === 'string' ? limit.window.label.slice(0, 60) : null,
-    resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
-    usedFraction,
-    unit: typeof limit.amount?.unit === 'string' ? limit.amount.unit.slice(0, 30) : null,
-    status: typeof limit.status === 'string' ? limit.status.slice(0, 30) : null,
-  };
-}
-
-app.get('/api/usage-limits', async (_req, res) => {
-  const harnesses = listHarnesses().filter(d => d.argv?.usage && harnessCommandAvailable(d));
-  const results = await Promise.all(harnesses.map(async d => {
-    try {
-      const parsed = await runHarnessJsonCommand(d, d.argv.usage);
-      // Whitelist fields: even --redact output carries partial account ids,
-      // and the raw reports may hold emails — none of it belongs on the wire.
-      const reports = (Array.isArray(parsed.reports) ? parsed.reports : []).map(report => ({
-        provider: String(report?.provider || 'unknown').slice(0, 60),
-        fetchedAt: Number.isFinite(Number(report?.fetchedAt)) ? Number(report.fetchedAt) : null,
-        planType: typeof report?.metadata?.planType === 'string' ? report.metadata.planType.slice(0, 40) : null,
-        limits: (Array.isArray(report?.limits) ? report.limits : []).map(normalizeUsageLimit).filter(Boolean),
-      })).filter(report => report.limits.length);
-      return { harness: d.id, label: d.label, reports };
-    } catch (e) {
-      return { harness: d.id, label: d.label, error: e.message };
-    }
-  }));
-  res.json({ generatedAt: Date.now(), harnesses: results });
-});
+app.get('/api/usage-limits', featureHandlers.usageLimits);
 
 // =========================================================================
 // Skills view (main-pane takeover) — inventory from pi's loader + activation
@@ -1885,65 +1853,10 @@ app.get('/api/skills/coverage', (req, res) => {
   });
 });
 
-// Saved sidebar filters ("scopes") are server-global like the budget: the
-// user defines "no subagents" once, every device gets the chip. Which chips
-// are *active* stays device-local (localStorage) — a phone and a desktop can
-// scope differently.
-function sanitizeSavedFilters(value) {
-  if (!Array.isArray(value) || value.length > 50) return null;
-  const out = [];
-  const seen = new Set();
-  for (const f of value) {
-    const name = typeof f?.name === 'string' ? f.name.trim() : '';
-    const query = typeof f?.query === 'string' ? f.query.trim() : '';
-    if (!name || !query || name.length > 60 || query.length > 500 || seen.has(name)) return null;
-    seen.add(name);
-    out.push({ name, query });
-  }
-  return out;
-}
-
-// An allowlist, not a redaction: credential-bearing blocks (`remotes`, the
-// `stt` endpoint + key, `allowedOrigins`) are deliberately file-level config
-// and never travel to a client, in either direction — PUT below writes only
-// allowlisted keys, so an `stt` key in a request body is ignored.
-function settingsForClient(settings = readDishSettings()) {
-  return {
-    monthlyBudgetUsd: settings.monthlyBudgetUsd ?? null,
-    savedFilters: sanitizeSavedFilters(settings.savedFilters) || [],
-    recoveryMode: recoveryMode(settings.recoveryMode),
-  };
-}
-
-app.get('/api/settings', (_req, res) => res.json(settingsForClient()));
+app.get('/api/settings', featureHandlers.settings);
 // Partial update: only the keys present in the body change, so the budget
 // form and the saved-filters UI can't clobber each other's setting.
-app.put('/api/settings', (req, res) => {
-  const body = req.body || {};
-  const settings = readDishSettings();
-  if ('monthlyBudgetUsd' in body) {
-    const value = body.monthlyBudgetUsd;
-    if (value !== null && (!Number.isFinite(value) || value <= 0 || value > 1_000_000)) return res.status(400).json({ error: 'monthlyBudgetUsd must be null or a positive number at most 1000000' });
-    if (value === null) delete settings.monthlyBudgetUsd; else settings.monthlyBudgetUsd = value;
-  }
-  if ('savedFilters' in body) {
-    const filters = sanitizeSavedFilters(body.savedFilters);
-    if (!filters) return res.status(400).json({ error: 'savedFilters must be up to 50 { name, query } entries with unique non-empty names (≤60 chars) and queries (≤500 chars)' });
-    if (filters.length === 0) delete settings.savedFilters; else settings.savedFilters = filters;
-  }
-  if ('recoveryMode' in body) {
-    if (!['off', 'restore', 'continue'].includes(body.recoveryMode)) {
-      return res.status(400).json({ error: 'recoveryMode must be off, restore, or continue' });
-    }
-    settings.recoveryMode = body.recoveryMode;
-  }
-  try {
-    fs.mkdirSync(path.dirname(DISH_SETTINGS_FILE), { recursive: true });
-    const tmp = `${DISH_SETTINGS_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n'); fs.renameSync(tmp, DISH_SETTINGS_FILE);
-    res.json(settingsForClient(settings));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+app.put('/api/settings', featureHandlers.updateSettings);
 
 // Historical image blocks can be megabytes. Keep those bytes out of the
 // paginated JSON so the browser can decode/cache them as resources and defer
@@ -3541,9 +3454,6 @@ app.post('/api/sessions/:id/branch', async (req, res) => {
 
 let modelsCache = null;
 let modelsCacheTime = 0;
-const MODELS_CACHE_TTL = 60000;
-const harnessModelsCache = new Map(); // resolved harness+cwd -> { models?, time?, inFlight? }
-const HARNESS_JSON_EXIT_GRACE_MS = 250;
 
 function setModelsCache(models) {
   modelsCache = models;
@@ -3571,416 +3481,26 @@ function annotateEnabled(models) {
 }
 
 
-function harnessCommandAvailable(descriptor) {
-  const spec = harnessLaunchSpec(descriptor);
-  const command = spec.argv[0];
-  if (!command) return false;
-  const environment = { ...process.env, ...spec.env };
-  const executable = (file) => { try { fs.accessSync(file, fs.constants.X_OK); return true; } catch { return false; } };
-  if (command.includes(path.sep)) return executable(path.resolve(command));
-  return String(environment.PATH || '').split(path.delimiter)
-    .some(dir => dir && executable(path.join(dir, command)));
-}
 
-function resolveHarnessCwd(value) {
-  const home = process.env.HOME || os.homedir();
-  if (typeof value !== 'string' || !value.trim()) return process.cwd();
-  const trimmed = value.trim();
-  const expanded = trimmed === '~' ? home
-    : trimmed.startsWith('~/') ? path.join(home, trimmed.slice(2)) : trimmed;
-  return path.resolve(expanded);
-}
-
-function runHarnessJsonCommand(descriptor, commandArgs, { cwd, acceptCompleteJson = false } = {}) {
-  const spec = harnessLaunchSpec(descriptor);
-  const args = [...spec.argv.slice(1), ...commandArgs];
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let completeJsonTimer = null;
-    let streamedStdout = '';
-    let child;
-    const settle = (callback, value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(completeJsonTimer);
-      callback(value);
-    };
-    const acceptStreamedJson = () => {
-      if (!acceptCompleteJson || completeJsonTimer || !/[\r\n]\s*$/.test(streamedStdout)) return;
-      let parsed;
-      try { parsed = JSON.parse(streamedStdout.trim()); } catch { return; }
-      // OMP has already emitted the complete machine-readable response at
-      // this point. Give normal shutdown a short grace period, then stop a
-      // CLI whose extensions left the event loop alive instead of making the
-      // web pilot wait for the full process timeout.
-      completeJsonTimer = setTimeout(() => {
-        settle(resolve, parsed);
-        child.kill();
-      }, HARNESS_JSON_EXIT_GRACE_MS);
-    };
-    child = execFile(spec.argv[0], args, {
-      env: { ...process.env, ...spec.env },
-      cwd: resolveHarnessCwd(cwd),
-      timeout: 15_000,
-      maxBuffer: 10 * 1024 * 1024,
-    }, (error, stdout, stderr) => {
-      if (settled) return;
-      if (error) return settle(reject, new Error((stderr || error.message).trim()));
-      try {
-        settle(resolve, JSON.parse(stdout.trim() || '{}'));
-      } catch (parseError) {
-        settle(reject, new Error(`Could not parse ${descriptor.label} command output: ${parseError.message}`));
-      }
-    });
-    if (acceptCompleteJson) {
-      child.stdout.setEncoding('utf8');
-      child.stdout.on('data', chunk => {
-        if (streamedStdout.length <= 10 * 1024 * 1024) streamedStdout += chunk;
-        acceptStreamedJson();
-      });
-    }
-  });
-}
-
-async function runHarnessModelCommand(descriptor, { cwd } = {}) {
-  const cacheKey = `${descriptor.id}\0${resolveHarnessCwd(cwd)}`;
-  const cached = harnessModelsCache.get(cacheKey);
-  if (cached && Object.hasOwn(cached, 'models')
-      && Date.now() - cached.time < MODELS_CACHE_TTL) return cached.models;
-  if (cached?.inFlight) return cached.inFlight;
-
-  const entry = cached || {};
-  entry.inFlight = runHarnessJsonCommand(
-    descriptor, descriptor.argv.models, { cwd, acceptCompleteJson: true },
-  ).then(parsed => {
-    entry.models = normalizeModels(parsed.models || parsed);
-    entry.time = Date.now();
-    return entry.models;
-  }).finally(() => { delete entry.inFlight; });
-  harnessModelsCache.set(cacheKey, entry);
-  return entry.inFlight;
-}
+app.get('/api/harnesses', featureHandlers.harnesses);
 
 
-const MODEL_ROLE_KEY = /^[a-zA-Z][\w.-]{0,63}$/;
-const MODEL_ROLE_VALUE_MAX = 200;
-const AGENT_NAME_KEY = /^[A-Za-z0-9][\w.-]{0,63}$/;
-
-function sanitizeModelRoles(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(Object.entries(value)
-    .filter(([, model]) => typeof model === 'string' && model.trim()));
-}
-
-// `config get <key>` returns the merged project-over-global view for the cwd,
-// while `config set <key>` rewrites the whole value in the *global* config —
-// so a read(merged) → edit → set() round trip would silently copy a project's
-// `.omp/config.yml` overrides into the global config. An empty temp dir has no
-// project config to overlay, so reading there yields global alone.
-async function readGlobalConfigValues(descriptor, keys) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-global-'));
-  try {
-    const values = await Promise.all(keys.map(key => runHarnessJsonCommand(
-      descriptor, descriptor.argv.configGet(key), { cwd: dir })));
-    return values.map(result => result?.value);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-async function readGlobalModelRoles(descriptor) {
-  const [value] = await readGlobalConfigValues(descriptor, [descriptor.pilotConfig.modelRoles]);
-  return sanitizeModelRoles(value);
-}
-
-async function readHarnessPilotConfig(descriptor, cwd) {
-  const keys = descriptor.pilotConfig;
-  if (!keys || typeof descriptor.argv.configGet !== 'function') return null;
-  const [rolesResult, thinkingResult, globalModelRoles] = await Promise.all([
-    runHarnessJsonCommand(descriptor, descriptor.argv.configGet(keys.modelRoles), { cwd }),
-    runHarnessJsonCommand(descriptor, descriptor.argv.configGet(keys.defaultThinkingLevel), { cwd }),
-    readGlobalModelRoles(descriptor),
-  ]);
-  const modelRoles = sanitizeModelRoles(rolesResult?.value);
-  const defaultModel = typeof modelRoles.default === 'string' ? modelRoles.default : null;
-  const defaultThinkingLevel = typeof thinkingResult?.value === 'string'
-    ? thinkingResult.value : null;
-  return { defaultModel, defaultThinkingLevel, modelRoles, globalModelRoles };
-}
-
-// --- Task-agent settings (OMP's /agents hub: one array + three records) ---
-
-const AGENT_SETTING_KEYS = ['disabledAgents', 'agentModelOverrides', 'agentPrewalk', 'agentAdvisor'];
-
-function agentSettingsSupported(descriptor) {
-  const keys = descriptor.pilotConfig;
-  return !!(keys && descriptor.taskAgents && AGENT_SETTING_KEYS.every(key => keys[key]));
-}
-
-function sanitizeNameList(value) {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.filter(name => typeof name === 'string' && AGENT_NAME_KEY.test(name)))];
-}
-
-// OMP stores these per-agent toggles as `record`s and stringifies booleans it
-// has normalized once ("on"/"off"), so a read sees either form; both collapse
-// to a boolean for the wire, and writes go back out as booleans (which the
-// harness accepts and normalizes itself).
-function sanitizeFlagRecord(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const flags = {};
-  for (const [name, flag] of Object.entries(value)) {
-    if (!AGENT_NAME_KEY.test(name)) continue;
-    if (typeof flag === 'boolean') flags[name] = flag;
-    else if (flag === 'on' || flag === 'true') flags[name] = true;
-    else if (flag === 'off' || flag === 'false') flags[name] = false;
-  }
-  return flags;
-}
-
-function shapeAgentSettings([disabled, modelOverrides, prewalk, advisor]) {
-  return {
-    disabled: sanitizeNameList(disabled),
-    modelOverrides: sanitizeModelRoles(modelOverrides),
-    prewalk: sanitizeFlagRecord(prewalk),
-    advisor: sanitizeFlagRecord(advisor),
-  };
-}
-
-function agentSettingKeyList(descriptor) {
-  return AGENT_SETTING_KEYS.map(key => descriptor.pilotConfig[key]);
-}
-
-// Effective (project-over-global, for `cwd`) and global-only settings, the
-// same split the model-role editor uses: rows edit global, and a differing
-// effective value is a project override the harness wins with in that cwd.
-async function readAgentSettings(descriptor, cwd) {
-  const keys = agentSettingKeyList(descriptor);
-  const [effective, global] = await Promise.all([
-    Promise.all(keys.map(key => runHarnessJsonCommand(
-      descriptor, descriptor.argv.configGet(key), { cwd }).then(result => result?.value))),
-    readGlobalConfigValues(descriptor, keys),
-  ]);
-  return { settings: shapeAgentSettings(effective), globalSettings: shapeAgentSettings(global) };
-}
-
-// Every config write here is a read-modify-write of one whole value, so two
-// concurrent PUTs would drop one another's patch. One chain per harness.
-const harnessConfigWrites = new Map();
-function queueHarnessConfigWrite(harnessId, task) {
-  // The stored link is always failure-swallowed, so one failed write can't
-  // reject every queued one behind it.
-  const chained = (harnessConfigWrites.get(harnessId) || Promise.resolve()).then(() => task());
-  harnessConfigWrites.set(harnessId, chained.catch(() => {}));
-  return chained;
-}
-
-app.get('/api/harnesses', (_req, res) => {
-  res.json({
-    harnesses: listHarnesses().map(descriptor => ({
-      id: descriptor.id,
-      label: descriptor.label,
-      available: harnessCommandAvailable(descriptor),
-      rpcFallback: descriptor.rpcFallback,
-      closeMode: descriptor.closeMode,
-      // Does this harness have a settings view at all: pilot defaults plus
-      // model roles, and (OMP only so far) the task-agent hub.
-      pilotConfig: !!descriptor.pilotConfig,
-      taskAgents: agentSettingsSupported(descriptor),
-    })),
-  });
-});
-
-
-app.get('/api/harnesses/:id/config', async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!descriptor.pilotConfig) {
-    return res.status(501).json({ error: `Pilot config is not supported for ${descriptor.label}.` });
-  }
-  if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  try {
-    res.json(await readHarnessPilotConfig(descriptor, req.query.cwd));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/harnesses/:id/config', featureHandlers.harnessConfig);
 
 // Patch role → model assignments in the harness's *global* config. Values are
 // stored verbatim: the harness resolves model refs itself, and a rewrite here
 // would only invent a second dialect.
-app.put('/api/harnesses/:id/model-roles', async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!descriptor.pilotConfig || typeof descriptor.argv.configSet !== 'function') {
-    return res.status(501).json({ error: `Model roles are not editable for ${descriptor.label}.` });
-  }
-  const { roles, cwd } = req.body || {};
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  if (!roles || typeof roles !== 'object' || Array.isArray(roles)) {
-    return res.status(400).json({ error: 'roles must be an object mapping role names to model refs' });
-  }
-  const patch = Object.entries(roles);
-  if (!patch.length) return res.status(400).json({ error: 'roles must name at least one role' });
-  for (const [role, model] of patch) {
-    if (!MODEL_ROLE_KEY.test(role)) {
-      return res.status(400).json({ error: `Invalid role name: ${role}` });
-    }
-    if (model === null) continue;
-    if (typeof model !== 'string' || !model.trim() || model.length > MODEL_ROLE_VALUE_MAX) {
-      return res.status(400).json({ error: `Invalid model for role ${role}: expected null or a non-empty model ref of at most ${MODEL_ROLE_VALUE_MAX} characters` });
-    }
-  }
-  try {
-    res.json(await queueHarnessConfigWrite(descriptor.id, async () => {
-      const record = await readGlobalModelRoles(descriptor);
-      for (const [role, model] of patch) {
-        if (model === null) delete record[role]; else record[role] = model;
-      }
-      await runHarnessJsonCommand(descriptor,
-        descriptor.argv.configSet(descriptor.pilotConfig.modelRoles, JSON.stringify(record)));
-      const [globalModelRoles, effective] = await Promise.all([
-        readGlobalModelRoles(descriptor),
-        runHarnessJsonCommand(descriptor, descriptor.argv.configGet(descriptor.pilotConfig.modelRoles), { cwd }),
-      ]);
-      return { globalModelRoles, modelRoles: sanitizeModelRoles(effective?.value) };
-    }));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.put('/api/harnesses/:id/model-roles', featureHandlers.updateModelRoles);
 
 // Task-agent inventory (bundled + user + project definitions) with the
 // per-agent settings the harness's own agents hub edits.
-app.get('/api/harnesses/:id/agents', async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!agentSettingsSupported(descriptor)) {
-    return res.status(501).json({ error: `Task agents are not configurable for ${descriptor.label}.` });
-  }
-  const cwd = req.query.cwd;
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  try {
-    const [agents, settings] = await Promise.all([
-      listTaskAgents(descriptor, runHarnessJsonCommand, { cwd }),
-      readAgentSettings(descriptor, cwd),
-    ]);
-    res.json({ agents, ...settings, cwd: cwd || '' });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.get('/api/harnesses/:id/agents', featureHandlers.harnessAgents);
 
 // Patch per-agent settings in the harness's *global* config. Each field is
 // tri-state: `disabled` toggles array membership, and `model`/`prewalk`/
 // `advisor` take a value or null to drop the override and inherit again.
-app.put('/api/harnesses/:id/agents', async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!agentSettingsSupported(descriptor) || typeof descriptor.argv.configSet !== 'function') {
-    return res.status(501).json({ error: `Task agents are not configurable for ${descriptor.label}.` });
-  }
-  const { agents, cwd } = req.body || {};
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  if (!agents || typeof agents !== 'object' || Array.isArray(agents)) {
-    return res.status(400).json({ error: 'agents must be an object mapping agent names to settings' });
-  }
-  const patch = Object.entries(agents);
-  if (!patch.length) return res.status(400).json({ error: 'agents must name at least one agent' });
-  for (const [name, settings] of patch) {
-    if (!AGENT_NAME_KEY.test(name)) return res.status(400).json({ error: `Invalid agent name: ${name}` });
-    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
-      return res.status(400).json({ error: `Invalid settings for agent ${name}` });
-    }
-    for (const field of ['disabled', 'prewalk', 'advisor']) {
-      const value = settings[field];
-      if (value !== undefined && value !== null && typeof value !== 'boolean') {
-        return res.status(400).json({ error: `Invalid ${field} for agent ${name}: expected a boolean or null` });
-      }
-    }
-    const model = settings.model;
-    if (model !== undefined && model !== null
-        && (typeof model !== 'string' || !model.trim() || model.length > MODEL_ROLE_VALUE_MAX)) {
-      return res.status(400).json({ error: `Invalid model for agent ${name}: expected null or a non-empty model ref of at most ${MODEL_ROLE_VALUE_MAX} characters` });
-    }
-  }
-  try {
-    res.json(await queueHarnessConfigWrite(descriptor.id, async () => {
-      const keys = agentSettingKeyList(descriptor);
-      const record = shapeAgentSettings(await readGlobalConfigValues(descriptor, keys));
-      const disabled = new Set(record.disabled);
-      const dirty = new Set();
-      const setOverride = (bucket, key, name, value) => {
-        if (value === undefined) return;
-        if (value === null) {
-          if (!Object.hasOwn(bucket, name)) return;
-          delete bucket[name];
-        } else {
-          if (bucket[name] === value) return;
-          bucket[name] = value;
-        }
-        dirty.add(key);
-      };
-      for (const [name, settings] of patch) {
-        if (settings.disabled !== undefined && settings.disabled !== null
-            && settings.disabled !== disabled.has(name)) {
-          if (settings.disabled) disabled.add(name); else disabled.delete(name);
-          dirty.add(descriptor.pilotConfig.disabledAgents);
-        }
-        setOverride(record.modelOverrides, descriptor.pilotConfig.agentModelOverrides, name, settings.model);
-        setOverride(record.prewalk, descriptor.pilotConfig.agentPrewalk, name, settings.prewalk);
-        setOverride(record.advisor, descriptor.pilotConfig.agentAdvisor, name, settings.advisor);
-      }
-      const values = {
-        [descriptor.pilotConfig.disabledAgents]: [...disabled],
-        [descriptor.pilotConfig.agentModelOverrides]: record.modelOverrides,
-        [descriptor.pilotConfig.agentPrewalk]: record.prewalk,
-        [descriptor.pilotConfig.agentAdvisor]: record.advisor,
-      };
-      // Only the records a patch actually moved are rewritten: every `config
-      // set` is a whole-value write, so touching an untouched key would
-      // materialize a global copy of whatever the read returned.
-      for (const key of keys) {
-        if (dirty.has(key)) {
-          await runHarnessJsonCommand(descriptor, descriptor.argv.configSet(key, JSON.stringify(values[key])));
-        }
-      }
-      return readAgentSettings(descriptor, cwd);
-    }));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+app.put('/api/harnesses/:id/agents', featureHandlers.updateHarnessAgents);
 
-// A live OMP session's model registry doesn't carry the per-model thinking
-// level list that `omp models --json` has — merge it in from the (cached)
-// catalog by selector, so the thinking dropdown can offer only what the
-// session's model supports.
-async function withCatalogThinkingLevels(models, descriptor) {
-  if (descriptor?.modelCatalog !== 'command') return models;
-  if (!models.some(m => m && !Array.isArray(m.thinking))) return models;
-  try {
-    const catalog = await runHarnessModelCommand(descriptor, {});
-    const levelsBySelector = new Map(
-      catalog.filter(m => m && Array.isArray(m.thinking)).map(m => [m.selector, m.thinking]));
-    return models.map(m => {
-      if (!m || Array.isArray(m.thinking)) return m;
-      const thinking = levelsBySelector.get(m.selector)
-        ?? levelsBySelector.get(`${m.provider}/${m.id}`);
-      return thinking ? { ...m, thinking } : m;
-    });
-  } catch {
-    return models;
-  }
-}
 
 app.get('/api/models', async (req, res) => {
   try {
@@ -4212,24 +3732,7 @@ app.get('/api/config', (req, res) => {
 // /hosts/:name/api/stt proxy relays the bytes untouched.
 const parseAudioBody = express.raw({ type: ['audio/*', 'video/webm'], limit: '25mb' });
 
-app.post('/api/stt', parseAudioBody, async (req, res) => {
-  const config = stt.resolveSttConfig(readDishSettings());
-  if (!config) return res.status(503).json({ error: 'Speech-to-text is not configured on this host' });
-  // Type before body: the raw parser above only claims audio/* and
-  // video/webm, so anything else never becomes a Buffer at all and would
-  // otherwise be reported as a missing body rather than a wrong format.
-  const contentType = req.headers['content-type'] || '';
-  if (!stt.sttFilename(contentType)) {
-    return res.status(415).json({ error: `unsupported audio type ${stt.baseMimeType(contentType) || 'unknown'}` });
-  }
-  if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: 'audio body required' });
-  try {
-    const { text } = await stt.transcribe(config, { bytes: req.body, contentType });
-    res.json({ text });
-  } catch (e) {
-    res.status(e.status || 502).json({ error: e.message });
-  }
-});
+app.post('/api/stt', parseAudioBody, featureHandlers.transcribe);
 
 // =========================================================================
 // Agent docs: GET /api/agent-docs, GET /api/agent-docs/:topic
