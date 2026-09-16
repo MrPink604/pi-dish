@@ -152,6 +152,24 @@ Any `SourceLookup.route` change requires M1 coordination before mutation.
 Record every exceptional callsite and compare original/post-change native and
 shell behavior, including malformed cwd failure placement and raw argv coercion.
 
+The controlled M1 follow-up may widen only `SourceLookup.route` to unknown and
+guard the existing post-parser `startsWith(VERSION)` exactness check. Preserve
+the original bytes in the cache key and parser-before-lookup ordering. M1 owns
+the change after its current review barrier, with all three final-revision
+rechecks; dependent owners consume the published delta rather than editing it.
+
+**RPC metadata exception:** native spawn success does not prove cwd is a string.
+Pass the original effective cwd to native spawn unchanged, then preserve string
+and absent metadata or normalize a native-accepted file URL to a filesystem path
+with `fileURLToPath`. Do not use `String(url)` or assert a cwd alias is a string.
+Any native-accepted byte-path decoding must be proved against actual child cwd
+behavior. Publish only proven string/null metadata without widening
+`RPCSession.cwd`; a normalization failure must not orphan the owned child.
+This is an explicitly authorized post-native metadata representation correction,
+not unchanged behavior for direct JavaScript callers supplying URL objects.
+Keep native validation/error order, ordinary string/fallback behavior and
+lifecycle authority intact; record the exception and native probes for review.
+
 **Explicit bounded M1 bug-fix authorization:** the baseline token/reasoning
 accumulators concatenate malformed strings and coerce objects through `+=`.
 Use finite-number raw operands at those existing sites, in the same pass;
