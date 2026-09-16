@@ -1,0 +1,370 @@
+{
+  "milestone": "M1",
+  "status": "Owner M1 deliverable complete; all three exact models ACCEPT final source6d9b3e2; parent integration acceptance pending",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "branch": "migration/m1-reads",
+  "worktree": "/home/jyarwood/workspace/pi-dish-m1",
+  "owner": "01a0a998-4175-7206-b4a7-e3e0c1fa532e",
+  "contracts": [
+    "docs/m0-contracts.md",
+    "docs/m0-route-contracts.json",
+    "docs/m0-runtime-manifest.json"
+  ],
+  "ownership": [
+    {
+      "slice": "M1a",
+      "session": "01a0a999-b509-7178-ae80-1d49d7a27d63",
+      "model": "openai-codex/gpt-6-astra",
+      "thinking": "high",
+      "verification": "semantic CLI resolve before assignment",
+      "files": [
+        "src/core/session-files.ts",
+        "src/core/session-index.ts",
+        "src/core/session-index-data.ts",
+        "src/core/session-metadata.ts",
+        "src/core/session-metadata-contracts.ts",
+        "src/core/session-discovery.ts"
+      ],
+      "exclusive": "index and session-index-data editor"
+    },
+    {
+      "slice": "M1b",
+      "session": "01a0a999-b9e2-72dc-96fe-8d901ea09db0",
+      "model": "openai-codex/gpt-6-astra",
+      "thinking": "high",
+      "verification": "semantic CLI resolve before assignment",
+      "files": [
+        "src/core/harness-pricing.ts",
+        "src/core/skill-mining.ts"
+      ]
+    },
+    {
+      "slice": "M1c",
+      "session": "01a0a999-be6d-7666-9d08-afd239eb9f23",
+      "model": "openai-codex/gpt-6-astra",
+      "thinking": "high",
+      "verification": "semantic CLI resolve before assignment",
+      "files": [
+        "src/core/pi-sdk.ts",
+        "src/core/omp-export.ts",
+        "src/core/session-refs.ts",
+        "src/core/helper-types.ts"
+      ],
+      "exclusive": "SDK editor"
+    }
+  ],
+  "validationPolicy": "Slice writers skip all validation/generated output/commits while shared source mutations are in flight. Owner alone validates stable tree, generates, commits and pushes assigned branch.",
+  "approvedContractClarifications": [
+    "Parent explicitly approves M1 ownership of read-only GET /api/sessions/:id/tree; branch/navigation mutations remain M7 and registration position is unchanged.",
+    "SessionReadPorts imports RuntimeDescription and receives existing checked describeRuntime; no runtime ownership reimplementation.",
+    "SessionReadHandlers returns bound exportSessionHtml and getOmpShareSnapshot functions for M3; undefined fallback and snapshotResolved suppression retained.",
+    "RefContextEntry.isActive permits boolean|null to describe the pre-existing remote unknown activity wire value; no runtime null dropping."
+  ],
+  "approvedBehaviorException": {
+    "authority": "Parent controller explicit approval and immediate steer, 2026-09-16",
+    "scope": "Finite numeric operands only at existing token/reasoning accumulation sites, including measured generation output; same pass, no reducer/cache redesign",
+    "before": "rawCounter || 0 fed JavaScript addition: truthy strings concatenated and objects/arrays coerced into counters; nonfinite numeric values propagated",
+    "after": "Nonnumeric/nonfinite counter operands contribute zero; absent/null remain zero; finite negatives/fractions are not clamped",
+    "unchanged": "Original raw usage still reaches existing retry classification and pricing/reported-cost/costUnavailable policies; calls, timestamps, models and malformed metadata continuity remain unchanged",
+    "limits": "Finite operands do not guarantee finite sums. No saturation or finite-total guarantee is introduced. Persisted consumed nonfinite/nonnumeric counters are rejected.",
+    "verification": "Baseline generated implementation failed focused regression with input=\"0870-2.53\", output=\"0[object Object]001.252\", cacheWrite=Infinity. Checked generated implementation passes expected input0.5/output3.25/cacheRead5/cacheWrite0.5, raw retry/cost assertions and same-object full/delta equivalence. Persisted malformed/sparse cases and existing malformed metadata cases pass."
+  },
+  "runtimeVersions": {
+    "node": "26.8.2",
+    "npm": "12.0.2",
+    "bun": "1.3.14",
+    "omp": "18.1.21"
+  },
+  "checks": [
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "result": "exit 0; 916 packages; node-pty rebuilt for Electron 33.4.11",
+      "limits": "npm reports six dependency lifecycle scripts blocked by existing allowScripts policy; no policy change"
+    },
+    {
+      "command": "LSP status",
+      "result": "No language servers configured for this project"
+    },
+    {
+      "command": "node --require ./test/test-env.js --test --test-name-pattern='malformed raw counters' test/session-files.test.js (before core generation)",
+      "result": "Expected exit 1 against baseline generated session-files.js: one regression failed",
+      "actual": {
+        "input": "0870-2.53",
+        "output": "0[object Object]001.252",
+        "cacheRead": 5,
+        "cacheWrite": "Infinity"
+      },
+      "expected": {
+        "input": 0.5,
+        "output": 3.25,
+        "cacheRead": 5,
+        "cacheWrite": 0.5
+      }
+    },
+    {
+      "command": "npm run build:core (first stable source build)",
+      "result": "exit 1; two SDK boundary errors and three handler port errors; generated files not replaced"
+    },
+    {
+      "command": "npm run build:core && npm run build:browser",
+      "result": "exit 0; generated core JavaScript/declarations and browser bundles from checked source"
+    },
+    {
+      "command": "npm run check",
+      "result": "exit 0; authored-source policy 203 compiler-owned sources, no explicit-any exceptions; ESLint, core/browser drift, portable helpers and checked-JS types pass"
+    },
+    {
+      "command": "npm test -- test/session-files.test.js test/session-index.test.js test/harness-pricing.test.js test/skill-mining.test.js test/session-refs.test.js test/omp-export.test.js test/session-source.test.js test/session-recovery.test.js test/omp-tree-bridge.test.js test/server.test.js",
+      "result": "253 passed, 0 failures/skips; 8.78 seconds; includes previously failing malformed counter regression"
+    },
+    {
+      "command": "npm test",
+      "result": "1002 passed, 0 failures/skips; 31.80 seconds"
+    },
+    {
+      "command": "npm run test:browser -- transcript.spec.js transcript-tree.spec.js search-view.spec.js usage-view.spec.js skills.spec.js session-info.spec.js session-controls.spec.js",
+      "result": "44 passed; 29.6 seconds"
+    },
+    {
+      "command": "npm run test:ui:scenarios",
+      "result": "all eight isolated scenarios pass; models/drafts/sidebar/usage/skills/routines/bounce/mobile; 48.14 seconds"
+    },
+    {
+      "command": "npm run test:ui",
+      "result": "full desktop/mobile smoke all good; 60.49 seconds"
+    },
+    {
+      "command": "Isolated env -i actual server.js + throwaway read/export smoke against synthetic JSONL in temporary HOME/TMUX_TMPDIR/socket dir",
+      "result": "HTTP transcript tail 3 total messages, stable-ID image bytes 70, search match index0/user, stats16 tokens and authoritative zero cost, Pi tree leaf image001, real bundled Pi HTML269610 bytes, real OMP18.1.21 HTML393948 bytes; raw pre-header native entry retained, live snapshot injected, source order unchanged"
+    },
+    {
+      "command": "Managed Chromium on isolated actual server, historical Pi transcript and expanded tool details",
+      "result": "visual screenshot confirms user/assistant text and tool group; image complete with positive naturalWidth after expansion; managed tab closed",
+      "limits": "Two browser tool interaction attempts failed (direct selector TypeError reported to tool QA, then locator timeout); observed element click and DOM action succeeded. No application failure inferred."
+    },
+    {
+      "command": "PI_DISH_REAL_OMP_BIN=/home/jyarwood/.local/bin/omp PI_DISH_REAL_BUN_BIN_DIR=/home/jyarwood/.bun/bin npm run test:lineage -- omp",
+      "result": "exit0; OMP18.1.21; commands21/models55; actual streamed turn, persisted assistant, live tree read, inactive tree refusal, close200, same-route resume/history read and btw answer pass; two localhost fake-provider requests, no paid credentials"
+    },
+    {
+      "command": "npm run build:core (approved raw lookup checkpoint)",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "exit0; exact four-file source/output delta generated"
+    },
+    {
+      "command": "npm run check (final source)",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "exit0; 203 compiler-owned sources/no-any, lint, core/browser drift, portable-helper and checked-JS types pass"
+    },
+    {
+      "command": "npm test -- test/session-source.test.js test/session-discovery.test.js test/session-foundation.test.js test/session-files.test.js test/session-index.test.js",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "82 passed,0failed,0skipped;0.39seconds"
+    },
+    {
+      "command": "npm test (final source)",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "1002 passed,0failed,0skipped;32.13seconds"
+    },
+    {
+      "command": "Throwaway Node resolver smoke with env-isolated temporary HOME and explicit temporary harness roots",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "result": "42,[],{},null,undefined,custom-toString object reject:6; custom object not coerced; partial lookup succeeds; encoded-Pi alias and explicit exact lookup remain exact after partial-cache warm; temporary root removed"
+    }
+  ],
+  "sourceCommits": [
+    {
+      "commit": "6b10e54d5cd15594a5c58e9abd4f02f6e71a7a8e",
+      "role": "Checked producers, handlers, generated outputs and consumer cutover; no server root patch"
+    },
+    {
+      "commit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "role": "Private root mount/body-deletion proposal; combined source revision exercised by recorded validation"
+    },
+    {
+      "commit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "role": "Separate parent-approved four-file raw SourceLookup producer delta, without server root changes"
+    }
+  ],
+  "reviewers": [
+    {
+      "session": "01a0a9ac-9115-72c8-9bd7-995f642457a5",
+      "model": "zai/glm-5.3",
+      "harness": "omp",
+      "verdict": "ACCEPT",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "initialSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "finalRecheck": "Actual source delta reviewed; same exact semantic model reverified"
+    },
+    {
+      "session": "01a0a9ac-9629-7271-8f6a-39e3ba7e7337",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "harness": "omp",
+      "verdict": "ACCEPT",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "initialSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "finalRecheck": "Actual source delta reviewed; same exact semantic model reverified"
+    },
+    {
+      "session": "01a0a9ac-8cc9-70f7-8746-9ff05d3b5c96",
+      "model": "kimi-code/k3",
+      "harness": "omp",
+      "verdict": "ACCEPT",
+      "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "initialSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "finalRecheck": "Actual source delta reviewed; same exact semantic model reverified"
+    }
+  ],
+  "acceptanceOwner": "Parent integration controller; no acceptance claimed here",
+  "compilerCutover": {
+    "program": "tsconfig.core.json",
+    "mapping": "src/core/<name>.ts -> lib/<name>.js + lib/<name>.d.ts",
+    "sources": [
+      "session-files",
+      "harness-pricing",
+      "skill-mining",
+      "pi-sdk",
+      "omp-export",
+      "session-refs",
+      "session-read-handlers"
+    ],
+    "policy": "Existing source-policy.json src/core root automatically enrolls all seven additions; no configuration or exception change",
+    "consumers": [
+      "session-index.ts actual imports and shared parse projections",
+      "session-index-data.ts closed usage and persisted decoder",
+      "session-discovery.ts actual bounded tail-reader import",
+      "server.js six original-position handler registrations and direct bound share callbacks",
+      "session-source-contracts.ts unknown raw route input and session-source.ts post-parser narrowing; original validation and raw alias bytes preserved"
+    ],
+    "unchangedConsumers": [
+      "session-metadata.ts and session-metadata-contracts.ts reused without modifications",
+      "M2/M3/M4/M6 sibling consumers await parent-approved transfer; no integration acceptance claimed"
+    ]
+  },
+  "rootProposal": {
+    "registrations": [
+      "GET /api/sessions/:id/messages/:messageId/images/:blockIndex",
+      "GET /api/sessions/:id/messages",
+      "GET /api/sessions/:id/search",
+      "GET /api/sessions/:id/stats",
+      "GET /api/sessions/:id/export",
+      "GET /api/sessions/:id/tree"
+    ],
+    "policy": "Only M1 body/mount proposal in private branch; parent alone applies shared-root integration. Original registration order retained.",
+    "helperOwnership": {
+      "moved": [
+        "messageForClient",
+        "imageBlockBytes",
+        "getOmpShareSnapshot",
+        "exportSessionHtml"
+      ],
+      "inlined": [
+        "roundPercent in checked messages response"
+      ],
+      "retainedRootPorts": [
+        "findSessionSource",
+        "liveSessionHistoryPending",
+        "getRegisteredSession",
+        "getRPCSession",
+        "getLiveSession",
+        "liveTreeLeafId",
+        "getLiveContextUsage",
+        "getContextWindow",
+        "describeRuntime"
+      ],
+      "unchangedCheckedOwners": [
+        "sessionIdentityFields/liveSessionSupports/routeIdentity from session-ownership",
+        "withSessionContext/subsessionLabel from session-catalog",
+        "getSessionInfo from session-index"
+      ]
+    }
+  },
+  "deletionMoveLedger": {
+    "moves": "Six authored JS libraries replaced by generated JS from actual TypeScript; response bodies moved to flat checked module, not algorithm simplification.",
+    "removed": [
+      "handwritten parser/mining/pricing index require signatures",
+      "checkedEntries/checkedUsage/checkedSkills/checkedSearch validation adapters over unchecked producers",
+      "session-discovery local tail-reader implementation signature",
+      "duplicate root M1 response implementations"
+    ],
+    "retained": "Persisted ingress decoders and narrow raw search-leaf check remain; no R1 reducer/cache redesign, no compatibility shims."
+  },
+  "retainedBoundaries": [
+    "Opaque external display/tool/native export payloads and bridge snapshot/leaf replies remain unknown until consumed.",
+    "Remaining root/non-M1 implementations remain explicitly unchecked until their owners migrate; root mounts are a parent-application proposal.",
+    "SDK0.85.1 ProviderHeaders null tombstones are runtime-supported but missing from GenerateBranchSummaryOptions.headers declaration; one documented call-site assertion to actual SDK type preserves original object identity/null semantics.",
+    "Finite raw operands can still overflow finite sums; no saturation or universal schema introduced."
+  ],
+  "skips": [
+    "Full 286-case browser suite not rerun: 44 relevant cases plus all isolated UI scenarios/full desktop-mobile smoke passed.",
+    "Prime real harness canary not run: no Prime-specific runtime change; existing Prime backend/UI coverage passed.",
+    "Packaged Electron/native archive proof remains M6; actual checkout SDK and OMP native export executed.",
+    "Parent integrated exact-commit CI and milestone acceptance remain pending."
+  ],
+  "cleanup": "Isolated smoke server stopped exit143, browser tab closed; temporary smoke script/fixtures removed after recording results.",
+  "reviewRecord": "docs/m1-review.json",
+  "contractAmendment": "de0496c9ec09a18d21a7d970c67beab9550cb897",
+  "revisionBinding": "Original core/browser/focused253/full1002/browser44/all8isolatedUI/fullUI/actualSDK-nativeexport/OMPcanary results bind source9d47ed6. Final source6d9b3e2 changes only raw lookup input typing and its provably redundant post-parser string guard; owner reran build/check/focused82/full1002 and six-case resolver smoke on that final source. All three reviewers explicitly accepted both original full source and actual final delta. No UI/native rerun for the delta is claimed. This subsequent JSON update is attestation-only, not a new runtime revision.",
+  "finalSourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+  "attestationHistory": [
+    {
+      "commit": "2b0a49bc38597498c9690ac75f3ddffcd5a50ba5",
+      "role": "Documentation-only original9d47ed6 review attestation, not runtime source"
+    }
+  ],
+  "sourceLookupFollowup": {
+    "authorization": "Parent explicitly approved M1 exclusive ownership after original three-review barrier completed",
+    "change": "Only SourceLookup.route unknown and post-parser typeof-string narrowing at existing startsWith exactness expression; original raw bytes/cache key, validator try/catch, all other fields and admission/error behavior unchanged",
+    "files": [
+      "src/core/session-source-contracts.ts",
+      "src/core/session-source.ts",
+      "lib/session-source-contracts.d.ts",
+      "lib/session-source.js"
+    ],
+    "commit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+    "review": "Each original exact-model reviewer inspected the actual final source delta and explicitly ACCEPTed the final revision; not merely an attestation acknowledgment"
+  },
+  "changedFiles": [
+    "docs/m1-evidence.json",
+    "docs/m1-review.json",
+    "docs/typescript.md",
+    "lib/harness-pricing.d.ts",
+    "lib/harness-pricing.js",
+    "lib/helper-types.d.ts",
+    "lib/omp-export.d.ts",
+    "lib/omp-export.js",
+    "lib/pi-sdk.d.ts",
+    "lib/pi-sdk.js",
+    "lib/session-discovery.js",
+    "lib/session-files.d.ts",
+    "lib/session-files.js",
+    "lib/session-index-data.d.ts",
+    "lib/session-index-data.js",
+    "lib/session-index.js",
+    "lib/session-read-handlers.d.ts",
+    "lib/session-read-handlers.js",
+    "lib/session-refs.d.ts",
+    "lib/session-refs.js",
+    "lib/session-source-contracts.d.ts",
+    "lib/session-source.js",
+    "lib/skill-mining.d.ts",
+    "lib/skill-mining.js",
+    "server.js",
+    "src/core/harness-pricing.ts",
+    "src/core/helper-types.ts",
+    "src/core/omp-export.ts",
+    "src/core/pi-sdk.ts",
+    "src/core/session-discovery.ts",
+    "src/core/session-files.ts",
+    "src/core/session-index-data.ts",
+    "src/core/session-index.ts",
+    "src/core/session-read-handlers.ts",
+    "src/core/session-refs.ts",
+    "src/core/session-source-contracts.ts",
+    "src/core/session-source.ts",
+    "src/core/skill-mining.ts",
+    "test/session-files.test.js",
+    "test/session-index.test.js",
+    "test/skill-mining.test.js"
+  ]
+}

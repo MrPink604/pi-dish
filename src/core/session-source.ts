@@ -65,7 +65,7 @@ function createSessionSourceResolver(options: ResolverOptions = {}): SessionSour
 
       // Keep the original bytes: an encoded Pi alias is exact even though its
       // canonical route is raw, and must not borrow a cached partial result.
-      const exact = input.exact === true || input.route.startsWith(VERSION);
+      const exact = input.exact === true || (typeof input.route === 'string' && input.route.startsWith(VERSION));
       const key = `${exact ? 'exact' : 'partial'}:${input.route}`;
       const cached = routes.get(key);
       if (cached && fs.existsSync(cached.file)) {

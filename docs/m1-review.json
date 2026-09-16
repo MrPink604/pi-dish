@@ -1,0 +1,197 @@
+{
+  "milestone": "M1",
+  "status": "All three exact models ACCEPT final source6d9b3e2 after full milestone review and explicit source-delta rechecks; not package or integration acceptance",
+  "dependencyBaseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "contractAmendment": "de0496c9ec09a18d21a7d970c67beab9550cb897",
+  "branch": "migration/m1-reads",
+  "producerCommit": "6b10e54d5cd15594a5c58e9abd4f02f6e71a7a8e",
+  "reviewedSourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+  "rootProposalCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+  "owner": "01a0a998-4175-7206-b4a7-e3e0c1fa532e",
+  "reviewBarrier": "All three sessions were newly spawned concurrently as OMP, verified through semantic resolve before receiving the review. No owner worktree edits occurred during their reviews. Each reviewed the complete milestone and consumer diff from the true baseline, including the root proposal and parent contract amendment. Reviewers skipped builds, linters, formatters, tests and archive extraction in the worktree.",
+  "reviewers": [
+    {
+      "session": "01a0a9ac-9115-72c8-9bd7-995f642457a5",
+      "model": "zai/glm-5.3",
+      "harness": "omp",
+      "thinking": "max",
+      "modelVerification": "Actual semantic session.model matched zai/glm-5.3 before dispatch",
+      "verdict": "ACCEPT",
+      "sourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "blockingFindings": [],
+      "scope": "All six implementations compared with baseline JavaScript, actual index/data/discovery cutover, all six response handlers and root registrations, persisted malformed/sparse contracts, bounded reads/shared parse/delta behavior, approved finite-counter fix, real SDK header mismatch, raw native export, lazy references and evidence.",
+      "observations": [
+        {
+          "id": "GLM-1",
+          "severity": "informational",
+          "finding": "OMP export descriptor guard changes only an unreachable misconfiguration error message",
+          "disposition": "No action; omp descriptor always supplies export argv"
+        },
+        {
+          "id": "GLM-2",
+          "severity": "informational",
+          "finding": "Malformed branch-summary search text guard and malformed pricing section guards preserve prior empty-output behavior",
+          "disposition": "No action; equivalent consumed output"
+        },
+        {
+          "id": "GLM-3",
+          "severity": "informational",
+          "finding": "Temporary export directory can remain if writeFileSync fails immediately after mkdtemp",
+          "disposition": "Pre-existing baseline behavior, unchanged and outside this migration; no cleanup claim made for that failure"
+        }
+      ],
+      "limits": "Read-only static review; owner runtime evidence not re-executed. Generated content/export surfaces spot-checked rather than complete independent drift build. Header forwarding verified from pinned SDK sources, not a live paid branch-summary request. Sibling M2-M7 implementations not reviewed.",
+      "finalSourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "finalVerdict": "ACCEPT",
+      "finalRecheck": {
+        "kind": "Actual source-delta review following prior complete baseline review",
+        "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+        "previousSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+        "modelVerifiedAgain": true,
+        "blockingFindings": [],
+        "analysis": "resolveSessionRoute(input.route) try/catch still precedes every lookup; its existing validators accept only strings. The added post-parser typeof conjunct is true on reachable exactness paths, so raw nonstrings still reject without coercion and original route bytes/cache keys retain exact encoded-Pi behavior. Only input type honesty and corresponding generated outputs changed.",
+        "limits": "Read-only delta recheck; owner build/check/82 focused/1002 backend/six-case smoke evidence not re-executed. Prior browser/UI/native results apply to unchanged bodies; no rerun claimed for this two-line source correction."
+      }
+    },
+    {
+      "session": "01a0a9ac-9629-7271-8f6a-39e3ba7e7337",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "harness": "omp",
+      "thinking": "high",
+      "modelVerification": "Actual semantic session.model matched opencode-go/deepseek-v4.1-flash before dispatch",
+      "verdict": "ACCEPT",
+      "sourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "blockingFindings": [],
+      "scope": "Full baseline-to-source implementation/consumer diff, six root handlers field/status/order parity, all M1 algorithms and exports, parser/cache/read limits, disk validation and regression contracts, actual SDK declarations/runtime forwarding, source policy and recorded verification.",
+      "routeEvidence": "Mechanical comparison of main-app registrations found 100 on both sides, no additions/removals/order mismatches; six M1 indices 22,23,24,30,31,54 unchanged. This subset is not the 115-entry M0 manifest including share/upgrade registrations.",
+      "observations": [
+        {
+          "id": "F1",
+          "severity": "informational",
+          "finding": "Explicit TypeError for structured/non-string search query has different error text",
+          "disposition": "Same existing Express 500 path; no new validation response or successful coercion"
+        },
+        {
+          "id": "F2",
+          "severity": "informational",
+          "finding": "Number(bucket.tokens[k]) on indexed accumulation left operand",
+          "disposition": "Decoder-validated counters are already numeric; malformed persisted numeric state rejects; no broader reducer work"
+        },
+        {
+          "id": "F3",
+          "severity": "withdrawn",
+          "finding": "Initial claim that key in cost plus Reflect.get ignored inherited values",
+          "disposition": "Owner corrected false premise: in and Reflect.get observe inherited properties. Reviewer explicitly withdrew F3 and retained unchanged ACCEPT; not a retained boundary or source defect"
+        },
+        {
+          "id": "F4",
+          "severity": "informational",
+          "finding": "OMP descriptor export guard changes unreachable misconfiguration error wording",
+          "disposition": "No action; actual registered descriptor always supports export"
+        },
+        {
+          "id": "F5",
+          "severity": "bookkeeping",
+          "finding": "Producer evidence cannot self-reference and initially has empty sourceCommits/reviewers arrays",
+          "disposition": "Filled by this separate post-review attestation; not a reviewed runtime change"
+        },
+        {
+          "id": "F6",
+          "severity": "informational",
+          "finding": "Generated SDK declaration retains resolution-mode import attribute",
+          "disposition": "Correct for real ESM-only SDK under NodeNext; downstream programs must retain compatible module resolution"
+        }
+      ],
+      "limits": "Read-only; no builds/tests/canaries re-run. Generated drift only spot-checked, owner drift gate supplies full result. No integrated CI or package acceptance claimed.",
+      "finalSourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "finalVerdict": "ACCEPT",
+      "finalRecheck": {
+        "kind": "Actual source-delta review following prior complete baseline review",
+        "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+        "previousSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+        "modelVerifiedAgain": true,
+        "blockingFindings": [],
+        "analysis": "resolveSessionRoute(input.route) try/catch still precedes every lookup; its existing validators accept only strings. The added post-parser typeof conjunct is true on reachable exactness paths, so raw nonstrings still reject without coercion and original route bytes/cache keys retain exact encoded-Pi behavior. Only input type honesty and corresponding generated outputs changed.",
+        "limits": "Read-only delta recheck; owner build/check/82 focused/1002 backend/six-case smoke evidence not re-executed. Prior browser/UI/native results apply to unchanged bodies; no rerun claimed for this two-line source correction."
+      }
+    },
+    {
+      "session": "01a0a9ac-8cc9-70f7-8746-9ff05d3b5c96",
+      "model": "kimi-code/k3",
+      "harness": "omp",
+      "thinking": "high",
+      "modelVerification": "Actual semantic session.model matched kimi-code/k3 before dispatch",
+      "verdict": "ACCEPT",
+      "sourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+      "blockingFindings": [],
+      "scope": "All six real implementations side-by-side against baseline, index/data/discovery typed imports and disk rejection, handler factory/ports/six responses and root mount proposal, focused regressions, approved contract amendments, counter fix and actual SDK mismatch.",
+      "observations": [
+        {
+          "id": "KIMI-1",
+          "severity": "informational",
+          "finding": "OMP descriptor guard changes only impossible misconfiguration error wording",
+          "disposition": "No action; no offline capability invented"
+        },
+        {
+          "id": "KIMI-2",
+          "severity": "informational",
+          "finding": "SDK catch logging uses String(error) fallback",
+          "disposition": "Console-only fallback; no response policy change"
+        },
+        {
+          "id": "KIMI-3",
+          "severity": "informational",
+          "finding": "Indexed token accumulation enumerates five consumed token keys rather than foreign extra keys in manually edited persisted data",
+          "disposition": "Producer-written contract unchanged; extra opaque keys are not first-party token amounts"
+        },
+        {
+          "id": "KIMI-4",
+          "severity": "informational",
+          "finding": "Search explicitly throws TypeError for structured query input",
+          "disposition": "Preserves legacy 500 failure rather than silently accepting malformed query"
+        }
+      ],
+      "limits": "Read-only code equivalence review; owner runtime results accepted as supplied, not re-executed. No independent complete generated-output byte comparison. No M0 approvals counted and no package acceptance claimed.",
+      "finalSourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+      "finalVerdict": "ACCEPT",
+      "finalRecheck": {
+        "kind": "Actual source-delta review following prior complete baseline review",
+        "sourceCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+        "previousSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+        "modelVerifiedAgain": true,
+        "blockingFindings": [],
+        "analysis": "resolveSessionRoute(input.route) try/catch still precedes every lookup; its existing validators accept only strings. The added post-parser typeof conjunct is true on reachable exactness paths, so raw nonstrings still reject without coercion and original route bytes/cache keys retain exact encoded-Pi behavior. Only input type honesty and corresponding generated outputs changed.",
+        "limits": "Read-only delta recheck; owner build/check/82 focused/1002 backend/six-case smoke evidence not re-executed. Prior browser/UI/native results apply to unchanged bodies; no rerun claimed for this two-line source correction."
+      }
+    }
+  ],
+  "sdkDeclarationMismatch": {
+    "approval": "Parent explicitly approved only this field-specific assertion after source/runtime evidence",
+    "callsite": "src/core/pi-sdk.ts:539-549; assertion at line545",
+    "actualType": "PiSDK.GenerateBranchSummaryOptions['headers']",
+    "runtimeVersion": "@earendil-works/pi-coding-agent@0.85.1",
+    "evidence": [
+      "dist/core/compaction/branch-summarization.js:187-188 destructures headers unchanged;225 creates requestOptions with the same headers;226 forwards to completeSummarization",
+      "dist/core/compaction/compaction.js:454-465 spreads options unchanged into completeSimple",
+      "@earendil-works/pi-ai/dist/types.d.ts:44 ProviderHeaders = Record<string,string|null>;84 documents null suppression of a provider/API default header"
+    ],
+    "semantics": "Original auth.headers object and null tombstones preserved; no filtering/copy, module-level cast, alternate SDK signature or ambient facade"
+  },
+  "attestationBinding": "This JSON records completed reviews after their source freeze. Its later commit is evidence-only and is not represented as source reviewed by the trio. Parent alone performs integration, exact integrated-commit CI, acceptance ledger and milestone acceptance.",
+  "initialReviewedSourceCommit": "9d47ed6b02c990c3e832c2456c39ba1521fa6f16",
+  "lookupProducerDeltaCommit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+  "initialAttestationCommit": "2b0a49bc38597498c9690ac75f3ddffcd5a50ba5",
+  "resolvedCoordination": {
+    "authorization": "Parent explicitly approved M1 exclusive ownership after original three-review barrier completed",
+    "change": "Only SourceLookup.route unknown and post-parser typeof-string narrowing at existing startsWith exactness expression; original raw bytes/cache key, validator try/catch, all other fields and admission/error behavior unchanged",
+    "files": [
+      "src/core/session-source-contracts.ts",
+      "src/core/session-source.ts",
+      "lib/session-source-contracts.d.ts",
+      "lib/session-source.js"
+    ],
+    "commit": "6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d",
+    "review": "Each original exact-model reviewer inspected the actual final source delta and explicitly ACCEPTed the final revision; not merely an attestation acknowledgment"
+  },
+  "finalReviewBarrier": "All three final rechecks explicitly accepted6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d before this evidence-only update. No source edits occurred during either frozen review round."
+}

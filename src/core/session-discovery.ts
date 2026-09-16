@@ -5,6 +5,7 @@ import { getHarness, listHarnesses } from './harnesses';
 import { isRecord } from './wire-protocol';
 import type { HarnessDescriptor, HarnessId, NativeSessionId } from './contracts';
 import type { DiscoveryCandidate, DiscoveryOptions } from './session-source-contracts';
+import { readSessionTailEntry } from './session-files';
 
 interface SessionHeader { id: string | null; cwd: string | null; parentSession: string | null; }
 type Candidate = DiscoveryCandidate;
@@ -473,8 +474,6 @@ function inspectSubsessionExits(parentFile: unknown, options: DiscoveryOptions =
     }
   };
   if (!validFile(parentFile)) return { complete, blockers };
-  // The general JSONL reader remains JavaScript; narrow its result here.
-  const { readSessionTailEntry }: { readSessionTailEntry(input: { file: string; profileId: string }): unknown } = require('./session-files');
   const walk = (dirPath: string, depth: number, optional = false): void => {
     if (capped) return;
     let dir;
