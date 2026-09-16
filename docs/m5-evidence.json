@@ -1,6 +1,6 @@
 {
   "milestone": "M5",
-  "status": "Owner verification complete; awaiting frozen exact-source three-model review and parent acceptance",
+  "status": "Final corrected source and consumer verification complete; exact-revision review pending; not parent acceptance",
   "acceptedBaseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "branch": "migration/m5-transport",
   "remoteProducerCommit": "57bed24194c0e251d18b58b02041309bf1534439",
@@ -359,7 +359,7 @@
   "completedChecks": [
     {
       "command": "npm run check:source-policy",
-      "scope": "All five M5 source files currently authored",
+      "scope": "Five M5 sources before authorized M3 FleetArtifactStore transfer; historical201-source policy run",
       "result": "201 governed compiler-owned sources; no explicit-any exceptions"
     },
     {
@@ -390,7 +390,7 @@
     },
     {
       "command": "env -i PATH=/usr/bin:/bin HOME=<temporary> node <temporary>/smoke.cjs with supervised isolated sshd",
-      "scope": "Actual generated M5 owners reached through root server.js",
+      "scope": "Initial complete source b7970d1 through root server.js; later correction changes only terminal thrown-value .message projection, independently regression-tested. All HTTP/SSH/relay and PTY success paths unchanged.",
       "result": "exit0; raw invalid-JSON HTTP byte bypass, direct and real SSH forwarding/reuse, credential replacement,0700 socket dir, CORS, fleet registration, public header allowlist, parsed comment relay, real PTY input/restart/reconnect replay, multi-use terminal tickets, WS-over-real-SSH splice, immediate identity SSE still live after10.5s,10s first-response deadline and instant cached failure, shutdown socket removal"
     },
     {
@@ -400,6 +400,35 @@
     {
       "command": "npm run test:ui",
       "result": "exit0; all good; full desktop/mobile smoke including terminal, terminal async ownership, mobile terminal, multi-host and same-id sessions across hosts"
+    },
+    {
+      "command": "npm test -- --test-name-pattern=native.failures test/terminal.test.js",
+      "scope": "Pre-correction generated b7970d1 behavior with new real-WS failure regression",
+      "result": "Expected failure reproduced: null native spawn failure sent [{type:error}] instead of no frame"
+    },
+    {
+      "command": "npm run build:core && npm test -- test/terminal.test.js",
+      "scope": "Exact-error parity correction",
+      "result": "17passed,0fail,0skip;4688.511161ms; preserves1011close and absent/function-carried error message outcomes"
+    },
+    {
+      "command": "isolated Node process intercepts optional node-pty module load with function-carried failure",
+      "result": "exit0; unavailable reason retains message and feature stays disabled; empty temporary HOME removed"
+    },
+    {
+      "command": "npm run check && npm test",
+      "scope": "Final corrected source and root proposal",
+      "result": "exit0;202 governed sources; lint and all drift/strict checks pass;999/999 backend tests,0fail,0skip;31997.747769ms"
+    },
+    {
+      "command": "npm run test:browser -- host-discovery.spec.js host-polls.spec.js host-settings.spec.js terminal-ownership.spec.js",
+      "scope": "Final corrected source revision",
+      "result": "15passed in11.7s; no skips"
+    },
+    {
+      "command": "npm run test:ui",
+      "scope": "Final corrected source revision",
+      "result": "exit0 all good; full desktop/mobile and multi-host/terminal ownership smoke"
     }
   ],
   "runtime": {
@@ -461,10 +490,22 @@
   "sourceSha256": {
     "server.js": "2edfb87acf9f5227003666a871951afa09e8b19c2d5da3cb3e3ad9bbc9ecc15e",
     "src/core/remote-hosts.ts": "c78b913fec0602bbcad9f708744072b7edcc72b359d5c31f11717206da808e5e",
-    "src/core/terminal.ts": "9e9a78e0c265af2a5f91a8d4ca49d7cf8e2f04f6a97dd44cca64bb7144386d0a",
+    "src/core/terminal.ts": "d75522f3c7fe6b833abc39ca13f4ceeb5f0fdb6841f33dbed84ec25d8f80dfbf",
     "src/core/access-handlers.ts": "1cb66aeef1d2d769d6228066907d0f3cf0011272eee07e265a40e876f5d192c3",
     "src/core/relay-handlers.ts": "c3d8afc75b7122cd620a5a1a78f8e6f4e96479a143ab5e64b27ab45030f30a6f",
-    "src/core/terminal-handlers.ts": "22abd75176062d6f977e902876ad58156df48107c3de2aae7aaa2e0abe1dfe41"
+    "src/core/terminal-handlers.ts": "f8ed5423e51d0f47037f6bea62ffc517b635cdb5eae36d85a9d5b055048db276",
+    "test/terminal.test.js": "dd89417b303cef87bcedfeae62d4c1f85cfed61a5d083d38c419200609823584"
   },
-  "cleanup": "Throwaway producer snapshot removed; smoke processes exited0 and SSH daemon stopped; temporary HOME, keys, configs, scripts and independent compiler outputs removed after capturing results. No live user sessions/configuration used."
+  "cleanup": "Throwaway producer snapshot removed; smoke processes exited0 and SSH daemon stopped; temporary HOME, keys, configs, scripts and independent compiler outputs removed after capturing results. No live user sessions/configuration used.",
+  "errorParityCorrection": {
+    "reason": "Strict absent/null/error parity beyond initially nonblocking review observation",
+    "sourcePaths": [
+      "src/core/terminal.ts",
+      "src/core/terminal-handlers.ts"
+    ],
+    "regression": "test/terminal.test.js: native failures preserve absent and function-carried messages",
+    "preFixResult": "Focused real-WebSocket regression failed: actual [{type:error}], expected [] for null native spawn failure",
+    "postFixResult": "Official core generation then entire terminal suite17/17 passed,0skips; function native-load failure smoke passed",
+    "contractsChanged": false
+  }
 }
