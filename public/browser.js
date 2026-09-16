@@ -171,6 +171,7 @@ var PiDishBrowser = (() => {
     normalizeHostBase: () => normalizeHostBase,
     queryHosts: () => queryHosts,
     reconcileHostCatalog: () => reconcileHostCatalog,
+    renameSession: () => renameSession,
     renderDiffViewHtml: () => renderDiffViewHtml,
     renderHarnessBadge: () => renderHarnessBadge,
     renderSidebar: () => renderSidebar,
@@ -184,6 +185,8 @@ var PiDishBrowser = (() => {
     selectionTextAnchor: () => selectionTextAnchor,
     sendJson: () => sendJson,
     sessionSpawnKey: () => sessionSpawnKey,
+    setSessionModel: () => setSessionModel,
+    setSessionThinking: () => setSessionThinking,
     spawnTargetKey: () => spawnTargetKey,
     terminalTheme: () => terminalTheme,
     updateToolGroupSummary: () => updateToolGroupSummary,
@@ -422,11 +425,18 @@ var PiDishBrowser = (() => {
     if (cwd) params.set("cwd", cwd);
     return "/api/models?" + params.toString();
   }
+  async function setSessionModel(request, endpoint, sessionId, modelId) {
+    const body = { modelId };
+    return decodeMutationResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/model`, body));
+  }
+  async function setSessionThinking(request, endpoint, sessionId, level) {
+    const body = { level };
+    return decodeThinkingResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/thinking`, body));
+  }
+  async function renameSession(request, endpoint, sessionId, name) {
+    return decodeMutationResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/rename`, { name }));
+  }
   function createSessionApi(request) {
-    function mutate(owner, operation, body) {
-      const { host, id } = owner;
-      return sendJson(request, host, `/api/sessions/${encodeURIComponent(id)}/${operation}`, body);
-    }
     return {
       async list(host, path, options2) {
         return decodeSessionList(await jsonResponse(await request(host, path, options2), "HTTP request failed"));
@@ -435,17 +445,6 @@ var PiDishBrowser = (() => {
         const { sessionId, harnessId = "pi", cwd } = options2;
         const path = sessionId ? "/api/models?sessionId=" + encodeURIComponent(sessionId) : harnessId !== "pi" ? modelCatalogUrl(harnessId, cwd) : "/api/models";
         return decodeModelCatalog(await jsonResponse(await request(host, path), "Model catalog request failed"));
-      },
-      async setModel(owner, modelId) {
-        const body = { modelId };
-        return decodeMutationResult(await mutate(owner, "model", body));
-      },
-      async setThinking(owner, level) {
-        const body = { level };
-        return decodeThinkingResult(await mutate(owner, "thinking", body));
-      },
-      async rename(owner, name) {
-        return decodeMutationResult(await mutate(owner, "rename", { name }));
       },
       async setEnabledModels(enabledIds) {
         const body = { enabledIds: enabledIds && [...enabledIds] };
@@ -13048,10 +13047,10 @@ var PiDishBrowser = (() => {
     function owns(owner) {
       return !!owner && !!endpointCurrent(owner) && sessionState.ownsSelection(owner.selection);
     }
-    function api(owner) {
+    function mutationEndpoint(owner) {
       const endpoint = endpointCurrent(owner);
       if (!endpoint) throw new Error("Host connection changed");
-      return createSessionApi((_host, path, init) => options2.request(endpoint, path, init));
+      return endpoint;
     }
     function mutation(owner, kind) {
       const key = sessionKey(owner.selection.host, owner.selection.id) + ":" + kind, token = Symbol(kind);
@@ -13200,7 +13199,7 @@ var PiDishBrowser = (() => {
       const current = mutation(owner, "model");
       options2.status("Switching model...", "working");
       try {
-        await api(owner).setModel(owner.selection, selector);
+        await setSessionModel(options2.request, mutationEndpoint(owner), owner.selection.id, selector);
         if (!current()) return;
         sessionState.patchSession(owner.selection.id, { model: selector }, owner.selection.host);
         if (owns(owner)) options2.status("Model switched to " + selector);
@@ -13252,7 +13251,7 @@ var PiDishBrowser = (() => {
       if (!owner || !session || !sessionSupports2(session, "setThinking")) return;
       const current = mutation(owner, "thinking");
       try {
-        const result = await api(owner).setThinking(owner.selection, level);
+        const result = await setSessionThinking(options2.request, mutationEndpoint(owner), owner.selection.id, level);
         if (!current()) return;
         const reported = result.level || level;
         sessionState.patchSession(owner.selection.id, { thinkingLevel: reported }, owner.selection.host);
@@ -13300,7 +13299,7 @@ var PiDishBrowser = (() => {
       if (!owns(owner) || !session?.isActive || !sessionSupports2(session, "rename") || !value || value === session.name) return;
       const current = mutation(owner, "rename");
       try {
-        await api(owner).rename(owner.selection, value);
+        await renameSession(options2.request, mutationEndpoint(owner), owner.selection.id, value);
         if (current()) sessionState.patchSession(owner.selection.id, { name: value }, owner.selection.host);
       } catch (error) {
         if (current() && owns(owner)) options2.status("Rename failed: " + errorText(error), "error");

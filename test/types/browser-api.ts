@@ -1,15 +1,17 @@
-import { createSessionApi, createHostTransport } from '../../src/browser/api-client';
-const api = createSessionApi(async () => new Response());
-const owner = { id: 'session', host: 'peer', generation: 1 };
-api.setModel(owner, 'provider/model');
-api.setThinking(owner, 'high');
+import { createSessionApi, createHostTransport, setSessionModel, setSessionThinking, renameSession } from '../../src/browser/api-client';
+const request = async () => new Response();
+const api = createSessionApi(request);
+const endpoint = { base: 'https://peer.invalid', token: 'fixture' };
+setSessionModel(request, endpoint, 'session', 'provider/model');
+setSessionThinking(request, endpoint, 'session', 'high');
+renameSession(request, endpoint, 'session', 'name');
 api.models('peer', { harnessId: 'omp', cwd: '/workspace' });
-// @ts-expect-error A bare id cannot own a session mutation.
-api.setModel('session', 'provider/model');
-// @ts-expect-error Host/generation cannot be omitted from an owner.
-api.rename({ id: 'session' }, 'name');
+// @ts-expect-error A host lookup id is not a captured endpoint.
+setSessionModel(request, 'peer', 'session', 'provider/model');
+// @ts-expect-error A selection owner is not a route session id.
+renameSession(request, endpoint, { id: 'session', host: 'peer', generation: 1 }, 'name');
 // @ts-expect-error The selector is a string, not a model record.
-api.setModel(owner, { id: 'model' });
+setSessionModel(request, endpoint, 'session', { id: 'model' });
 // @ts-expect-error Host resolution must provide a usable base URL.
 createHostTransport({ resolveHost: () => ({}), fetch });
 api.models(null).then(models => {

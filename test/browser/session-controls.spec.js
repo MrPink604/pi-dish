@@ -29,14 +29,69 @@ test('out-of-order model mutations preserve the latest selection on their origin
   await fleet.select(fleet.peer); const held = [];
   await page.route('**/api/sessions/*/model', route => { held.push(route); });
   await page.evaluate(() => {
-    window.modelMutationWrites = []; const patch = fixtureApp.features.sessionState.patchSession;
-    fixtureApp.features.sessionState.patchSession = (id, update, host) => { if (typeof update.model === 'string' && update.model.startsWith('test/')) window.modelMutationWrites.push(update.model); return patch(id, update, host); };
     window.firstModel = fixtureApp.features.sessionControls.selectModel('test/first'); window.secondModel = fixtureApp.features.sessionControls.selectModel('test/second');
   });
   await expect.poll(() => held.length).toBe(2);
   await held[1].fulfill({ json: { success: true } }); await page.evaluate(() => window.secondModel);
   await held[0].fulfill({ json: { success: true } }); await page.evaluate(() => window.firstModel);
-  expect(await page.evaluate(() => window.modelMutationWrites)).toEqual(['test/second']);
+  expect(await page.evaluate(({ id, host }) => fixtureApp.features.sessionState.findSession(id, host).model,
+    { id: ROOT, host: fleet.peer.hostId })).toBe('test/second');
+});
+
+test('rename refreshes credentials without retargeting its captured endpoint', async ({ page, fleet }) => {
+  await fleet.select(fleet.peer);
+  await page.evaluate(() => {
+    const ports = fixtureApp.ports.sessionControls, host = ports.host;
+    window.controlEndpoint = { ...host(fixtureApp.features.sessionState.currentSession.host) };
+    ports.host = id => id === fixtureApp.features.sessionState.currentSession.host ? window.controlEndpoint : host(id);
+    fixtureApp.features.sessionControls.startRename();
+    document.getElementById('sessionNameInput').value = 'Rotated peer';
+    window.controlEndpoint.token = 'fresh-fixture-token';
+  });
+  let request;
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/rename`, route => {
+    request = route.request();
+    return route.fulfill({ json: { success: true } });
+  });
+  const result = await page.evaluate(async ({ id, self, peer }) => {
+    await fixtureApp.features.sessionControls.commitRename();
+    return {
+      header: document.getElementById('sessionName').textContent,
+      peer: fixtureApp.features.sessionState.findSession(id, peer).name,
+      self: fixtureApp.features.sessionState.findSession(id, self).name,
+    };
+  }, { id: ROOT, self: fleet.self.hostId, peer: fleet.peer.hostId });
+  expect(request.headers().authorization).toBe('Bearer fresh-fixture-token');
+  expect(result.header).toBe('Rotated peer');
+  expect(result.peer).toBe('Rotated peer');
+  expect(result.self).not.toBe('Rotated peer');
+});
+
+test('changed endpoint base retires rename editors and pending mutation completions', async ({ page, fleet }) => {
+  await fleet.select(fleet.peer);
+  await page.evaluate(() => {
+    const ports = fixtureApp.ports.sessionControls, host = ports.host;
+    window.controlEndpoint = { ...host(fixtureApp.features.sessionState.currentSession.host) };
+    ports.host = () => window.controlEndpoint;
+    fixtureApp.features.sessionControls.startRename();
+    document.getElementById('sessionNameInput').value = 'Retired rename';
+    window.controlEndpoint.base += '/replacement';
+  });
+  let renameWrites = 0;
+  await page.route('**/api/sessions/*/rename', route => { renameWrites++; return route.fulfill({ json: { success: true } }); });
+  await page.evaluate(() => fixtureApp.features.sessionControls.commitRename());
+  expect(renameWrites).toBe(0);
+  await expect(page.locator('#sessionName')).not.toHaveText('Retired rename');
+  await page.evaluate(base => { window.controlEndpoint.base = base; }, fleet.peer.base);
+  let held;
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/thinking`, route => { held = route; });
+  const before = await page.locator('#sessionThinking').textContent();
+  await page.evaluate(() => { window.pendingThinking = fixtureApp.features.sessionControls.selectThinking('high'); });
+  await expect.poll(() => !!held).toBe(true);
+  await page.evaluate(() => { window.controlEndpoint.base += '/replacement'; });
+  await held.fulfill({ json: { success: true, level: 'high' } });
+  await page.evaluate(() => window.pendingThinking);
+  await expect(page.locator('#sessionThinking')).toHaveText(before);
 });
 
 test('enabled-model debounce retains the serving host preference after menu close and selection change', async ({ page, fleet }) => {

@@ -1,7 +1,6 @@
 import { decodeSessionList, decodeModelCatalog, decodeMutationResult, decodeThinkingResult,
   decodeEnabledModelsResult } from '../core/session-api';
 import type { ModelChangeRequest, ThinkingChangeRequest, EnabledModelsRequest } from '../core/session-api';
-import type { SelectionOwner } from './session-state';
 
 export interface HostEndpoint { base: string; token?: string | null }
 export type HostTarget = string | HostEndpoint | null;
@@ -58,11 +57,21 @@ export function modelCatalogUrl(harnessId: string, cwd?: string | null): string 
   return '/api/models?' + params.toString();
 }
 
+export async function setSessionModel(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, modelId: string) {
+  const body: ModelChangeRequest = { modelId };
+  return decodeMutationResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/model`, body));
+}
+
+export async function setSessionThinking(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, level: string) {
+  const body: ThinkingChangeRequest = { level };
+  return decodeThinkingResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/thinking`, body));
+}
+
+export async function renameSession(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, name: string) {
+  return decodeMutationResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/rename`, { name }));
+}
+
 export function createSessionApi(request: ApiRequest) {
-  function mutate(owner: SelectionOwner, operation: string, body: unknown) {
-    const { host, id } = owner;
-    return sendJson(request, host, `/api/sessions/${encodeURIComponent(id)}/${operation}`, body);
-  }
   return {
     async list(host: HostTarget, path: string, options?: RequestOptions) {
       return decodeSessionList(await jsonResponse(await request(host, path, options), 'HTTP request failed'));
@@ -72,17 +81,6 @@ export function createSessionApi(request: ApiRequest) {
       const path = sessionId ? '/api/models?sessionId=' + encodeURIComponent(sessionId)
         : harnessId !== 'pi' ? modelCatalogUrl(harnessId, cwd) : '/api/models';
       return decodeModelCatalog(await jsonResponse(await request(host, path), 'Model catalog request failed'));
-    },
-    async setModel(owner: SelectionOwner, modelId: string) {
-      const body: ModelChangeRequest = { modelId };
-      return decodeMutationResult(await mutate(owner, 'model', body));
-    },
-    async setThinking(owner: SelectionOwner, level: string) {
-      const body: ThinkingChangeRequest = { level };
-      return decodeThinkingResult(await mutate(owner, 'thinking', body));
-    },
-    async rename(owner: SelectionOwner, name: string) {
-      return decodeMutationResult(await mutate(owner, 'rename', { name }));
     },
     async setEnabledModels(enabledIds: string[] | null) {
       // This setting belongs to the serving Pi instance, independently of selection.
