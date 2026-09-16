@@ -1,0 +1,103 @@
+{
+  "milestone": "M3",
+  "scope": "Narrow actual file-search consumer producer for M6 packaging proof; NOT M3 acceptance",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "contractAmendment": "de0496c9ec09a18d21a7d970c67beab9550cb897",
+  "requiredDependency": {
+    "owner": "M6",
+    "originalCommit": "707a2e34b2cce1619fb3379ab7af3217d6b16691",
+    "privateCherryPick": "575610458e446542429f44dcd859d07e705029c4",
+    "files": [
+      "src/core/runtime-resources.ts",
+      "lib/runtime-resources.js",
+      "lib/runtime-resources.d.ts",
+      "test/runtime-resources.test.js"
+    ]
+  },
+  "transfer": "Cherry-pick only the consumer commit containing this record over the real M6 resolver producer. No M1, M5, publication-handler or root-proposal dependency is required.",
+  "sourceOutputSha256": {
+    "src/core/file-search.ts": "67e09df73ae1b48050a564e45ef613d555cbe0bf13f33ce246caf74eee297db5",
+    "lib/file-search.js": "d2576e370c9b4548ab885bad857553130ac00e0286f74926c196340199fc0c77",
+    "lib/file-search.d.ts": "3f39e477af852ea240d74bdf6572f54cf88f52fa8e9dda677a2b379566296a6a"
+  },
+  "verificationSnapshot": {
+    "directory": "/tmp/pi-dish-m3-search-producer-ldqg0vfp",
+    "construction": "git archive of baseline35 + exact four M6 producer files + actual src/core/file-search.ts; official build:core generated outputs. Original server routes consume the generated file-search implementation. Own installed node_modules symlink; no sibling worktree mutations."
+  },
+  "runtime": {
+    "node": "26.8.2",
+    "npm": "12.0.2",
+    "typescript": "7.0.2"
+  },
+  "commands": [
+    {
+      "command": "npm run build:core",
+      "result": "exit0; actual JS/declaration generated"
+    },
+    {
+      "command": "npm run check",
+      "result": "exit0;198 governed sources, lint, core/browser drift and types"
+    },
+    {
+      "command": "npm test",
+      "result": "exit0;1004 passed,0 failed,0 skipped;31927.365095ms"
+    },
+    {
+      "command": "Temporary-HOME actual generated consumer native search",
+      "result": {
+        "result": "PASS",
+        "consumer": "actual generated lib/file-search.js",
+        "first": [
+          {
+            "path": "native-marker.txt",
+            "gitStatus": "modified"
+          }
+        ],
+        "second": [
+          {
+            "path": "native-marker.txt",
+            "gitStatus": "modified"
+          }
+        ],
+        "nativeLibrary": "/home/jyarwood/workspace/pi-dish-m3/node_modules/@ff-labs/fff-bin-linux-x64-gnu/libfff_c.so",
+        "warnings": []
+      }
+    },
+    {
+      "command": "Temporary-HOME synchronous resolver failure cache/fallback smoke",
+      "result": {
+        "result": "PASS",
+        "first": [
+          {
+            "path": "walker-marker.txt",
+            "gitStatus": null
+          }
+        ],
+        "second": [
+          {
+            "path": "walker-marker.txt",
+            "gitStatus": null
+          }
+        ],
+        "warnings": 1,
+        "scope": "Actual generated consumer handles synchronous resolver failure as one cached unavailable import; fallback remains usable after metadata becomes resolvable. Plain-directory archive layout, not Electron packaged proof."
+      }
+    }
+  ],
+  "preservedSemantics": [
+    "single lazy cached FFF import",
+    "checkout bare import specifier unchanged by M6 resolver",
+    "no duplicated app.asar detection",
+    "synchronous resolver failure cached through same unavailable-import fallback",
+    "four-finder LRU and existing scan wait/error behavior",
+    "bounded walker and directory cache",
+    "path-completion limits, absolute/tilde/relative spelling and ranking"
+  ],
+  "limits": [
+    "Native execution proved in Node checkout, not full Electron product package",
+    "Plain app.asar-named directory used only to exercise resolver failure cache; not ASAR-native proof",
+    "M6 owns complete dependency-tree unpacking and must run real packaged-window/native consumer proof",
+    "Complete M3 handler/root/browser/full milestone reviews still pending"
+  ],
+  "commitBinding": "The consumer commit containing this record binds the source/output hashes; final milestone evidence names its resulting full commit."
+}
