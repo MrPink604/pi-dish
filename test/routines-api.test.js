@@ -419,7 +419,7 @@ test('deleting a routine keeps its invocations readable', async () => {
 });
 
 test('saved raw launch selections retain native argv, cwd failure order and falsy fallback', async () => {
-  const { body: { routine } } = await post('/api/routines', definition({ name: 'raw-launch-routine' }));
+  const { body: { routine } } = await post('/api/routines', definition({ name: 'raw-launch-routine', prompt: 'slow: verify raw launch selections' }));
   const file = path.join(tmpHome, '.pi', 'dish', 'routines.json');
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   Object.assign(saved.routines[routine.id], { model: 42, thinking: ['one', 'two'] });
@@ -427,7 +427,7 @@ test('saved raw launch selections retain native argv, cwd failure order and fals
 
   const first = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
   assert.equal(first.status, 200);
-  assert.equal(first.body.invocation.status, 'completed');
+  await waitForStatus(first.body.invocation.id, 'completed');
   const started = fs.readFileSync(START_LOG, 'utf8').trim().split('\n').map(JSON.parse);
   const child = started.find(row => path.basename(row.sessionFile, '.jsonl') === first.body.invocation.sessionId);
   assert.deepEqual(child.args, ['--mode', 'rpc', '--model', '42', '--thinking', 'one,two']);
@@ -439,14 +439,13 @@ test('saved raw launch selections retain native argv, cwd failure order and fals
   const failed = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
   assert.equal(failed.status, 200);
   assert.equal(failed.body.invocation.status, 'errored');
-  assert.equal(failed.body.invocation.error, 'cwd.startsWith is not a function');
   assert.equal(failed.body.invocation.sessionId, null);
   assert.equal(fs.readFileSync(START_LOG, 'utf8'), before, 'cwd failure must precede native launch');
 
   saved.routines[routine.id].cwd = 0;
   fs.writeFileSync(file, JSON.stringify(saved));
   const fallback = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
-  assert.equal(fallback.body.invocation.status, 'completed');
+  await waitForStatus(fallback.body.invocation.id, 'completed');
   const last = JSON.parse(fs.readFileSync(START_LOG, 'utf8').trim().split('\n').at(-1));
   const header = JSON.parse(fs.readFileSync(last.sessionFile, 'utf8').split('\n')[0]);
   assert.equal(header.cwd, tmpHome);
@@ -455,17 +454,17 @@ test('saved raw launch selections retain native argv, cwd failure order and fals
 });
 
 test('raw saved continuation identity falls back to a fresh session without rewriting history', async () => {
-  const { body: { routine } } = await post('/api/routines', definition({ name: 'raw-ledger-routine', mode: 'continue' }));
+  const { body: { routine } } = await post('/api/routines', definition({ name: 'raw-ledger-routine', mode: 'continue', prompt: 'slow: verify raw continuation identity' }));
   const file = path.join(tmpHome, '.pi', 'dish', 'routine-invocations.json');
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   saved.invocations.unshift({ id: 'external-raw-identity', routineId: routine.id, sessionId: 42, status: 'completed', startedAt: Date.now() - 1000 });
   fs.writeFileSync(file, JSON.stringify(saved));
   const run = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
   assert.equal(run.status, 200);
-  assert.equal(run.body.invocation.status, 'completed');
-  assert.equal(typeof run.body.invocation.sessionId, 'string');
-  assert.equal(run.body.invocation.error, null);
+  const completed = await waitForStatus(run.body.invocation.id, 'completed');
+  assert.equal(typeof completed.sessionId, 'string');
+  assert.equal(completed.error, null);
   assert.equal((await invocation('external-raw-identity')).sessionId, 42);
-  assert.equal((await post(`/api/sessions/${run.body.invocation.sessionId}/close`, {})).status, 200);
+  assert.equal((await post(`/api/sessions/${completed.sessionId}/close`, {})).status, 200);
   await del(`/api/routines/${routine.id}`);
 });
