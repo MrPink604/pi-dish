@@ -8,7 +8,6 @@ import type { SkillsInventory } from './skills';
 import * as sessionIndex from './session-index';
 import { finite } from './session-index-data';
 import type { SkillActivation } from './session-index-data';
-import { getSessionInfo } from './session-files';
 import { runtimeResourcePath } from './runtime-resources';
 
 const DAY_MS = 86400000;
@@ -271,7 +270,7 @@ export function createSkillFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
     if (latest && latest.sessionId) {
       try {
         const source = ports.findSessionSource(latest.sessionId);
-        if (source) latest = { ...latest, name: getSessionInfo(source).name || null };
+        if (source) latest = { ...latest, name: sessionIndex.getSessionInfo(source).name || null };
       } catch {}
     }
 
