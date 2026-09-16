@@ -1,6 +1,6 @@
 # Remaining TypeScript migration and simplifying refactors
 
-Status: **scoped and independently critiqued; ready for implementation planning**.
+Status: **implementation underway; M0 accepted, parallel M1–M6 work released**.
 Baseline: `c46e7c5798d6a678dbb2a5f13ac2603f7f2a9952` (2026-09-15).
 This is the forward plan after the delivered browser, catalog, composition,
 contract, shared-helper and lifecycle stages. Their implementation records remain
@@ -112,9 +112,8 @@ boundaries and exact CI/review links. The package author supplies the evidence;
 an independent reviewer checks the ledger against code and behavior, and the
 integration lead records acceptance and updates BACKLOG. If a package needs its
 own substantial design record, link it from that subsection rather than creating
-an untracked parallel clearance list. No future package is accepted by this plan's
-critique alone; the currently absent implementation records are not placeholders
-for claimed work.
+an untracked parallel clearance list. Planning critique alone never accepts a
+future implementation package.
 
 ## Complete remaining ownership inventory
 
@@ -684,8 +683,9 @@ Future ideas require their own problem/evidence, not expansion of this finish li
 **Depends on:** stable product contracts. Its runner/vendor-tool prerequisite may
 start alongside late M/R work; test-family cutovers wait for the contract they use.
 
-Convert the nine authored scripts, Node tests, Playwright tests, UI scenarios and
-support implementations in bounded families. Explicitly allocate
+Convert the authored scripts (nine at baseline, plus M0's source-policy gate and
+later additions), Node tests, Playwright tests, UI scenarios and support
+implementations in bounded families. Explicitly allocate
 `eslint.config.js` and `playwright.config.js`: keep compatible loader entrypoints
 as named strict-`checkJs` configurations unless their hosts support a direct TS
 cutover without a new runtime loader. Their bodies are checked, not deferred to
@@ -807,3 +807,61 @@ Unverified platform/package combinations must be named, not inferred from Linux
 or a successful typecheck. Each shipped implementation checkpoint must pass the
 required exact-commit CI gates. Documentation-only planning updates require
 content/link checks, not a claim that the future implementation has passed tests.
+
+## Implementation ledger
+
+### Implementation record — M0
+
+**Accepted by the integration lead on 2026-09-16.** Owner: OMP session
+`01a0a963-f44d-71d2-b8d6-fe6d7807db69`, verified
+`openai-codex/gpt-6-astra`, High.
+
+- Implementation: `9988d5a0256f13ac4025a72c7dbfafb93885077f`.
+- Final reviewed source/contracts: `5305af19fb674a624a17a267812bb3ed436089c6`;
+  its only changes from the implementation are three contract/evidence documents.
+- Attestation and integrated implementation checkpoint:
+  `35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52`. The attestation adds only
+  [the review record](m0-review.json). Main received the committed objects by
+  fast-forward, not a copy of the review worktree.
+- [All five CI jobs passed on that exact checkpoint](https://github.com/MrPink604/pi-dish/actions/runs/35079260428):
+  backend/checks on Node 22.19.0, 22.x, 24.x and 26.x; Node 24 browser cases,
+  isolated UI scenarios and desktop/mobile smoke.
+
+**Delivered:** [source/output/compiler and consumed-port contracts](m0-contracts.md),
+[115 ordered registrations and 557 resolved outer-name references](m0-route-contracts.json),
+the [inactive M6c runtime-manifest target](m0-runtime-manifest.json), real declaration
+pins, and the TypeScript-parser-backed source-policy gate wired into `npm run check`.
+The gate currently governs 196 compiler-owned sources; pending implementations
+are not claimed checked. M0 makes no production moves/deletions and introduces
+no runtime shim or wire/store policy change. Its new development script remains
+within C1's checked-tooling obligation.
+
+**Verification:** the [owner evidence](m0-evidence.json) records Node 26.8.2,
+npm 12.0.2, TypeScript 7.0.2 and Linux x64; clean install, check, 998 backend
+tests, 31 focused post-install cases, actual temporary explicit-any rejection,
+compiler/export/native-type probes, isolated server executable/export and
+installed-link loader checks. The parent inspected the implementation,
+dependency delta, contract boundaries and all three durable final review
+transcripts; integrated `npm run check` passed. An additional disposable parent
+probe proved that a governed-root executable absent from all compiler programs
+is rejected, while the valid source set passes before and after removal.
+Temporary parent probe files were removed.
+
+**Independent acceptance:** `zai/glm-5.3`,
+`opencode-go/deepseek-v4.1-flash` and `kimi-code/k3` each explicitly accepted
+`5305af1`. The review record retains exact identities, revisions, findings and
+dispositions. The accidental review-time package extraction, confirmed cause,
+byte-identical restoration and post-restoration check are recorded separately;
+no contaminated working-tree bytes were integrated.
+
+**Retained boundaries:** all M1–M7 implementations remain pending. M6c must fix
+the reproduced package entrypoint, omitted resources and Electron embedded-Node
+incompatibility, and prove real desktop/native/SDK behavior; M0's HTTP-only
+package launch is not desktop acceptance. M0 did not run opt-in real OMP/Prime
+canaries or establish macOS package support.
+
+**Release:** M1–M6 may implement their independent slices in isolated worktrees.
+Producer-dependent integration still follows the frozen M1/M3/M5 contracts.
+Private domain mount/deletion patches are proposals reviewed with their consumer
+cutover; only the integration lead applies them to shared main, serially.
+M7 owns the remaining server/root conversion. R and C completion are not implied.

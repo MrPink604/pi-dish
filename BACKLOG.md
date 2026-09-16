@@ -212,6 +212,15 @@ DeepSeek Flash each returned `ready` after independent critique and recheck.
 The [review record](docs/remaining-migration-review-2026-09-15.json) retains the
 initial findings, resolutions and exact reviewed document digests.
 
+**M0 accepted (2026-09-16):** the compiler/port/runtime contracts and parser-backed
+source-policy gate are integrated at `35ad0c4`, with all three implementation
+reviewers accepting and [all five exact-commit CI jobs green](https://github.com/MrPink604/pi-dish/actions/runs/35079260428).
+See the [M0 implementation record](docs/remaining-migration-plan.md#implementation-record--m0).
+Next: independent M1–M6 slices in isolated Astra High sessions; dependent consumer
+integration and shared server/build changes remain serialized. The reproduced
+Electron entrypoint/resource/embedded-Node defects are explicit M6c obligations,
+not completed fixes. Product migration, simplification and closure remain open.
+
 1. **Finish product migration (M0–M7).** Freeze delivery/compiler contracts; migrate
    the remaining session read/SDK/projection, routine, publication/file, feature,
    fleet/terminal and runtime-edge implementations; finish checked server composition.
