@@ -7,7 +7,7 @@ export interface TerminalPorts {
     getRegisteredSession(id: string): object | null | undefined;
     getRPCSession(id: string): object | null | undefined;
     findSessionFile(id: string): string | null | undefined;
-    resolveSessionCwd(id: string): string | null | undefined;
+    resolveSessionCwd(id: string): unknown;
     locatePiPane(id: string): Promise<PaneTarget | null>;
 }
 export interface TerminalHandlers {

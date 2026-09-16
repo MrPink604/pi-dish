@@ -47,6 +47,7 @@ declare class RPCSession {
     bounceExecuting?: boolean;
     bounceActivityRevision?: number;
     extUIState?: ExtensionUIState;
+    extUIStateTracked?: boolean;
     lastStats?: unknown;
     constructor(id: NativeSessionId, proc: ChildProcessWithoutNullStreams);
     _canObserveRecovery(): boolean;

@@ -14,7 +14,7 @@ type FileResponse = Response<unknown, Record<string, unknown>>;
 type FileHandler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 
 export interface FileHandlerPorts {
-  resolveSessionCwd(sessionId: string): string | null;
+  resolveSessionCwd(sessionId: string): unknown;
   findSessionSource(sessionId: string): SessionSource | null;
 }
 
@@ -31,7 +31,7 @@ export interface FileHandlers {
 
 interface DiffSnapshot {
   id: string;
-  cwd: string;
+  cwd: unknown;
   at: number;
   version: GitDiffAggregate['version'];
   data: Omit<GitDiffAggregate, 'version'>;
@@ -66,10 +66,10 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
       const q = String(req.query.q || '');
       const cwd = ports.resolveSessionCwd(req.params.id);
       if (isPathCompletionToken(q)) {
-        return res.json({ cwd, files: completePath(q, { cwd, limit: 20 }) });
+        return res.json({ cwd, files: completePath(q, { cwd: cwd as string | null | undefined, limit: 20 }) });
       }
       if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
-      const files = await searchFiles(cwd, q, 20);
+      const files = await searchFiles(cwd as string, q, 20);
       res.json({ cwd, files });
     } catch (error) {
       res.status(500).json({ error: record(error) ? error.message : undefined });
@@ -82,7 +82,7 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     if (!cwd && !session) return { error: 'Unknown session', status: 404 } as const;
     let messages: readonly unknown[] = [];
     if (session) { try { messages = readSessionMessages(session); } catch {} }
-    const resolved = await resolveFileMention(mention, { cwd, messages });
+    const resolved = await resolveFileMention(mention, { cwd: cwd as string | null | undefined, messages });
     if (!resolved) return { error: `Couldn't find "${mention}" among this session's files`, status: 404 } as const;
     return { cwd, resolved };
   }
@@ -120,7 +120,8 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
       }
       res.json({
         path: resolved.absPath,
-        relPath: cwd && resolved.absPath.startsWith(cwd + '/') ? resolved.absPath.slice(cwd.length + 1) : null,
+        relPath: cwd && resolved.absPath.startsWith((cwd as string) + '/')
+          ? resolved.absPath.slice((cwd as string).length + 1) : null,
         line: resolved.line ?? null,
         ...file,
       });
@@ -129,7 +130,7 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     }
   };
 
-  function rememberDiffSnapshot(sessionId: string, cwd: string, data: GitDiffAggregate): DiffSnapshot {
+  function rememberDiffSnapshot(sessionId: string, cwd: unknown, data: GitDiffAggregate): DiffSnapshot {
     const { version, ...clientData } = data;
     const snapshot = {
       id: crypto.randomBytes(12).toString('hex'),
@@ -173,9 +174,9 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
       const repo = snapshot.data.repos.find(item => item.path === repoPath);
       const file = repo?.files.find(item => item.path === filePath);
       if (!repo || !file) return res.status(404).json({ error: 'Patch not found' });
-      if (await getDiffVersion(cwd) !== snapshot.version) return staleDiffResponse(res);
-      const patch = file.patch ? file : await getFilePatch(path.resolve(cwd, repo.path), file);
-      if (await getDiffVersion(cwd) !== snapshot.version) return staleDiffResponse(res);
+      if (await getDiffVersion(cwd as string) !== snapshot.version) return staleDiffResponse(res);
+      const patch = file.patch ? file : await getFilePatch(path.resolve(cwd as string, repo.path), file);
+      if (await getDiffVersion(cwd as string) !== snapshot.version) return staleDiffResponse(res);
       if (!patch?.patch) return res.status(404).json({ error: 'Patch not found' });
       snapshot.at = Date.now();
       diffSnapshots.delete(req.params.id);
@@ -190,7 +191,7 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     try {
       const cwd = ports.resolveSessionCwd(req.params.id);
       if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
-      const data = await aggregateDiffs(cwd, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
+      const data = await aggregateDiffs(cwd as string, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
       const snapshot = rememberDiffSnapshot(req.params.id, cwd, data);
       res.json({ ...snapshot.data, snapshotId: snapshot.id });
     } catch (error) {

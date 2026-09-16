@@ -22,6 +22,7 @@
     "scripts/report-ci-failure.ts",
     "eslint.config.js",
     "playwright.config.ts",
+    "server.js",
     "skills/lib/pi-dish-client.ts",
     "skills/pi-dish-sessions/scripts/pi-dish-sessions.ts",
     "skills/pi-dish-comments/scripts/pi-dish-comments.ts",

@@ -12,7 +12,7 @@ export interface TerminalPorts {
   getRegisteredSession(id: string): object | null | undefined;
   getRPCSession(id: string): object | null | undefined;
   findSessionFile(id: string): string | null | undefined;
-  resolveSessionCwd(id: string): string | null | undefined;
+  resolveSessionCwd(id: string): unknown;
   locatePiPane(id: string): Promise<PaneTarget | null>;
 }
 
@@ -71,7 +71,7 @@ export function createTerminalHandlers(ports: TerminalPorts): TerminalHandlers {
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
         try {
-          attachClient(key, ports.resolveSessionCwd(sessionId), ws, opts);
+          attachClient(key, ports.resolveSessionCwd(sessionId) as string | null | undefined, ws, opts);
         } catch (error) {
           try {
             // Preserve property access inside this catch: null/undefined skip
