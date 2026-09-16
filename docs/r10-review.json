@@ -1,0 +1,1267 @@
+{
+  "milestone": "R10 — Endpoint-explicit browser mutations",
+  "status": "Three independent whole-source ACCEPT decisions for the same exact source; parent integration/runtime/exact-main-CI acceptance pending",
+  "baselineCommit": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "reviewedSourceCommit": "86e7d24ebb5aaf83bd0de9186c39590e98c0d276",
+  "branch": "migration/r10-endpoint-mutations",
+  "ownerRef": "01a0ab39-942c-779f-b7a5-490b56e98c59",
+  "parentRef": "01a0a3fd-9825-70bd-b000-dc85c59a7421",
+  "sourceFiles": [
+    "src/browser/api-client.ts",
+    "src/browser/session-controls.ts",
+    "src/browser/index.ts",
+    "test/types/browser-api.ts",
+    "test/browser-api.test.js",
+    "test/browser/session-controls.spec.js",
+    "public/app.js",
+    "public/browser.js",
+    "docs/r10-evidence.json"
+  ],
+  "sourceEvidence": "docs/r10-evidence.json",
+  "ownership": {
+    "api": "src/browser/api-client.ts owns endpoint-explicit serialization/decoding; explicit ApiRequest, HostEndpoint, route session id and value arguments.",
+    "controls": "src/browser/session-controls.ts alone retains selection/generation, endpoint-base/fresh-token checks, per-host/id/field latest-operation symbols and original-row patch/feedback ownership.",
+    "index": "Only three mutation export additions to shared src/browser/index.ts; parent serializes integration.",
+    "app": "app.ts unchanged. Parent approved standalone contract with no app fragment or R8 dependency.",
+    "generated": "Only affected browser outputs regenerated via existing build:browser; no compiler, package, source-policy or loader exception."
+  },
+  "contract": {
+    "owner": "src/browser/api-client.ts",
+    "operations": [
+      "setSessionModel(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, modelId: string)",
+      "setSessionThinking(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, level: string)",
+      "renameSession(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, name: string)"
+    ],
+    "identity": "Captured endpoint plus route session id address requests. Selection host/generation never becomes a transport requirement.",
+    "coordination": "Parent explicitly approved the proposed standalone signatures, no app.ts fragment/R8 dependency, and API-mutation exports only in shared index.ts. Parent serializes shared exports at integration.",
+    "lsp": "xd://lsp status reports No language servers configured for this project; exact textual exported callers inventoried instead. No mutating LSP."
+  },
+  "deletionLedger": [
+    "Per-mutation createSessionApi allocation and ignored-host request closure",
+    "Factory-local mutate closure and three factory mutation methods",
+    "API SelectionOwner import",
+    "Obsolete type-fixture owner/generation requirements",
+    "Mocked mutation-forwarding test assertions and patch-write spy replaced by observable evidence"
+  ],
+  "retainedChecks": [
+    "endpoint base equality and fresh dispatch token",
+    "latest-operation symbol by host/id/field",
+    "selection ownership for UI feedback",
+    "original host/id state patch",
+    "capabilities/disposal",
+    "HTTP status and strict mutation response decoding"
+  ],
+  "opaqueBoundaries": [
+    "Raw response JSON remains unknown until existing decoder; no DTO expansion",
+    "Native registry/harness/lifecycle/relay policies are unchanged",
+    "No compiler, loader, host exception or new source-policy entry"
+  ],
+  "contributorPath": {
+    "before": "Changing a model/thinking/rename transport required following controls.api(owner), an ignored-host closure, createSessionApi's factory-local mutate and a factory mutation method. Every dispatch allocated the entire factory even though only one method was used.",
+    "after": "Controls validates/refreshes its captured endpoint, then calls the named API operation with request/endpoint/id/value. API owns wire serialization and response decoding; controls alone owns selection/generation/order/patch policy. No new facade or duplicate policy owner."
+  },
+  "behaviorDifferences": [
+    "Transport API no longer accepts a SelectionOwner or requires generation; explicit endpoint is mandatory. No intended observable product behavior change."
+  ],
+  "ownerValidation": [
+    {
+      "command": "npm ci",
+      "result": "798 pinned packages installed; no manifest/lockfile changes. Initial build before installation failed because worktree lacked typescript/bin/tsc; installation restored declared tooling."
+    },
+    {
+      "command": "npm run build:browser",
+      "result": "passed; affected app.js and browser.js regenerated using existing build"
+    },
+    {
+      "command": "npm test -- test/browser-api.test.js",
+      "result": "4 passed, 0 skipped; real loopback HTTP endpoint, route encoding, bearer, model/thinking/rename and malformed/error cases"
+    },
+    {
+      "command": "npm run test:browser -- session-controls.spec.js session-identity.spec.js api-boundary.spec.js menu-ownership.spec.js",
+      "result": "27 passed (20.4s)"
+    },
+    {
+      "command": "npm run check",
+      "result": "passed; 258 compiler-owned sources, no explicit-any exceptions; lint/types/core/browser/edge/tools drift and modes match"
+    },
+    {
+      "command": "npm test",
+      "result": "1027 passed, 0 failures, 0 skips (33.99s)"
+    },
+    {
+      "command": "npm run test:browser",
+      "result": "Initial full run: 287 passed, 1 failure in new credential test. It waited for DOM after mocked rename and an unrelated real transcript/poll refresh could overwrite it. Fixed test to snapshot header and both host rows atomically upon mutation completion; no product change."
+    },
+    {
+      "command": "npm run check && npm run test:browser && npm run test:ui:scenarios && npm run test:ui",
+      "result": "Final run passed: check with 258 governed sources; all 288 browser cases (3.6m), all eight independently isolated scenarios, complete desktop/mobile/multi-host/same-id UI smoke. Combined command 331.70s. Chromium 153.0.8010.12. No skips.",
+      "output": "artifact://39"
+    },
+    {
+      "command": "node /tmp/r10-work-probe.cjs",
+      "result": "300 model/thinking/rename dispatches per version. Baseline: 300 factory calls, 300 original-endpoint requests, 300 patches. Final: 0 factory calls, 300 original-endpoint requests, 300 patches. In-memory instrumentation only; not a timing/heap-size benchmark or permanent test."
+    },
+    {
+      "command": "hub start r10-smoke: node /tmp/r10-runtime-smoke.cjs; browser production desktop/mobile interaction",
+      "result": "Two actual isolated server.js processes, same route id, temporary HOME/socket/tmux roots and sanitized environment; real bridge sockets, no intercepted mutation routes, no fixtureApp global. Desktop peer renamed to R10 peer renamed, model fixture/second, thinking high. Mobile self renamed to R10 self mobile; final real HTTP lists prove self retained fixture/first/low and peer retained fixture/second/high. Both screenshots inspected."
+    }
+  ],
+  "runtimeProof": {
+    "desktopScreenshot": "/tmp/r10-peer-desktop.png",
+    "mobileScreenshot": "/tmp/r10-self-mobile.png",
+    "httpResult": "/tmp/r10-smoke-result.json",
+    "scriptArchive": {
+      "path": "/tmp/r10-runtime-proof-archive.json",
+      "sha256": "91c73a44373013645121964a54e98137327ec5b0b53d05fa37bc2f3ed79adb7c",
+      "contents": "Complete corrected smoke and work-probe scripts plus raw result JSON, each with SHA-256"
+    },
+    "workResult": "/tmp/r10-work-result.json",
+    "fixtureCorrection": "Initial throwaway bridge used set_name instead of actual set_session_name, so its registry reverted successful rename on poll. Corrected only the throwaway fixture and reran all real mutations; final native command log includes set_session_name.",
+    "toolLimit": "Direct browser tab.click timed out despite visible elements; raw Puppeteer page.click via tab.run succeeded. Reported to xd://report_issue. Opening mobile viewport directly avoided coordinate issues after changing an existing tab's raw viewport.",
+    "displayLimit": "Minimal JSONL fixture has no model_change entry; transcript header can project unknown after selection even though authoritative registry/list model remains fixture/first. Same-id isolation was checked against real host lists.",
+    "platform": "Linux x64, Node 26.8.2; no macOS/Electron or real external-provider execution claimed for this browser-only change.",
+    "cleanup": "Both managed browser tabs released; hub stopped fixture process successfully with exit 0; temporary homes removed. Corrected throwaway scripts and raw results archived with hashes, then both executable probe scripts removed."
+  },
+  "evidenceFiles": [
+    {
+      "path": "docs/r10-evidence.json",
+      "sha256": "f8901d64f4e072d5096b9b0892e7c9e8158fc8ed6ee4af75624692c1ec2072e7"
+    },
+    {
+      "path": "/tmp/r10-runtime-proof-archive.json",
+      "sha256": "91c73a44373013645121964a54e98137327ec5b0b53d05fa37bc2f3ed79adb7c"
+    },
+    {
+      "path": "/tmp/r10-validation-output.json",
+      "sha256": "9e92b014a86feef27d038d3667817b8d7c92c31492f7f166fae3ff873b13c96a"
+    },
+    {
+      "path": "/tmp/r10-backend-initial-browser-output.json",
+      "sha256": "66496abf6eb33d587aec45fe804f1bcceed793287542a822cac630cda9ac121a"
+    },
+    {
+      "path": "/tmp/r10-peer-desktop.png",
+      "sha256": "8acfa20058b70f289bf9174e52b85da439c2febc473979654164620cc924563b"
+    },
+    {
+      "path": "/tmp/r10-self-mobile.png",
+      "sha256": "f5bf5d5c4035b4d555a28a457060c23aba6005cfbc64b8b4bb045182bdcdabbd"
+    },
+    {
+      "path": "/tmp/r10-existing-byte-recovery.txt",
+      "sha256": "d9e8b7c2db91ef6567e37eedfa04481ca335de159c6514d8d14c35bbf6ceb5fe"
+    },
+    {
+      "path": "/tmp/r10-review-progress.json",
+      "sha256": "3e957768db20916fc79539e9463bb6720e5438ae777a5711a00129818d7d4175"
+    },
+    {
+      "path": "/tmp/r10-kimi-final-review-audit.json",
+      "sha256": "90534ff0af1b80d39ef7c95ef9e1093c4cff2a56c42b91f6271d69994eab9850"
+    }
+  ],
+  "reviewProtocol": {
+    "capacity": "Parent explicitly granted the concurrent exact-model trio after its capacity hold. No implementation peers or replacement reviewers.",
+    "models": "zai/glm-5.3; opencode-go/deepseek-v4.1-flash; kimi-code/k3, each OMP/high/assigned cwd verified before substantive prompts and after review.",
+    "sourceFrozen": true,
+    "wholeSource": "Each reviewer personally read all nine changed paths, including both complete generated bundles, and actual relevant producer/consumer bodies. No diff/summary/grep-only approval accepted.",
+    "coverageAudit": "Owner inspected actual semantic tool-result content, matched visible source intervals, recovered elisions and long-line truncations, and verified escaped control-byte output. Complete primary files are distinct from scoped unchanged app/server caller windows.",
+    "validationRestrictions": "No reviewer suites/build/compiler/esbuild/check/lint/formatter/tests/source writes/delegation. Initial read-only native probes were permitted; Kimi continuation prohibited new probes and used only existing byte-extraction data.",
+    "historicalToolDeviations": "GLM/DeepSeek used shell grep/head/ls and inline read-only Node scripts despite the specialized-tool preference. Retained in full archives, not hidden. No prohibited validation or source writes occurred.",
+    "kimiContinuation": "One parent-authorized bounded continuation of the same actor after reported quota reset; actual semantic resume/provenance verified first. No new reviewer/model/upgrade or source change. Continuation used read/grep and semantic final-verdict send only."
+  },
+  "archiveFraming": {
+    "serializer": "JSON.stringify(semanticPayload, null, 2)",
+    "encoding": "UTF-8, no BOM, no terminal newline",
+    "hash": "SHA-256 over the exact saved file bytes, without newline or key-order normalization",
+    "initialMethod": "CLI-resolved route id; complete semantic messages HTTP payload limit=500. Initial CLI show windows capped at100 and were not used as final complete archives.",
+    "continuationMethod": "Existing shared CLI client api(defaultBase(), resolved host, messages route using CLI-resolved id), solely for complete raw message archives; no auth inspection or raw-session access.",
+    "messageIntegrity": "Every final archive has native indices contiguous from0 through lastIndex, messages.length===totalMessages. Prior incomplete Kimi87-message archive remains untouched; all87 message objects are exactly preserved in resumed archive prefix."
+  },
+  "finalDecisions": [
+    {
+      "reviewer": "GLM",
+      "ref": "01a0ab74-88",
+      "source": "86e7d24ebb5aaf83bd0de9186c39590e98c0d276",
+      "messageId": "5aa8b757",
+      "index": 198,
+      "timestamp": 1789583803992,
+      "verdictVerbatim": "**FINAL: ACCEPT reaffirmed** for exact unchanged SHA `86e7d24ebb5aaf83bd0de9186c39590e98c0d276` (rev-parse reconfirmed). Reaffirmation delivered to owner `01a0ab39-94` via the pi-dish semantic CLI — `success: true`.\n\n**Last inventory gap — test/types/browser-session-controls.ts (8 lines, whole):** consumes only the controller's public API as an unchanged type fixture. Three negatives: `modelOpen` is read-only, `selectModel` takes a bare model-selector string (not a request/host object), `setAll` takes a boolean. No transport, endpoint, or factory contact — untouched by R10 exactly as the evidence's `unchangedConsumers` inventory states, and the public signatures it pins (`selectModel(selector: string)`, etc.) are identical pre/post R10, so the fixture still guards the same observable surface.\n\nMy read archive now covers the complete verified inventory: nine final-path whole reads; both generated bundles at 100 % line coverage with all elisions, chunk-boundary gaps, the two 977-char native line recoveries, and both U+0003 codepoint confirmations; actual producer bodies (`session-api.ts`, `server-app.ts` routes, `host-directory.ts` `resolveHost`, `session-state.ts`); actual `app.ts` transport and model/controls wiring bodies; and every inventoried type/spec consumer (`browser-api.ts`, `browser-model-catalog.ts`, `browser-session-controls.ts`, plus the browser suites). No builds, tests, source writes, or subagents at any point in the review.\n\nRemaining idle for the owner's archive audit and closure; not closing myself.",
+      "actualModel": "zai/glm-5.3",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "decision": "ACCEPT",
+      "prePromptProvenance": {
+        "ref": "01a0ab74-88",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE2LTIzNFpfMDFhMGFiNzQtODhhYS03NGNiLThiMmEtZjg3MDUxOThkYWUyIl0",
+        "nativeSessionId": "2026-09-16T18-22-16-234Z_01a0ab74-88aa-74cb-8b2a-f8705198dae2",
+        "model": "zai/glm-5.3",
+        "thinkingLevel": "high",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "postReviewProvenance": {
+        "ref": "01a0ab74-88",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE2LTIzNFpfMDFhMGFiNzQtODhhYS03NGNiLThiMmEtZjg3MDUxOThkYWUyIl0",
+        "nativeSessionId": "2026-09-16T18-22-16-234Z_01a0ab74-88aa-74cb-8b2a-f8705198dae2",
+        "model": "zai/glm-5.3",
+        "thinkingLevel": "high",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "archive": {
+        "path": "/tmp/pi-dish-r10-review-archives/glm-01a0ab74-88aa-74cb-8b2a-f8705198dae2.json",
+        "sha256": "99249a004592d6cbee4e1edfaa9f18592c29e97394c4bb0adddef8fdeec2b28f",
+        "totalMessages": 199,
+        "firstIndex": 0,
+        "lastIndex": 198,
+        "complete": true,
+        "method": "Resolved semantic /api/sessions/:id/messages?limit=500; actual native indices contiguous from zero; no raw JSONL access"
+      },
+      "coverage": {
+        "primaryReadIntervals": [
+          {
+            "path": "src/browser/api-client.ts",
+            "total": 91,
+            "covered": 91,
+            "visibleIntervals": [
+              [
+                1,
+                91
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "src/browser/session-controls.ts",
+            "total": 178,
+            "covered": 178,
+            "visibleIntervals": [
+              [
+                1,
+                178
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "src/browser/index.ts",
+            "total": 130,
+            "covered": 130,
+            "visibleIntervals": [
+              [
+                1,
+                130
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "test/types/browser-api.ts",
+            "total": 33,
+            "covered": 33,
+            "visibleIntervals": [
+              [
+                1,
+                33
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "test/browser-api.test.js",
+            "total": 104,
+            "covered": 104,
+            "visibleIntervals": [
+              [
+                1,
+                104
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "test/browser/session-controls.spec.js",
+            "total": 153,
+            "covered": 153,
+            "visibleIntervals": [
+              [
+                1,
+                153
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "public/app.js",
+            "total": 19233,
+            "covered": 19231,
+            "visibleIntervals": [
+              [
+                1,
+                8764
+              ],
+              [
+                8766,
+                15974
+              ],
+              [
+                15976,
+                19233
+              ]
+            ],
+            "missingIntervals": [
+              [
+                8765,
+                8765
+              ],
+              [
+                15975,
+                15975
+              ]
+            ]
+          },
+          {
+            "path": "public/browser.js",
+            "total": 17929,
+            "covered": 17927,
+            "visibleIntervals": [
+              [
+                1,
+                8432
+              ],
+              [
+                8434,
+                10014
+              ],
+              [
+                10016,
+                17929
+              ]
+            ],
+            "missingIntervals": [
+              [
+                8433,
+                8433
+              ],
+              [
+                10015,
+                10015
+              ]
+            ]
+          },
+          {
+            "path": "docs/r10-evidence.json",
+            "total": 87,
+            "covered": 87,
+            "visibleIntervals": [
+              [
+                1,
+                87
+              ]
+            ],
+            "missingIntervals": []
+          }
+        ],
+        "nativeRecovery": [
+          {
+            "path": "public/app.js",
+            "line": 8765,
+            "messageIndex": 170,
+            "exact": true
+          },
+          {
+            "path": "public/browser.js",
+            "line": 10015,
+            "messageIndex": 170,
+            "exact": true
+          },
+          {
+            "path": "public/app.js",
+            "line": 15975,
+            "messageIndex": 168,
+            "exact": true
+          },
+          {
+            "path": "public/browser.js",
+            "line": 8433,
+            "messageIndex": 168,
+            "exact": true
+          }
+        ],
+        "completeAfterRecovery": true,
+        "actualConsumerWindows": [
+          {
+            "path": "src/browser/app.ts",
+            "visibleIntervals": [
+              [
+                97,
+                97
+              ],
+              [
+                99,
+                138
+              ],
+              [
+                142,
+                142
+              ],
+              [
+                582,
+                582
+              ],
+              [
+                584,
+                633
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/host-directory.ts",
+            "visibleIntervals": [
+              [
+                27,
+                63
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/session-state.ts",
+            "visibleIntervals": [
+              [
+                1,
+                185
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/session-resume.ts",
+            "visibleIntervals": [
+              [
+                1,
+                46
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/sidebar-lists.ts",
+            "visibleIntervals": [
+              [
+                1,
+                53
+              ]
+            ]
+          },
+          {
+            "path": "src/core/session-api.ts",
+            "visibleIntervals": [
+              [
+                1,
+                260
+              ]
+            ]
+          },
+          {
+            "path": "src/core/server-app.ts",
+            "visibleIntervals": [
+              [
+                1121,
+                1121
+              ],
+              [
+                1126,
+                1126
+              ],
+              [
+                1185,
+                1185
+              ],
+              [
+                1189,
+                1243
+              ],
+              [
+                1502,
+                1502
+              ],
+              [
+                1513,
+                1513
+              ],
+              [
+                1519,
+                1608
+              ],
+              [
+                1618,
+                1619
+              ]
+            ]
+          },
+          {
+            "path": "test/browser/session-identity.spec.js",
+            "visibleIntervals": [
+              [
+                1,
+                52
+              ]
+            ]
+          },
+          {
+            "path": "test/browser/api-boundary.spec.js",
+            "visibleIntervals": [
+              [
+                1,
+                73
+              ]
+            ]
+          },
+          {
+            "path": "test/browser/menu-ownership.spec.js",
+            "visibleIntervals": [
+              [
+                1,
+                129
+              ]
+            ]
+          },
+          {
+            "path": "test/types/browser-session-controls.ts",
+            "visibleIntervals": [
+              [
+                1,
+                8
+              ]
+            ]
+          },
+          {
+            "path": "test/types/browser-model-catalog.ts",
+            "visibleIntervals": [
+              [
+                1,
+                31
+              ]
+            ]
+          }
+        ]
+      },
+      "close": {
+        "success": true
+      },
+      "postCloseProvenance": {
+        "ref": "01a0ab74-88",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE2LTIzNFpfMDFhMGFiNzQtODhhYS03NGNiLThiMmEtZjg3MDUxOThkYWUyIl0",
+        "nativeSessionId": "2026-09-16T18-22-16-234Z_01a0ab74-88aa-74cb-8b2a-f8705198dae2",
+        "model": "zai/glm-5.3",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": false
+      }
+    },
+    {
+      "reviewer": "DeepSeek",
+      "ref": "01a0ab74-83",
+      "source": "86e7d24ebb5aaf83bd0de9186c39590e98c0d276",
+      "messageId": "25176359",
+      "index": 184,
+      "timestamp": 1789583734961,
+      "verdictVerbatim": "Fixture read whole and inventory closed; reaffirmation sent to owner (`success: true`).\n\n## `test/types/browser-model-catalog.ts` — whole read (1–31)\n\nDelivered via `:raw`; footer \"1–31 of 32\" is the same trailing-newline artifact already documented for the bundles (split yields a final empty element). Byte-verified: 1745 bytes, single `LF` terminator, no `CR`, **zero control characters**.\n\nContent:\n- Imports `createModelCatalog`, `createAppModels`, `createSessionApi`, `mountModelSelector`; types `SelectionOwner`, `SessionState`; `declare const owner: SelectionOwner`.\n- `const api = createSessionApi(async () => new Response())` — used **only** as `read: scope => api.models(scope.host, scope)`.\n- Negatives: readonly persistence rows (`rows.push({})`), external enabled-writer (`rows()[0].enabled = false`), external row replacement, string host on `catalog.load`, plus `appModels.load()` / `(undefined)` / `(null)` session-id rejections.\n- `selector.update({ owner, … })` with the frozen owner; `appModels.load('session')` and `('session','pi')` positives.\n\n## Caller inventory now complete\n\n- This fixture: **2** `createSessionApi` occurrences, **0** `api.setModel`/`setThinking`/`rename` calls → it is a read-only type fixture, never consumed the deleted factory mutations, needed no migration (matches evidence's `unchangedConsumers`).\n- Whole-repo consumer set: `app.ts:110` (`sessionApi.models` only), `session-resume.ts:13` (`api.models`), `sidebar-lists.ts:18` (`api.list`), `test/types/browser-model-catalog.ts:3,7`, `test/types/browser-api.ts:1,3`, `test/browser-api.test.js:9,65,68,80` — all reads, no obsolete caller anywhere.\n- `sha256 test/types/browser-model-catalog.ts` = `151800ce4e0126898091d8d3c93bc9a14f5a6827bd0bf2fe7c83395f2efab856`; `HEAD` still `86e7d24ebb5aaf83bd0de9186c39590e98c0d276`.\n\n**Final: ACCEPT** — whole-source, caller-complete, byte-complete, for unchanged `86e7d24ebb5aaf83bd0de9186c39590e98c0d276`. Prior ACCEPT stands with two recovery notes archived: (1) read dropped raw `U+0003` on `public/app.js:15975` / `public/browser.js:8433` (recovered via codepoint enumeration; `ctrl-c` sends ETX `0x03`), (2) the raw-read trailing-newline off-by-one. No findings requiring revision. Idle for closure; not self-closing.",
+      "actualModel": "opencode-go/deepseek-v4.1-flash",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "decision": "ACCEPT",
+      "prePromptProvenance": {
+        "ref": "01a0ab74-83",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE1LTAwOVpfMDFhMGFiNzQtODNlMS03MTY3LTk0ODEtMWY5MzkwZWExOTA2Il0",
+        "nativeSessionId": "2026-09-16T18-22-15-009Z_01a0ab74-83e1-7167-9481-1f9390ea1906",
+        "model": "opencode-go/deepseek-v4.1-flash",
+        "thinkingLevel": "high",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "postReviewProvenance": {
+        "ref": "01a0ab74-83",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE1LTAwOVpfMDFhMGFiNzQtODNlMS03MTY3LTk0ODEtMWY5MzkwZWExOTA2Il0",
+        "nativeSessionId": "2026-09-16T18-22-15-009Z_01a0ab74-83e1-7167-9481-1f9390ea1906",
+        "model": "opencode-go/deepseek-v4.1-flash",
+        "thinkingLevel": "high",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "archive": {
+        "path": "/tmp/pi-dish-r10-review-archives/deepseek-01a0ab74-83e1-7167-9481-1f9390ea1906.json",
+        "sha256": "2dbc164838d6f754737170acadd8d3d5699a5bdc6a833746242329b919b7714d",
+        "totalMessages": 185,
+        "firstIndex": 0,
+        "lastIndex": 184,
+        "complete": true,
+        "method": "Resolved semantic /api/sessions/:id/messages?limit=500; actual native indices contiguous from zero; no raw JSONL access"
+      },
+      "coverage": {
+        "primaryReadIntervals": [
+          {
+            "path": "src/browser/api-client.ts",
+            "total": 91,
+            "covered": 91,
+            "visibleIntervals": [
+              [
+                1,
+                91
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "src/browser/session-controls.ts",
+            "total": 178,
+            "covered": 178,
+            "visibleIntervals": [
+              [
+                1,
+                178
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "src/browser/index.ts",
+            "total": 130,
+            "covered": 130,
+            "visibleIntervals": [
+              [
+                1,
+                130
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "test/types/browser-api.ts",
+            "total": 33,
+            "covered": 33,
+            "visibleIntervals": [
+              [
+                1,
+                33
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "test/browser-api.test.js",
+            "total": 104,
+            "covered": 104,
+            "visibleIntervals": [
+              [
+                1,
+                104
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "test/browser/session-controls.spec.js",
+            "total": 153,
+            "covered": 153,
+            "visibleIntervals": [
+              [
+                1,
+                153
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "public/app.js",
+            "total": 19233,
+            "covered": 19233,
+            "visibleIntervals": [
+              [
+                1,
+                19233
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "public/browser.js",
+            "total": 17929,
+            "covered": 17929,
+            "visibleIntervals": [
+              [
+                1,
+                17929
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "docs/r10-evidence.json",
+            "total": 87,
+            "covered": 87,
+            "visibleIntervals": [
+              [
+                1,
+                87
+              ]
+            ],
+            "missingIntervals": []
+          }
+        ],
+        "nativeRecovery": [
+          {
+            "path": "public/app.js",
+            "line": 15975,
+            "messageIndex": 169,
+            "exact": true
+          },
+          {
+            "path": "public/browser.js",
+            "line": 8433,
+            "messageIndex": 169,
+            "exact": true
+          }
+        ],
+        "completeAfterRecovery": true,
+        "actualConsumerWindows": [
+          {
+            "path": "src/browser/app.ts",
+            "visibleIntervals": [
+              [
+                94,
+                138
+              ],
+              [
+                585,
+                630
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/host-directory.ts",
+            "visibleIntervals": [
+              [
+                26,
+                83
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/session-state.ts",
+            "visibleIntervals": [
+              [
+                32,
+                185
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/session-resume.ts",
+            "visibleIntervals": [
+              [
+                1,
+                46
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/sidebar-lists.ts",
+            "visibleIntervals": [
+              [
+                1,
+                53
+              ]
+            ]
+          },
+          {
+            "path": "src/core/session-api.ts",
+            "visibleIntervals": [
+              [
+                1,
+                260
+              ]
+            ]
+          },
+          {
+            "path": "src/core/server-app.ts",
+            "visibleIntervals": [
+              [
+                1201,
+                1248
+              ],
+              [
+                1529,
+                1623
+              ]
+            ]
+          },
+          {
+            "path": "test/browser/session-identity.spec.js",
+            "visibleIntervals": [
+              [
+                1,
+                52
+              ]
+            ]
+          },
+          {
+            "path": "test/browser/api-boundary.spec.js",
+            "visibleIntervals": [
+              [
+                1,
+                73
+              ]
+            ]
+          },
+          {
+            "path": "test/browser/menu-ownership.spec.js",
+            "visibleIntervals": [
+              [
+                1,
+                129
+              ]
+            ]
+          },
+          {
+            "path": "test/types/browser-session-controls.ts",
+            "visibleIntervals": [
+              [
+                1,
+                8
+              ]
+            ]
+          },
+          {
+            "path": "test/types/browser-model-catalog.ts",
+            "visibleIntervals": [
+              [
+                1,
+                31
+              ]
+            ]
+          }
+        ]
+      },
+      "close": {
+        "success": true
+      },
+      "postCloseProvenance": {
+        "ref": "01a0ab74-83",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE1LTAwOVpfMDFhMGFiNzQtODNlMS03MTY3LTk0ODEtMWY5MzkwZWExOTA2Il0",
+        "nativeSessionId": "2026-09-16T18-22-15-009Z_01a0ab74-83e1-7167-9481-1f9390ea1906",
+        "model": "opencode-go/deepseek-v4.1-flash",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": false
+      }
+    },
+    {
+      "reviewer": "Kimi",
+      "ref": "01a0ab74-8d8a-7031-ab78-97480d611711",
+      "source": "86e7d24ebb5aaf83bd0de9186c39590e98c0d276",
+      "messageId": "034911de",
+      "index": 151,
+      "timestamp": 1789592841251,
+      "verdictVerbatim": "Verdict delivered to owner `01a0ab39-942c-779f-b7a5-490b56e98c59` via the semantic CLI (`send` succeeded, immediate delivery).\n\n**Final verdict: ACCEPT** for exact SHA `86e7d24ebb5aaf83bd0de9186c39590e98c0d276`.\n\nSummary of what was completed in this continuation:\n\n- **browser.js 6001–17930** — finished whole-file coverage in verified 500-line raw chunks, no elisions. Combined with my prior 1–6000, the full 17,930 lines are covered contiguously, including the export table (all three mutation exports present), the api-client section (standalone ops, reads-only `createSessionApi`), and the session-controls section (source-faithful `endpointCurrent`/`mutationEndpoint`/mutation-symbol logic).\n- **Byte recovery** — read `/tmp/r10-existing-byte-recovery.txt` (existing data, no new probe): the 977-char `sessionCloseBtn` line is byte-identical in both bundles; the terminal keybar line carries literal TAB and literal U+0003 (ETX) for `ctrl-c` — semantically correct, resolving the read-tool's sanitization of those bytes.\n- **Caller/producer bodies** — app.ts 100-135 + 585-630 (transport wiring, `sessionApi.models` read path, no api port to controls), host-directory resolveHost, session-state capture/owns/patch, session-resume (`api.models` only), sidebar-lists (`api.list` only), core/session-api decoders + `thinkingResult`, server-app thinking/rename/model route bodies, the three browser specs, both type fixtures, R10 plan section, and CLAUDE invariant sections.\n- **Findings** — zero defects. Zero per-mutation factory or ignored-host substitution; captured-endpoint + refreshed-token + base-guard + latest-operation ordering + original-row patch + selection-owned feedback all verified in source and generated bundles; evidence file is honest about what it claims (owner's runtime proofs not attested by me).\n\nI remain idle for the owner's actual-output archive audit and will not self-close.",
+      "actualModel": "kimi-code/k3",
+      "harness": "omp",
+      "thinkingLevel": "high",
+      "decision": "ACCEPT",
+      "initialPrePromptProvenance": {
+        "ref": "01a0ab74-8d",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE3LTQ4MlpfMDFhMGFiNzQtOGQ4YS03MDMxLWFiNzgtOTc0ODBkNjExNzExIl0",
+        "nativeSessionId": "2026-09-16T18-22-17-482Z_01a0ab74-8d8a-7031-ab78-97480d611711",
+        "model": "kimi-code/k3",
+        "thinkingLevel": "high",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "resumedPrePromptProvenance": {
+        "ref": "01a0ab74-8d",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE3LTQ4MlpfMDFhMGFiNzQtOGQ4YS03MDMxLWFiNzgtOTc0ODBkNjExNzExIl0",
+        "nativeSessionId": "2026-09-16T18-22-17-482Z_01a0ab74-8d8a-7031-ab78-97480d611711",
+        "model": "kimi-code/k3",
+        "thinkingLevel": "high",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "postReviewProvenance": {
+        "ref": "01a0ab74-8d",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE3LTQ4MlpfMDFhMGFiNzQtOGQ4YS03MDMxLWFiNzgtOTc0ODBkNjExNzExIl0",
+        "nativeSessionId": "2026-09-16T18-22-17-482Z_01a0ab74-8d8a-7031-ab78-97480d611711",
+        "model": "kimi-code/k3",
+        "thinkingLevel": "high",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "archive": {
+        "path": "/tmp/pi-dish-r10-review-archives/kimi-01a0ab74-8d8a-7031-ab78-97480d611711-resumed.json",
+        "sha256": "0f51403d9118525555b631c05a15e2f1db7caa5aa93dd366e0cbb2dacd2e398f",
+        "totalMessages": 152,
+        "firstIndex": 0,
+        "lastIndex": 151,
+        "complete": true,
+        "serializer": "JSON.stringify(payload, null, 2), UTF-8, no BOM, no terminal newline; exact file bytes hashed with SHA-256",
+        "method": "Shared CLI client api(defaultBase(), CLI-resolved host, /api/sessions/<CLI-resolved encoded id>/messages?limit=500); no auth inspection or raw-session access",
+        "priorAttemptPreserved": {
+          "path": "/tmp/pi-dish-r10-review-archives/kimi-01a0ab74-8d8a-7031-ab78-97480d611711.json",
+          "sha256": "402aeb2937927b2d1023a0309cfd60375679d90ffaaed117927636efa778bc6f",
+          "all87PrefixMessageIdsRetained": true
+        }
+      },
+      "coverage": {
+        "primaryReadAndExistingByteDataIntervals": [
+          {
+            "path": "src/browser/api-client.ts",
+            "total": 91,
+            "covered": 91,
+            "visibleIntervals": [
+              [
+                1,
+                91
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "src/browser/session-controls.ts",
+            "total": 178,
+            "covered": 178,
+            "visibleIntervals": [
+              [
+                1,
+                178
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "src/browser/index.ts",
+            "total": 130,
+            "covered": 130,
+            "visibleIntervals": [
+              [
+                1,
+                130
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "test/types/browser-api.ts",
+            "total": 33,
+            "covered": 33,
+            "visibleIntervals": [
+              [
+                1,
+                33
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "test/browser-api.test.js",
+            "total": 104,
+            "covered": 104,
+            "visibleIntervals": [
+              [
+                1,
+                104
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "test/browser/session-controls.spec.js",
+            "total": 153,
+            "covered": 153,
+            "visibleIntervals": [
+              [
+                1,
+                153
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "public/app.js",
+            "total": 19233,
+            "covered": 19233,
+            "visibleIntervals": [
+              [
+                1,
+                19233
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "public/browser.js",
+            "total": 17929,
+            "covered": 17929,
+            "visibleIntervals": [
+              [
+                1,
+                17929
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "docs/r10-evidence.json",
+            "total": 87,
+            "covered": 87,
+            "visibleIntervals": [
+              [
+                1,
+                87
+              ]
+            ],
+            "missingIntervals": []
+          },
+          {
+            "path": "/tmp/r10-existing-byte-recovery.txt",
+            "total": 21,
+            "covered": 21,
+            "visibleIntervals": [
+              [
+                1,
+                21
+              ]
+            ],
+            "missingIntervals": []
+          }
+        ],
+        "completeAfterRecovery": true,
+        "byteRecovery": "Personally read all21 lines of /tmp/r10-existing-byte-recovery.txt: previously extracted exact977-character lines as two JSON-string segments and keybar TAB/U+0003 as escaped complete lines. Existing source-byte data only, no sibling verdict or new probe.",
+        "actualConsumerWindows": [
+          {
+            "path": "src/browser/app.ts",
+            "visibleIntervals": [
+              [
+                100,
+                135
+              ],
+              [
+                585,
+                630
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/host-directory.ts",
+            "visibleIntervals": [
+              [
+                27,
+                63
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/session-state.ts",
+            "visibleIntervals": [
+              [
+                32,
+                185
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/session-resume.ts",
+            "visibleIntervals": [
+              [
+                1,
+                46
+              ]
+            ]
+          },
+          {
+            "path": "src/browser/sidebar-lists.ts",
+            "visibleIntervals": [
+              [
+                1,
+                53
+              ]
+            ]
+          },
+          {
+            "path": "src/core/session-api.ts",
+            "visibleIntervals": [
+              [
+                1,
+                260
+              ]
+            ]
+          },
+          {
+            "path": "src/core/server-app.ts",
+            "visibleIntervals": [
+              [
+                1201,
+                1224
+              ],
+              [
+                1529,
+                1588
+              ]
+            ]
+          },
+          {
+            "path": "test/browser/session-identity.spec.js",
+            "visibleIntervals": [
+              [
+                1,
+                52
+              ]
+            ]
+          },
+          {
+            "path": "test/browser/api-boundary.spec.js",
+            "visibleIntervals": [
+              [
+                1,
+                73
+              ]
+            ]
+          },
+          {
+            "path": "test/browser/menu-ownership.spec.js",
+            "visibleIntervals": [
+              [
+                1,
+                129
+              ]
+            ]
+          },
+          {
+            "path": "test/types/browser-session-controls.ts",
+            "visibleIntervals": [
+              [
+                1,
+                8
+              ]
+            ]
+          },
+          {
+            "path": "test/types/browser-model-catalog.ts",
+            "visibleIntervals": [
+              [
+                1,
+                31
+              ]
+            ]
+          }
+        ]
+      },
+      "close": {
+        "success": true
+      },
+      "postCloseProvenance": {
+        "ref": "01a0ab74-8d",
+        "routeId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIyLTE3LTQ4MlpfMDFhMGFiNzQtOGQ4YS03MDMxLWFiNzgtOTc0ODBkNjExNzExIl0",
+        "nativeSessionId": "2026-09-16T18-22-17-482Z_01a0ab74-8d8a-7031-ab78-97480d611711",
+        "model": "kimi-code/k3",
+        "harness": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r10",
+        "isActive": false
+      }
+    }
+  ],
+  "historicalDecisionsAndDispositions": [
+    {
+      "event": "Initial owner browser validation failure",
+      "disposition": "287 passed/1 new credential-test failure caused by later real transcript/poll refresh overwriting a mocked mutation. Test changed to snapshot observable header/both host rows atomically at completion; no product workaround. Final288 browser/all8 scenarios/fullUI passed."
+    },
+    {
+      "event": "Initial smoke fixture rename command mismatch",
+      "disposition": "Throwaway fixture used set_name instead of actual set_session_name, so registry reverted name on polling. Corrected only fixture; reran actual production multi-host mutations. Corrected script/results archived then scripts removed."
+    },
+    {
+      "event": "Initial GLM reasoning level max",
+      "disposition": "Semantic thinking route returned high; first immediate resolve still max. Subsequent actual resolve high before any substantive prompt; exact provenance preserved."
+    },
+    {
+      "event": "Initial GLM/DeepSeek ACCEPTs withheld pending coverage audit",
+      "disposition": "Recovered GLM app3010-3072,977-character lines app8765/browser10015, sanitized ETX lines app15975/browser8433, actual app wiring and unchanged type fixtures. Each personally recovered and issued final same-SHA reaffirmation. No source changes; earlier decisions remain in complete archives."
+    },
+    {
+      "event": "Kimi original quota interruption",
+      "errors": [
+        {
+          "index": 82,
+          "id": "304ba3ea",
+          "timestamp": 1789583431622,
+          "error": "403 {\"error\":{\"type\":\"permission_error\",\"message\":\"You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota\"},\"type\":\"error\"}"
+        },
+        {
+          "index": 84,
+          "id": "157dcd57",
+          "timestamp": 1789583454171,
+          "error": "403 {\"error\":{\"type\":\"permission_error\",\"message\":\"You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota\"},\"type\":\"error\"}"
+        },
+        {
+          "index": 86,
+          "id": "5ba4d2d7",
+          "timestamp": 1789583659905,
+          "error": "403 {\"error\":{\"type\":\"permission_error\",\"message\":\"You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota\"},\"type\":\"error\"}"
+        }
+      ],
+      "archive": {
+        "path": "/tmp/pi-dish-r10-review-archives/kimi-01a0ab74-8d8a-7031-ab78-97480d611711.json",
+        "sha256": "402aeb2937927b2d1023a0309cfd60375679d90ffaaed117927636efa778bc6f",
+        "totalMessages": 87,
+        "firstIndex": 0,
+        "lastIndex": 86,
+        "complete": true,
+        "method": "Resolved semantic /api/sessions/:id/messages?limit=500; actual native indices contiguous from zero; no raw JSONL access"
+      },
+      "disposition": "No ACCEPT issued. Initial provider403 at82; two coverage followups sent before owner discovered errors produced84/86. No further prompts after discovery. Complete attempt/provenance saved and same actor gracefully closed/inactive per parent. No exact reset time was claimed."
+    },
+    {
+      "event": "Kimi authorized same-actor continuation",
+      "disposition": "Parent reported reset should be available and authorized one bounded continuation. Semantic resume preserved native identity; actual model/high/OMP/cwd verified before prompt. No new403; completed own remaining reads/byte data/caller windows and issued renewed ENTIRE source ACCEPT. All87 original message objects, including errors, retained exactly."
+    },
+    {
+      "event": "Kimi final message short-ref ambiguity",
+      "disposition": "Semantic send to01a0ab39 failed with10 matching sessions (message148); full owner ref succeeded (150). This was verdict delivery, not a provider retry or new review prompt."
+    },
+    {
+      "event": "Nonblocking preserved behavior observation",
+      "disposition": "GLM noted working-status text can linger after a same-tick endpoint-base retirement until later status/selection. Pre-existing ordering, not an R10 defect or source change."
+    }
+  ],
+  "scopeCorrections": [
+    "SelectionOwner remains in session-controls for selection ownership; only the api-client import/transport requirement was removed. A reviewer phrase implying no SelectionOwner anywhere is not endorsed.",
+    "createSessionApi retains setEnabledModels (a serving-instance preference mutation), plus list/models. Reviewer reads-only wording refers to remaining session read consumers, not every factory method.",
+    "Generated content spans app.js1-19233 and browser.js1-17929, each with terminal LF. Reviewer19234/17930 split counts include the final empty element; no extra content line was omitted.",
+    "Whole-primary-path claims do not imply whole unchanged app.ts/server-app.ts reads. Exact actual caller/producer windows are recorded above.",
+    "Reviewer static ACCEPTs do not independently attest owner-executed runtime proofs."
+  ],
+  "parentAuditHistory": {
+    "existingGLMDeepSeek": "Parent reported audit PASS for GLM199/DeepSeek185 archives, exact hashes, contiguous history, provenance, verdicts, byte recovery and closure.",
+    "record": "/tmp/pi-dish-parent-r10-review-audit.json",
+    "kimiAndIntegration": "Parent independent renewed-Kimi/archive/attestation audit and integrated runtime/exact pushed-main CI remain separate gates."
+  },
+  "platformLimits": [
+    "Owner proof Linux x64, Node26.8.2, Chromium153.0.8010.12; no macOS claim.",
+    "Browser-only package does not claim Electron packaging, native real-provider execution or new lifecycle/relay/parser guarantees."
+  ],
+  "cleanup": "All reviewer sessions gracefully closed and semantically confirmed inactive; smoke browser/process resources and throwaway executable scripts already cleaned. Complete archives, screenshots, failure/retry and byte-extraction evidence preserved.",
+  "documentationValidation": "Parsed final JSON; recomputed exact-byte SHA-256 for every referenced evidence file and all three final semantic archives; checked contiguous native indices, total message counts, exact final-message IDs and verbatim text equality, three ACCEPTs for the identical source SHA, and nine primary source paths. No runtime/source suite rerun for this documentation-only commit.",
+  "attestationCommitPolicy": "Only docs/r10-review.json in a separate documentation commit; reviewed source remains86e7d24ebb5aaf83bd0de9186c39590e98c0d276. Attestation commit identity is delivered separately, not self-referenced.",
+  "integrationStatus": "No main integration, dependency release or milestone acceptance claimed; parent owns those gates."
+}
