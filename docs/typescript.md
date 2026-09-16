@@ -52,6 +52,22 @@ stats, read-only tree and export response production, plus the bound native shar
 snapshot/export callbacks. The root still supplies narrow observation ports and
 mounts each handler at its original registration position.
 
+M3 authors the distinct page/share/comment/fleet stores and file search, mention,
+preview and diff implementations in `src/core/`. Their checked-in `lib/` outputs
+retain the existing CommonJS entrypoints and persisted/wire behavior.
+`publication-handlers.ts` consumes M1's actual bound export/snapshot callbacks
+and M5's actual public-artifact relay; `file-handlers.ts` owns diff snapshots,
+retirement cleanup and both stale-version checks. Their root mounts retain
+their original positions, including the restricted public listener. Native FFF
+loading uses M6's checked resource resolver inside the existing cached failure
+boundary; walker fallback is not evidence of native packaging.
+Legacy store members and external payloads remain explicitly opaque where the
+old implementation passed them through. This migration does not unify the
+stores or move remaining root/application ownership into these factories.
+The private root composition and producer provenance are recorded in
+[`m3-evidence.json`](m3-evidence.json); parent integration and acceptance remain
+separate from these implemented boundaries.
+
 See the [stage plan](session-catalog-migration.md) for scope, field authority,
 dependencies, deletion criteria and verification. Lifecycle authority, host and
 selection ownership, local assets and checked-in runtime delivery remain
@@ -117,6 +133,13 @@ The integration lead, not this guide, records milestone acceptance.
 | `harness-pricing.ts`, `skill-mining.ts` | Optional pricing refresh/override revisions and whole-file/batch-local skill evidence |
 | `pi-sdk.ts`, `omp-export.ts`, `session-refs.ts` | Real bundled SDK adapters, raw native OMP HTML export and lazy prompt-reference expansion |
 | `session-read-handlers.ts` | Individual Express read handlers and bound share snapshot/export operations |
+| `pages.ts`, `shares.ts`, `comments.ts` | Distinct live page references, immutable imported share snapshots and anchored comments with ownership/acknowledgement rules |
+| `fleet-artifacts.ts` | Host-scoped artifact reachability mappings and persisted timestamp compatibility |
+| `file-search.ts`, `file-mention.ts` | Lazy native FFF search/fallback and bounded file completion/reach behavior |
+| `file-page.ts` | Local-asset standalone Markdown/text/image previews and inert raw HTML/SVG handling |
+| `git-diff.ts` | Bounded repository/patch aggregation, optional deferred patches and version production |
+| `publication-handlers.ts` | Page/share/comment HTTP production and local-first public artifact serving through actual M1/M5 dependencies |
+| `file-handlers.ts` | Session file HTTP production, captured diff snapshots, retirement and stale-version checks |
 | `host-identity.ts` | Stable host id and host label |
 | `host-colors.ts` | Shared pure color sanitization, palette assignment and RGB conversion |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
@@ -306,7 +329,6 @@ consumer calls this helper without duplicating ASAR detection and preserves its
 lazy import cache and walker fallback. Native load acceptance requires actual
 scan/search and PTY execution, not archive presence alone.
 Linux results do not establish macOS package/runtime support.
-
 
 ## Contract conventions
 

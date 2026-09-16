@@ -1,0 +1,574 @@
+{
+  "milestone": "M3",
+  "status": "All three exact-model final-source reviews ACCEPT; parent integration and package acceptance pending",
+  "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+  "initialSourceCommit": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "branch": "migration/m3-publication",
+  "ownerSession": "01a0a998-4b0e-76ce-9490-995db584afd2",
+  "modelVerification": "Owner verified all three top-level actual model identities through semantic resolve. Kimi helper identities separately verified through raw semantic hub resolvedModelIdentity fields; reviewer identifies them as owner-attested, not independently verified by its agent-type-only tool view. Each final verdict is explicitly owned by its required reviewer.",
+  "initialReviews": [
+    {
+      "model": "zai/glm-5.3",
+      "sessionRef": "01a0a9e4-5ccb-7348-9bb0-da6dca4412c2",
+      "harness": "omp",
+      "thinking": "max",
+      "modelVerification": "Actual semantic CLI resolve response, not launch label",
+      "sourceCommit": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
+      "verdict": "ACCEPT",
+      "findings": [
+        {
+          "severity": "info",
+          "finding": "Quoted-path decoder behavior differs only for inputs real git cannot produce; repository degradation behavior remains preserved.",
+          "disposition": "No change requested; reviewer confirmed product reachability and accepted."
+        },
+        {
+          "severity": "info",
+          "finding": "Legacy M5 root relay body remains after M3 callers move to checked relay implementation.",
+          "disposition": "Parent coalesces/removes it with the M5 root proposal; no M3 scope expansion."
+        },
+        {
+          "severity": "info",
+          "finding": "onRetired closes over fileHandlers initialized later.",
+          "disposition": "Retirement is post-construction; TDZ-safe and covered by lifecycle tests."
+        },
+        {
+          "severity": "info",
+          "finding": "Fleet remaps retain valid timestamps; malformed null createdAt is replaced with Date.now() exactly as baseline nullish coalescing.",
+          "disposition": "Preserve implementation; clarify evidence wording to valid timestamps in final attestation."
+        }
+      ],
+      "limits": "Did not rerun owner build/check/full backend/browser/UI/native gates; process-local artifact logs unavailable. Dependency internals reviewed only at consumed interfaces. Product packaged-native and two-real-server proofs inspected as owner evidence, not reproduced.",
+      "independentEvidence": [
+        "Line-by-line comparison of all eight libraries and all 26 baseline route bodies.",
+        "Generated export lists, original-position root mounts and exact five-factory composition checked.",
+        "Early fleet/search producer source and output hashes match final tree.",
+        "Strict source-policy enrollment 219 and no explicit-any/suppressions; package/type boundary checked.",
+        "All required store/publication/comment/reach/inert-preview/FFF/diff semantics confirmed at source and consumed dependency interfaces."
+      ]
+    },
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "sessionRef": "01a0a9e4-6667-712c-963a-fa32d9b2ec59",
+      "harness": "omp",
+      "thinking": "high",
+      "modelVerification": "Actual semantic CLI resolve response, not launch label",
+      "sourceCommit": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
+      "verdict": "ACCEPT",
+      "findings": [
+        {
+          "severity": "low",
+          "path": "server.js",
+          "lines": [
+            392,
+            533
+          ],
+          "finding": "Legacy serveFleetArtifact and its PAGE_COMMENTS_HEADER are unreachable after M3 consumers move to actual relay-handlers.",
+          "disposition": "Retain under unchanged M5 ownership in this proposal; parent removes them while integrating M5 root proposal, not as an M3 fix."
+        },
+        {
+          "severity": "info",
+          "finding": "Additional guards were equivalent or unreachable through actual product inputs; extractSessionPaths null-row skip differs only for inputs session-files cannot produce.",
+          "disposition": "No change required; reviewer accepted existing migration behavior."
+        },
+        {
+          "severity": "info",
+          "finding": "No new compile-only M3 consumer fixture in test/types/core.ts.",
+          "disposition": "M0 assigns remaining root compiler/consumer closure to M7; no M3 change requested."
+        }
+      ],
+      "limits": "Did not run owner check/full backend/browser/UI/Electron/harness gates; process-local artifact logs unavailable. Dependencies reviewed only at consumed contracts/ancestry. M5 root-only and M7 proposals excluded. No live sessions/providers.",
+      "independentEvidence": [
+        "Disposable core emit: all 20 M3 JS/declaration outputs byte-identical after standard banner.",
+        "All 105 app/shareApp literal route registrations preserve sequence.",
+        "65 store comparisons and 27 parser comparisons; observable product behavior preserved.",
+        "42 reach/ranking comparisons: two native-versus-walker harness asymmetry results explained, reach identical.",
+        "Synchronous FFF packaged resolver failure cached once; valid unpacked import initialized once with scan/page/query behavior.",
+        "Real file-page rendering, KaTeX, Markdown sanitization and HTML-share rollback exercised.",
+        "Fleet/search producer hashes and ancestry match evidence; no later source changes.",
+        "Focused git-diff/file-mention/fleet-artifacts suites: 38 passed, including two-real-server relay/comment consumers."
+      ]
+    },
+    {
+      "model": "kimi-code/k3",
+      "sessionRef": "01a0a9e4-6191-736d-965b-64f2690861b3",
+      "harness": "omp",
+      "thinking": "high",
+      "modelVerification": "Actual semantic CLI resolve response, not launch label",
+      "sourceCommit": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
+      "verdict": "ACCEPT",
+      "findings": [
+        {
+          "severity": "P3",
+          "path": "server.js",
+          "lines": [
+            392,
+            533,
+            619
+          ],
+          "finding": "Orphaned M5 serveFleetArtifact body and PAGE_COMMENTS_HEADER remain after M3 cutover.",
+          "disposition": "No M3 edit; parent deletes during M5 root coalescing as explicitly required by ownership."
+        },
+        {
+          "severity": "P3",
+          "path": "src/core/file-mention.ts",
+          "lines": [
+            132
+          ],
+          "finding": "record(msg) guard skipped null/undefined messages rather than preserving baseline native TypeError; unreachable through real transcript parser.",
+          "disposition": "Owner elected exact baseline preservation, not a documented exception: restore direct native property access via narrow structural assertion, add null-message regression, regenerate and validate; all three final revision rechecks required."
+        }
+      ],
+      "limits": "Did not rerun builds/tests/smokes; relied on inspected owner evidence, unavailable process-local artifact logs. Generated output fidelity spot-checked, not full recompile. Dependencies reviewed only at consumed boundaries.",
+      "independentEvidence": [
+        "Ten parallel read-only review slices plus Kimi direct high-risk seam inspection.",
+        "All required invariants, source-policy/compiler enrollment, root composition and original route order confirmed.",
+        "Personally checked synchronous FFF resolver failure conversion/caching and both diff version checks.",
+        "Generated output spot checks for pages, git-diff, publication-handlers, shares and file-page."
+      ],
+      "helperProvenance": {
+        "verification": "Raw semantic show JSON; actual resolved model fields, not inferred agent aliases",
+        "sessionRef": "01a0a9e4-6191-736d-965b-64f2690861b3",
+        "launchMessage": {
+          "index": 16,
+          "id": "ebfcc57e"
+        },
+        "resolvedModelMessage": {
+          "index": 30,
+          "id": "51931f7b",
+          "field": "details.jobs"
+        },
+        "helpers": [
+          {
+            "task": "PagesReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "SharesReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "CommentsReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "FleetArtifactsReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "FileSearchReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "FileMentionReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "FilePageReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "GitDiffReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "HandlersReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "RootPolicyDocsReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          }
+        ],
+        "reviewerOwnedScope": "Kimi explicitly owns both the initial entire-M3 verdict and the final entire857 ACCEPT. It reports personal FFF caching, both diff version checks, inert preview headers, root composition/orphan ownership and complete corrected-source baseline comparison, distinct from delegated slices.",
+        "reviewerProvenanceRequest": "Fulfilled in final857 Kimi-owned verdict after authorized quota-reset resumption.",
+        "reviewerConfirmation": {
+          "identityConfidence": "OWNER-ATTESTED, not independently verifiable in reviewer-visible tooling",
+          "ownStatement": "Reviewer tooling exposes agent type only; owner-retrieved raw hub metadata reports all ten actual resolved models kimi-code/k3:high. No inference from default aliases.",
+          "personallyInspected": [
+            "FFF lazy cached failure including synchronous resolver throw",
+            "stale409 and both diff version checks",
+            "inert SVG/raw preview headers",
+            "root factory composition and orphan ownership",
+            "complete857 delta against baseline35"
+          ],
+          "entireM3Verdict": "ACCEPT",
+          "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263"
+        }
+      }
+    }
+  ],
+  "finalReviews": [
+    {
+      "model": "zai/glm-5.3",
+      "sessionRef": "01a0a9e4-5ccb-7348-9bb0-da6dca4412c2",
+      "harness": "omp",
+      "thinking": "max",
+      "modelVerification": "Actual semantic CLI resolve response, not launch label",
+      "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+      "verdict": "ACCEPT",
+      "findings": [
+        {
+          "severity": "info",
+          "finding": "Quoted-path decoder behavior differs only for inputs real git cannot produce; repository degradation behavior remains preserved.",
+          "disposition": "No change requested; reviewer confirmed product reachability and accepted."
+        },
+        {
+          "severity": "info",
+          "finding": "Legacy M5 root relay body remains after M3 callers move to checked relay implementation.",
+          "disposition": "Parent coalesces/removes it with the M5 root proposal; no M3 scope expansion."
+        },
+        {
+          "severity": "info",
+          "finding": "onRetired closes over fileHandlers initialized later.",
+          "disposition": "Retirement is post-construction; TDZ-safe and covered by lifecycle tests."
+        },
+        {
+          "severity": "info",
+          "finding": "Fleet remaps retain valid timestamps; malformed null createdAt is replaced with Date.now() exactly as baseline nullish coalescing.",
+          "disposition": "Preserve implementation; clarify evidence wording to valid timestamps in final attestation."
+        },
+        {
+          "severity": "info",
+          "path": "src/core/file-mention.ts",
+          "finding": "Initial malformed-message skip differed from native baseline errors.",
+          "disposition": "RESOLVED in 8570631; exact native property access restored and behavior regression added."
+        }
+      ],
+      "limits": "Did not rerun owner build/check/full backend/browser/UI/native gates; process-local artifact logs unavailable. Dependency internals reviewed only at consumed interfaces. Product packaged-native and two-real-server proofs inspected as owner evidence, not reproduced.",
+      "independentEvidence": [
+        "Line-by-line comparison of all eight libraries and all 26 baseline route bodies.",
+        "Generated export lists, original-position root mounts and exact five-factory composition checked.",
+        "Early fleet/search producer source and output hashes match final tree.",
+        "Strict source-policy enrollment 219 and no explicit-any/suppressions; package/type boundary checked.",
+        "All required store/publication/comment/reach/inert-preview/FFF/diff semantics confirmed at source and consumed dependency interfaces."
+      ],
+      "initialSourceCommit": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
+      "initialVerdict": "ACCEPT",
+      "recheckEvidence": "Read complete four-file delta and carried forward full initial review. Confirmed documented unknown-member structural assertion restores unguarded native message errors, strict/sloppy primitive reads agree, source/emission match, regression asserts error type only, and owner evidence matches scope.",
+      "recheckLimits": "No build/tests/smokes rerun; final owner gates and four-case runtime parity smoke accepted as reported. No parent package acceptance inferred."
+    },
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "sessionRef": "01a0a9e4-6667-712c-963a-fa32d9b2ec59",
+      "harness": "omp",
+      "thinking": "high",
+      "modelVerification": "Actual semantic CLI resolve response, not launch label",
+      "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+      "verdict": "ACCEPT",
+      "findings": [
+        {
+          "severity": "low",
+          "path": "server.js",
+          "lines": [
+            392,
+            533
+          ],
+          "finding": "Legacy serveFleetArtifact and its PAGE_COMMENTS_HEADER are unreachable after M3 consumers move to actual relay-handlers.",
+          "disposition": "Retain under unchanged M5 ownership in this proposal; parent removes them while integrating M5 root proposal, not as an M3 fix."
+        },
+        {
+          "severity": "info",
+          "finding": "Additional guards were equivalent or unreachable through actual product inputs; extractSessionPaths null-row skip differs only for inputs session-files cannot produce.",
+          "disposition": "RESOLVED in 8570631: direct property access restores exact native errors; reviewer independently verified nine cases. No exception remains."
+        },
+        {
+          "severity": "info",
+          "finding": "No new compile-only M3 consumer fixture in test/types/core.ts.",
+          "disposition": "M0 assigns remaining root compiler/consumer closure to M7; no M3 change requested."
+        }
+      ],
+      "limits": "Did not run owner check/full backend/browser/UI/Electron/harness gates; process-local artifact logs unavailable. Dependencies reviewed only at consumed contracts/ancestry. M5 root-only and M7 proposals excluded. No live sessions/providers.",
+      "independentEvidence": [
+        "Disposable core emit: all 20 M3 JS/declaration outputs byte-identical after standard banner.",
+        "All 105 app/shareApp literal route registrations preserve sequence.",
+        "65 store comparisons and 27 parser comparisons; observable product behavior preserved.",
+        "42 reach/ranking comparisons: two native-versus-walker harness asymmetry results explained, reach identical.",
+        "Synchronous FFF packaged resolver failure cached once; valid unpacked import initialized once with scan/page/query behavior.",
+        "Real file-page rendering, KaTeX, Markdown sanitization and HTML-share rollback exercised.",
+        "Fleet/search producer hashes and ancestry match evidence; no later source changes.",
+        "Focused git-diff/file-mention/fleet-artifacts suites: 38 passed, including two-real-server relay/comment consumers."
+      ],
+      "initialSourceCommit": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
+      "initialVerdict": "ACCEPT",
+      "recheckEvidence": "Read complete four-file c60f16d..8570631 delta; independent nine-case disposable runtime probe verified exact baseline native null/undefined errors, unchanged primitive skips and valid trail maps. Checked source/generated correspondence, unchanged declarations, meaningful regression and retained initial review scope.",
+      "recheckLimits": "No build/full backend/browser/UI/Electron gates rerun. Direct-function probe used disposable copies and a stubbed resolver only for the old reviewed module, not the HTTP surface; no live providers/sessions."
+    },
+    {
+      "model": "kimi-code/k3",
+      "sessionRef": "01a0a9e4-6191-736d-965b-64f2690861b3",
+      "harness": "omp",
+      "thinking": "high",
+      "modelVerification": "Actual semantic CLI resolve response, not launch label",
+      "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+      "verdict": "ACCEPT",
+      "findings": [
+        {
+          "severity": "P3",
+          "path": "server.js",
+          "lines": [
+            392,
+            533,
+            619
+          ],
+          "finding": "Orphaned M5 serveFleetArtifact body and PAGE_COMMENTS_HEADER remain after M3 cutover.",
+          "disposition": "No M3 edit; parent deletes during M5 root coalescing as explicitly required by ownership."
+        },
+        {
+          "severity": "P3",
+          "path": "src/core/file-mention.ts",
+          "lines": [
+            132
+          ],
+          "finding": "record(msg) guard skipped null/undefined messages rather than preserving baseline native TypeError; unreachable through real transcript parser.",
+          "disposition": "RESOLVED in 8570631. Kimi personally compared baseline and corrected code and explicitly marked the finding FIXED; exact native error semantics restored."
+        }
+      ],
+      "limits": "Did not rerun builds/tests/smokes; relied on inspected owner evidence, unavailable process-local artifact logs. Generated output fidelity spot-checked, not full recompile. Dependencies reviewed only at consumed boundaries.",
+      "independentEvidence": [
+        "Ten parallel read-only review slices plus Kimi direct high-risk seam inspection.",
+        "All required invariants, source-policy/compiler enrollment, root composition and original route order confirmed.",
+        "Personally checked synchronous FFF resolver failure conversion/caching and both diff version checks.",
+        "Generated output spot checks for pages, git-diff, publication-handlers, shares and file-page."
+      ],
+      "initialSourceCommit": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
+      "initialVerdict": "ACCEPT",
+      "status": "completed",
+      "helperProvenance": {
+        "verification": "Raw semantic show JSON; actual resolved model fields, not inferred agent aliases",
+        "sessionRef": "01a0a9e4-6191-736d-965b-64f2690861b3",
+        "launchMessage": {
+          "index": 16,
+          "id": "ebfcc57e"
+        },
+        "resolvedModelMessage": {
+          "index": 30,
+          "id": "51931f7b",
+          "field": "details.jobs"
+        },
+        "helpers": [
+          {
+            "task": "PagesReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "SharesReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "CommentsReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "FleetArtifactsReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "FileSearchReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "FileMentionReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "FilePageReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "GitDiffReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "HandlersReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          },
+          {
+            "task": "RootPolicyDocsReview",
+            "agent": "reviewer",
+            "resolvedModelIdentity": "kimi-code/k3",
+            "resolvedModel": "kimi-code/k3:high",
+            "resolvedThinkingLevel": "high"
+          }
+        ],
+        "reviewerOwnedScope": "Kimi explicitly owns both the initial entire-M3 verdict and the final entire857 ACCEPT. It reports personal FFF caching, both diff version checks, inert preview headers, root composition/orphan ownership and complete corrected-source baseline comparison, distinct from delegated slices.",
+        "reviewerProvenanceRequest": "Fulfilled in final857 Kimi-owned verdict after authorized quota-reset resumption.",
+        "reviewerConfirmation": {
+          "identityConfidence": "OWNER-ATTESTED, not independently verifiable in reviewer-visible tooling",
+          "ownStatement": "Reviewer tooling exposes agent type only; owner-retrieved raw hub metadata reports all ten actual resolved models kimi-code/k3:high. No inference from default aliases.",
+          "personallyInspected": [
+            "FFF lazy cached failure including synchronous resolver throw",
+            "stale409 and both diff version checks",
+            "inert SVG/raw preview headers",
+            "root factory composition and orphan ownership",
+            "complete857 delta against baseline35"
+          ],
+          "entireM3Verdict": "ACCEPT",
+          "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263"
+        }
+      },
+      "priorBlockedAttempt": {
+        "httpStatus": 403,
+        "type": "permission_error",
+        "message": "You've reached your 5-hour usage limit. Your quota will reset when the current 5-hour window ends.",
+        "observedAt": "2026-09-16T11:27:16Z",
+        "scope": "Final 857 recheck failed before source inspection; initial c60 ACCEPT is not a final857 approval."
+      },
+      "recheckEvidence": "Kimi personally read the complete four-file delta and baseline35 extractSessionPaths source; confirmed sole message guard removed, compile-time-only assertion retains exact native null/undefined TypeErrors, regression/emission match, declarations/API and other code unchanged. Explicit Kimi-owned verdict covers ENTIRE M3 at857 and carries forward full initial review.",
+      "recheckLimits": "No product validation reruns by reviewer. Helper model identities are owner-attested from owner-retrieved raw semantic hub metadata; reviewer tooling exposed agent type only. Kimi explicitly owns the entire857 verdict and personally inspected the delta and high-risk seams."
+    }
+  ],
+  "scheduledResumption": {
+    "reportedQuotaReset": "2026-09-16T14:23:17Z",
+    "notBefore": "2026-09-16T14:23:32Z",
+    "process": "m3-kimi-quota-reset",
+    "script": "/tmp/pi-dish-m3-kimi-reset.cjs",
+    "sameReviewer": "01a0a9e4-6191-736d-965b-64f2690861b3",
+    "automaticRetries": 0,
+    "sourceFreeze": "8570631fb8047afab998538a479fed7257ab2263",
+    "requiredResult": "Kimi-owned entire857 ACCEPT or REVISE plus own actual helper provenance statement; delivery alone is not review approval.",
+    "dispatch": {
+      "at": "2026-09-16T14:23:32.286Z",
+      "ok": true,
+      "queued": false,
+      "meaning": "Request accepted for delivery only; no verdict or quota availability inferred."
+    }
+  },
+  "runtimeEvidence": "m3-evidence.json",
+  "ownedFiles": [
+    "docs/m3-evidence.json",
+    "docs/m3-fleet-producer-evidence.json",
+    "docs/m3-review.json",
+    "docs/m3-search-producer-evidence.json",
+    "docs/typescript.md",
+    "lib/comments.d.ts",
+    "lib/comments.js",
+    "lib/file-handlers.d.ts",
+    "lib/file-handlers.js",
+    "lib/file-mention.d.ts",
+    "lib/file-mention.js",
+    "lib/file-page.d.ts",
+    "lib/file-page.js",
+    "lib/file-search.d.ts",
+    "lib/file-search.js",
+    "lib/fleet-artifacts.d.ts",
+    "lib/fleet-artifacts.js",
+    "lib/git-diff.d.ts",
+    "lib/git-diff.js",
+    "lib/pages.d.ts",
+    "lib/pages.js",
+    "lib/publication-handlers.d.ts",
+    "lib/publication-handlers.js",
+    "lib/shares.d.ts",
+    "lib/shares.js",
+    "package-lock.json",
+    "package.json",
+    "server.js",
+    "src/core/comments.ts",
+    "src/core/file-handlers.ts",
+    "src/core/file-mention.ts",
+    "src/core/file-page.ts",
+    "src/core/file-search.ts",
+    "src/core/fleet-artifacts.ts",
+    "src/core/git-diff.ts",
+    "src/core/pages.ts",
+    "src/core/publication-handlers.ts",
+    "src/core/shares.ts",
+    "test/file-mention.test.js"
+  ],
+  "publicListenerRegistrations": [
+    {
+      "method": "get",
+      "path": "/share/:token",
+      "handler": "serveSharedSession"
+    },
+    {
+      "method": "get",
+      "path": "/page/:token",
+      "handler": "publicPage"
+    },
+    {
+      "method": "get",
+      "path": "/page/:token/*",
+      "handler": "publicPageAsset"
+    },
+    {
+      "method": "get",
+      "path": "/style.css",
+      "handler": "fileStyles"
+    },
+    {
+      "method": "get",
+      "path": "/vendor/hljs-theme.min.css",
+      "handler": "highlightStyles"
+    }
+  ],
+  "publicListenerCatchAll": "Unchanged404; no API/host routes mounted",
+  "attestationBoundary": {
+    "kind": "review/evidence-only followup",
+    "reviewedSourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+    "runtimeSourceChanged": false,
+    "contents": [
+      "docs/m3-review.json",
+      "docs/m3-evidence.json"
+    ],
+    "parentAcceptanceClaimed": false
+  }
+}

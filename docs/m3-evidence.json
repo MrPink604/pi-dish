@@ -1,0 +1,666 @@
+{
+  "milestone": "M3",
+  "status": "Owner implementation, validation and three exact-model final-source reviews complete; parent integration and package acceptance pending",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "branch": "migration/m3-publication",
+  "ownerSession": "01a0a998-4b0e-76ce-9490-995db584afd2",
+  "implementationWorkers": [
+    {
+      "slice": "stores",
+      "session": "01a0a99a-3205-7696-9e16-ae23b0d51037",
+      "model": "openai-codex/gpt-6-astra",
+      "thinking": "high"
+    },
+    {
+      "slice": "file libraries",
+      "session": "01a0a99a-2d36-7252-a339-3908b706facb",
+      "model": "openai-codex/gpt-6-astra",
+      "thinking": "high"
+    },
+    {
+      "slice": "git diff",
+      "session": "01a0a99a-2874-728c-8eff-846e6277f7b5",
+      "model": "openai-codex/gpt-6-astra",
+      "thinking": "high"
+    }
+  ],
+  "modelVerification": "semantic CLI list --active --json before work assignment; no unverified default delegation",
+  "sourceOutputs": [
+    {
+      "source": "src/core/pages.ts",
+      "javascript": "lib/pages.js",
+      "declaration": "lib/pages.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    },
+    {
+      "source": "src/core/shares.ts",
+      "javascript": "lib/shares.js",
+      "declaration": "lib/shares.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    },
+    {
+      "source": "src/core/comments.ts",
+      "javascript": "lib/comments.js",
+      "declaration": "lib/comments.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    },
+    {
+      "source": "src/core/fleet-artifacts.ts",
+      "javascript": "lib/fleet-artifacts.js",
+      "declaration": "lib/fleet-artifacts.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    },
+    {
+      "source": "src/core/file-search.ts",
+      "javascript": "lib/file-search.js",
+      "declaration": "lib/file-search.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    },
+    {
+      "source": "src/core/file-mention.ts",
+      "javascript": "lib/file-mention.js",
+      "declaration": "lib/file-mention.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    },
+    {
+      "source": "src/core/file-page.ts",
+      "javascript": "lib/file-page.js",
+      "declaration": "lib/file-page.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    },
+    {
+      "source": "src/core/git-diff.ts",
+      "javascript": "lib/git-diff.js",
+      "declaration": "lib/git-diff.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    },
+    {
+      "source": "src/core/publication-handlers.ts",
+      "javascript": "lib/publication-handlers.js",
+      "declaration": "lib/publication-handlers.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    },
+    {
+      "source": "src/core/file-handlers.ts",
+      "javascript": "lib/file-handlers.js",
+      "declaration": "lib/file-handlers.d.ts",
+      "program": "tsconfig.core.json",
+      "policy": "source-policy.json roots src/core"
+    }
+  ],
+  "baselineRegistrations": [
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/shares/import",
+      "lines": [
+        2537,
+        2547
+      ],
+      "consumes": [
+        "app",
+        "express",
+        "sharePayload",
+        "shares",
+        "validOmpShareHtml"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/sessions/:id/share",
+      "lines": [
+        2549,
+        2562
+      ],
+      "consumes": [
+        "app",
+        "findSessionSource",
+        "liveSessionHistoryPending",
+        "sharePayload",
+        "shares"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/sessions/:id/share",
+      "lines": [
+        2564,
+        2571
+      ],
+      "consumes": [
+        "app",
+        "shareExportCache",
+        "shares"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/share",
+      "lines": [
+        2573,
+        2577
+      ],
+      "consumes": [
+        "app",
+        "sharePayload",
+        "shares"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/share/:token",
+      "lines": [
+        2580,
+        2580
+      ],
+      "consumes": [
+        "app",
+        "serveSharedSession"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/comments",
+      "lines": [
+        2750,
+        2767
+      ],
+      "consumes": [
+        "app",
+        "canonicalKnownSessionId",
+        "cleanCommentTarget",
+        "comments",
+        "inferSessionForPath",
+        "pages",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/comments/index",
+      "lines": [
+        2796,
+        2806
+      ],
+      "consumes": [
+        "app",
+        "commentIndexEntry",
+        "comments",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/comments/count",
+      "lines": [
+        2808,
+        2812
+      ],
+      "consumes": [
+        "app",
+        "comments",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/comments/get",
+      "lines": [
+        2816,
+        2830
+      ],
+      "consumes": [
+        "app",
+        "comments",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "patch",
+      "path": "/api/comments/:id",
+      "lines": [
+        2854,
+        2862
+      ],
+      "consumes": [
+        "app",
+        "comments",
+        "resolveOpenComment",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/comments/:id",
+      "lines": [
+        2864,
+        2870
+      ],
+      "consumes": [
+        "app",
+        "comments",
+        "resolveOpenComment"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/comments/:id/ack",
+      "lines": [
+        2872,
+        2882
+      ],
+      "consumes": [
+        "app",
+        "canonicalSessionId",
+        "comments"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "post",
+      "path": "/api/pages",
+      "lines": [
+        2916,
+        2962
+      ],
+      "consumes": [
+        "app",
+        "canonicalKnownSessionId",
+        "fs",
+        "inferSessionForPath",
+        "pagePayload",
+        "pages",
+        "path",
+        "shortString"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/pages",
+      "lines": [
+        2964,
+        2973
+      ],
+      "consumes": [
+        "app",
+        "canonicalSessionId",
+        "fs",
+        "pagePayload",
+        "pages"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "delete",
+      "path": "/api/pages/:token",
+      "lines": [
+        2975,
+        2977
+      ],
+      "consumes": [
+        "app",
+        "pages"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/page/:token",
+      "lines": [
+        3052,
+        3052
+      ],
+      "consumes": [
+        "app",
+        "servePage"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/page/:token/*",
+      "lines": [
+        3053,
+        3058
+      ],
+      "consumes": [
+        "app",
+        "servePage"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/dirs",
+      "lines": [
+        4349,
+        4355
+      ],
+      "consumes": [
+        "app",
+        "searchHomeDirs"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/dirs/children",
+      "lines": [
+        4360,
+        4367
+      ],
+      "consumes": [
+        "app",
+        "getDirChildren"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/files",
+      "lines": [
+        4384,
+        4397
+      ],
+      "consumes": [
+        "app",
+        "completePath",
+        "isPathCompletionToken",
+        "resolveSessionCwd",
+        "searchFiles"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/file/content",
+      "lines": [
+        4415,
+        4431
+      ],
+      "consumes": [
+        "app",
+        "readFileForViewer",
+        "resolveViewerMention"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/file",
+      "lines": [
+        4437,
+        4458
+      ],
+      "consumes": [
+        "app",
+        "readFileForViewer",
+        "resolveViewerMention"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/diff/patch",
+      "lines": [
+        4490,
+        4519
+      ],
+      "consumes": [
+        "DIFF_SNAPSHOT_TTL_MS",
+        "app",
+        "diffSnapshots",
+        "getDiffVersion",
+        "getFilePatch",
+        "path",
+        "resolveSessionCwd",
+        "staleDiffResponse"
+      ],
+      "owner": "M3"
+    },
+    {
+      "receiver": "app",
+      "method": "get",
+      "path": "/api/sessions/:id/diff",
+      "lines": [
+        4525,
+        4535
+      ],
+      "consumes": [
+        "DIFF_INLINE_FILE_LIMIT",
+        "aggregateDiffs",
+        "app",
+        "rememberDiffSnapshot",
+        "resolveSessionCwd"
+      ],
+      "owner": "M3"
+    }
+  ],
+  "additionalConsumerCutover": [
+    "shareApp public share/page routes (M7-owned mounting only)",
+    "session ownership onRetired callback must call fileHandlers.retireSession instead of direct diff cache mutation"
+  ],
+  "rootCompositionProposal": {
+    "scope": "M3-only body deletion and original-position mounts; no sibling root-only proposal imported",
+    "initializationOrder": ["ownership", "fileHandlers", "sessionReadHandlers", "accessHandlers", "relayHandlers", "publicationHandlers"],
+    "fileHandlers": {
+      "factory": "createFileHandlers",
+      "ports": ["resolveSessionCwd", "findSessionSource"],
+      "retirement": "ownership.onRetired calls fileHandlers.retireSession(route)"
+    },
+    "sessionReadHandlers": {
+      "factory": "createSessionReadHandlers",
+      "ports": ["findSessionSource", "liveSessionHistoryPending", "getRegisteredSession", "getRPCSession", "getLiveSession", "liveTreeLeafId", "getLiveContextUsage", "getContextWindow", "describeRuntime"],
+      "consumedBoundExports": ["exportSessionHtml", "getOmpShareSnapshot"]
+    },
+    "accessHandlers": {
+      "factory": "createAccessHandlers",
+      "ports": {
+        "version": "PKG_VERSION",
+        "readDishSettings": "readDishSettings",
+        "sttAvailable": "() => !!stt.resolveSttConfig(readDishSettings())",
+        "usageLimitsAvailable": "() => listHarnesses().some(d => d.argv?.usage && harnessCommandAvailable(d))"
+      }
+    },
+    "relayHandlers": {
+      "factory": "createRelayHandlers",
+      "ports": {
+        "fleetArtifacts": "fleetArtifacts",
+        "localPageExists": "token => !!pages.getPage(token)",
+        "publicBaseUrl": "() => process.env.PI_DISH_SHARE_BASE_URL",
+        "hostDescriptor": "accessHandlers.hostDescriptor",
+        "upgradeAuthorized": "accessHandlers.upgradeAuthorized"
+      }
+    },
+    "publicationHandlers": {
+      "factory": "createPublicationHandlers",
+      "observationPorts": ["findSessionSource", "liveSessionHistoryPending", "listRegisteredSessions", "enumerateSessionCandidates", "getRPCSession"],
+      "exportSessionHtml": "sessionReadHandlers.exportSessionHtml",
+      "getOmpShareSnapshot": "sessionReadHandlers.getOmpShareSnapshot",
+      "relay": "relayHandlers.publicArtifacts",
+      "publicBaseUrl": "() => process.env.PI_DISH_SHARE_BASE_URL",
+      "resourceRoot": "__dirname"
+    },
+    "parentCoalescing": "Reuse these actual factory instances when integrating M1/M5 root proposals serially; do not initialize duplicate instances or substitute unchecked callbacks. No singleton globals added.",
+    "unchangedOwnership": "Out-of-scope M1 session-read routes and M5 access/transport routes and old root bodies remain with their owners until parent applies those owners' root proposals. M7 retains root startup, listener wiring and resolveSessionCwd observation."
+  },
+  "consumedBehaviorMatrix": {
+    "pages": "Live root references; root-idempotent token; title pass-through; absent-vs-null metadata; explicit session association validation precedes mutation; directory redirects and contained assets; public local-first fallback; main annotation versus raw share listener.",
+    "shares": "Session references distinct from immutable imported native HTML; import payload validation; atomic HTML write and rollback; canonical alias behavior; revoke HTML/cache cleanup; mtime/size/live-snapshot export cache.",
+    "comments": "File/diff/page target variants; anchor caps; page session inheritance and deepest unique live cwd inference; canonical known identity; index/get reads never acknowledge; session guard and acknowledged edit/delete conflict.",
+    "fleet-artifacts": "M3-owned get/record/remove/listByHost/token/kind guards; M5 actual remote-name guard; invalid timestamp null; remap preserves valid timestamps while null createdAt retains baseline Date.now() fallback; valid host-scoped unmapping; newest-first; mapping is reachability only.",
+    "files": "Lazy native FFF SDK/fallback; four finders; bounded directory walker; typed path completion bypasses FFF; mention reach/ranking/symlink semantics; text/image limits; raw HTML/SVG inert.",
+    "diff": "Bounded repo/patch/untracked reads; summary vs deferred patch absent fields; four-entry snapshots, sliding TTL; request paths select captured entries; both version comparisons; stale409."
+  },
+  "dependencyStatus": {
+    "M1": "Approved checked producer 6b10e54d5cd15594a5c58e9abd4f02f6e71a7a8e applied unchanged as 4036971d441974f2570bfc83d21fe6f6ff47e6c0; no M1 root proposal imported",
+    "M1ResolverDelta": "Parent-approved final four-file producer delta 6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d applied unchanged as 958e583c9fe563aa0bf364cfd8a0a2abc9f8ee6e, without code overlaps: SourceLookup.route unknown and post-parser typeof-string guard. No sibling root proposal imported.",
+    "M1FinalReviewReport": "Owner reports all three exact required models explicitly ACCEPTed final source 6d9b3e2830ff492ef26ea9ab5b02b2d38b8f694d after final-source rechecks. Attestation-only de99e3d03f6ab08b8093b7f0665c079ea01ff5aa pushed; source/validation/review binding is in docs/m1-evidence.json and docs/m1-review.json. Original producer remains 6b10e54d5cd15594a5c58e9abd4f02f6e71a7a8e. These are M1 owner results, not M3 integration validation or parent package acceptance.",
+    "M5": "Approved remote producer 57bed24194c0e251d18b58b02041309bf1534439 applied unchanged as 0743a9582e960557539b51b2ab9bf55944826c18. Parent-approved source-only producer c5d336a1e4e1d069a06306d81b654d703d0ccab0 applied as 33033ddabda57a523ad524f275f94be10a15a2d4; final terminal parity delta cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd applied as 648ff4f3f03002ba03ae0fe2038e22a0ef8e9604. No code overlaps. Only docs/m5-evidence.json modify/delete conflict: retained incoming final evidence unchanged because its creation belonged to an excluded ancestor. No M5 root proposal or duplicate fleet/remote commit imported.",
+    "M5FinalReviewReport": "Owner reports all three exact-model final-revision ACCEPTs for cf6b948a0b1e9be8a4957a2aed4bff3002dc62bd and pushed attestation e9445b0e745d2d05b0123189428570fbcfea17de. Final check, 999 backend, 15 browser and desktop/mobile gates passed, with real SSH/HTTP/SSE/WS/PTY evidence in docs/m5-evidence.json. These are M5 owner results, not M3 integration validation or parent acceptance. Final cf6b948 delta inspected: terminal source/generated implementations, focused terminal test and M5 evidence only; no root changes. M3 fleet producer d31 to M5 e9 remained byte-identical per owner.",
+    "M6": "Checked runtime-resources producer 707a2e34b2cce1619fb3379ab7af3217d6b16691 applied unchanged as 575610458e446542429f44dcd859d07e705029c4 under approved FFF contract amendment de0496c9ec09a18d21a7d970c67beab9550cb897",
+    "fleetProducer": "M3 producer d31b67bc6bfd1d5fc0e6f27820f5a65065813494 pushed and delivered; readiness only, not acceptance",
+    "searchProducer": "Narrow consumer 51c4991238d15aea94a824fadd33f4ec0e3b9374 delivered to M6 as 8303d7f79a125fdedfbdf3dd5fdfc3ba67bf4069; only baseline plus exact M6 resolver required; actual Linux packaged product native proof passed, not milestone acceptance"
+  },
+  "initialCommands": [
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "result": "exit 0, 916 packages, node-pty postinstall completed; six dependency lifecycle scripts blocked by existing npm allowScripts policy"
+    },
+    {
+      "command": "npm install --save-dev --save-exact @types/katex@0.16.8 --ignore-scripts --no-audit --no-fund",
+      "result": "exit 0; one maintained declaration package added; parent approved minimal package/lock proposal"
+    }
+  ],
+  "verification": [
+    {
+      "scope": "Independent seven-library source snapshot before FFF packaging integration or root-handler cutover",
+      "snapshot": "/tmp/pi-dish-m3-producer-dv4w4ysn",
+      "commands": ["npm run build:core", "npm run check", "npm test -- test/file-mention.test.js test/git-diff.test.js test/comments-cli.test.js test/server.test.js"],
+      "result": "All exit 0; 203 governed sources; 156 tests passed, 0 failed, 0 skipped"
+    },
+    {
+      "scope": "Exact fleet producer only",
+      "evidence": "docs/m3-fleet-producer-evidence.json",
+      "sourceCommit": "d31b67bc6bfd1d5fc0e6f27820f5a65065813494",
+      "result": "Official build/check and 998 backend tests passed; temporary-HOME generated store lifecycle smoke passed"
+    },
+    {
+      "scope": "Actual old JavaScript versus generated migrated pages/comments",
+      "command": "Throwaway temporary-HOME differential runtime smoke; no committed test scaffold",
+      "result": "143 comparisons passed: primitive/array/object disk rows; absent/null/coercion/order; get/list/update/ack/delete/reassociation results and persisted state"
+    },
+    {
+      "scope": "Dependency-minimal file-search consumer and actual M6 resolver",
+      "evidence": "docs/m3-search-producer-evidence.json",
+      "sourceCommit": "51c4991238d15aea94a824fadd33f4ec0e3b9374",
+      "result": "Official build/check and 1004 backend tests passed; actual native modified gitStatus and mapped libfff_c.so observed without warnings; separate cached synchronous resolver-failure fallback smoke passed; not Electron package proof"
+    },
+    {
+      "scope": "M6-owned actual Linux Electron development and packaged product using exact M3 search consumer",
+      "ownerSession": "01a0a998-4644-742f-bbf6-102bc6f53c99",
+      "consumerCommit": "51c4991238d15aea94a824fadd33f4ec0e3b9374",
+      "consumerAppliedCommit": "8303d7f79a125fdedfbdf3dd5fdfc3ba67bf4069",
+      "resolverCommit": "707a2e34b2cce1619fb3379ab7af3217d6b16691",
+      "evidencePaths": ["/tmp/pd-m6c-proof-NH1ND2/dev/evidence.json", "/tmp/pd-m6c-proof-NH1ND2/packaged/evidence.json"],
+      "versions": { "electron": "44.4.1", "node": "24.21.0", "chrome": "152.0.7977.78" },
+      "result": "Owner reports actual product /api/sessions/:id/files passed in both modes; evidence read directly confirms a/b/c/d/e/f/g/h/m6c-native-needle.txt with gitStatus clean, beyond walker depth six. Packaged root is app.asar and mappings show physical app.asar.unpacked libfff_c.so and pty.node. PTY output m6c-pty-42; contextIsolation/sandbox/webSecurity true, nodeIntegration false; local HTTP assets recorded.",
+      "limits": "Owner-reported windows visually inspected, SDK/external-links/installed-CLI checks passed. Full final M6 validation and real packaged harness checks still running at report time; neither M3 nor M6 milestone acceptance claimed. Disposable mapping filter corrected to native basenames without product changes."
+    },
+    {
+      "scope": "Complete M3 implementation and actual M1/M5/M6 dependencies with M3-only root cutover",
+      "commands": ["npm run build:core", "npm run check", "npm test"],
+      "result": "All exit 0. Source policy: 219 compiler-owned sources, no explicit-any exceptions. Core/browser generated output match. Full backend: 1009 passed, 0 failed, 0 skipped, duration 32097.58663 ms.",
+      "backendOutput": "artifact://141",
+      "versions": { "node": "26.8.2", "npm": "12.0.2", "typescript": "7.0.2" }
+    },
+    {
+      "scope": "Affected browser ownership and presentation paths",
+      "command": "npm run test:browser -- file-views.spec.js anchored-comments.spec.js artifact-comments.spec.js session-info.spec.js directories.spec.js composer-autocomplete.spec.js",
+      "result": "39 passed in 28.1 seconds; no failures",
+      "output": "artifact://144"
+    },
+    {
+      "scope": "Fresh-fixture feature scenarios and full desktop/mobile browser surface",
+      "commands": ["npm run test:ui:scenarios", "npm run test:ui"],
+      "result": "All eight independent scenarios passed (models, drafts, sidebar, usage, skills, routines, bounce, mobile). Full desktop/mobile smoke passed, including file viewer, artifacts, diffs, deferred patches, mentions, share links and host-aware ownership.",
+      "outputs": ["artifact://146", "artifact://148"]
+    },
+    {
+      "scope": "Actual generated handlers through isolated main/public HTTP listeners and real browser",
+      "command": "Throwaway launch.cjs/exercise.cjs with existing test environment sanitization and temporary HOME/tmux/Git project; browser observation and screenshots of returned page URLs",
+      "result": "PASS: native file search returned modified gitStatus; Markdown preview and inert raw SVG headers; deferred patch then post-write stale409; legacy title pass-through; main annotation versus unchanged public HTML; public API404; comment inheritance, non-acknowledging read, owner403, acknowledgement and delete409; standalone CSP; immutable imported native HTML; malformed stored page404/missing. Browser displayed Markdown/table and literal script text with window.m3Executed absent, then displayed the published HTML artifact.",
+      "screenshots": ["/tmp/omp-sshots-1581c561f87a28cc.webp"],
+      "isolation": "No live agent sessions or provider credentials. Browser released and isolated listener stopped after proof.",
+      "limits": "No browser bundle change. Native Electron packaging evidence is the separate M6-owned actual-product proof above, not walker fallback or a merely named app.asar directory."
+    },
+    {
+      "scope": "Post-review exact malformed-message error parity correction",
+      "commands": ["npm run build:core", "npm run check", "npm test", "npm run test:browser -- file-views.spec.js composer-autocomplete.spec.js", "npm run test:ui:scenarios", "npm run test:ui"],
+      "result": "All exit 0. Check: 219 governed sources, no explicit-any exceptions, generated output match. Full backend: 1010 passed, 0 failed, 0 skipped, 32250.60484 ms. Affected browser paths: 15 passed in 12.8 seconds. All eight isolated UI scenarios and full desktop/mobile smoke passed.",
+      "outputs": ["artifact://175", "artifact://173", "artifact://180", "artifact://181"],
+      "runtimeSmoke": "Four actual baseline-JavaScript versus corrected-generated-module comparisons passed: null and undefined retain identical native TypeError names/messages; primitive entries remain ignored and valid tool-call paths remain unchanged. Inline throwaway script left no files.",
+      "regression": "test/file-mention.test.js now asserts a null message raises TypeError rather than silently dropping the malformed entry; no error wording or source text is pinned."
+    }
+  ],
+  "cleanup": "Updated existing docs/typescript.md implementation inventory and opaque boundaries; removed the four owner-created independent/fleet/search/surface throwaway directories after their proofs. Historical snapshot paths and process-local output references identify executed evidence, not retained fixtures. No permanent test scaffolding or browser bundle changes added.",
+  "reviews": [
+    {
+      "model": "zai/glm-5.3",
+      "sessionRef": "01a0a9e4-5ccb-7348-9bb0-da6dca4412c2",
+      "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+      "verdict": "ACCEPT"
+    },
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "sessionRef": "01a0a9e4-6667-712c-963a-fa32d9b2ec59",
+      "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+      "verdict": "ACCEPT"
+    },
+    {
+      "model": "kimi-code/k3",
+      "sessionRef": "01a0a9e4-6191-736d-965b-64f2690861b3",
+      "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263",
+      "verdict": "ACCEPT"
+    }
+  ],
+  "reviewRecord": "m3-review.json",
+  "attestationBoundary": "This evidence update and m3-review.json are review/provenance-only followups to the exact reviewed source; no runtime source or generated output changes. Parent alone owns integrated CI and package acceptance.",
+  "reviewCorrection": {
+    "initialReviewedSource": "c60f16d01b7c95eafe226c2605d674e4c78ddff1",
+    "initialVerdicts": "All three required exact-model reviewers explicitly ACCEPTed this revision; Kimi and DeepSeek identified a non-blocking malformed-message error difference.",
+    "resolution": "Owner chose exact baseline preservation: extractSessionPaths now performs direct property access through a documented narrow structural assertion, retaining native null/undefined errors without special-case error construction. Generated output and one focused regression updated.",
+    "rootDisposition": "The unused M5-owned serveFleetArtifact body and PAGE_COMMENTS_HEADER remain for parent deletion with M5 root coalescing; no M3 ownership expansion.",
+    "finalRechecks": "All three required exact models explicitly ACCEPTed the entire corrected M3 implementation at 8570631fb8047afab998538a479fed7257ab2263. Kimi supplied its own verdict and personal-versus-delegated provenance statement after the authorized quota reset; no old-source acceptance or request delivery was counted."
+  },
+  "remainingOpaqueBoundaries": [
+    "Root server startup, observation callbacks and out-of-scope M1/M5 route bodies remain JavaScript under their existing owners; parent coalesces actual factory instances when integrating their separate root proposals.",
+    "Legacy persisted page/share/comment members preserve existing primitive/array/object coercion and absent/null distinctions through unknown fields; valid writes and disk-read DTOs stay distinct.",
+    "Third-party SDK/native/Express runtime values and arbitrary session/tool payloads remain external boundaries; no ambient SDK facsimiles or explicit-any exceptions added.",
+    "No R4 ownership consolidation, R5 shared store mechanics, store format migration, browser framework adoption or algorithm-simplification claim."
+  ],
+  "sourceCommit": "8570631fb8047afab998538a479fed7257ab2263"
+}
