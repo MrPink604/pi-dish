@@ -2,14 +2,32 @@
   "programs": [
     "tsconfig.core.json",
     "tsconfig.browser.json",
-    "tsconfig.check.json"
+    "tsconfig.check.json",
+    "tsconfig.edges.json",
+    "tsconfig.extensions.json"
   ],
   "roots": [
     "src/core",
     "src/browser"
   ],
-  "files": [],
+  "files": [
+    "skills/lib/pi-dish-client.ts",
+    "skills/pi-dish-sessions/scripts/pi-dish-sessions.ts",
+    "skills/pi-dish-comments/scripts/pi-dish-comments.ts",
+    "skills/pi-dish-pages/scripts/pi-dish-pages.ts",
+    "electron/main.ts",
+    "extensions/pi-dish-share-omp.mts",
+    "extensions/mood.ts",
+    "extensions/pi-dish-bridge/core.ts",
+    "extensions/pi-dish-bridge/index.ts",
+    "extensions/pi-dish-bridge/pi-private.ts",
+    "extensions/pi-dish-bridge-omp/index.ts",
+    "extensions/pi-dish-bridge-omp/native-state.ts",
+    "extensions/pi-dish-bridge-prime/index.ts",
+    "test/types/omp-host.d.ts"
+  ],
   "negativeFixtures": [
+    "test/types/extensions.ts",
     "test/types/browser-anchored-comments.ts",
     "test/types/browser-api.ts",
     "test/types/browser-app.ts",

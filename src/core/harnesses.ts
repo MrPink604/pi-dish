@@ -3,11 +3,12 @@ import type { HarnessDescriptor, HarnessId, ResumeFileOptions, ResumeOptions } f
 
 import os = require('os');
 import path = require('path');
+import { runtimeResourcePath } from './runtime-resources';
 
 // Deliberately data-only: launch/RPC modules consume this registry, never the
 // reverse, which keeps harness selection free of the rpc-session dependency.
 const repo = path.resolve(__dirname, '..');
-const bridge = (name: string) => path.join(repo, 'extensions', `pi-dish-bridge-${name}`, 'index.ts');
+const bridge = (name: string) => runtimeResourcePath(repo, `extensions/pi-dish-bridge-${name}/index.ts`);
 
 function piResume(options: ResumeFileOptions): string[];
 function piResume(options?: ResumeOptions): (string | undefined)[];

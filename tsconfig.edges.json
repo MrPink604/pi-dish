@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "strict": true,
+    "noEmitOnError": true,
+    "declaration": true,
+    "newLine": "lf",
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "files": [
+    "skills/lib/pi-dish-client.ts",
+    "skills/pi-dish-sessions/scripts/pi-dish-sessions.ts",
+    "skills/pi-dish-comments/scripts/pi-dish-comments.ts",
+    "skills/pi-dish-pages/scripts/pi-dish-pages.ts",
+    "electron/main.ts",
+    "extensions/pi-dish-share-omp.mts"
+  ]
+}

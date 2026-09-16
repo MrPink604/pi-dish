@@ -2532,8 +2532,9 @@ test('PUT /api/models/enabled preserves a concurrent pi settings write', async (
   // Model a separate pi process: hold pi's own settings lock with a snapshot,
   // then commit an unrelated field before releasing it. The API must wait,
   // re-read that write under the same lock, and merge enabledModels into it.
-  const lockfilePath = path.join(__dirname, '..', 'node_modules', '@earendil-works',
-    'pi-coding-agent', 'node_modules', 'proper-lockfile');
+  const sdkRequire = require('node:module').createRequire(path.join(__dirname, '..',
+    'node_modules', '@earendil-works', 'pi-coding-agent', 'package.json'));
+  const lockfilePath = sdkRequire.resolve('proper-lockfile');
   const script = `
     const fs = require('node:fs');
     const lockfile = require(${JSON.stringify(lockfilePath)});
@@ -2554,6 +2555,7 @@ test('PUT /api/models/enabled preserves a concurrent pi settings write', async (
   const locked = new Promise((resolve, reject) => {
     child.stdout.once('data', resolve);
     child.once('error', reject);
+    child.once('exit', (code) => reject(new Error(`Settings lock child exited before readiness (${code}): ${childStderr}`)));
   });
   const exited = new Promise((resolve) => child.once('exit', resolve));
   await locked;

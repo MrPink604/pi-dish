@@ -3,16 +3,24 @@ import { AgentSession } from "@earendil-works/pi-coding-agent";
 const HOLDER = Symbol.for("pi-dish-bridge.agentSession");
 const PATCHED = Symbol.for("pi-dish-bridge.sessionPatch");
 
+const sharedGlobal = globalThis as unknown as Record<PropertyKey, unknown>;
+
 try {
-  const proto: any = (AgentSession as any)?.prototype;
-  if (proto && !proto[PATCHED]) {
-    proto[PATCHED] = true;
-    for (const name of ["subscribe", "prompt"]) {
-      const original = proto[name];
-      if (typeof original !== "function") continue;
-      proto[name] = function (this: any, ...args: any[]) {
-        try { (globalThis as any)[HOLDER] = { current: this }; } catch {}
-        return Reflect.apply(original, this, args);
+  const proto = AgentSession.prototype;
+  if (!Reflect.get(proto, PATCHED)) {
+    Object.defineProperty(proto, PATCHED, { value: true });
+    const subscribe = proto.subscribe;
+    if (typeof subscribe === "function") {
+      proto.subscribe = function (this: AgentSession, ...args: Parameters<AgentSession["subscribe"]>) {
+        try { sharedGlobal[HOLDER] = { current: this }; } catch {}
+        return subscribe.apply(this, args);
+      };
+    }
+    const prompt = proto.prompt;
+    if (typeof prompt === "function") {
+      proto.prompt = function (this: AgentSession, ...args: Parameters<AgentSession["prompt"]>) {
+        try { sharedGlobal[HOLDER] = { current: this }; } catch {}
+        return prompt.apply(this, args);
       };
     }
   }
@@ -20,6 +28,7 @@ try {
   try { process.stderr.write(`[pi-dish-bridge] AgentSession capture patch failed (queue editing disabled): ${e}\n`); } catch {}
 }
 
-export function getPiPrivateSession(): any {
-  return (globalThis as any)[HOLDER]?.current ?? null;
+export function getPiPrivateSession(): unknown {
+  const holder = sharedGlobal[HOLDER];
+  return holder && typeof holder === "object" && "current" in holder ? holder.current : null;
 }

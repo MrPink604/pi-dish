@@ -1,6 +1,6 @@
 // Type-only dependency: alternate wrappers execute this core without loading
 // upstream Pi's AgentSession implementation at runtime.
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ContextUsage, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as cp from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -8,6 +8,81 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createSessionObserver } from "../../lib/session-recovery.js";
+
+// Alternate hosts deliberately enter as unknown. A callable guard establishes
+// only that a member can be invoked; its result is still unknown until consumed.
+// This is not a declaration of either host SDK (compact/thinking differ from Pi).
+type HostObject = Record<PropertyKey, unknown>;
+type HostMethod = (this: unknown, ...args: unknown[]) => unknown;
+type UserContent = Parameters<ExtensionAPI["sendUserMessage"]>[0];
+type DeliveryOptions = Parameters<ExtensionAPI["sendUserMessage"]>[1];
+type UIRequest = Record<string, unknown> & { method: string; id?: string };
+type HostModel = HostObject & { provider: string; id: string };
+type HostCommand = HostObject & { name: string; source: string };
+
+function isObject(value: unknown): value is HostObject {
+  return value !== null && (typeof value === "object" || typeof value === "function");
+}
+
+function field(value: unknown, key: PropertyKey): unknown {
+  return isObject(value) ? value[key] : undefined;
+}
+
+function isHostMethod(value: unknown): value is HostMethod {
+  return typeof value === "function";
+}
+
+function callHost(target: unknown, name: string, ...args: unknown[]): unknown {
+  const method = field(target, name);
+  if (!isHostMethod(method)) throw new Error(`host does not expose ${name}`);
+  return Reflect.apply(method, target, args);
+}
+
+function optionalHostCall(target: unknown, name: string, ...args: unknown[]): unknown {
+  if (!isHostMethod(field(target, name))) return undefined;
+  return callHost(target, name, ...args);
+}
+
+function errorText(error: unknown): string {
+  return String(field(error, "message") || error);
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.every((item: unknown) => typeof item === "string")) {
+    throw new Error("host returned an invalid string array");
+  }
+  return value;
+}
+
+function hostModels(value: unknown): HostModel[] {
+  if (!Array.isArray(value) || !value.every((model: unknown): model is HostModel =>
+    isObject(model) && typeof model.provider === "string" && typeof model.id === "string")) {
+    throw new Error("host returned an invalid model list");
+  }
+  return value;
+}
+
+function hostCommands(host: unknown): HostCommand[] {
+  const value = callHost(host, "getCommands");
+  if (!Array.isArray(value) || !value.every((command: unknown): command is HostCommand =>
+    isObject(command) && typeof command.name === "string" && typeof command.source === "string")) {
+    throw new Error("host returned an invalid command list");
+  }
+  return value;
+}
+
+function sessionNameFrom(ctx: unknown): string | undefined {
+  return stringValue(optionalHostCall(field(ctx, "sessionManager"), "getSessionName"));
+}
+
+function isContextUsage(value: unknown): value is ContextUsage {
+  return isObject(value) && (value.tokens === null || typeof value.tokens === "number") &&
+    typeof value.contextWindow === "number" && (value.percent === null || typeof value.percent === "number");
+}
 
 // Exact process-birth identity for registry consumers. A PID alone can be
 // reused after this pi exits; Linux proc field 22 is stable for this process's
@@ -92,8 +167,8 @@ function ensureSocketDirectory(): void {
     if (mode !== 0o700) {
       throw new Error(`directory mode is ${mode.toString(8).padStart(4, "0")}, expected 0700`);
     }
-  } catch (e: any) {
-    throw new Error(`[pi-dish-bridge] ${label} is not a private usable directory: ${SOCKET_DIR}: ${String(e?.message || e)}. Choose an absolute directory owned by this user with mode 0700.`);
+  } catch (e: unknown) {
+    throw new Error(`[pi-dish-bridge] ${label} is not a private usable directory: ${SOCKET_DIR}: ${errorText(e)}. Choose an absolute directory owned by this user with mode 0700.`);
   }
 }
 
@@ -123,7 +198,7 @@ export const PI_EVENT_PROFILE = [
   "tool_execution_update",
   "tool_execution_end",
   // queue_update is deliberately NOT here: pi never routes it through the
-  // extension runner (verified pi 0.80.3), so pi.on("queue_update") never
+  // extension runner (verified pi 0.80.3), so on("queue_update") never
   // fires. The real source is the AgentSession.subscribe() listener installed
   // in ensureSessionSubscription() — see the capture patch at module scope.
   "auto_retry_start",
@@ -237,7 +312,7 @@ export type BridgeDescriptor = {
   wrapperVersion: string;
   eventProfile: readonly string[];
   capabilities: Record<string, boolean>;
-  getPrivateSession?: () => any;
+  getPrivateSession?: () => unknown;
   nativeProjection?: {
     get: () => unknown;
     subscribe: (listener: (projection: unknown) => void) => (() => void);
@@ -249,7 +324,7 @@ export type BridgeDescriptor = {
   // replace the runner or do not publish this event.
   sessionSwitchEvents?: boolean;
   publicCompactionEvents?: boolean;
-  compactArgument?: (instructions: string) => any;
+  compactArgument?: (instructions: string) => unknown;
   // OMP permits branch()/navigateTree() only while an extension command
   // handler is executing. When enabled, socket requests are queued and an
   // internal command services them instead of reusing a command context from
@@ -312,12 +387,12 @@ function foreignWrapperHost(): string | null {
 }
 
 function deriveSessionIdentity(
-  ctx: ExtensionContext,
+  ctx: HostObject,
   descriptor: BridgeDescriptor,
 ): { sessionFile: string; sessionId: string; cwd: string } | null {
-  const manager: any = (ctx as any)?.sessionManager;
-  const sessionFile = typeof manager?.getSessionFile === "function" ? manager.getSessionFile() : null;
-  if (!sessionFile) return null; // ephemeral, skip
+  const manager = ctx.sessionManager;
+  const sessionFile = optionalHostCall(manager, "getSessionFile");
+  if (typeof sessionFile !== "string" || !sessionFile || typeof ctx.cwd !== "string") return null; // ephemeral, skip
 
   // Normal sessions use their unique JSONL basename. pi-subagents-style
   // explicit <run-N>/session.jsonl files and OMP sibling-directory subagents
@@ -326,7 +401,7 @@ function deriveSessionIdentity(
   let sessionId = path.basename(sessionFile, ".jsonl");
   const nestedSubsession = descriptor.nestedSubsessions && fs.existsSync(`${path.dirname(sessionFile)}.jsonl`);
   if (sessionId === "session" || nestedSubsession) {
-    const headerId = typeof manager.getSessionId === "function" ? manager.getSessionId() : null;
+    const headerId = optionalHostCall(manager, "getSessionId");
     if (
       typeof headerId === "string" &&
       headerId.length > 0 &&
@@ -343,30 +418,30 @@ function deriveSessionIdentity(
 // private _getUserMessageText does: a string is itself; otherwise join the
 // text parts of the content array. Handles both raw content (compaction
 // buffer) and AgentMessage-shaped entries (agent-core queues).
-function queueEntryText(entry: any): string {
+function queueEntryText(entry: unknown): string {
   if (typeof entry === "string") return entry;
-  const content = Array.isArray(entry) ? entry : entry?.content;
+  const content = Array.isArray(entry) ? entry : field(entry, "content");
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.filter((c: any) => c?.type === "text").map((c: any) => c.text).join("");
+  if (Array.isArray(content)) return treeEntryText(content);
   return "";
 }
 
-function treeEntryText(content: any): string {
+function treeEntryText(content: unknown): string {
   return typeof content === "string"
     ? content
     : Array.isArray(content)
-      ? content.filter((part: any) => part?.type === "text").map((part: any) => part.text).join("")
+      ? content.filter((part: unknown) => field(part, "type") === "text").map((part: unknown) => field(part, "text")).join("")
       : "";
 }
 
-function treeEntryPreview(content: any, maxLength: number): string {
+function treeEntryPreview(content: unknown, maxLength: number): string {
   return treeEntryText(content).replace(/[\n\t]/g, " ").trim().slice(0, maxLength);
 }
 
-function treeToolSummary(name: string, args: any): string {
-  if (!args || typeof args !== "object") return "";
+function treeToolSummary(name: unknown, args: unknown): string {
+  if (!isObject(args)) return "";
   if (name === "Bash" || name === "bash") return typeof args.command === "string" ? args.command.split("\n")[0].slice(0, 60) : "";
-  if (["Read", "read", "Edit", "edit", "Write", "write"].includes(name)) return typeof args.path === "string" ? args.path : "";
+  if (typeof name === "string" && ["Read", "read", "Edit", "edit", "Write", "write"].includes(name)) return typeof args.path === "string" ? args.path : "";
   const key = Object.keys(args)[0];
   return key ? String(args[key]).slice(0, 40) : "";
 }
@@ -374,34 +449,34 @@ function treeToolSummary(name: string, args: any): string {
 // Public ReadonlySessionManager -> the compact tree shape consumed by the web
 // modal. This intentionally uses only getTree/getEntries/getLeafId: OMP tree
 // reads are safe in ordinary event/socket contexts, unlike tree mutations.
-function serializeSessionTree(sessionManager: any) {
-  if (!sessionManager || typeof sessionManager.getTree !== "function" ||
-      typeof sessionManager.getEntries !== "function" || typeof sessionManager.getLeafId !== "function") {
+function serializeSessionTree(sessionManager: unknown) {
+  if (!isHostMethod(field(sessionManager, "getTree")) ||
+      !isHostMethod(field(sessionManager, "getEntries")) || !isHostMethod(field(sessionManager, "getLeafId"))) {
     throw new Error("tree read unavailable: host does not expose the ReadonlySessionManager tree API");
   }
-  const tree = sessionManager.getTree();
-  const entries = sessionManager.getEntries();
-  const leafId = sessionManager.getLeafId() ?? null;
+  const tree = callHost(sessionManager, "getTree");
+  const entries = callHost(sessionManager, "getEntries");
+  const leafId = callHost(sessionManager, "getLeafId") ?? null;
   if (!Array.isArray(tree) || !Array.isArray(entries)) {
     throw new Error("tree read unavailable: host returned an invalid session tree");
   }
 
-  const byId = new Map(entries.filter((entry: any) => entry?.id).map((entry: any) => [entry.id, entry]));
+  const byId = new Map(entries.filter((entry: unknown): entry is HostObject => isObject(entry) && typeof entry.id === "string").map(entry => [entry.id, entry]));
   const activePathIds = new Set<string>();
   let current = leafId;
   while (typeof current === "string" && current && !activePathIds.has(current)) {
     activePathIds.add(current);
-    const parent = (byId.get(current) as any)?.parentId;
+    const parent = byId.get(current)?.parentId;
     current = typeof parent === "string" ? parent : null;
   }
 
-  const nodes: any[] = [];
-  const flatten = (node: any, depth: number) => {
-    const entry = node?.entry;
-    if (!entry?.id || !Array.isArray(node.children)) {
+  const nodes: Record<string, unknown>[] = [];
+  const flatten = (node: unknown, depth: number) => {
+    const entry = field(node, "entry");
+    if (!isObject(node) || !isObject(entry) || typeof entry.id !== "string" || !entry.id || !Array.isArray(node.children)) {
       throw new Error("tree read unavailable: host returned an invalid tree node");
     }
-    const result: any = {
+    const result: Record<string, unknown> = {
       id: entry.id,
       parentId: entry.parentId ?? null,
       type: entry.type,
@@ -413,7 +488,7 @@ function serializeSessionTree(sessionManager: any) {
       childCount: node.children.length,
     };
     if (entry.type === "message") {
-      const message = entry.message || {};
+      const message = isObject(entry.message) ? entry.message : {};
       result.role = message.role;
       if (message.role === "user") {
         result.text = treeEntryPreview(message.content, 120);
@@ -424,8 +499,8 @@ function serializeSessionTree(sessionManager: any) {
         result.errorMessage = message.errorMessage;
         if (Array.isArray(message.content)) {
           result.toolCalls = message.content
-            .filter((part: any) => part?.type === "toolCall")
-            .map((part: any) => ({ id: part.id, name: part.name, args: treeToolSummary(part.name, part.arguments) }));
+            .filter((part: unknown): part is HostObject => isObject(part) && part.type === "toolCall")
+            .map((part) => ({ id: part.id, name: part.name, args: treeToolSummary(part.name, part.arguments) }));
         }
       } else if (message.role === "toolResult") {
         result.toolName = message.toolName;
@@ -451,7 +526,28 @@ function serializeSessionTree(sessionManager: any) {
 }
 
 export function createBridge(descriptor: BridgeDescriptor) {
- return function (pi: ExtensionAPI) {
+ return function (pi: unknown) {
+  if (!isObject(pi) || !isHostMethod(pi.on) || !isHostMethod(pi.registerCommand)) {
+    throw new Error("pi-dish bridge needs a host with on and registerCommand");
+  }
+  const on = (name: string, handler: (event: HostObject, ctx: HostObject) => void | Promise<void>) => {
+    callHost(pi, "on", name, (event: unknown, ctx: unknown) => {
+      if (!isObject(ctx)) throw new Error("host supplied an invalid extension context");
+      return handler(isObject(event) ? event : {}, ctx);
+    });
+  };
+  const registerCommand = (name: string, options: {
+    description?: string;
+    handler: (args: string, ctx: HostObject) => void | Promise<void>;
+  }) => {
+    callHost(pi, "registerCommand", name, {
+      ...options,
+      handler: (args: unknown, ctx: unknown) => {
+        if (typeof args !== "string" || !isObject(ctx)) throw new Error("host supplied an invalid command context");
+        return options.handler(args, ctx);
+      },
+    });
+  };
   // The stock bridge rides along inside wrapper hosts that embed pi's
   // extension API (OMP autoloads its user-extension directory). Their
   // dedicated bridges own those sessions; a second generic-pi registration
@@ -487,10 +583,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
   const LOAD_SENTINEL = Symbol.for(`pi-dish-bridge.loaded.${descriptor.harnessId}`);
   const g = globalThis as { [key: symbol]: unknown };
   let effectiveSpawnToken: string | null = descriptor.spawnToken ?? SPAWN_TOKEN ?? null;
-  const existingClaim = g[LOAD_SENTINEL] as null | false | { adopt?: (token: string) => void };
+  const existingClaim = g[LOAD_SENTINEL];
   if (existingClaim) {
-    if (descriptor.spawnToken && typeof existingClaim.adopt === "function") {
-      existingClaim.adopt(descriptor.spawnToken);
+    if (descriptor.spawnToken && isHostMethod(field(existingClaim, "adopt"))) {
+      callHost(existingClaim, "adopt", descriptor.spawnToken);
       try {
         process.stderr.write("[pi-dish-bridge] launch token adopted by the already-loaded bridge copy — this wrapper stays inactive.\n");
       } catch {}
@@ -521,8 +617,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // command handling, so pi-dish queues each operation over the socket and
   // triggers the internal service through the exact tmux pane — by pressing
   // the service shortcut, never by typing the command name.
-  let commandCtx: any = null;
-  function stashCommandCtx(ctx: any) {
+  let commandCtx: HostObject | null = null;
+  function stashCommandCtx(ctx: HostObject) {
     if (ctx && typeof ctx.navigateTree === "function") commandCtx = ctx;
   }
 
@@ -536,14 +632,15 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // Null until the host accepts the registration — the registry entry only
   // advertises a chord pi-dish can actually press.
   let treeServiceShortcut: string | null = null;
+  type TreeOperationResult = { editorText?: string; leafId: unknown };
   type PendingTreeOperation = {
     kind: "navigate" | "branch";
     targetId: string;
     summarize: boolean;
     editorText?: string;
-    resolve: (value: any) => void;
+    resolve: (value: TreeOperationResult) => void;
     reject: (error: Error) => void;
-    acquireTimer: ReturnType<typeof setTimeout>;
+    acquireTimer: ReturnType<typeof setTimeout> | undefined;
     settled: boolean;
   };
   const pendingTreeOperations: PendingTreeOperation[] = [];
@@ -560,10 +657,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
     operation.reject(error);
   }
 
-  async function runTreeOperationInCommand(operation: PendingTreeOperation, ctx: any): Promise<any> {
+  async function runTreeOperationInCommand(operation: PendingTreeOperation, ctx: HostObject): Promise<TreeOperationResult> {
     const operationName = operation.kind === "branch" ? "tree branch" : "tree navigation";
-    const method = operation.kind === "branch" ? ctx?.branch : ctx?.navigateTree;
-    if (typeof method !== "function") {
+    const method = operation.kind === "branch" ? ctx.branch : ctx.navigateTree;
+    if (!isHostMethod(method)) {
       capabilities.treeNavigation = false;
       writeRegistry();
       throw new Error(`${operationName} unavailable: host command context does not expose ${operation.kind === "branch" ? "branch" : "navigateTree"}`);
@@ -582,7 +679,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
           timer = setTimeout(() => reject(new Error(`${operationName} timed out after ${timeoutMs}ms`)), timeoutMs);
         }),
       ]);
-      if ((result as any)?.cancelled) {
+      if (field(result, "cancelled")) {
         throw new Error(`${operationName} cancelled by ${descriptor.name}`);
       }
       refreshContextUsage(ctx);
@@ -595,7 +692,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
   }
 
-  async function servicePendingTreeOperations(ctx: any) {
+  async function servicePendingTreeOperations(ctx: HostObject) {
     // HTTP requests and tmux-triggered command handlers can overlap. Keep
     // mutations strictly serialized; the first command handler drains work
     // queued for later handlers too.
@@ -614,7 +711,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
             activeTreeOperations.delete(operation);
             operation.resolve(result);
           }
-        } catch (error: any) {
+        } catch (error: unknown) {
           if (!operation.settled) {
             operation.settled = true;
             activeTreeOperations.delete(operation);
@@ -628,14 +725,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
   }
 
   function queueTreeOperation(kind: "navigate" | "branch", targetId: string, summarize: boolean, editorText?: string) {
-    return new Promise((resolve, reject) => {
+    return new Promise<TreeOperationResult>((resolve, reject) => {
       const acquireTimeoutMs = descriptor.treeCommandAcquireTimeoutMs ?? 5000;
       const operationName = kind === "branch" ? "tree branch" : "tree navigation";
-      const operation = {
+      const operation: PendingTreeOperation = {
         kind, targetId, summarize, editorText, resolve, reject,
-        acquireTimer: null as any,
+        acquireTimer: undefined,
         settled: false,
-      } satisfies PendingTreeOperation;
+      };
       operation.acquireTimer = setTimeout(() => {
         rejectTreeOperation(operation, new Error(`${operationName} command context acquisition timed out after ${acquireTimeoutMs}ms`));
       }, acquireTimeoutMs);
@@ -655,23 +752,23 @@ export function createBridge(descriptor: BridgeDescriptor) {
     if (!descriptor.selfPrime) return;
     const s = getCapturedSession();
     if (!s || typeof s.prompt !== "function") return;
-    try { await s.prompt("/dish-prime"); } catch {}
+    try { await callHost(s, "prompt", "/dish-prime"); } catch {}
   }
 
-  pi.registerCommand("dish-prime", {
+  registerCommand("dish-prime", {
     description: "Enable pi-dish remote session control (tree navigation)",
-    handler: async (_args: string, ctx: any) => {
+    handler: async (_args: string, ctx: HostObject) => {
       stashCommandCtx(ctx);
     },
   });
 
   if (descriptor.treeCommandContext) {
-    pi.registerCommand(TREE_SERVICE_COMMAND, {
+    registerCommand(TREE_SERVICE_COMMAND, {
       // OMP has no public hidden-command flag. Keep this out of the bridge's
       // command listing below and give it no user-facing description. Kept
       // for hosts whose shortcut registration is unavailable (and for manual
       // recovery); the shortcut below is the trigger pi-dish actually uses.
-      handler: async (_args: string, ctx: any) => {
+      handler: async (_args: string, ctx: HostObject) => {
         await servicePendingTreeOperations(ctx);
       },
     });
@@ -680,11 +777,13 @@ export function createBridge(descriptor: BridgeDescriptor) {
     // service navigation this way. Advertised through the registry so the
     // server presses the chord instead of typing the command name.
     if ("registerShortcut" in pi && typeof pi.registerShortcut === "function") {
-      pi.registerShortcut(TREE_SERVICE_SHORTCUT, {
+      callHost(pi, "registerShortcut", TREE_SERVICE_SHORTCUT, {
         description: "pi-dish remote tree navigation service",
         // Invoked without await by the host: servicePendingTreeOperations
         // settles every operation itself and never rejects.
-        handler: (ctx: unknown) => { void servicePendingTreeOperations(ctx); },
+        handler: (ctx: unknown) => {
+          if (isObject(ctx)) void servicePendingTreeOperations(ctx);
+        },
       });
       treeServiceShortcut = TREE_SERVICE_SHORTCUT;
     }
@@ -692,17 +791,17 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   // Reload entrypoint: RPC sessions can invoke this via a plain `prompt`
   // command ("/dish-reload"); TUI sessions cannot (see commandCtx above).
-  pi.registerCommand("dish-reload", {
+  registerCommand("dish-reload", {
     description: "Reload extensions, skills, and prompt templates (pi-dish)",
-    handler: async (_args: string, ctx: any) => {
-      await ctx.reload();
+    handler: async (_args: string, ctx: HostObject) => {
+      await callHost(ctx, "reload");
     },
   });
 
   // Bulk reload enters a real command context and checks safety there, not
   // when the server queued it. Never type into the user's TUI draft.
   let guardedReloadReply: ((success: boolean, data?: unknown, error?: string) => void) | null = null;
-  pi.registerCommand("dish-bounce-reload", {
+  registerCommand("dish-bounce-reload", {
     description: "Reload an idle agent for pi-dish maintenance",
     handler: async (_args, ctx) => {
       const reply = guardedReloadReply;
@@ -716,19 +815,19 @@ export function createBridge(descriptor: BridgeDescriptor) {
         return;
       }
       reply(true, { info: "Reload dispatched" });
-      await ctx.reload();
+      await callHost(ctx, "reload");
     },
   });
 
   // Manual recovery/debug: re-broadcast current widget/status state to
   // connected pi-dish clients (and re-check socket ownership). Usable from
   // the TUI and from the web composer (run_command → executeSlashCommand).
-  pi.registerCommand("dish-push", {
+  registerCommand("dish-push", {
     description: "Re-broadcast extension UI state to pi-dish clients (pi-dish)",
-    handler: async (_args: string, ctx: any) => {
+    handler: async (_args: string, ctx: HostObject) => {
       stashCommandCtx(ctx);
       const r = forcePushExtensionUI();
-      try { ctx.ui.notify(`pi-dish: pushed ${r.widgets} widget(s), ${r.statuses} status(es) to ${r.clients} client(s)`, "info"); } catch {}
+      try { callHost(ctx.ui, "notify", `pi-dish: pushed ${r.widgets} widget(s), ${r.statuses} status(es) to ${r.clients} client(s)`, "info"); } catch {}
     },
   });
 
@@ -761,11 +860,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
   function installUIWrapper(
     ui: Record<string, unknown>,
     name: string,
-    build: (original: (...args: any[]) => any) => (...args: any[]) => any,
+    build: (original: HostMethod) => HostMethod,
   ): void {
     const original = underlyingUIMethod(ui, name);
-    if (typeof original !== "function" || (original as any)[UI_METHOD_WRAPPER]) return;
-    const wrapped = build(original as (...args: any[]) => any);
+    if (!isHostMethod(original) || field(original, UI_METHOD_WRAPPER)) return;
+    const wrapped = build(original);
     Object.defineProperty(wrapped, UI_METHOD_WRAPPER, { value: true });
     try { ui[name] = wrapped; } catch { return; }
     if (underlyingUIMethod(ui, name) !== wrapped) return;
@@ -779,7 +878,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // A wrapper may opt into an operation that is absent on an older host.
   // Resolve that claim against the live public context before registration;
   // alternative hosts must fail closed rather than throwing at extension load.
-  const capabilities = { ...descriptor.capabilities, guardedReload: descriptor.selfPrime === true };
+  const capabilities: Record<string, boolean> = { ...descriptor.capabilities, guardedReload: descriptor.selfPrime === true };
 
   let turnInProgress = false;
   // Compaction has no active turn (turn_start never fires), yet pi has aborted
@@ -793,7 +892,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // Distinguishes compaction episodes so a stale resolution probe from one
   // /compact can never release the gate a newer compaction raised.
   let compactionGeneration = 0;
-  const compactionQueue: Array<string | any[]> = [];
+  const compactionQueue: UserContent[] = [];
   const COMPACTION_STUCK_MS = 6 * 60 * 1000;
   // True once ensureSessionSubscription() is listening to the AgentSession's
   // real compaction_start/compaction_end events. While live, those drive the
@@ -811,45 +910,45 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let queueUnsub: (() => void) | null = null;
   let nativeProjectionUnsub: (() => void) | null = null;
   let modelId: string | null = null;
-  let contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | null = null;
+  let contextUsage: ContextUsage | null = null;
   let sessionName: string | null = null;
-  let lastCtx: ExtensionContext | null = null;
+  let lastCtx: HostObject | null = null;
 
   // Dialog requests waiting for a remote (web) answer. id -> resolve(raw response)
-  const pendingDialogs = new Map<string, (resp: any) => void>();
+  const pendingDialogs = new Map<string, (resp: unknown) => void>();
 
-  function formatModel(model: any): string | null {
+  function formatModel(model: unknown): string | null {
     if (!model) return null;
     if (typeof model === "string") return model;
-    const provider = model.provider;
-    const id = model.id ?? model.modelId;
+    const provider = field(model, "provider");
+    const id = field(model, "id") ?? field(model, "modelId");
     return provider && id ? `${provider}/${id}` : null;
   }
 
-  async function resolveModel(ref: string): Promise<any | null> {
+  async function resolveModel(ref: string): Promise<HostModel | null> {
     if (!lastCtx) return null;
     const slashIdx = ref.indexOf("/");
     const provider = slashIdx > 0 ? ref.slice(0, slashIdx) : null;
     const id = slashIdx > 0 ? ref.slice(slashIdx + 1) : ref;
-    const available = await lastCtx.modelRegistry.getAvailable();
-    return available.find((m: any) => provider ? (m.provider === provider && m.id === id) : m.id === id)
-      ?? available.find((m: any) => formatModel(m) === ref)
+    const available = hostModels(await callHost(lastCtx.modelRegistry, "getAvailable"));
+    return available.find((m) => provider ? (m.provider === provider && m.id === id) : m.id === id)
+      ?? available.find((m) => formatModel(m) === ref)
       // Loose fallback so "/model fable" works like the TUI's fuzzy picker.
-      ?? available.find((m: any) => m.id.includes(id))
+      ?? available.find((m) => m.id.includes(id))
       ?? null;
   }
 
-  function refreshModel(ctx?: ExtensionContext | null) {
+  function refreshModel(ctx?: HostObject | null) {
     const model = formatModel(ctx?.model ?? lastCtx?.model);
     if (model) modelId = model;
   }
 
-  function refreshContextUsage(ctx?: ExtensionContext | null) {
+  function refreshContextUsage(ctx?: HostObject | null) {
     const c = ctx ?? lastCtx;
     if (!c) return;
     try {
-      const usage = c.getContextUsage();
-      if (usage) contextUsage = usage;
+      const usage = callHost(c, "getContextUsage");
+      if (isContextUsage(usage)) contextUsage = usage;
     } catch {}
   }
 
@@ -870,10 +969,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
   }
 
   const uiState = {
-    widgets: new Map<string, any>(),
-    statuses: new Map<string, any>(),
-    title: null as any,
-    editorText: null as any,
+    widgets: new Map<string, UIRequest>(),
+    statuses: new Map<string, UIRequest>(),
+    title: null as UIRequest | null,
+    editorText: null as UIRequest | null,
   };
 
   function broadcast(obj: unknown) {
@@ -889,10 +988,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   // The live AgentSession, if the module-scope capture patch stashed one and it
   // still looks like an AgentSession. All queue features feature-detect on this.
-  function getCapturedSession(): any {
+  function getCapturedSession(): HostObject | null {
     try {
       const s = descriptor.getPrivateSession?.();
-      if (s && typeof s.subscribe === "function") return s;
+      if (isObject(s) && isHostMethod(s.subscribe)) return s;
     } catch {}
     return null;
   }
@@ -907,8 +1006,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
     const s = getCapturedSession();
     if (s) {
       try {
-        steering = [...s.getSteeringMessages()];
-        followUp = [...s.getFollowUpMessages()];
+        steering = [...stringArray(callHost(s, "getSteeringMessages"))];
+        followUp = [...stringArray(callHost(s, "getFollowUpMessages"))];
       } catch {
         steering = [...lastQueue.steering];
         followUp = [...lastQueue.followUp];
@@ -940,11 +1039,13 @@ export function createBridge(descriptor: BridgeDescriptor) {
     const s = getCapturedSession();
     if (!s) return;
     try {
-      const unsub = s.subscribe((event: any) => {
+      const unsub = callHost(s, "subscribe", (value: unknown) => {
+        if (!isObject(value)) return;
+        const event = value;
         if (event?.type === "queue_update") {
           lastQueue = {
-            steering: Array.isArray(event.steering) ? [...event.steering] : [],
-            followUp: Array.isArray(event.followUp) ? [...event.followUp] : [],
+            steering: Array.isArray(event.steering) ? [...stringArray(event.steering)] : [],
+            followUp: Array.isArray(event.followUp) ? [...stringArray(event.followUp)] : [],
           };
           broadcastQueue();
         } else if (event?.type === "agent_end") {
@@ -954,7 +1055,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
           beginCompaction();
           broadcast({ type: "event", event: "compaction_start", data: { reason: event.reason } });
         } else if (event?.type === "compaction_end") {
-          const r = event.result;
+          const r = isObject(event.result) ? event.result : null;
           broadcast({
             type: "event",
             event: "compaction_end",
@@ -976,7 +1077,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         }
       });
       if (typeof unsub === "function") {
-        queueUnsub = unsub;
+        queueUnsub = () => { Reflect.apply(unsub, undefined, []); };
         compactionEventsLive = true;
       }
     } catch (e) {
@@ -984,13 +1085,13 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
   }
 
-  function emitExtensionUIRequest(req: any) {
+  function emitExtensionUIRequest(req: UIRequest) {
     if (!req?.id) req.id = crypto.randomUUID();
 
     if (req.method === "setWidget") {
       // Extensions re-set widgets on every internal tick (pi-processes does it
       // per output line) — don't rebroadcast content clients already have.
-      const key = req.widgetKey || "default";
+      const key = stringValue(req.widgetKey) || "default";
       if (req.widgetLines === undefined || (Array.isArray(req.widgetLines) && req.widgetLines.length === 0)) {
         if (!uiState.widgets.delete(key)) return;
       } else {
@@ -1000,7 +1101,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         uiState.widgets.set(key, req);
       }
     } else if (req.method === "setStatus") {
-      const key = req.statusKey || "default";
+      const key = stringValue(req.statusKey) || "default";
       if (!req.statusText) {
         if (!uiState.statuses.delete(key)) return;
       } else {
@@ -1009,7 +1110,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       }
     } else if (req.method === "setTitle") {
       uiState.title = req;
-      if (req.title) syncTmuxTitle(req.title);
+      if (typeof req.title === "string") syncTmuxTitle(req.title);
     } else if (req.method === "set_editor_text") {
       uiState.editorText = req;
     }
@@ -1169,35 +1270,35 @@ export function createBridge(descriptor: BridgeDescriptor) {
   }
 
   // Keep the original request payload for replay to late-joining clients.
-  const dialogRequests = new Map<string, any>();
+  const dialogRequests = new Map<string, UIRequest>();
 
-  function wrapExtensionUI(ctx?: ExtensionContext | null) {
-    const ui = ctx?.ui as Record<string, unknown> | undefined;
-    if (!ui) return;
+  function wrapExtensionUI(ctx?: HostObject | null) {
+    const ui = ctx?.ui;
+    if (!isObject(ui)) return;
 
-    const wrapFireAndForget = (name: string, makeReq: (...args: any[]) => any) => {
-      installUIWrapper(ui, name, original => function (this: unknown, ...args: any[]) {
+    const wrapFireAndForget = (name: string, makeReq: (...args: unknown[]) => UIRequest) => {
+      installUIWrapper(ui, name, original => function (this: unknown, ...args: unknown[]) {
         const ret = original.apply(this, args);
         try { emitExtensionUIRequest(makeReq(...args)); } catch {}
         return ret;
       });
     };
 
-    wrapFireAndForget("notify", (message: string, type?: string) => ({ method: "notify", message, notifyType: type }));
-    wrapFireAndForget("setStatus", (key: string, text?: string) => ({ method: "setStatus", statusKey: key, statusText: text }));
-    wrapFireAndForget("setTitle", (title: string) => ({ method: "setTitle", title }));
-    wrapFireAndForget("setEditorText", (text: string) => ({ method: "set_editor_text", text }));
-    wrapFireAndForget("pasteToEditor", (text: string) => ({ method: "set_editor_text", text }));
+    wrapFireAndForget("notify", (message: unknown, type?: unknown) => ({ method: "notify", message, notifyType: type }));
+    wrapFireAndForget("setStatus", (key: unknown, text?: unknown) => ({ method: "setStatus", statusKey: key, statusText: text }));
+    wrapFireAndForget("setTitle", (title: unknown) => ({ method: "setTitle", title }));
+    wrapFireAndForget("setEditorText", (text: unknown) => ({ method: "set_editor_text", text }));
+    wrapFireAndForget("pasteToEditor", (text: unknown) => ({ method: "set_editor_text", text }));
 
-    installUIWrapper(ui, "setWidget", originalSetWidget => function (this: unknown, key: string, content: any, options?: any) {
-      const ret = originalSetWidget.apply(this, arguments as any);
+    installUIWrapper(ui, "setWidget", originalSetWidget => function (this: unknown, key: unknown, content: unknown, options?: unknown) {
+      const ret = Reflect.apply(originalSetWidget, this, arguments);
       try {
         if (content === undefined || Array.isArray(content)) {
           emitExtensionUIRequest({
             method: "setWidget",
             widgetKey: key,
             widgetLines: content,
-            widgetPlacement: options?.placement,
+            widgetPlacement: field(options, "placement"),
           });
         }
       } catch {}
@@ -1208,12 +1309,12 @@ export function createBridge(descriptor: BridgeDescriptor) {
     // prefers the richer askDialog primitive. Intercept it directly so the web
     // can answer the native tool without reducing multi-question forms to a
     // sequence of lossy select dialogs.
-    installUIWrapper(ui, "askDialog", originalAskDialog => function (this: unknown, questions: unknown, options?: { timeout?: number }) {
+    installUIWrapper(ui, "askDialog", originalAskDialog => function (this: unknown, questions: unknown, options?: unknown) {
       const req = {
         method: "ask",
         id: crypto.randomUUID(),
         questions,
-        timeout: options?.timeout,
+        timeout: field(options, "timeout"),
       };
       let settled = false;
       const settle = (source: string) => {
@@ -1225,8 +1326,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
       };
       const remote = new Promise<unknown>((resolve) => {
         pendingDialogs.set(req.id, response => {
-          if (response?.cancelled) resolve(undefined);
-          else resolve(response?.value);
+          if (field(response, "cancelled")) resolve(undefined);
+          else resolve(field(response, "value"));
         });
       });
       dialogRequests.set(req.id, req);
@@ -1254,24 +1355,25 @@ export function createBridge(descriptor: BridgeDescriptor) {
     // until dismissed, but its (late) result is discarded.
     const wrapDialog = (
       name: string,
-      makeReq: (...args: any[]) => any,
-      mapResponse: (resp: any) => any,
+      makeReq: (...args: unknown[]) => UIRequest,
+      mapResponse: (resp: unknown) => unknown,
     ) => {
-      installUIWrapper(ui, name, original => function (this: unknown, ...args: any[]) {
+      installUIWrapper(ui, name, original => function (this: unknown, ...args: unknown[]) {
         const req = makeReq(...args);
-        req.id = crypto.randomUUID();
+        const id = crypto.randomUUID();
+        req.id = id;
         let settled = false;
         const settle = (source: string) => {
           if (settled) return;
           settled = true;
-          pendingDialogs.delete(req.id);
-          dialogRequests.delete(req.id);
-          broadcast({ type: "event", event: "extension_ui_resolved", data: { id: req.id, source } });
+          pendingDialogs.delete(id);
+          dialogRequests.delete(id);
+          broadcast({ type: "event", event: "extension_ui_resolved", data: { id, source } });
         };
         const remote = new Promise((resolve) => {
-          pendingDialogs.set(req.id, (resp: any) => resolve(mapResponse(resp)));
+          pendingDialogs.set(id, (resp: unknown) => resolve(mapResponse(resp)));
         });
-        dialogRequests.set(req.id, req);
+        dialogRequests.set(id, req);
         try { emitExtensionUIRequest(req); } catch {}
         let local: unknown;
         try {
@@ -1290,11 +1392,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
       });
     };
 
-    const valueResponse = (resp: any) => (resp?.cancelled ? undefined : resp?.value);
-    wrapDialog("select", (title: string, options: string[], opts?: any) => ({ method: "select", title, options, timeout: opts?.timeout }), valueResponse);
-    wrapDialog("confirm", (title: string, message: string, opts?: any) => ({ method: "confirm", title, message, timeout: opts?.timeout }), (resp) => (resp?.cancelled ? false : !!resp?.confirmed));
-    wrapDialog("input", (title: string, placeholder?: string, opts?: any) => ({ method: "input", title, placeholder, timeout: opts?.timeout }), valueResponse);
-    wrapDialog("editor", (title: string, prefill?: string) => ({ method: "editor", title, prefill }), valueResponse);
+    const valueResponse = (resp: unknown) => (field(resp, "cancelled") ? undefined : field(resp, "value"));
+    wrapDialog("select", (title: unknown, options: unknown, opts?: unknown) => ({ method: "select", title, options, timeout: field(opts, "timeout") }), valueResponse);
+    wrapDialog("confirm", (title: unknown, message: unknown, opts?: unknown) => ({ method: "confirm", title, message, timeout: field(opts, "timeout") }), (resp) => (field(resp, "cancelled") ? false : !!field(resp, "confirmed")));
+    wrapDialog("input", (title: unknown, placeholder?: unknown, opts?: unknown) => ({ method: "input", title, placeholder, timeout: field(opts, "timeout") }), valueResponse);
+    wrapDialog("editor", (title: unknown, prefill?: unknown) => ({ method: "editor", title, prefill }), valueResponse);
   }
 
   // Callers invoke this on every turn/message/model event; skip the disk
@@ -1390,7 +1492,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       buf += chunk.toString("utf-8");
       const nl = buf.indexOf("\n");
       if (nl < 0) return;
-      try { done(JSON.parse(buf.slice(0, nl)).instanceId === instanceId); } catch { done(false); }
+      try { done(field(JSON.parse(buf.slice(0, nl)), "instanceId") === instanceId); } catch { done(false); }
     });
     probe.on("error", () => done(false)); // path unlinked/dead → rebind
     probe.setTimeout(2000, () => done(true)); // unresponsive: don't fight it
@@ -1492,7 +1594,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   }
 
   function getThinkingLevel(): string | null {
-    try { return pi.getThinkingLevel() ?? null; } catch { return null; }
+    try { return stringValue(callHost(pi, "getThinkingLevel")) ?? null; } catch { return null; }
   }
 
   function lifecycleSnapshot(ctx: unknown = lastCtx) {
@@ -1577,15 +1679,15 @@ export function createBridge(descriptor: BridgeDescriptor) {
         buf = buf.slice(idx + 1);
         if (!line.trim()) continue;
         try {
-          const cmd = JSON.parse(line);
+          const cmd: unknown = JSON.parse(line);
           await handleCommand(cmd, sock);
-        } catch (e: any) {
+        } catch (e: unknown) {
           try {
             sock.write(JSON.stringify({
               type: "response",
               id: null,
               success: false,
-              error: String(e?.message || e),
+              error: errorText(e),
             }) + "\n");
           } catch {}
         }
@@ -1605,7 +1707,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
    * - Extension commands: NOT supported (pi's extension API has no way to
    *   invoke another extension's command handler) — returns a clear error.
    */
-  async function executeSlashCommand(text: string, deliverAs?: string): Promise<{ ok: boolean; error?: string; info?: string; answer?: string }> {
+  async function executeSlashCommand(text: string, deliverAs?: unknown): Promise<{ ok: boolean; error?: string; info?: string; answer?: string }> {
     const spaceIdx = text.indexOf(" ");
     const name = (spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx)).trim();
     const args = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
@@ -1620,8 +1722,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
       // transcript. The socket timeout for this request lives server-side.
       try {
         return { ok: true, answer: await descriptor.runBtw(args) };
-      } catch (e: any) {
-        return { ok: false, error: String(e?.message || e) };
+      } catch (e: unknown) {
+        return { ok: false, error: errorText(e) };
       }
     }
     // --- Emulated built-ins ---
@@ -1650,7 +1752,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         const argument = args
           ? (descriptor.compactArgument?.(args) ?? { customInstructions: args })
           : undefined;
-        const invocation = (lastCtx as any).compact(argument) as any;
+        const invocation = callHost(lastCtx, "compact", argument);
         // Interactive OMP resolves this promise when compaction settles —
         // success or failure alike — but reports failures only to its own TUI
         // (executeCompaction catches the error, shows it, and resolves void),
@@ -1659,7 +1761,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         // resolution and releases the gate; if this attempt's gate is still
         // up shortly after resolution, the host swallowed a failure/cancel —
         // release it instead of silently queueing prompts until the stuck net.
-        invocation?.then?.(() => {
+        optionalHostCall(invocation, "then", () => {
           setTimeout(() => {
             if (!compacting || attempt !== compactionGeneration) return;
             console.error("[pi-dish-bridge] compact settled without a compaction event; treating as host-reported failure");
@@ -1667,20 +1769,20 @@ export function createBridge(descriptor: BridgeDescriptor) {
             endCompaction();
           }, 1000);
         });
-        invocation?.catch?.((e: any) => {
-            console.error("[pi-dish-bridge] compact failed:", e?.message || e);
+        optionalHostCall(invocation, "catch", (e: unknown) => {
+            console.error("[pi-dish-bridge] compact failed:", errorText(e));
             // With the session subscription live the AgentSession's own
             // compaction_end (errorMessage) already reported and released.
             if (!compactionEventsLive) {
-              broadcast({ type: "event", event: "compaction_end", data: { reason: "manual", errorMessage: String(e?.message || e) } });
+              broadcast({ type: "event", event: "compaction_end", data: { reason: "manual", errorMessage: errorText(e) } });
             }
             endCompaction();
           });
-      } catch (e: any) {
+      } catch (e: unknown) {
         // Synchronous throw: compaction never started — drop the gate we
         // raised optimistically or it would swallow sends until the net.
         endCompaction();
-        return { ok: false, error: String(e?.message || e) };
+        return { ok: false, error: errorText(e) };
       }
       return { ok: true, info: "Compaction started" };
     }
@@ -1697,8 +1799,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       }
       if (!lastCtx) return { ok: false, error: "no active context" };
       abortCompactionIfRunning();
-      (lastCtx.abort() as any)
-        ?.catch?.((e: any) => console.error("[pi-dish-bridge] abort failed:", e?.message || e));
+      optionalHostCall(callHost(lastCtx, "abort"), "catch", (e: unknown) => console.error("[pi-dish-bridge] abort failed:", errorText(e)));
       return { ok: true, info: "Aborted" };
     }
     if (name === "model") {
@@ -1708,7 +1809,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       if (!args) return { ok: false, error: "usage: /model <provider/model-id>" };
       const model = await resolveModel(args);
       if (!model) return { ok: false, error: `model not found: ${args}` };
-      const ok = await pi.setModel(model);
+      const ok = await callHost(pi, "setModel", model);
       if (ok) {
         modelId = formatModel(model) ?? modelId;
         refreshContextUsage();
@@ -1722,7 +1823,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
       }
       if (!args) return { ok: false, error: "usage: /name <session name>" };
-      await pi.setSessionName(args);
+      await callHost(pi, "setSessionName", args);
       sessionName = args;
       syncTmuxTitle(sessionName);
       writeRegistry();
@@ -1736,7 +1837,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       if (!levels.includes(args)) return { ok: false, error: `usage: /thinking <${levels.join("|")}>` };
       // Runtime-validated against the host's own vocabulary just above;
       // wrapper hosts accept levels pi's ThinkingLevel union doesn't name.
-      pi.setThinkingLevel(args as Parameters<ExtensionAPI["setThinkingLevel"]>[0]);
+      callHost(pi, "setThinkingLevel", args);
       writeRegistry();
       return { ok: true, info: `Thinking level: ${args}` };
     }
@@ -1758,28 +1859,27 @@ export function createBridge(descriptor: BridgeDescriptor) {
         return { ok: false, error: "pi's extension API can't trigger /reload on this session remotely — run /reload in the TUI." };
       }
       setTimeout(() => {
-        (s.prompt("/dish-reload") as Promise<any>)
-          ?.catch?.((e: any) => console.error("[pi-dish-bridge] reload failed:", e?.message || e));
+        optionalHostCall(callHost(s, "prompt", "/dish-reload"), "catch", (e: unknown) => console.error("[pi-dish-bridge] reload failed:", errorText(e)));
       }, 50);
       return { ok: true, info: "Reload started" };
     }
 
     // --- Skills / prompt templates / extension commands via pi.getCommands() ---
-    const commands = pi.getCommands();
+    const commands = hostCommands(pi);
     const skillCmd = commands.find((c) => c.source === "skill" && c.name === name);
     if (skillCmd) {
       if (!descriptor.capabilities.prompt) {
         return { ok: false, error: `/${name} cannot send a prompt in the ${descriptor.name} public bridge profile.` };
       }
-      const filePath = skillCmd.sourceInfo?.path;
+      const filePath = stringValue(field(skillCmd.sourceInfo, "path"));
       if (!filePath) return { ok: false, error: `skill file not found for /${name}` };
       let body: string;
       try {
         body = stripFrontmatter(fs.readFileSync(filePath, "utf-8")).trim();
-      } catch (e: any) {
-        return { ok: false, error: `failed to read skill: ${e?.message || e}` };
+      } catch (e: unknown) {
+        return { ok: false, error: `failed to read skill: ${errorText(e)}` };
       }
-      const baseDir = skillCmd.sourceInfo?.baseDir || path.dirname(filePath);
+      const baseDir = stringValue(field(skillCmd.sourceInfo, "baseDir")) || path.dirname(filePath);
       const skillName = name.startsWith("skill:") ? name.slice(6) : name;
       const skillBlock = `<skill name="${skillName}" location="${filePath}">\nReferences are relative to ${baseDir}.\n\n${body}\n</skill>`;
       const expanded = args ? `${skillBlock}\n\n${args}` : skillBlock;
@@ -1792,13 +1892,13 @@ export function createBridge(descriptor: BridgeDescriptor) {
       if (!descriptor.capabilities.prompt) {
         return { ok: false, error: `/${name} cannot send a prompt in the ${descriptor.name} public bridge profile.` };
       }
-      const filePath = promptCmd.sourceInfo?.path;
+      const filePath = stringValue(field(promptCmd.sourceInfo, "path"));
       if (!filePath) return { ok: false, error: `template file not found for /${name}` };
       let content: string;
       try {
         content = stripFrontmatter(fs.readFileSync(filePath, "utf-8"));
-      } catch (e: any) {
-        return { ok: false, error: `failed to read template: ${e?.message || e}` };
+      } catch (e: unknown) {
+        return { ok: false, error: `failed to read template: ${errorText(e)}` };
       }
       const expanded = substituteArgs(content, parseCommandArgs(args));
       const { queued } = await deliverUserMessage(expanded, deliverAs);
@@ -1816,19 +1916,19 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // Text-only messages stay plain strings; attachments become a content
   // array in pi-ai's TextContent/ImageContent shape. Returns null when the
   // command carries neither text nor a usable image.
-  function buildUserContent(cmd: any): string | any[] | null {
+  function buildUserContent(cmd: HostObject): UserContent | null {
     const text = typeof cmd?.message === "string" ? cmd.message : "";
     const images = (Array.isArray(cmd?.images) ? cmd.images : []).filter(
-      (i: any) => i && typeof i.data === "string" && i.data && typeof i.mimeType === "string",
+      (i: unknown): i is { data: string; mimeType: string } => isObject(i) && typeof i.data === "string" && !!i.data && typeof i.mimeType === "string",
     );
     if (!images.length) return text || null;
-    const content: any[] = [];
+    const content: Exclude<UserContent, string> = [];
     if (text) content.push({ type: "text", text });
     for (const i of images) content.push({ type: "image", data: i.data, mimeType: i.mimeType });
     return content;
   }
 
-  function deliverAsOptions(deliverAs?: string): any {
+  function deliverAsOptions(deliverAs?: unknown): DeliveryOptions {
     if (deliverAs === "steer" || deliverAs === "followUp") return { deliverAs };
     if (turnInProgress) return { deliverAs: "steer" };
     return {};
@@ -1837,13 +1937,13 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // Single chokepoint for user-message sends: buffer while compacting, else
   // hand off to pi with the usual mid-turn steer default. Returns whether the
   // message was queued so callers can tell the client.
-  async function deliverUserMessage(content: string | any[], deliverAs?: string): Promise<{ queued: boolean }> {
+  async function deliverUserMessage(content: UserContent, deliverAs?: unknown): Promise<{ queued: boolean }> {
     if (compacting) {
       compactionQueue.push(content);
       broadcastQueue();
       return { queued: true };
     }
-    await pi.sendUserMessage(content, deliverAsOptions(deliverAs));
+    await callHost(pi, "sendUserMessage", content, deliverAsOptions(deliverAs));
     return { queued: false };
   }
 
@@ -1861,9 +1961,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
     (async () => {
       for (let i = 0; i < pending.length; i++) {
         try {
-          await pi.sendUserMessage(pending[i], i === 0 ? {} : { deliverAs: "followUp" });
-        } catch (e: any) {
-          console.error("[pi-dish-bridge] queued send failed:", e?.message || e);
+          await callHost(pi, "sendUserMessage", pending[i], i === 0 ? {} : { deliverAs: "followUp" });
+        } catch (e: unknown) {
+          console.error("[pi-dish-bridge] queued send failed:", errorText(e));
         }
       }
     })();
@@ -1876,7 +1976,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   function abortCompactionIfRunning(): void {
     const s = getCapturedSession();
     if ((compacting || s?.isCompacting) && typeof s?.abortCompaction === "function") {
-      try { s.abortCompaction(); } catch {}
+      try { callHost(s, "abortCompaction"); } catch {}
     }
   }
 
@@ -1899,7 +1999,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   // Clear the compaction gate and flush. Idempotent: the compaction_end
   // paths and the stuck-timer net can all call it.
-  function endCompaction(outcome: { aborted?: boolean; errorMessage?: string; willRetry?: boolean; unknown?: boolean } = { unknown: true }): void {
+  function endCompaction(outcome: unknown = { unknown: true }): void {
     if (compactionStuckTimer) { clearTimeout(compactionStuckTimer); compactionStuckTimer = null; }
     if (!compacting) return;
     compacting = false;
@@ -1908,8 +2008,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
     flushCompactionQueue();
   }
 
-  async function handleCommand(cmd: any, sock: net.Socket) {
-    const respond = (success: boolean, data?: any, error?: string) => {
+  async function handleCommand(value: unknown, sock: net.Socket) {
+    const cmd = isObject(value) ? value : {};
+    const respond = (success: boolean, data?: unknown, error?: string) => {
       try {
         sock.write(JSON.stringify({
           type: "response",
@@ -1945,7 +2046,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         set_session_name: "rename",
         guarded_reload: "guardedReload",
       };
-      const requiredCapability = commandCapabilities[cmd?.command];
+      const requiredCapability = typeof cmd.command === "string" ? commandCapabilities[cmd.command] : undefined;
       if (requiredCapability && !capabilities[requiredCapability]) {
         respond(false, undefined,
           `unsupported command ${cmd.command}: ${descriptor.harnessId} wrapper does not advertise ${requiredCapability}`);
@@ -1976,7 +2077,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
               respond(false, undefined, "Session changed before reload; no reload was started.");
               return;
             }
-            Promise.resolve().then(() => captured.prompt("/dish-bounce-reload")).then(() => {
+            Promise.resolve().then(() => callHost(captured, "prompt", "/dish-bounce-reload")).then(() => {
               if (guardedReloadReply === respond) {
                 guardedReloadReply = null;
                 respond(false, undefined, "The runtime did not execute its reload command.");
@@ -2005,23 +2106,23 @@ export function createBridge(descriptor: BridgeDescriptor) {
           // tree (tree_read) costs O(session bytes) per request, which made
           // long live OMP sessions crawl on every page/catch-up fetch.
           if (!lastCtx) return respond(false, undefined, "tree leaf unavailable: no active context");
-          const manager = (lastCtx as any).sessionManager;
-          if (!manager || typeof manager.getLeafId !== "function") {
+          const manager = lastCtx.sessionManager;
+          if (!manager || !isHostMethod(field(manager, "getLeafId"))) {
             return respond(false, undefined, "tree leaf unavailable: session manager lacks getLeafId");
           }
-          respond(true, { leafId: manager.getLeafId() ?? null });
+          respond(true, { leafId: callHost(manager, "getLeafId") ?? null });
           return;
         }
 
         case "tree_read": {
           if (!lastCtx) return respond(false, undefined, "tree read unavailable: no active context");
           try {
-            respond(true, serializeSessionTree((lastCtx as any).sessionManager));
-          } catch (error: any) {
+            respond(true, serializeSessionTree(lastCtx.sessionManager));
+          } catch (error: unknown) {
             capabilities.treeRead = false;
             capabilities.treeNavigation = false;
             writeRegistry();
-            respond(false, undefined, String(error?.message || error));
+            respond(false, undefined, errorText(error));
           }
           return;
         }
@@ -2068,7 +2169,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
               return respond(false, undefined, "kind (steering|followUp) and non-empty text required");
             }
             const index = cmd?.index;
-            if (!Number.isInteger(index) || index < 0) {
+            if (typeof index !== "number" || !Number.isInteger(index) || index < 0) {
               return respond(false, undefined, "index must be a non-negative integer");
             }
 
@@ -2080,7 +2181,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
               const captured = getCapturedSession();
               let piFollowUpCount = lastQueue.followUp.length;
               try {
-                const visible = captured?.getFollowUpMessages();
+                const visible = optionalHostCall(captured, "getFollowUpMessages");
                 if (Array.isArray(visible)) piFollowUpCount = visible.length;
               } catch {}
               const compactionIndex = index - piFollowUpCount;
@@ -2098,11 +2199,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
             const s = getCapturedSession();
             const unavailable = "queue editing unavailable (pi internals changed — update pi-dish-bridge)";
             if (!s) return respond(false, undefined, unavailable);
-            const arr: string[] = kind === "steering" ? s._steeringMessages : s._followUpMessages;
+            const arr = kind === "steering" ? s._steeringMessages : s._followUpMessages;
             if (!Array.isArray(arr) || typeof s._emitQueueUpdate !== "function") {
               return respond(false, undefined, unavailable);
             }
-            const coreQueue = kind === "steering" ? s.agent?.steeringQueue?.messages : s.agent?.followUpQueue?.messages;
+            const coreQueue = field(field(s.agent, kind === "steering" ? "steeringQueue" : "followUpQueue"), "messages");
             if (!Array.isArray(coreQueue)) {
               return respond(false, undefined, unavailable);
             }
@@ -2119,24 +2220,24 @@ export function createBridge(descriptor: BridgeDescriptor) {
             }
             arr.splice(index, 1);
             coreQueue.splice(index, 1);
-            s._emitQueueUpdate();
+            callHost(s, "_emitQueueUpdate");
             return respond(true, { text });
-          } catch (e: any) {
-            return respond(false, undefined, String(e?.message || e));
+          } catch (e: unknown) {
+            return respond(false, undefined, errorText(e));
           }
         }
 
         case "abort": {
           if (!lastCtx) return respond(false, undefined, "no active context");
           abortCompactionIfRunning();
-          await lastCtx.abort();
+          await callHost(lastCtx, "abort");
           respond(true);
           return;
         }
 
         case "get_available_models": {
           if (!lastCtx) return respond(false, undefined, "no active context");
-          const models = await lastCtx.modelRegistry.getAvailable();
+          const models = await callHost(lastCtx.modelRegistry, "getAvailable");
           respond(true, { models });
           return;
         }
@@ -2144,18 +2245,20 @@ export function createBridge(descriptor: BridgeDescriptor) {
         case "share_snapshot": {
           if (!lastCtx) return respond(false, undefined, "no active context");
           try {
-            const active = new Set(pi.getActiveTools());
-            const tools = pi.getAllTools()
-              .filter((tool: any) => active.has(tool.name))
-              .map((tool: any) => ({ name: tool.name, description: tool.description || "" }));
+            const active = new Set(stringArray(callHost(pi, "getActiveTools")));
+            const availableTools = callHost(pi, "getAllTools");
+            if (!Array.isArray(availableTools)) throw new Error("host returned an invalid tool list");
+            const tools = availableTools
+              .filter((tool: unknown): tool is HostObject => isObject(tool) && typeof tool.name === "string" && active.has(tool.name))
+              .map(tool => ({ name: tool.name, description: tool.description || "" }));
             respond(true, {
-              systemPrompt: lastCtx.getSystemPrompt(),
+              systemPrompt: callHost(lastCtx, "getSystemPrompt"),
               tools,
             });
-          } catch (error: any) {
+          } catch (error: unknown) {
             capabilities.shareSnapshot = false;
             writeRegistry();
-            respond(false, undefined, String(error?.message || error));
+            respond(false, undefined, errorText(error));
           }
           return;
         }
@@ -2171,13 +2274,13 @@ export function createBridge(descriptor: BridgeDescriptor) {
             if (command.name === "btw") return !!(capabilities.btw && descriptor.runBtw);
             return true;
           });
-          const commands = pi.getCommands()
+          const commands = hostCommands(pi)
             .filter((c) => c.name !== TREE_SERVICE_COMMAND)
             .map((c) => ({
             name: c.name,
             description: c.description || "",
             source: c.source,
-            path: c.sourceInfo?.path as string | undefined,
+            path: stringValue(field(c.sourceInfo, "path")),
             // Skills/templates and the explicitly emulated built-ins can be
             // invoked over the public bridge. Other host/extension commands
             // require their own TUI command context.
@@ -2187,7 +2290,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
           const discoveredNames = new Set(commands.map((command) => command.name));
           for (const command of emulated) {
             if (discoveredNames.has(command.name)) continue;
-            commands.unshift({ name: command.name, description: command.description, source: "builtin" as any, path: undefined, supported: true });
+            commands.unshift({ name: command.name, description: command.description, source: "builtin", path: undefined, supported: true });
           }
           respond(true, { commands });
           return;
@@ -2217,7 +2320,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
           if (!requested) return respond(false, undefined, "model required");
           const model = typeof requested === "string" ? await resolveModel(requested) : requested;
           if (!model) return respond(false, undefined, `model not found: ${requested}`);
-          const ok = await pi.setModel(model);
+          const ok = await callHost(pi, "setModel", model);
           if (ok) {
             modelId = formatModel(model) ?? modelId;
             refreshContextUsage();
@@ -2229,10 +2332,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
         case "set_thinking_level": {
           const levels = descriptor.thinkingLevels ?? THINKING_LEVELS;
-          if (!levels.includes(cmd.level)) {
+          if (typeof cmd.level !== "string" || !levels.includes(cmd.level)) {
             return respond(false, undefined, `level must be one of: ${levels.join(", ")}`);
           }
-          pi.setThinkingLevel(cmd.level);
+          callHost(pi, "setThinkingLevel", cmd.level);
           writeRegistry();
           respond(true, { level: getThinkingLevel() });
           return;
@@ -2257,20 +2360,20 @@ export function createBridge(descriptor: BridgeDescriptor) {
           }
           const targetId = typeof cmd.targetId === "string" ? cmd.targetId : "";
           if (!targetId) return respond(false, undefined, "targetId required");
-          const manager: any = (lastCtx as any).sessionManager;
-          if (!manager || typeof manager.getEntry !== "function") {
+          const manager = lastCtx.sessionManager;
+          if (!manager || !isHostMethod(field(manager, "getEntry"))) {
             capabilities.treeRead = false;
             capabilities.treeNavigation = false;
             writeRegistry();
             return respond(false, undefined, "tree navigation unavailable: host does not expose the ReadonlySessionManager entry API");
           }
-          const target = manager.getEntry(targetId);
-          if (!target) return respond(false, undefined, `entry not found: ${targetId}`);
+          const target = callHost(manager, "getEntry", targetId);
+          if (!isObject(target)) return respond(false, undefined, `entry not found: ${targetId}`);
           let editorText: string | undefined;
-          if (target.type === "message" && (target as any).message?.role === "user") {
-            editorText = treeEntryText((target as any).message.content) || undefined;
+          if (target.type === "message" && field(target.message, "role") === "user") {
+            editorText = treeEntryText(field(target.message, "content")) || undefined;
           } else if (target.type === "custom_message") {
-            editorText = treeEntryText((target as any).content) || undefined;
+            editorText = treeEntryText(target.content) || undefined;
           }
 
           const operation = cmd.command === "branch" ? "branch" : "navigate";
@@ -2287,8 +2390,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
               });
               const data = await pending;
               respond(true, data);
-            } catch (error: any) {
-              respond(false, undefined, String(error?.message || error));
+            } catch (error: unknown) {
+              respond(false, undefined, errorText(error));
             }
             return;
           }
@@ -2296,8 +2399,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
           if (operation === "branch") {
             if (!commandCtx) await acquireCommandCtx();
             if (!commandCtx || typeof commandCtx.branch !== "function") return respond(false, undefined, "no command context");
-            const result = await commandCtx.branch(targetId);
-            if (result?.cancelled) return respond(false, undefined, "tree branch was cancelled");
+            const result = await callHost(commandCtx, "branch", targetId);
+            if (field(result, "cancelled")) return respond(false, undefined, "tree branch was cancelled");
             refreshContextUsage();
             writeRegistry();
             respond(true, { editorText });
@@ -2309,14 +2412,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
           let result;
           for (let attempt = 0; ; attempt++) {
             try {
-              result = await commandCtx.navigateTree(targetId, {
+              result = await callHost(commandCtx, "navigateTree", targetId, {
                 summarize: !!cmd.summarize,
                 customInstructions: typeof cmd.customInstructions === "string" && cmd.customInstructions.trim() ? cmd.customInstructions : undefined,
                 label: typeof cmd.label === "string" && cmd.label.trim() ? cmd.label : undefined,
               });
               break;
-            } catch (e: any) {
-              const msg = String(e?.message || e);
+            } catch (e: unknown) {
+              const msg = errorText(e);
               if (/stale/i.test(msg)) {
                 // Captured before a reload/session switch — re-prime and retry
                 // once before giving up.
@@ -2332,14 +2435,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
           }
           refreshContextUsage();
           writeRegistry();
-          if (result?.cancelled) return respond(false, undefined, "tree navigation was cancelled");
+          if (field(result, "cancelled")) return respond(false, undefined, "tree navigation was cancelled");
           respond(true, { editorText });
           return;
         }
 
         case "set_session_name": {
-          if (!cmd.name) return respond(false, undefined, "name required");
-          await pi.setSessionName(cmd.name);
+          if (typeof cmd.name !== "string" || !cmd.name) return respond(false, undefined, "name required");
+          await callHost(pi, "setSessionName", cmd.name);
           sessionName = cmd.name;
           syncTmuxTitle(sessionName);
           writeRegistry();
@@ -2350,28 +2453,28 @@ export function createBridge(descriptor: BridgeDescriptor) {
         default:
           respond(false, undefined, `unknown command: ${cmd?.command}`);
       }
-    } catch (e: any) {
-      respond(false, undefined, String(e?.message || e));
+    } catch (e: unknown) {
+      respond(false, undefined, errorText(e));
     }
   }
 
-  pi.on("session_start", async (_event, ctx) => {
+  on("session_start", async (_event, ctx) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx;
     Object.assign(capabilities, descriptor.capabilities);
     if (descriptor.capabilities.compact) {
-      capabilities.compact = typeof (ctx as any)?.compact === "function";
+      capabilities.compact = isHostMethod(ctx.compact);
     }
     if (descriptor.capabilities.shareSnapshot) {
-      capabilities.shareSnapshot = typeof (ctx as any)?.getSystemPrompt === "function"
-        && typeof (pi as any)?.getActiveTools === "function"
-        && typeof (pi as any)?.getAllTools === "function";
+      capabilities.shareSnapshot = isHostMethod(ctx.getSystemPrompt)
+        && isHostMethod(pi.getActiveTools)
+        && isHostMethod(pi.getAllTools);
     }
     commandCtx = null; // any stashed command ctx predates this runner/session
-    const manager: any = (ctx as any)?.sessionManager;
-    if (capabilities.treeRead && (!manager || typeof manager.getTree !== "function" ||
-        typeof manager.getEntries !== "function" || typeof manager.getLeafId !== "function" ||
-        typeof manager.getEntry !== "function")) {
+    const manager = ctx.sessionManager;
+    if (capabilities.treeRead && (!manager || !isHostMethod(field(manager, "getTree")) ||
+        !isHostMethod(field(manager, "getEntries")) || !isHostMethod(field(manager, "getLeafId")) ||
+        !isHostMethod(field(manager, "getEntry")))) {
       // Older hosts can still load the wrapper and use its baseline controls;
       // they simply never advertise tree operations.
       capabilities.treeRead = false;
@@ -2379,7 +2482,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
     refreshModel(ctx);
     refreshContextUsage(ctx);
-    try { sessionName = (ctx as any)?.sessionManager?.getSessionName?.() ?? sessionName; } catch {}
+    try { sessionName = sessionNameFrom(ctx) ?? sessionName; } catch {}
     if (sessionName) syncTmuxTitle(sessionName);
     const identity = deriveSessionIdentity(ctx, descriptor);
     if (!identity) return;
@@ -2397,7 +2500,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     broadcast({ type: "event", event: "session_start", data: { sessionId, sessionFile, cwd } });
   });
 
-  if (descriptor.sessionSwitchEvents) pi.on("session_switch" as any, (event: any, ctx: ExtensionContext) => {
+  if (descriptor.sessionSwitchEvents) on("session_switch", (event: HostObject, ctx: HostObject) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;
     commandCtx = null;
@@ -2420,7 +2523,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     refreshModel(ctx);
     refreshContextUsage(ctx);
     sessionName = null;
-    try { sessionName = (ctx as any)?.sessionManager?.getSessionName?.() ?? null; } catch {}
+    try { sessionName = sessionNameFrom(ctx) ?? null; } catch {}
     if (sessionName) syncTmuxTitle(sessionName);
     ({ sessionFile, sessionId, cwd } = identity);
     recoveryObserver.initialize();
@@ -2450,7 +2553,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     });
   });
 
-  pi.on("session_shutdown", async () => {
+  on("session_shutdown", async () => {
     recoveryObserver.event("shutdown");
     broadcast({ type: "event", event: "session_shutdown", data: {} });
     cleanup();
@@ -2458,11 +2561,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   // Pi's whole-run boundary includes retries, post-run auto-compaction and
   // queued continuations. Older hosts without this event remain uncertain.
-  if (descriptor.piLifecycleEvents) pi.on("agent_settled", () => {
+  if (descriptor.piLifecycleEvents) on("agent_settled", () => {
     recoveryObserver.event("agent_settled");
   });
   for (const ev of descriptor.eventProfile) {
-    pi.on(ev as any, (event: any, ctx: ExtensionContext) => {
+    on(ev, (event: HostObject, ctx: HostObject) => {
       wrapExtensionUI(ctx);
       lastCtx = ctx ?? lastCtx;
       refreshModel(ctx);
@@ -2474,7 +2577,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         turnInProgress = false;
         refreshContextUsage(ctx);
         try {
-          const name = (ctx as any)?.sessionManager?.getSessionName?.() ?? null;
+          const name = sessionNameFrom(ctx) ?? null;
           if (name && name !== sessionName) {
             sessionName = name;
             syncTmuxTitle(sessionName);
@@ -2486,7 +2589,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         // so the session list shows accurate context numbers mid-turn too.
         refreshContextUsage(ctx);
         try {
-          const name = (ctx as any)?.sessionManager?.getSessionName?.() ?? null;
+          const name = sessionNameFrom(ctx) ?? null;
           if (name && name !== sessionName) {
             sessionName = name;
             syncTmuxTitle(sessionName);
@@ -2508,7 +2611,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // internal AgentSession events (subscribing to them never fires). The
   // extension-facing pair is session_before_compact/session_compact;
   // translate onto the wire names the server and client already speak.
-  if (descriptor.piLifecycleEvents || descriptor.publicCompactionEvents) pi.on("session_before_compact", (event: any, ctx: ExtensionContext) => {
+  if (descriptor.piLifecycleEvents || descriptor.publicCompactionEvents) on("session_before_compact", (event: HostObject, ctx: HostObject) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;
     // Gate + stuck-timer net regardless of source; with the session
@@ -2521,7 +2624,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     // pre-compaction transcript) and an AbortSignal.
     broadcast({ type: "event", event: "compaction_start", data: { reason: event?.reason, willRetry: event?.willRetry } });
   });
-  if (descriptor.piLifecycleEvents || descriptor.publicCompactionEvents) pi.on("session_compact", (event: any, ctx: ExtensionContext) => {
+  if (descriptor.piLifecycleEvents || descriptor.publicCompactionEvents) on("session_compact", (event: HostObject, ctx: HostObject) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;
     refreshContextUsage(ctx);
@@ -2530,7 +2633,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     // estimatedTokensAfter, aborted, errorMessage) follows via the
     // AgentSession event stream and releases the gate there.
     if (compactionEventsLive) return;
-    const entry = event?.compactionEntry;
+    const entry = isObject(event.compactionEntry) ? event.compactionEntry : null;
     broadcast({
       type: "event",
       event: "compaction_end",
@@ -2560,20 +2663,20 @@ export function createBridge(descriptor: BridgeDescriptor) {
   //     last entry already is the leaf.
   //  2. Broadcast the event so connected clients re-render the transcript
   //     from the (now anchored) file.
-  if (descriptor.piLifecycleEvents) pi.on("session_tree", (event: any, ctx: ExtensionContext) => {
+  if (descriptor.piLifecycleEvents) on("session_tree", (event: HostObject, ctx: HostObject) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;
     try {
-      const sm: any = ctx?.sessionManager;
-      const entries = sm?.getEntries?.() ?? [];
-      const last = entries[entries.length - 1];
-      const leafId = sm?.getLeafId?.() ?? null;
-      if (last && last.id !== leafId) {
+      const sm = ctx.sessionManager;
+      const entries = optionalHostCall(sm, "getEntries");
+      const last: unknown = Array.isArray(entries) ? entries[entries.length - 1] : undefined;
+      const leafId = optionalHostCall(sm, "getLeafId") ?? null;
+      if (isObject(last) && last.id !== leafId) {
         // Navigating to the root resets the leaf to null — anchor via the old
         // tip then (appendLabelChange needs an existing target; parentId is
         // taken from the current leaf either way).
         const target = leafId ?? event?.oldLeafId ?? last.id;
-        sm.appendLabelChange(target, sm.getLabel(target));
+        callHost(sm, "appendLabelChange", target, callHost(sm, "getLabel", target));
       }
     } catch (e) {
       console.error("[pi-dish-bridge] failed to anchor tree navigation:", e);
@@ -2582,7 +2685,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     writeRegistry();
     broadcast({ type: "event", event: "session_tree", data: { newLeafId: event?.newLeafId ?? null } });
   });
-  if (descriptor.treeCommandContext) pi.on("session_tree", (event: any, ctx: ExtensionContext) => {
+  if (descriptor.treeCommandContext) on("session_tree", (event: HostObject, ctx: HostObject) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;
     refreshContextUsage(ctx);

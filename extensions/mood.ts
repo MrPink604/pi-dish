@@ -95,7 +95,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("mood", {
 		description: "Set the prompt-box mood indicator: /mood <one-word-description> <kaomoji>",
 		handler: async (args, ctx) => {
-			let next = args?.trim();
+			let next: string | undefined = args?.trim();
 			if (!next) next = await ctx.ui.input("Mood: one word then kaomoji", formatMood(mood));
 			if (!next) return;
 			const [description = DEFAULT_DESCRIPTION, ...faceParts] = next.split(/\s+/);

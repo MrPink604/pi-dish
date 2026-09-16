@@ -96,6 +96,8 @@ The integration lead, not this guide, records milestone acceptance.
 | `contracts.ts` | Identity distinctions, process proof shapes, harness descriptors and running-tool snapshots |
 | `session-key.ts` | Strict route decoding, harness/native encoding and legacy Pi canonicalization |
 | `harnesses.ts` | Existing harness registry and launch argv/environment construction |
+| `runtime-resources.ts` | Real external extension/skill/lib paths and metadata-selected physical FFF imports for ASAR packages |
+| `file-search.ts` | M3 checked FFF consumer, finder cache, bounded walker and path completion; uses the M6 physical import resolver |
 | `session-capabilities.ts` | Bridge capability defaults and API projection; lifecycle authority stays with callers |
 | `session-api.ts` | Closed session fields and patches, wire ingress decoders, model DTOs and client projection |
 | `session-discovery.ts`, `session-source.ts` | Bounded discovery and header identity; explicit source descriptors and route/cache consistency |
@@ -176,12 +178,12 @@ Tree/branch operations and model/thinking menu loads also carry selection
 owners; a late branch preserves returned editor text in its original draft.
 
 `server.js` and server feature stores remain JavaScript. First-party browser
-controllers, rendering, composition and static bindings are TypeScript. Most
-harness extension sources are already TypeScript, loaded by
-the harnesses outside the `src/` build; their remaining migration/checking scope
-needs a separate audit. The typed browser adapter and model-selector DOM module
-are described below. The foundation's declarations do not mean that all its
-JavaScript callers have been checked.
+controllers, rendering, composition and static bindings are TypeScript. Native
+harness extensions are strictly checked by `tsconfig.extensions.json` without
+emission; harnesses still load their original `.ts` entrypoints. Electron and
+skill CLI sources have checked sibling output through `build:edges`, described
+below. The foundation's declarations do not mean that all its JavaScript
+callers have been checked.
 
 ## Source and runtime
 
@@ -197,10 +199,11 @@ npm test
 The pinned TypeScript compiler emits ES2022 CommonJS and declarations to the
 existing `lib/` entrypoints. Both outputs are committed. Consumers keep using
 paths such as `require('./lib/session-key')`; installs, direct server startup,
-Electron's existing file list and native harness loaders need no TypeScript
-loader or additional production dependency. Runtime-relative paths such as
-the harness registry's extension paths are still resolved from `lib/`, so do
-not execute `src/core/` directly.
+Electron and installed skill CLIs need no TypeScript loader or additional
+production dependency. Native harnesses retain their own TypeScript loaders.
+Runtime-relative paths still belong to emitted locations; the harness registry
+passes the application root to `runtimeResourcePath` for external resources.
+Do not execute `src/core/` directly.
 
 `scripts/build-core.js` compiles to a temporary directory before replacing
 output. A type error leaves existing output untouched. Its `--check` mode
@@ -221,8 +224,8 @@ decision and packaging checks.
 paths listed by `source-policy.json`. Named type-negative fixtures require their
 diagnostic purpose; tsc still checks that their errors actually occur. Strings and
 template text are not directives. No explicit-any type-utility exception exists.
-The current gate covers `src/core`, `src/browser` and the named fixtures, not
-pending native extensions or remaining JS implementations. Cron is now authored
+The current gate covers `src/core`, `src/browser`, the exact edge/native source
+lists and named fixtures, not remaining JS implementations. Cron is now authored
 in `src/core/cron.ts`; its former checked-JS exception is removed.
 Every new migration compiler target must enroll its authored sources and fixtures.
 See the [M0 contract](m0-contracts.md#dependencies-and-authored-source-policy).
@@ -251,6 +254,59 @@ call-site assertion to that actual SDK option type after inspecting the runtime
 forwarding chain. The original header object and null suppression semantics are
 preserved; no filtering, replacement ambient declaration or alternate SDK model
 is introduced. This external declaration mismatch remains an explicit boundary.
+
+
+## Native extensions, skill CLIs and Electron
+
+`tsconfig.extensions.json` uses strict ESNext/Bundler checking and `noEmit` for
+the seven native `.ts` sources under `extensions/`. Pi extension/TUI/TypeBox
+contracts come from the real dependencies. Host-only OMP imports enter as
+`unknown` and are narrowed at the existing use sites; the ambient host declaration
+does not recreate an SDK. Compile-only negative cases live in
+`test/types/extensions.ts`.
+
+`tsconfig.edges.json` uses strict NodeNext/ES2022 compilation for six authored
+sibling sources:
+
+| Source | Checked-in runtime output |
+| --- | --- |
+| `skills/lib/pi-dish-client.ts` | `skills/lib/pi-dish-client.js` |
+| `skills/pi-dish-{sessions,comments,pages}/scripts/pi-dish-*.ts` | Corresponding CommonJS `.js` and `.d.ts` |
+| `electron/main.ts` | `electron/main.js` and `.d.ts` |
+| `extensions/pi-dish-share-omp.mts` | `extensions/pi-dish-share-omp.mjs` and `.d.mts` |
+
+The shared client also emits its `.d.ts`. Run `npm run build:core` before
+`npm run build:edges` when a shared contract changes. `scripts/build-edges.js`
+compiles into a temporary directory before replacing output; type errors leave
+existing output intact. `--check` rejects byte/declaration drift, stale generated
+outputs and incorrect modes without repairing them. CLI shebangs stay first and
+their `.js` outputs remain executable. `npm run check` includes both edge drift
+and native `noEmit` checking.
+
+Installed CLI directory symlinks resolve to the generated CommonJS and its shared
+client using ordinary external Node. Neither a TypeScript loader nor an installed
+production package dependency is required by those scripts. Registry and HTTP
+values remain unknown until the fields actually consumed are narrowed; typing
+does not grant process ownership or redefine optional presentation metadata.
+
+Electron's root package main/export stays `server.js`; only packaged metadata
+uses `electron/main.js`. The explicit first-party manifest excludes authored
+edge sources, declarations, maps and build/test tools while retaining native
+harness `.ts` and local browser assets. `runtimeResourcePath` maps shipped
+extensions, skills and direct `lib/*.js` siblings to `app.asar.unpacked`; docs,
+SDK resources and application assets retain archive paths. User paths are not
+passed through this resolver.
+
+FFF additionally requires its complete native dependency tree outside ASAR.
+`fffImportSpecifier(applicationRoot: string): string` keeps the bare ESM package in checkout
+and reads the real unpacked package's `exports["."].import` in an `app.asar`
+root. It returns a physical file URL rather than guessing an entry filename
+or using CommonJS resolution for an import-only package. M3's checked `loadFff`
+consumer calls this helper without duplicating ASAR detection and preserves its
+lazy import cache and walker fallback. Native load acceptance requires actual
+scan/search and PTY execution, not archive presence alone.
+Linux results do not establish macOS package/runtime support.
+
 
 ## Contract conventions
 
