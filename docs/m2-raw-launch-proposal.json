@@ -1,5 +1,5 @@
 {
-  "status": "Parent-approved raw-input/native boundaries and bounded post-native RPC metadata correction implemented; build and complete validation pass; final three-model review pending",
+  "status": "Parent-approved raw-input/native boundaries and bounded post-native RPC metadata correction implemented and verified; all three exact required models ACCEPT source 1840a7bca15cff76aaa83c8d47d47259ca8877f8",
   "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "problem": "Raw persisted routine fields are not validated by readRoutines/readInvocations. Their legacy values reach lifecycle/launch native operations. Filtering rows, validating selections again, String-normalizing at the runner, or casting a row to a valid launch shape changes or hides that contract.",
   "proposedScope": [

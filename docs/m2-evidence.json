@@ -1,6 +1,7 @@
 {
   "milestone": "M2",
-  "status": "Complete M2 source/consumer cutover implemented and verified; final exact-source three-model review pending; package acceptance remains parent-owned",
+  "status": "Complete M2 source/consumer cutover verified and explicitly ACCEPTed by all three exact required models at the same frozen source; package acceptance remains parent-owned",
+  "finalSourceRevision": "1840a7bca15cff76aaa83c8d47d47259ca8877f8",
   "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
   "branch": "migration/m2-routines",
   "worktree": "/home/jyarwood/workspace/pi-dish-m2",
@@ -118,5 +119,19 @@
     { "command": "Final raw-launch, native-shell/tmux, lifecycle/restart and cwd-metadata throwaway probes", "result": "exit 0; 4.64 seconds combined; actual isolated native subprocesses, no provider credentials or live sessions" }
   ],
   "cleanup": "Throwaway probes and isolated visual-runtime home removed after final comparison; no permanent probe scaffolding.",
-  "review": { "status": "Not started; source freezing next for three exact-model read-only final reviews" }
+  "erasedOperandBoundaryInventory": [
+    { "source": "src/core/routine-runner.ts:238-245,379", "operations": "Raw minIntervalSec comparison/multiplication, startedAt subtraction, retry hint and startup watchdog arithmetic", "invariant": "Assertions apply only to existing operator operands. JavaScript coercion/errors remain unchanged; no persisted-row validity is claimed." },
+    { "source": "src/core/routines.ts:199-200,222-223,261", "operations": "Immediately guarded numeric validation and repeated model.trim calls", "invariant": "Existing validation order and repeated property access are preserved." },
+    { "source": "src/core/routines.ts:280-282,305-308,380,386,408-409", "operations": "Native version addition, iterable spread, ToPropertyKey indexing, Object.entries boxing, duration/pagination arithmetic", "invariant": "Call/operator-local assertions preserve permissive external records, string version arithmetic and native failure behavior; no schema cast or normalization." },
+    { "source": "src/core/routine-handlers.ts:69", "operations": "Original thrown status value passed to Express Response.status", "invariant": "Express remains the runtime status validator; no alternate error policy." },
+    { "source": "src/core/session-provenance.ts:20-25", "operations": "Object-container views after existing object guards", "invariant": "Only unknown field access is established; individual launch fields still pass their existing admission checks." }
+  ],
+  "review": {
+    "status": "ACCEPT",
+    "sourceRevision": "1840a7bca15cff76aaa83c8d47d47259ca8877f8",
+    "attestation": "docs/m2-review.json",
+    "models": ["zai/glm-5.3", "opencode-go/deepseek-v4.1-flash", "kimi-code/k3"],
+    "blockingFindings": [],
+    "binding": "Three new durable independent sessions, exact model identities verified semantically, each explicitly accepted this actual frozen source. Final attestation changes evidence only."
+  }
 }

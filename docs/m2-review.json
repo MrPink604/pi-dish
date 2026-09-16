@@ -1,0 +1,96 @@
+{
+  "milestone": "M2",
+  "status": "ACCEPT",
+  "sourceRevision": "1840a7bca15cff76aaa83c8d47d47259ca8877f8",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "branch": "migration/m2-routines",
+  "worktree": "/home/jyarwood/workspace/pi-dish-m2",
+  "independence": "Three NEW durable omp sessions; exact configured models verified using semantic pi-dish resolve; independent read-only actual-source reviews, no shared-tree writes.",
+  "sourceFreeze": "All three explicitly ACCEPT the same immutable source revision. Subsequent attestation changes only evidence records, not reviewed implementation.",
+  "validationEvidence": "docs/m2-evidence.json",
+  "requiredModels": [
+    "zai/glm-5.3",
+    "opencode-go/deepseek-v4.1-flash",
+    "kimi-code/k3"
+  ],
+  "reviewers": [
+    {
+      "ref": "01a0a9e6-a6",
+      "nativeSessionId": "2026-09-16T11-07-40-434Z_01a0a9e6-a612-71cd-a5ce-2f77768243f0",
+      "model": "zai/glm-5.3",
+      "thinking": "max",
+      "sourceRevision": "1840a7bca15cff76aaa83c8d47d47259ca8877f8",
+      "status": "ACCEPT",
+      "blockingFindings": [],
+      "reviewedBoundaries": [
+        "all M2 producer/source/generated baseline parity",
+        "routine scheduler, restart and invocation lifetime",
+        "eight root handler mounts, actual prompt/ref composition and startup order",
+        "raw unknown ingress, operator/native assertions and identity gates",
+        "post-native URL metadata, byte refusal, native failure precedence and owned-child reaping",
+        "source policy enrollment and behavior regressions"
+      ],
+      "nonblockingObservations": [
+        "Finalize pending review status in evidence after the gate.",
+        "Invocation input may contain its literal closing marker; this preserves pre-existing LLM-consumed prompt behavior.",
+        "Redundant provenance typeof-number guard is harmless.",
+        "Metadata TypeError remains the failure after successful spawn during byte-child cleanup; native spawn failures retain initializer path."
+      ]
+    },
+    {
+      "ref": "01a0a9e6-aa",
+      "nativeSessionId": "2026-09-16T11-07-41-597Z_01a0a9e6-aa9d-754f-9dea-64d3876d178b",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "thinking": "high",
+      "sourceRevision": "1840a7bca15cff76aaa83c8d47d47259ca8877f8",
+      "status": "ACCEPT",
+      "blockingFindings": [],
+      "reviewedBoundaries": [
+        "cron/routines/provenance source and generated parity",
+        "routine-runner scheduling/lifetime/restart",
+        "eight handler mounts and actual M1 prompt refs",
+        "unknown launch/ledger ingress and unchanged authority",
+        "post-native URL metadata, byte-path refusal, child cleanup and native error precedence",
+        "type assertions and behavioral regressions"
+      ],
+      "nonblockingObservations": [
+        "Pinned TypeScript 7.0.2 accepts unknown plus string in prompt composition; legacy runtime preserved.",
+        "Final boundary record should list raw numeric operand assertions in routine-runner alongside native launch exceptions.",
+        "No new compile-time fixture specifically pins M2 declarations; actual typed production consumers and runtime regression coverage exist.",
+        "M1 changes reviewed as consumed dependencies only; package/main acceptance parent-owned."
+      ]
+    },
+    {
+      "ref": "01a0a9e6-af",
+      "nativeSessionId": "2026-09-16T11-07-42-814Z_01a0a9e6-af5e-742a-98ef-aec25af93ad0",
+      "model": "kimi-code/k3",
+      "thinking": "high",
+      "sourceRevision": "1840a7bca15cff76aaa83c8d47d47259ca8877f8",
+      "status": "ACCEPT",
+      "blockingFindings": [],
+      "reviewedBoundaries": [
+        "cron local-time/DST/parser and producer baseline parity",
+        "raw persisted routine/provenance contracts",
+        "runner observers, busy delivery, oneShot/continue and restart lifetimes",
+        "eight handler mounts and actual M1 prompt/ref composition",
+        "unknown launch/ledger ingress, unchanged typed resume and identity/authority",
+        "post-native URL metadata, unsupported-byte child cleanup and native failure precedence",
+        "real transferred M1 dependencies, generated declarations and behavior regressions"
+      ],
+      "nonblockingObservations": [
+        "Thinking includes-to-some differs only for NaN outside the string vocabulary.",
+        "Post-owner string guard preserves typed output and cannot admit non-string identities.",
+        "Awaiting a SIGKILLed child could theoretically wait on uninterruptible sleep; owned error path and native-error precedence are acceptable.",
+        "Cron alias error text incompleteness is pre-existing and unchanged."
+      ]
+    }
+  ],
+  "blockingFindings": [],
+  "dispositions": {
+    "numericBoundaryInventory": "Final evidence now enumerates operator-local raw numeric/container/key assertions separately from native launch boundaries; no source changes.",
+    "compileTimeFixtures": "No implementation-pinning declaration test added; actual strict production consumers compile and behavioral regressions pass.",
+    "preExistingBehavior": "Prompt closing-marker text, partial cron alias error text, redundant guards and pinned TypeScript unknown-plus-string semantics remain unchanged.",
+    "metadataLimitation": "Direct RPC file URLs now publish filesystem-path metadata under explicit authorization. Byte cwd has no proven faithful decoding in async spawn and is rejected post-native with awaited owned-child cleanup; no guessed fallback."
+  },
+  "acceptanceOwnership": "M2 reviewer acceptance only. M1 acceptance, package acceptance and main integration remain parent-owned."
+}
