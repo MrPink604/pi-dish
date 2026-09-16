@@ -26,6 +26,7 @@ process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS = '0';
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
 const CMD_LOG = path.join(tmpHome, 'rpc-commands.jsonl');
 process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} ${process.execPath} ${FIXTURE}`;
+process.env.PI_DISH_OMP_COMMAND = `env PI_FIXTURE_HARNESS=omp ${process.execPath} ${path.join(__dirname, 'fixtures', 'fake-pi.js')}`;
 
 const server = require('../server.js');
 const { getAllRPCSessions } = require('../lib/rpc-session');
@@ -149,6 +150,47 @@ test('validation errors are 400s and a duplicate name is a 409', async () => {
   assert.equal(second.status, 409);
   assert.match(second.body.error, /already exists/);
   await del('/api/routines/dupe-routine');
+});
+
+test('pilot errors precede definition errors without laundering untrusted selections', async () => {
+  const invalid = definition({ name: 'Invalid name', model: 123, thinking: null, cwd: 42 });
+  const omp = await post('/api/routines', { ...invalid, harness: 'omp' });
+  assert.equal(omp.status, 400);
+  assert.match(omp.body.error, /Model 123 is not available/);
+  const pi = await post('/api/routines', { ...invalid, harness: 'pi' });
+  assert.equal(pi.status, 400);
+  assert.match(pi.body.error, /name must be lowercase/);
+
+  const noModel = await post('/api/routines', { ...invalid, harness: 'omp', model: null, thinking: 7 });
+  assert.equal(noModel.status, 400);
+  assert.match(noModel.body.error, /Choose an Oh My Pi model/);
+  const badThinking = await post('/api/routines', {
+    ...invalid, harness: 'omp', model: 'zai/glm-5.2', thinking: 7,
+  });
+  assert.equal(badThinking.status, 400);
+  assert.match(badThinking.body.error, /Thinking level 7 is not valid/);
+  assert.equal((await get('/api/routines')).body.routines.some(row => row.name === invalid.name), false);
+});
+
+test('routine pilot updates distinguish absent selections from explicit null', async () => {
+  const created = await post('/api/routines', definition({
+    name: 'pilot-update', harness: 'omp', model: 'zai/glm-5.2', thinking: 'high',
+  }));
+  assert.equal(created.status, 201);
+  const resource = `/api/routines/${created.body.routine.id}`;
+  const unchanged = await put(resource, { description: 'same pilot' });
+  assert.equal(unchanged.status, 200);
+  assert.equal(unchanged.body.routine.model, 'zai/glm-5.2');
+  assert.equal(unchanged.body.routine.thinking, 'high');
+  const cleared = await put(resource, { model: null, thinking: null });
+  assert.equal(cleared.status, 200);
+  assert.equal(Object.hasOwn(cleared.body.routine, 'model'), false);
+  assert.equal(Object.hasOwn(cleared.body.routine, 'thinking'), false);
+  const invalidCwd = await put(resource, { cwd: null });
+  assert.equal(invalidCwd.status, 400);
+  assert.match(invalidCwd.body.error, /cwd is required/);
+  assert.equal((await get(resource)).body.routine.cwd, tmpHome);
+  await del(resource);
 });
 
 test('invoke spawns a session, delivers the prompt with the input block, completes and closes', async () => {

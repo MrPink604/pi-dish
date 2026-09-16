@@ -5,6 +5,7 @@
   "branch": "migration/m2-routines",
   "worktree": "/home/jyarwood/workspace/pi-dish-m2",
   "runtime": { "node": "26.8.2", "npm": "12.0.2", "typescript": "7.0.2", "platform": "Linux x64" },
+  "independentProducerCommit": "a76397f",
   "independentProducerMapping": [
     { "source": "src/core/cron.ts", "outputs": ["lib/cron.js", "lib/cron.d.ts"], "program": "tsconfig.core.json", "change": "Moves existing checked-JS implementation; local-time algorithm unchanged" },
     { "source": "src/core/routines.ts", "outputs": ["lib/routines.js", "lib/routines.d.ts"], "program": "tsconfig.core.json", "change": "Moves actual definition/ledger implementation; raw persisted fields remain unknown except established id" },
@@ -22,6 +23,19 @@
     { "command": "npm test", "result": "998 passed; zero failures/cancelled/skipped; duration 31901.994786 ms", "limits": "Existing sanitizer and temporary homes/sockets/tmux; legacy runner and root composition still execute at this producer checkpoint" },
     { "command": "node /tmp/pi-dish-m2-producer-smoke.cjs", "result": "exit 0; generated producers exercised in temporary HOME; UTC/New_York local scheduling, case alias, durable scheduled minute, ledger surviving definition deletion, permissive saved row and string-version arithmetic, canonical advisory provenance", "limits": "Throwaway probe removed after success; not full migrated runner/restart proof" }
   ],
+  "pilotInputCorrection": {
+    "parentApproved": true,
+    "scope": "Only SessionLaunch.validateHarnessPilotSelection takes PilotValidationInput unknown model/thinking/cwd; model-command observation cwd unknown. Typed launch/resume options remain unchanged.",
+    "mapping": "src/core/session-launch.ts -> lib/session-launch.js and lib/session-launch.d.ts",
+    "checks": [
+      { "command": "npm run build:core", "result": "exit 0" },
+      { "command": "npm test -- test/routines-api.test.js test/omp-web-pilot.test.js", "result": "22 passed, zero failures/skips; 3575.09909 ms" },
+      { "command": "npm run check", "result": "exit 0; 198 policy sources; lint, strict types and drift checks pass" },
+      { "command": "npm test", "result": "1000 passed, zero failures/cancelled/skipped; 32434.569206 ms" }
+    ],
+    "regressions": "Actual API checks preserve OMP pilot error precedence over invalid definition fields, Pi bypass, nonstring cwd model-command fallback, numeric thinking rejection, absent-versus-null selection updates and null cwd refusal without persisting a change.",
+    "limits": "Runner/HTTP composition drafts remain outside compiler roots during this independently verified checkpoint; no final M2 cutover claim."
+  },
   "preservedBoundaries": [
     "Routine reads validate only matching id; invocation reads validate only string id. Other fields/extras remain unknown and retain existing runtime coercion/failure behavior.",
     "Definition removal does not remove invocation ledger or touch sessions.",

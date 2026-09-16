@@ -34,6 +34,13 @@ export interface PilotSelectionOptions {
   cwd?: string | null;
 }
 
+/** HTTP pilot selection precedes routine-store validation; no field is trusted yet. */
+export interface PilotValidationInput {
+  model?: unknown;
+  thinking?: unknown;
+  cwd?: unknown;
+}
+
 export interface NewSessionLaunchOptions extends PilotSelectionOptions {
   descriptor: HarnessDescriptor;
   name?: string | null;
@@ -92,11 +99,11 @@ export type LaunchOutcome =
   | { kind: 'interrupted'; error: LifecycleInterruption; status: number };
 
 export interface SessionLaunchObservations {
-  runHarnessModelCommand(descriptor: HarnessDescriptor, options: { cwd?: string | null }): Promise<unknown>;
+  runHarnessModelCommand(descriptor: HarnessDescriptor, options: { cwd?: unknown }): Promise<unknown>;
 }
 
 export interface SessionLaunch {
-  validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotSelectionOptions): Promise<void>;
+  validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotValidationInput): Promise<void>;
   launchNewSession(options: NewSessionLaunchOptions): Promise<LaunchOutcome>;
   launchResumedSession(options: ResumeSessionLaunchOptions): Promise<LaunchOutcome>;
   resumeRpcSession(options: RpcResumeOptions): Promise<LaunchOutcome>;
@@ -501,7 +508,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     return run;
   }
 
-  async function validateHarnessPilotSelection(descriptor: HarnessDescriptor, { model, thinking, cwd }: PilotSelectionOptions): Promise<void> {
+  async function validateHarnessPilotSelection(descriptor: HarnessDescriptor, { model, thinking, cwd }: PilotValidationInput): Promise<void> {
     if (descriptor.id !== 'omp' || (!model && !thinking)) return;
     if (thinking && !model) throw new LaunchError('Choose an Oh My Pi model before overriding its thinking level.', 400);
     const models = await observations.runHarnessModelCommand(descriptor, { cwd });
@@ -509,7 +516,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       ? models.find((entry: unknown) => pilotModel(entry) && (entry.selector === model || `${entry.provider}/${entry.id}` === model))
       : undefined;
     if (!pilotModel(selected)) throw new LaunchError(`Model ${model} is not available from Oh My Pi in this working directory.`, 400);
-    if (thinking && !selected.thinking?.includes(thinking)) {
+    if (thinking && !selected.thinking?.some(level => level === thinking)) {
       const valid = selected.thinking?.length ? selected.thinking.join(', ') : 'none';
       throw new LaunchError(`Thinking level ${thinking} is not valid for ${model}; valid levels: ${valid}.`, 400);
     }

@@ -19,6 +19,12 @@ export interface PilotSelectionOptions {
     thinking?: string | null;
     cwd?: string | null;
 }
+/** HTTP pilot selection precedes routine-store validation; no field is trusted yet. */
+export interface PilotValidationInput {
+    model?: unknown;
+    thinking?: unknown;
+    cwd?: unknown;
+}
 export interface NewSessionLaunchOptions extends PilotSelectionOptions {
     descriptor: HarnessDescriptor;
     name?: string | null;
@@ -82,11 +88,11 @@ export type LaunchOutcome = {
 };
 export interface SessionLaunchObservations {
     runHarnessModelCommand(descriptor: HarnessDescriptor, options: {
-        cwd?: string | null;
+        cwd?: unknown;
     }): Promise<unknown>;
 }
 export interface SessionLaunch {
-    validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotSelectionOptions): Promise<void>;
+    validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotValidationInput): Promise<void>;
     launchNewSession(options: NewSessionLaunchOptions): Promise<LaunchOutcome>;
     launchResumedSession(options: ResumeSessionLaunchOptions): Promise<LaunchOutcome>;
     resumeRpcSession(options: RpcResumeOptions): Promise<LaunchOutcome>;

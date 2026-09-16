@@ -1,0 +1,23 @@
+{
+  "status": "Parent-approved pilot-only correction implemented and verified; raw saved-launch proposal remains separate and unapproved",
+  "baseline": "35ad0c4bd1433ae9b07bca6c1e422fa28cf4eb52",
+  "languageServer": "xd://lsp status returned No language servers configured for this project; textual caller inventory used",
+  "pilotValidation": {
+    "old": "SessionLaunch.validateHarnessPilotSelection(descriptor: HarnessDescriptor, options: PilotSelectionOptions): Promise<void>; PilotSelectionOptions={model?:string|null,thinking?:string|null,cwd?:string|null}",
+    "new": "Add owner-defined PilotValidationInput={model?:unknown,thinking?:unknown,cwd?:unknown}; only validateHarnessPilotSelection uses it. Keep PilotSelectionOptions on typed launch/resume internals unchanged.",
+    "observationPort": "SessionLaunchObservations.runHarnessModelCommand options.cwd string|null|undefined -> unknown; actual server resolveHarnessCwd already handles unknown by typeof string/trim fallback. Coordinate this consumed port with M4.",
+    "implementation": "Preserve non-OMP early return, thinking-without-model error, model command ordering, exact model equality and unavailable error. On selected.thinking use .some(level => level === thinking) instead of .includes(thinking) to compare unknown without a cast or new validation. All original error precedence retained.",
+    "callers": [
+      {"file":"server.js","symbols":"POST /api/sessions/new -> sessionLaunch.validateHarnessPilotSelection","domain":"HTTP body values; handler has its own pre-validation and cwd expansion"},
+      {"file":"server.js","symbols":"validateRoutinePilot -> sessionLaunch.validateHarnessPilotSelection","domain":"HTTP unknown fields BEFORE routine store validation; PUT nullish harness/cwd fallback but explicit model/thinking null preserved"},
+      {"file":"src/core/session-operations.ts","symbols":"resumeSessionById -> launch.validateHarnessPilotSelection","domain":"model validated string, recovery thinkingLevel string/null, derived cwd string"}
+    ],
+    "regressions": ["Pi ignores invalid pilot model/thinking then routine-store validation determines result", "OMP unknown model error precedes invalid routine name/prompt", "OMP thinking truthy without model errors before command/store", "OMP numeric/array/object thinking does not match supported string levels", "Nonstring cwd reaches existing model-command cwd fallback", "PUT null model/thinking vs absent values retain existing distinction"]
+  },
+  "rawSavedRoutineLaunch": {
+    "remainingMismatch": "Routine reads validate only id. Runner passes raw model/thinking/cwd to SessionOperations.createSession/CreateSessionOptions and raw ledger sessionId to live/resume/close/recovery lookup. No field-validity casts added.",
+    "affectedSymbols": ["SessionOperations.createSession/CreateSessionOptions", "SessionLaunch.launchNewSession/NewSessionLaunchOptions", "HarnessDescriptor.argv.new/LaunchOptions", "RPCLaunchOptions/createRPCSession/spawnPi", "SessionOwnership.getLiveSession", "SessionOperations.resumeSessionById", "SessionOperations.closeSession/closeSessionById", "RecoveryRunner.outcome"],
+    "risk": "Unknown launch values currently pass through typed lifecycle internals into argv/cwd/native spawn. Widening ingress alone does not honestly check these operations; a broader correction or approved narrow dynamic-operation boundary is needed. Do not silently assert saved fields are strings, normalize them, or filter raw rows.",
+    "next": "Separate docs/m2-raw-launch-proposal.json maps the deeper correction; only the pilot correction is approved and applied."
+  }
+}
