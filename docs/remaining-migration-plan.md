@@ -1050,3 +1050,14 @@ Proof artifacts remain separate from shipped source.
 **Retained limits:** Linux x64 delivery is verified; macOS packaging was not
 available and is not claimed. Root conversion, later domain packages, mandatory
 simplifications and repository-tool/test closure remain open.
+
+**Post-acceptance work-session cleanup:** graceful close was requested for both
+owners and their six reviewers. Subsequent semantic resolution reports all eight
+inactive with no close capability. One close call nevertheless reported pane
+`%21` gone with owned process identities still alive:
+`2609016@29809620`, `2609078@29809667`, `2609152@29809702`,
+`2611326@29811231`, `2612233@29812156`, `2614483@29813908`.
+The concurrent call's error did not identify its session; residual-process
+cleanup is therefore not claimed complete. No manual PID signals or repeated
+close requests without live authority were used. This limit concerns work
+sessions, not the isolated product/harness proofs above.
