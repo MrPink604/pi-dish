@@ -12,11 +12,14 @@
  * discovered but excluded from the advertised catalog (manual-only), adding
  * zero advertised cost — pi's formatSkillsForPrompt already filters them.
  */
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { LoadSkillsResult, ResourceDiagnostic, Skill } from '@earendil-works/pi-coding-agent' with { 'resolution-mode': 'import' };
 import * as piSDK from './pi-sdk';
+import { finite } from './session-index-data';
+import type { SkillActivation } from './session-index-data';
 
 type SkillDiagnostic = Pick<ResourceDiagnostic, 'type' | 'message' | 'path'>;
 interface BundleFile { file: string; bytes: number }
@@ -56,6 +59,97 @@ export interface SkillsInventory {
 }
 
 const est = (chars: number) => Math.ceil((chars || 0) / 4);
+
+interface SkillSection {
+  heading: string;
+  level: number;
+  startLine: number;
+  endLine: number;
+  lines: string[];
+}
+
+// Split SKILL.md into markdown sections by heading. Returns 1-indexed line
+// ranges. The preamble before the first heading is its own "(intro)" section.
+function splitSections(lines: readonly string[]): SkillSection[] {
+  const sections: SkillSection[] = [];
+  let cur: SkillSection = { heading: '(intro)', level: 0, startLine: 1, endLine: 0, lines: [] };
+  lines.forEach((line, i) => {
+    const m = line.match(/^(#{1,6})\s+(.*)$/);
+    if (m) {
+      if (cur.lines.length) { cur.endLine = cur.startLine + cur.lines.length - 1; sections.push(cur); }
+      cur = { heading: line.trim(), level: m[1].length, startLine: i + 1, endLine: 0, lines: [line] };
+    } else {
+      cur.lines.push(line);
+    }
+  });
+  if (cur.lines.length) { cur.endLine = cur.startLine + cur.lines.length - 1; sections.push(cur); }
+  // Drop a leading empty intro (a file starting with a heading).
+  return sections.filter(s => !(s.heading === '(intro)' && s.lines.join('').trim() === ''));
+}
+
+// Line set covered by one ranged/full read record, clamped to lineCount.
+function coveredLines(rec: SkillActivation, lineCount: number): Set<number> {
+  const set = new Set<number>();
+  const add = (s: number, e: number) => { for (let i = Math.max(1, s); i <= Math.min(lineCount, e); i++) set.add(i); };
+  if (rec.kind === 'explicit') { add(1, lineCount); return set; }
+  if (rec.ranges === 'all') { add(1, finite(rec.truncatedTo) ? rec.truncatedTo : lineCount); return set; }
+  if (Array.isArray(rec.ranges)) {
+    for (const [s, e] of rec.ranges) add(s, e === -1 ? lineCount : e);
+  }
+  return set;
+}
+
+/** Current-file coverage; each mapped read contributes one transient line set. */
+export function projectSkillCoverage(content: string, mtimeMs: number, records: readonly SkillActivation[]) {
+  const lines = content.split('\n');
+  const lineCount = lines.length;
+  const contentHash = crypto.createHash('sha1').update(content).digest('hex').slice(0, 12);
+  const sections = splitSections(lines).map(sec => ({
+    heading: sec.heading, level: sec.level,
+    startLine: sec.startLine, endLine: sec.endLine,
+    lineCount: sec.endLine - sec.startLine + 1,
+    reads: 0,
+    fraction: 0,
+    neverRead: false,
+    lines: [] as { text: string; hits: number }[],
+  }));
+  const lineHits = new Array<number>(lineCount + 1).fill(0);
+  let numMapped = 0, excludedBeforeMtime = 0, targetedTouches = 0;
+  let anyPartial = false;
+  for (const r of records) {
+    if (r.kind === 'targeted') targetedTouches++;
+    if (r.kind !== 'read' && r.kind !== 'explicit') continue;
+    if (!finite(r.ts) || r.ts < mtimeMs) excludedBeforeMtime++;
+    if (!finite(r.ts) || !(r.ts >= mtimeMs)) continue;
+    numMapped++;
+    const set = coveredLines(r, lineCount);
+    if (set.size < lineCount) anyPartial = true;
+    for (const ln of set) lineHits[ln]++;
+    for (const sec of sections) {
+      for (let ln = sec.startLine; ln <= sec.endLine; ln++) {
+        if (set.has(ln)) { sec.reads++; break; }
+      }
+    }
+  }
+  for (const sec of sections) {
+    sec.fraction = numMapped ? sec.reads / numMapped : 0;
+    sec.neverRead = numMapped > 0 && sec.reads === 0;
+    for (let ln = sec.startLine; ln <= sec.endLine; ln++) {
+      sec.lines.push({ text: lines[ln - 1], hits: lineHits[ln] });
+    }
+  }
+
+  // Unread token estimate includes the newline allowance for each untouched line.
+  let unreadChars = 0;
+  for (let ln = 1; ln <= lineCount; ln++) if (!lineHits[ln]) unreadChars += lines[ln - 1].length + 1;
+  return {
+    contentHash, lineCount, numMapped, mappedReads: numMapped,
+    targetedTouches, excludedBeforeMtime,
+    unreadTokensEst: Math.ceil(unreadChars / 4),
+    flatFullRead: numMapped > 0 && !anyPartial,
+    sections,
+  };
+}
 
 // Cap the bundled-file walk so a skill dir with a huge assets tree can't stall
 // a request; the coverage endpoint reads authoritative per-file data anyway.
