@@ -84,7 +84,7 @@ controller/port observations.
 | Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
 | Server application and feature modules | M1–M5 and M7 accepted | Actual implementations and composition are checked; the policy-free root preserves the synchronous native server export. Required R simplifications remain open. |
 | Harness extensions and Electron shell | M6 accepted on Linux x64 | Strict edge programs and generated outputs, installed CLIs, real development/packaged Electron and native harness execution passed. macOS delivery is unverified; startup simplification remains R7. |
-| Test and tooling closure | C1 tools and runner/support checkpoints accepted; C1/C2 open | Checked build/bootstrap/config and runner/support bodies have exact-source CI proof. Behavioral tests, remaining fixtures/tools and scenario bodies still require their cutovers. R12's handwritten vendor loader is removed. |
+| Test and tooling closure | C1 tools, runner/support and native-canary checkpoints accepted; C1/C2 open | Checked build/bootstrap/config, runner/support and native-canary bodies have exact-source CI proof. Behavioral tests, remaining fixtures/tools and scenario bodies still require their cutovers. R12's handwritten vendor loader is removed. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
@@ -262,6 +262,19 @@ duplicate settlement/header handling, authorization policies remain separate,
 and the handwritten highlight loader is replaced by the pinned bundler.
 This acceptance does not include R1/R8 or their dependent packages, the other
 unfinished R packages, or full C1/C2 closure.
+
+**R2, R3, R6, R8, R10 and the C1 native-canary checkpoint accepted (2026-09-16):**
+main `272a338` passed [all five exact-source CI jobs and required steps](https://github.com/MrPink604/pi-dish/actions/runs/35163287240).
+The [integration record](docs/remaining-migration-plan.md#implementation-record--r-integration-delivery)
+separates frozen-source reviews, parent native/HTTP/production-browser proof,
+the original Node 22.x settings-lock fixture failure and its deterministic
+test-only correction. Local checks covered 265 compiler-owned sources, 1,041
+backend tests, 291 browser cases, all eight scenarios and desktop/mobile UI.
+R7's composition dependency and R9's pane-policy dependency are released.
+**R1/R4 remain held:** the correction changes a test in R1's frozen inventory
+and needs final-scope review renewal. **R11 remains held:** its incomplete
+same-Kimi correction hit another quota limit, and its owner reported a provider
+limit. No retry, model substitution or whole-repository completion is implied.
 
 1. **Product migration accepted (M0–M7).** Actual session-read/SDK/projection,
    routine, publication/file, feature, fleet/terminal, runtime-edge and server

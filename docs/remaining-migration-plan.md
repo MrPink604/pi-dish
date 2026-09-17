@@ -1428,3 +1428,198 @@ accepted separately; R11's canonical-client work remains independently gated.
 Before any Playwright TS spec siblings land, discovery must become
 generated-JS-only, and browser-evaluated code needs its own compiler boundary.
 There is no full C1/C2 acceptance or release of unaccepted R1/R8 dependencies.
+
+### Implementation record — R integration delivery
+
+**Delivery verified by the integration lead on 2026-09-16.** Main
+`266675059fda76ec2bd51b30dfe5e3714b724dd3` integrates the separately reviewed
+R1, R2, R3, R6, R8, R10 and C1 native-canary sources and their attestation chains.
+Integration is not blanket acceptance: the package dispositions below control.
+
+**Local product proof:** strict source/drift/type/mode/lint checks over 265
+compiler-owned sources, 1,041 backend tests (zero failures/skips), 291 browser
+cases, all eight isolated UI scenarios and full desktop/mobile/multi-host UI
+passed. Parent additionally exercised actual isolated native OMP export, Pi mood
+and OMP sharing, routine HTTP admission/persistence, skill coverage, uninstrumented
+pane transitions and real BridgeSession/SSE widget/input replay. Temporary
+runtime scripts, fixture homes and browser/server processes were removed.
+Complete records remain in `/tmp/pi-dish-parent-reset-local-result.json`,
+`/tmp/pi-dish-parent-reset-core-smoke-result.json`,
+`/tmp/pi-dish-parent-reset-native-results.json` and
+`/tmp/pi-dish-parent-reset-browser-proof.json`.
+
+**CI failure and correction:** the first exact-source
+[run 35162106354](https://github.com/MrPink604/pi-dish/actions/runs/35162106354)
+passed three backend jobs and every browser/scenario/UI step, but Node 22.x
+returned `ELOCKED` in the existing concurrent-settings regression. Its child
+timer did not guarantee release within the pinned SDK's bounded lock retry
+window. Parent commit `272a338e0fe0292dfd5f45131890c1bcb273c3eb` changes only
+that fixture: a real held lock produces the actual contention error, then the
+competing snapshot is committed and released before the SDK's own retry.
+The HTTP result and persisted merge assertions remain; no product retry policy,
+lock result or assertion was weakened. Focused regression, strict checks and
+all 1,041 backend tests passed again.
+
+[Exact corrected-main run 35163287240 passed all five jobs and required steps](https://github.com/MrPink604/pi-dish/actions/runs/35163287240):
+check/backend on Node 22.19.0, 22.x, 24.x and 26.x, and browser/scenarios/full UI
+on Node 24. Parent inspected every mandatory step. The unauthenticated API
+observer later returned HTTP 403; this was not a CI failure. Parent recovered
+the final browser step conclusions and exact commit from GitHub's public HTML,
+without credentials. Both the original failure and corrected proof are retained
+in `/tmp/pi-dish-parent-reset-ci-result.json`,
+`/tmp/pi-dish-parent-reset-ci-node22-failure.json`,
+`/tmp/pi-dish-parent-reset-fixture-correction.json` and
+`/tmp/pi-dish-parent-reset-corrected-ci-result.json`.
+
+**Review boundaries:** the original frozen-source approvals are not represented
+as approvals of the parent-authored fixture correction. Because
+`test/server.test.js` is in R1's frozen test inventory, **R1 and dependent R4
+remain held for final-scope review renewal**. R1's product source is unchanged.
+R11 is not integrated or accepted: its same Kimi reviewer hit another five-hour
+quota error while closing actual remaining source/consumer/proof gaps; an
+earlier whole-source claim was withheld. Its Astra owner also reported a usage
+limit. No provider retry, substitute reviewer or partial acceptance is authorized
+by this record. Other package acceptance below is limited to their unchanged
+reviewed source and the independently verified integration.
+
+### Implementation record — R2
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0ab39-7c1b-768c-a142-60b465d84cca`, verified OMP
+`openai-codex/gpt-6-astra`, High. Reviewed source:
+`b70980d4a4c6b5ea6d8a8300e55c2c7a45ad0b90`; separate final attestation:
+`1e621cd63712d67a14b90a81fe6ffe7c566b9e15`.
+
+**Delivered:** one routine-input admission receipt carries the original input
+and measured size; definition and invocation paths reuse established admission
+and single-read storage contracts. It is deliberately not an immutable payload
+snapshot. Original serialization, ordering, malformed values and ledger behavior
+remain observable. [Evidence](r2-evidence.json) and
+[review record](r2-review.json) retain the ownership/deletion ledger and limits.
+
+**Review and proof:** parent verified the exact GLM, DeepSeek and Kimi
+model/High/OMP provenance, same-source finals, contiguous archive hashes,
+all eleven primary bodies, named consumers and decoded long proofs. Historical
+superseded decisions, quota attempts, protocol deviations and the narrative
+Kimi UUID typo remain disclosed; no full-protocol-compliance claim is made.
+The token-bearing DeepSeek raw archive remains private; the redacted derivative
+has a distinct identity and hash. No secret or raw protected archive is published.
+Parent real HTTP checks exercised CRUD, 413-before-source admission,
+404-before-size ordering, ledger retention and original-input serialization.
+The exact corrected-main delivery gate above passed. No dependent package is
+silently accepted by R2 acceptance.
+
+### Implementation record — R3
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0ab39-725b-76e3-8133-95f93e585787`, verified OMP
+`openai-codex/gpt-6-astra`, High. Reviewed source:
+`3f68de7924c65a0feecbcd13d90a0e0cf0bee36e`.
+
+**Delivered:** skill coverage derives the consumed projection in one pass and
+reuses one covered-line set per mapped activation instead of repeatedly deriving
+the same coverage. Current-version and exclusion policies remain with their
+established owners. [Evidence](r3-evidence.json) and
+[review record](r3-review.json) document retained checks and deleted duplication.
+
+Parent independently verified all three exact-model/High/OMP whole-source
+decisions, seven primary bodies, producer/browser consumers, archive integrity
+and semantic closures. Earlier generated-preamble/render gaps and Kimi quota
+history remain preserved, not counted as earlier passing reviews. Parent actual
+mining-to-coverage execution and the complete corrected-main gates above passed.
+
+### Implementation record — R6
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0ab39-6d9c-7296-b065-aa7eb90d56b9`, verified OMP
+`openai-codex/gpt-6-astra`, High. Reviewed source:
+`822db65d2c21e630f29727a641bd3b5649633c14`.
+
+**Delivered:** one extension replay-state owner serves RPC/bridge consumers;
+Pi private adapter behavior remains at its actual boundary instead of competing
+server copies. Replay identity, answering/retirement and native adapter receiver,
+coercion and error semantics remain preserved. [Evidence](r6-evidence.json)
+and [review record](r6-review.json) retain the concrete deletion and boundary
+ledgers, SDK consumer inventory and deliberately opaque values.
+
+Parent audited all three exact-model/High/OMP same-source finals, twenty primary
+bodies, twenty-two consumer/SDK windows, actual JSON frames and decoded proofs.
+The same Kimi continuation closed previously incomplete reads; historical
+partial decisions and quota errors remain. All three reviewer closures succeeded
+and resolved inactive. One implementation-worker residual-process uncertainty
+remains disclosed; no manual signal or false cleanup claim is made.
+Parent production Chromium exercised real BridgeSession/SSE widget/input replay
+across navigation and retirement of an answered dialog without a socket replay.
+Native harness proof and corrected-main CI passed. **R7's server composition
+dependency is released**; R7 still requires its own complete implementation,
+runtime proof and review gate.
+
+### Implementation record — R8
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0ab39-9dbd-7317-b73e-b0f8185783e8`, verified OMP
+`openai-codex/gpt-6-astra`, High. Reviewed source:
+`9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09`.
+
+**Delivered:** `main-pane.ts` owns named takeover/surface/overlay exclusion
+policies; controller-owned close/dispose behavior is retained. The competing
+peer lists and selection exclusion list are removed without a generic router
+or close-everything policy. [Evidence](r8-evidence.json) and
+[review record](r8-review.json) preserve the asymmetries and deletion ledger.
+
+Parent audited the three exact-model/High/OMP same-source decisions, all assigned
+authored/consumer bodies and decoded registration/commutation proof. Generated
+review scope is the complete assigned delta, **not** the whole unchanged bundle.
+Earlier missing-body decisions and the withdrawn all-pairs waiver remain
+disclosed. Protocol deviations and protected token-bearing raw archive handling
+are recorded without a full-compliance claim or publication of raw archives.
+Parent uninstrumented desktop/mobile proof exercised ordinary takeover retaining
+file/settings surfaces, recovery clearing them, selection retirement and usage
+on a settled 390px viewport. Screenshots were inspected; interaction/transition
+limitations are recorded. Corrected-main CI passed. **R9 may begin**, with
+session-view ownership and controller-local retirement preserved.
+
+### Implementation record — R10
+
+**Accepted by the integration lead on 2026-09-16.** Owner:
+`01a0ab39-942c-779f-b7a5-490b56e98c59`, verified OMP
+`openai-codex/gpt-6-astra`, High. Reviewed source:
+`86e7d24ebb5aaf83bd0de9186c39590e98c0d276`.
+
+**Delivered:** browser model/thinking/rename mutations accept the captured
+endpoint and identity explicitly. Per-mutation session-API construction and
+ignored-host substitution are removed; controls retain selection ownership,
+latest-operation ordering and original-session patching.
+[Evidence](r10-evidence.json) and [review record](r10-review.json) retain the
+caller/export/type-fixture cutover and preserved credential/base checks.
+
+Parent audited all three exact-model/High/OMP finals, nine primary bodies,
+twelve named caller windows and source-byte recovery of preexisting control
+characters. This is not a claim to have reviewed all unchanged app/server code.
+Historical partial decisions, quota history and protocol deviations remain.
+Actual full browser and desktop/mobile/multi-host mutation scenarios and the
+exact corrected-main gates above passed.
+
+### Implementation record — C1 native-canary checkpoint
+
+**Native-canary checkpoint accepted by the integration lead on 2026-09-16;
+C1 remains open.** Owner: `01a0aacf-378b-7454-a8ed-c7c5422991b6`,
+verified OMP `openai-codex/gpt-6-astra`, High. Reviewed source:
+`24e444ceb81be9d796bac324962d376a6dc912d6`.
+
+The actual `test/native-extensions.smoke.ts` body is checked in the existing
+Node-only strict tools program, with sibling generated JS/declarations,
+executable/shebang preservation and exact source/output/mode policy coverage.
+Type-only edge declaration consumption does not add edge runtime emission.
+[Evidence](c1-native-canary-evidence.json) and
+[review record](c1-native-canary-review.json) distinguish this bounded checkpoint
+from the remaining behavioral tests, fixtures, tools and browser-evaluated code.
+
+Parent verified the two existing exact-model finals and the required new
+Kimi/High/OMP reviewer, all seven source/output/config bodies and every byte of
+the captured 198,218-byte validation log. The earlier sampled-log claim remains
+superseded; Python JSON archive framing is not mislabeled JavaScript/JCS.
+All three reviewers closed successfully and resolved inactive. Parent actual
+isolated Pi mood and OMP share canaries passed, as did corrected-main CI.
+Stable-contract C1 families may continue independently; held R1/R11 and unfinished
+R4/R7/R9 families are not released wholesale. No full C1/C2 completion is claimed.
