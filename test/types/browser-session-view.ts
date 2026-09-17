@@ -8,3 +8,15 @@ view.spawnId = 'foreign';
 view.select('same', { forceTranscriptReload: 'yes' });
 // @ts-expect-error resume model reads need a session identity
 resume.load({ harnessId: 'omp' });
+
+declare const selectionPorts: Parameters<typeof createSessionView>[0];
+// @ts-expect-error selection can restore a draft, not migrate another owner's draft
+selectionPorts.drafts.migrate('spawn:foreign', 'host session');
+// @ts-expect-error selection seeds activity but does not initiate an abort
+selectionPorts.activity.beginAbort('host session');
+// @ts-expect-error selection cannot replace transcript pages directly
+selectionPorts.transcript.render([]);
+// @ts-expect-error selection stops connections without disposing the stream owner
+selectionPorts.stream.dispose();
+// @ts-expect-error selecting an inactive session must not launch its harness
+selectionPorts.resume.resume();

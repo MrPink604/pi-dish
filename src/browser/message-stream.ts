@@ -5,17 +5,44 @@ import { formatTime, formatTokens } from './helper-format';
 import { sessionKey } from './helper-identity';
 import type { HostEndpoint } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
-import type { createSessionActivity } from './session-activity';
-import type { createMessageRenderer } from './message-render';
-import type { createStreamingRenderer } from './streaming-render';
-import type { createLiveTools } from './live-tools';
-import type { createPromptDelivery } from './prompt-delivery';
-import type { createExtensionUI } from './extension-ui';
+import type { ExtensionSession } from './extension-dialogs';
+/** Stream event consumption does not confer the collaborators' other authority. */
+export interface MessageStreamActivity {
+  readonly turn: boolean;
+  setCompacting(active: boolean): void;
+  setTurn(active: boolean): void;
+  endAbort(key: string): void;
+}
+export interface MessageStreamRenderer {
+  user(message: RenderMessage, time: string): string;
+  assistant(message: RenderMessage, time: string): string;
+  upsertCustom(message: RenderMessage, options?: { streaming?: boolean }): void;
+}
+export interface MessageStreamRendering {
+  queue(message: RenderMessage): void;
+  cancel(): void;
+}
+export interface MessageStreamTools {
+  append(value: unknown): void;
+  update(value: unknown): void;
+  finish(value: unknown): void;
+  finishRunning(): void;
+}
+export interface MessageStreamDelivery {
+  consume(key: string, content: unknown): boolean;
+  render(value: unknown): void;
+}
+export interface MessageStreamExtensionUI {
+  handle(value: unknown, session: ExtensionSession): void;
+  resolve(id: unknown, session: ExtensionSession): void;
+  reconcile(value: unknown, session: ExtensionSession): void;
+  end(session: ExtensionSession): void;
+}
 function parseRecord(text: string): Record<string, unknown> { const value: unknown = JSON.parse(text); return record(value) ? value : {}; }
 export function createMessageStream(options: {
   document: Document; sessionState: SessionState; endpoint: (host: string | null) => HostEndpoint; ticket: (host: HostEndpoint) => Promise<string>; source?: (url: string) => EventSource;
-  activity: ReturnType<typeof createSessionActivity>; renderer: ReturnType<typeof createMessageRenderer>; streaming: ReturnType<typeof createStreamingRenderer>;
-  tools: ReturnType<typeof createLiveTools>; delivery: ReturnType<typeof createPromptDelivery>; extensionUI: ReturnType<typeof createExtensionUI>;
+  activity: MessageStreamActivity; renderer: MessageStreamRenderer; streaming: MessageStreamRendering;
+  tools: MessageStreamTools; delivery: MessageStreamDelivery; extensionUI: MessageStreamExtensionUI;
   status: (message: string, type?: string) => void; catchup: (owner: SelectionOwner) => unknown; refresh: () => unknown; artifacts: (owner: SelectionOwner) => unknown;
   pinned: (container: HTMLElement) => boolean; follow: () => boolean; scroll: (container: HTMLElement) => void; jump: (container: HTMLElement) => void; highlight: (root: Element) => void;
   select: (id: string, options: { forceTranscriptReload: boolean; host: string | null }) => unknown;

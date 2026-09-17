@@ -71,3 +71,88 @@ test('restored same-host tool panels retain their node and duration after a new 
   await expect(page.locator('[data-tool-call-id="cached-tool"]')).toHaveCount(1);
   await expect(page.locator('[data-tool-call-id="cached-tool"] .duration')).toContainText(/./);
 });
+
+test.describe('selection retirement', () => {
+  test.use({ liveSessions: true });
+
+  test('unknown real and provisional targets preserve the selected view and its live ownership', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    await expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
+    await page.locator('#promptInput').fill('Keep this composer');
+    await page.evaluate(async () => {
+      fixtureApp.features.sessionSearch.open();
+      await fixtureApp.features.sessionSearch.run('self');
+    });
+    await expect(page.locator('mark.search-mark')).toHaveText('self');
+    const result = await page.evaluate(async ({ id, host }) => {
+      const { sessionState, sessionView, messageStreamController } = fixtureApp.features;
+      const owner = sessionState.captureSelection(), source = messageStreamController.source;
+      const node = document.querySelector('#messages [data-msg-index]');
+      await sessionView.select('missing-session', { host });
+      await sessionView.select(id, { host: 'missing-host' });
+      sessionView.pending('missing-spawn');
+      return {
+        owned: sessionState.ownsSelection(owner),
+        sameStream: messageStreamController.source === source,
+        sameNode: document.querySelector('#messages [data-msg-index]') === node,
+        host: sessionState.currentSession.host,
+      };
+    }, { id: ROOT, host: fleet.self.hostId });
+    expect(result).toEqual({ owned: true, sameStream: true, sameNode: true, host: fleet.self.hostId });
+    await expect(page.locator('#promptInput')).toHaveValue('Keep this composer');
+    await expect(page.locator('#searchBar')).toBeVisible();
+    await expect(page.locator('mark.search-mark')).toHaveText('self');
+  });
+
+  test('provisional retirement stashes clean transcript nodes and drafts without clearing the old session activity', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    await expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
+    await page.locator('#promptInput').fill('Original real draft');
+    await page.evaluate(async () => {
+      fixtureApp.features.sessionSearch.open();
+      await fixtureApp.features.sessionSearch.run('self');
+      window.retainedSelectionMessage = document.querySelector('#messages [data-msg-index]');
+    });
+    await expect(page.locator('mark.search-mark')).toHaveText('self');
+    let status;
+    await page.route(`${fleet.self.base}/api/sessions/new`, route => route.fulfill({ json: { spawnId: 'retirement-operation' } }));
+    await page.route(`${fleet.self.base}/api/session-spawns/retirement-operation`, route => { status = route; });
+    // Register a real provisional operation without navigating yet. The
+    // retirement snapshot below is synchronous: a later catalog refresh may
+    // legitimately replace the old session's observed activity.
+    const spawnId = await page.evaluate(host => fixtureApp.features.newSessionController.submit({
+      cwd: '/fixture/project', host, ownsView: () => false,
+    }), fleet.self.hostId);
+    await expect.poll(() => !!status).toBe(true);
+    expect(await page.evaluate(({ id, host, spawnId }) => {
+      const { sessionState, sessionView, sessionActivity, messageStreamController } = fixtureApp.features;
+      sessionActivity.setCompacting(true);
+      sessionActivity.setTurn(true);
+      sessionView.pending(spawnId);
+      const old = sessionState.findSession(id, host);
+      return {
+        selected: sessionState.currentSession,
+        stream: messageStreamController.source,
+        turn: sessionActivity.turn,
+        compacting: sessionActivity.compacting,
+        oldTurn: old.turnInProgress,
+        oldCompacting: old.compacting,
+        retainedMarks: window.retainedSelectionMessage.querySelectorAll('mark.search-mark').length,
+        retainedCurrent: window.retainedSelectionMessage.classList.contains('search-current'),
+      };
+    }, { id: ROOT, host: fleet.self.hostId, spawnId })).toEqual({
+      selected: null, stream: null, turn: false, compacting: false,
+      oldTurn: true, oldCompacting: true, retainedMarks: 0, retainedCurrent: false,
+    });
+    await page.locator('#promptInput').fill('Separate provisional draft');
+    await fleet.select(fleet.self);
+    await expect(page.locator('#promptInput')).toHaveValue('Original real draft');
+    expect(await page.evaluate(() => document.querySelector('#messages [data-msg-index]') === window.retainedSelectionMessage)).toBe(true);
+    await expect(page.locator('mark.search-mark')).toHaveCount(0);
+    await page.evaluate(id => fixtureApp.features.sessionView.pending(id), spawnId);
+    await expect(page.locator('#promptInput')).toHaveValue('Separate provisional draft');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+    await status.fulfill({ json: { status: 'error', error: 'Fixture ends pending operation' } });
+    await expect(page.locator('#sessionName')).toHaveText('Session failed to start');
+  });
+});
