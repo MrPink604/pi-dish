@@ -1699,8 +1699,8 @@ R11 is formally accepted; remaining R packages and full C1/C2 are not implied.
 
 ### Implementation record — R7
 
-**Integrated and locally verified; exact pushed-main CI and formal acceptance
-pending.** Reviewed source `85b9860b8085658095c0386eef8bec7379fa640d`,
+**Accepted on pushed main `a441edab6aab3ab330e747dddde37d89af7542c5`.**
+Reviewed source `85b9860b8085658095c0386eef8bec7379fa640d`,
 owner `01a0ab39-80e9-74a5-ae1a-3145b3e52556`, exact
 `openai-codex/gpt-6-astra`/High/OMP. The same complete source was independently
 accepted by `zai/glm-5.3` (final 178/179 messages),
@@ -1747,4 +1747,13 @@ The isolated display, successful-probe homes, packaged output and throwaway
 drivers were removed. An earlier nonisolated screenshot-command failure is
 retained separately without a blanket descendant-cleanup claim. No macOS,
 live harness spawn, successful terminal attachment or naturally unavailable
-interface proof is claimed. R7 is not formally accepted before exact-source CI.
+interface proof is claimed.
+
+[Exact-source CI run 35180921128](https://github.com/MrPink604/pi-dish/actions/runs/35180921128)
+completed successfully: all four backend jobs (Node 22.19.0, 22.x, 24.x and
+26.x) passed both check and backend/bridge/lifecycle steps; Browser (Node 24)
+passed browser, all-scenario and full-UI steps. Parent inspected all five jobs
+and all eleven required steps, not merely the workflow conclusion. Failure-only
+diagnostic steps were correctly skipped. The raw job/step result is retained at
+`/tmp/pi-dish-parent-r7-main-ci-result.json`; the review record binds this proof
+to the exact pushed source. R4, R9 and full C1/C2 remain separate unfinished work.

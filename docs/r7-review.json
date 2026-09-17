@@ -1,6 +1,23 @@
 {
   "milestone": "R7",
-  "status": "All three independent exact-model HIGH OMP whole-source reviews and parent actual-read audits PASS for85b. Integrated on701bb90; full local gates and eight Linux dev/packaged native observations passed with explicit limits. Exact pushed-main CI remains pending; not yet formally accepted.",
+  "status": "ACCEPTED on pushed main a441edab6aab3ab330e747dddde37d89af7542c5. All three independent exact-model HIGH OMP whole-source reviews and parent actual-read audits PASS for85b. Full local gates, eight Linux dev/packaged native observations and all five exact-source CI jobs passed. Explicit native/platform/proof limits remain unchanged.",
+  "parentCI": {
+    "source": "a441edab6aab3ab330e747dddde37d89af7542c5",
+    "run": 35180921128,
+    "url": "https://github.com/MrPink604/pi-dish/actions/runs/35180921128",
+    "status": "completed",
+    "conclusion": "success",
+    "allFiveJobsAndElevenRequiredStepsPass": true,
+    "jobs": [
+      { "id": 105072675666, "name": "Browser (Node 24)", "conclusion": "success", "requiredSteps": ["test:browser", "test:ui:scenarios", "test:ui"] },
+      { "id": 105072675754, "name": "Backend (Node 22.x)", "conclusion": "success", "requiredSteps": ["check", "Backend, bridge and lifecycle tests"] },
+      { "id": 105072675818, "name": "Backend (Node 26.x)", "conclusion": "success", "requiredSteps": ["check", "Backend, bridge and lifecycle tests"] },
+      { "id": 105072675862, "name": "Backend (Node 24.x)", "conclusion": "success", "requiredSteps": ["check", "Backend, bridge and lifecycle tests"] },
+      { "id": 105072675900, "name": "Backend (Node 22.19.0)", "conclusion": "success", "requiredSteps": ["check", "Backend, bridge and lifecycle tests"] }
+    ],
+    "rawJobAndStepResults": "/tmp/pi-dish-parent-r7-main-ci-result.json",
+    "limits": "Failure-only diagnostic steps were correctly skipped; all required steps succeeded. This is CI for the exact integrated source commit, not a later documentation-only acceptance commit. Linux native observations do not establish macOS delivery."
+  },
   "baseline": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
   "sourceSha": "85b9860b8085658095c0386eef8bec7379fa640d",
   "branch": "migration/r7-startup-readiness",
@@ -5480,7 +5497,7 @@
     "Linux x64 native evidence only; no macOS.",
     "Restricted-share errorMonitor is notification only; preserve native exception/error/close policy.",
     "Private complete semantic archives remain0700/0600, not copied into repository.",
-    "Parent local/runtime proof is complete; exact pushed-main CI and formal acceptance remain pending."
+    "Parent local/runtime proof and all five exact pushed-main CI jobs passed; R7 is formally accepted on a441edab6aab3ab330e747dddde37d89af7542c5."
   ],
   "parentIntegration": {
     "source": "85b9860b8085658095c0386eef8bec7379fa640d",
