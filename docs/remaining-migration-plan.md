@@ -1760,8 +1760,8 @@ to the exact pushed source. R4, R9 and full C1/C2 remain separate unfinished wor
 
 ### Implementation record — R9
 
-**Whole-source review and local integration complete; exact pushed-main CI
-pending, not yet formal acceptance.** Reviewed source
+**Accepted on exact pushed main
+`29f963913a0a3876a38bfb03f5009fcd4a6238a0`.** Reviewed source
 `7282718f6c25ec69a98186a59bf8fdf6c5de5700`, owner
 `01a0acac-afff-738a-be83-ff17feaf476e`, exact
 `openai-codex/gpt-6-astra`/High/OMP, baseline
@@ -1804,4 +1804,12 @@ native harness spawn. Evidence is Linux/Chrome 153.0.8010.36 only; no macOS,
 native clipboard or successful terminal-attachment proof is claimed.
 Owner failures at 292/293 and 77/78 remain preserved in
 [owner evidence](r9-evidence.json); only the fixture was corrected.
+
+[Exact-source CI run 35183385236](https://github.com/MrPink604/pi-dish/actions/runs/35183385236)
+passed all five jobs: backend Node 22.19.0, 22.x, 24.x and 26.x, plus browser
+Node 24. All eleven required check/backend/browser/scenario/UI steps passed;
+only conditional failure-reporting steps were skipped. Complete public API
+responses, their hashes and the exact source identity are preserved in the
+review record and `/tmp/pi-dish-parent-r9-main-ci-result.json`.
+
 R4 and full C1/C2 remain separately unfinished.

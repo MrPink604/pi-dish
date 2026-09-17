@@ -1,6 +1,6 @@
 {
   "milestone": "R9",
-  "status": "All three independent exact-model HIGH OMP whole-source reviews and parent audits PASS. Integrated authored/evidence files unchanged; generated bundles merge accepted R11. Full five local gates and parent actual desktop/pending/mobile proof PASS. Exact pushed-main CI pending; not yet formal R9 acceptance.",
+  "status": "ACCEPTED on exact pushed main29f963913a0a3876a38bfb03f5009fcd4a6238a0: three independent exact-model HIGH OMP whole-source ACCEPTs, parent actual-read/provenance audits, all five integrated local gates, desktop/pending/mobile native proof, and all five exact-source CI jobs with eleven required steps PASS.",
   "baseline": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
   "sourceSha": "7282718f6c25ec69a98186a59bf8fdf6c5de5700",
   "branch": "migration/r9-retirement-ports",
@@ -8290,6 +8290,702 @@
       },
       "runnerSource": "'use strict';\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst cp = require('node:child_process');\nconst crypto = require('node:crypto');\nconst root = '/home/jyarwood/workspace/pi-dish';\nconst commands = [\n  ['npm', 'run', 'check'],\n  ['npm', 'test'],\n  ['npm', 'run', 'test:browser'],\n  ['npm', 'run', 'test:ui:scenarios'],\n  ['npm', 'run', 'test:ui'],\n];\nconst results = { root, integrationBase: 'b570618', reviewedSource: '7282718f6c25ec69a98186a59bf8fdf6c5de5700', node: process.version, platform: process.platform, commands: [] };\nfor (let i = 0; i < commands.length; i++) {\n  const [command, ...args] = commands[i];\n  const log = path.join(__dirname, `gate-${i + 1}.log`);\n  const fd = fs.openSync(log, 'w');\n  const started = new Date().toISOString();\n  const start = performance.now();\n  const result = cp.spawnSync(command, args, { cwd: root, stdio: ['ignore', fd, fd], timeout: 900000 });\n  fs.closeSync(fd);\n  const bytes = fs.readFileSync(log);\n  const entry = { command: [command, ...args].join(' '), started, seconds: (performance.now() - start) / 1000, exitCode: result.status, signal: result.signal, error: result.error?.message, log, logBytes: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };\n  results.commands.push(entry);\n  fs.writeFileSync(path.join(__dirname, 'gates-result.json'), JSON.stringify(results, null, 2) + '\\n');\n  console.log(JSON.stringify(entry));\n  console.log(bytes.toString('utf8').split('\\n').slice(-14).join('\\n'));\n  if (result.status !== 0) process.exit(result.status || 1);\n}\nconsole.log('R9_MAIN_GATES_PASS');\n",
       "temporaryRunnerRemoved": true
+    },
+    "ci": {
+      "source": "29f963913a0a3876a38bfb03f5009fcd4a6238a0",
+      "runId": 35183385236,
+      "url": "https://github.com/MrPink604/pi-dish/actions/runs/35183385236",
+      "status": "completed",
+      "conclusion": "success",
+      "observedAt": "2026-09-17T05:07:45.657Z",
+      "jobs": [
+        {
+          "id": 105080176073,
+          "run_id": 35183385236,
+          "workflow_name": "Tests",
+          "head_branch": "main",
+          "run_url": "https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236",
+          "run_attempt": 1,
+          "node_id": "CR_kwDORRXCAs8AAAAYd0Q9yQ",
+          "head_sha": "29f963913a0a3876a38bfb03f5009fcd4a6238a0",
+          "url": "https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176073",
+          "html_url": "https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176073",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-09-17T04:49:43Z",
+          "started_at": "2026-09-17T04:49:45Z",
+          "completed_at": "2026-09-17T05:04:41Z",
+          "name": "Browser (Node 24)",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-09-17T04:49:46Z",
+              "completed_at": "2026-09-17T04:49:46Z"
+            },
+            {
+              "name": "Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-09-17T04:49:46Z",
+              "completed_at": "2026-09-17T04:49:48Z"
+            },
+            {
+              "name": "Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-09-17T04:49:48Z",
+              "completed_at": "2026-09-17T04:49:51Z"
+            },
+            {
+              "name": "System prerequisites",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-09-17T04:49:51Z",
+              "completed_at": "2026-09-17T04:50:01Z"
+            },
+            {
+              "name": "Run npm ci",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-09-17T04:50:01Z",
+              "completed_at": "2026-09-17T04:50:24Z"
+            },
+            {
+              "name": "Run npx playwright install --with-deps chromium",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-09-17T04:50:24Z",
+              "completed_at": "2026-09-17T04:50:39Z"
+            },
+            {
+              "name": "Run npm run test:browser 2>&1 | tee \"$RUNNER_TEMP/browser.log\"",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7,
+              "started_at": "2026-09-17T04:50:39Z",
+              "completed_at": "2026-09-17T05:02:25Z"
+            },
+            {
+              "name": "Run npm run test:ui:scenarios 2>&1 | tee -a \"$RUNNER_TEMP/browser.log\"",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 8,
+              "started_at": "2026-09-17T05:02:25Z",
+              "completed_at": "2026-09-17T05:03:30Z"
+            },
+            {
+              "name": "Run npm run test:ui 2>&1 | tee -a \"$RUNNER_TEMP/browser.log\"",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 9,
+              "started_at": "2026-09-17T05:03:30Z",
+              "completed_at": "2026-09-17T05:04:39Z"
+            },
+            {
+              "name": "Browser failure details",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 10,
+              "started_at": "2026-09-17T05:04:39Z",
+              "completed_at": "2026-09-17T05:04:39Z"
+            },
+            {
+              "name": "Browser failure evidence",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 11,
+              "started_at": "2026-09-17T05:04:39Z",
+              "completed_at": "2026-09-17T05:04:39Z"
+            },
+            {
+              "name": "Post Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 21,
+              "started_at": "2026-09-17T05:04:39Z",
+              "completed_at": "2026-09-17T05:04:40Z"
+            },
+            {
+              "name": "Post Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 22,
+              "started_at": "2026-09-17T05:04:40Z",
+              "completed_at": "2026-09-17T05:04:40Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 23,
+              "started_at": "2026-09-17T05:04:40Z",
+              "completed_at": "2026-09-17T05:04:40Z"
+            }
+          ],
+          "check_run_url": "https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176073",
+          "labels": [
+            "ubuntu-24.04"
+          ],
+          "runner_id": 1000000791,
+          "runner_name": "GitHub Actions 1000000791",
+          "runner_group_id": 0,
+          "runner_group_name": "GitHub Actions"
+        },
+        {
+          "id": 105080176176,
+          "run_id": 35183385236,
+          "workflow_name": "Tests",
+          "head_branch": "main",
+          "run_url": "https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236",
+          "run_attempt": 1,
+          "node_id": "CR_kwDORRXCAs8AAAAYd0Q-MA",
+          "head_sha": "29f963913a0a3876a38bfb03f5009fcd4a6238a0",
+          "url": "https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176176",
+          "html_url": "https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176176",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-09-17T04:49:43Z",
+          "started_at": "2026-09-17T04:49:45Z",
+          "completed_at": "2026-09-17T04:52:20Z",
+          "name": "Backend (Node 26.x)",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-09-17T04:49:45Z",
+              "completed_at": "2026-09-17T04:49:46Z"
+            },
+            {
+              "name": "Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-09-17T04:49:46Z",
+              "completed_at": "2026-09-17T04:49:47Z"
+            },
+            {
+              "name": "Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-09-17T04:49:47Z",
+              "completed_at": "2026-09-17T04:49:54Z"
+            },
+            {
+              "name": "System and bridge test prerequisites",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-09-17T04:49:54Z",
+              "completed_at": "2026-09-17T04:50:08Z"
+            },
+            {
+              "name": "Run npm ci",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-09-17T04:50:08Z",
+              "completed_at": "2026-09-17T04:50:27Z"
+            },
+            {
+              "name": "Run npm run check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-09-17T04:50:27Z",
+              "completed_at": "2026-09-17T04:50:36Z"
+            },
+            {
+              "name": "Backend, bridge and lifecycle tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7,
+              "started_at": "2026-09-17T04:50:36Z",
+              "completed_at": "2026-09-17T04:52:18Z"
+            },
+            {
+              "name": "Backend failure details",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 8,
+              "started_at": "2026-09-17T04:52:18Z",
+              "completed_at": "2026-09-17T04:52:18Z"
+            },
+            {
+              "name": "Post Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 15,
+              "started_at": "2026-09-17T04:52:18Z",
+              "completed_at": "2026-09-17T04:52:18Z"
+            },
+            {
+              "name": "Post Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 16,
+              "started_at": "2026-09-17T04:52:18Z",
+              "completed_at": "2026-09-17T04:52:18Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 17,
+              "started_at": "2026-09-17T04:52:18Z",
+              "completed_at": "2026-09-17T04:52:18Z"
+            }
+          ],
+          "check_run_url": "https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176176",
+          "labels": [
+            "ubuntu-24.04"
+          ],
+          "runner_id": 1000000792,
+          "runner_name": "GitHub Actions 1000000792",
+          "runner_group_id": 0,
+          "runner_group_name": "GitHub Actions"
+        },
+        {
+          "id": 105080176201,
+          "run_id": 35183385236,
+          "workflow_name": "Tests",
+          "head_branch": "main",
+          "run_url": "https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236",
+          "run_attempt": 1,
+          "node_id": "CR_kwDORRXCAs8AAAAYd0Q-SQ",
+          "head_sha": "29f963913a0a3876a38bfb03f5009fcd4a6238a0",
+          "url": "https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176201",
+          "html_url": "https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176201",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-09-17T04:49:43Z",
+          "started_at": "2026-09-17T04:49:45Z",
+          "completed_at": "2026-09-17T04:52:46Z",
+          "name": "Backend (Node 24.x)",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-09-17T04:49:48Z",
+              "completed_at": "2026-09-17T04:49:48Z"
+            },
+            {
+              "name": "Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-09-17T04:49:48Z",
+              "completed_at": "2026-09-17T04:49:51Z"
+            },
+            {
+              "name": "Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-09-17T04:49:51Z",
+              "completed_at": "2026-09-17T04:50:08Z"
+            },
+            {
+              "name": "System and bridge test prerequisites",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-09-17T04:50:08Z",
+              "completed_at": "2026-09-17T04:50:21Z"
+            },
+            {
+              "name": "Run npm ci",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-09-17T04:50:21Z",
+              "completed_at": "2026-09-17T04:50:46Z"
+            },
+            {
+              "name": "Run npm run check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-09-17T04:50:46Z",
+              "completed_at": "2026-09-17T04:50:56Z"
+            },
+            {
+              "name": "Backend, bridge and lifecycle tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7,
+              "started_at": "2026-09-17T04:50:56Z",
+              "completed_at": "2026-09-17T04:52:42Z"
+            },
+            {
+              "name": "Backend failure details",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 8,
+              "started_at": "2026-09-17T04:52:42Z",
+              "completed_at": "2026-09-17T04:52:42Z"
+            },
+            {
+              "name": "Post Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 15,
+              "started_at": "2026-09-17T04:52:42Z",
+              "completed_at": "2026-09-17T04:52:42Z"
+            },
+            {
+              "name": "Post Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 16,
+              "started_at": "2026-09-17T04:52:42Z",
+              "completed_at": "2026-09-17T04:52:42Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 17,
+              "started_at": "2026-09-17T04:52:42Z",
+              "completed_at": "2026-09-17T04:52:42Z"
+            }
+          ],
+          "check_run_url": "https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176201",
+          "labels": [
+            "ubuntu-24.04"
+          ],
+          "runner_id": 1000000793,
+          "runner_name": "GitHub Actions 1000000793",
+          "runner_group_id": 0,
+          "runner_group_name": "GitHub Actions"
+        },
+        {
+          "id": 105080176257,
+          "run_id": 35183385236,
+          "workflow_name": "Tests",
+          "head_branch": "main",
+          "run_url": "https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236",
+          "run_attempt": 1,
+          "node_id": "CR_kwDORRXCAs8AAAAYd0Q-gQ",
+          "head_sha": "29f963913a0a3876a38bfb03f5009fcd4a6238a0",
+          "url": "https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176257",
+          "html_url": "https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176257",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-09-17T04:49:43Z",
+          "started_at": "2026-09-17T04:49:45Z",
+          "completed_at": "2026-09-17T04:52:14Z",
+          "name": "Backend (Node 22.19.0)",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-09-17T04:49:46Z",
+              "completed_at": "2026-09-17T04:49:46Z"
+            },
+            {
+              "name": "Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-09-17T04:49:46Z",
+              "completed_at": "2026-09-17T04:49:49Z"
+            },
+            {
+              "name": "Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-09-17T04:49:49Z",
+              "completed_at": "2026-09-17T04:49:57Z"
+            },
+            {
+              "name": "System and bridge test prerequisites",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-09-17T04:49:57Z",
+              "completed_at": "2026-09-17T04:50:09Z"
+            },
+            {
+              "name": "Run npm ci",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-09-17T04:50:09Z",
+              "completed_at": "2026-09-17T04:50:24Z"
+            },
+            {
+              "name": "Run npm run check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-09-17T04:50:24Z",
+              "completed_at": "2026-09-17T04:50:31Z"
+            },
+            {
+              "name": "Backend, bridge and lifecycle tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7,
+              "started_at": "2026-09-17T04:50:31Z",
+              "completed_at": "2026-09-17T04:52:10Z"
+            },
+            {
+              "name": "Backend failure details",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 8,
+              "started_at": "2026-09-17T04:52:10Z",
+              "completed_at": "2026-09-17T04:52:10Z"
+            },
+            {
+              "name": "Post Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 15,
+              "started_at": "2026-09-17T04:52:10Z",
+              "completed_at": "2026-09-17T04:52:10Z"
+            },
+            {
+              "name": "Post Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 16,
+              "started_at": "2026-09-17T04:52:10Z",
+              "completed_at": "2026-09-17T04:52:11Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 17,
+              "started_at": "2026-09-17T04:52:11Z",
+              "completed_at": "2026-09-17T04:52:11Z"
+            }
+          ],
+          "check_run_url": "https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176257",
+          "labels": [
+            "ubuntu-24.04"
+          ],
+          "runner_id": 1000000794,
+          "runner_name": "GitHub Actions 1000000794",
+          "runner_group_id": 0,
+          "runner_group_name": "GitHub Actions"
+        },
+        {
+          "id": 105080176259,
+          "run_id": 35183385236,
+          "workflow_name": "Tests",
+          "head_branch": "main",
+          "run_url": "https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236",
+          "run_attempt": 1,
+          "node_id": "CR_kwDORRXCAs8AAAAYd0Q-gw",
+          "head_sha": "29f963913a0a3876a38bfb03f5009fcd4a6238a0",
+          "url": "https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176259",
+          "html_url": "https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176259",
+          "status": "completed",
+          "conclusion": "success",
+          "created_at": "2026-09-17T04:49:43Z",
+          "started_at": "2026-09-17T04:49:45Z",
+          "completed_at": "2026-09-17T04:52:38Z",
+          "name": "Backend (Node 22.x)",
+          "steps": [
+            {
+              "name": "Set up job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 1,
+              "started_at": "2026-09-17T04:49:46Z",
+              "completed_at": "2026-09-17T04:49:47Z"
+            },
+            {
+              "name": "Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 2,
+              "started_at": "2026-09-17T04:49:47Z",
+              "completed_at": "2026-09-17T04:49:49Z"
+            },
+            {
+              "name": "Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 3,
+              "started_at": "2026-09-17T04:49:49Z",
+              "completed_at": "2026-09-17T04:49:54Z"
+            },
+            {
+              "name": "System and bridge test prerequisites",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 4,
+              "started_at": "2026-09-17T04:49:54Z",
+              "completed_at": "2026-09-17T04:50:08Z"
+            },
+            {
+              "name": "Run npm ci",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 5,
+              "started_at": "2026-09-17T04:50:08Z",
+              "completed_at": "2026-09-17T04:50:30Z"
+            },
+            {
+              "name": "Run npm run check",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 6,
+              "started_at": "2026-09-17T04:50:30Z",
+              "completed_at": "2026-09-17T04:50:41Z"
+            },
+            {
+              "name": "Backend, bridge and lifecycle tests",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 7,
+              "started_at": "2026-09-17T04:50:41Z",
+              "completed_at": "2026-09-17T04:52:35Z"
+            },
+            {
+              "name": "Backend failure details",
+              "status": "completed",
+              "conclusion": "skipped",
+              "number": 8,
+              "started_at": "2026-09-17T04:52:35Z",
+              "completed_at": "2026-09-17T04:52:35Z"
+            },
+            {
+              "name": "Post Run actions/setup-node@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 15,
+              "started_at": "2026-09-17T04:52:35Z",
+              "completed_at": "2026-09-17T04:52:35Z"
+            },
+            {
+              "name": "Post Run actions/checkout@v7",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 16,
+              "started_at": "2026-09-17T04:52:35Z",
+              "completed_at": "2026-09-17T04:52:35Z"
+            },
+            {
+              "name": "Complete job",
+              "status": "completed",
+              "conclusion": "success",
+              "number": 17,
+              "started_at": "2026-09-17T04:52:35Z",
+              "completed_at": "2026-09-17T04:52:35Z"
+            }
+          ],
+          "check_run_url": "https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176259",
+          "labels": [
+            "ubuntu-24.04"
+          ],
+          "runner_id": 1000000795,
+          "runner_name": "GitHub Actions 1000000795",
+          "runner_group_id": 0,
+          "runner_group_name": "GitHub Actions"
+        }
+      ],
+      "requiredSteps": [
+        {
+          "job": "Browser (Node 24)",
+          "name": "Run npm run test:browser 2>&1 | tee \"$RUNNER_TEMP/browser.log\"",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Browser (Node 24)",
+          "name": "Run npm run test:ui:scenarios 2>&1 | tee -a \"$RUNNER_TEMP/browser.log\"",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Browser (Node 24)",
+          "name": "Run npm run test:ui 2>&1 | tee -a \"$RUNNER_TEMP/browser.log\"",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Backend (Node 26.x)",
+          "name": "Run npm run check",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Backend (Node 26.x)",
+          "name": "Backend, bridge and lifecycle tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Backend (Node 24.x)",
+          "name": "Run npm run check",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Backend (Node 24.x)",
+          "name": "Backend, bridge and lifecycle tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Backend (Node 22.19.0)",
+          "name": "Run npm run check",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Backend (Node 22.19.0)",
+          "name": "Backend, bridge and lifecycle tests",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Backend (Node 22.x)",
+          "name": "Run npm run check",
+          "status": "completed",
+          "conclusion": "success"
+        },
+        {
+          "job": "Backend (Node 22.x)",
+          "name": "Backend, bridge and lifecycle tests",
+          "status": "completed",
+          "conclusion": "success"
+        }
+      ],
+      "rawResponses": [
+        {
+          "url": "https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236",
+          "bytes": 11876,
+          "sha256": "40e6b6a4d5805ac153b42983026135d7fdad93e798d8fa79d4723b3eae342050",
+          "raw": "{\"id\":35183385236,\"name\":\"Tests\",\"node_id\":\"WFR_kwLORRXCAs8AAAAIMRfalA\",\"head_branch\":\"main\",\"head_sha\":\"29f963913a0a3876a38bfb03f5009fcd4a6238a0\",\"path\":\".github/workflows/tests.yml\",\"display_title\":\"refactor: preserve ordered selection retirement with narrow ports\",\"run_number\":129,\"event\":\"push\",\"status\":\"completed\",\"conclusion\":\"success\",\"workflow_id\":354279582,\"check_suite_id\":95282651574,\"check_suite_node_id\":\"CS_kwDORRXCAs8AAAAWL0nhtg\",\"url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236\",\"html_url\":\"https://github.com/MrPink604/pi-dish/actions/runs/35183385236\",\"pull_requests\":[],\"created_at\":\"2026-09-17T04:49:42Z\",\"updated_at\":\"2026-09-17T05:04:42Z\",\"actor\":{\"login\":\"MrPink604\",\"id\":2043411,\"node_id\":\"MDQ6VXNlcjIwNDM0MTE=\",\"avatar_url\":\"https://avatars.githubusercontent.com/u/2043411?v=4\",\"gravatar_id\":\"\",\"url\":\"https://api.github.com/users/MrPink604\",\"html_url\":\"https://github.com/MrPink604\",\"followers_url\":\"https://api.github.com/users/MrPink604/followers\",\"following_url\":\"https://api.github.com/users/MrPink604/following{/other_user}\",\"gists_url\":\"https://api.github.com/users/MrPink604/gists{/gist_id}\",\"starred_url\":\"https://api.github.com/users/MrPink604/starred{/owner}{/repo}\",\"subscriptions_url\":\"https://api.github.com/users/MrPink604/subscriptions\",\"organizations_url\":\"https://api.github.com/users/MrPink604/orgs\",\"repos_url\":\"https://api.github.com/users/MrPink604/repos\",\"events_url\":\"https://api.github.com/users/MrPink604/events{/privacy}\",\"received_events_url\":\"https://api.github.com/users/MrPink604/received_events\",\"type\":\"User\",\"user_view_type\":\"public\",\"site_admin\":false},\"run_attempt\":1,\"referenced_workflows\":[],\"run_started_at\":\"2026-09-17T04:49:42Z\",\"triggering_actor\":{\"login\":\"MrPink604\",\"id\":2043411,\"node_id\":\"MDQ6VXNlcjIwNDM0MTE=\",\"avatar_url\":\"https://avatars.githubusercontent.com/u/2043411?v=4\",\"gravatar_id\":\"\",\"url\":\"https://api.github.com/users/MrPink604\",\"html_url\":\"https://github.com/MrPink604\",\"followers_url\":\"https://api.github.com/users/MrPink604/followers\",\"following_url\":\"https://api.github.com/users/MrPink604/following{/other_user}\",\"gists_url\":\"https://api.github.com/users/MrPink604/gists{/gist_id}\",\"starred_url\":\"https://api.github.com/users/MrPink604/starred{/owner}{/repo}\",\"subscriptions_url\":\"https://api.github.com/users/MrPink604/subscriptions\",\"organizations_url\":\"https://api.github.com/users/MrPink604/orgs\",\"repos_url\":\"https://api.github.com/users/MrPink604/repos\",\"events_url\":\"https://api.github.com/users/MrPink604/events{/privacy}\",\"received_events_url\":\"https://api.github.com/users/MrPink604/received_events\",\"type\":\"User\",\"user_view_type\":\"public\",\"site_admin\":false},\"jobs_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236/jobs\",\"logs_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236/logs\",\"check_suite_url\":\"https://api.github.com/repos/MrPink604/pi-dish/check-suites/95282651574\",\"artifacts_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236/artifacts\",\"cancel_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236/cancel\",\"rerun_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236/rerun\",\"previous_attempt_url\":null,\"workflow_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/workflows/354279582\",\"head_commit\":{\"id\":\"29f963913a0a3876a38bfb03f5009fcd4a6238a0\",\"tree_id\":\"2e7ec75efc8975a6ac2dd4228b7db9a4bd5f7b44\",\"message\":\"refactor: preserve ordered selection retirement with narrow ports\",\"timestamp\":\"2026-09-17T04:49:39Z\",\"author\":{\"name\":\"MrPink604\",\"email\":\"mr_pink@fastmail.com\"},\"committer\":{\"name\":\"MrPink604\",\"email\":\"mr_pink@fastmail.com\"}},\"repository\":{\"id\":1159053826,\"node_id\":\"R_kgDORRXCAg\",\"name\":\"pi-dish\",\"full_name\":\"MrPink604/pi-dish\",\"private\":false,\"owner\":{\"login\":\"MrPink604\",\"id\":2043411,\"node_id\":\"MDQ6VXNlcjIwNDM0MTE=\",\"avatar_url\":\"https://avatars.githubusercontent.com/u/2043411?v=4\",\"gravatar_id\":\"\",\"url\":\"https://api.github.com/users/MrPink604\",\"html_url\":\"https://github.com/MrPink604\",\"followers_url\":\"https://api.github.com/users/MrPink604/followers\",\"following_url\":\"https://api.github.com/users/MrPink604/following{/other_user}\",\"gists_url\":\"https://api.github.com/users/MrPink604/gists{/gist_id}\",\"starred_url\":\"https://api.github.com/users/MrPink604/starred{/owner}{/repo}\",\"subscriptions_url\":\"https://api.github.com/users/MrPink604/subscriptions\",\"organizations_url\":\"https://api.github.com/users/MrPink604/orgs\",\"repos_url\":\"https://api.github.com/users/MrPink604/repos\",\"events_url\":\"https://api.github.com/users/MrPink604/events{/privacy}\",\"received_events_url\":\"https://api.github.com/users/MrPink604/received_events\",\"type\":\"User\",\"user_view_type\":\"public\",\"site_admin\":false},\"html_url\":\"https://github.com/MrPink604/pi-dish\",\"description\":null,\"fork\":false,\"url\":\"https://api.github.com/repos/MrPink604/pi-dish\",\"forks_url\":\"https://api.github.com/repos/MrPink604/pi-dish/forks\",\"keys_url\":\"https://api.github.com/repos/MrPink604/pi-dish/keys{/key_id}\",\"collaborators_url\":\"https://api.github.com/repos/MrPink604/pi-dish/collaborators{/collaborator}\",\"teams_url\":\"https://api.github.com/repos/MrPink604/pi-dish/teams\",\"hooks_url\":\"https://api.github.com/repos/MrPink604/pi-dish/hooks\",\"issue_events_url\":\"https://api.github.com/repos/MrPink604/pi-dish/issues/events{/number}\",\"events_url\":\"https://api.github.com/repos/MrPink604/pi-dish/events\",\"assignees_url\":\"https://api.github.com/repos/MrPink604/pi-dish/assignees{/user}\",\"branches_url\":\"https://api.github.com/repos/MrPink604/pi-dish/branches{/branch}\",\"tags_url\":\"https://api.github.com/repos/MrPink604/pi-dish/tags\",\"blobs_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/blobs{/sha}\",\"git_tags_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/tags{/sha}\",\"git_refs_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/refs{/sha}\",\"trees_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/trees{/sha}\",\"statuses_url\":\"https://api.github.com/repos/MrPink604/pi-dish/statuses/{sha}\",\"languages_url\":\"https://api.github.com/repos/MrPink604/pi-dish/languages\",\"stargazers_url\":\"https://api.github.com/repos/MrPink604/pi-dish/stargazers\",\"contributors_url\":\"https://api.github.com/repos/MrPink604/pi-dish/contributors\",\"subscribers_url\":\"https://api.github.com/repos/MrPink604/pi-dish/subscribers\",\"subscription_url\":\"https://api.github.com/repos/MrPink604/pi-dish/subscription\",\"commits_url\":\"https://api.github.com/repos/MrPink604/pi-dish/commits{/sha}\",\"git_commits_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/commits{/sha}\",\"comments_url\":\"https://api.github.com/repos/MrPink604/pi-dish/comments{/number}\",\"issue_comment_url\":\"https://api.github.com/repos/MrPink604/pi-dish/issues/comments{/number}\",\"contents_url\":\"https://api.github.com/repos/MrPink604/pi-dish/contents/{+path}\",\"compare_url\":\"https://api.github.com/repos/MrPink604/pi-dish/compare/{base}...{head}\",\"merges_url\":\"https://api.github.com/repos/MrPink604/pi-dish/merges\",\"archive_url\":\"https://api.github.com/repos/MrPink604/pi-dish/{archive_format}{/ref}\",\"downloads_url\":\"https://api.github.com/repos/MrPink604/pi-dish/downloads\",\"issues_url\":\"https://api.github.com/repos/MrPink604/pi-dish/issues{/number}\",\"pulls_url\":\"https://api.github.com/repos/MrPink604/pi-dish/pulls{/number}\",\"milestones_url\":\"https://api.github.com/repos/MrPink604/pi-dish/milestones{/number}\",\"notifications_url\":\"https://api.github.com/repos/MrPink604/pi-dish/notifications{?since,all,participating}\",\"labels_url\":\"https://api.github.com/repos/MrPink604/pi-dish/labels{/name}\",\"releases_url\":\"https://api.github.com/repos/MrPink604/pi-dish/releases{/id}\",\"deployments_url\":\"https://api.github.com/repos/MrPink604/pi-dish/deployments\"},\"head_repository\":{\"id\":1159053826,\"node_id\":\"R_kgDORRXCAg\",\"name\":\"pi-dish\",\"full_name\":\"MrPink604/pi-dish\",\"private\":false,\"owner\":{\"login\":\"MrPink604\",\"id\":2043411,\"node_id\":\"MDQ6VXNlcjIwNDM0MTE=\",\"avatar_url\":\"https://avatars.githubusercontent.com/u/2043411?v=4\",\"gravatar_id\":\"\",\"url\":\"https://api.github.com/users/MrPink604\",\"html_url\":\"https://github.com/MrPink604\",\"followers_url\":\"https://api.github.com/users/MrPink604/followers\",\"following_url\":\"https://api.github.com/users/MrPink604/following{/other_user}\",\"gists_url\":\"https://api.github.com/users/MrPink604/gists{/gist_id}\",\"starred_url\":\"https://api.github.com/users/MrPink604/starred{/owner}{/repo}\",\"subscriptions_url\":\"https://api.github.com/users/MrPink604/subscriptions\",\"organizations_url\":\"https://api.github.com/users/MrPink604/orgs\",\"repos_url\":\"https://api.github.com/users/MrPink604/repos\",\"events_url\":\"https://api.github.com/users/MrPink604/events{/privacy}\",\"received_events_url\":\"https://api.github.com/users/MrPink604/received_events\",\"type\":\"User\",\"user_view_type\":\"public\",\"site_admin\":false},\"html_url\":\"https://github.com/MrPink604/pi-dish\",\"description\":null,\"fork\":false,\"url\":\"https://api.github.com/repos/MrPink604/pi-dish\",\"forks_url\":\"https://api.github.com/repos/MrPink604/pi-dish/forks\",\"keys_url\":\"https://api.github.com/repos/MrPink604/pi-dish/keys{/key_id}\",\"collaborators_url\":\"https://api.github.com/repos/MrPink604/pi-dish/collaborators{/collaborator}\",\"teams_url\":\"https://api.github.com/repos/MrPink604/pi-dish/teams\",\"hooks_url\":\"https://api.github.com/repos/MrPink604/pi-dish/hooks\",\"issue_events_url\":\"https://api.github.com/repos/MrPink604/pi-dish/issues/events{/number}\",\"events_url\":\"https://api.github.com/repos/MrPink604/pi-dish/events\",\"assignees_url\":\"https://api.github.com/repos/MrPink604/pi-dish/assignees{/user}\",\"branches_url\":\"https://api.github.com/repos/MrPink604/pi-dish/branches{/branch}\",\"tags_url\":\"https://api.github.com/repos/MrPink604/pi-dish/tags\",\"blobs_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/blobs{/sha}\",\"git_tags_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/tags{/sha}\",\"git_refs_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/refs{/sha}\",\"trees_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/trees{/sha}\",\"statuses_url\":\"https://api.github.com/repos/MrPink604/pi-dish/statuses/{sha}\",\"languages_url\":\"https://api.github.com/repos/MrPink604/pi-dish/languages\",\"stargazers_url\":\"https://api.github.com/repos/MrPink604/pi-dish/stargazers\",\"contributors_url\":\"https://api.github.com/repos/MrPink604/pi-dish/contributors\",\"subscribers_url\":\"https://api.github.com/repos/MrPink604/pi-dish/subscribers\",\"subscription_url\":\"https://api.github.com/repos/MrPink604/pi-dish/subscription\",\"commits_url\":\"https://api.github.com/repos/MrPink604/pi-dish/commits{/sha}\",\"git_commits_url\":\"https://api.github.com/repos/MrPink604/pi-dish/git/commits{/sha}\",\"comments_url\":\"https://api.github.com/repos/MrPink604/pi-dish/comments{/number}\",\"issue_comment_url\":\"https://api.github.com/repos/MrPink604/pi-dish/issues/comments{/number}\",\"contents_url\":\"https://api.github.com/repos/MrPink604/pi-dish/contents/{+path}\",\"compare_url\":\"https://api.github.com/repos/MrPink604/pi-dish/compare/{base}...{head}\",\"merges_url\":\"https://api.github.com/repos/MrPink604/pi-dish/merges\",\"archive_url\":\"https://api.github.com/repos/MrPink604/pi-dish/{archive_format}{/ref}\",\"downloads_url\":\"https://api.github.com/repos/MrPink604/pi-dish/downloads\",\"issues_url\":\"https://api.github.com/repos/MrPink604/pi-dish/issues{/number}\",\"pulls_url\":\"https://api.github.com/repos/MrPink604/pi-dish/pulls{/number}\",\"milestones_url\":\"https://api.github.com/repos/MrPink604/pi-dish/milestones{/number}\",\"notifications_url\":\"https://api.github.com/repos/MrPink604/pi-dish/notifications{?since,all,participating}\",\"labels_url\":\"https://api.github.com/repos/MrPink604/pi-dish/labels{/name}\",\"releases_url\":\"https://api.github.com/repos/MrPink604/pi-dish/releases{/id}\",\"deployments_url\":\"https://api.github.com/repos/MrPink604/pi-dish/deployments\"}}"
+        },
+        {
+          "url": "https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236/jobs",
+          "bytes": 14073,
+          "sha256": "05b2e9271c221a08199bfb0c27aad0d4e6e61ca4719b1f68f56b01993225d245",
+          "raw": "{\"total_count\":5,\"jobs\":[{\"id\":105080176073,\"run_id\":35183385236,\"workflow_name\":\"Tests\",\"head_branch\":\"main\",\"run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236\",\"run_attempt\":1,\"node_id\":\"CR_kwDORRXCAs8AAAAYd0Q9yQ\",\"head_sha\":\"29f963913a0a3876a38bfb03f5009fcd4a6238a0\",\"url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176073\",\"html_url\":\"https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176073\",\"status\":\"completed\",\"conclusion\":\"success\",\"created_at\":\"2026-09-17T04:49:43Z\",\"started_at\":\"2026-09-17T04:49:45Z\",\"completed_at\":\"2026-09-17T05:04:41Z\",\"name\":\"Browser (Node 24)\",\"steps\":[{\"name\":\"Set up job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":1,\"started_at\":\"2026-09-17T04:49:46Z\",\"completed_at\":\"2026-09-17T04:49:46Z\"},{\"name\":\"Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":2,\"started_at\":\"2026-09-17T04:49:46Z\",\"completed_at\":\"2026-09-17T04:49:48Z\"},{\"name\":\"Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":3,\"started_at\":\"2026-09-17T04:49:48Z\",\"completed_at\":\"2026-09-17T04:49:51Z\"},{\"name\":\"System prerequisites\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":4,\"started_at\":\"2026-09-17T04:49:51Z\",\"completed_at\":\"2026-09-17T04:50:01Z\"},{\"name\":\"Run npm ci\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":5,\"started_at\":\"2026-09-17T04:50:01Z\",\"completed_at\":\"2026-09-17T04:50:24Z\"},{\"name\":\"Run npx playwright install --with-deps chromium\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":6,\"started_at\":\"2026-09-17T04:50:24Z\",\"completed_at\":\"2026-09-17T04:50:39Z\"},{\"name\":\"Run npm run test:browser 2>&1 | tee \\\"$RUNNER_TEMP/browser.log\\\"\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":7,\"started_at\":\"2026-09-17T04:50:39Z\",\"completed_at\":\"2026-09-17T05:02:25Z\"},{\"name\":\"Run npm run test:ui:scenarios 2>&1 | tee -a \\\"$RUNNER_TEMP/browser.log\\\"\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":8,\"started_at\":\"2026-09-17T05:02:25Z\",\"completed_at\":\"2026-09-17T05:03:30Z\"},{\"name\":\"Run npm run test:ui 2>&1 | tee -a \\\"$RUNNER_TEMP/browser.log\\\"\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":9,\"started_at\":\"2026-09-17T05:03:30Z\",\"completed_at\":\"2026-09-17T05:04:39Z\"},{\"name\":\"Browser failure details\",\"status\":\"completed\",\"conclusion\":\"skipped\",\"number\":10,\"started_at\":\"2026-09-17T05:04:39Z\",\"completed_at\":\"2026-09-17T05:04:39Z\"},{\"name\":\"Browser failure evidence\",\"status\":\"completed\",\"conclusion\":\"skipped\",\"number\":11,\"started_at\":\"2026-09-17T05:04:39Z\",\"completed_at\":\"2026-09-17T05:04:39Z\"},{\"name\":\"Post Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":21,\"started_at\":\"2026-09-17T05:04:39Z\",\"completed_at\":\"2026-09-17T05:04:40Z\"},{\"name\":\"Post Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":22,\"started_at\":\"2026-09-17T05:04:40Z\",\"completed_at\":\"2026-09-17T05:04:40Z\"},{\"name\":\"Complete job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":23,\"started_at\":\"2026-09-17T05:04:40Z\",\"completed_at\":\"2026-09-17T05:04:40Z\"}],\"check_run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176073\",\"labels\":[\"ubuntu-24.04\"],\"runner_id\":1000000791,\"runner_name\":\"GitHub Actions 1000000791\",\"runner_group_id\":0,\"runner_group_name\":\"GitHub Actions\"},{\"id\":105080176176,\"run_id\":35183385236,\"workflow_name\":\"Tests\",\"head_branch\":\"main\",\"run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236\",\"run_attempt\":1,\"node_id\":\"CR_kwDORRXCAs8AAAAYd0Q-MA\",\"head_sha\":\"29f963913a0a3876a38bfb03f5009fcd4a6238a0\",\"url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176176\",\"html_url\":\"https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176176\",\"status\":\"completed\",\"conclusion\":\"success\",\"created_at\":\"2026-09-17T04:49:43Z\",\"started_at\":\"2026-09-17T04:49:45Z\",\"completed_at\":\"2026-09-17T04:52:20Z\",\"name\":\"Backend (Node 26.x)\",\"steps\":[{\"name\":\"Set up job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":1,\"started_at\":\"2026-09-17T04:49:45Z\",\"completed_at\":\"2026-09-17T04:49:46Z\"},{\"name\":\"Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":2,\"started_at\":\"2026-09-17T04:49:46Z\",\"completed_at\":\"2026-09-17T04:49:47Z\"},{\"name\":\"Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":3,\"started_at\":\"2026-09-17T04:49:47Z\",\"completed_at\":\"2026-09-17T04:49:54Z\"},{\"name\":\"System and bridge test prerequisites\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":4,\"started_at\":\"2026-09-17T04:49:54Z\",\"completed_at\":\"2026-09-17T04:50:08Z\"},{\"name\":\"Run npm ci\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":5,\"started_at\":\"2026-09-17T04:50:08Z\",\"completed_at\":\"2026-09-17T04:50:27Z\"},{\"name\":\"Run npm run check\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":6,\"started_at\":\"2026-09-17T04:50:27Z\",\"completed_at\":\"2026-09-17T04:50:36Z\"},{\"name\":\"Backend, bridge and lifecycle tests\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":7,\"started_at\":\"2026-09-17T04:50:36Z\",\"completed_at\":\"2026-09-17T04:52:18Z\"},{\"name\":\"Backend failure details\",\"status\":\"completed\",\"conclusion\":\"skipped\",\"number\":8,\"started_at\":\"2026-09-17T04:52:18Z\",\"completed_at\":\"2026-09-17T04:52:18Z\"},{\"name\":\"Post Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":15,\"started_at\":\"2026-09-17T04:52:18Z\",\"completed_at\":\"2026-09-17T04:52:18Z\"},{\"name\":\"Post Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":16,\"started_at\":\"2026-09-17T04:52:18Z\",\"completed_at\":\"2026-09-17T04:52:18Z\"},{\"name\":\"Complete job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":17,\"started_at\":\"2026-09-17T04:52:18Z\",\"completed_at\":\"2026-09-17T04:52:18Z\"}],\"check_run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176176\",\"labels\":[\"ubuntu-24.04\"],\"runner_id\":1000000792,\"runner_name\":\"GitHub Actions 1000000792\",\"runner_group_id\":0,\"runner_group_name\":\"GitHub Actions\"},{\"id\":105080176201,\"run_id\":35183385236,\"workflow_name\":\"Tests\",\"head_branch\":\"main\",\"run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236\",\"run_attempt\":1,\"node_id\":\"CR_kwDORRXCAs8AAAAYd0Q-SQ\",\"head_sha\":\"29f963913a0a3876a38bfb03f5009fcd4a6238a0\",\"url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176201\",\"html_url\":\"https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176201\",\"status\":\"completed\",\"conclusion\":\"success\",\"created_at\":\"2026-09-17T04:49:43Z\",\"started_at\":\"2026-09-17T04:49:45Z\",\"completed_at\":\"2026-09-17T04:52:46Z\",\"name\":\"Backend (Node 24.x)\",\"steps\":[{\"name\":\"Set up job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":1,\"started_at\":\"2026-09-17T04:49:48Z\",\"completed_at\":\"2026-09-17T04:49:48Z\"},{\"name\":\"Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":2,\"started_at\":\"2026-09-17T04:49:48Z\",\"completed_at\":\"2026-09-17T04:49:51Z\"},{\"name\":\"Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":3,\"started_at\":\"2026-09-17T04:49:51Z\",\"completed_at\":\"2026-09-17T04:50:08Z\"},{\"name\":\"System and bridge test prerequisites\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":4,\"started_at\":\"2026-09-17T04:50:08Z\",\"completed_at\":\"2026-09-17T04:50:21Z\"},{\"name\":\"Run npm ci\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":5,\"started_at\":\"2026-09-17T04:50:21Z\",\"completed_at\":\"2026-09-17T04:50:46Z\"},{\"name\":\"Run npm run check\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":6,\"started_at\":\"2026-09-17T04:50:46Z\",\"completed_at\":\"2026-09-17T04:50:56Z\"},{\"name\":\"Backend, bridge and lifecycle tests\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":7,\"started_at\":\"2026-09-17T04:50:56Z\",\"completed_at\":\"2026-09-17T04:52:42Z\"},{\"name\":\"Backend failure details\",\"status\":\"completed\",\"conclusion\":\"skipped\",\"number\":8,\"started_at\":\"2026-09-17T04:52:42Z\",\"completed_at\":\"2026-09-17T04:52:42Z\"},{\"name\":\"Post Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":15,\"started_at\":\"2026-09-17T04:52:42Z\",\"completed_at\":\"2026-09-17T04:52:42Z\"},{\"name\":\"Post Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":16,\"started_at\":\"2026-09-17T04:52:42Z\",\"completed_at\":\"2026-09-17T04:52:42Z\"},{\"name\":\"Complete job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":17,\"started_at\":\"2026-09-17T04:52:42Z\",\"completed_at\":\"2026-09-17T04:52:42Z\"}],\"check_run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176201\",\"labels\":[\"ubuntu-24.04\"],\"runner_id\":1000000793,\"runner_name\":\"GitHub Actions 1000000793\",\"runner_group_id\":0,\"runner_group_name\":\"GitHub Actions\"},{\"id\":105080176257,\"run_id\":35183385236,\"workflow_name\":\"Tests\",\"head_branch\":\"main\",\"run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236\",\"run_attempt\":1,\"node_id\":\"CR_kwDORRXCAs8AAAAYd0Q-gQ\",\"head_sha\":\"29f963913a0a3876a38bfb03f5009fcd4a6238a0\",\"url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176257\",\"html_url\":\"https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176257\",\"status\":\"completed\",\"conclusion\":\"success\",\"created_at\":\"2026-09-17T04:49:43Z\",\"started_at\":\"2026-09-17T04:49:45Z\",\"completed_at\":\"2026-09-17T04:52:14Z\",\"name\":\"Backend (Node 22.19.0)\",\"steps\":[{\"name\":\"Set up job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":1,\"started_at\":\"2026-09-17T04:49:46Z\",\"completed_at\":\"2026-09-17T04:49:46Z\"},{\"name\":\"Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":2,\"started_at\":\"2026-09-17T04:49:46Z\",\"completed_at\":\"2026-09-17T04:49:49Z\"},{\"name\":\"Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":3,\"started_at\":\"2026-09-17T04:49:49Z\",\"completed_at\":\"2026-09-17T04:49:57Z\"},{\"name\":\"System and bridge test prerequisites\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":4,\"started_at\":\"2026-09-17T04:49:57Z\",\"completed_at\":\"2026-09-17T04:50:09Z\"},{\"name\":\"Run npm ci\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":5,\"started_at\":\"2026-09-17T04:50:09Z\",\"completed_at\":\"2026-09-17T04:50:24Z\"},{\"name\":\"Run npm run check\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":6,\"started_at\":\"2026-09-17T04:50:24Z\",\"completed_at\":\"2026-09-17T04:50:31Z\"},{\"name\":\"Backend, bridge and lifecycle tests\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":7,\"started_at\":\"2026-09-17T04:50:31Z\",\"completed_at\":\"2026-09-17T04:52:10Z\"},{\"name\":\"Backend failure details\",\"status\":\"completed\",\"conclusion\":\"skipped\",\"number\":8,\"started_at\":\"2026-09-17T04:52:10Z\",\"completed_at\":\"2026-09-17T04:52:10Z\"},{\"name\":\"Post Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":15,\"started_at\":\"2026-09-17T04:52:10Z\",\"completed_at\":\"2026-09-17T04:52:10Z\"},{\"name\":\"Post Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":16,\"started_at\":\"2026-09-17T04:52:10Z\",\"completed_at\":\"2026-09-17T04:52:11Z\"},{\"name\":\"Complete job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":17,\"started_at\":\"2026-09-17T04:52:11Z\",\"completed_at\":\"2026-09-17T04:52:11Z\"}],\"check_run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176257\",\"labels\":[\"ubuntu-24.04\"],\"runner_id\":1000000794,\"runner_name\":\"GitHub Actions 1000000794\",\"runner_group_id\":0,\"runner_group_name\":\"GitHub Actions\"},{\"id\":105080176259,\"run_id\":35183385236,\"workflow_name\":\"Tests\",\"head_branch\":\"main\",\"run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/runs/35183385236\",\"run_attempt\":1,\"node_id\":\"CR_kwDORRXCAs8AAAAYd0Q-gw\",\"head_sha\":\"29f963913a0a3876a38bfb03f5009fcd4a6238a0\",\"url\":\"https://api.github.com/repos/MrPink604/pi-dish/actions/jobs/105080176259\",\"html_url\":\"https://github.com/MrPink604/pi-dish/actions/runs/35183385236/job/105080176259\",\"status\":\"completed\",\"conclusion\":\"success\",\"created_at\":\"2026-09-17T04:49:43Z\",\"started_at\":\"2026-09-17T04:49:45Z\",\"completed_at\":\"2026-09-17T04:52:38Z\",\"name\":\"Backend (Node 22.x)\",\"steps\":[{\"name\":\"Set up job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":1,\"started_at\":\"2026-09-17T04:49:46Z\",\"completed_at\":\"2026-09-17T04:49:47Z\"},{\"name\":\"Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":2,\"started_at\":\"2026-09-17T04:49:47Z\",\"completed_at\":\"2026-09-17T04:49:49Z\"},{\"name\":\"Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":3,\"started_at\":\"2026-09-17T04:49:49Z\",\"completed_at\":\"2026-09-17T04:49:54Z\"},{\"name\":\"System and bridge test prerequisites\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":4,\"started_at\":\"2026-09-17T04:49:54Z\",\"completed_at\":\"2026-09-17T04:50:08Z\"},{\"name\":\"Run npm ci\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":5,\"started_at\":\"2026-09-17T04:50:08Z\",\"completed_at\":\"2026-09-17T04:50:30Z\"},{\"name\":\"Run npm run check\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":6,\"started_at\":\"2026-09-17T04:50:30Z\",\"completed_at\":\"2026-09-17T04:50:41Z\"},{\"name\":\"Backend, bridge and lifecycle tests\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":7,\"started_at\":\"2026-09-17T04:50:41Z\",\"completed_at\":\"2026-09-17T04:52:35Z\"},{\"name\":\"Backend failure details\",\"status\":\"completed\",\"conclusion\":\"skipped\",\"number\":8,\"started_at\":\"2026-09-17T04:52:35Z\",\"completed_at\":\"2026-09-17T04:52:35Z\"},{\"name\":\"Post Run actions/setup-node@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":15,\"started_at\":\"2026-09-17T04:52:35Z\",\"completed_at\":\"2026-09-17T04:52:35Z\"},{\"name\":\"Post Run actions/checkout@v7\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":16,\"started_at\":\"2026-09-17T04:52:35Z\",\"completed_at\":\"2026-09-17T04:52:35Z\"},{\"name\":\"Complete job\",\"status\":\"completed\",\"conclusion\":\"success\",\"number\":17,\"started_at\":\"2026-09-17T04:52:35Z\",\"completed_at\":\"2026-09-17T04:52:35Z\"}],\"check_run_url\":\"https://api.github.com/repos/MrPink604/pi-dish/check-runs/105080176259\",\"labels\":[\"ubuntu-24.04\"],\"runner_id\":1000000795,\"runner_name\":\"GitHub Actions 1000000795\",\"runner_group_id\":0,\"runner_group_name\":\"GitHub Actions\"}]}"
+        }
+      ]
     }
   },
   "remaining": "No R4/full C1/C2 completion implied. Independent accepted package source and integrated-main delivery evidence are separate gates."

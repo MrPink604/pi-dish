@@ -282,10 +282,12 @@ R4's final dependent consumer is released. See the [R1](docs/remaining-migration
 and [R11](docs/remaining-migration-plan.md#implementation-record--r11) records.
 R7 is accepted on `a441edab`: three complete same-source reviews, parent
 actual-read audits, integrated local/native proofs and all five exact-source CI
-jobs passed. R9's three whole-source reviews and parent receipt audits now pass;
-its integrated local gates and desktop/pending/mobile runtime proof pass, with
-exact pushed-main CI pending. R4's frozen source is under independent review;
-full C1/C2 remain unfinished.
+jobs passed. R9 is accepted on `29f9639`: three whole-source reviews, parent
+actual-read audits, integrated local gates and desktop/pending/mobile proof,
+and [all five exact-source CI jobs](https://github.com/MrPink604/pi-dish/actions/runs/35183385236)
+passed. R4 has audited GLM and DeepSeek ACCEPTs; its same-source Kimi review
+stopped at the provider's five-hour quota limit before a verdict. No retry,
+replacement or upgrade is authorized. Full C1/C2 remain unfinished.
 No review waiver or full C1/C2 completion is implied.
 
 1. **Product migration accepted (M0–M7).** Actual session-read/SDK/projection,
