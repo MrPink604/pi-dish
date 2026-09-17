@@ -48,6 +48,7 @@
     "test/skill-mining.test.ts",
     "test/skills-core.test.ts",
     "test/harness-pricing.test.ts",
-    "test/fixtures/fake-omp-models.ts"
+    "test/fixtures/fake-omp-models.ts",
+    "test/host-auth.test.ts"
   ]
 }

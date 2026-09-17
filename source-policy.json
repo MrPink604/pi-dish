@@ -49,6 +49,7 @@
     "test/skills-core.test.ts",
     "test/harness-pricing.test.ts",
     "test/fixtures/fake-omp-models.ts",
+    "test/host-auth.test.ts",
     "eslint.config.js",
     "playwright.config.ts",
     "server.js",

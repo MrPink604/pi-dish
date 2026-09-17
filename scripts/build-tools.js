@@ -46,7 +46,8 @@ for (const source of config.files) {
         && source !== 'test/edge-build.test.ts' && source !== 'test/source-policy.test.ts'
         && source !== 'test/install.test.ts'
         && source !== 'test/skill-mining.test.ts' && source !== 'test/skills-core.test.ts'
-        && source !== 'test/harness-pricing.test.ts' && source !== 'test/fixtures/fake-omp-models.ts')
+        && source !== 'test/harness-pricing.test.ts' && source !== 'test/fixtures/fake-omp-models.ts'
+        && source !== 'test/host-auth.test.ts')
         || /\.d\.(?:ts|mts)$/.test(source)) {
         throw new Error(`Unsupported tool source: ${source}`);
     }
