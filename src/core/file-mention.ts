@@ -24,6 +24,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { searchFiles } from './file-search';
 import { record } from './helper-values';
+import { matchCommandPaths } from './command-paths';
 
 export interface FileMentionContext {
   cwd?: string | null;
@@ -80,9 +81,6 @@ export interface FileViewerOptions {
 // process-style tools use `cwd`; the *_path variants cover other agents'
 // logs viewed through pi-dish).
 const PATH_ARG_KEYS = ['path', 'file_path', 'filePath', 'cwd'];
-
-// Absolute or ~-rooted tokens inside bash command strings.
-const COMMAND_PATH_RE = /(?:^|[\s'"`=(<>])((?:\/|~\/)[\w.@%+-]+(?:\/[\w.@%+-]+)*)/g;
 
 // Only the most recent tool-call paths are used as join bases (dir + '/' +
 // mention) — joining against a whole multi-thousand-call session would stat
@@ -146,7 +144,7 @@ export function extractSessionPaths(messages: readonly unknown[], cwd: string | 
         if (key !== 'cwd') paths.set(path.dirname(abs), idx);
       }
       if (typeof args.command === 'string') {
-        for (const m of args.command.matchAll(COMMAND_PATH_RE)) {
+        for (const m of matchCommandPaths(args.command)) {
           const abs = resolveArg(m[1]);
           if (abs) paths.set(abs, idx);
         }

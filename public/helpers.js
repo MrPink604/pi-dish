@@ -1027,6 +1027,7 @@ var PiDishHelpers = (() => {
     }
     let best = self;
     for (const alias of sessionRefAliases(self).slice().reverse()) {
+      if (peers.some((peer) => peer.startsWith(alias))) continue;
       const candidate = uniqueSessionPrefix(alias, peers, minLen);
       if (candidate && candidate.length < best.length) best = candidate;
     }

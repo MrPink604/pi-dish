@@ -4,6 +4,8 @@ import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
 import { spawnSync } from 'node:child_process';
+import { isBuiltin } from 'node:module';
+import esbuild = require('esbuild');
 
 const root = path.resolve(__dirname, '..');
 const check = process.argv.includes('--check');
@@ -32,6 +34,14 @@ for (const source of sources) {
     outputs.set(file, { source, executable: cli && suffix === '.js' });
   }
 }
+const clientSource = 'skills/lib/pi-dish-client.ts';
+// Imported for strict checking only; the client bundles its runtime subset.
+const portableSources = [
+  'helper-refs', 'helper-query', 'helper-values', 'helper-identity',
+  'helper-format', 'helper-types', 'session-api',
+].map(name => `src/core/${name}`);
+const compileOnly = sources.includes(clientSource)
+  ? portableSources.flatMap(source => [`${source}.js`, `${source}.d.ts`]) : [];
 const out = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-edges-'));
 try {
   const compiler = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc');
@@ -45,7 +55,7 @@ try {
     const emitted = fs.readdirSync(out, { recursive: true, withFileTypes: true })
       .filter(entry => entry.isFile())
       .map(entry => path.relative(out, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'));
-    const unexpected = emitted.filter(file => !outputs.has(file));
+    const unexpected = emitted.filter(file => !outputs.has(file) && !compileOnly.includes(file));
     const missing = [...outputs.keys()].filter(file => !emitted.includes(file));
     if (unexpected.length || missing.length) {
       throw new Error(`Edge output mapping mismatch; unexpected: ${unexpected.join(', ')}; missing: ${missing.join(', ')}`);
@@ -62,9 +72,27 @@ try {
       }
     }
     if (orphaned.length) throw new Error(`Remove obsolete edge output before building:\n${orphaned.join('\n')}`);
+    let clientBundle: string | undefined;
+    if (sources.includes(clientSource)) {
+      const result = esbuild.buildSync({
+        absWorkingDir: root, entryPoints: [clientSource], bundle: true,
+        platform: 'node', format: 'cjs', target: 'es2022',
+        write: false, metafile: true,
+      });
+      if (Object.keys(result.metafile.inputs).some(input => input !== clientSource
+        && !portableSources.some(source => input === `${source}.ts`))) {
+        throw new Error('Skill client runtime imports must stay in the portable helper closure');
+      }
+      if (result.outputFiles.length !== 1
+        || Object.values(result.metafile.outputs).some(output => output.imports.some(dependency => !isBuiltin(dependency.path)))) {
+        throw new Error('Skill client must be a standalone script with only Node builtin dependencies');
+      }
+      clientBundle = result.outputFiles[0].text;
+    }
     const prepared: { file: string; target: string; content: string; mode: number }[] = [];
     for (const [file, { source, executable }] of outputs) {
-      const raw = fs.readFileSync(path.join(out, file), 'utf8');
+      const raw = source === clientSource && file.endsWith('.js')
+        ? clientBundle! : fs.readFileSync(path.join(out, file), 'utf8');
       const shebang = raw.match(/^#![^\n]*\n/)?.[0] || '';
       if (executable && shebang !== '#!/usr/bin/env node\n') throw new Error(`CLI shebang missing or invalid: ${source}`);
       const content = shebang + `${banner}${source}; edit that source and run npm run build:edges.\n` + raw.slice(shebang.length);

@@ -57,6 +57,24 @@ for (const id of [AMBIGUOUS_A, AMBIGUOUS_B]) {
   ]);
 }
 
+const SHARED_UUID = '01a070d2-43fb-7360-aaba-a4ddf8d1deb0';
+const REFERENCE_FIXTURES = [
+  ['pi', 'route-hit', 'Pi alias owner'],
+  ['omp', 'route-hit', 'OMP alias collision'],
+  ['omp', `2026-09-05T09-07-03-291Z_${SHARED_UUID}`, 'Shared UUID morning'],
+  ['omp', `2026-09-06T09-07-03-291Z_${SHARED_UUID}`, 'Shared UUID next day'],
+  ['omp', '2026-09-07T09-07-03-291Z_01a07264-131e-74a7-979a-1e763bf12b97', 'Ordinary UUID'],
+];
+for (const [harness, id, name] of REFERENCE_FIXTURES) {
+  const dir = path.join(tmpHome, `.${harness}`, 'agent', 'sessions', 'references');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), [
+    { type: 'session', version: 3, id, cwd: '/home/user/skillproj', timestamp: '2026-09-07T09:07:03.291Z' },
+    { type: 'session_info', name },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: name }] } },
+  ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
+}
+
 const server = require('../server.js');
 
 let base;
@@ -86,7 +104,7 @@ async function settleIndex() {
   for (let i = 0; i < 100; i++) {
     const res = await fetch(`${base}/api/sessions`);
     const body = await res.json();
-    if (!body.indexing && (body.previous || []).length >= 3) return;
+    if (!body.indexing && (body.previous || []).length >= 3 + REFERENCE_FIXTURES.length) return;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error('fixture sessions never finished indexing');
@@ -161,6 +179,28 @@ test('an ambiguous prefix fails with the candidates listed', async () => {
       return true;
     },
   );
+});
+
+test('printed references preserve admitted Pi/OMP identity and avoid shared UUID ambiguity', async () => {
+  const listed = (await run(['list'])).stdout.split('\n').map(line => line.split('\t'));
+  const client = require('../skills/lib/pi-dish-client.js');
+  for (const [harness, native, name] of REFERENCE_FIXTURES) {
+    const id = harness === 'pi' ? native : '~sk1_' + Buffer.from(JSON.stringify([harness, native])).toString('base64url');
+    const row = listed.find(columns => columns[2] === name);
+    assert.ok(row, `missing discovered fixture ${name}`);
+    const printedRef = row[0];
+    assert.equal(JSON.parse((await run(['resolve', printedRef, '--json'])).stdout).id, id, name);
+    assert.equal((await client.resolveSessionClientSide(base, null, printedRef)).id, id, name);
+    const reply = await (await fetch(`${base}/api/sessions/resolve?id=${encodeURIComponent(id)}`)).json();
+    const roundTrip = await (await fetch(`${base}/api/sessions/resolve?id=${encodeURIComponent(reply.ref)}`)).json();
+    assert.equal(roundTrip.session.id, id, name);
+    if (name === 'Ordinary UUID') assert.equal(printedRef, '01a07264');
+  }
+  const ambiguous = await fetch(`${base}/api/sessions/resolve?id=${SHARED_UUID}`);
+  assert.equal(ambiguous.status, 409);
+  assert.deepEqual((await ambiguous.json()).matches.map(row => row.name).sort(), ['Shared UUID morning', 'Shared UUID next day']);
+  await assert.rejects(run(['resolve', SHARED_UUID]), error => error.code === 1 && /ambiguous/.test(error.stderr));
+  await assert.rejects(client.resolveSessionClientSide(base, null, SHARED_UUID), /ambiguous/);
 });
 
 test('a prefix shorter than the minimum is rejected', async () => {

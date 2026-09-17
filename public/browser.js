@@ -5826,6 +5826,7 @@ var PiDishBrowser = (() => {
     }
     let best = self;
     for (const alias of sessionRefAliases(self).slice().reverse()) {
+      if (peers.some((peer) => peer.startsWith(alias))) continue;
       const candidate = uniqueSessionPrefix(alias, peers, minLen);
       if (candidate && candidate.length < best.length) best = candidate;
     }
@@ -17362,27 +17363,43 @@ ${restored}`;
     function pendingComposerKey(spawnId) {
       return `spawn:${spawnId}`;
     }
-    function showPendingSessionView(spawnId) {
-      if (disposed) return;
-      const spawn = options2.spawn(spawnId);
-      if (!spawn) return;
-      const harnessLabel = spawn.harnessLabel || "Pi";
+    function beginSelectionRetirement() {
       sessionState.advanceSelection();
       options2.resetSearch();
       options2.transcript.retire();
       options2.drafts.stash();
+    }
+    function stashRetiringTranscript(keepBounce) {
       options2.cancelStreaming();
       options2.cancelRecording();
       options2.hideNote();
-      options2.closeViews(true, false);
+      options2.closeViews(keepBounce);
       options2.transcript.stash();
-      sessionState.setCurrentSession(null);
-      currentSessionSpawnId = spawnId;
+    }
+    function retireSessionResources() {
       options2.stream.stop();
       options2.stopFollowing();
       options2.closeTerminal();
       options2.clearExtension();
       options2.clearRelations();
+    }
+    function resetSelectionActivity(current) {
+      options2.queue(null);
+      options2.closeBtw();
+      options2.activity.setCompacting(!!current?.isActive && !!current.compacting);
+      options2.activity.setTurn(!!current?.isActive && !!current.turnInProgress);
+      options2.resetArtifacts();
+    }
+    function showPendingSessionView(spawnId) {
+      if (disposed) return;
+      const spawn = options2.spawn(spawnId);
+      if (!spawn) return;
+      const harnessLabel = spawn.harnessLabel || "Pi";
+      beginSelectionRetirement();
+      stashRetiringTranscript(false);
+      sessionState.setCurrentSession(null);
+      currentSessionSpawnId = spawnId;
+      retireSessionResources();
       options2.closeControls();
       options2.hideAutocomplete();
       options2.retireModels();
@@ -17392,11 +17409,7 @@ ${restored}`;
       document2.querySelector(".input-area").style.display = "";
       element("resumeBar").style.display = "none";
       document2.querySelector(".session-actions").style.display = "none";
-      options2.queue(null);
-      options2.closeBtw();
-      options2.activity.setCompacting(false);
-      options2.activity.setTurn(false);
-      options2.resetArtifacts();
+      resetSelectionActivity(null);
       const nameEl = element("sessionName");
       nameEl.textContent = "Starting session\u2026";
       nameEl.classList.remove("editable-name");
@@ -17439,17 +17452,10 @@ ${restored}`;
     }
     async function selectSession(id, { forceTranscriptReload = false, host = null, keepBounceView = false } = {}) {
       if (disposed || !sessionState.findSession(id, host)) return;
-      sessionState.advanceSelection();
-      options2.resetSearch();
-      options2.transcript.retire();
-      options2.drafts.stash();
+      beginSelectionRetirement();
       currentSessionSpawnId = null;
       options2.drafts.waiting(false);
-      options2.cancelStreaming();
-      options2.cancelRecording();
-      options2.hideNote();
-      options2.closeViews(false, keepBounceView);
-      options2.transcript.stash();
+      stashRetiringTranscript(keepBounceView);
       const current = sessionState.setCurrentSession(id, host);
       if (!current) return;
       const owner = sessionState.captureSelection();
@@ -17460,11 +17466,7 @@ ${restored}`;
       const mathAssetsReady = options2.math().catch(() => {
       });
       options2.reveal(id, current.host);
-      options2.stream.stop();
-      options2.stopFollowing();
-      options2.closeTerminal();
-      options2.clearExtension();
-      options2.clearRelations();
+      retireSessionResources();
       options2.storage.setItem("pi-dish-session", sessionRefKey(current));
       options2.seen(current);
       element("emptyState").style.display = "none";
@@ -17497,11 +17499,7 @@ ${restored}`;
         else options2.resume.reset();
       }
       if (sessionActions) sessionActions.style.display = current.isActive ? "" : "none";
-      options2.queue(null);
-      options2.closeBtw();
-      options2.activity.setCompacting(!!current.isActive && !!current.compacting);
-      options2.activity.setTurn(!!current.isActive && !!current.turnInProgress);
-      options2.resetArtifacts();
+      resetSelectionActivity(current);
       options2.artifacts(owner);
       options2.render();
       options2.header();

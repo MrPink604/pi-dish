@@ -1,0 +1,176 @@
+{
+  "milestone": "R9 ordered selection retirement and narrow consumed ports",
+  "status": "Complete source, generated outputs and required local proofs settled for frozen-source handoff. Corrected focused 78/78 and full browser 293/293 passed. Both failed fixture attempts and probe corrections retained. Review/provider capacity hold remains; no milestone acceptance claimed.",
+  "baseline": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
+  "branch": "migration/r9-retirement-ports",
+  "parent": "01a0a3fd-9825-70bd-b000-dc85c59a7421",
+  "owner": { "harness": "omp", "model": "openai-codex/gpt-6-astra", "thinking": "high", "provenance": "Verified by parent before substantive prompt; no delegated sessions authorized or created." },
+  "acceptedDependencies": {
+    "M0-M7": "Formally accepted; no reopening of historical findings or parser/native compatibility expansion.",
+    "R8": "Accepted source 9d733a0e082cb6b44f95a1d7e02baf9b72e8aa09, integrated baseline 272a338e0fe0292dfd5f45131890c1bcb273c3eb; parent reports exact main CI 35163287240 and actual desktop/mobile takeover-selection proofs. Read docs/r8-evidence.json and docs/r8-review.json relevant policy, ownership, runtime and historical findings.",
+    "R6-R10": "Already integrated replay ownership and endpoint-explicit mutations stay unchanged.",
+    "notDependencies": ["R1", "R4", "R11"]
+  },
+  "readPolicy": ["AGENTS.md (injected)", "CLAUDE.md browser source, main pane, spawn, selection ownership, streaming, composer and verification sections", "docs/remaining-migration-plan.md R9 entire package, deliberate limits, invariants and verification policy"],
+  "touchedInventory": [
+    { "path": "src/browser/session-view.ts", "ownership": "Sole ordered retirement sequence and explicit consumer-owned SessionView controller ports; distinct provisional and real activation remains here." },
+    { "path": "src/browser/message-stream.ts", "ownership": "Explicit consumer-owned MessageStream controller ports; no runtime event, connection, replay or decoding changes." },
+    { "path": "src/browser/app.ts", "ownership": "Only remove obsolete pending argument from closeViews composition; retain direct concrete producers and lazy getters, mainPane.beforeSelection and all other composition." },
+    { "path": "test/types/browser-session-view.ts", "ownership": "Reject real unrelated operations through selection's narrowed ports." },
+    { "path": "test/types/browser-message-stream.ts", "ownership": "Reject real unrelated operations through stream's narrowed ports." },
+    { "path": "test/browser/session-view.spec.js", "ownership": "Only uncertain observable selection retirement invariants: unknown target intact and provisional round-trip retained marks/draft/state." },
+    { "path": "public/app.js and public/browser.js", "ownership": "Both app and index factory bundles contain session-view runtime per scripts/build-browser.ts entries; regenerate only after explicit release, parent serializes integration." },
+    { "path": "docs/r9-evidence.json", "ownership": "Frozen package contracts, deletion/check ledger and actual later proof records." }
+  ],
+  "callerAndProducerInventory": {
+    "composition": ["src/browser/app.ts:createSessionView", "src/browser/app.ts:createMessageStream", "src/browser/index.ts:existing runtime factory exports", "test/browser/message-stream.spec.js:direct factory construction", "test/browser/fixtures.js:existing feature/port observation"],
+    "selectionCallers": ["app.ts initial saved selection, delegated refs, sidebar, resume, relations/subagents, search, skills, controls, session-info, stream, spawn, transcript-tree, routines, Bounce closures", "test/browser/fixtures.js", "test/browser/app-shell.spec.js", "test/browser/composer-autocomplete.spec.js", "test/browser/selection-ownership.spec.js", "test/browser/session-spawns.spec.js", "test/browser/session-navigation.spec.js", "test/browser/main-pane.spec.js", "test/browser/session-identity.spec.js", "test/browser/skills.spec.js", "test/browser/routines.spec.js", "test/browser/session-view.spec.js"],
+    "selectionPorts": {
+      "drafts": "composer-drafts.ts: stash(), clear(), waiting(boolean), restore(optional string|null)",
+      "activity": "session-activity.ts: setCompacting(boolean), setTurn(boolean); both capture current selection and can patch that selected row",
+      "transcript": "transcript.ts: retire(), stash(), reset(), deleteCached(string), load(optional SelectionOwner|null); stash reads OLD currentSession, load retains independent request generation/cache",
+      "stream": "message-stream.ts: stop(), start(optional SelectionOwner|null); independent connection generation and copied endpoint/ticket ownership",
+      "resume": "session-resume.ts: reset(), load(SessionEntry|null), dispose(); selection does not receive resume() action authority"
+    },
+    "streamPorts": {
+      "activity": "session-activity.ts: readonly turn, setCompacting(boolean), setTurn(boolean), endAbort(string)",
+      "renderer": "message-render.ts: user(RenderMessage,string), assistant(RenderMessage,string), upsertCustom(RenderMessage, optional streaming flag)",
+      "streaming": "streaming-render.ts: queue(RenderMessage), cancel()",
+      "tools": "live-tools.ts: append(unknown), update(unknown), finish(unknown), finishRunning(); append return unused",
+      "delivery": "prompt-delivery.ts: consume(string,unknown):boolean, render(unknown)",
+      "extensionUI": "extension-ui.ts / extension-dialogs.ts: handle(unknown,ExtensionSession), resolve(unknown,ExtensionSession), reconcile(unknown,ExtensionSession), end(ExtensionSession)"
+    },
+    "unchangedAuthorities": ["session-state.ts identity/advanceSelection/setCurrentSession/captureSelection", "main-pane.ts exclusion policy", "transcript-cache.ts bounded retained DOM", "model-catalog.ts retirement", "composer-autocomplete.ts command retirement", "terminal controller ticket/socket lifecycle", "composer-speech.ts recording ownership", "session-search.ts reset and transient mark removal", "session-spawns.ts endpoint-qualified provisional draft reconciliation"]
+  },
+  "frozenOrdering": {
+    "precondition": "Both entrypoints resolve their actual target before any retirement. Missing session/spawn or disposed view is a no-op.",
+    "decision": "Preserve exact baseline effect and exception order using four bounded shared phases, called in the same reviewed order by both paths; retain the different activation seams. No callback pipeline, universal cancellation generation or new state owner.",
+    "phaseBodies": {
+      "A_beginSelectionRetirement": ["sessionState.advanceSelection()", "options.resetSearch()", "options.transcript.retire()", "options.drafts.stash()"],
+      "B_stashRetiringTranscript": ["options.cancelStreaming()", "options.cancelRecording()", "options.hideNote()", "options.closeViews(keepBounce)", "options.transcript.stash()"],
+      "C_retireSessionResources": ["options.stream.stop()", "options.stopFollowing()", "options.closeTerminal()", "options.clearExtension()", "options.clearRelations()"],
+      "D_resetSelectionActivity": ["options.queue(null)", "options.closeBtw()", "options.activity.setCompacting(new active compaction or false)", "options.activity.setTurn(new active turn or false)", "options.resetArtifacts()"]
+    },
+    "baselinePhaseLocations": {
+      "A": "session-view.ts baseline pending 35-38; real 119-122",
+      "B": "baseline pending 39-42; real 128-134 (comments between calls, closeViews previously also passed unused pending boolean)",
+      "C": "baseline pending 46-52; real 147-155",
+      "D": "baseline pending 64-68; real 202-209"
+    },
+    "oldPendingExpandedOrder": ["validate spawn, derive harnessLabel", "advanceSelection", "resetSearch", "transcript.retire", "drafts.stash", "cancelStreaming", "cancelRecording", "hideNote", "closeViews(true,false)", "transcript.stash", "setCurrentSession(null)", "currentSessionSpawnId=spawnId", "stream.stop", "stopFollowing", "closeTerminal", "clearExtension", "clearRelations", "closeControls", "hideAutocomplete", "retireModels", "retireCommands", "hide emptyState; show sessionView/input-area; hide resumeBar/session-actions", "queue(null)", "closeBtw", "setCompacting(false)", "setTurn(false)", "resetArtifacts", "set name/model/context chrome", "thinking", "terminal buttons", "mic", "transcript.reset", "mood empty", "replace messages with pending markup", "drafts.restore(spawn key)", "drafts.waiting(true)", "status starting", "render", "focus prompt"],
+    "newPendingOrder": ["same validation/harnessLabel", "A", "B(false)", "setCurrentSession(null)", "currentSessionSpawnId=spawnId", "C", "closeControls", "hideAutocomplete", "retireModels", "retireCommands", "same visibility writes", "D(null)", "same name/model/context chrome", "thinking", "terminal buttons", "mic", "transcript.reset", "mood empty", "same pending markup", "drafts.restore(spawn key)", "drafts.waiting(true)", "status starting", "render", "focus prompt"],
+    "oldRealExpandedOrder": ["validate target", "advanceSelection", "resetSearch", "transcript.retire", "drafts.stash", "currentSessionSpawnId=null", "drafts.waiting(false)", "cancelStreaming", "cancelRecording", "hideNote", "closeViews(false,keepBounceView)", "transcript.stash", "setCurrentSession(id,host), return if missing", "captureSelection, return if missing", "copy/freeze endpoint and define owns", "optional deleteCached", "math().catch", "reveal", "stream.stop", "stopFollowing", "closeTerminal", "clearExtension", "clearRelations", "storage.setItem selected key", "seen", "hide emptyState/show sessionView; query input/resume/actions", "closeControls", "active: show input/hide resume, resume.reset, drafts.restore; inactive: drafts.clear, hide input, capability-based resume chrome, resume.load or reset", "sessionActions visibility", "queue(null)", "closeBtw", "setCompacting(active&&compacting)", "setTurn(active&&turn)", "resetArtifacts", "artifacts(owner)", "render", "header", "relations(owner)", "active only models then commands", "await math; ownership guard", "await transcript.load; ownership guard", "active stream.start else stream.stop"],
+    "newRealOrder": ["same validation", "A", "currentSessionSpawnId=null", "drafts.waiting(false)", "B(keepBounceView)", "same setCurrentSession and guard", "same captureSelection and guard", "same endpoint/owns", "same optional deleteCached", "math().catch", "reveal", "C", "storage.setItem selected key", "seen", "same visibility writes and queries", "closeControls", "same active/inactive composer/resume branch", "sessionActions visibility", "D(current)", "artifacts(owner)", "render", "header", "relations(owner)", "active only models then commands", "await math; ownership guard", "await transcript.load; ownership guard", "active stream.start else stream.stop"],
+    "actualBodyReasons": [
+      {
+        "boundary": "Composer restore/resume versus activity",
+        "bodies": ["composer-drafts.ts:20-28,38-42", "composer-images.ts:14-28", "app.ts:321,803-805", "session-resume.ts:16-28", "session-activity.ts:55-119"],
+        "facts": "Draft restore writes the textarea, renders attachment DOM/listeners, runs autosize (including scrollHeight layout read), advances its own generation and restores history. Clear discards owner attachments and clears input. Resume reset advances its sequence and changes picker DOM; load immediately resets, captures owner/endpoint and begins the model read before its first await. Activity setters capture selection, update tickers/tool state/buttons/status/queue and may patch the selected catalog row. These are observable operations, not commuting pure calls.",
+        "disposition": "Real composer/resume and sessionActions visibility remain BEFORE D; provisional visibility remains BEFORE D but spawn draft restore/waiting remain AFTER D and pending chrome. No callbacks cross these seams."
+      },
+      {
+        "boundary": "Math/reveal versus stream/terminal teardown",
+        "bodies": ["rich-text.ts:190-196", "browser-assets.ts:8-23", "sidebar-controls.ts:23-28,59-67", "message-stream.ts:stop", "terminal.ts:157-163", "extension-ui.ts:31-33", "extension-dialogs.ts:383", "session-relations.ts:99-109"],
+        "facts": "Math starts cached local CSS/script loads whose promise executor appends DOM immediately. Reveal traverses session families, expands ancestor keys and persists them. Stream stop advances its own generation, clears reconnect and closes EventSource; terminal close retires pending opens, aborts events, closes socket/disposes xterm and changes panel/status. Extension clear detaches dialogs; relation clear advances request sequence, aborts handlers and clears DOM.",
+        "disposition": "Real math().catch and reveal remain BEFORE C. Endpoint capture and force-cache deletion also remain before math. C remains before storage/seen/chrome. No added catch/finally allows retirement to proceed after an earlier callback throws; real select remains async and pending remains synchronous."
+      },
+      {
+        "boundary": "Pending spawn id and draft owner timing",
+        "bodies": ["composer-drafts.ts:20-28,38-42", "session-spawns.ts:66-127", "new-session.ts:237-252", "transcript.ts:45-48", "session-state.ts:120-123"],
+        "facts": "stash writes the dirty OLD draft, clears its debounce, advances its generation and clears its composer key. Transcript stash reads OLD currentSession and loaded key. Spawn readiness/failure and new-session ownsView read sessionView.spawnId; provisional draft ownership is installed only by restore(spawn key), not by the spawn id assignment.",
+        "disposition": "A stashes the old draft before either branch changes spawnId. Real clears spawnId and waiting(false) immediately after A, before B and old-session DOM stash. Pending leaves spawnId unchanged through B, then setCurrentSession(null) followed by spawnId assignment, then C. Provisional draft restore remains at its original late chrome position. No new ownership snapshot or copy."
+      },
+      {
+        "boundary": "Compaction/turn seeding and exceptions",
+        "bodies": ["session-activity.ts:77-119", "prompt-delivery.ts:39-59", "btw-panel.ts:15-18", "session-info.ts:458"],
+        "facts": "Compaction and turn setters capture current selection and may patch it. setTurn(false) clears tools/timing and clears queue/status only when compaction is false. setTurn(true) starts timing only on inactive-to-active. Queue render retires row listeners/generation; Btw closes its listeners/timer; artifact reset invalidates its reads/listeners and badge.",
+        "disposition": "D preserves queue then Btw then compaction then turn then artifacts. It seeds actual new values without an intermediate false reset; active-to-active timing remains unchanged. No D work runs if earlier composer/resume synchronous work throws. Existing callback receiver/getter access style is unchanged."
+      }
+    ],
+    "historicalNormalization": "Initial unvalidated source draft combined all phases before activation. Parent explicitly rejected no-await as a justification. Before any generation/test/commit this was replaced with the bounded phase extraction above; no normalized-order implementation is handed off or claimed proved.",
+    "deliberateDifferencesRetained": ["Only provisional activation explicitly hides autocomplete and retires model/command reads", "Real waiting/spawn-id clearing stays before DOM stash; provisional spawn identity stays after DOM stash", "Inactive/live-owned transcript resume capability policy unchanged", "keepBounce applies only to real selection; provisional closes Bounce", "Transcript and stream retain distinct generations/disposal"],
+    "proofStatus": "Exact ordering justified from actual bodies before editing. Required released runtime/suite proofs now recorded below; no permanent plumbing-order assertion test added."
+  },
+  "contractDecision": "Consumer owners define explicit named method interfaces in session-view.ts and message-stream.ts. Actual producers satisfy them structurally at existing app.ts composition, with no adapters, copied controller objects, ReturnType-derived ports or new shared type facade. Existing input sessionState contract remains owned by session-state; narrowing all app ports is out of scope.",
+  "readonlyLsp": "References requested before exported factory contract edits. Tool returned declaration-only createSessionView and omitted app/index references for createMessageStream. Grounded grep recovered actual callers. Incomplete result reported to xd://report_issue; no mutating LSP, SDK declaration or node_modules edits.",
+  "deletionLedger": {
+    "delete": ["Duplicated ordered selection retirement bodies", "Eleven factory ReturnType input dependencies in selection and stream", "Unused pending boolean in selection-to-mainPane callback"],
+    "retain": ["Separate provisional/real activation", "Consumer-specific generations/endpoint guards", "Actual producers and runtime factory exports", "All meaningful existing behavioral tests and compiler negatives"],
+    "noClaim": "No timing/allocation improvement claimed from line count; four bounded shared phases use direct calls without per-transition callback objects, universal context bag, cancellation owner or additional controller copies.",
+    "contributorPath": "Before: changing old-session transport retirement required editing both pending and real selection's independent stream/follow/terminal/extension/relation call lists. After: edit only retireSessionResources in authoritative session-view.ts; both entrypoints consume the same ordered phase at their preserved activation seams. Likewise advancement/stashing/activity each have one body. Adding authority to a consumed port now requires an explicit method contract instead of silently inheriting a concrete factory's newly added methods. No implementation moved to a facade or competing owner."
+  },
+  "requiredProofs": {
+    "heldByParent": "Skip ALL generation/builds/compiler/lint/test/formatter activity until explicit source-wave release; authored tests/fixtures are unexecuted proposals until then.",
+    "commandsAfterRelease": ["npm run build:browser", "npm run check", "npm test", "npm run test:browser", "npm run test:ui:scenarios", "npm run test:ui"],
+    "focusedCases": ["selection/spawn host identity and unknown targets", "composer draft/image ownership", "search marks cleared before retained DOM stash", "terminal retirement and late tickets", "transcript retained DOM/paging/late body ownership", "stream late ticket, endpoint/reconnect and replay behavior", "activity compaction/turn seeding"],
+    "runtime": "Actual isolated changed-path browser smoke against real app with sanitized test environment, temporary HOME/sockets/tmux; visual desktop/mobile confirmation. Existing fixture-only observation may supplement but not replace production smoke. No live sessions or provider credentials.",
+    "typeNegatives": "Use existing enrolled browser type fixtures to prove a consumer cannot resume a session, migrate drafts, render arbitrary transcript pages, dispose stream collaborators or initiate abort operations through narrowed ports.",
+    "review": "Explicit hold: no reviewer spawn/resume/request/provider probes until fresh parent grant. After complete proofs commit/push only assigned branch, then three exact GLM/DeepSeek/Kimi high OMP whole-source read-only decisions at one frozen SHA; separate docs/r9-review.json attestation only after all ACCEPT."
+  },
+  "opaqueBoundaries": ["External stream JSON remains unknown until existing decoder/owner consumes it", "Extension UI payloads remain unknown; no invented event DTO", "No changes to native receiver/coercion/getter/malformed/null/error policies", "No server/Electron, lifecycle, R6 replay or R10 mutation changes"],
+  "sourceWave": {
+    "authoredFiles": {
+      "src/browser/session-view.ts": "94fecd9d288ae8948fa7d4c7f0a4f7a89f97e06d5a3bfe4a45dd59ef35d0aad8",
+      "src/browser/message-stream.ts": "10d3a53efae6788f44cfc1ef9b70f4c6a1f46d43b2437f17a965f1bd0aa7742c",
+      "src/browser/app.ts": "7cf6d15263d70a888a0ada7059b4563c0ff890a2ec56ef73175901a8346d568a",
+      "test/types/browser-session-view.ts": "f0e597e3eb9e460b332f0e6a77982bb91aaa6421fa81c86b1bc108bd3a546fdf",
+      "test/types/browser-message-stream.ts": "d92ed3d62b3312b231bd8e7625c0f0bc8a7c8e823d28d7214bc32cdaadb0c7d2",
+      "test/browser/session-view.spec.js": "e0f909cc0e90c431cd39598645f9c255f1d426633b918eeefcff0e132e322af1"
+    },
+    "evidenceFile": "docs/r9-evidence.json",
+    "exactChanges": "Four bounded shared retirement phases remove duplicate bodies while preserving exact baseline callback/state-write order and distinct real/provisional activation seams. Eleven explicit named consumed interfaces remove factory-derived input authority. app.ts only drops obsolete pending callback argument. Eleven invalid collaborator operations added to existing compiler fixtures. Two observable browser regressions cover unknown targets preserving ownership/stream/draft/search DOM and provisional round-trip preserving cleaned retained nodes/separate drafts/old session activity.",
+    "notChanged": "No generated files, producer implementations, runtime factory exports, package/source policy/tsconfigs, server/Electron files, shared helper types or global acceptance docs changed.",
+    "validationHold": "No build, compiler, lint, test, formatter, browser runtime or generation executed during source wave. SHA256 fingerprinting only."
+  },
+  "validationRelease": "Parent explicitly released after all four source writers settled and reading full session-view, stream interfaces, regressions and actual-body ordering evidence. Bounded phases approved without a no-await commutation waiver. Reviewer/provider hold remains separate and unreleased.",
+  "validation": [
+    { "command": "npm run build:browser", "result": "PASS; regenerated both public/app.js and public/browser.js; other bundle contents unchanged." },
+    { "command": "npm run check", "result": "PASS before browser runs and again after fixture correction; 265 compiler-owned sources, no explicit-any exceptions; ESLint, strict programs, generated drift and mode gates passed." },
+    { "command": "npm test", "result": "PASS: 1041 tests, zero failed/cancelled/skipped. 32.36 seconds.", "output": "artifact://13 (full), artifact://12 (raw)" },
+    { "command": "npm run test:browser -- session-view.spec.js selection-ownership.spec.js session-spawns.spec.js composer-drafts.spec.js composer-ownership.spec.js composer-speech.spec.js session-navigation.spec.js transcript.spec.js terminal-ownership.spec.js message-stream.spec.js session-activity.spec.js session-identity.spec.js main-pane.spec.js", "result": "Final corrected fixture PASS: 78 tests, 52.7 seconds. Historical initial 78-pass and first correction 77/78 failure remain recorded, not substituted for this result.", "output": "artifact://53 (final), artifact://14 (initial), artifact://44 (failed correction)" },
+    { "command": "npm run test:browser", "result": "Final corrected fixture PASS: 293 tests, 3.1 minutes. Initial full 292/293 failed and is preserved in failedProbesAndCorrections. Final chained focused plus full wall time 240.92 seconds.", "output": "artifact://53 (final), artifact://33 (initial failure)" },
+    { "command": "npm run test:ui:scenarios", "result": "PASS all eight independently initialized scenarios: models, drafts, sidebar, usage, skills, routines, bounce, mobile. 50.47 seconds.", "output": "artifact://22" },
+    { "command": "npm run test:ui", "result": "PASS full desktop/mobile suite including same-pane switch, streaming/replay, pending new session, drafts/images, compaction/turn, retained transcript, async terminal/tickets, multi-host same-id selection. 62.33 seconds.", "output": "artifact://28" }
+  ],
+  "authorityNegativeProbe": {
+    "command": "node node_modules/typescript/bin/tsc --noEmit --strict --target es2022 --module esnext --moduleResolution bundler --lib ES2022,DOM --skipLibCheck /tmp/pi-dish-r9-proof-PbQ4ov/authority-negative.ts",
+    "input": "Imports real createSessionView/createMessageStream and declares Parameters<typeof factory>[0] values; attempts the eleven newly forbidden collaborator operations without @ts-expect-error.",
+    "result": "Expected exit 1: eleven property errors. Selection rejects drafts.migrate, activity.beginAbort, transcript.render, stream.dispose, resume.resume. Stream rejects activity.beginAbort, renderer.dispose, streaming.render, tools.clear, delivery.edit, extensionUI.dispose. Ten TS2339 and one TS2551; no unrelated diagnostics. Existing enrolled expect-error fixtures passed npm run check."
+  },
+  "failedProbesAndCorrections": [
+    { "probe": "Initial full browser regression", "actual": "New provisional retirement case saw oldTurn=false and oldCompacting=false instead of true; all other assertions matched. 292 passed, one failed.", "cause": "New fixture directly seeded browser activity while real server remained idle. EventSource onopen is not an init-consumption barrier, and authoritative idle list/SSE state could overwrite the client-only setup. Exact overwriting event was not instrumented.", "correction": "Only fixture changed: emit actual bridge turn_start and compaction_start, wait for consumed activity, then exercise retirement. No product code, timings, global fixture or expectation suppression changed.", "preservedTrace": "/tmp/pi-dish-r9-proof-PbQ4ov/initial-browser-failure/trace.zip", "traceSha256": "a104607de6f115e74fb09ec18b56b910d9e83128bed091b66463fd160da59305" },
+    { "probe": "First fixture correction focused rerun", "actual": "77 passed, same provisional test failed on oldTurn/oldCompacting; chained full browser did not execute.", "output": "artifact://44", "causeEvidence": "Preserved 1-trace.network contains the active-list refresh after provisional switch: both /api/sessions?active=1&view=client responses explicitly returned turnInProgress=false and compacting=false for shared-root. app.ts showPending first calls sidebarQuery.switchTab; sidebar-query.ts:73-76 starts this reload and sidebar-lists.ts:36-41 publishes its catalog. Emitting bridge events did not update this separate registry/catalog fixture observation.", "correction": "Register the genuine spawn operation with ownsView false, then seed activity using actual activity setters and invoke actual sessionView.pending in one synchronous page evaluation. Capture resulting visible selection/stream/retained DOM plus old catalog activity before an unrelated later catalog refresh. Keep all original expected values. Existing spawn suites and separate uninstrumented production smoke cover automatic spawn navigation; no product change or permanent plumbing-order assertion.", "preservedTrace": "/tmp/pi-dish-r9-proof-PbQ4ov/bridge-fixture-failure/trace.zip", "traceSha256": "07c62ef244acc043e4e75caa40fb1d6321f12d950cb1febd5a4162a52fe2ac0b" },
+    { "probe": "Initial desktop production navigation", "actual": "Immediate click of historical r9-second after All failed: No element found.", "correction": "Wait for the asynchronously loaded actual row before clicking; selection round trip then passed. No app change." },
+    { "probe": "Browser direct title selector", "actual": "tab.click title selector for Search in session (Ctrl+F) timed out although observe/evaluate showed exact visible button and positive rectangle.", "correction": "Reported eval tool mismatch; used Puppeteer page.click on grounded #btnSearch, actual action succeeded. Report submission initially rejected a non-tool prefix, then accepted eval prefix." },
+    { "probe": "Initial mobile production navigation", "actual": "Node is either not clickable or not an Element after opening drawer; inspection showed drawer open but the immediate next action raced CSS transition.", "correction": "Wait for drawer bounding rectangle to reach open/closed state before pointer action. Historical/live round trip then passed without product changes." },
+    { "probe": "Failure-artifact preservation", "actual": "fs.cp binding required callback, despite prior promises import.", "correction": "Used fs.promises binding to preserve trace outside test-results before rerun; no repository mutation." }
+  ],
+  "runtimeSmoke": {
+    "isolation": "Temporary /tmp/pi-dish-r9-proof-PbQ4ov/home; applyTestEnv before explicit HOME/TMUX_TMPDIR/PORT settings; temporary JSONL sessions, Unix fixture bridge and registry. Actual generated production app.js against real server.js. No live sessions, provider credentials or production debug injection.",
+    "launcher": "Temporary server.cjs initializes two disk transcripts r9-first/r9-second, one local socket bridge for live first with idle hello and get_available_models/get_commands replies, then requires assigned-worktree server.js. Headless command explicitly points at existing fake-rpc-pi.js, never a live provider.",
+    "url": "http://127.0.0.1:40467",
+    "desktop": { "viewport": "1280x900", "selected": "r9-first", "draft": "R9 real draft survives selection", "width": 1280, "scrollWidth": 1280, "fixtureApp": "undefined", "PiDishBrowser": "undefined", "pageErrors": [] },
+    "pending": { "name": "Starting session…", "sendDisabled": true, "retainedSearchMarks": 0, "retainedSearchCurrent": false, "newSessionTakeoverOpen": false, "sameRetainedMessageNodeAfterReturn": true, "separateProvisionalDraft": "R9 provisional draft", "returnedRealDraft": "R9 real draft survives selection", "pageErrors": [] },
+    "pendingTransportLimit": "Only POST /api/sessions/new and GET /api/session-spawns/r9-production-operation intercepted to hold a deterministic pending operation, then conclude with explicit fixture error. Actual uninstrumented UI click, pending activation, selection retirement, search mark removal, DOM cache, draft stash/restore and failure rendering exercised. This is not a real harness-spawn claim.",
+    "mobile": { "viewport": "390x844 touch", "historicalResumeVisible": true, "drawerClosedAfterHistoricalSelection": true, "returnedSelected": "r9-first", "returnedDraft": "R9 real draft survives selection", "drawerClosedAfterLiveSelection": true, "width": 390, "scrollWidth": 390, "fixtureApp": "undefined", "pageErrors": [] },
+    "visualConfirmation": "Read all three screenshots: settled desktop live transcript/composer, provisional starting pane/disabled Send, and mobile transcript/composer with no horizontal overflow.",
+    "artifacts": [
+      { "path": "/tmp/pi-dish-r9-proof-PbQ4ov/desktop-selection.png", "sha256": "2bc5daedc0cb0a6f3cd07696367ce1c6ebcf51f538aeacc09457c6a92e03f0c6" },
+      { "path": "/tmp/pi-dish-r9-proof-PbQ4ov/desktop-pending.png", "sha256": "e62d99f29bd032b8f3713e318a50155a3653a30434dc3e31306082874d3ebf75" },
+      { "path": "/tmp/pi-dish-r9-proof-PbQ4ov/mobile-selection.png", "sha256": "6d5fe03247eaa1691d2234262bf40eb20c0190d9dc6f54c7b51af479a683768a" }
+    ],
+    "versions": { "node": "v26.8.2", "npm": "12.0.2", "manualBrowser": "Chrome/153.0.8010.36", "suiteBrowser": "Chromium 153.0.8010.12", "platform": "Linux x64" }
+  },
+  "finalManifest": {
+    "src/browser/session-view.ts": "94fecd9d288ae8948fa7d4c7f0a4f7a89f97e06d5a3bfe4a45dd59ef35d0aad8",
+    "src/browser/message-stream.ts": "10d3a53efae6788f44cfc1ef9b70f4c6a1f46d43b2437f17a965f1bd0aa7742c",
+    "src/browser/app.ts": "7cf6d15263d70a888a0ada7059b4563c0ff890a2ec56ef73175901a8346d568a",
+    "public/app.js": "03179ca540682a491610983f1bd3bc9505d8b9539005d1cfb40593f7d8398dac",
+    "public/browser.js": "158aaa47f61e0c2afd4b971baf90ac6d6f2bea434cc5e8b1627425bbf491191e",
+    "test/types/browser-session-view.ts": "f0e597e3eb9e460b332f0e6a77982bb91aaa6421fa81c86b1bc108bd3a546fdf",
+    "test/types/browser-message-stream.ts": "d92ed3d62b3312b231bd8e7625c0f0bc8a7c8e823d28d7214bc32cdaadb0c7d2",
+    "test/browser/session-view.spec.js": "26f20813f436595180306c3154a39413f7a6588158a16461e0a42ae8dc7d5cc3"
+  },
+  "cleanup": { "server": "Stopped supervised r9-production-smoke, exit 143 after successful proof", "browser": "Released r9-production managed tab", "removed": ["Temporary isolated home including sockets/registry/tmux directory", "Temporary server.cjs launcher", "Temporary authority-negative.ts compiler probe"], "retained": "Three screenshots, runtime-results.json and both failed browser traces retained as evidence outside repository", "unrelated": "Untracked .amp/ preserved unopened and unstaged", "docs": "Package evidence only; parent owns global records. No redundant markdown or performance/plumbing tests." },
+  "limits": ["Linux only; no macOS/other Node-version execution claim", "No Electron/native loader change or packaging claim", "No reviewer/provider activity before fresh grant", "Final independent whole-source reviews and separate attestation still required", "Parent alone records integration, exact pushed-main CI and acceptance"]
+}

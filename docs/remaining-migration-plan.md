@@ -1471,16 +1471,15 @@ in `/tmp/pi-dish-parent-reset-ci-result.json`,
 `/tmp/pi-dish-parent-reset-fixture-correction.json` and
 `/tmp/pi-dish-parent-reset-corrected-ci-result.json`.
 
-**Review boundaries:** the original frozen-source approvals are not represented
-as approvals of the parent-authored fixture correction. Because
-`test/server.test.js` is in R1's frozen test inventory, **R1 and dependent R4
-remain held for final-scope review renewal**. R1's product source is unchanged.
-R11 is not integrated or accepted: its same Kimi reviewer hit another five-hour
-quota error while closing actual remaining source/consumer/proof gaps; an
-earlier whole-source claim was withheld. Its Astra owner also reported a usage
-limit. No provider retry, substitute reviewer or partial acceptance is authorized
-by this record. Other package acceptance below is limited to their unchanged
-reviewed source and the independently verified integration.
+**Historical review boundaries at `272a338`:** the original frozen-source
+approvals did not approve the parent-authored fixture correction. R1 and
+dependent R4 were held for final-scope renewal despite unchanged product source.
+R11 was not integrated or accepted: its same Kimi reviewer hit another quota
+error while closing actual source/consumer/proof gaps, and its Astra owner
+reported a usage limit. This record authorized no provider retry, substitution
+or partial acceptance. Subsequent user-authorized renewal and integration are
+recorded separately under R1 and R11 below; other package acceptance here stays
+limited to its reviewed source and independently verified integration.
 
 ### Implementation record — R2
 
@@ -1621,5 +1620,263 @@ the captured 198,218-byte validation log. The earlier sampled-log claim remains
 superseded; Python JSON archive framing is not mislabeled JavaScript/JCS.
 All three reviewers closed successfully and resolved inactive. Parent actual
 isolated Pi mood and OMP share canaries passed, as did corrected-main CI.
-Stable-contract C1 families may continue independently; held R1/R11 and unfinished
-R4/R7/R9 families are not released wholesale. No full C1/C2 completion is claimed.
+Stable-contract C1 families could continue independently; this checkpoint did
+not release the then-held R1/R11 or unfinished R4/R7/R9 families wholesale.
+No full C1/C2 completion is claimed.
+
+### Implementation record — R1
+
+**Accepted by the integration lead at main
+`2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424`.** Reviewed source:
+`5d1728abb1d35afb361ef400952da4a174a826b7`, branch `migration/r1-read-export`.
+Its product source remains `453c409ab1d63eb269382bc38b33a930be466c6b`; the
+genuine settings-lock correction is the one already delivered in `272a338`.
+[Evidence](r1-evidence.json) and [review record](r1-review.json) keep historical
+453, private 5d and integrated-main evidence distinct.
+
+The same original OMP/High reviewers independently accepted the complete
+15-path revised candidate: `zai/glm-5.3` final 260, transcripts 261 messages;
+`opencode-go/deepseek-v4.1-flash` final 256, 257 messages; and `kimi-code/k3`
+final 274, 275 messages. Parent verified actual whole primary bodies, seven
+complete consumer files and the native SDK export unit. Finite continuations
+closed diff-only test reads, missing dossier bytes, unchanged server-test
+sections and JSON-escaped-only capture-helper evidence. Earlier premature
+complete-scope claims remain superseded, not erased. All three final reviews
+read the decoded executable helper; all three semantic closures succeeded and
+resolved inactive. Private raw archives remain private.
+
+Combined R1/R11 integration passed check (265 compiler-owned sources), all
+1,044 backend tests with zero failures/skips, all 291 browser cases, eight
+isolated scenarios and full desktop/mobile/terminal/multi-host UI. The serial
+gate chain took 332.41 seconds; this is not an isolated UI duration. Complete
+200,361-byte output is retained in
+`/tmp/pi-dish-parent-r1-r11-full-gates.log`, SHA256
+`33c9115596da34ff29da7475931afb39ecf260e822482b4d043634d5466352c5`.
+Parent result: `/tmp/pi-dish-parent-r1-r11-local-gates.json`.
+[All five exact-source CI jobs and required steps passed](https://github.com/MrPink604/pi-dish/actions/runs/35177938477):
+Backend Node 22.19.0/22.x/24.x/26.x checks and backend/bridge/lifecycle suites,
+plus Node 24 browser, eight isolated scenarios and full UI.
+Receipt: `/tmp/pi-dish-parent-r1-r11-final-ci-result.json`.
+R1 is formally accepted; R4's final dependent matcher consumer is released.
+This records source `2181e5b`, not CI on the later documentation-only attestation.
+
+### Implementation record — R11
+
+**Accepted by the integration lead at main
+`2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424`.** Reviewed source:
+`55ba88e50adf871d9b66e2264d6235499bea2610`, branch
+`migration/r11-canonical-refs`. Both `e694d894` and its correcting `55ba88e`
+were applied atomically; the rejected intermediate source was not delivered
+alone. [Evidence](r11-evidence.json) and [review record](r11-review.json)
+preserve the wrong-target counterexample and renewed decisions.
+
+Canonical portable references are authored once in `src/core/helper-refs.ts`
+and bundled into the standalone skill client. Shared/shadowed aliases are
+rejected before prefix selection, preserving resolver stages, exact identity,
+host capability policy and old-host fallback. No handwritten CLI copy or
+runtime dependency on server modules remains.
+
+All three exact-model OMP/High reviewers accepted the same complete corrected
+16-path source: GLM final 378 (379 messages), DeepSeek final 286 (287 messages),
+and the same user-resumed Kimi final 370 (371 messages). Parent audited actual
+whole-file and decoded-proof coverage. Both generated ETX-containing lines
+were verified bytewise: 68 bytes including newline, not empty strings.
+Earlier rejected/partial decisions and quota failures remain historical.
+All three reviewers were archived, audited and semantically closed.
+
+Parent independently exercised seven first-party-discovered fixture identities
+through the installed/symlink CLI (14 product/fallback resolutions), real HTTP
+(seven emitted-reference roundtrips) and actual production browser copy-ref
+menus (seven roundtrips). Shared native/UUID aliases and shorter/longer alias
+pairs retained their requested identities; ordinary UUID shortening stayed
+unchanged. The smoke used no application globals, live agents or lifecycle
+requests. No native clipboard, harness-launch or macOS claim is made.
+Proof: `/tmp/pi-dish-parent-r11-main-smoke-proof.json`; screenshot:
+`/tmp/omp-sshots-1582a2f7c863a7cb.webp`. The browser, owned server, temporary
+home and throwaway smoke script were removed. The complete combined local
+gates and all five exact-source CI jobs with required steps above passed.
+R11 is formally accepted; remaining R packages and full C1/C2 are not implied.
+
+### Implementation record — R7
+
+**Accepted on pushed main `a441edab6aab3ab330e747dddde37d89af7542c5`.**
+Reviewed source `85b9860b8085658095c0386eef8bec7379fa640d`,
+owner `01a0ab39-80e9-74a5-ae1a-3145b3e52556`, exact
+`openai-codex/gpt-6-astra`/High/OMP. The same complete source was independently
+accepted by `zai/glm-5.3` (final 178/179 messages),
+`opencode-go/deepseek-v4.1-flash` (228/229) and `kimi-code/k3` (233/234).
+Parent audited all eight primary bodies, required consumer units and fourteen
+decoded proof drivers. All three semantic closures succeeded and resolved
+inactive. Earlier incomplete-read claims and their precise corrections remain
+in [the review record](r7-review.json); [owner evidence](r7-evidence.json)
+retains the native baseline/retry comparisons.
+
+Construction installs upgrade handling and closeable resources before binding.
+The synchronous CommonJS export remains the actual initial native server;
+Electron requires that cached root, observes owned-listener startup, and uses
+the first ready main or alias listener's actual address. Delayed binds,
+ephemeral ports and retry replacement listeners no longer depend on a timer
+or independently guessed/advertised URL. Restricted-share error notification
+does not swallow native errors or impose a new shutdown policy.
+
+Integrated on `701bb90`, the serial local gates passed: check with 265
+compiler-owned sources, 1,049 backend tests with zero failures/skips, 291
+browser cases, all eight isolated scenarios and full desktop/mobile/terminal/
+multi-host UI. The chain took 345.86 seconds, not an isolated UI duration.
+Exact 200,819-byte raw output:
+`/tmp/pi-dish-parent-r7-full-gates.log`, SHA256
+`7086d61d3e833941495fdcb9845314310ec337a135fe874ff079ab83a4f84ee6`.
+
+Parent then exercised actual Electron 44.4.1 development and newly packaged
+Linux runtimes on an owned isolated X display. Both loaded the real viewport
+only after delayed native binding on port zero, preserving root identity.
+Occupied-main-port failures displayed the native startup dialog, never
+navigated and exited 1 after dismissal. Native invalid-port `RangeError`
+displayed a startup dialog and retained its rejected-promise warning; the
+process was still alive at observation, then cleaned up by the driver—not
+an exit-1 claim. A restricted-share failure before delayed main readiness
+showed both the explicit notification and original native uncaught-error
+dialog; the same process subsequently loaded main once and served HTTP 200.
+
+Eight probes exited 0; actual viewport/error screenshots were inspected.
+Driver source, trace/results, preserved failed attempts and exact limits are
+recorded in [the review record](r7-review.json) and
+`/tmp/pi-dish-parent-r7-main-native-proof.json`. The private evidence archive
+SHA256 is `d162167d4c389f86c7c774e15e0fc9db4ae590784edb9915f0da4f286fbb00c1`.
+The isolated display, successful-probe homes, packaged output and throwaway
+drivers were removed. An earlier nonisolated screenshot-command failure is
+retained separately without a blanket descendant-cleanup claim. No macOS,
+live harness spawn, successful terminal attachment or naturally unavailable
+interface proof is claimed.
+
+[Exact-source CI run 35180921128](https://github.com/MrPink604/pi-dish/actions/runs/35180921128)
+completed successfully: all four backend jobs (Node 22.19.0, 22.x, 24.x and
+26.x) passed both check and backend/bridge/lifecycle steps; Browser (Node 24)
+passed browser, all-scenario and full-UI steps. Parent inspected all five jobs
+and all eleven required steps, not merely the workflow conclusion. Failure-only
+diagnostic steps were correctly skipped. The raw job/step result is retained at
+`/tmp/pi-dish-parent-r7-main-ci-result.json`; the review record binds this proof
+to the exact pushed source. R4, R9 and full C1/C2 remain separate unfinished work.
+
+### Implementation record — R9
+
+**Accepted on exact pushed main
+`29f963913a0a3876a38bfb03f5009fcd4a6238a0`.** Reviewed source
+`7282718f6c25ec69a98186a59bf8fdf6c5de5700`, owner
+`01a0acac-afff-738a-be83-ff17feaf476e`, exact
+`openai-codex/gpt-6-astra`/High/OMP, baseline
+`272a338e0fe0292dfd5f45131890c1bcb273c3eb`.
+`zai/glm-5.3` (final 372/373 messages),
+`opencode-go/deepseek-v4.1-flash` (313/314) and `kimi-code/k3` (328/329)
+independently accepted the same entire frozen source. Parent audited all nine
+primary bodies, 32 required consumer scopes and sixteen decoded proof drivers,
+including complete TAB/ETX bundle-line bytes. Earlier premature completeness
+claims and same-reviewer renewals remain in [the review record](r9-review.json);
+all three graceful semantic closures succeeded and resolved inactive.
+
+Session view remains authoritative. Four ordered phases share retirement
+without merging real/provisional activation: old draft and DOM stashing precede
+selection clear/swap, pending remains synchronous, and real selection retains
+its endpoint/ownership guards. Eleven named consumed-method interfaces replace
+whole-controller factory-return inputs in session view and message stream.
+Unknown targets remain inert; independent transcript, stream, terminal, speech
+and delivery generations and R8's pane policy remain distinct. The only
+`app.ts` change removes the already-dead `closeViews` argument.
+
+Integrated on main `b570618` with all seven authored/type-test/regression/evidence
+files byte-identical to the freeze. Generated bundles auto-merged the separately
+accepted R11 helper-ref change; drift checking confirms generated truth.
+Serial local gates passed: check with 265 compiler-owned sources, 1,049 backend
+tests with zero failures/skips, 293 browser cases, all eight isolated scenarios
+and full desktop/mobile/terminal/multi-host UI. The complete chain took 337.88
+seconds. Five exact logs, hashes and receipts are retained under
+`/tmp/pi-dish-parent-r9-main-0eFT4X` and in the review record.
+
+Parent independently exercised the uninstrumented production browser:
+1280px desktop draft round trip; pending selection with disabled Send, cleared
+search marks, the identical retained DOM node and separate provisional draft;
+then settled 390px mobile navigation without overflow. Three screenshots were
+visually inspected. Proof sources, results and hashes are preserved in the
+review record and `/tmp/pi-dish-parent-r9-main-native-proof.json`; the owned
+browser/server, temporary home and executable scratch were removed.
+Pending POST/status transport was deliberately intercepted and held, not a
+native harness spawn. Evidence is Linux/Chrome 153.0.8010.36 only; no macOS,
+native clipboard or successful terminal-attachment proof is claimed.
+Owner failures at 292/293 and 77/78 remain preserved in
+[owner evidence](r9-evidence.json); only the fixture was corrected.
+
+[Exact-source CI run 35183385236](https://github.com/MrPink604/pi-dish/actions/runs/35183385236)
+passed all five jobs: backend Node 22.19.0, 22.x, 24.x and 26.x, plus browser
+Node 24. All eleven required check/backend/browser/scenario/UI steps passed;
+only conditional failure-reporting steps were skipped. Complete public API
+responses, their hashes and the exact source identity are preserved in the
+review record and `/tmp/pi-dish-parent-r9-main-ci-result.json`.
+
+R4 and full C1/C2 remain separately unfinished.
+
+### Implementation record — R4
+
+**Accepted on exact pushed main `4cae6026fe50c2b413e26cd717ce30f691b7bad6`.**
+Reviewed source `db5dfa9b5aadba00d5957aaca7033022358cadea`,
+owner `01a0ab39-779b-70ed-b2d7-6b2ed6087488`, exact
+`openai-codex/gpt-6-astra`/High/OMP, baseline
+`2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424`.
+`zai/glm-5.3` (final 278/279 messages),
+`opencode-go/deepseek-v4.1-flash` (273/274) and `kimi-code/k3` (352/353)
+independently accepted that same complete freeze. Parent audited all sixteen
+primary files, fifteen required consumer files, six decoded dossier proof
+bodies, the complete browser driver and all eight scenario receipts.
+The initial GLM thinking level was corrected to actual High before its first
+prompt. Earlier incomplete-read claims and Kimi's quota stop remain alongside
+the same-reviewer whole-source renewals in [the review record](r4-review.json).
+All three semantic closures succeeded and resolved inactive. GLM's OCR/byte
+checks are not represented as visual inspection; the parent inspected the
+rendered screenshots.
+
+Preview/raw routes now share file-specific preparation while retaining their
+different JSON/resource responses. One diff-view owner holds snapshot, LRU and
+TTL state; routes no longer mutate snapshots or bypass membership/version
+checks through arbitrary-path patch access. A narrow Node-only command-path
+matcher is shared by mentions and mining without merging their authorization,
+ranking, classification or bare-tilde semantics. Standalone file pages reuse
+the existing HTML escaping helper.
+
+Applied on main `6349b4f` with all sixteen reviewed files byte-identical.
+One serial local chain passed: check over 266 compiler-owned sources,
+1,052 backend tests with zero failures/skips, 293 browser cases, all eight
+isolated scenarios and full desktop/mobile UI. The chain took 338.59 seconds;
+all five unfiltered logs, hashes and actual exit receipts are retained under
+`/tmp/pi-dish-parent-r4-main-QMhMxC` and in the review record.
+
+Parent independently ran the accepted proof drivers against integrated main:
+actual preview/raw errors and resource handling; delayed real Git output with
+both stale-version checks; inline mutation rejection; 72 baseline/current HTTP
+comparisons; native title/coercion and command-path examples; and full/incremental
+mining through actual server inventory/activation routes. Managed Chromium at
+1365×768, DPR 1.25 showed escaped script text, an inert unsafe link and no
+horizontal overflow. The screenshot and actual executed browser driver are
+preserved in `/tmp/pi-dish-parent-r4-main-native-proof.json`.
+The managed tab was released; the supervised HTTP proof process exited 143
+after stop. Owned fixture directories and all four executable proof scripts
+were removed with ENOENT receipts; retained logs/results are not cleanup leaks.
+The unchanged browser screenshot producer regenerated three existing untracked
+PNG artifacts. Exact before/after observations are recorded; no manual
+edit/restore/delete/staging or blanket across-browser byte preservation is claimed.
+
+[Exact-source CI run 35194783835](https://github.com/MrPink604/pi-dish/actions/runs/35194783835)
+passed all five jobs: backend on Node 22.19.0, 22.x, 24.x and 26.x, plus
+browser on Node 24. All eleven required check/test steps passed. Complete
+public API responses and their byte/hash receipts are retained in the review
+record and `/tmp/pi-dish-parent-r4-main-ci-result.json`. This binds CI to
+`4cae602`, not the later documentation-only acceptance commit.
+The parent's first read-only observer failed parsing before making requests;
+its source, correction and output remain recorded. The corrected observer
+exited zero and its executable was removed. No CI or product-validation rerun
+was performed.
+
+This is Linux Node 26.8.2/Chromium evidence, not macOS, Electron packaging,
+native harness-agent launch or live-provider proof. Reference comparisons use
+`2181e5b`; the actual integration base is `6349b4f`.
+Full C1/C2 remain open. Private C1 checkpoint `c6d0c6c` is frozen and audited,
+but its git-diff test/API alignment to final R4 main remains required before
+the complete C1 freeze and independent review trio.

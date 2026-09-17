@@ -45,8 +45,12 @@ listener policy. Its generated `lib/server-app.js` receives the application root
 explicitly; assets, docs and package metadata must not resolve relative to `lib/`.
 The strict-checkJs launcher is only
 `module.exports = require('./lib/server-app').startServer(__dirname);`.
-It exports the actual initial native `http.Server` synchronously. Startup ordering
-and close behavior are preserved; the readiness redesign remains R7.
+It exports the actual initial native `http.Server` synchronously. Construction
+registers upgrade handling and closeable resources before binding. Electron
+requires that same cached root export, then observes `observeServerStartup`;
+navigation uses the first ready owned main or alias listener's actual address,
+including ephemeral ports and retry replacements, never an advertised share URL.
+Native close, signal and error policies remain distinct from readiness notification.
 
 `tsconfig.tools.json` checks actual build/tool implementations and emits their
 existing sibling runtime paths through `build:tools`; its generated bootstrap
@@ -761,9 +765,11 @@ print in column 1, and what the UI's copy-ref and `#` picker write. Clients
 gate it on the owning host's `refAliases` capability (older hosts resolve
 route-id prefixes only; the CLI notices a bodied 404 there and resolves the
 alias against that host's own list instead, so short refs survive a
-mixed-version fleet). The rule is deliberately duplicated in
-`skills/lib/pi-dish-client.js` — those CLIs import nothing from the server —
-with a parity test in test/skills-core.test.js pinning the copies together.
+mixed-version fleet). The rule is authored once in `src/core/helper-refs.ts`.
+`scripts/build-edges.ts` bundles that portable source into the standalone
+`skills/lib/pi-dish-client.js`; installed CLIs still require no server modules
+or repository layout. Consumer tests cover reference identity and installed-client
+delivery, rather than maintaining parity between handwritten copies.
 
 **`#ref` mentions**: a ref is only a string, and a model reading `8f3ab2c1` in
 a prompt has no reason to treat it as a handle — the skill catalog describes
@@ -1138,8 +1144,8 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   unbuffered (the only exception: the tiny JSON bodies the fleet-artifact
   hook must read), strips caller `Authorization`/`host`/`origin`, attaches
   the peer credential, and is excluded from compression and `express.json`
-  entirely. WS upgrades go through one dispatcher (`upgradeHandlers` —
-  every `'upgrade'` listener sees every socket, so handlers claim or pass);
+  entirely. WS upgrades use the dispatcher constructed before listener binding;
+  handlers claim or pass each socket in the existing order;
   the proxied terminal splices raw sockets and works with the hub's own
   terminal feature off. Proxy failures answer 502 with the same classified
   `reason` vocabulary `/api/hosts` uses.
@@ -2354,3 +2360,12 @@ selection retirement; never assign its source or reconnect state externally.
 
 Session selection, resume and header projection are typed. Validate a target
 before teardown, retain request endpoints and reuse cached tools only by identity.
+
+`session-view.ts` owns four ordered retirement phases shared by real and
+provisional selection: `beginSelectionRetirement`, `stashRetiringTranscript`,
+`retireSessionResources` and `resetSelectionActivity`. Their activation seams
+remain distinct: stash the old draft and DOM before clearing/swapping selection;
+pending selection stays synchronous, while real selection retains its captured
+endpoint and ownership checks across awaits. Session view and message stream
+consume named method interfaces, not whole factory-return controllers. Keep
+transcript, stream, terminal, speech and delivery generations independent.

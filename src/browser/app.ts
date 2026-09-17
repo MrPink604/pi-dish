@@ -569,7 +569,7 @@ function pendingComposerKey(id: string) { return `spawn:${id}`; }
 const sessionView: ReturnType<typeof createSessionView> = createSessionView({ document, sessionState, storage: localStorage, endpoint: (...args) => hostDirectory.resolveHost(...args),
   get drafts() { return composerDrafts; }, get activity() { return sessionActivity; }, get transcript() { return transcriptController; }, get stream() { return messageStreamController; }, get resume() { return sessionResume; },
   spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => streamingRenderer.cancel(), stopFollowing: () => { appChrome.stopFollowing(); },
-  closeViews: (_pending, keepBounce) => mainPane.beforeSelection(keepBounce),
+  closeViews: keepBounce => mainPane.beforeSelection(keepBounce),
   closeTerminal: () => terminalController.close(), clearExtension: () => extensionUI.clear(), clearRelations: () => sessionRelationsController.clear(), closeControls: () => appChrome.closePanel(), hideAutocomplete: () => composerAutocomplete.hide(),
   retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => promptDelivery.render(data), closeBtw: () => btwPanel.close(), resetArtifacts: () => sessionInfo.resetArtifacts(),
   thinking: () => sessionControls.updateThinking(), terminal: () => terminalController.updateButtons(), mic: () => composerSpeech.updateButton(), mood: (description, face) => moodController.set(description, face), status: (message, type) => setStatus(message, type),

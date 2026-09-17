@@ -83,7 +83,7 @@ controller/port observations.
 | Shared runtime helpers | Implemented, locally verified and reviewed | Actual portable core source serves browser and Node consumers; 121 compatibility exports remain. Strict checks, 984 backend tests, 286 browser cases and UI suites passed. Fable approved `1cbd826` without blocking findings. |
 | Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
 | Server application and feature modules | M1–M5 and M7 accepted | Actual implementations and composition are checked; the policy-free root preserves the synchronous native server export. Required R simplifications remain open. |
-| Harness extensions and Electron shell | M6 accepted on Linux x64 | Strict edge programs and generated outputs, installed CLIs, real development/packaged Electron and native harness execution passed. macOS delivery is unverified; startup simplification remains R7. |
+| Harness extensions and Electron shell | M6 and R7 accepted on Linux x64 | Strict edge programs, installed CLIs and real development/packaged Electron passed. R7's same-source trio, integrated gates, native readiness/failure proofs and all five exact pushed-main CI jobs passed on `a441edab`. macOS delivery is unverified. |
 | Test and tooling closure | C1 tools, runner/support and native-canary checkpoints accepted; C1/C2 open | Checked build/bootstrap/config, runner/support and native-canary bodies have exact-source CI proof. Behavioral tests, remaining fixtures/tools and scenario bodies still require their cutovers. R12's handwritten vendor loader is removed. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
@@ -271,10 +271,27 @@ the original Node 22.x settings-lock fixture failure and its deterministic
 test-only correction. Local checks covered 265 compiler-owned sources, 1,041
 backend tests, 291 browser cases, all eight scenarios and desktop/mobile UI.
 R7's composition dependency and R9's pane-policy dependency are released.
-**R1/R4 remain held:** the correction changes a test in R1's frozen inventory
-and needs final-scope review renewal. **R11 remains held:** its incomplete
-same-Kimi correction hit another quota limit, and its owner reported a provider
-limit. No retry, model substitution or whole-repository completion is implied.
+**R1 and R11 accepted at main `2181e5b`:** the same required exact-model/High/OMP
+reviewers accepted complete revised sources `5d1728a` and `55ba88e`; parent
+actual-byte and decoded-proof audits passed. Their combined local integration
+passed check (265 sources), 1,044 backend tests, 291 browser cases, all eight
+scenarios and full desktop/mobile UI. Parent also exercised seven reference
+identities through installed CLI, HTTP and the production browser.
+[All five exact-source CI jobs and required steps passed](https://github.com/MrPink604/pi-dish/actions/runs/35177938477);
+R4's final dependent consumer is released. See the [R1](docs/remaining-migration-plan.md#implementation-record--r1)
+and [R11](docs/remaining-migration-plan.md#implementation-record--r11) records.
+R7 is accepted on `a441edab`: three complete same-source reviews, parent
+actual-read audits, integrated local/native proofs and all five exact-source CI
+jobs passed. R9 is accepted on `29f9639`: three whole-source reviews, parent
+actual-read audits, integrated local gates and desktop/pending/mobile proof,
+and [all five exact-source CI jobs](https://github.com/MrPink604/pi-dish/actions/runs/35183385236)
+passed. R4 is accepted on `4cae602`: all three audited whole-source ACCEPTs
+on `db5dfa9b`, integrated local checks, 1,052 backend tests, 293 browser cases,
+all eight scenarios and independent HTTP/browser proofs passed.
+[All five exact-source CI jobs and eleven required steps passed](https://github.com/MrPink604/pi-dish/actions/runs/35194783835).
+The earlier quota stop and incomplete-read claims remain in the
+[R4 review record](docs/r4-review.json). Full C1/C2 remain unfinished.
+No review waiver or full C1/C2 completion is implied.
 
 1. **Product migration accepted (M0–M7).** Actual session-read/SDK/projection,
    routine, publication/file, feature, fleet/terminal, runtime-edge and server

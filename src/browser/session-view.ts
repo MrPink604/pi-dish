@@ -3,17 +3,39 @@ import { sessionRefKey } from './helper-identity';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import type { HostEndpoint } from './api-client';
 import type { PendingSessionSpawn } from './session-spawns';
-import type { createComposerDrafts } from './composer-drafts';
-import type { createSessionActivity } from './session-activity';
-import type { createTranscript } from './transcript';
-import type { createMessageStream } from './message-stream';
-import type { createSessionResume } from './session-resume';
+/** Operations selection may consume; collaborators retain their other authority. */
+export interface SessionViewDrafts {
+  stash(): void;
+  clear(): void;
+  waiting(value: boolean): void;
+  restore(id?: string | null): void;
+}
+export interface SessionViewActivity {
+  setCompacting(active: boolean): void;
+  setTurn(active: boolean): void;
+}
+export interface SessionViewTranscript {
+  retire(): void;
+  stash(): void;
+  reset(): void;
+  deleteCached(key: string): void;
+  load(owner?: SelectionOwner | null): Promise<void>;
+}
+export interface SessionViewStream {
+  stop(): void;
+  start(owner?: SelectionOwner | null): Promise<void>;
+}
+export interface SessionViewResume {
+  reset(): void;
+  load(session: SessionEntry | null): Promise<void>;
+  dispose(): void;
+}
 export interface SessionSelectOptions { forceTranscriptReload?: boolean; host?: string | null; keepBounceView?: boolean }
 export function createSessionView(options: {
   document: Document; sessionState: SessionState; storage: Pick<Storage, 'setItem'>; endpoint: (host: string | null) => HostEndpoint;
-  drafts: ReturnType<typeof createComposerDrafts>; activity: ReturnType<typeof createSessionActivity>; transcript: ReturnType<typeof createTranscript>;
-  stream: ReturnType<typeof createMessageStream>; resume: ReturnType<typeof createSessionResume>; spawn: (id: string) => PendingSessionSpawn | null | undefined;
-  closeViews: (pending: boolean, keepBounce: boolean) => void; resetSearch: () => void; cancelStreaming: () => void; stopFollowing: () => void;
+  drafts: SessionViewDrafts; activity: SessionViewActivity; transcript: SessionViewTranscript;
+  stream: SessionViewStream; resume: SessionViewResume; spawn: (id: string) => PendingSessionSpawn | null | undefined;
+  closeViews: (keepBounce: boolean) => void; resetSearch: () => void; cancelStreaming: () => void; stopFollowing: () => void;
   closeTerminal: () => void; clearExtension: () => void; clearRelations: () => void; closeControls: () => void; hideAutocomplete: () => void;
   retireModels: () => void; retireCommands: () => void; queue: (value: null) => void; closeBtw: () => void; resetArtifacts: () => void;
   thinking: () => void; terminal: () => void; mic: () => void; mood: (description: string, face: string) => void; status: (message: string, type?: string) => void;
@@ -25,6 +47,41 @@ export function createSessionView(options: {
   let currentSessionSpawnId: string | null = null, disposed = false;
 function pendingComposerKey(spawnId: string) { return `spawn:${spawnId}`; }
 
+// Ordered retirement phases: advance/stash draft, stash DOM, retire transports,
+// reset activity. Activation stays at its existing seams between these phases.
+function beginSelectionRetirement() {
+  sessionState.advanceSelection();
+  // Clear transient marks before caching already-finalized transcript nodes.
+  options.resetSearch();
+  options.transcript.retire();
+  options.drafts.stash();
+}
+
+function stashRetiringTranscript(keepBounce: boolean) {
+  options.cancelStreaming();
+  // Dictation must never land in the replacement composer's draft.
+  options.cancelRecording();
+  options.hideNote();
+  options.closeViews(keepBounce);
+  options.transcript.stash();
+}
+
+function retireSessionResources() {
+  options.stream.stop();
+  options.stopFollowing();
+  options.closeTerminal();
+  options.clearExtension();
+  options.clearRelations();
+}
+
+function resetSelectionActivity(current: SessionEntry | null) {
+  options.queue(null);
+  options.closeBtw();
+  options.activity.setCompacting(!!current?.isActive && !!current.compacting);
+  options.activity.setTurn(!!current?.isActive && !!current.turnInProgress);
+  options.resetArtifacts();
+}
+
 // Show a usable pane before the bridge has produced a real session id. Keep
 // currentSession null so no transcript/stream/action can accidentally target
 // the operation id; only the composer is owned by the provisional key.
@@ -32,24 +89,12 @@ function showPendingSessionView(spawnId: string) {
   if (disposed) return; const spawn = options.spawn(spawnId);
   if (!spawn) return;
   const harnessLabel = spawn.harnessLabel || 'Pi';
-  sessionState.advanceSelection();
-  options.resetSearch();
-  options.transcript.retire();
-  options.drafts.stash();
-  options.cancelStreaming();
-  options.cancelRecording(); options.hideNote();
-  options.closeViews(true, false);
-  options.transcript.stash();
+  beginSelectionRetirement();
+  stashRetiringTranscript(false);
   sessionState.setCurrentSession(null);
   currentSessionSpawnId = spawnId;
 
-  options.stream.stop();
-  options.stopFollowing();
-  options.closeTerminal();
-  options.clearExtension();
-  // The provisional pane has no session identity yet. Do not leave the
-  // previously selected session's parent/child chips in its header.
-  options.clearRelations();
+  retireSessionResources();
   options.closeControls();
   options.hideAutocomplete();
   options.retireModels();
@@ -61,11 +106,7 @@ function showPendingSessionView(spawnId: string) {
   element('resumeBar').style.display = 'none';
   document.querySelector<HTMLElement>('.session-actions')!.style.display = 'none';
 
-  options.queue(null);
-  options.closeBtw();
-  options.activity.setCompacting(false);
-  options.activity.setTurn(false);
-  options.resetArtifacts();
+  resetSelectionActivity(null);
 
   const nameEl = element('sessionName');
   nameEl.textContent = 'Starting session…';
@@ -116,22 +157,10 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   // racing a filtered refresh, a pruned session) must leave the current view
   // intact instead of stashing the transcript and then bailing on a blank pane.
   if (disposed || !sessionState.findSession(id, host)) return;
-  sessionState.advanceSelection();
-  options.resetSearch();
-  options.transcript.retire();
-  options.drafts.stash();
+  beginSelectionRetirement();
   currentSessionSpawnId = null;
   options.drafts.waiting(false);
-  // Search marks are transient UI, but the pages search loaded are not. Clear
-  // the marks before moving the current transcript into its short-lived DOM
-  // cache so revisiting restores clean, already-finalized message nodes.
-  options.cancelStreaming();
-  // A recording belongs to the composer it was started from — switching away
-  // discards it and releases the mic rather than dictating into a new session.
-  options.cancelRecording();
-  options.hideNote();
-  options.closeViews(false, keepBounceView);
-  options.transcript.stash();
+  stashRetiringTranscript(keepBounceView);
   const current = sessionState.setCurrentSession(id, host); if (!current) return;
   const owner = sessionState.captureSelection(); if (!owner) return;
   const endpoint = Object.freeze({ ...options.endpoint(owner.host) });
@@ -141,18 +170,8 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   // synchronous session chrome is updated, then gate markdown hydration on it.
   const mathAssetsReady = options.math().catch(() => {});
   options.reveal(id, current.host);
-  // Tear down the previous session's stream up front, before the awaits below.
-  // Left open, its in-flight turn_end/message_update events fire against the
-  // session we're switching to (options.transcript.load has already reset the cursors).
-  options.stream.stop();
-  options.stopFollowing(); // forced follow doesn't carry across sessions
-  // The terminal panel is per-session (its PTY keeps running server-side;
-  // reopening reattaches with scrollback).
-  options.closeTerminal();
-  // Extension widgets/statuses/dialogs and relation navigation are
-  // per-session; clear them before the new session's projections arrive.
-  options.clearExtension();
-  options.clearRelations();
+  // Retire the previous stream before awaiting new transcript hydration.
+  retireSessionResources();
   options.storage.setItem('pi-dish-session', sessionRefKey(current));
   options.seen(current);
   
@@ -197,16 +216,8 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   }
   if (sessionActions) sessionActions.style.display = current.isActive ? '' : 'none';
 
-  // Working state and queue strip are per-session — seed from the list data
-  // instead of leaking the previous session's state until the init event.
-  options.queue(null);
-  options.closeBtw();
-  options.activity.setCompacting(!!current.isActive && !!current.compacting);
-  options.activity.setTurn(!!current.isActive && !!current.turnInProgress);
-
-  // Artifacts are per-session; clear the previous session's badge before the
-  // fetch lands so a stale count never shows against the new session.
-  options.resetArtifacts();
+  // Seed from the new session without clearing a still-active turn's timing.
+  resetSelectionActivity(current);
   options.artifacts(owner);
 
   options.render();

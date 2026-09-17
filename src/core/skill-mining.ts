@@ -33,6 +33,7 @@ import * as os from 'node:os';
 import { extractTextContent } from './helper-content';
 import { finite, record } from './helper-values';
 import { parseSessionEntries } from './session-files';
+import { matchCommandPaths } from './command-paths';
 import type { SessionEntries } from './session-metadata-contracts';
 import type { SkillActivation, SkillState, SkillProjection } from './session-index-data';
 
@@ -45,10 +46,6 @@ export interface SkillMiningOptions {
 }
 export interface SkillBlock { name: string; location: string }
 export interface SkillPath { skill: string; file: string }
-
-// Absolute or ~-rooted tokens inside bash command strings (mirrors
-// lib/file-mention.js's COMMAND_PATH_RE — the same bash-path mining).
-const COMMAND_PATH_RE = /(?:^|[\s'"`=(<>])((?:\/|~\/)[\w.@%+-]+(?:\/[\w.@%+-]+)*)/g;
 
 /**
  * Match pi's own skill-block format (AgentSession.parseSkillBlock). Kept in
@@ -239,7 +236,7 @@ export function mineSkillsFromEntries(entries: SessionEntries, opts: SkillMining
         }
         records.push(rec);
       } else if (call.name === 'bash' && typeof args.command === 'string') {
-        for (const m of args.command.matchAll(COMMAND_PATH_RE)) {
+        for (const m of matchCommandPaths(args.command)) {
           const abs = resolve(m[1]);
           const cls = classifySkillPath(abs, skillCtx);
           if (!cls) continue;

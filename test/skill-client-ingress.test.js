@@ -222,3 +222,36 @@ test('message views retain catalog metadata when optional response fields are ab
   assert.match(richer.stdout, /\/catalog/);
   assert.match(richer.stdout, /Preserved transcript content/);
 });
+
+test('legacy-host CLI fallback preserves staged precedence, ambiguity and provenance exact-only', async t => {
+  const { env } = fixture(t);
+  const hostId = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+  const encoded = native => '~sk1_' + Buffer.from(JSON.stringify(['omp', native])).toString('base64url');
+  const active = [
+    { id: 'route-hit', name: 'Exact route' }, { id: encoded('route-hit'), name: 'Shadowed alias' },
+    { id: encoded('alias-hit'), name: 'Exact alias' }, { id: 'alias-hit-long', name: 'Shadowed route prefix' },
+    { id: 'prefix-hit-long', name: 'Route prefix' }, { id: encoded('prefix-hit-other'), name: 'Shadowed alias prefix' },
+    { id: 'twin-a' }, { id: 'twin-b' },
+  ];
+  const base = await serve(t, (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/api/hosts') return res.end(JSON.stringify({ hosts: [{ self: true, hostId, capabilities: {} }] }));
+    if (req.url === '/api/sessions') return res.end(JSON.stringify({ active, previous: [{ id: 'route-hit', name: 'Old duplicate' }] }));
+    res.statusCode = 404;
+    res.end(JSON.stringify({ error: 'Unexpected route' }));
+  });
+  const resolve = ref => run(process.execPath, [cli, 'resolve', ref, '--url', base, '--json'], { env });
+  for (const [ref, id, name] of [
+    ['route-hit', 'route-hit', 'Exact route'],
+    ['alias-hit', encoded('alias-hit'), 'Exact alias'],
+    ['prefix-hit', 'prefix-hit-long', 'Route prefix'],
+    [`${hostId}:alias-hit`, encoded('alias-hit'), 'Exact alias'],
+  ]) {
+    const resolved = JSON.parse((await resolve(ref)).stdout);
+    assert.equal(resolved.id, id);
+    assert.equal(resolved.session.name, name);
+  }
+  await assert.rejects(resolve('twin-'), error => error.code === 1
+    && /ambiguous/.test(error.stderr) && /twin-a/.test(error.stderr) && /twin-b/.test(error.stderr));
+  await assert.rejects(resolve(`${hostId}:prefix-hit`), error => error.code === 1 && /Session not found/.test(error.stderr));
+});

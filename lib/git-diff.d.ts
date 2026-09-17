@@ -41,12 +41,6 @@ export interface GitDiffFile extends GitFileCounts {
     patch?: string | null;
     patchDeferred?: boolean;
 }
-/** The selected snapshot member, not an arbitrary client-supplied path. */
-export interface GitFilePatchSelection {
-    path: string;
-    oldPath?: string | null;
-    status?: string;
-}
 export interface GitRepoDiff {
     branch: string | null;
     ahead: number;
@@ -89,14 +83,29 @@ export declare function parseStatusV2(out: string): GitStatusV2;
  */
 export declare function splitPatch(patchText: unknown): GitFilePatch[];
 export declare function parseNumstat(out: unknown): GitNumstatFile[];
-export declare function getDiffVersion(root: string): Promise<string | null>;
 export declare function getRepoDiff(repoPath: string): Promise<GitRepoDiff>;
-/** Generate one patch selected from a previously gated repo summary. */
-export declare function getFilePatch(repoPath: string, file: GitFilePatchSelection | null | undefined): Promise<GitFilePatch | null>;
 /**
  * The full aggregate for the diff modal: every repo under `root` with its
  * uncommitted changes. Repo paths are root-relative ('.' for root itself);
  * dirty repos sort before clean ones, then by path.
  */
 export declare function aggregateDiffs(root: string, { inlineLimit }?: GitDiffOptions): Promise<GitDiffAggregate>;
+export interface DiffViewSummary {
+    root: unknown;
+    gitAvailable: boolean;
+    repos: GitDiffRepo[];
+    snapshotId: string;
+}
+export interface DiffViewPatch {
+    patch: string;
+    truncated: boolean;
+    binary: boolean;
+}
+export interface DiffView {
+    summary(sessionId: string, cwd: unknown): Promise<DiffViewSummary>;
+    patch(sessionId: string, cwd: unknown, snapshotId: string, repoPath: string, filePath: string): Promise<DiffViewPatch | 'stale' | null>;
+    retireSession(sessionId: string): void;
+}
+/** Owns the captured diff pane and every operation allowed to use its members. */
+export declare function createDiffView(): DiffView;
 export {};
