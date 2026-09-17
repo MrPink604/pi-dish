@@ -4,6 +4,7 @@ import type { TokenizerThis } from 'marked';
 import hljs from 'highlight.js';
 import * as katex from 'katex';
 import { createMathExtensions } from './helper-markdown.js';
+import { escapeHtml } from './helper-format';
 import type { FileViewerFile } from './file-mention';
 
 export interface FilePageOptions {
@@ -16,12 +17,6 @@ export interface FilePageOptions {
 interface HighlightedCode {
   html: string;
   highlighted: boolean;
-}
-
-function escapeHtml(value: unknown): string {
-  return String(value == null ? '' : value).replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  } as Record<string, string>)[char]);
 }
 
 function sanitizeMarkdownUrl(url: unknown): string {

@@ -285,9 +285,11 @@ actual-read audits, integrated local/native proofs and all five exact-source CI
 jobs passed. R9 is accepted on `29f9639`: three whole-source reviews, parent
 actual-read audits, integrated local gates and desktop/pending/mobile proof,
 and [all five exact-source CI jobs](https://github.com/MrPink604/pi-dish/actions/runs/35183385236)
-passed. R4 has audited GLM and DeepSeek ACCEPTs; its same-source Kimi review
-stopped at the provider's five-hour quota limit before a verdict. No retry,
-replacement or upgrade is authorized. Full C1/C2 remain unfinished.
+passed. R4 now has all three audited whole-source ACCEPTs on `db5dfa9b`;
+its integrated local checks, 1,052 backend tests, 293 browser cases, all eight
+scenarios and independent HTTP/browser proofs passed. Exact pushed-main CI
+remains the final acceptance gate. The earlier quota stop and incomplete-read
+claims remain in the [R4 review record](docs/r4-review.json). Full C1/C2 remain unfinished.
 No review waiver or full C1/C2 completion is implied.
 
 1. **Product migration accepted (M0–M7).** Actual session-read/SDK/projection,

@@ -1813,3 +1813,59 @@ responses, their hashes and the exact source identity are preserved in the
 review record and `/tmp/pi-dish-parent-r9-main-ci-result.json`.
 
 R4 and full C1/C2 remain separately unfinished.
+
+### Implementation record — R4
+
+**Whole-source review and integrated local proof complete; exact pushed-main
+CI pending.** Reviewed source `db5dfa9b5aadba00d5957aaca7033022358cadea`,
+owner `01a0ab39-779b-70ed-b2d7-6b2ed6087488`, exact
+`openai-codex/gpt-6-astra`/High/OMP, baseline
+`2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424`.
+`zai/glm-5.3` (final 278/279 messages),
+`opencode-go/deepseek-v4.1-flash` (273/274) and `kimi-code/k3` (352/353)
+independently accepted that same complete freeze. Parent audited all sixteen
+primary files, fifteen required consumer files, six decoded dossier proof
+bodies, the complete browser driver and all eight scenario receipts.
+The initial GLM thinking level was corrected to actual High before its first
+prompt. Earlier incomplete-read claims and Kimi's quota stop remain alongside
+the same-reviewer whole-source renewals in [the review record](r4-review.json).
+All three semantic closures succeeded and resolved inactive. GLM's OCR/byte
+checks are not represented as visual inspection; the parent inspected the
+rendered screenshots.
+
+Preview/raw routes now share file-specific preparation while retaining their
+different JSON/resource responses. One diff-view owner holds snapshot, LRU and
+TTL state; routes no longer mutate snapshots or bypass membership/version
+checks through arbitrary-path patch access. A narrow Node-only command-path
+matcher is shared by mentions and mining without merging their authorization,
+ranking, classification or bare-tilde semantics. Standalone file pages reuse
+the existing HTML escaping helper.
+
+Applied on main `6349b4f` with all sixteen reviewed files byte-identical.
+One serial local chain passed: check over 266 compiler-owned sources,
+1,052 backend tests with zero failures/skips, 293 browser cases, all eight
+isolated scenarios and full desktop/mobile UI. The chain took 338.59 seconds;
+all five unfiltered logs, hashes and actual exit receipts are retained under
+`/tmp/pi-dish-parent-r4-main-QMhMxC` and in the review record.
+
+Parent independently ran the accepted proof drivers against integrated main:
+actual preview/raw errors and resource handling; delayed real Git output with
+both stale-version checks; inline mutation rejection; 72 baseline/current HTTP
+comparisons; native title/coercion and command-path examples; and full/incremental
+mining through actual server inventory/activation routes. Managed Chromium at
+1365×768, DPR 1.25 showed escaped script text, an inert unsafe link and no
+horizontal overflow. The screenshot and actual executed browser driver are
+preserved in `/tmp/pi-dish-parent-r4-main-native-proof.json`.
+The managed tab was released; the supervised HTTP proof process exited 143
+after stop. Owned fixture directories and all four executable proof scripts
+were removed with ENOENT receipts; retained logs/results are not cleanup leaks.
+The unchanged browser screenshot producer regenerated three existing untracked
+PNG artifacts. Exact before/after observations are recorded; no manual
+edit/restore/delete/staging or blanket across-browser byte preservation is claimed.
+
+This is Linux Node 26.8.2/Chromium evidence, not macOS, Electron packaging,
+native harness-agent launch or live-provider proof. Reference comparisons use
+`2181e5b`; the actual integration base is `6349b4f`.
+Full C1/C2 remain open. Private C1 checkpoint `c6d0c6c` is frozen and audited,
+but its git-diff test/API alignment to final R4 main remains required before
+the complete C1 freeze and independent review trio.
