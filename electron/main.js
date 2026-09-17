@@ -6,8 +6,8 @@ const node_http_1 = require("node:http");
 const path = require("node:path");
 // Keep reference to prevent GC.
 let mainWindow = null;
-const PORT = process.env.PORT || 3333;
-function createWindow() {
+let readyUrl = null;
+function createWindow(url) {
     mainWindow = new electron_1.BrowserWindow({
         width: 1280,
         height: 860,
@@ -21,7 +21,7 @@ function createWindow() {
             contextIsolation: true,
         },
     });
-    mainWindow.loadURL(`http://localhost:${PORT}`);
+    mainWindow.loadURL(url);
     // Open external links in the system browser.
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         electron_1.shell.openExternal(url);
@@ -31,24 +31,32 @@ function createWindow() {
         mainWindow = null;
     });
 }
-function startServer() {
-    // Root server.js remains unchecked until M7; validate its actual export
-    // instead of declaring an ambient contract over the implementation.
+function showStartupFailure(error) {
+    electron_1.dialog.showErrorBox('pi-dish could not start', error instanceof Error ? error.message : String(error));
+}
+electron_1.app.whenReady().then(() => {
+    // Require the actual root so other in-process consumers share its native server.
     const server = require(path.join(__dirname, '..', 'server.js'));
     if (!(server instanceof node_http_1.Server)) {
         throw new TypeError('server.js must export the listening HTTP server');
     }
-    return server;
-}
-electron_1.app.whenReady().then(() => {
-    startServer();
-    // Small delay to let Express bind before loading the URL (R7 owns readiness).
-    setTimeout(createWindow, 300);
+    const { observeServerStartup } = require('../lib/server-app');
+    observeServerStartup(server, {
+        ready(url) {
+            readyUrl = url;
+            createWindow(url);
+        },
+        failed: showStartupFailure,
+    });
     electron_1.app.on('activate', () => {
-        if (electron_1.BrowserWindow.getAllWindows().length === 0) {
-            createWindow();
+        if (readyUrl !== null && electron_1.BrowserWindow.getAllWindows().length === 0) {
+            createWindow(readyUrl);
         }
     });
+}).catch(error => {
+    showStartupFailure(error);
+    // Preserve the native unhandled-rejection policy for synchronous root failures.
+    throw error;
 });
 electron_1.app.on('window-all-closed', () => {
     // On macOS apps conventionally stay open until Cmd+Q.

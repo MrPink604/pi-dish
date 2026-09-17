@@ -4,6 +4,8 @@ import fs = require('fs');
 import path = require('path');
 import os = require('os');
 import crypto = require('crypto');
+import { createServer } from 'node:http';
+import { errorMonitor, type EventEmitter } from 'node:events';
 import piSDK = require('./pi-sdk');
 import { createSessionReadHandlers } from './session-read-handlers';
 import { getAllRPCSessions } from './rpc-session';
@@ -146,6 +148,29 @@ function property(value: unknown, key: string): unknown {
 /** Optional access short-circuits only nullish values, not other raw payloads. */
 function optionalProperty(value: unknown, key: string): unknown {
   return value == null ? undefined : property(value, key);
+}
+
+export interface ServerStartupObserver {
+  /** The first bound full-app listener, not the advertised agent or share URL. */
+  ready(url: string): void;
+  /** Errors observed after subscription, before the native host failure policy. */
+  failed(error: Error): void;
+}
+
+interface ServerStartupState {
+  readyUrl: string | null;
+  observers: ServerStartupObserver[];
+}
+
+// Key the lifecycle by its exported initial native server, not by whichever
+// retry candidate happens to own the successful bind.
+const serverStartups = new WeakMap<Server, ServerStartupState>();
+
+export function observeServerStartup(initialServer: Server, observer: ServerStartupObserver): void {
+  const startup = serverStartups.get(initialServer);
+  if (!startup) throw new Error('Server does not belong to a pi-dish startup');
+  startup.observers.push(observer);
+  if (startup.readyUrl !== null) observer.ready(startup.readyUrl);
 }
 
 export function startServer(rootDirectory: string): Server {
@@ -2402,76 +2427,115 @@ export function startServer(rootDirectory: string): Server {
   }
 
   // =========================================================================
-  // Start server
+  // Construct resources and listener handlers before binding any socket
   // =========================================================================
 
-  // Warm the models cache at startup so context window sizes are accurate immediately
-  piSDK.getAvailableModels().then(setModelsCache).catch(() => {});
+  const terminalHandlers = terminal.isTerminalEnabled() ? createTerminalHandlers({
+    upgradeAuthorized: accessHandlers.upgradeAuthorized,
+    getRegisteredSession,
+    getRPCSession,
+    findSessionFile,
+    resolveSessionCwd,
+    locatePiPane,
+  }) : null;
+  const relayUpgrade = relayHandlers.upgrade;
+  const terminalUpgrade = terminalHandlers?.upgrade;
 
-  // Every listener pi-dish owns: the loopback alias below plus each main
-  // (fleet-facing) listener candidate. Close hooks and WebSocket upgrades
-  // must reach all of them.
-  const ownedServers: Server[] = [];
-  const serverCloseHooks: (() => void)[] = [];
-
-  function ownServer(l: Server): Server {
-    ownedServers.push(l);
-    for (const hook of serverCloseHooks) l.on('close', hook);
-    wireUpgrades(l);
-    return l;
+  // The restricted listener is not a full-app listener: no API or WS dispatch,
+  // and never a source of Electron readiness.
+  let shareServer: Server | null = null;
+  if (process.env.PI_DISH_SHARE_PORT) {
+    const shareApp = express();
+    shareApp.get('/share/:token', publicationHandlers.serveSharedSession);
+    shareApp.get('/page/:token', publicationHandlers.publicPage);
+    shareApp.get('/page/:token/*', publicationHandlers.publicPageAsset);
+    shareApp.get('/style.css', publicationHandlers.fileStyles);
+    shareApp.get('/vendor/hljs-theme.min.css', publicationHandlers.highlightStyles);
+    shareApp.use((req: ApplicationRequest, res: ApplicationResponse) => res.status(404).type('text/plain').send('Not found'));
+    shareServer = createServer(shareApp);
+    // Observe without consuming the error: native Node/Electron ownership stays.
+    const shareEvents: EventEmitter = shareServer;
+    shareEvents.on(errorMonitor, reportFailure);
   }
 
-  function onServerClose(hook: () => void) {
-    serverCloseHooks.push(hook);
-    for (const l of ownedServers) l.on('close', hook);
+  let recoveryStopped = false;
+  function closeResources() {
+    recoveryStopped = true;
+    recoveryRunner.stop();
+    routineRunner.stop();
+    if (shareServer) { try { shareServer.close(); } catch {} }
+    remoteHosts.shutdown();
+    sessionBounces.stop();
+  }
+
+  // Fleet relay takes precedence even when this host's terminal is disabled.
+  // Keep ordinary unbound handler calls and destroy every unclaimed socket.
+  function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
+    let url;
+    try { url = new URL(req.url || '', 'http://localhost'); } catch { return socket.destroy(); }
+    if (relayUpgrade(req, socket, head, url) || terminalUpgrade?.(req, socket, head, url)) return;
+    socket.destroy();
+  }
+
+  function createOwnedServer(): Server {
+    const listener = createServer(app);
+    listener.on('close', closeResources);
+    // Keep the terminal shutdown callback's native EventEmitter receiver.
+    if (terminalHandlers) listener.on('close', terminalHandlers.shutdown);
+    listener.on('upgrade', upgrade);
+    return listener;
+  }
+
+  const startup: ServerStartupState = { readyUrl: null, observers: [] };
+  const initialServer = createOwnedServer();
+  serverStartups.set(initialServer, startup);
+
+  function reportReady(listener: Server) {
+    if (startup.readyUrl !== null) return;
+    const bound = listener.address() as AddressInfo;
+    const address = bound.address === '0.0.0.0' ? '127.0.0.1' : bound.address === '::' ? '::1' : bound.address;
+    const authority = address.includes(':') ? `[${address}]` : address;
+    const url = startup.readyUrl = `http://${authority}:${bound.port}`;
+    // An observer added during delivery gets the retained result on registration.
+    const count = startup.observers.length;
+    for (let i = 0; i < count; i++) startup.observers[i].ready(url);
+  }
+
+  function reportFailure(error: Error) {
+    // A share error can leave Electron alive; it must not suppress a later bind.
+    const count = startup.observers.length;
+    for (let i = 0; i < count; i++) startup.observers[i].failed(error);
   }
 
   const LOOPBACK = '127.0.0.1';
   const hostIsLoopback = HOST === LOOPBACK || HOST === 'localhost';
   const hostIsWildcard = HOST === '0.0.0.0' || HOST === '::';
-
-  // With HOST=<specific address> (typically the tailscale IP) nothing listens
-  // on loopback, yet host-local callers need it: the update timer's health
-  // probe and spawned session CLIs (PI_DISH_URL below) must keep working
-  // while the tailnet is wedged, so a dead relay reads as "unreachable from
-  // the fleet", never as "pi-dish down" — the update timer restarts, pauses
-  // updates, and spawns a diagnosis session on the latter. Bound first, and
-  // kept up even when HOST itself cannot bind.
   let aliasServer: Server | null = null;
+  let server: Server | null = null;
   const explicitAgentUrl = !!process.env.PI_DISH_URL;
+
   function ensureLoopbackAlias(port: number) {
     if (hostIsLoopback || hostIsWildcard || aliasServer) return;
-    aliasServer = ownServer(app.listen(port, LOOPBACK, () => {
+    const alias = aliasServer = createOwnedServer();
+    alias.once('listening', () => {
       updateAgentUrl(server);
-      console.log(`pi-dish loopback alias at http://${LOOPBACK}:${(aliasServer!.address() as AddressInfo).port}`);
-    }));
-    aliasServer.on('error', (err) => {
+      console.log(`pi-dish loopback alias at http://${LOOPBACK}:${(alias.address() as AddressInfo).port}`);
+      reportReady(alias);
+    });
+    alias.on('error', (err) => {
       console.error(`pi-dish: loopback alias not listening: ${err.message}`);
       aliasServer = null;
       updateAgentUrl(server);
     });
+    alias.listen(port, LOOPBACK);
   }
 
-  // Bound before the main listener (and before it starts retrying) with a
-  // concrete port, so both listeners answer the one URL we advertise.
-  // PORT=0 defers to startMainListener below: only the main listener can
-  // mint the ephemeral port the alias must share.
-  if (PORT > 0) ensureLoopbackAlias(PORT);
-
-  let recoveryStopped = false;
-  let server: Server | null = null; // fleet-facing listener; set by startMainListener
-
   function updateAgentUrl(main: Server | null) {
-    // Base URL for agents running on this machine (skill CLIs and the
-    // pi-dish-pages hook fetch it). Children spawned by pi-dish inherit
-    // process.env (RPC) or get it via tmux -e; respect an operator-provided
-    // value. Prefer loopback whenever we serve it — it stays reachable no
-    // matter the tailnet state; otherwise advertise the address we bound.
+    // Agent advertisement is separate from local readiness. Preserve explicit
+    // operator URLs and prefer the alias only after its actual bind succeeds.
     if (!explicitAgentUrl && main?.listening) {
       const bound = main.address() as AddressInfo;
       const wildcard = !bound.address || bound.address === '0.0.0.0' || bound.address === '::';
-      // Creating the alias object does not mean its asynchronous bind succeeded.
-      // Until it listens, the primary is the address an agent can actually reach.
       const reachable = wildcard || aliasServer?.listening ? LOOPBACK : bound.address;
       const authority = reachable.includes(':') ? `[${reachable}]` : reachable;
       process.env.PI_DISH_URL = `http://${authority}:${bound.port}`;
@@ -2484,118 +2548,57 @@ export function startServer(rootDirectory: string): Server {
     if (HOST === '127.0.0.1') {
       console.log('Bound to localhost only. To reach it from other devices, set HOST (e.g. HOST=0.0.0.0 or your Tailscale IP) or front it with a reverse proxy.');
     }
-    // Prime the skill-mining context before the first big index build so bundled
-    // (references/*) reads attribute to their skill from the cold pass. Failure
-    // is harmless — SKILL.md reads and explicit /skill: blocks are detected
-    // without roots, and the inventory re-primes on the first /api/skills hit.
+    // Skill roots precede the first big index build; failure remains harmless.
     skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds(buildSessionCatalog) })
       .then(paths => sessionIndex.setSkillRoots(paths))
       .catch(() => {});
     sessionBounces.start();
-    // Recovery runs on every configured server startup, with no browser or boot
-    // service dependency. Reconcile routine-owned invocations only afterwards:
-    // a restored idle session is interrupted work, not a completed oneShot.
+    // A restored idle session is interrupted work, not a completed oneShot.
     recoveryRunner.start()
       .then(() => routineRunner.recoverAfterRestart())
       .then(() => { if (!recoveryStopped) routineRunner.start(); })
       .catch((e) => console.error(`Session restart recovery failed: ${e.message}`));
+    reportReady(main);
   }
 
-  function startMainListener(retrySeconds = 15): Server {
-    const main = ownServer(app.listen(PORT, HOST, () => {
+  function startMainListener(main: Server, retrySeconds = 15): void {
+    main.once('listening', () => {
       if (PORT === 0) ensureLoopbackAlias((main.address() as AddressInfo).port);
       onMainListening(main);
-    }));
+    });
     main.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRNOTAVAIL') {
-        // HOST's interface is gone (tailscaled down or still starting). Keep
-        // serving loopback and retry: crashing here would only buy a
-        // supervisor restart loop that ends the moment the address returns.
+        // Keep loopback alive while the configured interface is unavailable.
         console.error(`pi-dish: ${HOST} is not assigned yet; retrying in ${retrySeconds}s`);
-        setTimeout(() => startMainListener(retrySeconds), retrySeconds * 1000);
+        setTimeout(() => startMainListener(createOwnedServer(), retrySeconds), retrySeconds * 1000);
         return;
       }
       console.error(`pi-dish: cannot listen on ${HOST}:${PORT}: ${err.message}`);
-      process.exit(1);
+      try { reportFailure(err); } finally { process.exit(1); }
     });
     server = main;
-    return main;
+    main.listen(PORT, HOST);
   }
 
-  const initialServer = startMainListener();
-  onServerClose(() => {
-    recoveryStopped = true;
-    recoveryRunner.stop();
-    routineRunner.stop();
-  });
-
-  // Optional dedicated share listener: a second minimal app that serves only
-  // public content routes and the two static stylesheets used by standalone
-  // file pages. Everything else 404s, so exposing this listener does not open
-  // the main app or API. All public routes remain on the main app too.
-  if (process.env.PI_DISH_SHARE_PORT) {
-    const shareApp = express();
-    shareApp.get('/share/:token', publicationHandlers.serveSharedSession);
-    // Dedicated public handlers always serve original HTML without annotations.
-    shareApp.get('/page/:token', publicationHandlers.publicPage);
-    shareApp.get('/page/:token/*', publicationHandlers.publicPageAsset);
-    shareApp.get('/style.css', publicationHandlers.fileStyles);
-    shareApp.get('/vendor/hljs-theme.min.css', publicationHandlers.highlightStyles);
-    shareApp.use((req: ApplicationRequest, res: ApplicationResponse) => res.status(404).type('text/plain').send('Not found'));
+  // Warm the models cache without delaying listener readiness.
+  piSDK.getAvailableModels().then(setModelsCache).catch(() => {});
+  // Concrete ports bind loopback first, independently of main-listener retries.
+  // PORT=0 must wait for the main listener to mint their shared ephemeral port.
+  if (PORT > 0) ensureLoopbackAlias(PORT);
+  startMainListener(initialServer);
+  if (shareServer) {
+    const share = shareServer;
     const shareHost = process.env.PI_DISH_SHARE_HOST || HOST;
-    const shareServer = shareApp.listen(process.env.PI_DISH_SHARE_PORT as unknown as number, shareHost, () => {
-      console.log(`pi-dish share listener at http://${shareHost}:${(shareServer.address() as AddressInfo).port}`);
+    share.listen(process.env.PI_DISH_SHARE_PORT as unknown as number, shareHost, () => {
+      console.log(`pi-dish share listener at http://${shareHost}:${(share.address() as AddressInfo).port}`);
     });
-    onServerClose(() => { try { shareServer.close(); } catch {} });
   }
 
-  // ssh forwards are children of this process; nothing outlives the server.
-  // The signal handlers exist because that is how a server actually stops
-  // (`node --watch` restarts, Ctrl-C): without them every restart would strand
-  // another `ssh -N` holding a connection to a work host. They reproduce the
-  // default exit codes so nothing else observes a change.
-  onServerClose(() => remoteHosts.shutdown());
-  onServerClose(() => sessionBounces.stop());
+  // Signals retain the existing forward-cleanup and process-exit policy; they
+  // do not redefine native Server.close(), sibling listeners or retry timers.
   const exitSignals: [NodeJS.Signals, number][] = [['SIGINT', 130], ['SIGTERM', 143]];
   for (const [signal, code] of exitSignals) {
     process.once(signal, () => { remoteHosts.shutdown(); process.exit(code); });
-  }
-
-  // WebSocket upgrades bypass Express, and two features want them: the local
-  // terminal and the /hosts/<name> terminal proxy. Every 'upgrade' listener
-  // sees every socket, so one dispatcher hands each socket to the first
-  // handler that claims it and destroys whatever nothing claims (which is the
-  // behavior a server with no handler at all has). Attached to every owned
-  // listener — the loopback alias included — by ownServer above.
-  const upgradeHandlers: ((req: IncomingMessage, socket: Duplex, head: Buffer, url: URL) => boolean)[] = [];
-  function wireUpgrades(l: Server) {
-    l.on('upgrade', (req, socket, head) => {
-      let url;
-      try { url = new URL(req.url || '', 'http://localhost'); } catch { return socket.destroy(); }
-      for (const handle of upgradeHandlers) if (handle(req, socket, head, url)) return;
-      socket.destroy();
-    });
-  }
-
-  // Proxied terminals work even when this host's own terminal feature is off:
-  // the PTY lives on the peer.
-  upgradeHandlers.push(relayHandlers.upgrade);
-
-  // WebSocket endpoint for the in-browser terminal (see lib/terminal.js).
-  // Registered only when the feature flag is on — with it off, upgrade
-  // requests fall through the dispatcher to the default socket destroy,
-  // indistinguishable from a server without the feature.
-  if (terminal.isTerminalEnabled()) {
-    const terminalHandlers = createTerminalHandlers({
-      upgradeAuthorized: accessHandlers.upgradeAuthorized,
-      getRegisteredSession,
-      getRPCSession,
-      findSessionFile,
-      resolveSessionCwd,
-      locatePiPane,
-    });
-    upgradeHandlers.push(terminalHandlers.upgrade);
-    onServerClose(terminalHandlers.shutdown);
   }
 
   return initialServer;
