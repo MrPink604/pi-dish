@@ -1,0 +1,79 @@
+import test = require('node:test');
+import assert = require('node:assert/strict');
+import fs = require('node:fs');
+import os = require('node:os');
+import path = require('node:path');
+import { spawnSync } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
+import { sanitizeTestEnv } from './test-env';
+
+test('core build detects stale runtime/declarations and never repairs them in check mode', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-core-build-'));
+  try {
+    fs.mkdirSync(path.join(root, 'scripts'));
+    fs.mkdirSync(path.join(root, 'src', 'core'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'lib'));
+    fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'build-core.js'), path.join(root, 'scripts', 'build-core.js'));
+    fs.copyFileSync(path.join(__dirname, '..', 'tsconfig.core.json'), path.join(root, 'tsconfig.core.json'));
+    fs.symlinkSync(path.join(__dirname, '..', 'node_modules'), path.join(root, 'node_modules'), 'junction');
+    fs.writeFileSync(path.join(root, 'package.json'), '{"type":"commonjs"}');
+    const source = path.join(root, 'src', 'core', 'example.ts');
+    fs.writeFileSync(source, 'function value(): number { return 42; }\nexport = { value };\n');
+    const env = sanitizeTestEnv(process.env);
+    const run = (...args: string[]): SpawnSyncReturns<string> => spawnSync(process.execPath, ['scripts/build-core.js', ...args], {
+      cwd: root, env, encoding: 'utf8', timeout: 30000,
+    });
+    const expectStatus = (result: SpawnSyncReturns<string>, status: number) => {
+      assert.ifError(result.error);
+      assert.equal(result.status, status, result.stdout + result.stderr);
+    };
+    expectStatus(run(), 0);
+    const runtime = path.join(root, 'lib', 'example.js');
+    const declarations = path.join(root, 'lib', 'example.d.ts');
+    const originalRuntime = fs.readFileSync(runtime, 'utf8');
+    const originalDeclarations = fs.readFileSync(declarations, 'utf8');
+    const loaded: unknown = require(runtime);
+    assert.ok(typeof loaded === 'object' && loaded !== null && 'value' in loaded);
+    assert.ok(typeof loaded.value === 'function');
+    const loadedValue: unknown = loaded.value();
+    assert.equal(loadedValue, 42);
+    expectStatus(run('--check'), 0);
+    fs.appendFileSync(runtime, '\n// stale runtime\n');
+    fs.appendFileSync(declarations, '\n// stale declarations\n');
+    const mismatch = run('--check');
+    expectStatus(mismatch, 1);
+    assert.match(mismatch.stderr, /lib\/example.js/);
+    assert.match(mismatch.stderr, /lib\/example.d.ts/);
+    assert.match(fs.readFileSync(runtime, 'utf8'), /stale runtime/);
+    assert.match(fs.readFileSync(declarations, 'utf8'), /stale declarations/);
+    expectStatus(run(), 0);
+    assert.equal(fs.readFileSync(runtime, 'utf8'), originalRuntime);
+    assert.equal(fs.readFileSync(declarations, 'utf8'), originalDeclarations);
+
+    fs.writeFileSync(source, 'const value: number = "type error";\nexport = { value };\n');
+    assert.notEqual(run().status, 0);
+    assert.equal(fs.readFileSync(runtime, 'utf8'), originalRuntime, 'type failure cannot partially overwrite runtime');
+    assert.equal(fs.readFileSync(declarations, 'utf8'), originalDeclarations);
+
+    fs.writeFileSync(source, 'function value(): number { return 42; }\nexport = { value };\n');
+    const nested = path.join(root, 'src', 'core', 'identity');
+    fs.mkdirSync(nested);
+    fs.writeFileSync(path.join(nested, 'session.ts'), 'export const value = 1;\n');
+    for (const args of [[], ['--check']]) {
+      const unsupported = run(...args);
+      expectStatus(unsupported, 1);
+      assert.match(unsupported.stderr, /src\/core\//);
+      assert.doesNotMatch(unsupported.stderr, /EISDIR/);
+      assert.equal(fs.readFileSync(runtime, 'utf8'), originalRuntime);
+      assert.equal(fs.readFileSync(declarations, 'utf8'), originalDeclarations);
+    }
+    fs.rmSync(nested, { recursive: true });
+    fs.writeFileSync(path.join(root, 'lib', 'obsolete.js'), '// Generated from src/core/obsolete.ts;\n');
+    const orphan = run('--check');
+    expectStatus(orphan, 1);
+    assert.match(orphan.stderr, /lib\/obsolete\.js/);
+    assert.equal(fs.readFileSync(runtime, 'utf8'), originalRuntime);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -39,7 +39,10 @@ for (const source of config.files as string[]) {
       && source !== 'test/routines.test.ts' && source !== 'test/session-bounces.test.ts'
       && source !== 'test/runtime-resources.test.ts' && source !== 'test/git-diff.test.ts'
       && source !== 'test/file-mention.test.ts' && source !== 'test/recovery-runner.test.ts'
-      && source !== 'test/session-foundation.test.ts')
+      && source !== 'test/session-foundation.test.ts'
+      && source !== 'test/core-contracts.test.ts' && source !== 'test/core-build.test.ts'
+      && source !== 'test/edge-build.test.ts' && source !== 'test/source-policy.test.ts'
+      && source !== 'test/install.test.ts')
       || /\.d\.(?:ts|mts)$/.test(source)) {
     throw new Error(`Unsupported tool source: ${source}`);
   }

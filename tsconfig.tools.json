@@ -39,6 +39,11 @@
     "test/git-diff.test.ts",
     "test/file-mention.test.ts",
     "test/recovery-runner.test.ts",
-    "test/session-foundation.test.ts"
+    "test/session-foundation.test.ts",
+    "test/core-contracts.test.ts",
+    "test/core-build.test.ts",
+    "test/edge-build.test.ts",
+    "test/source-policy.test.ts",
+    "test/install.test.ts"
   ]
 }
