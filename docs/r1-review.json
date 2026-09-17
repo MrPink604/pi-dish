@@ -1,6 +1,6 @@
 {
   "milestone": "R1",
-  "status": "Exact-source decisions retained with appended same-actor GLM literal-gap and Kimi entire-consumer renewals after parent audit; original Kimi ACCEPT is historical and under-scoped, not gate-grade. Parent integration, exact-main CI and dependency release remain pending.",
+  "status": "HISTORICAL reviews cover ONLY frozen453 scope. Revised complete R1 test candidate passed released private validation but has NO new same-final-source reviews or passing attestation. All prior decisions retained; fresh grant and R1/R4 formal gates pending.",
   "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
   "sourceSha": "453c409ab1d63eb269382bc38b33a930be466c6b",
   "branch": "migration/r1-read-export",
@@ -1610,5 +1610,243 @@
     },
     "lifecycleLimits": "Both authorized continuations were archived/audited, then closed once through semantic CLI with success:true and later inactive/closefalse resolves. These successes do NOT resolve the original DeepSeek recorded process-birth residual holds; no manual signals or blind retries. Parent retains those capacity decisions.",
     "integrationGate": "No product source changes, dependency/R4 release, parent acceptance or exact-main-CI success is claimed by this amendment."
+  },
+  "historicalStatusBeforeTestRevision": "Exact-source decisions retained with appended same-actor GLM literal-gap and Kimi entire-consumer renewals after parent audit; original Kimi ACCEPT is historical and under-scoped, not gate-grade. Parent integration, exact-main CI and dependency release remain pending.",
+  "newCompleteCandidateGate": {
+    "status": "Released private validation PASS; complete candidate pending fresh reviewer grant and ENTIRE same-final-source reviews, not formal acceptance",
+    "unchangedProductSource": "453c409ab1d63eb269382bc38b33a930be466c6b",
+    "privateBranchBase": "75d8142a32640d76a9fdf632280d7d7c15881980",
+    "authorizedUpstreamTestCommit": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
+    "application": "git cherry-pick --no-commit 272a338e0fe0292dfd5f45131890c1bcb273c3eb; only the authorized test change, no other R package commits",
+    "affectedFiles": [
+      "test/server.test.js",
+      "docs/r1-evidence.json",
+      "docs/r1-review.json"
+    ],
+    "test": "PUT /api/models/enabled preserves a concurrent pi settings write",
+    "finding": {
+      "parentFailedSource": "266675059fda76ec2bd51b30dfe5e3714b724dd3",
+      "ciRun": 35162106354,
+      "url": "https://github.com/MrPink604/pi-dish/actions/runs/35162106354",
+      "job": "Backend (Node22.x)",
+      "observed": "API500 ELOCKED while HTTP200 expected; child60ms lock-release timer could outlast pinned SDK10x20ms synchronous retry under CI load",
+      "authority": "Parent actual integration failure; not re-run to confirm"
+    },
+    "correction": "Hold the actual proper-lockfile lock and snapshot. Intercept lockSync only to call the real method with its receiver/arguments; after real ELOCKED on that settings file, write the competing snapshot and release its actual lock, then rethrow the original error so the actual SDK retry succeeds. Preserve same HTTP status and persisted theme/concurrentPiWrite/enabledModels assertions; finally release only if still held.",
+    "deletionLedger": {
+      "removed": [
+        "Child-process startup/readiness/exit plumbing used solely by this fixture",
+        "Timing-dependent60ms release assumption"
+      ],
+      "retained": [
+        "Actual proper-lockfile lock acquisition and collision",
+        "Original ELOCKED propagated into actual SDK retry",
+        "HTTP200 and merged persisted-state assertions",
+        "Finally cleanup of any still-held lock"
+      ],
+      "notChanged": [
+        "No product retry budget, lifecycle, model settings or error policy",
+        "No fabricated lock result or weakened API/state assertion",
+        "No product/generated/compiler/config/tool-family changes"
+      ]
+    },
+    "parentProof": {
+      "attribution": "Independent parent execution on integrated main272a338, which contains other packages; not private-branch execution or a transferred review approval",
+      "focusedPassed": 1,
+      "checkSources": 265,
+      "backendPassed": 1041,
+      "backendFailed": 0,
+      "backendSkipped": 0,
+      "correctedSource": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
+      "ciRun": 35163287240,
+      "ciUrl": "https://github.com/MrPink604/pi-dish/actions/runs/35163287240",
+      "ciConclusion": "All5jobs and mandatory check/backend/browser/isolated-scenarios/UI steps passed",
+      "failureDetailsSkipped": "Only failure-only diagnostic/upload steps skipped on successful jobs",
+      "observerLimit": "Parent records GitHub API observer403 followed by successful public HTML step inspection; observer failure is not CI failure"
+    },
+    "artifacts": [
+      {
+        "path": "/tmp/pi-dish-parent-reset-ci-node22-failure.json",
+        "sha256": "5e4d2cd51f46f50eac26bd66fa24e15475ba6eebafe9a1e3456b7554b391de01"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-reset-fixture-correction.json",
+        "sha256": "76f77d8fd35ad83f035d4600e152dba64c8d5964f4766dea08e2f188ab5fd6f5"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-reset-corrected-ci-result.json",
+        "sha256": "e9509d041dcb5030551160a3f61b10a8f7abbbf0210033d598a35662976bdd2c"
+      }
+    ],
+    "historyRule": "All prior product source453 reviews, original/renewed decisions, archives, hashes and attestation commits22073fb496360e3df7bdd6676de850310c257281 and75d8142a32640d76a9fdf632280d7d7c15881980 remain historical evidence valid ONLY for their frozen453 scope. They are superseded as approval of this new complete candidate; no approval is carried forward.",
+    "privateValidation": {
+      "status": "PASS after explicit parent validation release; no scoped failure or further source fix",
+      "requiredAfterParentRelease": [],
+      "generatedOutputs": "None affected; no regeneration needed for this test-only change. Drift/types are checked only after validation release.",
+      "historicalRuntimeProofs": "No new browser/UI/native execution: no product/browser change. Original453 and independent parent smoke/CI remain distinctly attributed historical evidence, not this private validation.",
+      "additionalGates": "Follow parent validation release for any additional new-candidate browser/UI/native proof requirement; browser implementation/runtime mapping is unchanged.",
+      "node": "v26.8.2",
+      "focusedTests": 1,
+      "serverTests": 135,
+      "checkSources": 258,
+      "backendTests": 1032,
+      "failures": 0,
+      "skips": 0,
+      "performedCommands": [
+        {
+          "name": "check",
+          "command": [
+            "npm",
+            "run",
+            "check"
+          ],
+          "result": "PASS",
+          "governedSources": 258,
+          "wallSeconds": 5.23,
+          "output": {
+            "path": "/tmp/pi-dish-r1-check-tool-output.txt",
+            "bytes": 897,
+            "sha256": "7c3207588835dbea06c81359599ca14ed449b4d172ace7b2c9b25596e549f669",
+            "capture": "Complete nontruncated tool-captured output, preserved verbatim including wall-time line; not claimed to be separate raw stdout/stderr byte streams"
+          }
+        },
+        {
+          "name": "focused",
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "--test-name-pattern=^PUT /api/models/enabled preserves a concurrent pi settings write$",
+            "test/server.test.js"
+          ],
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "startedAt": "2026-09-17T00:17:24.230Z",
+          "endedAt": "2026-09-17T00:17:25.435Z",
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null,
+          "capture": "Complete unmodified stdout/stderr bytes; combined preserves Node data-event order. npm test invokes the existing sanitizeTestEnv runner.",
+          "outputs": {
+            "stdout": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/focused-stdout.log",
+              "bytes": 450,
+              "sha256": "c81fa5e4f58155e7f983394f4893f53c574327819d98984ee8ee292524d9bf7d"
+            },
+            "stderr": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/focused-stderr.log",
+              "bytes": 182,
+              "sha256": "1d0333471bc207fb0a4ad01ff3407882729de77cb7094b1f09dbbdc8ad9ece80"
+            },
+            "combined": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/focused-combined.log",
+              "bytes": 632,
+              "sha256": "947f101fd717429570cf0a172f42f3939575a0665e36ee32953f2d8ae62c2b40"
+            }
+          },
+          "summary": {
+            "tests": 1,
+            "pass": 1,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          }
+        },
+        {
+          "name": "server",
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "test/server.test.js"
+          ],
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "startedAt": "2026-09-17T00:17:24.235Z",
+          "endedAt": "2026-09-17T00:17:33.914Z",
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null,
+          "capture": "Complete unmodified stdout/stderr bytes; combined preserves Node data-event order. npm test invokes the existing sanitizeTestEnv runner.",
+          "outputs": {
+            "stdout": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/server-stdout.log",
+              "bytes": 12084,
+              "sha256": "4991dcf1b1dfc427155953d689b45ce90e6151e2d2b29d16e86fe425343ad09c"
+            },
+            "stderr": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/server-stderr.log",
+              "bytes": 95,
+              "sha256": "35e5800b3acb97bc94ba5b3aac2b6f2ca18a5a7dedebce794b77cf7e6a0a394d"
+            },
+            "combined": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/server-combined.log",
+              "bytes": 12179,
+              "sha256": "d558460511bbe7c308a06838f3371b0032bacfcad961d5c5030223afda17517c"
+            }
+          },
+          "summary": {
+            "tests": 135,
+            "pass": 135,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          }
+        },
+        {
+          "name": "backend",
+          "command": [
+            "npm",
+            "test"
+          ],
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "startedAt": "2026-09-17T00:17:24.224Z",
+          "endedAt": "2026-09-17T00:17:56.842Z",
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null,
+          "capture": "Complete unmodified stdout/stderr bytes; combined preserves Node data-event order. npm test invokes the existing sanitizeTestEnv runner.",
+          "outputs": {
+            "stdout": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/backend-stdout.log",
+              "bytes": 106534,
+              "sha256": "298f2190ec950ed86a217174894791d1608848b02a85772942095c085bc18aa0"
+            },
+            "stderr": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/backend-stderr.log",
+              "bytes": 75,
+              "sha256": "e68e311aff9ff1a7eb1c337af1ed6ff602c1f63b01be60b4f888a4c220d1a4ec"
+            },
+            "combined": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/backend-combined.log",
+              "bytes": 106609,
+              "sha256": "b70c33f658b730c1dbeeb9a91207a54ef7e43d72e682f80164b8321888017a40"
+            }
+          },
+          "summary": {
+            "tests": 1032,
+            "pass": 1032,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          }
+        }
+      ],
+      "completeOutputBundle": {
+        "path": "/tmp/pi-dish-r1-test-revision-validation/proof.json",
+        "sha256": "886fe5e5b7d74af4b03d7fdbe61e41c3bc1d84178ac05f6de46e66fcc7d97791",
+        "bytes": 7834
+      },
+      "generation": "No regeneration command; existing npm run check drift/type checks passed",
+      "scope": "Private258/1032 counts belong to this branch; parent integrated-main265/1041 remain parent proof on272a338 and are not substituted."
+    },
+    "reviewGate": {
+      "status": "NO reviewer operations authorized; await fresh parent grant after validation/source freeze",
+      "required": "Three exact-model OMP high reviewers must renew ENTIRE same-final-source ACCEPT/REVISE for the new complete R1 candidate, including new test/dossier and actual producers/consumers. No selected-delta-only approval.",
+      "quota": "Parent reports R11 same Kimi hit403 again. No provider retry/probe, replacement/upgrade, reviewer resolve/resume/prompt, new peer or manual signal."
+    },
+    "ownershipGate": "Parent acceptance docs3b4fcfe explicitly withhold R1/R4. R4/miner handoff remains held until parent integration/exactCI/formal gate. No main writes or unrelated cleanup.",
+    "validationCaptureCleanup": "Disposable capture helper source retained in complete proof bundle; helper removed after evidence capture. All unmodified logs/result JSON files retained. No unrelated cleanup."
   }
 }
