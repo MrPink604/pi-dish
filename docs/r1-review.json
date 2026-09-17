@@ -1,6 +1,6 @@
 {
   "milestone": "R1",
-  "status": "Complete revised5d candidate has three renewed coverage-audited ACCEPTs; integrated local gates PASS; exact pushed-main CI pending.",
+  "status": "R1 accepted by parent: complete revised5d reviews, independent coverage audit, integrated local gates and all five exact-main CI jobs with required steps PASS at2181e5b.",
   "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
   "sourceSha": "453c409ab1d63eb269382bc38b33a930be466c6b",
   "branch": "migration/r1-read-export",
@@ -3673,9 +3673,17 @@
     "history": "Earlier453 decisions remain historical. GLM225 lacked three whole test bodies/seven dossier lines; Kimi229 excluded unchanged server-test bytes. All three first5d decisions had only JSON-escaped/helper-hash evidence. Finite same-actor continuations supplied missing literal bodies and decoded helper source before final acceptance; no source changed.",
     "scopeCorrection": "Parent proof-gap continuation was sent while the server-file read was still progressing. Its blanket primary-complete statement was premature. Final275-message archive, not that intermediate assertion, proves actual complete4447 coverage.",
     "privacy": "Complete semantic archives remain private0700/0600; only explicit verdicts and proof metadata are recorded here.",
-    "integration": "Product453 and genuine contention correction272 were already present in main. Revised5d dossiers and both R11 source commits are now applied together, preserving other accepted package changes. Formal R1/R4 release waits parent integration/exact-source delivery gate.",
+    "integration": "Product453 and genuine contention correction272 were already present in main. Revised5d dossiers and both R11 source commits are applied together. Parent formally accepts R1 at2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424 and releases R4's final dependent consumer.",
     "parentIntegration": {
       "sourceBase": "3b4fcfe",
+      "acceptedMain": "2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424",
+      "ci": {
+        "url": "https://github.com/MrPink604/pi-dish/actions/runs/35177938477",
+        "result": "All five jobs completed successfully: Backend Node22.19.0/22.x/24.x/26.x check and backend/bridge/lifecycle steps; Browser Node24 browser, eight scenarios and full UI steps.",
+        "jobIds": [105063683974, 105063684240, 105063684243, 105063684275, 105063684276],
+        "receipt": "/tmp/pi-dish-parent-r1-r11-final-ci-result.json",
+        "scope": "Exact integrated source2181 only; not a claim that later documentation commits ran these gates."
+      },
       "integratedCommits": [
         "e694d8948eecaf85c02b21db0185035fff57a501",
         "55ba88e50adf871d9b66e2264d6235499bea2610",

@@ -1626,8 +1626,8 @@ No full C1/C2 completion is claimed.
 
 ### Implementation record — R1
 
-**Complete revised-source reviews and local integration verified; exact
-pushed-main CI pending.** Reviewed source:
+**Accepted by the integration lead at main
+`2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424`.** Reviewed source:
 `5d1728abb1d35afb361ef400952da4a174a826b7`, branch `migration/r1-read-export`.
 Its product source remains `453c409ab1d63eb269382bc38b33a930be466c6b`; the
 genuine settings-lock correction is the one already delivered in `272a338`.
@@ -1653,12 +1653,17 @@ gate chain took 332.41 seconds; this is not an isolated UI duration. Complete
 `/tmp/pi-dish-parent-r1-r11-full-gates.log`, SHA256
 `33c9115596da34ff29da7475931afb39ecf260e822482b4d043634d5466352c5`.
 Parent result: `/tmp/pi-dish-parent-r1-r11-local-gates.json`.
-Formal acceptance and R4's final dependent release await exact pushed-main CI.
+[All five exact-source CI jobs and required steps passed](https://github.com/MrPink604/pi-dish/actions/runs/35177938477):
+Backend Node 22.19.0/22.x/24.x/26.x checks and backend/bridge/lifecycle suites,
+plus Node 24 browser, eight isolated scenarios and full UI.
+Receipt: `/tmp/pi-dish-parent-r1-r11-final-ci-result.json`.
+R1 is formally accepted; R4's final dependent matcher consumer is released.
+This records source `2181e5b`, not CI on the later documentation-only attestation.
 
 ### Implementation record — R11
 
-**Complete corrected-source reviews and local integration verified; exact
-pushed-main CI pending.** Reviewed source:
+**Accepted by the integration lead at main
+`2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424`.** Reviewed source:
 `55ba88e50adf871d9b66e2264d6235499bea2610`, branch
 `migration/r11-canonical-refs`. Both `e694d894` and its correcting `55ba88e`
 were applied atomically; the rejected intermediate source was not delivered
@@ -1689,4 +1694,5 @@ requests. No native clipboard, harness-launch or macOS claim is made.
 Proof: `/tmp/pi-dish-parent-r11-main-smoke-proof.json`; screenshot:
 `/tmp/omp-sshots-1582a2f7c863a7cb.webp`. The browser, owned server, temporary
 home and throwaway smoke script were removed. The complete combined local
-gates above passed; exact pushed-source CI and formal acceptance remain pending.
+gates and all five exact-source CI jobs with required steps above passed.
+R11 is formally accepted; remaining R packages and full C1/C2 are not implied.

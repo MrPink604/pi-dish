@@ -271,14 +271,14 @@ the original Node 22.x settings-lock fixture failure and its deterministic
 test-only correction. Local checks covered 265 compiler-owned sources, 1,041
 backend tests, 291 browser cases, all eight scenarios and desktop/mobile UI.
 R7's composition dependency and R9's pane-policy dependency are released.
-**R1 and R11 review renewal is complete:** the same required exact-model/High/OMP
+**R1 and R11 accepted at main `2181e5b`:** the same required exact-model/High/OMP
 reviewers accepted complete revised sources `5d1728a` and `55ba88e`; parent
 actual-byte and decoded-proof audits passed. Their combined local integration
 passed check (265 sources), 1,044 backend tests, 291 browser cases, all eight
 scenarios and full desktop/mobile UI. Parent also exercised seven reference
-identities through installed CLI, HTTP and the production browser. Exact
-pushed-main CI is pending; R4's dependent release and formal acceptance are
-recorded in the [R1](docs/remaining-migration-plan.md#implementation-record--r1)
+identities through installed CLI, HTTP and the production browser.
+[All five exact-source CI jobs and required steps passed](https://github.com/MrPink604/pi-dish/actions/runs/35177938477);
+R4's final dependent consumer is released. See the [R1](docs/remaining-migration-plan.md#implementation-record--r1)
 and [R11](docs/remaining-migration-plan.md#implementation-record--r11) records.
 R7's required independent reviews are running; R9 and the frozen C1 checkpoints
 remain queued within the session cap. No review waiver or full C1/C2 completion
