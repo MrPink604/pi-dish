@@ -24,6 +24,9 @@
     "scripts/run-ui-scenarios.ts",
     "test/test-env.ts",
     "test/ui-scenarios/index.ts",
-    "test/native-extensions.smoke.ts"
+    "test/native-extensions.smoke.ts",
+    "test/cron.test.ts",
+    "test/session-capabilities.test.ts",
+    "test/session-provenance.test.ts"
   ]
 }

@@ -30,7 +30,9 @@ const outputs = new Map<string, { source: string; executable: boolean }>();
 for (const source of config.files as string[]) {
   if ((!/^scripts\/[^/]+\.(?:ts|mts)$/.test(source)
       && source !== 'test/test-env.ts' && source !== 'test/ui-scenarios/index.ts'
-      && source !== 'test/native-extensions.smoke.ts')
+      && source !== 'test/native-extensions.smoke.ts'
+      && source !== 'test/cron.test.ts' && source !== 'test/session-capabilities.test.ts'
+      && source !== 'test/session-provenance.test.ts')
       || /\.d\.(?:ts|mts)$/.test(source)) {
     throw new Error(`Unsupported tool source: ${source}`);
   }
