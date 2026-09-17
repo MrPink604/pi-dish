@@ -34,6 +34,11 @@
     "test/skills-coverage.test.ts",
     "test/transport-frames.test.ts",
     "test/routines.test.ts",
-    "test/session-bounces.test.ts"
+    "test/session-bounces.test.ts",
+    "test/runtime-resources.test.ts",
+    "test/git-diff.test.ts",
+    "test/file-mention.test.ts",
+    "test/recovery-runner.test.ts",
+    "test/session-foundation.test.ts"
   ]
 }

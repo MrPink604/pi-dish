@@ -38,7 +38,10 @@ for (const source of config.files) {
         && source !== 'test/stt.test.ts' && source !== 'test/test-env.test.ts'
         && source !== 'test/tmux-service.test.ts'
         && source !== 'test/skills-coverage.test.ts' && source !== 'test/transport-frames.test.ts'
-        && source !== 'test/routines.test.ts' && source !== 'test/session-bounces.test.ts')
+        && source !== 'test/routines.test.ts' && source !== 'test/session-bounces.test.ts'
+        && source !== 'test/runtime-resources.test.ts' && source !== 'test/git-diff.test.ts'
+        && source !== 'test/file-mention.test.ts' && source !== 'test/recovery-runner.test.ts'
+        && source !== 'test/session-foundation.test.ts')
         || /\.d\.(?:ts|mts)$/.test(source)) {
         throw new Error(`Unsupported tool source: ${source}`);
     }
