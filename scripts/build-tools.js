@@ -34,7 +34,9 @@ for (const source of config.files) {
         && source !== 'test/test-env.ts' && source !== 'test/ui-scenarios/index.ts'
         && source !== 'test/native-extensions.smoke.ts'
         && source !== 'test/cron.test.ts' && source !== 'test/session-capabilities.test.ts'
-        && source !== 'test/session-provenance.test.ts')
+        && source !== 'test/session-provenance.test.ts'
+        && source !== 'test/stt.test.ts' && source !== 'test/test-env.test.ts'
+        && source !== 'test/tmux-service.test.ts')
         || /\.d\.(?:ts|mts)$/.test(source)) {
         throw new Error(`Unsupported tool source: ${source}`);
     }
