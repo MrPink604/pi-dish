@@ -1,27 +1,95 @@
 {
   "milestone": "R1",
-  "status": "Complete source/consumer cutover and required proofs; frozen for independent review, not parent acceptance",
+  "status": "Complete R1 candidate with only parent test correction272a338: released private focused1/server135/check258/backend1032 passed. Fresh complete-candidate reviews and parent R1/R4 formal gates pending; historic453 approvals do not transfer.",
   "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
   "branch": "migration/r1-read-export",
   "owner": "01a0ab39-8ab2-71fd-828d-9332e50d865e",
-  "provenance": { "harness": "omp", "model": "openai-codex/gpt-6-astra", "thinking": "high", "basis": "Parent verified before substantive assignment; semantic CLI resolve independently confirms same active model/harness/high and assigned cwd on 2026-09-16" },
-  "acceptedEvidence": ["docs/remaining-migration-plan.md: M1 and M4 accepted records", "docs/m1-evidence.json", "docs/m1-review.json", "docs/m4-evidence.json", "docs/m4-review.json"],
+  "provenance": {
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinking": "high",
+    "basis": "Parent verified before substantive assignment; semantic CLI resolve independently confirms same active model/harness/high and assigned cwd on 2026-09-16"
+  },
+  "acceptedEvidence": [
+    "docs/remaining-migration-plan.md: M1 and M4 accepted records",
+    "docs/m1-evidence.json",
+    "docs/m1-review.json",
+    "docs/m4-evidence.json",
+    "docs/m4-review.json"
+  ],
   "ownership": {
-    "source": ["src/core/session-files.ts", "src/core/skill-mining.ts", "src/core/omp-export.ts", "src/core/publication-handlers.ts"],
-    "retainedBoundaryOwners": ["src/core/session-index.ts", "src/core/session-index-data.ts", "src/core/session-metadata.ts", "src/core/harness-pricing.ts"],
-    "generated": ["lib/session-files.js", "lib/session-files.d.ts", "lib/skill-mining.js", "lib/skill-mining.d.ts", "lib/omp-export.js", "lib/omp-export.d.ts", "lib/publication-handlers.js", "lib/publication-handlers.d.ts"],
-    "tests": ["test/session-files.test.js", "test/skill-mining.test.js", "test/omp-export.test.js", "test/server.test.js"],
+    "source": [
+      "src/core/session-files.ts",
+      "src/core/skill-mining.ts",
+      "src/core/omp-export.ts",
+      "src/core/publication-handlers.ts"
+    ],
+    "retainedBoundaryOwners": [
+      "src/core/session-index.ts",
+      "src/core/session-index-data.ts",
+      "src/core/session-metadata.ts",
+      "src/core/harness-pricing.ts"
+    ],
+    "generated": [
+      "lib/session-files.js",
+      "lib/session-files.d.ts",
+      "lib/skill-mining.js",
+      "lib/skill-mining.d.ts",
+      "lib/omp-export.js",
+      "lib/omp-export.d.ts",
+      "lib/publication-handlers.js",
+      "lib/publication-handlers.d.ts"
+    ],
+    "tests": [
+      "test/session-files.test.js",
+      "test/skill-mining.test.js",
+      "test/omp-export.test.js",
+      "test/server.test.js"
+    ],
     "compiler": "Existing tsconfig.core.json/build:core mapping, no compiler or host exceptions",
     "sharedHolds": "R1 alone edits skill-mining. Parent approved R4 Node-only src/core/command-paths.ts matchCommandPaths(command:string), returning command.matchAll(the unchanged COMMAND_PATH_RE). R4 later owns only miner import/loop substitution and regex/comment deletion after explicit settled source handoff; R1 does not implement it. No global acceptance-record edits. No browser or runtime-loader changes.",
     "lsp": "xd://lsp status reports no language servers configured; actual source/consumer searches used instead of unavailable references"
   },
   "callers": {
-    "parser": ["session-files.parseSessionContent", "session-files.parseMessageData", "session-files.buildSearchIndexFromContent", "session-files.extendSearchIndexFromContent", "session-files.buildIndexedUsageFromContent", "session-index.indexFile", "session-index.tryExtendIndexEntry", "new skill-mining.mineSkillsFromContent use"],
-    "chronology": ["session-files.parseMessageData", "session-files.computeSessionStats", "session-files.accumulateIndexedUsage"],
-    "readConsumers": ["session-read-handlers messages/search/stats/image handlers", "file-handlers resolveFileMention transcript input", "server-app readSessionMessages import", "session-index full/delta usage builders"],
-    "mining": ["session-index.indexFile", "session-index.tryExtendIndexEntry", "mineSkillsFromContent", "test/skill-mining.test.js"],
-    "nativeDecoder": ["omp-export.readOmpExportData", "omp-export.injectOmpExportSnapshot", "omp-export.exportOmpSessionHtml", "publication-handlers.validOmpShareHtml/importShare"],
-    "nativeExport": ["pi-sdk.exportSessionHtml", "session-read-handlers.exportSessionHtml", "publication-handlers.serveSharedSession", "test/omp-export.test.js"]
+    "parser": [
+      "session-files.parseSessionContent",
+      "session-files.parseMessageData",
+      "session-files.buildSearchIndexFromContent",
+      "session-files.extendSearchIndexFromContent",
+      "session-files.buildIndexedUsageFromContent",
+      "session-index.indexFile",
+      "session-index.tryExtendIndexEntry",
+      "new skill-mining.mineSkillsFromContent use"
+    ],
+    "chronology": [
+      "session-files.parseMessageData",
+      "session-files.computeSessionStats",
+      "session-files.accumulateIndexedUsage"
+    ],
+    "readConsumers": [
+      "session-read-handlers messages/search/stats/image handlers",
+      "file-handlers resolveFileMention transcript input",
+      "server-app readSessionMessages import",
+      "session-index full/delta usage builders"
+    ],
+    "mining": [
+      "session-index.indexFile",
+      "session-index.tryExtendIndexEntry",
+      "mineSkillsFromContent",
+      "test/skill-mining.test.js"
+    ],
+    "nativeDecoder": [
+      "omp-export.readOmpExportData",
+      "omp-export.injectOmpExportSnapshot",
+      "omp-export.exportOmpSessionHtml",
+      "publication-handlers.validOmpShareHtml/importShare"
+    ],
+    "nativeExport": [
+      "pi-sdk.exportSessionHtml",
+      "session-read-handlers.exportSessionHtml",
+      "publication-handlers.serveSharedSession",
+      "test/omp-export.test.js"
+    ]
   },
   "behaviorFreeze": {
     "display": "Active-branch transcript, whole-tree stable-ID image map. Model changes supply pricing fallbacks but do not overwrite display message provider/model/responseModel. Raw truthiness, OMP slash splitting, malformed/null handling and per-entry catch remain.",
@@ -33,19 +101,76 @@
     "allocation": "One reusable chronology state per projection; no per-entry fact DTO, universal reducer, raw-entry cache, extra projection pass or added full read. Existing assistant generation/cost primitives stay shared; shared raw parsing replaces miner JSON loop. Probe measures parse bytes/calls and chronology allocations, not permanent implementation-count tests."
   },
   "boundaryTable": [
-    { "sites": ["indexFile parseSessionEntries", "tryExtendIndexEntry parseSessionEntries"], "kind": "disk ingress", "decision": "Retain parser construction, unknown entries and physical-line/archive behavior; checkedEntries already removed by accepted M1" },
-    { "sites": ["indexFile buildSearchIndexFromEntries/checkSearchLeaf", "tryExtendIndexEntry extendSearchIndexFromEntries/checkSearchLeaf"], "kind": "local projection with raw tree leaf", "decision": "Retain leaf runtime check, active-branch and append-chain/version/null-extension rules; text/tree are checked constructed values, output-shape wrapper already removed" },
-    { "sites": ["indexFile buildIndexedUsageFromEntries", "tryExtendIndexEntry extendIndexedUsageFromEntries"], "kind": "projection to persistence", "decision": "Retain consumed-entry/string/raw-pricing/finite token and cost guards; no finite-sum promise. Persistence decoder rejects nonfinite sums. checkedUsage already removed with M1 consumed bucket decoders; do not recreate a scan" },
-    { "sites": ["indexFile mineSkillsFromEntries", "tryExtendIndexEntry mineSkillsFromEntries"], "kind": "disk-derived local projection", "decision": "Retain entry/message/tool/range/timestamp/state guards. checkedSkills second output scan already removed. Finite range operands can overflow arithmetic; no new finite-result guarantee claimed, persisted decoder retained" },
-    { "sites": ["getState decodeSkillRecords", "getState decodeSkillState", "decodeIndexedInfo decodeUsage"], "kind": "persisted disk ingress", "decision": "Retain all consumed-field, finite, container and continuity checks including sparse day/model buckets and absent legacy state" }
+    {
+      "sites": [
+        "indexFile parseSessionEntries",
+        "tryExtendIndexEntry parseSessionEntries"
+      ],
+      "kind": "disk ingress",
+      "decision": "Retain parser construction, unknown entries and physical-line/archive behavior; checkedEntries already removed by accepted M1"
+    },
+    {
+      "sites": [
+        "indexFile buildSearchIndexFromEntries/checkSearchLeaf",
+        "tryExtendIndexEntry extendSearchIndexFromEntries/checkSearchLeaf"
+      ],
+      "kind": "local projection with raw tree leaf",
+      "decision": "Retain leaf runtime check, active-branch and append-chain/version/null-extension rules; text/tree are checked constructed values, output-shape wrapper already removed"
+    },
+    {
+      "sites": [
+        "indexFile buildIndexedUsageFromEntries",
+        "tryExtendIndexEntry extendIndexedUsageFromEntries"
+      ],
+      "kind": "projection to persistence",
+      "decision": "Retain consumed-entry/string/raw-pricing/finite token and cost guards; no finite-sum promise. Persistence decoder rejects nonfinite sums. checkedUsage already removed with M1 consumed bucket decoders; do not recreate a scan"
+    },
+    {
+      "sites": [
+        "indexFile mineSkillsFromEntries",
+        "tryExtendIndexEntry mineSkillsFromEntries"
+      ],
+      "kind": "disk-derived local projection",
+      "decision": "Retain entry/message/tool/range/timestamp/state guards. checkedSkills second output scan already removed. Finite range operands can overflow arithmetic; no new finite-result guarantee claimed, persisted decoder retained"
+    },
+    {
+      "sites": [
+        "getState decodeSkillRecords",
+        "getState decodeSkillState",
+        "decodeIndexedInfo decodeUsage"
+      ],
+      "kind": "persisted disk ingress",
+      "decision": "Retain all consumed-field, finite, container and continuity checks including sparse day/model buckets and absent legacy state"
+    }
   ],
   "deletionLedger": {
-    "creditedAcceptedM1": ["handwritten parser/mining/pricing index require signatures", "checkedEntries", "checkedSearch output-shape validation except raw leaf", "checkedUsage", "checkedSkills", "session-discovery handwritten tail-reader signature"],
-    "removed": ["independent miner tolerant JSON loop", "publication regex/base64/JSON decoder", "duplicate display/stats chronological model-change block and assistant pricing precedence"],
-    "retained": ["all persisted ingress decoders", "raw search leaf checks", "finite token/cost guards", "distinct display, billing, skills and retry policies", "separate bounded header/cwd/tail/recovery reads"],
-    "relocated": ["Indexed usage's deliberately different nonempty-string/OMP suffix policy now lives beside, not merged into, the shared chronological primitive's display policy"],
+    "creditedAcceptedM1": [
+      "handwritten parser/mining/pricing index require signatures",
+      "checkedEntries",
+      "checkedSearch output-shape validation except raw leaf",
+      "checkedUsage",
+      "checkedSkills",
+      "session-discovery handwritten tail-reader signature"
+    ],
+    "removed": [
+      "independent miner tolerant JSON loop",
+      "publication regex/base64/JSON decoder",
+      "duplicate display/stats chronological model-change block and assistant pricing precedence"
+    ],
+    "retained": [
+      "all persisted ingress decoders",
+      "raw search leaf checks",
+      "finite token/cost guards",
+      "distinct display, billing, skills and retry policies",
+      "separate bounded header/cwd/tail/recovery reads"
+    ],
+    "relocated": [
+      "Indexed usage's deliberately different nonempty-string/OMP suffix policy now lives beside, not merged into, the shared chronological primitive's display policy"
+    ],
     "checksRemovedInR1": [],
-    "checksRelocatedInR1": ["Import entries-array requirement is supplied by the shared embedded-data decoder; import <html/header requirements remain in publication-handlers. JSON-decoded arrays cannot have a named entries property, so record admission adds no import rejection."],
+    "checksRelocatedInR1": [
+      "Import entries-array requirement is supplied by the shared embedded-data decoder; import <html/header requirements remain in publication-handlers. JSON-decoded arrays cannot have a named entries property, so record admission adds no import rejection."
+    ],
     "contributorPath": "A display/stats chronology correction previously edited two loops; now edit advanceModelChange display policy once. Indexed continuity remains an explicit separate policy in that same narrow owner; skills remains distinct. Embedded JSON decoding previously lived in publication and omp-export; now only omp-export owns regex/base64/JSON and publication retains import admission."
   },
   "proofPlan": [
@@ -58,22 +183,55 @@
     "build:core, npm run check, full backend before source commit. Relevant browser scenarios and isolated/full UI as M1 compatibility gates; no browser implementation/runtime mapping changed",
     "Push assigned source branch, parent grants review trio; three new verified exact models/high/OMP independently review whole same source SHA; separate review-only attestation commit"
   ],
-  "deliberateLimits": ["No speculative index transaction/stale-stat rewrite", "No header/cwd/recovery parser unification", "No runtime loader, framework, schema facade or new compiler exception", "No macOS proof without execution", "No main writes or self-acceptance"],
+  "deliberateLimits": [
+    "No speculative index transaction/stale-stat rewrite",
+    "No header/cwd/recovery parser unification",
+    "No runtime loader, framework, schema facade or new compiler exception",
+    "No macOS proof without execution",
+    "No main writes or self-acceptance"
+  ],
   "approvedContracts": [
     "Parent explicitly approved narrow chronological primitive with explicit display/usage policies, no extra pass/per-record allocation and no universal reducer; skills/billing/retry policies stay distinct.",
     "Parent explicitly approved shared decoder import/export policy default export; permissive import base64/html/header and strict export alphabet/shape/errors retained.",
     "Parent explicitly approved R4 matcher contract and serialized future miner cutover; no R4 edits in R1."
   ],
   "checks": [
-    { "command": "npm ci", "result": "PASS; 798 packages, existing allowScripts warnings; no lockfile changes" },
-    { "command": "npm run build:core", "result": "PASS after installing dependencies; initial attempt before npm ci failed because private worktree had no compiler" },
-    { "command": "npm run check", "result": "PASS; 258 governed sources; lint, all generated drift, types and modes" },
-    { "command": "npm test -- test/session-files.test.js test/session-index.test.js test/harness-pricing.test.js test/skill-mining.test.js test/session-refs.test.js test/omp-export.test.js test/session-source.test.js test/session-recovery.test.js test/server.test.js", "result": "PASS 247, zero skips" },
-    { "command": "npm test", "result": "PASS 1032, zero skips; 34.10 seconds" },
-    { "command": "npm run test:ui:scenarios", "result": "PASS all eight isolated scenarios; 53.29 seconds" },
-    { "command": "npm run test:ui", "result": "PASS full desktop/mobile smoke; 67.14 seconds" },
-    { "command": "npm run test:browser", "result": "Initial concurrent run: 285 pass, one existing timing-sensitive coalescing scenario failed. Serial full rerun: PASS 286 in 195.80 seconds, Chromium 153.0.8010.12. No browser/test changes between runs." },
-    { "command": "Throwaway Node native import admission differential", "result": "PASS 64 cases: baseline/current admission agrees for null/scalar/array/object shapes, truthy/falsy headers, entries containers, base64 punctuation/whitespace and lowercase/uppercase html" }
+    {
+      "command": "npm ci",
+      "result": "PASS; 798 packages, existing allowScripts warnings; no lockfile changes"
+    },
+    {
+      "command": "npm run build:core",
+      "result": "PASS after installing dependencies; initial attempt before npm ci failed because private worktree had no compiler"
+    },
+    {
+      "command": "npm run check",
+      "result": "PASS; 258 governed sources; lint, all generated drift, types and modes"
+    },
+    {
+      "command": "npm test -- test/session-files.test.js test/session-index.test.js test/harness-pricing.test.js test/skill-mining.test.js test/session-refs.test.js test/omp-export.test.js test/session-source.test.js test/session-recovery.test.js test/server.test.js",
+      "result": "PASS 247, zero skips"
+    },
+    {
+      "command": "npm test",
+      "result": "PASS 1032, zero skips; 34.10 seconds"
+    },
+    {
+      "command": "npm run test:ui:scenarios",
+      "result": "PASS all eight isolated scenarios; 53.29 seconds"
+    },
+    {
+      "command": "npm run test:ui",
+      "result": "PASS full desktop/mobile smoke; 67.14 seconds"
+    },
+    {
+      "command": "npm run test:browser",
+      "result": "Initial concurrent run: 285 pass, one existing timing-sensitive coalescing scenario failed. Serial full rerun: PASS 286 in 195.80 seconds, Chromium 153.0.8010.12. No browser/test changes between runs."
+    },
+    {
+      "command": "Throwaway Node native import admission differential",
+      "result": "PASS 64 cases: baseline/current admission agrees for null/scalar/array/object shapes, truthy/falsy headers, entries containers, base64 punctuation/whitespace and lowercase/uppercase html"
+    }
   ],
   "runtimeProof": {
     "command": "node /tmp/pi-dish-r1-proof.cjs",
@@ -81,18 +239,68 @@
     "isolation": "sanitizeTestEnv over minimal PATH/HOME/TMPDIR/native binary environment; temporary HOME and tmux namespace, loopback ephemeral server, no provider credentials or live sessions",
     "report": "/tmp/pi-dish-r1-proof-result.json",
     "sha256": "574fa84f0a8f08bf822cd5c7762911809532852f6bf38b8c29368ad0b6e2d730",
-    "observableResults": ["Baseline/final transcript, stats, usage and skill records deep-equal", "Native getter access sequence and indexed output equal", "Full/delta usage agree including retry omission and tokens", "Branch display excludes abandoned last message while stable-ID lookup retains it", "Corrupt persisted token rejects warm snapshot", "Actual native OMP export preserves source bytes and embedded header/entries/snapshot", "Actual HTTP import returns 200 and serves byte-exact 392788-byte native HTML", "Permissive base64 import remains 200"],
+    "observableResults": [
+      "Baseline/final transcript, stats, usage and skill records deep-equal",
+      "Native getter access sequence and indexed output equal",
+      "Full/delta usage agree including retry omission and tokens",
+      "Branch display excludes abandoned last message while stable-ID lookup retains it",
+      "Corrupt persisted token rejects warm snapshot",
+      "Actual native OMP export preserves source bytes and embedded header/entries/snapshot",
+      "Actual HTTP import returns 200 and serves byte-exact 392788-byte native HTML",
+      "Permissive base64 import remains 200"
+    ],
     "instrumentation": "Throwaway espree AST instrumentation of generated baseline/final session-files and skill-mining counts executed object-literal allocations, plus scoped JSON.parse calls/bytes. These are not total engine heap allocation or elapsed-time benchmarks. Index object count zero means not instrumented, not allocation-free.",
     "counts": {
-      "transcript": { "baselineObjectLiterals": 246, "finalObjectLiterals": 204, "baselineParseCalls": 44, "finalParseCalls": 44, "baselineParseBytes": 14139, "finalParseBytes": 14139 },
-      "stats": { "baselineObjectLiterals": 87, "finalObjectLiterals": 88, "baselineParseCalls": 43, "finalParseCalls": 43, "baselineParseBytes": 14139, "finalParseBytes": 14139 },
-      "usage": { "baselineObjectLiterals": 151, "finalObjectLiterals": 151, "baselineParseCalls": 44, "finalParseCalls": 44, "baselineParseBytes": 14139, "finalParseBytes": 14139 },
-      "skills": { "baselineObjectLiterals": 83, "finalObjectLiterals": 83, "baselineParseCalls": 44, "finalParseCalls": 46, "baselineParseBytes": 114174, "finalParseBytes": 14144 },
-      "indexJsonlEntriesParsed": { "full": 43, "warm": 0, "delta": 2 }
+      "transcript": {
+        "baselineObjectLiterals": 246,
+        "finalObjectLiterals": 204,
+        "baselineParseCalls": 44,
+        "finalParseCalls": 44,
+        "baselineParseBytes": 14139,
+        "finalParseBytes": 14139
+      },
+      "stats": {
+        "baselineObjectLiterals": 87,
+        "finalObjectLiterals": 88,
+        "baselineParseCalls": 43,
+        "finalParseCalls": 43,
+        "baselineParseBytes": 14139,
+        "finalParseBytes": 14139
+      },
+      "usage": {
+        "baselineObjectLiterals": 151,
+        "finalObjectLiterals": 151,
+        "baselineParseCalls": 44,
+        "finalParseCalls": 44,
+        "baselineParseBytes": 14139,
+        "finalParseBytes": 14139
+      },
+      "skills": {
+        "baselineObjectLiterals": 83,
+        "finalObjectLiterals": 83,
+        "baselineParseCalls": 44,
+        "finalParseCalls": 46,
+        "baselineParseBytes": 114174,
+        "finalParseBytes": 14144
+      },
+      "indexJsonlEntriesParsed": {
+        "full": 43,
+        "warm": 0,
+        "delta": 2
+      }
     },
     "interpretation": "Transcript avoids 43 per-entry fallback objects and adds one pass-local state. Stats adds one pass-local state. Usage reuses its final continuity allocation. Miner elides 100030 archive bytes but established parser also attempts two blank lines that the old miner skipped. Warm index still performs two identity-tuple JSON decodes, not JSONL parsing; no parse-free-total claim.",
-    "probeCorrections": ["Initial probe attempted removed TypeScript compiler JS API; changed only probe to installed espree over generated JavaScript", "Initial warm assertion counted identity tuple JSON as JSONL; scoped counts distinguish them", "Initial probe read usage from public getSessionInfo, which intentionally strips it; switched only probe to actual scanSessions indexed projection"],
-    "limits": ["Linux x64 only", "No macOS/native Electron claim", "No new full-header/recovery/cache policy", "OMP native offline exporter exercised, not paid live model calls"]
+    "probeCorrections": [
+      "Initial probe attempted removed TypeScript compiler JS API; changed only probe to installed espree over generated JavaScript",
+      "Initial warm assertion counted identity tuple JSON as JSONL; scoped counts distinguish them",
+      "Initial probe read usage from public getSessionInfo, which intentionally strips it; switched only probe to actual scanSessions indexed projection"
+    ],
+    "limits": [
+      "Linux x64 only",
+      "No macOS/native Electron claim",
+      "No new full-header/recovery/cache policy",
+      "OMP native offline exporter exercised, not paid live model calls"
+    ]
   },
   "browserFailureHistory": {
     "location": "test/browser/live-transcript.spec.js:60-62, unchanged",
@@ -101,6 +309,248 @@
     "disposition": "Reported to parent, retained evidence, no unauthorized browser/C1 edit or claim that a rerun fixed product behavior."
   },
   "cleanup": "Actual smoke server closed, successful temporary HOME removed, two failed-probe temporary homes and disposable script removed after preserving measured report/hash. No runtime source changes after final check/backend/browser/UI proofs.",
-  "opaqueBoundaries": ["Parsed JSON entries and native export records remain unknown until consumed", "Raw message/tool/pricing payloads are not replaced by a universal DTO", "Finite operands do not imply finite aggregate sums or range endpoints"],
-  "reviewRecord": "docs/r1-review.json"
+  "opaqueBoundaries": [
+    "Parsed JSON entries and native export records remain unknown until consumed",
+    "Raw message/tool/pricing payloads are not replaced by a universal DTO",
+    "Finite operands do not imply finite aggregate sums or range endpoints"
+  ],
+  "reviewRecord": "docs/r1-review.json",
+  "historicalStatusBeforeTestRevision": "Complete source/consumer cutover and required proofs; frozen for independent review, not parent acceptance",
+  "testOnlyIntegrationRevision": {
+    "status": "Released private validation PASS; complete candidate pending fresh reviewer grant and ENTIRE same-final-source reviews, not formal acceptance",
+    "unchangedProductSource": "453c409ab1d63eb269382bc38b33a930be466c6b",
+    "privateBranchBase": "75d8142a32640d76a9fdf632280d7d7c15881980",
+    "authorizedUpstreamTestCommit": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
+    "application": "git cherry-pick --no-commit 272a338e0fe0292dfd5f45131890c1bcb273c3eb; only the authorized test change, no other R package commits",
+    "affectedFiles": [
+      "test/server.test.js",
+      "docs/r1-evidence.json",
+      "docs/r1-review.json"
+    ],
+    "test": "PUT /api/models/enabled preserves a concurrent pi settings write",
+    "finding": {
+      "parentFailedSource": "266675059fda76ec2bd51b30dfe5e3714b724dd3",
+      "ciRun": 35162106354,
+      "url": "https://github.com/MrPink604/pi-dish/actions/runs/35162106354",
+      "job": "Backend (Node22.x)",
+      "observed": "API500 ELOCKED while HTTP200 expected; child60ms lock-release timer could outlast pinned SDK10x20ms synchronous retry under CI load",
+      "authority": "Parent actual integration failure; not re-run to confirm"
+    },
+    "correction": "Hold the actual proper-lockfile lock and snapshot. Intercept lockSync only to call the real method with its receiver/arguments; after real ELOCKED on that settings file, write the competing snapshot and release its actual lock, then rethrow the original error so the actual SDK retry succeeds. Preserve same HTTP status and persisted theme/concurrentPiWrite/enabledModels assertions; finally release only if still held.",
+    "deletionLedger": {
+      "removed": [
+        "Child-process startup/readiness/exit plumbing used solely by this fixture",
+        "Timing-dependent60ms release assumption"
+      ],
+      "retained": [
+        "Actual proper-lockfile lock acquisition and collision",
+        "Original ELOCKED propagated into actual SDK retry",
+        "HTTP200 and merged persisted-state assertions",
+        "Finally cleanup of any still-held lock"
+      ],
+      "notChanged": [
+        "No product retry budget, lifecycle, model settings or error policy",
+        "No fabricated lock result or weakened API/state assertion",
+        "No product/generated/compiler/config/tool-family changes"
+      ]
+    },
+    "parentProof": {
+      "attribution": "Independent parent execution on integrated main272a338, which contains other packages; not private-branch execution or a transferred review approval",
+      "focusedPassed": 1,
+      "checkSources": 265,
+      "backendPassed": 1041,
+      "backendFailed": 0,
+      "backendSkipped": 0,
+      "correctedSource": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
+      "ciRun": 35163287240,
+      "ciUrl": "https://github.com/MrPink604/pi-dish/actions/runs/35163287240",
+      "ciConclusion": "All5jobs and mandatory check/backend/browser/isolated-scenarios/UI steps passed",
+      "failureDetailsSkipped": "Only failure-only diagnostic/upload steps skipped on successful jobs",
+      "observerLimit": "Parent records GitHub API observer403 followed by successful public HTML step inspection; observer failure is not CI failure"
+    },
+    "artifacts": [
+      {
+        "path": "/tmp/pi-dish-parent-reset-ci-node22-failure.json",
+        "sha256": "5e4d2cd51f46f50eac26bd66fa24e15475ba6eebafe9a1e3456b7554b391de01"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-reset-fixture-correction.json",
+        "sha256": "76f77d8fd35ad83f035d4600e152dba64c8d5964f4766dea08e2f188ab5fd6f5"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-reset-corrected-ci-result.json",
+        "sha256": "e9509d041dcb5030551160a3f61b10a8f7abbbf0210033d598a35662976bdd2c"
+      }
+    ],
+    "historyRule": "All prior product source453 reviews, original/renewed decisions, archives, hashes and attestation commits22073fb496360e3df7bdd6676de850310c257281 and75d8142a32640d76a9fdf632280d7d7c15881980 remain historical evidence valid ONLY for their frozen453 scope. They are superseded as approval of this new complete candidate; no approval is carried forward.",
+    "privateValidation": {
+      "status": "PASS after explicit parent validation release; no scoped failure or further source fix",
+      "requiredAfterParentRelease": [],
+      "generatedOutputs": "None affected; no regeneration needed for this test-only change. Drift/types are checked only after validation release.",
+      "historicalRuntimeProofs": "No new browser/UI/native execution: no product/browser change. Original453 and independent parent smoke/CI remain distinctly attributed historical evidence, not this private validation.",
+      "additionalGates": "Follow parent validation release for any additional new-candidate browser/UI/native proof requirement; browser implementation/runtime mapping is unchanged.",
+      "node": "v26.8.2",
+      "focusedTests": 1,
+      "serverTests": 135,
+      "checkSources": 258,
+      "backendTests": 1032,
+      "failures": 0,
+      "skips": 0,
+      "performedCommands": [
+        {
+          "name": "check",
+          "command": [
+            "npm",
+            "run",
+            "check"
+          ],
+          "result": "PASS",
+          "governedSources": 258,
+          "wallSeconds": 5.23,
+          "output": {
+            "path": "/tmp/pi-dish-r1-check-tool-output.txt",
+            "bytes": 897,
+            "sha256": "7c3207588835dbea06c81359599ca14ed449b4d172ace7b2c9b25596e549f669",
+            "capture": "Complete nontruncated tool-captured output, preserved verbatim including wall-time line; not claimed to be separate raw stdout/stderr byte streams"
+          }
+        },
+        {
+          "name": "focused",
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "--test-name-pattern=^PUT /api/models/enabled preserves a concurrent pi settings write$",
+            "test/server.test.js"
+          ],
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "startedAt": "2026-09-17T00:17:24.230Z",
+          "endedAt": "2026-09-17T00:17:25.435Z",
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null,
+          "capture": "Complete unmodified stdout/stderr bytes; combined preserves Node data-event order. npm test invokes the existing sanitizeTestEnv runner.",
+          "outputs": {
+            "stdout": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/focused-stdout.log",
+              "bytes": 450,
+              "sha256": "c81fa5e4f58155e7f983394f4893f53c574327819d98984ee8ee292524d9bf7d"
+            },
+            "stderr": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/focused-stderr.log",
+              "bytes": 182,
+              "sha256": "1d0333471bc207fb0a4ad01ff3407882729de77cb7094b1f09dbbdc8ad9ece80"
+            },
+            "combined": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/focused-combined.log",
+              "bytes": 632,
+              "sha256": "947f101fd717429570cf0a172f42f3939575a0665e36ee32953f2d8ae62c2b40"
+            }
+          },
+          "summary": {
+            "tests": 1,
+            "pass": 1,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          }
+        },
+        {
+          "name": "server",
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "test/server.test.js"
+          ],
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "startedAt": "2026-09-17T00:17:24.235Z",
+          "endedAt": "2026-09-17T00:17:33.914Z",
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null,
+          "capture": "Complete unmodified stdout/stderr bytes; combined preserves Node data-event order. npm test invokes the existing sanitizeTestEnv runner.",
+          "outputs": {
+            "stdout": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/server-stdout.log",
+              "bytes": 12084,
+              "sha256": "4991dcf1b1dfc427155953d689b45ce90e6151e2d2b29d16e86fe425343ad09c"
+            },
+            "stderr": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/server-stderr.log",
+              "bytes": 95,
+              "sha256": "35e5800b3acb97bc94ba5b3aac2b6f2ca18a5a7dedebce794b77cf7e6a0a394d"
+            },
+            "combined": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/server-combined.log",
+              "bytes": 12179,
+              "sha256": "d558460511bbe7c308a06838f3371b0032bacfcad961d5c5030223afda17517c"
+            }
+          },
+          "summary": {
+            "tests": 135,
+            "pass": 135,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          }
+        },
+        {
+          "name": "backend",
+          "command": [
+            "npm",
+            "test"
+          ],
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "startedAt": "2026-09-17T00:17:24.224Z",
+          "endedAt": "2026-09-17T00:17:56.842Z",
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null,
+          "capture": "Complete unmodified stdout/stderr bytes; combined preserves Node data-event order. npm test invokes the existing sanitizeTestEnv runner.",
+          "outputs": {
+            "stdout": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/backend-stdout.log",
+              "bytes": 106534,
+              "sha256": "298f2190ec950ed86a217174894791d1608848b02a85772942095c085bc18aa0"
+            },
+            "stderr": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/backend-stderr.log",
+              "bytes": 75,
+              "sha256": "e68e311aff9ff1a7eb1c337af1ed6ff602c1f63b01be60b4f888a4c220d1a4ec"
+            },
+            "combined": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/backend-combined.log",
+              "bytes": 106609,
+              "sha256": "b70c33f658b730c1dbeeb9a91207a54ef7e43d72e682f80164b8321888017a40"
+            }
+          },
+          "summary": {
+            "tests": 1032,
+            "pass": 1032,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          }
+        }
+      ],
+      "completeOutputBundle": {
+        "path": "/tmp/pi-dish-r1-test-revision-validation/proof.json",
+        "sha256": "886fe5e5b7d74af4b03d7fdbe61e41c3bc1d84178ac05f6de46e66fcc7d97791",
+        "bytes": 7834
+      },
+      "generation": "No regeneration command; existing npm run check drift/type checks passed",
+      "scope": "Private258/1032 counts belong to this branch; parent integrated-main265/1041 remain parent proof on272a338 and are not substituted."
+    },
+    "reviewGate": {
+      "status": "NO reviewer operations authorized; await fresh parent grant after validation/source freeze",
+      "required": "Three exact-model OMP high reviewers must renew ENTIRE same-final-source ACCEPT/REVISE for the new complete R1 candidate, including new test/dossier and actual producers/consumers. No selected-delta-only approval.",
+      "quota": "Parent reports R11 same Kimi hit403 again. No provider retry/probe, replacement/upgrade, reviewer resolve/resume/prompt, new peer or manual signal."
+    },
+    "ownershipGate": "Parent acceptance docs3b4fcfe explicitly withhold R1/R4. R4/miner handoff remains held until parent integration/exactCI/formal gate. No main writes or unrelated cleanup.",
+    "validationCaptureCleanup": "Disposable capture helper source retained in complete proof bundle; helper removed after evidence capture. All unmodified logs/result JSON files retained. No unrelated cleanup."
+  }
 }

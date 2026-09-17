@@ -1,0 +1,807 @@
+{
+  "milestone": "R11",
+  "status": "Authorized canonical identity correction complete and all owner gates passed; new source freeze pending; same-actor review renewal and Kimi quota authorization still required",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r11-canonical-refs",
+  "owner": {
+    "session": "01a0ab39-8607-7781-94e2-54863e0a35ac",
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinking": "high"
+  },
+  "authority": [
+    "AGENTS.md",
+    "CLAUDE.md: runtime edges, session refs, test isolation",
+    "docs/remaining-migration-plan.md: R11, deliberate limits, verification policy",
+    "docs/m6-evidence.json: accepted CLI ingress/native behavior and runtime boundaries",
+    "docs/remaining-migration-plan.md: accepted M7 plus C1 tools checkpoint"
+  ],
+  "ownership": {
+    "authoredChanges": [
+      "skills/lib/pi-dish-client.ts",
+      "scripts/build-edges.ts",
+      "test/skills-core.test.js",
+      "test/edge-build.test.js",
+      "test/skill-client-ingress.test.js",
+      "src/core/helper-refs.ts",
+      "test/helpers.test.js",
+      "test/skills-cli.test.js"
+    ],
+    "generatedChanges": [
+      "skills/lib/pi-dish-client.js",
+      "skills/lib/pi-dish-client.d.ts",
+      "scripts/build-edges.js",
+      "lib/helper-refs.js",
+      "public/app.js",
+      "public/browser.js",
+      "public/helpers.js"
+    ],
+    "parentOnly": [
+      "CLAUDE.md (retire duplicated-rule/parity-test description)",
+      "AGENTS.md",
+      "BACKLOG.md",
+      "docs/remaining-migration-plan.md",
+      "main integration and push"
+    ],
+    "compiler": "Existing tsconfig.edges.json checks imported canonical source and emits temporary closure; existing tsconfig.tools.json checks build mapping. No compiler/config/package/source-policy exception requested.",
+    "languageServer": "Rechecked xd://lsp status before exported canonical implementation modification: no language servers configured. Grounded source/caller grep and full applicable bodies used; no mutating LSP.",
+    "compileOnlyOutputs": [
+      "src/core/helper-refs.js",
+      "src/core/helper-refs.d.ts",
+      "src/core/helper-query.js",
+      "src/core/helper-query.d.ts",
+      "src/core/helper-values.js",
+      "src/core/helper-values.d.ts",
+      "src/core/helper-identity.js",
+      "src/core/helper-identity.d.ts",
+      "src/core/helper-format.js",
+      "src/core/helper-format.d.ts",
+      "src/core/helper-types.js",
+      "src/core/helper-types.d.ts",
+      "src/core/session-api.js",
+      "src/core/session-api.d.ts"
+    ],
+    "unchangedGeneratedDeclaration": "scripts/build-edges.d.ts remains the existing empty module declaration; skill-client sibling declaration is regenerated.",
+    "canonicalOwner": "src/core/helper-refs.ts shortSessionRef candidate eligibility only; parent-authorized correction"
+  },
+  "callerInventory": {
+    "skillClient": {
+      "resolveSessionClientSide": "Only production caller of copied resolveRefAmong; replace with resolveSessionRefAmong(catalog,id,{exactOnly}). Catalog remains active-first and opaque fields retain existing consumers.",
+      "sessionsCli": "skills/pi-dish-sessions/scripts/pi-dish-sessions.ts consumes stableSessionRef in refsForRows for list/search output; consumes sessionHarnessId for spawn inheritance.",
+      "otherClis": "skills/pi-dish-comments/scripts/pi-dish-comments.ts and skills/pi-dish-pages/scripts/pi-dish-pages.ts load the same realpath-relative generated client. Discovery/auth/output unchanged.",
+      "retiredExports": "sessionRefAliases, resolveRefAmong, shortSessionRef have no production external caller; only test/skills-core.test.js copy-parity tests consume them.",
+      "nativeDecoder": "decodeRouteId is retained separately for sessionHarnessId/nativeSessionId; harness identity can be known with missing/empty/nonstring native id. RegistryRouteId and spawn authority unchanged."
+    },
+    "unchangedCanonicalConsumers": [
+      "src/browser/shared-helpers.ts -> public/helpers.js",
+      "src/browser/session-references.ts -> public/app.js (prefix/ref/search; match retains its separate route-only hint policy)",
+      "src/core/server-app.ts resolveRefInCatalog and /api/sessions/resolve -> lib/server-app.js",
+      "src/core/session-refs.ts prompt context expansion through supplied resolver -> lib/session-refs.js"
+    ],
+    "portableCompileClosure": [
+      "src/core/helper-refs.ts",
+      "src/core/helper-query.ts",
+      "src/core/helper-values.ts",
+      "src/core/helper-identity.ts",
+      "src/core/helper-format.ts",
+      "src/core/helper-types.ts",
+      "src/core/session-api.ts"
+    ],
+    "buildAndDelivery": [
+      "scripts/build-edges.ts: complete temporary compile and output validation before writes; check mode, executable modes, shebangs, CJS/ESM, orphan checks",
+      "tsconfig.edges.json: sibling source/output mapping unchanged",
+      "install.sh: skill-directory symlinks resolve client via realpath",
+      "package.json: installed client runtime path already included; no new runtime file"
+    ]
+  },
+  "behaviorMatrix": [
+    {
+      "boundary": "resolution",
+      "preserve": "Exact route -> exact alias -> route prefix -> alias prefix; first singleton wins; first nonempty stage supplies ambiguity; duplicate route ids keep first row."
+    },
+    {
+      "boundary": "host-qualified",
+      "preserve": "name/id/label host lookup, self handling, conflicting --host failure; provenance exact-only; server-capability-first dispatch and older-host list fallback stay unchanged."
+    },
+    {
+      "boundary": "references",
+      "preserve": "Existing portable canonical alias generation, shortest references and stable print policy; opaque malformed route ids remain usable as exact ids."
+    },
+    {
+      "boundary": "CLI decoder",
+      "preserve": "Nonempty string harness remains inferable when native tuple slot is missing, null, empty, numeric or malformed; nativeSessionId returns null. Do not use stricter decodeRouteSessionId here."
+    },
+    {
+      "boundary": "ref syntax",
+      "preserve": "CLI parseRef error messages for missing slash parts/empty input remain local; canonical parseSessionRefParts null policy is not substituted."
+    },
+    {
+      "boundary": "canonical differences",
+      "decision": "Historical unchanged-algorithm approval was superseded after actual CLI retargeting. Current authorized correction restores peer-alias exclusion centrally; resolver empty-needle policy unchanged and public empty target still rejected."
+    },
+    {
+      "boundary": "runtime",
+      "preserve": "Standalone generated client uses only Node builtins, no repo-relative runtime require. Only client JS is bundled; other edge outputs keep tsc emission and existing paths."
+    },
+    {
+      "boundary": "opaque ingress",
+      "preserve": "No new normalization, DTO, raw-entry cache, loader, reflection, capability or lifecycle policy. Retain native receiver/coercion/error boundaries from accepted M6."
+    }
+  ],
+  "deletionLedger": [
+    {
+      "target": "skills/lib/pi-dish-client.ts",
+      "remove": "UUID_TAIL_RE and authored sessionRefAliases/resolveRefAmong/shortSessionRef/stableSessionRef implementations and obsolete export surface; direct canonical imports replace them, not forwarding wrappers."
+    },
+    {
+      "target": "test/skills-core.test.js",
+      "remove": "Two copy-parity tests plus comparison-only fixtures/imports; retain native decoder observable behavior."
+    }
+  ],
+  "retainedCheckLedger": [
+    "test/helpers.test.js canonical precedence/ambiguity/exactOnly/short/stable contracts",
+    "test/skills-cli.test.js actual CLI against isolated product server",
+    "test/skill-sessions-fleet.test.js actual local/proxied fleet CLI and authorization",
+    "test/session-control-cli.test.js harness inference/override and launch request semantics",
+    "test/skill-client-ingress.test.js malformed/null/raw response behavior",
+    "test/session-refs.test.js prompt reference context policy",
+    "test/edge-build.test.js drift/modes/atomic validation and standalone bundling regression",
+    "test/browser/composer-autocomplete.spec.js target-host reference insertion and draft ownership"
+  ],
+  "requiredProofs": [
+    "build:core -> build:browser -> build:edges",
+    "npm run check",
+    "npm test",
+    "npm run test:browser",
+    "npm run test:ui:scenarios",
+    "npm run test:ui",
+    "Actual isolated copied-client/installed-symlink CLI product+fallback and browser reference identity smoke",
+    "Renew whole corrected source verdicts on same verified reviewer actors, Kimi only when authorized after quota restoration"
+  ],
+  "limits": [
+    "Only authorized shared alias eligibility correction; resolver stages/exactOnly and distinct CLI decoders unchanged",
+    "Full browser/scenario/UI gates now mandatory because shared runtime browser behavior changes",
+    "No native adapter/lifecycle redesign and no macOS claim",
+    "No extra actors or Kimi quota retry/probe; historical reviews invalidated by new source"
+  ],
+  "runtime": {
+    "node": "26.8.2",
+    "platform": "Linux x64",
+    "browser": "Chromium153.0.8010.12 via full Playwright suite; managed Chromium production surface separately exercised",
+    "macOS": "not executed"
+  },
+  "attempts": [
+    {
+      "problem": "Initial build:tools before dependencies installed could not locate typescript/bin/tsc",
+      "resolution": "Pinned private npm ci, then both builds and checks passed"
+    },
+    {
+      "problem": "First runtime smoke assumed comments --help; that CLI instead attempted session discovery",
+      "resolution": "Changed disposable proof to real count with explicit isolated session and actual server"
+    },
+    {
+      "problem": "Second runtime smoke used /p/ instead of actual /page/ publication path",
+      "resolution": "Read publication producer and corrected disposable proof; subsequent ready run passed all assertions"
+    },
+    {
+      "problem": "Expanded smoke expected parseRef wording for empty argument, but actual CLI target admission rejects it earlier",
+      "resolution": "Changed disposable assertion to existing session-ref rejection contract; final expanded smoke passed. No product change."
+    }
+  ],
+  "contributorPath": {
+    "before": "Alias generation, staged matching and short/stable reference edits required independent helper-refs and skill-client implementations plus copy-parity maintenance.",
+    "after": "Edit src/core/helper-refs.ts once; core/browser/edge outputs all consume the identity-safe algorithm. The only new eligibility check rejects aliases shadowed by another session; CLI decoder and syntax policy remain separate.",
+    "allocationLimits": "No performance improvement claimed. Existing canonical implementation/passes unchanged; esbuild retains a module-level unused reference-preamble join as conservative side-effect handling. No per-request cache or normalization added."
+  },
+  "finalDisposition": {
+    "deleted": "Four duplicate algorithm function bodies, local UUID-tail regex, obsolete explanatory comments; unused client sessionRefAliases/resolveRefAmong/shortSessionRef exports; two copy-parity tests and their comparison-only fixtures.",
+    "retained": "Canonical stableSessionRef remains an imported consumer-facing function for sessions list/search; CLI decodeRouteId/sessionHarnessId/nativeSessionId and parseRef policies retained.",
+    "newRegressionCases": "Initial standalone/missing-native/legacy-stage regressions retained. Added shared native+UUID canonical roundtrip regression and real first-party Pi/OMP/shared-UUID/ordinary-UUID CLI+server+fallback consumer regression; both fail before the authorized eligibility fix and pass afterward.",
+    "unchanged": "Resolver precedence/ambiguity/exactOnly, uniqueSessionPrefix route-only behavior, CLI decoder/parser/host policy, tsconfig/package/source-policy and approved exact build-edges closure remain unchanged; canonical shortSessionRef eligibility and its generated core/browser/client outputs are explicitly changed.",
+    "parentDocAction": "CLAUDE.md 760\u2013762 duplicated rule/parity test text must describe single authored algorithm bundled by build:edges; parent owns this edit."
+  },
+  "approvals": [
+    {
+      "boundary": "Canonical algorithm differences",
+      "decision": "Parent approved in principle unchanged canonical algorithm, grounded shadowed-alias divergence and empty-needle distinction; required real CLI proof and separate missing-native policy preserved.",
+      "proof": "Final expanded installed CLI smoke recorded above."
+    },
+    {
+      "boundary": "Exact temporary compile-only output map and runtime guard",
+      "decision": "Parent inspected actual scripts/build-edges.ts and approved only src/core/{helper-refs,helper-query,helper-values,helper-identity,helper-format,helper-types,session-api}.{js,d.ts}, conditional on client source. These outputs remain temporary and are not copied into edge outputs. Runtime inputs restricted to exact client plus listed TypeScript closure, builtin-only imports, one output, existing declarations/modes retained. No wildcard/prefix allowance.",
+      "reviewCapacity": "Separate trio capacity grant still required."
+    },
+    {
+      "boundary": "Identity-safe shared canonical exception",
+      "decision": "Parent rejected e694d89 and explicitly authorized only minimal shortSessionRef shared/shadowed alias eligibility correction; no resolver-stage/exactOnly/decoder-policy change, no CLI-only shim/copy, no avoidable per-candidate resolver/maps/allocations. After final source freeze renew SAME verified GLM/DeepSeek; SAME Kimi only after actual quota restoration/authorization."
+    }
+  ],
+  "cleanup": {
+    "stopped": "Supervised r11-runtime listener process and managed r11-product browser released",
+    "removed": "All five owned /tmp/r11-proof-* fixture homes and throwaway executable /tmp/r11-runtime-proof.cjs; source embedded with SHA256 in this evidence",
+    "retained": "/tmp/r11-runtime-result.json plus browser screenshot; repository contains no throwaway executable.",
+    "scope": "No unrelated files or live sessions modified.",
+    "correction": "After actual corrected runtime/browser proof, released managed browser, stopped proof listeners, removed isolated fixture home and executable scripts after embedding source/hash/results. Results/screenshots/historical archives retained outside repo."
+  },
+  "historicalRejectedSource": {
+    "sha": "e694d8948eecaf85c02b21db0185035fff57a501",
+    "decision": "REJECT: actual Pi/OMP same-native catalog made final CLI print route-hi resolving to Pi peer instead of OMP target; old CLI printed encoded OMP route correctly. Preexisting canonical behavior does not excuse migrated CLI retargeting.",
+    "reviewDisposition": "GLM initial/renewed and DeepSeek ACCEPTs are historical-invalidated for correction; Kimi quota attempt has no verdict. All three archived and gracefully closed; same actors only for renewal.",
+    "reviewArchiveRecords": [
+      {
+        "path": "/tmp/r11-review-archives/glm-final.json",
+        "sha256": "699fcd4f8300e4c3693964b56b50502af933b7faa9b9a7de74301047571c9d1e",
+        "bytes": 1435236,
+        "messages": 142,
+        "firstIndex": 0,
+        "lastIndex": 141,
+        "contiguous": true
+      },
+      {
+        "path": "/tmp/r11-review-archives/deepseek-final.json",
+        "sha256": "9b2993b2d36ca4e082ce75ef9148743916566dd277a9a16461f2ffecc9720f60",
+        "bytes": 1444516,
+        "messages": 123,
+        "firstIndex": 0,
+        "lastIndex": 122,
+        "contiguous": true
+      },
+      {
+        "path": "/tmp/r11-review-archives/kimi-quota-incomplete.json",
+        "sha256": "18ea25590707faa78b2e05a2bd1211695a1582684a961ee34cfadf3dc8ce172a",
+        "bytes": 1263113,
+        "messages": 112,
+        "firstIndex": 0,
+        "lastIndex": 111,
+        "contiguous": true
+      }
+    ],
+    "pendingDossier": "/tmp/r11-review-pending.json",
+    "counterexample": {
+      "command": "node /tmp/r11-retarget-probe.cjs via supervised finite process r11-retarget",
+      "exitCode": 0,
+      "source": "const fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst assert = require('node:assert/strict');\nconst run = require('node:util').promisify(require('node:child_process').execFile);\nconst root = process.cwd();\nrequire(path.join(root, 'test/test-env')).applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'r11-retarget-'));\nObject.assign(process.env, { HOME: home, TMUX_TMPDIR: path.join(home, 'tmux'), PI_DISH_INDEX_SYNC_BUDGET: '1000' });\nfs.mkdirSync(process.env.TMUX_TMPDIR);\nconst native = 'route-hit';\nconst encoded = '~sk1_' + Buffer.from(JSON.stringify(['omp', native])).toString('base64url');\nfor (const [harness, name] of [['pi', 'Pi peer'], ['omp', 'OMP target']]) {\n  const dir = path.join(home, `.${harness}`, 'agent/sessions/project');\n  fs.mkdirSync(dir, { recursive: true });\n  fs.writeFileSync(path.join(dir, native + '.jsonl'), [\n    { type: 'session', version: 3, id: native, cwd: home, timestamp: '2026-09-05T09:07:03.291Z' },\n    { type: 'session_info', name },\n    { type: 'message', id: 'u1', message: { role: 'user', content: [{ type: 'text', text: name }], timestamp: '2026-09-05T09:07:04.000Z' } },\n  ].map(JSON.stringify).join('\\n') + '\\n');\n}\nfor (const version of ['before','after']) {\n  const skills = path.join(home, version, 'skills');\n  fs.mkdirSync(path.join(skills, 'lib'), { recursive: true });\n  fs.mkdirSync(path.join(skills, 'pi-dish-sessions/scripts'), { recursive: true });\n  fs.copyFileSync(version === 'before' ? '/tmp/r11-baseline-client.js' : path.join(root, 'skills/lib/pi-dish-client.js'), path.join(skills, 'lib/pi-dish-client.js'));\n  fs.copyFileSync(path.join(root, 'skills/pi-dish-sessions/scripts/pi-dish-sessions.js'), path.join(skills, 'pi-dish-sessions/scripts/pi-dish-sessions.js'));\n}\nconst server = require(path.join(root, 'server'));\n(async () => {\n  try {\n    if (!server.listening) await new Promise(resolve => server.once('listening', resolve));\n    const base = `http://127.0.0.1:${server.address().port}`;\n    let catalog;\n    for (let i = 0; i < 100; i++) {\n      catalog = await (await fetch(base + '/api/sessions')).json();\n      if (!catalog.indexing && catalog.previous.length === 2) break;\n      await new Promise(resolve => setTimeout(resolve, 50));\n    }\n    assert.deepEqual(catalog.previous.map(s => s.id).sort(), [native, encoded].sort());\n    const host = await (await fetch(base + '/api/host')).json();\n    assert.equal(host.capabilities.refAliases, true);\n    const outcomes = [];\n    for (const version of ['before','after']) {\n      const skills = path.join(home, version, 'skills');\n      const cli = path.join(skills, 'pi-dish-sessions/scripts/pi-dish-sessions.js');\n      const client = require(path.join(skills, 'lib/pi-dish-client.js'));\n      const ids = catalog.previous.map(s => s.id);\n      const stableRef = client.stableSessionRef(encoded, ids);\n      const invoke = args => run(process.execPath, [cli, ...args, '--url', base], { env: process.env, cwd: home });\n      const listed = (await invoke(['list'])).stdout;\n      const targetRow = listed.split('\\n').find(line => line.includes('\\tOMP target\\t'));\n      assert.ok(targetRow, listed);\n      const printedRef = targetRow.split('\\t')[0];\n      assert.equal(printedRef, stableRef);\n      const resolved = JSON.parse((await invoke(['resolve', printedRef, '--json'])).stdout);\n      const direct = await (await fetch(base + '/api/sessions/resolve?id=' + encodeURIComponent(printedRef))).json();\n      const clientSide = await client.resolveSessionClientSide(base, null, printedRef);\n      outcomes.push({ version, stableRef, printedRef, targetRow, cliResolvedId: resolved.id, cliResolvedName: resolved.session.name, serverResolvedId: direct.session.id, fallbackResolvedId: clientSide.id, listOutput: listed });\n    }\n    assert.equal(outcomes[0].printedRef, encoded);\n    assert.equal(outcomes[0].cliResolvedId, encoded);\n    assert.equal(outcomes[1].printedRef, 'route-hi');\n    assert.equal(outcomes[1].cliResolvedId, native);\n    const result = { baseline: 'dc4ae84568fda976cfb136082b1dda405ccf54d8', final: 'e694d8948eecaf85c02b21db0185035fff57a501', native, encoded, admittedCatalogRows: catalog.previous, capabilities: host.capabilities, outcomes, conclusion: 'Actual first-party discovery admits both fixture identities; baseline installed CLI prints a handle resolving to OMP target, R11 installed CLI prints route-hi resolving to Pi peer. Same wrong target via product and client-side resolver. No lifecycle/control operation executed.' };\n    fs.writeFileSync('/tmp/r11-retarget-result.json', JSON.stringify(result, null, 2));\n    console.log(JSON.stringify(result, null, 2));\n  } finally {\n    server.close();\n    fs.rmSync(home, { recursive: true, force: true });\n  }\n})().catch(error => { console.error(error); process.exitCode = 1; });\n",
+      "sourceSha256": "dee013482eeaa54305fd4f6237d3f2fcad3f4e69f5a4563af41af92ff21a44be",
+      "baselineClientSha256": "441b8255cc4876667b7f3df62cc3d83d52f96487d98824c9f7d346487f4ebb83",
+      "result": {
+        "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+        "final": "e694d8948eecaf85c02b21db0185035fff57a501",
+        "native": "route-hit",
+        "encoded": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+        "admittedCatalogRows": [
+          {
+            "id": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "sessionKey": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "harnessId": "omp",
+            "nativeSessionId": "route-hit",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": false,
+              "steer": false,
+              "followUp": false,
+              "abort": false,
+              "compact": false,
+              "models": false,
+              "setModel": false,
+              "setThinking": false,
+              "rename": false,
+              "commands": false,
+              "queueCancel": false,
+              "tree": false,
+              "export": true,
+              "close": false,
+              "restart": false,
+              "resume": true
+            },
+            "closeMode": "owned-pane",
+            "profileId": "omp-v1",
+            "profileVersion": 1,
+            "name": "OMP target",
+            "model": "unknown",
+            "contextPercent": 0,
+            "contextTokens": 0,
+            "messageCount": 1,
+            "lastActivity": "2026-09-16T18:37:48.147Z",
+            "isActive": false,
+            "cwd": "/tmp/r11-retarget-tLRarL",
+            "sessionFile": "/tmp/r11-retarget-tLRarL/.omp/agent/sessions/project/route-hit.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "parentId": null,
+            "parentSource": null,
+            "familyParentId": null
+          },
+          {
+            "id": "route-hit",
+            "sessionKey": "~sk1_WyJwaSIsInJvdXRlLWhpdCJd",
+            "harnessId": "pi",
+            "nativeSessionId": "route-hit",
+            "harnessLabel": "Pi",
+            "capabilities": {
+              "prompt": false,
+              "steer": false,
+              "followUp": false,
+              "abort": false,
+              "compact": false,
+              "models": true,
+              "setModel": true,
+              "setThinking": false,
+              "rename": true,
+              "commands": true,
+              "queueCancel": false,
+              "tree": true,
+              "export": true,
+              "close": false,
+              "restart": false,
+              "resume": true
+            },
+            "closeMode": "logical",
+            "profileId": "pi-v3",
+            "profileVersion": 1,
+            "name": "Pi peer",
+            "model": "unknown",
+            "contextPercent": 0,
+            "contextTokens": 0,
+            "messageCount": 1,
+            "lastActivity": "2026-09-16T18:37:48.147Z",
+            "isActive": false,
+            "cwd": "/tmp/r11-retarget-tLRarL",
+            "sessionFile": "/tmp/r11-retarget-tLRarL/.pi/agent/sessions/project/route-hit.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "parentId": null,
+            "parentSource": null,
+            "familyParentId": null
+          }
+        ],
+        "capabilities": {
+          "sessions": true,
+          "search": true,
+          "usage": true,
+          "spawns": true,
+          "shares": true,
+          "pages": true,
+          "comments": true,
+          "skills": true,
+          "harnesses": true,
+          "resolve": true,
+          "docs": true,
+          "routines": true,
+          "recovery": true,
+          "sessionBounces": true,
+          "refAliases": true,
+          "tmux": true,
+          "usageLimits": true
+        },
+        "outcomes": [
+          {
+            "version": "before",
+            "stableRef": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "printedRef": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "targetRow": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ\tinactive\tOMP target\t/tmp/r11-retarget-tLRarL",
+            "cliResolvedId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "cliResolvedName": "OMP target",
+            "serverResolvedId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "fallbackResolvedId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "listOutput": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ\tinactive\tOMP target\t/tmp/r11-retarget-tLRarL\nroute-hit\tinactive\tPi peer\t/tmp/r11-retarget-tLRarL\n"
+          },
+          {
+            "version": "after",
+            "stableRef": "route-hi",
+            "printedRef": "route-hi",
+            "targetRow": "route-hi\tinactive\tOMP target\t/tmp/r11-retarget-tLRarL",
+            "cliResolvedId": "route-hit",
+            "cliResolvedName": "Pi peer",
+            "serverResolvedId": "route-hit",
+            "fallbackResolvedId": "route-hit",
+            "listOutput": "route-hi\tinactive\tOMP target\t/tmp/r11-retarget-tLRarL\nroute-hit\tinactive\tPi peer\t/tmp/r11-retarget-tLRarL\n"
+          }
+        ],
+        "conclusion": "Actual first-party discovery admits both fixture identities; baseline installed CLI prints a handle resolving to OMP target, R11 installed CLI prints route-hi resolving to Pi peer. Same wrong target via product and client-side resolver. No lifecycle/control operation executed."
+      },
+      "limits": "Two valid fixture JSONL session stores discovered by real first-party product server; no registry mocks, live agent sessions, provider credentials, or lifecycle/control requests. Native harness launch did not generate these fixtures; actual discovery/catalog admission and both actual installed CLI versions were executed."
+    }
+  },
+  "historicalVerification": [
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "result": "exit 0; 798 pinned packages installed in private worktree; existing six blocked lifecycle scripts unchanged"
+    },
+    {
+      "command": "npm run build:tools && npm run build:edges",
+      "result": "exit 0; sibling declarations/runtime outputs and bundled skill client generated"
+    },
+    {
+      "command": "npm run check",
+      "result": "exit 0; 258 compiler-owned sources/no explicit-any exceptions; lint and all tool/core/browser/edge drift, modes and strict checks passed"
+    },
+    {
+      "command": "npm test -- test/skills-core.test.js test/edge-build.test.js test/skill-client-ingress.test.js test/skills-cli.test.js test/session-control-cli.test.js test/skill-sessions-fleet.test.js test/helpers.test.js test/session-refs.test.js",
+      "result": "236 passed; no failures/skips; 2986.561158ms"
+    },
+    {
+      "command": "npm test",
+      "result": "1028 passed; no failures/cancellations/skips; 34752.715019ms"
+    },
+    {
+      "command": "npm run test:browser -- composer-autocomplete.spec.js",
+      "result": "8 passed; 13.1s; target-host reference insertion and ownership retained"
+    }
+  ],
+  "historicalRuntimeSmoke": {
+    "command": "node /tmp/r11-runtime-proof.cjs via supervised process r11-runtime",
+    "result": {
+      "base": "http://127.0.0.1:39683",
+      "legacyBase": "http://127.0.0.1:35353",
+      "home": "/tmp/r11-proof-kJyfLl",
+      "route": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+      "standalone": "/tmp/r11-proof-kJyfLl/standalone/skills",
+      "assertions": "12 resolutions including shadowed full alias, two ambiguity exits, two exact-only misses, two empty-ref errors, two list policies including shadowed alias, missing-native CLI spawn harness inference against admission fixture (no native process launched), HTTP 409, three standalone installed CLI loaders",
+      "outputs": [
+        {
+          "endpoint": "product",
+          "ref": "01a070d2",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "product",
+          "ref": "route-hit",
+          "id": "route-hit"
+        },
+        {
+          "endpoint": "product",
+          "ref": "alias-hit",
+          "id": "~sk1_WyJvbXAiLCJhbGlhcy1oaXQiXQ"
+        },
+        {
+          "endpoint": "product",
+          "ref": "60d031ea-a33c-4794-856a-85a817366e7a:~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "product",
+          "ref": "self/01a070d2",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "product",
+          "ref": "shadowed",
+          "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "01a070d2",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "route-hit",
+          "id": "route-hit"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "alias-hit",
+          "id": "~sk1_WyJvbXAiLCJhbGlhcy1oaXQiXQ"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "60d031ea-a33c-4794-856a-85a817366e7a:~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "self/01a070d2",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "endpoint": "legacy-fallback",
+          "ref": "shadowed",
+          "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+        }
+      ]
+    },
+    "additionalAssertions": "Standalone installed comments count returns 0 and pages publish serves actual temporary HTML with HTTP 200. Only generated CLI/client JS copied; no node_modules, core/lib source or declarations in installed tree.",
+    "source": "const fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst http = require('node:http');\nconst assert = require('node:assert/strict');\nconst { promisify } = require('node:util');\nconst run = promisify(require('node:child_process').execFile);\nconst root = process.cwd();\nrequire(path.join(root, 'test/test-env')).applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'r11-proof-'));\nObject.assign(process.env, { HOME: home, TMUX_TMPDIR: path.join(home, 'tmux'), PI_DISH_INDEX_SYNC_BUDGET: '1000' });\nfs.mkdirSync(process.env.TMUX_TMPDIR);\nconst native = '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0';\nconst route = '~sk1_' + Buffer.from(JSON.stringify(['omp', native])).toString('base64url');\nconst shadowed = '~sk1_' + Buffer.from(JSON.stringify(['omp', 'shadowed'])).toString('base64url');\nconst fixtures = [['omp', native, 'Canonical OMP'], ['pi', 'route-hit', 'Exact route'], ['omp', 'route-hit', 'Shadowed alias'], ['omp', 'alias-hit', 'Exact alias'], ['pi', 'alias-hit-long', 'Shadowed prefix'], ['pi', 'twin-a', 'Twin A'], ['pi', 'twin-b', 'Twin B'], ['omp', 'shadowed', 'Full alias retained'], ['omp', 'shadowed-long', 'Longer peer alias']];\nfor (const [harness, id, title] of fixtures) {\n  const dir = path.join(home, `.${harness}`, 'agent/sessions/project');\n  fs.mkdirSync(dir, { recursive: true });\n  fs.writeFileSync(path.join(dir, id + '.jsonl'), [\n    { type: 'session', version: 3, id, cwd: home, timestamp: '2026-09-05T09:07:03.291Z' },\n    { type: 'session_info', name: title },\n    { type: 'message', id: 'u1', message: { role: 'user', content: [{ type: 'text', text: title }], timestamp: '2026-09-05T09:07:04.000Z' } },\n  ].map(JSON.stringify).join('\\n') + '\\n');\n}\nconst installed = path.join(home, 'standalone/skills');\nfs.mkdirSync(path.join(installed, 'lib'), { recursive: true });\nfs.copyFileSync(path.join(root, 'skills/lib/pi-dish-client.js'), path.join(installed, 'lib/pi-dish-client.js'));\nfor (const skill of ['pi-dish-sessions', 'pi-dish-comments', 'pi-dish-pages']) {\n  fs.mkdirSync(path.join(installed, skill, 'scripts'), { recursive: true });\n  fs.copyFileSync(path.join(root, 'skills', skill, 'scripts', skill + '.js'), path.join(installed, skill, 'scripts', skill + '.js'));\n  fs.mkdirSync(path.join(home, '.pi/agent/skills'), { recursive: true });\n  fs.symlinkSync(path.join(installed, skill), path.join(home, '.pi/agent/skills', skill));\n}\nconst cli = path.join(home, '.pi/agent/skills/pi-dish-sessions/scripts/pi-dish-sessions.js');\nconst server = require(path.join(root, 'server'));\nlet legacy;\nasync function main() {\n  if (!server.listening) await new Promise(resolve => server.once('listening', resolve));\n  const base = `http://127.0.0.1:${server.address().port}`;\n  let list;\n  for (let i = 0; i < 100; i++) {\n    list = await (await fetch(base + '/api/sessions')).json();\n    if (!list.indexing && list.previous.length === fixtures.length) break;\n    await new Promise(resolve => setTimeout(resolve, 50));\n  }\n  assert.equal(list.previous.length, fixtures.length);\n  const identity = await (await fetch(base + '/api/host')).json();\n  let selectedHarness;\n  legacy = http.createServer(async (req, res) => {\n    if (req.url === '/api/harnesses') {\n      res.setHeader('Content-Type', 'application/json');\n      return res.end(JSON.stringify({ harnesses: [{ id: 'omp', available: true }] }));\n    }\n    if (req.url === '/api/sessions/new' && req.method === 'POST') {\n      let body = ''; for await (const chunk of req) body += chunk;\n      selectedHarness = JSON.parse(body).harness;\n      res.setHeader('Content-Type', 'application/json');\n      return res.end(JSON.stringify({ sessionId: 'isolated-admission-fixture' }));\n    }\n    const response = await fetch(base + req.url);\n    const data = await response.json();\n    if (req.url === '/api/hosts') for (const host of data.hosts) host.capabilities = {};\n    res.writeHead(response.status, { 'content-type': 'application/json' });\n    res.end(JSON.stringify(data));\n  });\n  await new Promise(resolve => legacy.listen(0, '127.0.0.1', resolve));\n  const legacyBase = `http://127.0.0.1:${legacy.address().port}`;\n  const outputs = [];\n  for (const endpoint of [base, legacyBase]) {\n    const invoke = args => run(process.execPath, [cli, ...args, '--url', endpoint], { env: process.env, cwd: home });\n    for (const [ref, expected] of [['01a070d2', route], ['route-hit', 'route-hit'], ['alias-hit', '~sk1_' + Buffer.from(JSON.stringify(['omp', 'alias-hit'])).toString('base64url')], [`${identity.hostId}:${route}`, route], ['self/01a070d2', route], ['shadowed', shadowed]]) {\n      const resolved = JSON.parse((await invoke(['resolve', ref, '--json'])).stdout);\n      assert.equal(resolved.id, expected);\n      outputs.push({ endpoint: endpoint === base ? 'product' : 'legacy-fallback', ref, id: resolved.id });\n    }\n    await assert.rejects(invoke(['resolve', 'twin-']), e => e.code === 1 && /twin-a/.test(e.stderr) && /twin-b/.test(e.stderr));\n    await assert.rejects(invoke(['resolve', `${identity.hostId}:01a070d2`]), e => e.code === 1 && /Session not found/.test(e.stderr));\n    await assert.rejects(invoke(['resolve', '']), e => e.code === 1 && /session ref/.test(e.stderr));\n    const printed = (await invoke(['list'])).stdout;\n    assert.ok(printed.includes(endpoint === base ? '01a070d2\\t' : route + '\\t'));\n    assert.ok(printed.includes(endpoint === base ? 'shadowed\\t' : shadowed + '\\t'));\n  }\n  const missingNative = '~sk1_' + Buffer.from(JSON.stringify(['omp'])).toString('base64url');\n  const inherited = JSON.parse((await run(process.execPath, [cli, 'spawn', '--session', missingNative, '--no-wait', '--json', '--url', legacyBase], { env: process.env, cwd: home })).stdout);\n  assert.equal(inherited.harness, 'omp');\n  assert.equal(selectedHarness, 'omp');\n  assert.equal((await fetch(base + '/api/sessions/resolve?id=twin-')).status, 409);\n  const comments = path.join(home, '.pi/agent/skills/pi-dish-comments/scripts/pi-dish-comments.js');\n  assert.equal(JSON.parse((await run(process.execPath, [comments, 'count', '--session', route, '--url', base, '--json'], { env: process.env, cwd: home })).stdout).total, 0);\n  const pages = path.join(home, '.pi/agent/skills/pi-dish-pages/scripts/pi-dish-pages.js');\n  const html = path.join(home, 'proof.html');\n  fs.writeFileSync(html, '<h1>R11 isolated publication</h1>');\n  const published = JSON.parse((await run(process.execPath, [pages, 'publish', html, '--session', route, '--url', base, '--json'], { env: process.env, cwd: home })).stdout);\n  assert.equal((await fetch(base + '/page/' + published.token)).status, 200);\n  const result = { base, legacyBase, home, route, standalone: installed, assertions: '12 resolutions including shadowed full alias, two ambiguity exits, two exact-only misses, two empty-ref errors, two list policies including shadowed alias, missing-native CLI spawn harness inference against admission fixture (no native process launched), HTTP 409, three standalone installed CLI loaders', outputs };\n  fs.writeFileSync('/tmp/r11-runtime-result.json', JSON.stringify(result, null, 2));\n  console.log('R11_READY ' + JSON.stringify(result));\n}\nprocess.on('SIGTERM', () => { legacy?.close(); server.close(); fs.rmSync(home, { recursive: true, force: true }); setTimeout(() => process.exit(0), 200).unref(); });\nmain().catch(error => { console.error(error); process.exitCode = 1; legacy?.close(); server.close(); });\n",
+    "sha256": "463637a8ca73f4d5364295552a3e5dbba2dc207a52f32f769e3be8e458db7c78"
+  },
+  "historicalBrowserSmoke": {
+    "surface": "Production public/app.js served by actual isolated server, no fixtureApp/debug entrypoint",
+    "actions": "Opened All, right-clicked Canonical OMP session, observed Copy session ref 01a070d2 and data-copy=01a070d2 matching CLI/server. Actual menu selection exercised.",
+    "screenshot": "/tmp/omp-sshots-15821dc11af8cdfa.webp",
+    "clipboardLimit": "Headless native clipboard read remained empty after menu click; no native clipboard success claim. Canonical displayed/action value and target-host composer behavior independently verified.",
+    "toolIssues": [
+      "CSS click helper timeout although observed-id/raw Puppeteer click worked",
+      "Function-based tab.run serialization failed; raw-string tab.run worked"
+    ]
+  },
+  "verification": [
+    {
+      "command": "npm test -- test/helpers.test.js test/skills-cli.test.js (before canonical correction)",
+      "result": "exit1; both new regressions failed: shared alias ref resolved null; actual CLI OMP row ref resolved to Pi route-hit. Expected red proof retained."
+    },
+    {
+      "command": "npm run build:core && npm run build:browser && npm run build:edges && npm test -- test/helpers.test.js test/skills-cli.test.js",
+      "result": "exit0; all affected outputs regenerated; 187 focused tests passed, 0 failures/skips,2995.168627ms."
+    },
+    {
+      "command": "npm run check && npm test",
+      "result": "exit0; source policy258/no explicit-any exceptions, lint/types/all generated drift/modes; full backend1030 passed,0 failures/cancellations/skips,32215.854002ms."
+    },
+    {
+      "command": "npm run test:browser && npm run test:ui:scenarios && npm run test:ui",
+      "result": "exit0; full286 browser tests passed in3.2m; all8 independent models/drafts/sidebar/usage/skills/routines/bounce/mobile scenarios passed; full desktop/mobile/multi-host/same-id UI smoke all good; combined298.34s.",
+      "browser": "Chromium153.0.8010.12",
+      "output": "artifact://112"
+    }
+  ],
+  "identityCorrection": {
+    "approval": "Parent rejected frozen source and explicitly superseded canonical-unchanged rule ONLY to prevent demonstrated shadowed/shared aliases. No resolver stages, exactOnly, decoder, host, lifecycle or unrelated M changes.",
+    "design": "Reject an alias before prefix search when any other session alias starts with that whole alias. Then no candidate prefix of that alias could pass the old CLI peer.startsWith(candidate) guard. Existing uniqueSessionPrefix may safely search eligible aliases; avoid per-candidate resolver/maps/allocations. One authored algorithm; no CLI shim/copy.",
+    "referenceInventory": [
+      "shortSessionRef -> stableSessionRef in helper-refs",
+      "shortSessionRef -> browser session-references prefix/ref and shared-helpers export",
+      "stableSessionRef -> server /api/sessions/resolve and skill sessions refIndex list/search/fleetSearch",
+      "uniqueSessionPrefix route-only behavior remains unchanged"
+    ],
+    "proofPlan": [
+      "Focused true consumer regression on real first-party Pi/OMP same-native catalog list->resolve and server/fallback identity",
+      "Shared uuid alias ambiguity and safe emitted handles; ordinary short refs unchanged",
+      "Permanent canonical helper cases defend shorter shadowed aliases and shared native/uuid aliases, not source counts",
+      "Actual installed copied-client CLI, real server and browser context-menu/picker paths with isolated fixtures",
+      "Regenerate core then browser then edges; full check/backend/browser/all8 scenarios/full desktop-mobile UI"
+    ],
+    "reviewPlan": "Renew SAME GLM/DeepSeek entire new final source after exact model/high/OMP verification. SAME Kimi only after actual quota restoration/authorization; no retry/probe/new actor.",
+    "runtimeSmoke": {
+      "command": "node /tmp/r11-corrected-runtime.cjs supervised with readiness observed",
+      "source": "const fs = require('node:fs');\nconst os = require('node:os');\nconst path = require('node:path');\nconst http = require('node:http');\nconst assert = require('node:assert/strict');\nconst run = require('node:util').promisify(require('node:child_process').execFile);\nconst root = process.cwd();\nrequire(path.join(root, 'test/test-env')).applyTestEnv();\nconst home = fs.mkdtempSync(path.join(os.tmpdir(), 'r11-corrected-'));\nObject.assign(process.env, { HOME: home, TMUX_TMPDIR: path.join(home, 'tmux'), PI_DISH_INDEX_SYNC_BUDGET: '1000' });\nfs.mkdirSync(process.env.TMUX_TMPDIR);\nconst uuid = '01a070d2-43fb-7360-aaba-a4ddf8d1deb0';\nconst encode = native => '~sk1_' + Buffer.from(JSON.stringify(['omp', native])).toString('base64url');\nconst fixtures = [\n  ['pi', 'route-hit', 'Pi alias owner'], ['omp', 'route-hit', 'OMP alias collision'],\n  ['omp', `2026-09-05T09-07-03-291Z_${uuid}`, 'Shared UUID morning'],\n  ['omp', `2026-09-06T09-07-03-291Z_${uuid}`, 'Shared UUID next day'],\n  ['omp', '2026-09-07T09-07-03-291Z_01a07264-131e-74a7-979a-1e763bf12b97', 'Ordinary UUID'],\n  ['omp', 'shadowed', 'Short alias'], ['omp', 'shadowed-long', 'Extended alias'],\n].map(([harness, native, name]) => ({ harness, native, name, id: harness === 'pi' ? native : encode(native) }));\nfor (const fixture of fixtures) {\n  const dir = path.join(home, `.${fixture.harness}`, 'agent/sessions/project');\n  fs.mkdirSync(dir, { recursive: true });\n  fs.writeFileSync(path.join(dir, fixture.native + '.jsonl'), [\n    { type: 'session', version: 3, id: fixture.native, cwd: home, timestamp: '2026-09-07T09:07:03.291Z' },\n    { type: 'session_info', name: fixture.name },\n    { type: 'message', id: 'u1', message: { role: 'user', content: [{ type: 'text', text: fixture.name }], timestamp: '2026-09-07T09:07:04.000Z' } },\n  ].map(JSON.stringify).join('\\n') + '\\n');\n}\nfor (const version of ['before','corrected']) {\n  const skills = path.join(home, version, 'skills');\n  fs.mkdirSync(path.join(skills, 'lib'), { recursive: true });\n  fs.mkdirSync(path.join(skills, 'pi-dish-sessions/scripts'), { recursive: true });\n  fs.copyFileSync(version === 'before' ? '/tmp/r11-baseline-client.js' : path.join(root, 'skills/lib/pi-dish-client.js'), path.join(skills, 'lib/pi-dish-client.js'));\n  fs.copyFileSync(path.join(root, 'skills/pi-dish-sessions/scripts/pi-dish-sessions.js'), path.join(skills, 'pi-dish-sessions/scripts/pi-dish-sessions.js'));\n  fs.symlinkSync(path.join(skills, 'pi-dish-sessions'), path.join(home, version, 'installed-skill'));\n}\nconst server = require(path.join(root, 'server'));\nlet legacy;\n(async () => {\n  if (!server.listening) await new Promise(resolve => server.once('listening', resolve));\n  const base = `http://127.0.0.1:${server.address().port}`;\n  let catalog;\n  for (let i = 0; i < 100; i++) {\n    catalog = await (await fetch(base + '/api/sessions')).json();\n    if (!catalog.indexing && catalog.previous.length === fixtures.length) break;\n    await new Promise(resolve => setTimeout(resolve, 50));\n  }\n  assert.deepEqual(catalog.previous.map(s => s.id).sort(), fixtures.map(s => s.id).sort());\n  const identity = await (await fetch(base + '/api/host')).json();\n  legacy = http.createServer(async (req, res) => {\n    const response = await fetch(base + req.url);\n    const data = await response.json();\n    if (req.url === '/api/hosts') for (const host of data.hosts) host.capabilities = {};\n    res.writeHead(response.status, { 'content-type': 'application/json' });\n    res.end(JSON.stringify(data));\n  });\n  await new Promise(resolve => legacy.listen(0, '127.0.0.1', resolve));\n  const legacyBase = `http://127.0.0.1:${legacy.address().port}`;\n  const outcomes = [];\n  for (const version of ['before','corrected']) {\n    const cli = path.join(home, version, 'installed-skill/scripts/pi-dish-sessions.js');\n    const client = require(path.join(home, version, 'skills/lib/pi-dish-client.js'));\n    const invoke = (args, endpoint = base) => run(process.execPath, [cli, ...args, '--url', endpoint], { env: process.env, cwd: home });\n    const listed = (await invoke(['list'])).stdout.split('\\n').map(line => line.split('\\t'));\n    for (const fixture of fixtures) {\n      const row = listed.find(columns => columns[2] === fixture.name);\n      assert.ok(row, fixture.name);\n      const ref = row[0];\n      assert.equal(client.stableSessionRef(fixture.id, catalog.previous.map(s => s.id)), ref);\n      const product = JSON.parse((await invoke(['resolve', ref, '--json'])).stdout);\n      const fallback = JSON.parse((await invoke(['resolve', ref, '--json'], legacyBase)).stdout);\n      assert.equal(product.id, fixture.id);\n      assert.equal(fallback.id, fixture.id);\n      const serverReply = await (await fetch(base + '/api/sessions/resolve?id=' + encodeURIComponent(fixture.id))).json();\n      const serverRoundTrip = await (await fetch(base + '/api/sessions/resolve?id=' + encodeURIComponent(serverReply.ref))).json();\n      assert.equal(serverRoundTrip.session.id, fixture.id);\n      if (fixture.name === 'Ordinary UUID') assert.equal(ref, '01a07264');\n      if (fixture.name === 'OMP alias collision') assert.equal(ref, fixture.id);\n      outcomes.push({ version, name: fixture.name, id: fixture.id, printedRef: ref, productId: product.id, fallbackId: fallback.id, serverRef: serverReply.ref, serverRoundTripId: serverRoundTrip.session.id });\n    }\n    for (const endpoint of [base, legacyBase]) {\n      await assert.rejects(invoke(['resolve', uuid], endpoint), e => e.code === 1 && /ambiguous/.test(e.stderr));\n      await assert.rejects(invoke(['resolve', `${identity.hostId}:01a07264`], endpoint), e => e.code === 1 && /Session not found/.test(e.stderr));\n    }\n  }\n  assert.equal((await fetch(base + '/api/sessions/resolve?id=' + uuid)).status, 409);\n  const result = { base, legacyBase, home, fixtures, outcomes, summary: '7 first-party admitted rows, baseline+corrected installed symlink CLI lists and 28 product/fallback resolutions preserve identity; 14 server ref roundtrips; ordinary UUID unchanged; 4 shared UUID ambiguity failures and 4 provenance-prefix misses; no native launch or control request.' };\n  fs.writeFileSync('/tmp/r11-corrected-runtime-result.json', JSON.stringify(result, null, 2));\n  console.log('R11_CORRECTED_READY ' + JSON.stringify(result));\n})().catch(error => { console.error(error); legacy?.close(); server.close(); process.exitCode = 1; });\nprocess.on('SIGTERM', () => { legacy?.close(); server.close(); fs.rmSync(home, { recursive: true, force: true }); setTimeout(() => process.exit(0), 200).unref(); });\n",
+      "sha256": "dd346ac2fe7f94f110a4ea68fa9e96d5e76bd6d5f6ff2cb29524eb5f8ed8ed89",
+      "result": {
+        "base": "http://127.0.0.1:43729",
+        "legacyBase": "http://127.0.0.1:34701",
+        "home": "/tmp/r11-corrected-7QqIiE",
+        "fixtures": [
+          {
+            "harness": "pi",
+            "native": "route-hit",
+            "name": "Pi alias owner",
+            "id": "route-hit"
+          },
+          {
+            "harness": "omp",
+            "native": "route-hit",
+            "name": "OMP alias collision",
+            "id": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ"
+          },
+          {
+            "harness": "omp",
+            "native": "2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0",
+            "name": "Shared UUID morning",
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+          },
+          {
+            "harness": "omp",
+            "native": "2026-09-06T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0",
+            "name": "Shared UUID next day",
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+          },
+          {
+            "harness": "omp",
+            "native": "2026-09-07T09-07-03-291Z_01a07264-131e-74a7-979a-1e763bf12b97",
+            "name": "Ordinary UUID",
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0"
+          },
+          {
+            "harness": "omp",
+            "native": "shadowed",
+            "name": "Short alias",
+            "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+          },
+          {
+            "harness": "omp",
+            "native": "shadowed-long",
+            "name": "Extended alias",
+            "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0"
+          }
+        ],
+        "outcomes": [
+          {
+            "version": "before",
+            "name": "Pi alias owner",
+            "id": "route-hit",
+            "printedRef": "route-hit",
+            "productId": "route-hit",
+            "fallbackId": "route-hit",
+            "serverRef": "route-hit",
+            "serverRoundTripId": "route-hit"
+          },
+          {
+            "version": "before",
+            "name": "OMP alias collision",
+            "id": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "printedRef": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "productId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "fallbackId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "serverRef": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ"
+          },
+          {
+            "version": "before",
+            "name": "Shared UUID morning",
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "printedRef": "2026-09-05",
+            "productId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "fallbackId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "serverRef": "2026-09-05",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+          },
+          {
+            "version": "before",
+            "name": "Shared UUID next day",
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "printedRef": "2026-09-06",
+            "productId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "fallbackId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "serverRef": "2026-09-06",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+          },
+          {
+            "version": "before",
+            "name": "Ordinary UUID",
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+            "printedRef": "01a07264",
+            "productId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+            "fallbackId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+            "serverRef": "01a07264",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0"
+          },
+          {
+            "version": "before",
+            "name": "Short alias",
+            "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "printedRef": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "productId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "fallbackId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "serverRef": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+          },
+          {
+            "version": "before",
+            "name": "Extended alias",
+            "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+            "printedRef": "shadowed-",
+            "productId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+            "fallbackId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+            "serverRef": "shadowed-",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0"
+          },
+          {
+            "version": "corrected",
+            "name": "Pi alias owner",
+            "id": "route-hit",
+            "printedRef": "route-hit",
+            "productId": "route-hit",
+            "fallbackId": "route-hit",
+            "serverRef": "route-hit",
+            "serverRoundTripId": "route-hit"
+          },
+          {
+            "version": "corrected",
+            "name": "OMP alias collision",
+            "id": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "printedRef": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "productId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "fallbackId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "serverRef": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ"
+          },
+          {
+            "version": "corrected",
+            "name": "Shared UUID morning",
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "printedRef": "2026-09-05",
+            "productId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "fallbackId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "serverRef": "2026-09-05",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+          },
+          {
+            "version": "corrected",
+            "name": "Shared UUID next day",
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "printedRef": "2026-09-06",
+            "productId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "fallbackId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+            "serverRef": "2026-09-06",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+          },
+          {
+            "version": "corrected",
+            "name": "Ordinary UUID",
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+            "printedRef": "01a07264",
+            "productId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+            "fallbackId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+            "serverRef": "01a07264",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0"
+          },
+          {
+            "version": "corrected",
+            "name": "Short alias",
+            "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "printedRef": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "productId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "fallbackId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "serverRef": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+          },
+          {
+            "version": "corrected",
+            "name": "Extended alias",
+            "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+            "printedRef": "shadowed-",
+            "productId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+            "fallbackId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+            "serverRef": "shadowed-",
+            "serverRoundTripId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0"
+          }
+        ],
+        "summary": "7 first-party admitted rows, baseline+corrected installed symlink CLI lists and 28 product/fallback resolutions preserve identity; 14 server ref roundtrips; ordinary UUID unchanged; 4 shared UUID ambiguity failures and 4 provenance-prefix misses; no native launch or control request."
+      },
+      "isolation": "Temporary HOME/tmux directory; actual first-party JSONL discovery/server catalog; copied baseline/current client+CLI JS outside repo with installed skill symlink; no repo runtime dependency and no live credentials/sessions/control operation."
+    },
+    "browserSmoke": {
+      "surface": "Actual production public/app.js on same isolated first-party server, no fixtureApp/debug bundle",
+      "results": [
+        {
+          "name": "Pi alias owner",
+          "id": "route-hit",
+          "browserRef": "route-hit",
+          "resolvedId": "route-hit"
+        },
+        {
+          "name": "OMP alias collision",
+          "id": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+          "browserRef": "~sk1_WyJvbXAiLCJy",
+          "resolvedId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ"
+        },
+        {
+          "name": "Shared UUID morning",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+          "browserRef": "2026-09-05",
+          "resolvedId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "name": "Shared UUID next day",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+          "browserRef": "2026-09-06",
+          "resolvedId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "name": "Ordinary UUID",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+          "browserRef": "01a07264",
+          "resolvedId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0"
+        },
+        {
+          "name": "Short alias",
+          "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+          "browserRef": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJ",
+          "resolvedId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+        },
+        {
+          "name": "Extended alias",
+          "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+          "browserRef": "shadowed-",
+          "resolvedId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0"
+        }
+      ],
+      "screenshot": "/tmp/omp-sshots-1582301c31e8968c.webp",
+      "assertion": "All seven actual context-menu data-copy references fetched through real /api/sessions/resolve select the requested row, including Pi/OMP collision, duplicate UUID aliases, ordinary UUID and shorter/longer alias pair. Browser short route prefixes and CLI stable full route outputs intentionally differ.",
+      "clipboardLimit": "No native clipboard success claim; checked the actual rendered menu/action reference and server resolution.",
+      "attempt": "Initial multi-row interaction left an earlier context menu over the next row and read the wrong menu. Explicitly dismissed each menu with Escape before right-clicking; all seven actual row roundtrips then passed. No product change for fixture interaction."
+    },
+    "complexity": "One short-circuit peer-prefix scan per alias, before existing prefix search. No resolver invocation, Map construction or candidate-list allocation added. Shared/extended aliases skip the existing prefix-search/filter allocation. No performance improvement claimed.",
+    "result": "The admitted Pi/OMP collision now prints the full encoded OMP route and resolves to OMP target through real CLI, server and fallback. Browser uses a collision-safe route prefix. Shared UUID aliases stay ambiguous when entered explicitly; emitted references instead use unshared native prefixes. Ordinary UUID handles remain short. Both new permanent regressions fail on rejected e694d89 and pass after correction.",
+    "reviewInvalidation": "Every old e694d89 decision is historical-invalidated for the corrected source. GLM/DeepSeek must reread the entire final package, not just the guard; same Kimi remains closed with incomplete quota attempt until authorized restoration. No review attestation or parent acceptance claimed."
+  }
+}

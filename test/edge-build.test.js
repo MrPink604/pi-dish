@@ -62,3 +62,35 @@ test('edge delivery preserves executable CJS and ESM, rejects drift and leaves o
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('skill client bundle resolves aliases after installation without the source tree', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-edge-client-'));
+  try {
+    for (const dir of ['scripts', 'skills/lib', 'electron', 'extensions', 'src/core']) {
+      fs.mkdirSync(path.join(root, dir), { recursive: true });
+    }
+    for (const file of ['scripts/build-edges.js', 'skills/lib/pi-dish-client.ts']) {
+      fs.copyFileSync(path.join(__dirname, '..', file), path.join(root, file));
+    }
+    // Compile the real canonical owner, not a second fixture implementation.
+    fs.cpSync(path.join(__dirname, '../src/core'), path.join(root, 'src/core'), { recursive: true });
+    const config = JSON.parse(fs.readFileSync(path.join(__dirname, '../tsconfig.edges.json'), 'utf8'));
+    config.files = ['skills/lib/pi-dish-client.ts'];
+    fs.writeFileSync(path.join(root, 'tsconfig.edges.json'), JSON.stringify(config));
+    fs.writeFileSync(path.join(root, 'package.json'), '{"type":"commonjs"}');
+    fs.symlinkSync(path.join(__dirname, '../node_modules'), path.join(root, 'node_modules'), 'junction');
+    const env = sanitizeTestEnv(process.env);
+    const built = spawnSync(process.execPath, ['scripts/build-edges.js'], { cwd: root, env, encoding: 'utf8', timeout: 30000 });
+    assert.ifError(built.error);
+    assert.equal(built.status, 0, built.stdout + built.stderr);
+    fs.rmSync(path.join(root, 'src'), { recursive: true });
+    fs.unlinkSync(path.join(root, 'node_modules'));
+    const client = require(path.join(root, 'skills/lib/pi-dish-client.js'));
+    const id = '~sk1_' + Buffer.from(JSON.stringify(['omp', '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0'])).toString('base64url');
+    assert.equal(client.stableSessionRef(id, [id]), '01a070d2');
+    assert.equal(client.stableSessionRef('legacy-session-long', ['legacy-session-long']), 'legacy-session-long');
+    assert.equal(client.sessionHarnessId(id), 'omp');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

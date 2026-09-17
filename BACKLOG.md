@@ -271,10 +271,18 @@ the original Node 22.x settings-lock fixture failure and its deterministic
 test-only correction. Local checks covered 265 compiler-owned sources, 1,041
 backend tests, 291 browser cases, all eight scenarios and desktop/mobile UI.
 R7's composition dependency and R9's pane-policy dependency are released.
-**R1/R4 remain held:** the correction changes a test in R1's frozen inventory
-and needs final-scope review renewal. **R11 remains held:** its incomplete
-same-Kimi correction hit another quota limit, and its owner reported a provider
-limit. No retry, model substitution or whole-repository completion is implied.
+**R1 and R11 review renewal is complete:** the same required exact-model/High/OMP
+reviewers accepted complete revised sources `5d1728a` and `55ba88e`; parent
+actual-byte and decoded-proof audits passed. Their combined local integration
+passed check (265 sources), 1,044 backend tests, 291 browser cases, all eight
+scenarios and full desktop/mobile UI. Parent also exercised seven reference
+identities through installed CLI, HTTP and the production browser. Exact
+pushed-main CI is pending; R4's dependent release and formal acceptance are
+recorded in the [R1](docs/remaining-migration-plan.md#implementation-record--r1)
+and [R11](docs/remaining-migration-plan.md#implementation-record--r11) records.
+R7's required independent reviews are running; R9 and the frozen C1 checkpoints
+remain queued within the session cap. No review waiver or full C1/C2 completion
+is implied.
 
 1. **Product migration accepted (M0–M7).** Actual session-read/SDK/projection,
    routine, publication/file, feature, fleet/terminal, runtime-edge and server

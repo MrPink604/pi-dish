@@ -428,11 +428,11 @@ no need to reproduce helper declarations in each extracted operation module.
 Handoff to transcript/search/usage: established shared primitives so parser and
 projection implementations can migrate without importing browser artifacts.
 
-The skill CLI has a separate zero-dependency/no-server-import contract and its
-own reference implementations, documented in
-[pi-dish-client.js](../skills/lib/pi-dish-client.js) and
-[parity coverage](../test/skills-core.test.js). Do not silently change that delivery
-contract in this stage. Record the portable reference subset and duplicate rules
-for the later CLI stage, which can decide how to share source while preserving
-its standalone dependency behavior. A lower TypeScript file count or a source
-move alone is not the simplification outcome.
+The skill CLI's zero-dependency/no-server-import contract is preserved by the
+R11 cutover: `scripts/build-edges.ts` bundles the canonical portable reference
+source from `src/core/helper-refs.ts` into
+[pi-dish-client.js](../skills/lib/pi-dish-client.js). There is no separate
+handwritten CLI reference algorithm. [Consumer coverage](../test/skills-core.test.js)
+and installed-client tests verify the standalone delivery boundary and reference
+identity, including shared and shadowed aliases. A lower TypeScript file count
+or a source move alone is not the simplification outcome.

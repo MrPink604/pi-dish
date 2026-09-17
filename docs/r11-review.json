@@ -1,0 +1,1569 @@
+{
+  "milestone": "R11",
+  "status": "Three independent exact-model HIGH OMP reviewers ACCEPT complete corrected55 source; parent coverage audit, integrated CLI/HTTP/production-browser smoke and full local gates PASS. Exact pushed-main CI pending.",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "sourceSha": "55ba88e50adf871d9b66e2264d6235499bea2610",
+  "sourceCommits": [
+    "e694d8948eecaf85c02b21db0185035fff57a501",
+    "55ba88e50adf871d9b66e2264d6235499bea2610"
+  ],
+  "branch": "migration/r11-canonical-refs",
+  "sourceManifest": [
+    {
+      "path": "scripts/build-edges.ts",
+      "sha256": "bc16e7ebc5a68cfc4783e11fcbaa4e955c75b379a833aadcde9a426c158822d8",
+      "lines": 120,
+      "bytes": 6235
+    },
+    {
+      "path": "scripts/build-edges.js",
+      "sha256": "8d3dad07c45a8ce2fc2e5d2b6dd13069d5fa018d325f18dca76ad4aaaff7b272",
+      "lines": 132,
+      "bytes": 6835
+    },
+    {
+      "path": "skills/lib/pi-dish-client.ts",
+      "sha256": "a43e3415a85a95c6ec1a34b5371ec643e3ae3fda5b67a62d0631ce7bcdef6dff",
+      "lines": 790,
+      "bytes": 33806
+    },
+    {
+      "path": "skills/lib/pi-dish-client.js",
+      "sha256": "40631a4188e8371fc8c799efe65d7b7bfeb0a4a1513f7e2d84f4d5394546ae3f",
+      "lines": 747,
+      "bytes": 28725
+    },
+    {
+      "path": "skills/lib/pi-dish-client.d.ts",
+      "sha256": "4cec077fa4778188bc2d3635a5e262600be9bb436d3952b95f2773be5a5f3d3d",
+      "lines": 214,
+      "bytes": 9327
+    },
+    {
+      "path": "test/edge-build.test.js",
+      "sha256": "34e33b41c6e4b6bf3d6aba308453c937842b56bb7418d56e04dc6d8e6433f699",
+      "lines": 96,
+      "bytes": 6132
+    },
+    {
+      "path": "test/skill-client-ingress.test.js",
+      "sha256": "6056240a55c4bf011b6ee158dcf584e34f9d04c336540010125e442ab7c799a1",
+      "lines": 257,
+      "bytes": 12325
+    },
+    {
+      "path": "test/skills-core.test.js",
+      "sha256": "926a35c63f62612f9dd14d1471c5b68e20fc7aa941d6bfb72b3c88375df95d68",
+      "lines": 201,
+      "bytes": 9414
+    },
+    {
+      "path": "docs/r11-evidence.json",
+      "sha256": "a0339a6d2a4b1e3ef7c138a61974f3604592897a44d8bf79b91ce345d155482b",
+      "lines": 807,
+      "bytes": 63572
+    },
+    {
+      "path": "src/core/helper-refs.ts",
+      "sha256": "8e20a6c3d7344c4ab8007d7df600867a82c8277c779bc7b960e0a8da6eedd1fc",
+      "lines": 390,
+      "bytes": 18971
+    },
+    {
+      "path": "lib/helper-refs.js",
+      "sha256": "328ea4fd9eb9f2a0c97513d1fd3410047aecdddc6074cfde6ef7a608d11e6c80",
+      "lines": 432,
+      "bytes": 20345
+    },
+    {
+      "path": "public/app.js",
+      "sha256": "caa646284c7d5cd47c8745ede251258879ca731f6dd72ec7355d854de2371bd2",
+      "lines": 19238,
+      "bytes": 875900
+    },
+    {
+      "path": "public/browser.js",
+      "sha256": "88336c2f88b3c7c5673d2e32014a4b41b7077bac9ba562ae582974c57f96bbb1",
+      "lines": 17931,
+      "bytes": 824331
+    },
+    {
+      "path": "public/helpers.js",
+      "sha256": "756e41dfc0c8d3f0c8eb660765ac64852508a40d6c3d2dff0fc0bbdd041778f9",
+      "lines": 1914,
+      "bytes": 84236
+    },
+    {
+      "path": "test/helpers.test.js",
+      "sha256": "04a6a71ece17e5b377d84b4625b6ec630254bea41e638e51be4580f74a70f2c5",
+      "lines": 2345,
+      "bytes": 123902
+    },
+    {
+      "path": "test/skills-cli.test.js",
+      "sha256": "fa3b9b4750785d807dce2c1a1a7d7ef2b5bbe475741b8ca33b21bdf96383893f",
+      "lines": 346,
+      "bytes": 16092
+    }
+  ],
+  "evidence": "docs/r11-evidence.json",
+  "reviewBarrier": "All three reviewed the same complete corrected16-path source, including whole generated bundles and actual decoded executable proof bodies. No final approval is transferred from rejected e694. No code changes occurred during renewed reviews. Parent separately verifies integration.",
+  "reviewers": [
+    {
+      "model": "zai/glm-5.3",
+      "session": "2026-09-16T18-20-05-869Z_01a0ab72-8b6d-72df-b6f8-38041506c42d",
+      "verdict": "ACCEPT",
+      "sourceSha": "55ba88e50adf871d9b66e2264d6235499bea2610",
+      "pre": {
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIwLTA1LTg2OVpfMDFhMGFiNzItOGI2ZC03MmRmLWI2ZjgtMzgwNDE1MDZjNDJkIl0",
+        "nativeSessionId": "2026-09-16T18-20-05-869Z_01a0ab72-8b6d-72df-b6f8-38041506c42d",
+        "model": "zai/glm-5.3",
+        "thinkingLevel": "high",
+        "harnessId": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r11",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "post": {
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIwLTA1LTg2OVpfMDFhMGFiNzItOGI2ZC03MmRmLWI2ZjgtMzgwNDE1MDZjNDJkIl0",
+        "nativeSessionId": "2026-09-16T18-20-05-869Z_01a0ab72-8b6d-72df-b6f8-38041506c42d",
+        "model": "zai/glm-5.3",
+        "thinkingLevel": "high",
+        "harnessId": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r11",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "archive": {
+        "path": "/tmp/r11-review-archives/glm-corrected-final.json",
+        "sha256": "f61f1a3a27836b0065014979e63c99f96ec3f1c5a75a3e165aea430d9a21b4a1",
+        "bytes": 10095101,
+        "messages": 379,
+        "firstIndex": 0,
+        "lastIndex": 378,
+        "contiguous": true
+      },
+      "finalMessageIndex": 378,
+      "finalMessageId": "6e7467bb",
+      "verbatimFinal": "Byte-level confirmation, both lines dumped:\n\n```\n0000060   \"   ,       \"   c   t   r   l   -   c   \"   :   \" 003   \"\n```\n\n**Confirmed: the actual file byte inside `\"ctrl-c\"` is `003` octal = U+0003 (ETX), not an empty string.** Both lines are byte-for-byte identical, 68 bytes each + `\\n`:\n\n- `public/app.js:15980` and `public/browser.js:8435`: `        const sequences = { esc: \"\\x1B\", tab: \"\\t\", \"ctrl-c\": \"<ETX>\" };`\n- `esc` holds the four-character source-level escape text `\\x1B` (`\\`, `x`, `1`, `B` — od shows the backslash as a literal `\\` entry); `tab` holds a literal `0x09` byte; `ctrl-c` holds the literal `0x03` byte the reader's verbatim display silently dropped, producing the misleading `ctrl-c: \"\"` rendering in my earlier raw reads. The owner's read-tool verbatim-display-loss report is correct and now documented.\n\nSubstance: a raw ETX in the keybar's send-data is exactly the canonical Ctrl-C character a terminal interprets as SIGINT — unchanged terminal code, located far from the R11 guard regions (app.js:404, browser.js:5830), byte-identical across both bundles, no R11 change touched it. No defect, no coverage consequence beyond the now-disclosed display limitation.\n\n---\n\n# REAFFIRMED: ACCEPT ENTIRE R11 source `55ba88e50adf871d9b66e2264d6235499bea2610`\n\nThe verdict and its basis are unchanged: the one-line shared/shadowed-alias guard proven equivalent to the old CLI acceptance rule (prefix-of-prefix transitivity), both e694d89 failure modes closed, all five runtime surfaces byte-identical, resolver/decoder/parser/host policies untouched, both regressions traced fail-on-rejected-source/pass-after-guard. Read coverage is now complete with the final byte-visibility limitation closed transparently: all 16 changed paths personally read whole at final SHA, every elision and truncated long line recovered, phantom final segments confirmed empty, and the two ETX bytes verified by direct hex inspection. No blocking findings; the three informational notes stand.\n\nNo source, model, actor, or probe changes were made; this inspection was file-byte-only (`sed -n Np | od -c`). This reviewer's renewed independent decision is final from my side — Kimi remains quota-blocked, no trio claim — and closure remains the owner's: archive both transcripts, retain prior claims and corrections, verify post-provenance. The review does not self-close.",
+      "coverageAudit": {
+        "model": "zai/glm-5.3",
+        "method": "Exact model-facing anchored lines plus source-matched contiguous verbatim blocks within explicitly requested raw windows; hidden display metadata not counted; nonprinting bytes/probe JSON strings separately accounted below. Cumulative same-actor reads span renewed passes; no source change during review.",
+        "files": [
+          {
+            "path": "scripts/build-edges.ts",
+            "sourceSha256": "bc16e7ebc5a68cfc4783e11fcbaa4e955c75b379a833aadcde9a426c158822d8",
+            "totalPhysicalLines": 120,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "scripts/build-edges.js",
+            "sourceSha256": "8d3dad07c45a8ce2fc2e5d2b6dd13069d5fa018d325f18dca76ad4aaaff7b272",
+            "totalPhysicalLines": 132,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "skills/lib/pi-dish-client.ts",
+            "sourceSha256": "a43e3415a85a95c6ec1a34b5371ec643e3ae3fda5b67a62d0631ce7bcdef6dff",
+            "totalPhysicalLines": 790,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "skills/lib/pi-dish-client.js",
+            "sourceSha256": "40631a4188e8371fc8c799efe65d7b7bfeb0a4a1513f7e2d84f4d5394546ae3f",
+            "totalPhysicalLines": 747,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "skills/lib/pi-dish-client.d.ts",
+            "sourceSha256": "4cec077fa4778188bc2d3635a5e262600be9bb436d3952b95f2773be5a5f3d3d",
+            "totalPhysicalLines": 214,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/edge-build.test.js",
+            "sourceSha256": "34e33b41c6e4b6bf3d6aba308453c937842b56bb7418d56e04dc6d8e6433f699",
+            "totalPhysicalLines": 96,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/skill-client-ingress.test.js",
+            "sourceSha256": "6056240a55c4bf011b6ee158dcf584e34f9d04c336540010125e442ab7c799a1",
+            "totalPhysicalLines": 257,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/skills-core.test.js",
+            "sourceSha256": "926a35c63f62612f9dd14d1471c5b68e20fc7aa941d6bfb72b3c88375df95d68",
+            "totalPhysicalLines": 201,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "docs/r11-evidence.json",
+            "sourceSha256": "a0339a6d2a4b1e3ef7c138a61974f3604592897a44d8bf79b91ce345d155482b",
+            "totalPhysicalLines": 807,
+            "visibleNonblankMissing": [
+              263,
+              504,
+              556
+            ],
+            "embeddedSourceReadException": {
+              "lines": [
+                263,
+                504,
+                556
+              ],
+              "method": "Entire decoded probe bodies separately extracted byte-exact, personally read raw by GLM, and SHA256-verified; JSON source lines exceed column display cap.",
+              "sourceHashes": [
+                "463637a8ca73f4d5364295552a3e5dbba2dc207a52f32f769e3be8e458db7c78",
+                "dee013482eeaa54305fd4f6237d3f2fcad3f4e69f5a4563af41af92ff21a44be",
+                "dd346ac2fe7f94f110a4ea68fa9e96d5e76bd6d5f6ff2cb29524eb5f8ed8ed89"
+              ]
+            }
+          },
+          {
+            "path": "src/core/helper-refs.ts",
+            "sourceSha256": "8e20a6c3d7344c4ab8007d7df600867a82c8277c779bc7b960e0a8da6eedd1fc",
+            "totalPhysicalLines": 390,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "lib/helper-refs.js",
+            "sourceSha256": "328ea4fd9eb9f2a0c97513d1fd3410047aecdddc6074cfde6ef7a608d11e6c80",
+            "totalPhysicalLines": 432,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "public/app.js",
+            "sourceSha256": "caa646284c7d5cd47c8745ede251258879ca731f6dd72ec7355d854de2371bd2",
+            "totalPhysicalLines": 19238,
+            "visibleNonblankMissing": [
+              15980
+            ],
+            "byteInspectionException": {
+              "line": 15980,
+              "actualByte": "0x03 ETX within ctrl-c literal; raw read presentation removed this nonprinting byte",
+              "reviewerConfirmationMessage": 378,
+              "method": "Direct escaped/od file-byte inspection by same reviewer; final ENTIRE verdict reaffirmed."
+            }
+          },
+          {
+            "path": "public/browser.js",
+            "sourceSha256": "88336c2f88b3c7c5673d2e32014a4b41b7077bac9ba562ae582974c57f96bbb1",
+            "totalPhysicalLines": 17931,
+            "visibleNonblankMissing": [
+              8435
+            ],
+            "byteInspectionException": {
+              "line": 8435,
+              "actualByte": "0x03 ETX within ctrl-c literal; raw read presentation removed this nonprinting byte",
+              "reviewerConfirmationMessage": 378,
+              "method": "Direct escaped/od file-byte inspection by same reviewer; final ENTIRE verdict reaffirmed."
+            }
+          },
+          {
+            "path": "public/helpers.js",
+            "sourceSha256": "756e41dfc0c8d3f0c8eb660765ac64852508a40d6c3d2dff0fc0bbdd041778f9",
+            "totalPhysicalLines": 1914,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/helpers.test.js",
+            "sourceSha256": "04a6a71ece17e5b377d84b4625b6ec630254bea41e638e51be4580f74a70f2c5",
+            "totalPhysicalLines": 2345,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/skills-cli.test.js",
+            "sourceSha256": "fa3b9b4750785d807dce2c1a1a7d7ef2b5bbe475741b8ca33b21bdf96383893f",
+            "totalPhysicalLines": 346,
+            "visibleNonblankMissing": []
+          }
+        ],
+        "status": "All16 current files personally covered; display-only exceptions explicitly closed by same reviewer."
+      },
+      "parentAudit": "/tmp/pi-dish-parent-r11-review-audit.json"
+    },
+    {
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "session": "2026-09-16T18-20-04-650Z_01a0ab72-86aa-776a-a3a5-fb763fa99fe8",
+      "verdict": "ACCEPT",
+      "sourceSha": "55ba88e50adf871d9b66e2264d6235499bea2610",
+      "pre": {
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIwLTA0LTY1MFpfMDFhMGFiNzItODZhYS03NzZhLWEzYTUtZmI3NjNmYTk5ZmU4Il0",
+        "nativeSessionId": "2026-09-16T18-20-04-650Z_01a0ab72-86aa-776a-a3a5-fb763fa99fe8",
+        "model": "opencode-go/deepseek-v4.1-flash",
+        "thinkingLevel": "high",
+        "harnessId": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r11",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "post": {
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIwLTA0LTY1MFpfMDFhMGFiNzItODZhYS03NzZhLWEzYTUtZmI3NjNmYTk5ZmU4Il0",
+        "nativeSessionId": "2026-09-16T18-20-04-650Z_01a0ab72-86aa-776a-a3a5-fb763fa99fe8",
+        "model": "opencode-go/deepseek-v4.1-flash",
+        "thinkingLevel": "high",
+        "harnessId": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r11",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "archive": {
+        "path": "/tmp/r11-review-archives/deepseek-corrected-final.json",
+        "sha256": "8352a56093c0033eb8a85324b47121b7c9a872d9bd972f1f761b6841daadb3d7",
+        "bytes": 9493660,
+        "messages": 287,
+        "firstIndex": 0,
+        "lastIndex": 286,
+        "contiguous": true
+      },
+      "finalMessageIndex": 286,
+      "finalMessageId": "3c06d009",
+      "verbatimFinal": "## Byte audit confirmed — the ETX byte is present in both files\n\nRead-only byte inspection of exactly those two lines (`sed`/`od`/`sha256sum`/`git hash-object`; no execution, probe, test or build):\n\n| file:line | bytes (hex tail) | `od -c` at the literal | line bytes | line sha256 |\n|---|---|---|---|---|\n| `public/app.js:15980` | `… 22 63 74 72 6c 2d 63 22 3a 20 22 **03** 22 20 7d 3b` | `\" c t r l - c \" : \" 003 \" } ;` | 68 | `db46430fbe2acdcc7380cf62938066db7ed77cd44de3ec5c4c512d1d084c2406` |\n| `public/browser.js:8435` | `… 22 63 74 72 6c 2d 63 22 3a 20 22 **03** 22 20 7d 3b` | `\" c t r l - c \" : \" 003 \" } ;` | 68 | `db46430fbe2acdcc7380cf62938066db7ed77cd44de3ec5c4c512d1d084c2406` |\n\n- The byte between the quotes is **`0x03` = ETX = U+0003**, not an empty string. `wc -c` = 68 for both (67 chars + `\\n`), and the two lines are byte-identical (same sha256).\n- Each file contains exactly **one** `0x03` byte in total — the one in this map.\n- The generated line is `const sequences = { esc: \"\\x1B\", tab: \"<0x09>\", \"ctrl-c\": \"<0x03>\" };` inside the `key()` handler of `createTerminalController` (the `// src/browser/terminal.ts` section), i.e. **unchanged terminal key handling**, emitted by esbuild as a raw control byte rather than the `\\x03` escape text. R11 touches none of it.\n- The reader's earlier presentation (`ctrl-c:\"\"`) was display-layer loss: the semantic/text renderer dropped the control character while re-emitting the line. The file bytes were never affected.\n- Provenance: working-tree blob hashes equal the frozen commit's — `public/app.js` `19583a01080498c45ae98bbb126edd0f5b36cf03`, `public/browser.js` `e89fea174ce01c5ef9cebc89ce9ea47dae1ebf49`, both matching `git rev-parse 55ba88e:<path>`. Worktree otherwise clean apart from the pre-existing untracked `.amp/` (untouched).\n\n## Verdict reaffirmed\n\n**ACCEPT ENTIRE R11 source 55ba88e50adf871d9b66e2264d6235499bea2610**\n\nNothing changed: no blocking findings; the four non-blocking observations stand (authorised shadowed-full-alias reversion at `src/core/helper-refs.ts:152`; inert `skills/lib/pi-dish-client.d.ts:2` repo-relative import; `skills/lib/pi-dish-client.ts:14-15` wording; parent-owned stale copy-rule text in `CLAUDE.md:760-762` and `docs/shared-runtime-helpers.md:432-436`). Coverage of all sixteen changed paths remains whole-file complete across this session, with every elided range recovered; the two analytic probes and their finite-sampling caveat remain historical evidence, not a proof over all corpora. No build/compiler/check/lint/test was run; no source, model or actor change; Kimi is not claimed and this is not trio acceptance.\n\nThis closes the last byte-visibility limitation: the only known discrepancy between the file bytes and their semantic presentation is a display-layer control-character strip on unchanged terminal code, now verified at byte level. Owner still must archive the contiguous transcripts and verify post-provenance before closure.",
+      "coverageAudit": {
+        "model": "opencode-go/deepseek-v4.1-flash",
+        "method": "Exact model-facing anchored lines plus source-matched contiguous verbatim blocks within explicitly requested raw windows; hidden display metadata not counted; nonprinting bytes/probe JSON strings separately accounted below. Cumulative same-actor reads span renewed passes; no source change during review.",
+        "files": [
+          {
+            "path": "scripts/build-edges.ts",
+            "sourceSha256": "bc16e7ebc5a68cfc4783e11fcbaa4e955c75b379a833aadcde9a426c158822d8",
+            "totalPhysicalLines": 120,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "scripts/build-edges.js",
+            "sourceSha256": "8d3dad07c45a8ce2fc2e5d2b6dd13069d5fa018d325f18dca76ad4aaaff7b272",
+            "totalPhysicalLines": 132,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "skills/lib/pi-dish-client.ts",
+            "sourceSha256": "a43e3415a85a95c6ec1a34b5371ec643e3ae3fda5b67a62d0631ce7bcdef6dff",
+            "totalPhysicalLines": 790,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "skills/lib/pi-dish-client.js",
+            "sourceSha256": "40631a4188e8371fc8c799efe65d7b7bfeb0a4a1513f7e2d84f4d5394546ae3f",
+            "totalPhysicalLines": 747,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "skills/lib/pi-dish-client.d.ts",
+            "sourceSha256": "4cec077fa4778188bc2d3635a5e262600be9bb436d3952b95f2773be5a5f3d3d",
+            "totalPhysicalLines": 214,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/edge-build.test.js",
+            "sourceSha256": "34e33b41c6e4b6bf3d6aba308453c937842b56bb7418d56e04dc6d8e6433f699",
+            "totalPhysicalLines": 96,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/skill-client-ingress.test.js",
+            "sourceSha256": "6056240a55c4bf011b6ee158dcf584e34f9d04c336540010125e442ab7c799a1",
+            "totalPhysicalLines": 257,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/skills-core.test.js",
+            "sourceSha256": "926a35c63f62612f9dd14d1471c5b68e20fc7aa941d6bfb72b3c88375df95d68",
+            "totalPhysicalLines": 201,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "docs/r11-evidence.json",
+            "sourceSha256": "a0339a6d2a4b1e3ef7c138a61974f3604592897a44d8bf79b91ce345d155482b",
+            "totalPhysicalLines": 807,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "src/core/helper-refs.ts",
+            "sourceSha256": "8e20a6c3d7344c4ab8007d7df600867a82c8277c779bc7b960e0a8da6eedd1fc",
+            "totalPhysicalLines": 390,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "lib/helper-refs.js",
+            "sourceSha256": "328ea4fd9eb9f2a0c97513d1fd3410047aecdddc6074cfde6ef7a608d11e6c80",
+            "totalPhysicalLines": 432,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "public/app.js",
+            "sourceSha256": "caa646284c7d5cd47c8745ede251258879ca731f6dd72ec7355d854de2371bd2",
+            "totalPhysicalLines": 19238,
+            "visibleNonblankMissing": [
+              15980
+            ],
+            "byteInspectionException": {
+              "line": 15980,
+              "actualByte": "0x03 ETX within ctrl-c literal; raw read presentation removed this nonprinting byte",
+              "reviewerConfirmationMessage": 286,
+              "method": "Direct escaped/od file-byte inspection by same reviewer; final ENTIRE verdict reaffirmed."
+            }
+          },
+          {
+            "path": "public/browser.js",
+            "sourceSha256": "88336c2f88b3c7c5673d2e32014a4b41b7077bac9ba562ae582974c57f96bbb1",
+            "totalPhysicalLines": 17931,
+            "visibleNonblankMissing": [
+              8435
+            ],
+            "byteInspectionException": {
+              "line": 8435,
+              "actualByte": "0x03 ETX within ctrl-c literal; raw read presentation removed this nonprinting byte",
+              "reviewerConfirmationMessage": 286,
+              "method": "Direct escaped/od file-byte inspection by same reviewer; final ENTIRE verdict reaffirmed."
+            }
+          },
+          {
+            "path": "public/helpers.js",
+            "sourceSha256": "756e41dfc0c8d3f0c8eb660765ac64852508a40d6c3d2dff0fc0bbdd041778f9",
+            "totalPhysicalLines": 1914,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/helpers.test.js",
+            "sourceSha256": "04a6a71ece17e5b377d84b4625b6ec630254bea41e638e51be4580f74a70f2c5",
+            "totalPhysicalLines": 2345,
+            "visibleNonblankMissing": []
+          },
+          {
+            "path": "test/skills-cli.test.js",
+            "sourceSha256": "fa3b9b4750785d807dce2c1a1a7d7ef2b5bbe475741b8ca33b21bdf96383893f",
+            "totalPhysicalLines": 346,
+            "visibleNonblankMissing": []
+          }
+        ],
+        "status": "All16 current files personally covered; display-only exceptions explicitly closed by same reviewer."
+      },
+      "parentAudit": "/tmp/pi-dish-parent-r11-review-audit.json"
+    },
+    {
+      "model": "kimi-code/k3",
+      "session": "01a0ab72-81e1-751c-9045-504248d6423d",
+      "verdict": "ACCEPT",
+      "sourceSha": "55ba88e50adf871d9b66e2264d6235499bea2610",
+      "pre": {
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIwLTAzLTQyNVpfMDFhMGFiNzItODFlMS03NTFjLTkwNDUtNTA0MjQ4ZDY0MjNkIl0",
+        "nativeSessionId": "2026-09-16T18-20-03-425Z_01a0ab72-81e1-751c-9045-504248d6423d",
+        "model": "kimi-code/k3",
+        "thinkingLevel": "high",
+        "harnessId": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r11",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "post": {
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTIwLTAzLTQyNVpfMDFhMGFiNzItODFlMS03NTFjLTkwNDUtNTA0MjQ4ZDY0MjNkIl0",
+        "nativeSessionId": "2026-09-16T18-20-03-425Z_01a0ab72-81e1-751c-9045-504248d6423d",
+        "model": "kimi-code/k3",
+        "thinkingLevel": "high",
+        "harnessId": "omp",
+        "cwd": "/home/jyarwood/workspace/pi-dish-r11",
+        "isActive": true,
+        "turnInProgress": false
+      },
+      "archive": {
+        "path": "/tmp/pi-dish-parent-r11-resumed-review-evidence/semantic-371.json",
+        "messages": 371,
+        "sha256": "b24184d50e43040b1cde42f19c50c334b924db6c47c09f8cbdb582b590f8d570"
+      },
+      "finalMessageIndex": 370,
+      "finalMessageId": "e7caa458",
+      "verbatimFinal": "Delivered. Final decision:\n\n## ACCEPT ENTIRE R11 source 55ba88e50adf871d9b66e2264d6235499bea2610\n\nNo blocking findings. This verdict supersedes — without erasing — the earlier premature 338-message ACCEPT, which the parent correctly held as not accepted pending these exact reads.\n\n### What the correction does, independently re-verified\n\nThe single authorized change is `src/core/helper-refs.ts:150-152`: inside `shortSessionRef`'s reversed-alias loop, `if (peers.some((peer) => peer.startsWith(alias))) continue;` precedes `uniqueSessionPrefix`. Traced against the recorded rejection case (Pi `route-hit` + OMP `~sk1_…[\"omp\",\"route-hit\"]`): the OMP row's native alias is whole-shadowed by the Pi peer's identical alias; `uniqueSessionPrefix` filters equal peers (`peer !== self`), so without the guard the 8-char `route-hi` escaped as \"unique\" and stage-3 route-prefix resolution bound it to the Pi row. The guard closes exactly that: any alias that is a prefix of (or equal to) another session's alias yields no safe candidate prefix, so it is skipped and `stableSessionRef` falls back to the full route id — matching the recorded corrected outcomes (collision row prints the full encoded route; `Ordinary UUID` still prints `01a07264`; shared-UUID rows print unshared native prefixes `2026-09-05`/`2026-09-06`; `shadowed-long` prints `shadowed-`). One short-circuit scan per alias; no new resolver invocations, maps, or candidate allocations. Resolver stages/exactOnly, `uniqueSessionPrefix`, CLI `decodeRouteId`/`sessionHarnessId` missing-native inference, and `parseRef` error policy are provably untouched. Guard present identically at lib/helper-refs.js:180, public/app.js:404, public/browser.js:5830, public/helpers.js:1030, skills/lib/pi-dish-client.js:148.\n\n### Exact gap closure (all `:raw` reads this continuation)\n\n- skills/lib/pi-dish-client.d.ts: 4-76, 80-108 (all interface bodies), 166-171 (parseRef doc), 185-187 (client-side resolution doc), 198-203 (mergeSearchResults doc) — declaration file fully consistent with the source's export surface and the distinct CLI policies.\n- docs/r11-evidence.json lines 263, 504, 556 — each multi-kilobyte embedded proof source line shown in full; plus the parent-materialized decode /tmp/pi-dish-parent-r11-historical-smoke-source.txt read whole (7,468 chars; content matches the recorded historical smoke semantics — 12 identity resolutions over product+fallback, ambiguity/exact-only/empty-ref rejections, missing-native spawn harness inference against an admission fixture without native launch, 409, three standalone installed CLI loaders).\n- src/core/helper-refs.ts:179-193 — `sessionRef` doc body (three ref forms, bare-prefix single-host policy, `prefix` override guidance).\n- public/app.js:15980 and public/browser.js:8435 — raw context around `const sequences = { esc: \"\\x1B\", tab: \"\\t\", \"ctrl-c\": \"<0x03>\" };` (the ETX byte itself previously byte-verified via od at 68 bytes per line incl. newline; identical at accepted baseline — preexisting generated characteristic, not R11-introduced).\n- test/helpers.test.js:1484-1488 (uniqueSessionPrefix extension/empty cases), 1490-1573 (widened-prefix host forms, alias derivation, corrupt-key non-resolution, route-before-alias precedence, ambiguity candidates, exactOnly, short-ref round-trip and widening), 1575-1582 (stableSessionRef print policy) — canonical contracts intact alongside the new shared-alias guard test.\n- test/skills-cli.test.js:3-10 (boot/isolation pattern) and 175-179 (ambiguity error contract) — harness context for the new identity regression.\n- Authored consumer bodies: src/core/server-app.ts:633-635 (resolveRefInCatalog delegating to `resolveSessionRefAmong(catalog.list, ref, { exactOnly })`); src/browser/app.ts:516-532 (sidebarControls wiring `ref: session => sessionRefFor(session)` and the `sessionRefFor` definition feeding the guarded `sessionReferences.prefix`); src/browser/session-info.ts:62-143 (whole openStatsModal consumer — Ref row resolved at capture time before the stats round-trip); src/browser/composer-autocomplete.ts:51-57 (whole showRefs picker body).\n\n### Cumulative actual scope\n\nAll 16 changed paths personally read in full current form: build-edges.ts (120) and build-edges.js (132), pi-dish-client.ts (790), pi-dish-client.js (747, contiguous current-form re-read), pi-dish-client.d.ts (215, every interface/doc interval), edge-build.test.js (96), skill-client-ingress.test.js (257), skills-core.test.js (201), r11-evidence.json (808 incl. all three decoded proofs, attempts, outcomes, limits), helper-refs.ts (391), lib/helper-refs.js (432), public/app.js (19,238, 46 contiguous windows + raw recoveries), public/browser.js (17,931, 45 contiguous windows + raw recoveries), public/helpers.js (1,914), test/helpers.test.js (2,345), test/skills-cli.test.js (346). Consumers: sessions CLI full 956-line source, comments/pages realpath loaders, install.sh, server-app.ts resolve route + sessionRefDeps, session-refs.ts (86), session-references.ts (41), shared-helpers.ts (13), sidebar copy-ref/stats-modal/composer-picker/chip-match authored bodies.\n\n### Limitations (stated, not hidden)\n\nStatic review only: I executed no builds, tests, compilers, or probes; owner verification claims (check 258 sources, backend 1030, browser 286, 8 scenarios, full UI smoke) are accepted as recorded evidence, not re-run. No macOS/native-clipboard claim exists or is made. Non-blocking leftovers unchanged: bundle retains unused `SESSION_REF_PREAMBLE` (documented conservative esbuild behavior); pi-dish-client.d.ts:2 repo-relative type import (excluded from packaged artifacts); CLAUDE.md:760-762 stale duplicated-rule text is the recorded parent-owned follow-up.\n\nNot self-closing; owner archives and audits before semantic closure.",
+      "coverageAudit": {
+        "primary": {
+          "scripts/build-edges.ts": {
+            "lines": 120,
+            "seen": 120,
+            "gaps": [],
+            "records": [
+              {
+                "index": 3,
+                "lines": 51
+              },
+              {
+                "index": 5,
+                "lines": 92
+              }
+            ]
+          },
+          "scripts/build-edges.js": {
+            "lines": 132,
+            "seen": 132,
+            "gaps": [],
+            "records": [
+              {
+                "index": 2,
+                "lines": 56
+              },
+              {
+                "index": 6,
+                "lines": 102
+              }
+            ]
+          },
+          "skills/lib/pi-dish-client.ts": {
+            "lines": 790,
+            "seen": 790,
+            "gaps": [],
+            "records": [
+              {
+                "index": 9,
+                "lines": 220
+              },
+              {
+                "index": 11,
+                "lines": 71
+              },
+              {
+                "index": 12,
+                "lines": 172
+              },
+              {
+                "index": 14,
+                "lines": 281
+              },
+              {
+                "index": 16,
+                "lines": 267
+              }
+            ]
+          },
+          "skills/lib/pi-dish-client.js": {
+            "lines": 747,
+            "seen": 747,
+            "gaps": [],
+            "records": [
+              {
+                "index": 18,
+                "lines": 147
+              },
+              {
+                "index": 21,
+                "lines": 1
+              },
+              {
+                "index": 121,
+                "lines": 30
+              },
+              {
+                "index": 124,
+                "lines": 151
+              },
+              {
+                "index": 188,
+                "lines": 255
+              },
+              {
+                "index": 190,
+                "lines": 255
+              },
+              {
+                "index": 192,
+                "lines": 103
+              }
+            ]
+          },
+          "skills/lib/pi-dish-client.d.ts": {
+            "lines": 214,
+            "seen": 214,
+            "gaps": [],
+            "records": [
+              {
+                "index": 8,
+                "lines": 100
+              },
+              {
+                "index": 341,
+                "lines": 73
+              },
+              {
+                "index": 342,
+                "lines": 29
+              },
+              {
+                "index": 347,
+                "lines": 6
+              },
+              {
+                "index": 348,
+                "lines": 6
+              },
+              {
+                "index": 349,
+                "lines": 3
+              }
+            ]
+          },
+          "test/edge-build.test.js": {
+            "lines": 96,
+            "seen": 96,
+            "gaps": [],
+            "records": [
+              {
+                "index": 25,
+                "lines": 96
+              }
+            ]
+          },
+          "test/skill-client-ingress.test.js": {
+            "lines": 257,
+            "seen": 257,
+            "gaps": [],
+            "records": [
+              {
+                "index": 30,
+                "lines": 30
+              },
+              {
+                "index": 33,
+                "lines": 114
+              },
+              {
+                "index": 35,
+                "lines": 131
+              }
+            ]
+          },
+          "test/skills-core.test.js": {
+            "lines": 201,
+            "seen": 201,
+            "gaps": [],
+            "records": [
+              {
+                "index": 26,
+                "lines": 43
+              },
+              {
+                "index": 28,
+                "lines": 195
+              },
+              {
+                "index": 31,
+                "lines": 13
+              }
+            ]
+          },
+          "docs/r11-evidence.json": {
+            "lines": 807,
+            "seen": 807,
+            "gaps": [],
+            "records": [
+              {
+                "index": 37,
+                "lines": 23
+              },
+              {
+                "index": 39,
+                "lines": 1
+              },
+              {
+                "index": 126,
+                "lines": 186
+              },
+              {
+                "index": 128,
+                "lines": 244
+              },
+              {
+                "index": 130,
+                "lines": 206
+              },
+              {
+                "index": 132,
+                "lines": 192
+              },
+              {
+                "index": 352,
+                "lines": 300
+              },
+              {
+                "index": 353,
+                "lines": 300
+              }
+            ]
+          },
+          "src/core/helper-refs.ts": {
+            "lines": 390,
+            "seen": 390,
+            "gaps": [],
+            "records": [
+              {
+                "index": 43,
+                "lines": 52
+              },
+              {
+                "index": 46,
+                "lines": 146
+              },
+              {
+                "index": 118,
+                "lines": 54
+              },
+              {
+                "index": 335,
+                "lines": 198
+              },
+              {
+                "index": 350,
+                "lines": 15
+              }
+            ]
+          },
+          "lib/helper-refs.js": {
+            "lines": 432,
+            "seen": 432,
+            "gaps": [],
+            "records": [
+              {
+                "index": 149,
+                "lines": 47
+              },
+              {
+                "index": 173,
+                "lines": 165
+              },
+              {
+                "index": 174,
+                "lines": 232
+              }
+            ]
+          },
+          "public/app.js": {
+            "lines": 19238,
+            "seen": 19237,
+            "gaps": [
+              [
+                15980,
+                15980
+              ]
+            ],
+            "records": [
+              {
+                "index": 152,
+                "lines": 27
+              },
+              {
+                "index": 202,
+                "lines": 435
+              },
+              {
+                "index": 204,
+                "lines": 437
+              },
+              {
+                "index": 205,
+                "lines": 434
+              },
+              {
+                "index": 207,
+                "lines": 436
+              },
+              {
+                "index": 208,
+                "lines": 432
+              },
+              {
+                "index": 210,
+                "lines": 435
+              },
+              {
+                "index": 211,
+                "lines": 438
+              },
+              {
+                "index": 213,
+                "lines": 438
+              },
+              {
+                "index": 214,
+                "lines": 435
+              },
+              {
+                "index": 216,
+                "lines": 438
+              },
+              {
+                "index": 217,
+                "lines": 437
+              },
+              {
+                "index": 219,
+                "lines": 434
+              },
+              {
+                "index": 220,
+                "lines": 438
+              },
+              {
+                "index": 222,
+                "lines": 440
+              },
+              {
+                "index": 223,
+                "lines": 435
+              },
+              {
+                "index": 225,
+                "lines": 436
+              },
+              {
+                "index": 226,
+                "lines": 438
+              },
+              {
+                "index": 228,
+                "lines": 442
+              },
+              {
+                "index": 229,
+                "lines": 433
+              },
+              {
+                "index": 231,
+                "lines": 439
+              },
+              {
+                "index": 232,
+                "lines": 437
+              },
+              {
+                "index": 234,
+                "lines": 434
+              },
+              {
+                "index": 235,
+                "lines": 443
+              },
+              {
+                "index": 237,
+                "lines": 437
+              },
+              {
+                "index": 238,
+                "lines": 440
+              },
+              {
+                "index": 240,
+                "lines": 438
+              },
+              {
+                "index": 241,
+                "lines": 442
+              },
+              {
+                "index": 243,
+                "lines": 439
+              },
+              {
+                "index": 244,
+                "lines": 436
+              },
+              {
+                "index": 246,
+                "lines": 438
+              },
+              {
+                "index": 247,
+                "lines": 439
+              },
+              {
+                "index": 249,
+                "lines": 437
+              },
+              {
+                "index": 250,
+                "lines": 439
+              },
+              {
+                "index": 252,
+                "lines": 440
+              },
+              {
+                "index": 253,
+                "lines": 436
+              },
+              {
+                "index": 255,
+                "lines": 441
+              },
+              {
+                "index": 256,
+                "lines": 437
+              },
+              {
+                "index": 258,
+                "lines": 438
+              },
+              {
+                "index": 259,
+                "lines": 438
+              },
+              {
+                "index": 261,
+                "lines": 436
+              },
+              {
+                "index": 262,
+                "lines": 438
+              },
+              {
+                "index": 264,
+                "lines": 435
+              },
+              {
+                "index": 265,
+                "lines": 437
+              },
+              {
+                "index": 267,
+                "lines": 321
+              },
+              {
+                "index": 268,
+                "lines": 433
+              },
+              {
+                "index": 270,
+                "lines": 300
+              }
+            ]
+          },
+          "public/browser.js": {
+            "lines": 17931,
+            "seen": 17930,
+            "gaps": [
+              [
+                8435,
+                8435
+              ]
+            ],
+            "records": [
+              {
+                "index": 153,
+                "lines": 30
+              },
+              {
+                "index": 272,
+                "lines": 436
+              },
+              {
+                "index": 273,
+                "lines": 436
+              },
+              {
+                "index": 275,
+                "lines": 436
+              },
+              {
+                "index": 276,
+                "lines": 445
+              },
+              {
+                "index": 278,
+                "lines": 438
+              },
+              {
+                "index": 279,
+                "lines": 443
+              },
+              {
+                "index": 281,
+                "lines": 444
+              },
+              {
+                "index": 282,
+                "lines": 436
+              },
+              {
+                "index": 284,
+                "lines": 443
+              },
+              {
+                "index": 285,
+                "lines": 439
+              },
+              {
+                "index": 287,
+                "lines": 443
+              },
+              {
+                "index": 288,
+                "lines": 446
+              },
+              {
+                "index": 290,
+                "lines": 451
+              },
+              {
+                "index": 291,
+                "lines": 439
+              },
+              {
+                "index": 293,
+                "lines": 441
+              },
+              {
+                "index": 294,
+                "lines": 447
+              },
+              {
+                "index": 296,
+                "lines": 447
+              },
+              {
+                "index": 297,
+                "lines": 440
+              },
+              {
+                "index": 299,
+                "lines": 444
+              },
+              {
+                "index": 300,
+                "lines": 438
+              },
+              {
+                "index": 302,
+                "lines": 445
+              },
+              {
+                "index": 303,
+                "lines": 440
+              },
+              {
+                "index": 305,
+                "lines": 445
+              },
+              {
+                "index": 306,
+                "lines": 437
+              },
+              {
+                "index": 308,
+                "lines": 446
+              },
+              {
+                "index": 309,
+                "lines": 300
+              },
+              {
+                "index": 311,
+                "lines": 439
+              },
+              {
+                "index": 312,
+                "lines": 445
+              },
+              {
+                "index": 314,
+                "lines": 438
+              },
+              {
+                "index": 315,
+                "lines": 446
+              },
+              {
+                "index": 317,
+                "lines": 438
+              },
+              {
+                "index": 318,
+                "lines": 445
+              },
+              {
+                "index": 320,
+                "lines": 439
+              },
+              {
+                "index": 321,
+                "lines": 446
+              },
+              {
+                "index": 323,
+                "lines": 448
+              },
+              {
+                "index": 324,
+                "lines": 438
+              },
+              {
+                "index": 326,
+                "lines": 439
+              },
+              {
+                "index": 327,
+                "lines": 446
+              },
+              {
+                "index": 329,
+                "lines": 446
+              },
+              {
+                "index": 330,
+                "lines": 440
+              },
+              {
+                "index": 332,
+                "lines": 447
+              },
+              {
+                "index": 333,
+                "lines": 535
+              }
+            ]
+          },
+          "public/helpers.js": {
+            "lines": 1914,
+            "seen": 1914,
+            "gaps": [],
+            "records": [
+              {
+                "index": 150,
+                "lines": 21
+              },
+              {
+                "index": 194,
+                "lines": 425
+              },
+              {
+                "index": 196,
+                "lines": 602
+              },
+              {
+                "index": 198,
+                "lines": 421
+              },
+              {
+                "index": 200,
+                "lines": 464
+              }
+            ]
+          },
+          "test/helpers.test.js": {
+            "lines": 2345,
+            "seen": 2345,
+            "gaps": [],
+            "records": [
+              {
+                "index": 103,
+                "lines": 17
+              },
+              {
+                "index": 145,
+                "lines": 29
+              },
+              {
+                "index": 176,
+                "lines": 405
+              },
+              {
+                "index": 178,
+                "lines": 423
+              },
+              {
+                "index": 180,
+                "lines": 423
+              },
+              {
+                "index": 182,
+                "lines": 229
+              },
+              {
+                "index": 184,
+                "lines": 399
+              },
+              {
+                "index": 186,
+                "lines": 344
+              },
+              {
+                "index": 360,
+                "lines": 90
+              },
+              {
+                "index": 362,
+                "lines": 8
+              }
+            ]
+          },
+          "test/skills-cli.test.js": {
+            "lines": 346,
+            "seen": 346,
+            "gaps": [],
+            "records": [
+              {
+                "index": 93,
+                "lines": 40
+              },
+              {
+                "index": 95,
+                "lines": 20
+              },
+              {
+                "index": 144,
+                "lines": 42
+              },
+              {
+                "index": 147,
+                "lines": 43
+              },
+              {
+                "index": 162,
+                "lines": 130
+              },
+              {
+                "index": 163,
+                "lines": 84
+              },
+              {
+                "index": 359,
+                "lines": 5
+              },
+              {
+                "index": 361,
+                "lines": 8
+              }
+            ]
+          }
+        },
+        "etxByteClosure": [
+          {
+            "file": "public/app.js",
+            "line": 15980,
+            "bytes": 68,
+            "sha256": "db46430fbe2acdcc7380cf62938066db7ed77cd44de3ec5c4c512d1d084c2406",
+            "kimiActualOdReadIndex": 119,
+            "extraReadIndex": 122,
+            "disclosedInFinal": true
+          },
+          {
+            "file": "public/browser.js",
+            "line": 8435,
+            "bytes": 68,
+            "sha256": "db46430fbe2acdcc7380cf62938066db7ed77cd44de3ec5c4c512d1d084c2406",
+            "kimiActualOdReadIndex": 119,
+            "extraReadIndex": 122,
+            "disclosedInFinal": true
+          }
+        ],
+        "newConsumerRanges": {
+          "src/core/server-app.ts": [
+            [
+              633,
+              635
+            ]
+          ],
+          "src/browser/app.ts": [
+            [
+              516,
+              532
+            ]
+          ],
+          "src/browser/session-info.ts": [
+            [
+              62,
+              143
+            ]
+          ],
+          "src/browser/composer-autocomplete.ts": [
+            [
+              51,
+              57
+            ]
+          ]
+        },
+        "historicalDecodedSource": {
+          "index": 355,
+          "sha256": "463637a8ca73f4d5364295552a3e5dbba2dc207a52f32f769e3be8e458db7c78",
+          "wholeBodyActuallyPresent": true
+        },
+        "priorConsumerAudit": "/tmp/pi-dish-parent-r11-quota-blocked-audit.json"
+      },
+      "parentAudit": "/tmp/pi-dish-parent-r11-resumed-acceptance-audit.json",
+      "closure": "/tmp/pi-dish-parent-r11-resumed-review-closure.json"
+    }
+  ],
+  "historicalReviews": {
+    "record": "/tmp/r11-review-pending.json",
+    "sha256": "5d56f08d89d361ea6912beb70c9ff0f384c84539752a8a644afc5437b113ec25",
+    "rejectedSource": "e694d8948eecaf85c02b21db0185035fff57a501",
+    "reason": "Actual first-party discovery admitted Pi and OMP identities sharing a native alias; the initial canonical shortening could retarget the installed CLI. Shared/shadowed alias guard corrected the canonical implementation, rather than restoring a handwritten CLI copy.",
+    "counterexampleEvidence": "/tmp/r11-retarget-evidence.json",
+    "counterexampleSourceSha256": "dee013482eeaa54305fd4f6237d3f2fcad3f4e69f5a4563af41af92ff21a44be",
+    "quotaHistory": "Original Kimi provider rejection and later403/quota344 are retained, not retried without authorization. Same resumed actor completed final370 after actual missing reads; premature338 is superseded.",
+    "initialRecords": [
+      {
+        "model": "zai/glm-5.3",
+        "session": "2026-09-16T18-20-05-869Z_01a0ab72-8b6d-72df-b6f8-38041506c42d",
+        "verdict": "ACCEPT",
+        "finalMessageIndex": 141,
+        "archive": {
+          "path": "/tmp/r11-review-archives/glm-final.json",
+          "sha256": "699fcd4f8300e4c3693964b56b50502af933b7faa9b9a7de74301047571c9d1e",
+          "bytes": 1435236,
+          "messages": 142,
+          "firstIndex": 0,
+          "lastIndex": 141,
+          "contiguous": true
+        }
+      },
+      {
+        "model": "opencode-go/deepseek-v4.1-flash",
+        "session": "2026-09-16T18-20-04-650Z_01a0ab72-86aa-776a-a3a5-fb763fa99fe8",
+        "verdict": "ACCEPT",
+        "finalMessageIndex": 122,
+        "archive": {
+          "path": "/tmp/r11-review-archives/deepseek-final.json",
+          "sha256": "9b2993b2d36ca4e082ce75ef9148743916566dd277a9a16461f2ffecc9720f60",
+          "bytes": 1444516,
+          "messages": 123,
+          "firstIndex": 0,
+          "lastIndex": 122,
+          "contiguous": true
+        }
+      },
+      {
+        "model": "kimi-code/k3",
+        "session": "2026-09-16T18-20-03-425Z_01a0ab72-81e1-751c-9045-504248d6423d",
+        "verdict": null,
+        "finalMessageIndex": 111,
+        "archive": {
+          "path": "/tmp/r11-review-archives/kimi-quota-incomplete.json",
+          "sha256": "18ea25590707faa78b2e05a2bd1211695a1582684a961ee34cfadf3dc8ce172a",
+          "bytes": 1263113,
+          "messages": 112,
+          "firstIndex": 0,
+          "lastIndex": 111,
+          "contiguous": true
+        }
+      }
+    ]
+  },
+  "parentAuditCorrections": {
+    "wholePrimaryScope": "All16 paths; no sampled unchanged-bundle waiver.",
+    "literalControlBytes": "Both generated keybar lines are68 bytes INCLUDING newline, SHA db46430fbe2acdcc7380cf62938066db7ed77cd44de3ec5c4c512d1d084c2406; native od reads prove U+0003 stripped by text presentation. The earlier GLM68-plus-newline claim is corrected.",
+    "canonicalCopyDocumentation": "CLAUDE.md and docs/shared-runtime-helpers.md now describe the single portable authored source and standalone generated client, not deliberately duplicated algorithms.",
+    "reviewArchivePrivacy": "Complete semantic archives are retained separately; raw transcripts are not copied into this dossier."
+  },
+  "deletionLedger": [
+    {
+      "target": "skills/lib/pi-dish-client.ts",
+      "remove": "UUID_TAIL_RE and authored sessionRefAliases/resolveRefAmong/shortSessionRef/stableSessionRef implementations and obsolete export surface; direct canonical imports replace them, not forwarding wrappers."
+    },
+    {
+      "target": "test/skills-core.test.js",
+      "remove": "Two copy-parity tests plus comparison-only fixtures/imports; retain native decoder observable behavior."
+    }
+  ],
+  "retainedCheckLedger": [
+    "test/helpers.test.js canonical precedence/ambiguity/exactOnly/short/stable contracts",
+    "test/skills-cli.test.js actual CLI against isolated product server",
+    "test/skill-sessions-fleet.test.js actual local/proxied fleet CLI and authorization",
+    "test/session-control-cli.test.js harness inference/override and launch request semantics",
+    "test/skill-client-ingress.test.js malformed/null/raw response behavior",
+    "test/session-refs.test.js prompt reference context policy",
+    "test/edge-build.test.js drift/modes/atomic validation and standalone bundling regression",
+    "test/browser/composer-autocomplete.spec.js target-host reference insertion and draft ownership"
+  ],
+  "ownerVerification": [
+    {
+      "command": "npm test -- test/helpers.test.js test/skills-cli.test.js (before canonical correction)",
+      "result": "exit1; both new regressions failed: shared alias ref resolved null; actual CLI OMP row ref resolved to Pi route-hit. Expected red proof retained."
+    },
+    {
+      "command": "npm run build:core && npm run build:browser && npm run build:edges && npm test -- test/helpers.test.js test/skills-cli.test.js",
+      "result": "exit0; all affected outputs regenerated; 187 focused tests passed, 0 failures/skips,2995.168627ms."
+    },
+    {
+      "command": "npm run check && npm test",
+      "result": "exit0; source policy258/no explicit-any exceptions, lint/types/all generated drift/modes; full backend1030 passed,0 failures/cancellations/skips,32215.854002ms."
+    },
+    {
+      "command": "npm run test:browser && npm run test:ui:scenarios && npm run test:ui",
+      "result": "exit0; full286 browser tests passed in3.2m; all8 independent models/drafts/sidebar/usage/skills/routines/bounce/mobile scenarios passed; full desktop/mobile/multi-host/same-id UI smoke all good; combined298.34s.",
+      "browser": "Chromium153.0.8010.12",
+      "output": "artifact://112"
+    }
+  ],
+  "parentRuntime": {
+    "proof": "/tmp/pi-dish-parent-r11-main-smoke-proof.json",
+    "sourceSha256": "cbbcbbf184e710b5b1dd7c30269b4daa3796828cf45176f2a5343e5148f21f8a",
+    "outcomes": [
+      {
+        "version": "corrected",
+        "name": "Pi alias owner",
+        "id": "route-hit",
+        "printedRef": "route-hit",
+        "productId": "route-hit",
+        "fallbackId": "route-hit",
+        "serverRef": "route-hit",
+        "serverRoundTripId": "route-hit"
+      },
+      {
+        "version": "corrected",
+        "name": "OMP alias collision",
+        "id": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+        "printedRef": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+        "productId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+        "fallbackId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+        "serverRef": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+        "serverRoundTripId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ"
+      },
+      {
+        "version": "corrected",
+        "name": "Shared UUID morning",
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+        "printedRef": "2026-09-05",
+        "productId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+        "fallbackId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+        "serverRef": "2026-09-05",
+        "serverRoundTripId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+      },
+      {
+        "version": "corrected",
+        "name": "Shared UUID next day",
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+        "printedRef": "2026-09-06",
+        "productId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+        "fallbackId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+        "serverRef": "2026-09-06",
+        "serverRoundTripId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+      },
+      {
+        "version": "corrected",
+        "name": "Ordinary UUID",
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+        "printedRef": "01a07264",
+        "productId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+        "fallbackId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+        "serverRef": "01a07264",
+        "serverRoundTripId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0"
+      },
+      {
+        "version": "corrected",
+        "name": "Short alias",
+        "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+        "printedRef": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+        "productId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+        "fallbackId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+        "serverRef": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+        "serverRoundTripId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+      },
+      {
+        "version": "corrected",
+        "name": "Extended alias",
+        "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+        "printedRef": "shadowed-",
+        "productId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+        "fallbackId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+        "serverRef": "shadowed-",
+        "serverRoundTripId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0"
+      }
+    ],
+    "browser": {
+      "source": "const fixtures = [{\"harness\":\"pi\",\"native\":\"route-hit\",\"name\":\"Pi alias owner\",\"id\":\"route-hit\"},{\"harness\":\"omp\",\"native\":\"route-hit\",\"name\":\"OMP alias collision\",\"id\":\"~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ\"},{\"harness\":\"omp\",\"native\":\"2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0\",\"name\":\"Shared UUID morning\",\"id\":\"~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0\"},{\"harness\":\"omp\",\"native\":\"2026-09-06T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0\",\"name\":\"Shared UUID next day\",\"id\":\"~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0\"},{\"harness\":\"omp\",\"native\":\"2026-09-07T09-07-03-291Z_01a07264-131e-74a7-979a-1e763bf12b97\",\"name\":\"Ordinary UUID\",\"id\":\"~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0\"},{\"harness\":\"omp\",\"native\":\"shadowed\",\"name\":\"Short alias\",\"id\":\"~sk1_WyJvbXAiLCJzaGFkb3dlZCJd\"},{\"harness\":\"omp\",\"native\":\"shadowed-long\",\"name\":\"Extended alias\",\"id\":\"~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0\"}];\nconst outcomes = [];\nfor (const fixture of fixtures) {\n  await page.keyboard.press(\"Escape\");\n  await page.click(\".session-item-name[title=\" + JSON.stringify(fixture.id) + \"]\", {button:\"right\"});\n  const ref = await page.$eval(\"button[data-copy]\", e => e.getAttribute(\"data-copy\"));\n  const resolved = await page.evaluate(async value => { const response = await fetch(\"/api/sessions/resolve?id=\" + encodeURIComponent(value)); return {status:response.status,data:await response.json()}; }, ref);\n  if (resolved.status !== 200 || resolved.data.session.id !== fixture.id) throw new Error(\"Reference retargeted \" + fixture.name);\n  outcomes.push({name:fixture.name,id:fixture.id,browserRef:ref,resolvedId:resolved.data.session.id});\n}\nawait page.keyboard.press(\"Escape\");\nawait page.click(\"text/OMP alias collision\", {button:\"right\"});\nreturn outcomes;",
+      "outcomes": [
+        {
+          "name": "Pi alias owner",
+          "id": "route-hit",
+          "browserRef": "route-hit",
+          "resolvedId": "route-hit"
+        },
+        {
+          "name": "OMP alias collision",
+          "id": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ",
+          "browserRef": "~sk1_WyJvbXAiLCJy",
+          "resolvedId": "~sk1_WyJvbXAiLCJyb3V0ZS1oaXQiXQ"
+        },
+        {
+          "name": "Shared UUID morning",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+          "browserRef": "2026-09-05",
+          "resolvedId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA1VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "name": "Shared UUID next day",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0",
+          "browserRef": "2026-09-06",
+          "resolvedId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA2VDA5LTA3LTAzLTI5MVpfMDFhMDcwZDItNDNmYi03MzYwLWFhYmEtYTRkZGY4ZDFkZWIwIl0"
+        },
+        {
+          "name": "Ordinary UUID",
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0",
+          "browserRef": "01a07264",
+          "resolvedId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTA3VDA5LTA3LTAzLTI5MVpfMDFhMDcyNjQtMTMxZS03NGE3LTk3OWEtMWU3NjNiZjEyYjk3Il0"
+        },
+        {
+          "name": "Short alias",
+          "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd",
+          "browserRef": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJ",
+          "resolvedId": "~sk1_WyJvbXAiLCJzaGFkb3dlZCJd"
+        },
+        {
+          "name": "Extended alias",
+          "id": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0",
+          "browserRef": "shadowed-",
+          "resolvedId": "~sk1_WyJvbXAiLCJzaGFkb3dlZC1sb25nIl0"
+        }
+      ],
+      "screenshot": "/tmp/omp-sshots-1582a2f7c863a7cb.webp",
+      "screenshotSha256": "d1f65e692b6549f961b7e58c6808b09b86c1c0b0d00efa253193ce50a9d6102c",
+      "surface": "Actual integrated production public/app.js; DOM context-menu references and real HTTP resolution. No fixtureApp/global injection, no clipboard success claim, no lifecycle/control/native harness launch.",
+      "attempts": [
+        "ARIA selector click timed out; observed element-id click succeeded. Tool issue reported.",
+        "Function-form tab.run with element evaluation failed inside browser transport; direct DOM-selector string-form run succeeded. No product changes."
+      ]
+    },
+    "cleanup": {
+      "browserReleased": true,
+      "supervisedStop": "Exited143 on owned hub stop; not a lifecycle-behavior assertion",
+      "homePresentAfterStop": true,
+      "homeRemoved": true,
+      "throwawayScriptRemoved": true
+    },
+    "limits": "Seven fixture identities were admitted by actual first-party discovery. Installed/symlink CLI product and old-capability fallback, real HTTP and rendered copy-reference menu paths preserve identity. No native harness spawn, lifecycle/control request, native clipboard or macOS claim."
+  },
+  "closure": {
+    "glmAndDeepseek": "/tmp/pi-dish-parent-r11-review-audit.json",
+    "kimi": "/tmp/pi-dish-parent-r11-resumed-review-closure.json",
+    "allThreeSemanticallyClosedAfterArchiveAndAudit": true
+  },
+  "acceptanceOwner": "Parent owns integrated main, full local gates and exact pushed-source CI; no entire-repository/C1/C2 completion claim.",
+  "parentIntegration": {
+    "sourceBase": "3b4fcfe",
+    "integratedCommits": [
+      "e694d8948eecaf85c02b21db0185035fff57a501",
+      "55ba88e50adf871d9b66e2264d6235499bea2610",
+      "5d1728abb1d35afb361ef400952da4a174a826b7"
+    ],
+    "command": "npm run check && npm test && npm run test:browser && npm run test:ui:scenarios && npm run test:ui",
+    "checkCompilerOwned": 265,
+    "backend": {
+      "tests": 1044,
+      "passed": 1044,
+      "failed": 0,
+      "skipped": 0
+    },
+    "browser": {
+      "passed": 291
+    },
+    "independentScenarios": 8,
+    "fullUi": "PASS desktop/mobile/terminal/multi-host",
+    "serialWallSeconds": 332.41,
+    "raw": {
+      "path": "/tmp/pi-dish-parent-r1-r11-full-gates.log",
+      "artifact": "artifact://1567",
+      "bytes": 200361,
+      "sha256": "33c9115596da34ff29da7475931afb39ecf260e822482b4d043634d5466352c5"
+    },
+    "formattedArtifact": "artifact://1568",
+    "runtimeSmoke": "/tmp/pi-dish-parent-r11-main-smoke-proof.json",
+    "passed": true
+  }
+}

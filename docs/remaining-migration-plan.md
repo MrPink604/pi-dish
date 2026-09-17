@@ -1471,16 +1471,15 @@ in `/tmp/pi-dish-parent-reset-ci-result.json`,
 `/tmp/pi-dish-parent-reset-fixture-correction.json` and
 `/tmp/pi-dish-parent-reset-corrected-ci-result.json`.
 
-**Review boundaries:** the original frozen-source approvals are not represented
-as approvals of the parent-authored fixture correction. Because
-`test/server.test.js` is in R1's frozen test inventory, **R1 and dependent R4
-remain held for final-scope review renewal**. R1's product source is unchanged.
-R11 is not integrated or accepted: its same Kimi reviewer hit another five-hour
-quota error while closing actual remaining source/consumer/proof gaps; an
-earlier whole-source claim was withheld. Its Astra owner also reported a usage
-limit. No provider retry, substitute reviewer or partial acceptance is authorized
-by this record. Other package acceptance below is limited to their unchanged
-reviewed source and the independently verified integration.
+**Historical review boundaries at `272a338`:** the original frozen-source
+approvals did not approve the parent-authored fixture correction. R1 and
+dependent R4 were held for final-scope renewal despite unchanged product source.
+R11 was not integrated or accepted: its same Kimi reviewer hit another quota
+error while closing actual source/consumer/proof gaps, and its Astra owner
+reported a usage limit. This record authorized no provider retry, substitution
+or partial acceptance. Subsequent user-authorized renewal and integration are
+recorded separately under R1 and R11 below; other package acceptance here stays
+limited to its reviewed source and independently verified integration.
 
 ### Implementation record — R2
 
@@ -1621,5 +1620,73 @@ the captured 198,218-byte validation log. The earlier sampled-log claim remains
 superseded; Python JSON archive framing is not mislabeled JavaScript/JCS.
 All three reviewers closed successfully and resolved inactive. Parent actual
 isolated Pi mood and OMP share canaries passed, as did corrected-main CI.
-Stable-contract C1 families may continue independently; held R1/R11 and unfinished
-R4/R7/R9 families are not released wholesale. No full C1/C2 completion is claimed.
+Stable-contract C1 families could continue independently; this checkpoint did
+not release the then-held R1/R11 or unfinished R4/R7/R9 families wholesale.
+No full C1/C2 completion is claimed.
+
+### Implementation record — R1
+
+**Complete revised-source reviews and local integration verified; exact
+pushed-main CI pending.** Reviewed source:
+`5d1728abb1d35afb361ef400952da4a174a826b7`, branch `migration/r1-read-export`.
+Its product source remains `453c409ab1d63eb269382bc38b33a930be466c6b`; the
+genuine settings-lock correction is the one already delivered in `272a338`.
+[Evidence](r1-evidence.json) and [review record](r1-review.json) keep historical
+453, private 5d and integrated-main evidence distinct.
+
+The same original OMP/High reviewers independently accepted the complete
+15-path revised candidate: `zai/glm-5.3` final 260, transcripts 261 messages;
+`opencode-go/deepseek-v4.1-flash` final 256, 257 messages; and `kimi-code/k3`
+final 274, 275 messages. Parent verified actual whole primary bodies, seven
+complete consumer files and the native SDK export unit. Finite continuations
+closed diff-only test reads, missing dossier bytes, unchanged server-test
+sections and JSON-escaped-only capture-helper evidence. Earlier premature
+complete-scope claims remain superseded, not erased. All three final reviews
+read the decoded executable helper; all three semantic closures succeeded and
+resolved inactive. Private raw archives remain private.
+
+Combined R1/R11 integration passed check (265 compiler-owned sources), all
+1,044 backend tests with zero failures/skips, all 291 browser cases, eight
+isolated scenarios and full desktop/mobile/terminal/multi-host UI. The serial
+gate chain took 332.41 seconds; this is not an isolated UI duration. Complete
+200,361-byte output is retained in
+`/tmp/pi-dish-parent-r1-r11-full-gates.log`, SHA256
+`33c9115596da34ff29da7475931afb39ecf260e822482b4d043634d5466352c5`.
+Parent result: `/tmp/pi-dish-parent-r1-r11-local-gates.json`.
+Formal acceptance and R4's final dependent release await exact pushed-main CI.
+
+### Implementation record — R11
+
+**Complete corrected-source reviews and local integration verified; exact
+pushed-main CI pending.** Reviewed source:
+`55ba88e50adf871d9b66e2264d6235499bea2610`, branch
+`migration/r11-canonical-refs`. Both `e694d894` and its correcting `55ba88e`
+were applied atomically; the rejected intermediate source was not delivered
+alone. [Evidence](r11-evidence.json) and [review record](r11-review.json)
+preserve the wrong-target counterexample and renewed decisions.
+
+Canonical portable references are authored once in `src/core/helper-refs.ts`
+and bundled into the standalone skill client. Shared/shadowed aliases are
+rejected before prefix selection, preserving resolver stages, exact identity,
+host capability policy and old-host fallback. No handwritten CLI copy or
+runtime dependency on server modules remains.
+
+All three exact-model OMP/High reviewers accepted the same complete corrected
+16-path source: GLM final 378 (379 messages), DeepSeek final 286 (287 messages),
+and the same user-resumed Kimi final 370 (371 messages). Parent audited actual
+whole-file and decoded-proof coverage. Both generated ETX-containing lines
+were verified bytewise: 68 bytes including newline, not empty strings.
+Earlier rejected/partial decisions and quota failures remain historical.
+All three reviewers were archived, audited and semantically closed.
+
+Parent independently exercised seven first-party-discovered fixture identities
+through the installed/symlink CLI (14 product/fallback resolutions), real HTTP
+(seven emitted-reference roundtrips) and actual production browser copy-ref
+menus (seven roundtrips). Shared native/UUID aliases and shorter/longer alias
+pairs retained their requested identities; ordinary UUID shortening stayed
+unchanged. The smoke used no application globals, live agents or lifecycle
+requests. No native clipboard, harness-launch or macOS claim is made.
+Proof: `/tmp/pi-dish-parent-r11-main-smoke-proof.json`; screenshot:
+`/tmp/omp-sshots-1582a2f7c863a7cb.webp`. The browser, owned server, temporary
+home and throwaway smoke script were removed. The complete combined local
+gates above passed; exact pushed-source CI and formal acceptance remain pending.

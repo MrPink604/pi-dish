@@ -1,6 +1,6 @@
 {
   "milestone": "R1",
-  "status": "Exact-source decisions retained with appended same-actor GLM literal-gap and Kimi entire-consumer renewals after parent audit; original Kimi ACCEPT is historical and under-scoped, not gate-grade. Parent integration, exact-main CI and dependency release remain pending.",
+  "status": "Complete revised5d candidate has three renewed coverage-audited ACCEPTs; integrated local gates PASS; exact pushed-main CI pending.",
   "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
   "sourceSha": "453c409ab1d63eb269382bc38b33a930be466c6b",
   "branch": "migration/r1-read-export",
@@ -1610,5 +1610,2100 @@
     },
     "lifecycleLimits": "Both authorized continuations were archived/audited, then closed once through semantic CLI with success:true and later inactive/closefalse resolves. These successes do NOT resolve the original DeepSeek recorded process-birth residual holds; no manual signals or blind retries. Parent retains those capacity decisions.",
     "integrationGate": "No product source changes, dependency/R4 release, parent acceptance or exact-main-CI success is claimed by this amendment."
+  },
+  "historicalStatusBeforeTestRevision": "Exact-source decisions retained with appended same-actor GLM literal-gap and Kimi entire-consumer renewals after parent audit; original Kimi ACCEPT is historical and under-scoped, not gate-grade. Parent integration, exact-main CI and dependency release remain pending.",
+  "newCompleteCandidateGate": {
+    "status": "Independent complete-candidate review and integrated local delivery gates PASS; exact pushed-main CI pending.",
+    "unchangedProductSource": "453c409ab1d63eb269382bc38b33a930be466c6b",
+    "privateBranchBase": "75d8142a32640d76a9fdf632280d7d7c15881980",
+    "authorizedUpstreamTestCommit": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
+    "application": "git cherry-pick --no-commit 272a338e0fe0292dfd5f45131890c1bcb273c3eb; only the authorized test change, no other R package commits",
+    "affectedFiles": [
+      "test/server.test.js",
+      "docs/r1-evidence.json",
+      "docs/r1-review.json"
+    ],
+    "test": "PUT /api/models/enabled preserves a concurrent pi settings write",
+    "finding": {
+      "parentFailedSource": "266675059fda76ec2bd51b30dfe5e3714b724dd3",
+      "ciRun": 35162106354,
+      "url": "https://github.com/MrPink604/pi-dish/actions/runs/35162106354",
+      "job": "Backend (Node22.x)",
+      "observed": "API500 ELOCKED while HTTP200 expected; child60ms lock-release timer could outlast pinned SDK10x20ms synchronous retry under CI load",
+      "authority": "Parent actual integration failure; not re-run to confirm"
+    },
+    "correction": "Hold the actual proper-lockfile lock and snapshot. Intercept lockSync only to call the real method with its receiver/arguments; after real ELOCKED on that settings file, write the competing snapshot and release its actual lock, then rethrow the original error so the actual SDK retry succeeds. Preserve same HTTP status and persisted theme/concurrentPiWrite/enabledModels assertions; finally release only if still held.",
+    "deletionLedger": {
+      "removed": [
+        "Child-process startup/readiness/exit plumbing used solely by this fixture",
+        "Timing-dependent60ms release assumption"
+      ],
+      "retained": [
+        "Actual proper-lockfile lock acquisition and collision",
+        "Original ELOCKED propagated into actual SDK retry",
+        "HTTP200 and merged persisted-state assertions",
+        "Finally cleanup of any still-held lock"
+      ],
+      "notChanged": [
+        "No product retry budget, lifecycle, model settings or error policy",
+        "No fabricated lock result or weakened API/state assertion",
+        "No product/generated/compiler/config/tool-family changes"
+      ]
+    },
+    "parentProof": {
+      "attribution": "Independent parent execution on integrated main272a338, which contains other packages; not private-branch execution or a transferred review approval",
+      "focusedPassed": 1,
+      "checkSources": 265,
+      "backendPassed": 1041,
+      "backendFailed": 0,
+      "backendSkipped": 0,
+      "correctedSource": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
+      "ciRun": 35163287240,
+      "ciUrl": "https://github.com/MrPink604/pi-dish/actions/runs/35163287240",
+      "ciConclusion": "All5jobs and mandatory check/backend/browser/isolated-scenarios/UI steps passed",
+      "failureDetailsSkipped": "Only failure-only diagnostic/upload steps skipped on successful jobs",
+      "observerLimit": "Parent records GitHub API observer403 followed by successful public HTML step inspection; observer failure is not CI failure"
+    },
+    "artifacts": [
+      {
+        "path": "/tmp/pi-dish-parent-reset-ci-node22-failure.json",
+        "sha256": "5e4d2cd51f46f50eac26bd66fa24e15475ba6eebafe9a1e3456b7554b391de01"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-reset-fixture-correction.json",
+        "sha256": "76f77d8fd35ad83f035d4600e152dba64c8d5964f4766dea08e2f188ab5fd6f5"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-reset-corrected-ci-result.json",
+        "sha256": "e9509d041dcb5030551160a3f61b10a8f7abbbf0210033d598a35662976bdd2c"
+      }
+    ],
+    "historyRule": "All prior product source453 reviews, original/renewed decisions, archives, hashes and attestation commits22073fb496360e3df7bdd6676de850310c257281 and75d8142a32640d76a9fdf632280d7d7c15881980 remain historical evidence valid ONLY for their frozen453 scope. They are superseded as approval of this new complete candidate; no approval is carried forward.",
+    "privateValidation": {
+      "status": "PASS after explicit parent validation release; no scoped failure or further source fix",
+      "requiredAfterParentRelease": [],
+      "generatedOutputs": "None affected; no regeneration needed for this test-only change. Drift/types are checked only after validation release.",
+      "historicalRuntimeProofs": "No new browser/UI/native execution: no product/browser change. Original453 and independent parent smoke/CI remain distinctly attributed historical evidence, not this private validation.",
+      "additionalGates": "Follow parent validation release for any additional new-candidate browser/UI/native proof requirement; browser implementation/runtime mapping is unchanged.",
+      "node": "v26.8.2",
+      "focusedTests": 1,
+      "serverTests": 135,
+      "checkSources": 258,
+      "backendTests": 1032,
+      "failures": 0,
+      "skips": 0,
+      "performedCommands": [
+        {
+          "name": "check",
+          "command": [
+            "npm",
+            "run",
+            "check"
+          ],
+          "result": "PASS",
+          "governedSources": 258,
+          "wallSeconds": 5.23,
+          "output": {
+            "path": "/tmp/pi-dish-r1-check-tool-output.txt",
+            "bytes": 897,
+            "sha256": "7c3207588835dbea06c81359599ca14ed449b4d172ace7b2c9b25596e549f669",
+            "capture": "Complete nontruncated tool-captured output, preserved verbatim including wall-time line; not claimed to be separate raw stdout/stderr byte streams"
+          }
+        },
+        {
+          "name": "focused",
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "--test-name-pattern=^PUT /api/models/enabled preserves a concurrent pi settings write$",
+            "test/server.test.js"
+          ],
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "startedAt": "2026-09-17T00:17:24.230Z",
+          "endedAt": "2026-09-17T00:17:25.435Z",
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null,
+          "capture": "Complete unmodified stdout/stderr bytes; combined preserves Node data-event order. npm test invokes the existing sanitizeTestEnv runner.",
+          "outputs": {
+            "stdout": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/focused-stdout.log",
+              "bytes": 450,
+              "sha256": "c81fa5e4f58155e7f983394f4893f53c574327819d98984ee8ee292524d9bf7d"
+            },
+            "stderr": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/focused-stderr.log",
+              "bytes": 182,
+              "sha256": "1d0333471bc207fb0a4ad01ff3407882729de77cb7094b1f09dbbdc8ad9ece80"
+            },
+            "combined": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/focused-combined.log",
+              "bytes": 632,
+              "sha256": "947f101fd717429570cf0a172f42f3939575a0665e36ee32953f2d8ae62c2b40"
+            }
+          },
+          "summary": {
+            "tests": 1,
+            "pass": 1,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          }
+        },
+        {
+          "name": "server",
+          "command": [
+            "npm",
+            "test",
+            "--",
+            "test/server.test.js"
+          ],
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "startedAt": "2026-09-17T00:17:24.235Z",
+          "endedAt": "2026-09-17T00:17:33.914Z",
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null,
+          "capture": "Complete unmodified stdout/stderr bytes; combined preserves Node data-event order. npm test invokes the existing sanitizeTestEnv runner.",
+          "outputs": {
+            "stdout": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/server-stdout.log",
+              "bytes": 12084,
+              "sha256": "4991dcf1b1dfc427155953d689b45ce90e6151e2d2b29d16e86fe425343ad09c"
+            },
+            "stderr": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/server-stderr.log",
+              "bytes": 95,
+              "sha256": "35e5800b3acb97bc94ba5b3aac2b6f2ca18a5a7dedebce794b77cf7e6a0a394d"
+            },
+            "combined": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/server-combined.log",
+              "bytes": 12179,
+              "sha256": "d558460511bbe7c308a06838f3371b0032bacfcad961d5c5030223afda17517c"
+            }
+          },
+          "summary": {
+            "tests": 135,
+            "pass": 135,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          }
+        },
+        {
+          "name": "backend",
+          "command": [
+            "npm",
+            "test"
+          ],
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "startedAt": "2026-09-17T00:17:24.224Z",
+          "endedAt": "2026-09-17T00:17:56.842Z",
+          "exitCode": 0,
+          "signal": null,
+          "spawnError": null,
+          "capture": "Complete unmodified stdout/stderr bytes; combined preserves Node data-event order. npm test invokes the existing sanitizeTestEnv runner.",
+          "outputs": {
+            "stdout": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/backend-stdout.log",
+              "bytes": 106534,
+              "sha256": "298f2190ec950ed86a217174894791d1608848b02a85772942095c085bc18aa0"
+            },
+            "stderr": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/backend-stderr.log",
+              "bytes": 75,
+              "sha256": "e68e311aff9ff1a7eb1c337af1ed6ff602c1f63b01be60b4f888a4c220d1a4ec"
+            },
+            "combined": {
+              "path": "/tmp/pi-dish-r1-test-revision-validation/backend-combined.log",
+              "bytes": 106609,
+              "sha256": "b70c33f658b730c1dbeeb9a91207a54ef7e43d72e682f80164b8321888017a40"
+            }
+          },
+          "summary": {
+            "tests": 1032,
+            "pass": 1032,
+            "fail": 0,
+            "cancelled": 0,
+            "skipped": 0,
+            "todo": 0
+          }
+        }
+      ],
+      "completeOutputBundle": {
+        "path": "/tmp/pi-dish-r1-test-revision-validation/proof.json",
+        "sha256": "886fe5e5b7d74af4b03d7fdbe61e41c3bc1d84178ac05f6de46e66fcc7d97791",
+        "bytes": 7834
+      },
+      "generation": "No regeneration command; existing npm run check drift/type checks passed",
+      "scope": "Private258/1032 counts belong to this branch; parent integrated-main265/1041 remain parent proof on272a338 and are not substituted."
+    },
+    "reviewGate": {
+      "status": "NO reviewer operations authorized; await fresh parent grant after validation/source freeze",
+      "required": "Three exact-model OMP high reviewers must renew ENTIRE same-final-source ACCEPT/REVISE for the new complete R1 candidate, including new test/dossier and actual producers/consumers. No selected-delta-only approval.",
+      "quota": "Parent reports R11 same Kimi hit403 again. No provider retry/probe, replacement/upgrade, reviewer resolve/resume/prompt, new peer or manual signal."
+    },
+    "ownershipGate": "Parent acceptance docs3b4fcfe explicitly withhold R1/R4. R4/miner handoff remains held until parent integration/exactCI/formal gate. No main writes or unrelated cleanup.",
+    "validationCaptureCleanup": "Disposable capture helper source retained in complete proof bundle; helper removed after evidence capture. All unmodified logs/result JSON files retained. No unrelated cleanup.",
+    "historicalStatus": "Released private validation PASS; complete candidate pending fresh reviewer grant and ENTIRE same-final-source reviews, not formal acceptance"
+  },
+  "renewedFinalReview": {
+    "sourceSha": "5d1728abb1d35afb361ef400952da4a174a826b7",
+    "status": "All three same original exact-model HIGH OMP reviewers ACCEPT the complete revised candidate; parent actual-byte and decoded-source audits plus integrated local gates PASS. Exact pushed-main CI pending.",
+    "authorization": "User: Resume them. No review waiver, replacement, model upgrade or provider retry.",
+    "scope": [
+      {
+        "path": "docs/r1-evidence.json",
+        "bytes": 30200,
+        "sha256": "4baf653b7fc2f2922e8ebc34e25bdb6dc0805efacfb37d980ccc8bb254bb9a15"
+      },
+      {
+        "path": "docs/r1-review.json",
+        "bytes": 118444,
+        "sha256": "421355b6eaf13b27dfea04a615f355dd978199cb3187b0a5175ae0eb155e8dd9"
+      },
+      {
+        "path": "lib/omp-export.d.ts",
+        "bytes": 993,
+        "sha256": "4e8ddf0637bf5f358a7bfab6e2dce485b9c84bc1b13d9669f09186b67ab8f33e"
+      },
+      {
+        "path": "lib/omp-export.js",
+        "bytes": 8024,
+        "sha256": "6a289a3c872c8089c400e93109e6fa19ce9356f4b750ac517f01cd1ba5e5a88f"
+      },
+      {
+        "path": "lib/publication-handlers.js",
+        "bytes": 30125,
+        "sha256": "1b697143951df8d596941833d0ca68acc50b3222def3293a608f289cf9e48afb"
+      },
+      {
+        "path": "lib/session-files.js",
+        "bytes": 41334,
+        "sha256": "bf3011a703c86561546281cd311ec73efd080b990a76bd3c0fe974b17bd68566"
+      },
+      {
+        "path": "lib/skill-mining.js",
+        "bytes": 14268,
+        "sha256": "75519a155df0a5b183ea71d7855336a3aa077d54f2d1a18111d4d9244eb21cd6"
+      },
+      {
+        "path": "src/core/omp-export.ts",
+        "bytes": 6381,
+        "sha256": "a8b8e7f7dcd7d9212aedcdc11a0c6d2ae486ffdb41e1ce96a5b8f9be10726786"
+      },
+      {
+        "path": "src/core/publication-handlers.ts",
+        "bytes": 28625,
+        "sha256": "7921bf2b3f6cc735b4c5cb330d52ef23923b34b1df2dd30097b118c414b30f25"
+      },
+      {
+        "path": "src/core/session-files.ts",
+        "bytes": 41671,
+        "sha256": "2ece5b6c30b44b75bfa468026b4f930f1903d6d26381c8ec2501e4f1c41739fe"
+      },
+      {
+        "path": "src/core/skill-mining.ts",
+        "bytes": 12085,
+        "sha256": "1c0cf653ff6bbdff7b3300582e9c4c4caef1d4ef324441b02139499385b7e830"
+      },
+      {
+        "path": "test/omp-export.test.js",
+        "bytes": 4487,
+        "sha256": "42a46a50de9358bf8809c75edf27f25b9af27b7b4df52d1919449f88eaecba1a"
+      },
+      {
+        "path": "test/server.test.js",
+        "bytes": 230935,
+        "sha256": "370c2843a6919e91de318a13476a5801961b1871744b133b0659817582245181"
+      },
+      {
+        "path": "test/session-files.test.js",
+        "bytes": 35858,
+        "sha256": "93eba49ae4b5d89225717e31dd8a4974dc70c432873b87a883ffa88f7e373f3f"
+      },
+      {
+        "path": "test/skill-mining.test.js",
+        "bytes": 9028,
+        "sha256": "aa116085a550677215a9e5af8ad6133f9a319bbf08fd0147ceb8e84def01995a"
+      }
+    ],
+    "proof": {
+      "path": "/tmp/pi-dish-r1-test-revision-validation/proof.json",
+      "sha256": "886fe5e5b7d74af4b03d7fdbe61e41c3bc1d84178ac05f6de46e66fcc7d97791",
+      "bytes": 7834
+    },
+    "reviewers": [
+      {
+        "model": "zai/glm-5.3",
+        "session": "01a0ab60-a38a-779f-8357-dd2698e17c56",
+        "verdict": "ACCEPT",
+        "sourceSha": "5d1728abb1d35afb361ef400952da4a174a826b7",
+        "pre": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTAwLTMyLTM5NFpfMDFhMGFiNjAtYTM4YS03NzlmLTgzNTctZGQyNjk4ZTE3YzU2Il0",
+          "nativeSessionId": "2026-09-16T18-00-32-394Z_01a0ab60-a38a-779f-8357-dd2698e17c56",
+          "model": "zai/glm-5.3",
+          "thinkingLevel": "high",
+          "harnessId": "omp",
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "isActive": true,
+          "turnInProgress": false
+        },
+        "post": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTAwLTMyLTM5NFpfMDFhMGFiNjAtYTM4YS03NzlmLTgzNTctZGQyNjk4ZTE3YzU2Il0",
+          "nativeSessionId": "2026-09-16T18-00-32-394Z_01a0ab60-a38a-779f-8357-dd2698e17c56",
+          "model": "zai/glm-5.3",
+          "thinkingLevel": "high",
+          "harnessId": "omp",
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "isActive": true,
+          "turnInProgress": false
+        },
+        "archive": {
+          "path": "/tmp/pi-dish-parent-r1-renewed-review-evidence/glm-261.json",
+          "sha256": "ef59e613ca8e17561c83b0dbf11fcaeb88b2cd66a40bfedd007968c2679f9f3e",
+          "messages": 261
+        },
+        "finalMessageIndex": 260,
+        "finalMessageId": "e906edc9",
+        "verbatimFinal": "**ACCEPT (final renewal)** for exact frozen source `5d1728abb1d35afb361ef400952da4a174a826b7` — delivered to parent `01a0a3fd-9825-70bd-b000-dc85c59a7421` via semantic CLI (delivered). Same actor, model `zai/glm-5.3`, OMP, thinking high, assigned cwd — unchanged; no self-close.\n\n## Proof gap closed\n`captureHelper.source` decoded from `/tmp/pi-dish-r1-test-revision-validation/proof.json` to its whole unescaped **33-line body** (plus empty EOF boundary) and personally read line-by-line via raw tool display. **Not executed.** Decoded-artifact SHA256 verified equal to the recorded `10f437797d5430833a2751ba6e90f91c98a1a7ffe4606249067a1041e9df8eb6` before reading; scratch decode removed after the read (reproducible from the bundle).\n\n## Decoded-source assessment (vs earlier encoded/hash-only evidence)\n- Strict-mode CommonJS, only `node:fs`/`path`/`crypto`/`child_process`; no network, no env mutation, no repo writes.\n- argv gated by an explicit allowlist (`focused`/`server`/`backend`) that throws on any other name **before** spawning; spawns exactly `npm` with the three fixed argv sets in the repo cwd.\n- Tees child stdout/stderr live while accumulating byte chunks — \"combined preserves Node data-event order\" is literally the capture mechanism.\n- On close: writes the three log files with per-stream byte length + sha256, writes the result JSON recording command/cwd/timestamps/`exitCode`/`signal`/`spawnError` verbatim from the child.\n- Exit gate `0` only when `exitCode===0 && signal===null && spawnError===null` — cannot mask a child failure; writes only under the validation directory; no pass/fail fabrication (summaries derive from the runner's own captured output).\n\nThis closes the private-proof chain end-to-end: the helper that produced the audited logs and hashes is exactly the source recorded in the bundle.\n\n## Standing verdict\nPrior completed scope — all 15 manifest files with complete literal tool-attributed reads (including the three whole test bodies and recovered dossier long lines from the previous pass), consumer sections, both parent audits, and the nine-log + check-output hash verifications — plus this decoded executable-source assessment. Findings unchanged, no new blockers. Verdict: **ACCEPT** for `5d1728abb1d35afb361ef400952da4a174a826b7`.\n\nLimits: no browser/UI/native execution at 5d verified by me; Linux x64; owner/parent runtime proofs accepted as recorded; helper not executed per instruction. Parent alone owns integration, exact-main-CI, R4/miner release and formal R1 acceptance.",
+        "primaryCoverage": {
+          "docs/r1-evidence.json": {
+            "lines": 556,
+            "seen": 556,
+            "gaps": [],
+            "records": [
+              {
+                "index": 7,
+                "lines": 5
+              },
+              {
+                "index": 10,
+                "lines": 2
+              },
+              {
+                "index": 199,
+                "lines": 287
+              },
+              {
+                "index": 201,
+                "lines": 278
+              }
+            ]
+          },
+          "docs/r1-review.json": {
+            "lines": 1852,
+            "seen": 1852,
+            "gaps": [],
+            "records": [
+              {
+                "index": 203,
+                "lines": 477
+              },
+              {
+                "index": 205,
+                "lines": 476
+              },
+              {
+                "index": 207,
+                "lines": 468
+              },
+              {
+                "index": 209,
+                "lines": 457
+              },
+              {
+                "index": 240,
+                "lines": 1
+              },
+              {
+                "index": 242,
+                "lines": 1
+              },
+              {
+                "index": 243,
+                "lines": 1
+              },
+              {
+                "index": 245,
+                "lines": 1
+              },
+              {
+                "index": 246,
+                "lines": 1
+              },
+              {
+                "index": 248,
+                "lines": 1
+              },
+              {
+                "index": 249,
+                "lines": 1
+              }
+            ]
+          },
+          "lib/omp-export.d.ts": {
+            "lines": 22,
+            "seen": 22,
+            "gaps": [],
+            "records": [
+              {
+                "index": 136,
+                "lines": 22
+              }
+            ]
+          },
+          "lib/omp-export.js": {
+            "lines": 181,
+            "seen": 181,
+            "gaps": [],
+            "records": [
+              {
+                "index": 133,
+                "lines": 40
+              },
+              {
+                "index": 137,
+                "lines": 132
+              },
+              {
+                "index": 139,
+                "lines": 17
+              }
+            ]
+          },
+          "lib/publication-handlers.js": {
+            "lines": 631,
+            "seen": 631,
+            "gaps": [],
+            "records": [
+              {
+                "index": 140,
+                "lines": 301
+              },
+              {
+                "index": 142,
+                "lines": 300
+              },
+              {
+                "index": 145,
+                "lines": 35
+              }
+            ]
+          },
+          "lib/session-files.js": {
+            "lines": 892,
+            "seen": 892,
+            "gaps": [],
+            "records": [
+              {
+                "index": 124,
+                "lines": 454
+              },
+              {
+                "index": 126,
+                "lines": 441
+              }
+            ]
+          },
+          "lib/skill-mining.js": {
+            "lines": 310,
+            "seen": 310,
+            "gaps": [],
+            "records": [
+              {
+                "index": 128,
+                "lines": 53
+              },
+              {
+                "index": 130,
+                "lines": 120
+              },
+              {
+                "index": 131,
+                "lines": 114
+              },
+              {
+                "index": 134,
+                "lines": 42
+              },
+              {
+                "index": 168,
+                "lines": 27
+              }
+            ]
+          },
+          "src/core/omp-export.ts": {
+            "lines": 152,
+            "seen": 152,
+            "gaps": [],
+            "records": [
+              {
+                "index": 46,
+                "lines": 38
+              },
+              {
+                "index": 49,
+                "lines": 132
+              }
+            ]
+          },
+          "src/core/publication-handlers.ts": {
+            "lines": 615,
+            "seen": 615,
+            "gaps": [],
+            "records": [
+              {
+                "index": 54,
+                "lines": 87
+              },
+              {
+                "index": 118,
+                "lines": 101
+              },
+              {
+                "index": 120,
+                "lines": 277
+              },
+              {
+                "index": 122,
+                "lines": 164
+              }
+            ]
+          },
+          "src/core/session-files.ts": {
+            "lines": 874,
+            "seen": 874,
+            "gaps": [],
+            "records": [
+              {
+                "index": 26,
+                "lines": 197
+              },
+              {
+                "index": 28,
+                "lines": 173
+              },
+              {
+                "index": 35,
+                "lines": 166
+              },
+              {
+                "index": 41,
+                "lines": 42
+              },
+              {
+                "index": 114,
+                "lines": 221
+              },
+              {
+                "index": 115,
+                "lines": 247
+              },
+              {
+                "index": 117,
+                "lines": 80
+              }
+            ]
+          },
+          "src/core/skill-mining.ts": {
+            "lines": 258,
+            "seen": 258,
+            "gaps": [],
+            "records": [
+              {
+                "index": 38,
+                "lines": 47
+              },
+              {
+                "index": 42,
+                "lines": 110
+              },
+              {
+                "index": 44,
+                "lines": 153
+              }
+            ]
+          },
+          "test/omp-export.test.js": {
+            "lines": 85,
+            "seen": 85,
+            "gaps": [],
+            "records": [
+              {
+                "index": 229,
+                "lines": 85
+              }
+            ]
+          },
+          "test/server.test.js": {
+            "lines": 4447,
+            "seen": 4447,
+            "gaps": [],
+            "records": [
+              {
+                "index": 185,
+                "lines": 334
+              },
+              {
+                "index": 187,
+                "lines": 663
+              },
+              {
+                "index": 189,
+                "lines": 663
+              },
+              {
+                "index": 191,
+                "lines": 665
+              },
+              {
+                "index": 193,
+                "lines": 674
+              },
+              {
+                "index": 195,
+                "lines": 673
+              },
+              {
+                "index": 197,
+                "lines": 796
+              }
+            ]
+          },
+          "test/session-files.test.js": {
+            "lines": 681,
+            "seen": 681,
+            "gaps": [],
+            "records": [
+              {
+                "index": 234,
+                "lines": 230
+              },
+              {
+                "index": 236,
+                "lines": 231
+              },
+              {
+                "index": 238,
+                "lines": 221
+              }
+            ]
+          },
+          "test/skill-mining.test.js": {
+            "lines": 182,
+            "seen": 182,
+            "gaps": [],
+            "records": [
+              {
+                "index": 228,
+                "lines": 182
+              }
+            ]
+          }
+        },
+        "consumerCoverage": {
+          "src/core/session-index.ts": {
+            "lines": 619,
+            "seen": 619,
+            "gaps": [],
+            "records": [
+              {
+                "index": 69,
+                "lines": 90
+              },
+              {
+                "index": 71,
+                "lines": 151
+              },
+              {
+                "index": 73,
+                "lines": 86
+              },
+              {
+                "index": 74,
+                "lines": 147
+              },
+              {
+                "index": 144,
+                "lines": 210
+              },
+              {
+                "index": 161,
+                "lines": 46
+              }
+            ]
+          },
+          "src/core/session-index-data.ts": {
+            "lines": 126,
+            "seen": 126,
+            "gaps": [],
+            "records": [
+              {
+                "index": 76,
+                "lines": 29
+              },
+              {
+                "index": 147,
+                "lines": 126
+              }
+            ]
+          },
+          "src/core/session-metadata.ts": {
+            "lines": 107,
+            "seen": 107,
+            "gaps": [],
+            "records": [
+              {
+                "index": 79,
+                "lines": 49
+              },
+              {
+                "index": 148,
+                "lines": 84
+              }
+            ]
+          },
+          "src/core/session-metadata-contracts.ts": {
+            "lines": 15,
+            "seen": 15,
+            "gaps": [],
+            "records": [
+              {
+                "index": 77,
+                "lines": 15
+              }
+            ]
+          },
+          "src/core/harness-pricing.ts": {
+            "lines": 242,
+            "seen": 242,
+            "gaps": [],
+            "records": [
+              {
+                "index": 80,
+                "lines": 51
+              },
+              {
+                "index": 150,
+                "lines": 192
+              },
+              {
+                "index": 162,
+                "lines": 56
+              }
+            ]
+          },
+          "src/core/session-read-handlers.ts": {
+            "lines": 322,
+            "seen": 322,
+            "gaps": [],
+            "records": [
+              {
+                "index": 82,
+                "lines": 47
+              },
+              {
+                "index": 84,
+                "lines": 236
+              },
+              {
+                "index": 153,
+                "lines": 60
+              }
+            ]
+          },
+          "src/core/file-handlers.ts": {
+            "lines": 207,
+            "seen": 207,
+            "gaps": [],
+            "records": [
+              {
+                "index": 152,
+                "lines": 59
+              },
+              {
+                "index": 155,
+                "lines": 91
+              },
+              {
+                "index": 159,
+                "lines": 77
+              }
+            ]
+          },
+          "src/core/pi-sdk.ts": {
+            "lines": 567,
+            "seen": 93,
+            "gaps": [
+              [
+                1,
+                38
+              ],
+              [
+                40,
+                58
+              ],
+              [
+                84,
+                370
+              ],
+              [
+                372,
+                438
+              ],
+              [
+                504,
+                507
+              ],
+              [
+                509,
+                567
+              ]
+            ],
+            "records": [
+              {
+                "index": 87,
+                "lines": 67
+              },
+              {
+                "index": 158,
+                "lines": 26
+              }
+            ]
+          }
+        },
+        "consumerRanges": {
+          "src/core/pi-sdk.ts": [
+            [
+              465,
+              476
+            ]
+          ]
+        },
+        "decodedSource": {
+          "indices": [
+            257
+          ],
+          "bytes": 2116,
+          "sha256": "10f437797d5430833a2751ba6e90f91c98a1a7ffe4606249067a1041e9df8eb6"
+        },
+        "parentAudit": "/tmp/pi-dish-parent-r1-glm-renewed-acceptance-audit.json",
+        "closure": "/tmp/pi-dish-parent-r1-glm-renewed-closure.json"
+      },
+      {
+        "model": "opencode-go/deepseek-v4.1-flash",
+        "session": "01a0ab60-ac99-7665-9760-db1e0868a7ac",
+        "verdict": "ACCEPT",
+        "sourceSha": "5d1728abb1d35afb361ef400952da4a174a826b7",
+        "pre": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTAwLTM0LTcxM1pfMDFhMGFiNjAtYWM5OS03NjY1LTk3NjAtZGIxZTA4NjhhN2FjIl0",
+          "nativeSessionId": "2026-09-16T18-00-34-713Z_01a0ab60-ac99-7665-9760-db1e0868a7ac",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "thinkingLevel": "high",
+          "harnessId": "omp",
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "isActive": true,
+          "turnInProgress": false
+        },
+        "post": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTAwLTM0LTcxM1pfMDFhMGFiNjAtYWM5OS03NjY1LTk3NjAtZGIxZTA4NjhhN2FjIl0",
+          "nativeSessionId": "2026-09-16T18-00-34-713Z_01a0ab60-ac99-7665-9760-db1e0868a7ac",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "thinkingLevel": "high",
+          "harnessId": "omp",
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "isActive": true,
+          "turnInProgress": false
+        },
+        "archive": {
+          "path": "/tmp/pi-dish-parent-r1-renewed-review-evidence/deepseek-257.json",
+          "sha256": "c912f51ead3c861031f043f37578b5faa7949b9b66b2556220c19f16a0c6ec3b",
+          "messages": 257
+        },
+        "finalMessageIndex": 256,
+        "finalMessageId": "a7d2abdb",
+        "verbatimFinal": "# ✅ Gap closed — R1 exact-5d verdict **RENEWED: ACCEPT** for `5d1728abb1d35afb361ef400952da4a174a826b7`\n\nSent to parent `01a0a3fd-9825-70bd-b000-dc85c59a7421` (`{\"success\":true,\"result\":{\"queued\":false}}`). Same actor/provenance: OMP, **opencode-go/deepseek-v4.1-flash**, **high**, `/home/jyarwood/workspace/pi-dish-r1`. Nothing executed; no edits.\n\n## The single finite proof gap — now actually decoded and read\nDecoded `captureHelper.source` from `/tmp/pi-dish-r1-test-revision-validation/proof.json`:\n\n- **2116 UTF-8 bytes**, sha256 `10f437797d5430833a2751ba6e90f91c98a1a7ffe4606249067a1041e9df8eb6` — **equals** the recorded `captureHelper.sha256` and the expected value.\n- **Explicit distinction:** my earlier evidence was the *JSON-escaped rendering* (literal `\\n` sequences) inside the bundle; this is the **actual unescaped executable body**.\n- Content read in full: argv map `focused` → `['test','--','--test-name-pattern=^PUT /api/models/enabled preserves a concurrent pi settings write$','test/server.test.js']`, `server` → `['test','--','test/server.test.js']`, `backend` → `['test']`; `spawn('npm', …, {cwd:'/home/jyarwood/workspace/pi-dish-r1', stdio:pipes})`; stdout/stderr teed to arrays and streams; on close writes `${name}-{stdout,stderr,combined}.log` with byte counts + sha256 into `${name}-result.json`; `process.exitCode = 0` **only when** `exitCode===0 && signal===null && spawnError===null`.\n- Consequence for honesty of the proof: the helper mutates no product code, injects no mock/assertion and rewrites no result — verdicts come from the Node runner’s summaries inside those captured byte streams, whose hashes I verified and whose counts match the records (focused 1 / server 135 / backend 1032, zero fail/skip). `check` is captured by a different, separately hashed path and the evidence does not claim otherwise.\n\n## Standing scope (completed earlier, unchanged)\nAll 15 manifest bodies read verbatim with sha256 equal to the frozen manifest; product blobs and consumer/declaration bodies byte-identical to the 453 bodies I read completely; proofs/audits read with all log hashes recomputed; historical-453, parent-272-CI and exact-5d-private proofs distinctly attributed. Test correction stands as a genuine real-lock/real-`ELOCKED` contention fixture (competing write → release → rethrow into the actual SDK retry; same HTTP/state assertions; deterministic ordering, replacing the 60 ms timer) with no product or retry-policy change.\n\n## Findings / limits\n**No blocking findings.** Labeled non-blocking, unchanged: SDK-instance dependency of the fixture (would fail loudly, evidenced passing Node 26.8.2 + parent Node22 CI 35163287240); pre-existing limits (null-JSONL throw, `endsWith('}}')` archive edge inert for R1 consumers, masked import error text, `mineSkillsFromContent` caller-less, untracked `.amp/`); one cosmetic empty fenced block in the dossier prose. Still **no independent execution by me** (authorization excludes suites/probes) — suite and lock-timing evidence rests on exact-source reading plus hash-verified captured logs and separately attributed parent runs; CI/observer detail is parent-reported; no new browser/native claim. R4 and formal R1 acceptance remain parent-held; no self-close.",
+        "primaryCoverage": {
+          "docs/r1-evidence.json": {
+            "lines": 556,
+            "seen": 556,
+            "gaps": [],
+            "records": [
+              {
+                "index": 8,
+                "lines": 2
+              },
+              {
+                "index": 150,
+                "lines": 2
+              },
+              {
+                "index": 197,
+                "lines": 80
+              },
+              {
+                "index": 200,
+                "lines": 236
+              },
+              {
+                "index": 201,
+                "lines": 240
+              }
+            ]
+          },
+          "docs/r1-review.json": {
+            "lines": 1852,
+            "seen": 1852,
+            "gaps": [],
+            "records": [
+              {
+                "index": 205,
+                "lines": 620
+              },
+              {
+                "index": 207,
+                "lines": 680
+              },
+              {
+                "index": 208,
+                "lines": 552
+              }
+            ]
+          },
+          "lib/omp-export.d.ts": {
+            "lines": 22,
+            "seen": 22,
+            "gaps": [],
+            "records": [
+              {
+                "index": 122,
+                "lines": 22
+              },
+              {
+                "index": 230,
+                "lines": 22
+              }
+            ]
+          },
+          "lib/omp-export.js": {
+            "lines": 181,
+            "seen": 181,
+            "gaps": [],
+            "records": [
+              {
+                "index": 121,
+                "lines": 181
+              },
+              {
+                "index": 229,
+                "lines": 181
+              }
+            ]
+          },
+          "lib/publication-handlers.js": {
+            "lines": 631,
+            "seen": 631,
+            "gaps": [],
+            "records": [
+              {
+                "index": 125,
+                "lines": 320
+              },
+              {
+                "index": 126,
+                "lines": 311
+              },
+              {
+                "index": 225,
+                "lines": 311
+              },
+              {
+                "index": 226,
+                "lines": 320
+              }
+            ]
+          },
+          "lib/session-files.js": {
+            "lines": 892,
+            "seen": 892,
+            "gaps": [],
+            "records": [
+              {
+                "index": 31,
+                "lines": 135
+              },
+              {
+                "index": 32,
+                "lines": 191
+              },
+              {
+                "index": 34,
+                "lines": 61
+              },
+              {
+                "index": 115,
+                "lines": 230
+              },
+              {
+                "index": 116,
+                "lines": 230
+              },
+              {
+                "index": 117,
+                "lines": 230
+              },
+              {
+                "index": 118,
+                "lines": 202
+              },
+              {
+                "index": 222,
+                "lines": 450
+              },
+              {
+                "index": 223,
+                "lines": 442
+              }
+            ]
+          },
+          "lib/skill-mining.js": {
+            "lines": 310,
+            "seen": 310,
+            "gaps": [],
+            "records": [
+              {
+                "index": 120,
+                "lines": 160
+              },
+              {
+                "index": 123,
+                "lines": 150
+              },
+              {
+                "index": 228,
+                "lines": 310
+              }
+            ]
+          },
+          "src/core/omp-export.ts": {
+            "lines": 152,
+            "seen": 152,
+            "gaps": [],
+            "records": [
+              {
+                "index": 24,
+                "lines": 133
+              },
+              {
+                "index": 137,
+                "lines": 25
+              },
+              {
+                "index": 220,
+                "lines": 152
+              }
+            ]
+          },
+          "src/core/publication-handlers.ts": {
+            "lines": 615,
+            "seen": 615,
+            "gaps": [],
+            "records": [
+              {
+                "index": 26,
+                "lines": 200
+              },
+              {
+                "index": 131,
+                "lines": 210
+              },
+              {
+                "index": 132,
+                "lines": 195
+              },
+              {
+                "index": 133,
+                "lines": 210
+              },
+              {
+                "index": 216,
+                "lines": 310
+              },
+              {
+                "index": 217,
+                "lines": 305
+              }
+            ]
+          },
+          "src/core/session-files.ts": {
+            "lines": 874,
+            "seen": 874,
+            "gaps": [],
+            "records": [
+              {
+                "index": 128,
+                "lines": 434
+              },
+              {
+                "index": 129,
+                "lines": 440
+              },
+              {
+                "index": 210,
+                "lines": 440
+              },
+              {
+                "index": 214,
+                "lines": 434
+              }
+            ]
+          },
+          "src/core/skill-mining.ts": {
+            "lines": 258,
+            "seen": 258,
+            "gaps": [],
+            "records": [
+              {
+                "index": 23,
+                "lines": 164
+              },
+              {
+                "index": 135,
+                "lines": 95
+              },
+              {
+                "index": 219,
+                "lines": 258
+              }
+            ]
+          },
+          "test/omp-export.test.js": {
+            "lines": 85,
+            "seen": 85,
+            "gaps": [],
+            "records": [
+              {
+                "index": 37,
+                "lines": 85
+              },
+              {
+                "index": 232,
+                "lines": 85
+              }
+            ]
+          },
+          "test/server.test.js": {
+            "lines": 4447,
+            "seen": 4447,
+            "gaps": [],
+            "records": [
+              {
+                "index": 185,
+                "lines": 650
+              },
+              {
+                "index": 188,
+                "lines": 651
+              },
+              {
+                "index": 189,
+                "lines": 650
+              },
+              {
+                "index": 191,
+                "lines": 650
+              },
+              {
+                "index": 192,
+                "lines": 650
+              },
+              {
+                "index": 194,
+                "lines": 650
+              },
+              {
+                "index": 195,
+                "lines": 547
+              }
+            ]
+          },
+          "test/session-files.test.js": {
+            "lines": 681,
+            "seen": 681,
+            "gaps": [],
+            "records": [
+              {
+                "index": 38,
+                "lines": 92
+              },
+              {
+                "index": 149,
+                "lines": 41
+              },
+              {
+                "index": 211,
+                "lines": 360
+              },
+              {
+                "index": 213,
+                "lines": 321
+              }
+            ]
+          },
+          "test/skill-mining.test.js": {
+            "lines": 182,
+            "seen": 182,
+            "gaps": [],
+            "records": [
+              {
+                "index": 35,
+                "lines": 182
+              },
+              {
+                "index": 234,
+                "lines": 182
+              }
+            ]
+          }
+        },
+        "consumerCoverage": {
+          "src/core/session-index.ts": {
+            "lines": 619,
+            "seen": 619,
+            "gaps": [],
+            "records": [
+              {
+                "index": 47,
+                "lines": 160
+              },
+              {
+                "index": 51,
+                "lines": 221
+              },
+              {
+                "index": 136,
+                "lines": 100
+              },
+              {
+                "index": 138,
+                "lines": 141
+              }
+            ]
+          },
+          "src/core/session-index-data.ts": {
+            "lines": 126,
+            "seen": 126,
+            "gaps": [],
+            "records": [
+              {
+                "index": 50,
+                "lines": 126
+              }
+            ]
+          },
+          "src/core/session-metadata.ts": {
+            "lines": 107,
+            "seen": 107,
+            "gaps": [],
+            "records": [
+              {
+                "index": 57,
+                "lines": 107
+              }
+            ]
+          },
+          "src/core/session-metadata-contracts.ts": {
+            "lines": 15,
+            "seen": 15,
+            "gaps": [],
+            "records": [
+              {
+                "index": 148,
+                "lines": 15
+              }
+            ]
+          },
+          "src/core/harness-pricing.ts": {
+            "lines": 242,
+            "seen": 242,
+            "gaps": [],
+            "records": [
+              {
+                "index": 59,
+                "lines": 90
+              },
+              {
+                "index": 62,
+                "lines": 93
+              },
+              {
+                "index": 68,
+                "lines": 56
+              },
+              {
+                "index": 140,
+                "lines": 26
+              }
+            ]
+          },
+          "src/core/session-read-handlers.ts": {
+            "lines": 322,
+            "seen": 322,
+            "gaps": [],
+            "records": [
+              {
+                "index": 53,
+                "lines": 140
+              },
+              {
+                "index": 141,
+                "lines": 183
+              }
+            ]
+          },
+          "src/core/file-handlers.ts": {
+            "lines": 207,
+            "seen": 207,
+            "gaps": [],
+            "records": [
+              {
+                "index": 142,
+                "lines": 207
+              }
+            ]
+          },
+          "src/core/pi-sdk.ts": {
+            "lines": 567,
+            "seen": 96,
+            "gaps": [
+              [
+                1,
+                424
+              ],
+              [
+                521,
+                567
+              ]
+            ],
+            "records": [
+              {
+                "index": 56,
+                "lines": 51
+              },
+              {
+                "index": 143,
+                "lines": 96
+              }
+            ]
+          }
+        },
+        "consumerRanges": {
+          "src/core/pi-sdk.ts": [
+            [
+              425,
+              520
+            ]
+          ],
+          "src/core/server-app.ts": [
+            [
+              20,
+              40
+            ],
+            [
+              214,
+              232
+            ],
+            [
+              1240,
+              1250
+            ]
+          ]
+        },
+        "decodedSource": {
+          "indices": [
+            251
+          ],
+          "bytes": 2116,
+          "sha256": "10f437797d5430833a2751ba6e90f91c98a1a7ffe4606249067a1041e9df8eb6"
+        },
+        "parentAudit": "/tmp/pi-dish-parent-r1-deepseek-renewed-acceptance-audit.json",
+        "closure": "/tmp/pi-dish-parent-r1-deepseek-renewed-closure.json"
+      },
+      {
+        "model": "kimi-code/k3",
+        "session": "01a0ab60-a822-75f1-8f2d-6125ef1e1bad",
+        "verdict": "ACCEPT",
+        "sourceSha": "5d1728abb1d35afb361ef400952da4a174a826b7",
+        "pre": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTAwLTMzLTU3MFpfMDFhMGFiNjAtYTgyMi03NWYxLThmMmQtNjEyNWVmMWUxYmFkIl0",
+          "nativeSessionId": "2026-09-16T18-00-33-570Z_01a0ab60-a822-75f1-8f2d-6125ef1e1bad",
+          "model": "kimi-code/k3",
+          "thinkingLevel": "high",
+          "harnessId": "omp",
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "isActive": true,
+          "turnInProgress": false
+        },
+        "post": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE2VDE4LTAwLTMzLTU3MFpfMDFhMGFiNjAtYTgyMi03NWYxLThmMmQtNjEyNWVmMWUxYmFkIl0",
+          "nativeSessionId": "2026-09-16T18-00-33-570Z_01a0ab60-a822-75f1-8f2d-6125ef1e1bad",
+          "model": "kimi-code/k3",
+          "thinkingLevel": "high",
+          "harnessId": "omp",
+          "cwd": "/home/jyarwood/workspace/pi-dish-r1",
+          "isActive": true,
+          "turnInProgress": false
+        },
+        "archive": {
+          "path": "/tmp/pi-dish-parent-r1-renewed-review-evidence/kimi-275.json",
+          "sha256": "0c314d75fc228439681edd154fafe2a2561b7c9b6f96730765981e018bf9bbde",
+          "messages": 275
+        },
+        "finalMessageIndex": 274,
+        "finalMessageId": "df645259",
+        "verbatimFinal": "Final verdict delivered to parent `01a0a3fd-9825-70bd-b000-dc85c59a7421` (immediate, not queued). Not self-closing.\n\n# R1 Exact-`5d` Final Renewal — ACCEPT\n\n**Source: `5d1728abb1d35afb361ef400952da4a174a826b7`** — unchanged, HEAD-verified earlier this session; no writes of any kind.\n\n## Provenance\nSame actor throughout: OMP, `kimi-code/k3`, thinking `high`, cwd `/home/jyarwood/workspace/pi-dish-r1`, native session `01a0ab60-a822-75f1-8f2d-6125ef1e1bad` — semantic-CLI-confirmed.\n\n## Gap closures this pass\n1. **`test/server.test.js` whole, 1–4448**, 18 sequential `:raw` chunks, zero elisions — every chunk returned its full requested range. The revised contention test confirmed in situ at 2527–2560 exactly as the audited delta; R1 import tests in situ at 3756–3791; the remaining ~3900 lines are API/bridge/skills/resolve/docs/share/SSE behavior tests with no bearing on the R1 delta and no hidden changes (git had already isolated the delta; the read now backs that with bytes). **My earlier partial-scope limitation is withdrawn — superseded, not carried.**\n2. **`captureHelper.source` decoded and read as its whole unescaped executable body.** SHA256 of the decoded value = `10f437797d5430833a2751ba6e90f91c98a1a7ffe4606249067a1041e9df8eb6`, exactly as recorded. Assessment: strict-mode, capture-only — whitelists the three npm-test argv shapes (throws otherwise), spawns in the assigned cwd, forwards child bytes verbatim while buffering stdout/stderr/combined separately, writes unmodified logs with per-stream sha256 plus a result JSON (command/cwd/timestamps/exitCode/signal/spawnError), propagates failure as exit 1. **No fabrication surface**: it cannot alter child output and emits no pass/fail summary itself; no env/credential/network access; writes confined to the validation directory. Not executed by me. This supersedes my earlier encoded-string/hash-only evidence tier for the helper.\n\n## Complete scope now standing\n- All 15 manifest primaries fully read at current bytes, hash-verified against the frozen manifest; product/generated files byte-identical to my complete `453c409` reads.\n- Seven consumer files + pi-sdk dispatch + authored line 598 fully read (parent byte-audit recorded in `r1-review.json`).\n- Both dossiers whole (557 + 1853 lines); both parent audits whole; three parent reset artifacts hash-verified; fixture-correction record read; proof-bundle retained logs hash-verified.\n- Evidence tiers distinct: historical `453` (`574fa84f…`), parent `272` integrated (265/1041, CI 35163287240), exact-`5d` private (`886fe5e5…`; 258/1032/135/1, zero fail/skip).\n\n## Findings\nNone blocking. Prior non-blocking notes unchanged (extensionless skill-mining specifier; pre-existing accepted limits: batch-local truncation recovery, tolerated blank-line parse attempts, browser coalescing timing-flake history).\n\n**ACCEPT for `5d1728abb1d35afb361ef400952da4a174a826b7`.** Parent alone retains integration, exact-main-CI acceptance, and the R4/miner release.",
+        "primaryCoverage": {
+          "docs/r1-evidence.json": {
+            "lines": 556,
+            "seen": 556,
+            "gaps": [],
+            "records": [
+              {
+                "index": 43,
+                "lines": 5
+              },
+              {
+                "index": 47,
+                "lines": 2
+              },
+              {
+                "index": 198,
+                "lines": 140
+              },
+              {
+                "index": 200,
+                "lines": 190
+              },
+              {
+                "index": 202,
+                "lines": 226
+              }
+            ]
+          },
+          "docs/r1-review.json": {
+            "lines": 1852,
+            "seen": 1852,
+            "gaps": [],
+            "records": [
+              {
+                "index": 204,
+                "lines": 230
+              },
+              {
+                "index": 206,
+                "lines": 330
+              },
+              {
+                "index": 208,
+                "lines": 340
+              },
+              {
+                "index": 210,
+                "lines": 330
+              },
+              {
+                "index": 212,
+                "lines": 330
+              },
+              {
+                "index": 214,
+                "lines": 292
+              }
+            ]
+          },
+          "lib/omp-export.d.ts": {
+            "lines": 22,
+            "seen": 22,
+            "gaps": [],
+            "records": [
+              {
+                "index": 77,
+                "lines": 22
+              }
+            ]
+          },
+          "lib/omp-export.js": {
+            "lines": 181,
+            "seen": 181,
+            "gaps": [],
+            "records": [
+              {
+                "index": 76,
+                "lines": 181
+              }
+            ]
+          },
+          "lib/publication-handlers.js": {
+            "lines": 631,
+            "seen": 631,
+            "gaps": [],
+            "records": [
+              {
+                "index": 91,
+                "lines": 220
+              },
+              {
+                "index": 93,
+                "lines": 220
+              },
+              {
+                "index": 95,
+                "lines": 191
+              }
+            ]
+          },
+          "lib/session-files.js": {
+            "lines": 892,
+            "seen": 892,
+            "gaps": [],
+            "records": [
+              {
+                "index": 83,
+                "lines": 260
+              },
+              {
+                "index": 85,
+                "lines": 260
+              },
+              {
+                "index": 87,
+                "lines": 260
+              },
+              {
+                "index": 89,
+                "lines": 112
+              }
+            ]
+          },
+          "lib/skill-mining.js": {
+            "lines": 310,
+            "seen": 310,
+            "gaps": [],
+            "records": [
+              {
+                "index": 79,
+                "lines": 160
+              },
+              {
+                "index": 81,
+                "lines": 150
+              }
+            ]
+          },
+          "src/core/omp-export.ts": {
+            "lines": 152,
+            "seen": 152,
+            "gaps": [],
+            "records": [
+              {
+                "index": 15,
+                "lines": 38
+              },
+              {
+                "index": 17,
+                "lines": 40
+              },
+              {
+                "index": 19,
+                "lines": 96
+              }
+            ]
+          },
+          "src/core/publication-handlers.ts": {
+            "lines": 615,
+            "seen": 615,
+            "gaps": [],
+            "records": [
+              {
+                "index": 70,
+                "lines": 210
+              },
+              {
+                "index": 72,
+                "lines": 210
+              },
+              {
+                "index": 74,
+                "lines": 195
+              }
+            ]
+          },
+          "src/core/session-files.ts": {
+            "lines": 874,
+            "seen": 874,
+            "gaps": [],
+            "records": [
+              {
+                "index": 21,
+                "lines": 119
+              },
+              {
+                "index": 23,
+                "lines": 71
+              },
+              {
+                "index": 24,
+                "lines": 126
+              },
+              {
+                "index": 26,
+                "lines": 83
+              },
+              {
+                "index": 60,
+                "lines": 189
+              },
+              {
+                "index": 62,
+                "lines": 167
+              },
+              {
+                "index": 64,
+                "lines": 127
+              },
+              {
+                "index": 66,
+                "lines": 71
+              },
+              {
+                "index": 141,
+                "lines": 1
+              }
+            ]
+          },
+          "src/core/skill-mining.ts": {
+            "lines": 258,
+            "seen": 258,
+            "gaps": [],
+            "records": [
+              {
+                "index": 28,
+                "lines": 143
+              },
+              {
+                "index": 30,
+                "lines": 103
+              },
+              {
+                "index": 32,
+                "lines": 32
+              }
+            ]
+          },
+          "test/omp-export.test.js": {
+            "lines": 85,
+            "seen": 85,
+            "gaps": [],
+            "records": [
+              {
+                "index": 186,
+                "lines": 85
+              }
+            ]
+          },
+          "test/server.test.js": {
+            "lines": 4447,
+            "seen": 4447,
+            "gaps": [],
+            "records": [
+              {
+                "index": 232,
+                "lines": 230
+              },
+              {
+                "index": 234,
+                "lines": 230
+              },
+              {
+                "index": 236,
+                "lines": 230
+              },
+              {
+                "index": 238,
+                "lines": 230
+              },
+              {
+                "index": 240,
+                "lines": 230
+              },
+              {
+                "index": 242,
+                "lines": 230
+              },
+              {
+                "index": 244,
+                "lines": 230
+              },
+              {
+                "index": 246,
+                "lines": 230
+              },
+              {
+                "index": 248,
+                "lines": 230
+              },
+              {
+                "index": 250,
+                "lines": 231
+              },
+              {
+                "index": 252,
+                "lines": 231
+              },
+              {
+                "index": 254,
+                "lines": 230
+              },
+              {
+                "index": 256,
+                "lines": 230
+              },
+              {
+                "index": 258,
+                "lines": 230
+              },
+              {
+                "index": 260,
+                "lines": 230
+              },
+              {
+                "index": 263,
+                "lines": 230
+              },
+              {
+                "index": 265,
+                "lines": 230
+              },
+              {
+                "index": 267,
+                "lines": 231
+              },
+              {
+                "index": 269,
+                "lines": 307
+              }
+            ]
+          },
+          "test/session-files.test.js": {
+            "lines": 681,
+            "seen": 681,
+            "gaps": [],
+            "records": [
+              {
+                "index": 192,
+                "lines": 230
+              },
+              {
+                "index": 194,
+                "lines": 231
+              },
+              {
+                "index": 196,
+                "lines": 221
+              }
+            ]
+          },
+          "test/skill-mining.test.js": {
+            "lines": 182,
+            "seen": 182,
+            "gaps": [],
+            "records": [
+              {
+                "index": 125,
+                "lines": 60
+              },
+              {
+                "index": 188,
+                "lines": 122
+              }
+            ]
+          }
+        },
+        "consumerCoverage": {
+          "test/server.test.js": {
+            "lines": 4447,
+            "seen": 4447,
+            "gaps": [],
+            "records": [
+              {
+                "index": 232,
+                "lines": 230
+              },
+              {
+                "index": 234,
+                "lines": 230
+              },
+              {
+                "index": 236,
+                "lines": 230
+              },
+              {
+                "index": 238,
+                "lines": 230
+              },
+              {
+                "index": 240,
+                "lines": 230
+              },
+              {
+                "index": 242,
+                "lines": 230
+              },
+              {
+                "index": 244,
+                "lines": 230
+              },
+              {
+                "index": 246,
+                "lines": 230
+              },
+              {
+                "index": 248,
+                "lines": 230
+              },
+              {
+                "index": 250,
+                "lines": 231
+              },
+              {
+                "index": 252,
+                "lines": 231
+              },
+              {
+                "index": 254,
+                "lines": 230
+              },
+              {
+                "index": 256,
+                "lines": 230
+              },
+              {
+                "index": 258,
+                "lines": 230
+              },
+              {
+                "index": 260,
+                "lines": 230
+              },
+              {
+                "index": 263,
+                "lines": 230
+              },
+              {
+                "index": 265,
+                "lines": 230
+              },
+              {
+                "index": 267,
+                "lines": 231
+              },
+              {
+                "index": 269,
+                "lines": 307
+              }
+            ]
+          },
+          "src/core/session-index.ts": {
+            "lines": 619,
+            "seen": 619,
+            "gaps": [],
+            "records": [
+              {
+                "index": 114,
+                "lines": 151
+              },
+              {
+                "index": 142,
+                "lines": 200
+              },
+              {
+                "index": 144,
+                "lines": 200
+              },
+              {
+                "index": 146,
+                "lines": 219
+              }
+            ]
+          },
+          "src/core/session-index-data.ts": {
+            "lines": 126,
+            "seen": 126,
+            "gaps": [],
+            "records": [
+              {
+                "index": 54,
+                "lines": 64
+              },
+              {
+                "index": 148,
+                "lines": 126
+              }
+            ]
+          },
+          "src/core/session-metadata.ts": {
+            "lines": 107,
+            "seen": 107,
+            "gaps": [],
+            "records": [
+              {
+                "index": 150,
+                "lines": 107
+              }
+            ]
+          },
+          "src/core/session-metadata-contracts.ts": {
+            "lines": 15,
+            "seen": 15,
+            "gaps": [],
+            "records": [
+              {
+                "index": 151,
+                "lines": 15
+              }
+            ]
+          },
+          "src/core/harness-pricing.ts": {
+            "lines": 242,
+            "seen": 242,
+            "gaps": [],
+            "records": [
+              {
+                "index": 121,
+                "lines": 83
+              },
+              {
+                "index": 153,
+                "lines": 125
+              },
+              {
+                "index": 155,
+                "lines": 117
+              }
+            ]
+          },
+          "src/core/session-read-handlers.ts": {
+            "lines": 322,
+            "seen": 322,
+            "gaps": [],
+            "records": [
+              {
+                "index": 123,
+                "lines": 147
+              },
+              {
+                "index": 157,
+                "lines": 170
+              },
+              {
+                "index": 159,
+                "lines": 152
+              }
+            ]
+          },
+          "src/core/file-handlers.ts": {
+            "lines": 207,
+            "seen": 207,
+            "gaps": [],
+            "records": [
+              {
+                "index": 161,
+                "lines": 110
+              },
+              {
+                "index": 163,
+                "lines": 97
+              }
+            ]
+          },
+          "src/core/pi-sdk.ts": {
+            "lines": 567,
+            "seen": 51,
+            "gaps": [
+              [
+                1,
+                439
+              ],
+              [
+                491,
+                567
+              ]
+            ],
+            "records": [
+              {
+                "index": 117,
+                "lines": 51
+              }
+            ]
+          }
+        },
+        "consumerRanges": {
+          "src/core/pi-sdk.ts": [
+            [
+              465,
+              476
+            ]
+          ]
+        },
+        "decodedSource": {
+          "indices": [
+            271
+          ],
+          "bytes": 2116,
+          "sha256": "10f437797d5430833a2751ba6e90f91c98a1a7ffe4606249067a1041e9df8eb6"
+        },
+        "parentAudit": "/tmp/pi-dish-parent-r1-kimi-renewed-acceptance-audit.json",
+        "closure": "/tmp/pi-dish-parent-r1-kimi-renewed-closure.json"
+      }
+    ],
+    "history": "Earlier453 decisions remain historical. GLM225 lacked three whole test bodies/seven dossier lines; Kimi229 excluded unchanged server-test bytes. All three first5d decisions had only JSON-escaped/helper-hash evidence. Finite same-actor continuations supplied missing literal bodies and decoded helper source before final acceptance; no source changed.",
+    "scopeCorrection": "Parent proof-gap continuation was sent while the server-file read was still progressing. Its blanket primary-complete statement was premature. Final275-message archive, not that intermediate assertion, proves actual complete4447 coverage.",
+    "privacy": "Complete semantic archives remain private0700/0600; only explicit verdicts and proof metadata are recorded here.",
+    "integration": "Product453 and genuine contention correction272 were already present in main. Revised5d dossiers and both R11 source commits are now applied together, preserving other accepted package changes. Formal R1/R4 release waits parent integration/exact-source delivery gate.",
+    "parentIntegration": {
+      "sourceBase": "3b4fcfe",
+      "integratedCommits": [
+        "e694d8948eecaf85c02b21db0185035fff57a501",
+        "55ba88e50adf871d9b66e2264d6235499bea2610",
+        "5d1728abb1d35afb361ef400952da4a174a826b7"
+      ],
+      "command": "npm run check && npm test && npm run test:browser && npm run test:ui:scenarios && npm run test:ui",
+      "checkCompilerOwned": 265,
+      "backend": {
+        "tests": 1044,
+        "passed": 1044,
+        "failed": 0,
+        "skipped": 0
+      },
+      "browser": {
+        "passed": 291
+      },
+      "independentScenarios": 8,
+      "fullUi": "PASS desktop/mobile/terminal/multi-host",
+      "serialWallSeconds": 332.41,
+      "raw": {
+        "path": "/tmp/pi-dish-parent-r1-r11-full-gates.log",
+        "artifact": "artifact://1567",
+        "bytes": 200361,
+        "sha256": "33c9115596da34ff29da7475931afb39ecf260e822482b4d043634d5466352c5"
+      },
+      "formattedArtifact": "artifact://1568",
+      "runtimeSmoke": "/tmp/pi-dish-parent-r11-main-smoke-proof.json",
+      "passed": true
+    }
   }
 }

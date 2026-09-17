@@ -761,9 +761,11 @@ print in column 1, and what the UI's copy-ref and `#` picker write. Clients
 gate it on the owning host's `refAliases` capability (older hosts resolve
 route-id prefixes only; the CLI notices a bodied 404 there and resolves the
 alias against that host's own list instead, so short refs survive a
-mixed-version fleet). The rule is deliberately duplicated in
-`skills/lib/pi-dish-client.js` — those CLIs import nothing from the server —
-with a parity test in test/skills-core.test.js pinning the copies together.
+mixed-version fleet). The rule is authored once in `src/core/helper-refs.ts`.
+`scripts/build-edges.ts` bundles that portable source into the standalone
+`skills/lib/pi-dish-client.js`; installed CLIs still require no server modules
+or repository layout. Consumer tests cover reference identity and installed-client
+delivery, rather than maintaining parity between handwritten copies.
 
 **`#ref` mentions**: a ref is only a string, and a model reading `8f3ab2c1` in
 a prompt has no reason to treat it as a handle — the skill catalog describes
