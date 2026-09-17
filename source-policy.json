@@ -33,6 +33,7 @@
     "test/tmux-service.test.ts",
     "test/skills-coverage.test.ts",
     "test/transport-frames.test.ts",
+    "test/routines.test.ts",
     "eslint.config.js",
     "playwright.config.ts",
     "server.js",
