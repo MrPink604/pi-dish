@@ -45,7 +45,8 @@ for (const source of config.files) {
         && source !== 'test/core-contracts.test.ts' && source !== 'test/core-build.test.ts'
         && source !== 'test/edge-build.test.ts' && source !== 'test/source-policy.test.ts'
         && source !== 'test/install.test.ts'
-        && source !== 'test/skill-mining.test.ts' && source !== 'test/skills-core.test.ts')
+        && source !== 'test/skill-mining.test.ts' && source !== 'test/skills-core.test.ts'
+        && source !== 'test/harness-pricing.test.ts' && source !== 'test/fixtures/fake-omp-models.ts')
         || /\.d\.(?:ts|mts)$/.test(source)) {
         throw new Error(`Unsupported tool source: ${source}`);
     }
@@ -79,7 +80,7 @@ try {
             throw new Error(`Tool output mapping mismatch; unexpected: ${unexpected.join(', ')}; missing: ${missing.join(', ')}`);
         }
         const orphaned = [];
-        for (const directory of ['scripts', 'test', 'test/ui-scenarios']) {
+        for (const directory of ['scripts', 'test', 'test/ui-scenarios', 'test/fixtures']) {
             const outputDirectory = path.join(root, directory);
             if (!fs.existsSync(outputDirectory))
                 continue;

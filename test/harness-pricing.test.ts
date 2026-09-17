@@ -1,0 +1,332 @@
+'use strict';
+
+import test = require('node:test');
+import assert = require('node:assert');
+import fs = require('node:fs');
+import os = require('node:os');
+import path = require('node:path');
+import childProcess = require('node:child_process');
+import type * as PiSDK from '../lib/pi-sdk.js';
+import type * as Pricing from '../lib/harness-pricing.js';
+import type * as SessionFiles from '../lib/session-files.js';
+import type { IndexedUsage, UsageCosts } from '../lib/session-index-data.js';
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-'));
+process.env.HOME = tmp;
+const fixture = path.join(__dirname, 'fixtures', 'fake-omp-models.js');
+process.env.PI_DISH_OMP_COMMAND = `env OMP_FIXTURE=1 ${process.execPath} ${fixture}`;
+
+const piSDK: typeof PiSDK = require('../lib/pi-sdk.js');
+const pricing: typeof Pricing = require('../lib/harness-pricing.js');
+const sessionFiles: typeof SessionFiles = require('../lib/session-files.js');
+
+test.after(() => {
+  delete process.env.PI_DISH_OMP_COMMAND;
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('OMP catalog command is cached, persisted, and prices tokens including cache reads', async () => {
+  const snapshot = await pricing.refreshHarnessPricing('omp', { force: true, now: 1_000_000 });
+  assert.ok(snapshot);
+  const cost = pricing.estimateUsageCost('omp', 'zai', 'glm-4.7-flash', {
+    input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 250_000,
+  });
+  assert.deepEqual(cost, { input: 0.6, output: 1.1, cacheRead: 0.22, cacheWrite: 0.2, total: 2.12 });
+  assert.equal(pricing.estimateUsageCost('omp', 'zai', 'unknown', { input: 10 }), undefined);
+  assert.equal(pricing.estimateUsageCost('pi', 'zai', 'glm-4.7-flash', { input: 1_000_000 }), undefined,
+    'Pi never reads the OMP catalog');
+  assert.ok(fs.existsSync(path.join(tmp, '.pi', 'dish', 'pricing', 'omp.json')));
+});
+
+test('Pi registry rates are cached and backfill zero-cost JSONL usage', async t => {
+  process.env.HOME = tmp;
+  pricing.resetForTests();
+  let loads = 0;
+  t.mock.method(piSDK, 'getPricingModels', async (): Promise<PiSDK.PricingModel[]> => {
+    loads++;
+    return [
+      { provider: 'zai', id: 'glm-5.2', cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 } },
+      { provider: 'zai', id: 'glm-5.3', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+    ];
+  });
+
+  const snapshot = await pricing.refreshHarnessPricing('pi', { force: true, now: 2_000_000 });
+  assert.ok(snapshot);
+  await pricing.refreshHarnessPricing('pi', { now: 2_000_001 });
+  assert.equal(loads, 1, 'a fresh persisted rate card avoids another registry load');
+  assert.ok(fs.existsSync(path.join(tmp, '.pi', 'dish', 'pricing', 'pi.json')));
+  assert.deepEqual(pricing.estimateUsageCost('pi', 'zai', 'glm-5.2', {
+    input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 250_000,
+  }), { input: 1.4, output: 2.2, cacheRead: 0.52, cacheWrite: 0, total: 4.12 });
+  assert.equal(pricing.estimateUsageCost('pi', 'zai', 'glm-5.3', { input: 1_000_000 }), undefined,
+    'zero-rate ZAI subscription entries remain unpriced rather than free');
+
+  const candidate: SessionFiles.SessionFileProfile = { harnessId: 'pi', profileId: 'pi-v1', profileVersion: 1 };
+  const content = [
+    { type: 'message', message: { role: 'assistant', provider: 'zai', model: 'glm-5.2', content: [], usage: {
+      input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 250_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    } } },
+    { type: 'message', message: { role: 'assistant', provider: 'zai', model: 'glm-5.3', content: [], usage: {
+      input: 100, output: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    } } },
+  ].map(value => JSON.stringify(value)).join('\n') + '\n';
+  const usage: IndexedUsage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
+  assert.ok(usage.models['zai/glm-5.3'].costs);
+  assert.ok(usage.models['zai/glm-5.3'].costUnavailable);
+  assert.equal(usage.total.costs.total, 4.12);
+  assert.equal(usage.total.costUnavailable.total, 1);
+  assert.equal(usage.models['zai/glm-5.3'].costs.total, 0);
+  assert.equal(usage.models['zai/glm-5.3'].costUnavailable.total, 1);
+
+  const file = path.join(tmp, 'pi-usage.jsonl');
+  fs.writeFileSync(file, content);
+  const messages: readonly SessionFiles.SessionMessage[] = sessionFiles.readSessionMessages({ ...candidate, file }).filter(message => message.role === 'assistant');
+  assert.ok(messages[0]?.usage?.cost);
+  assert.equal(messages[0].usage.cost.total, 4.12);
+  assert.ok(messages[1]?.usage);
+  assert.equal(messages[1].usage.cost, undefined);
+});
+
+test('OMP catalog uses valid JSON already printed when the command times out', async t => {
+  const timeoutHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-timeout-'));
+  t.after(() => {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    fs.rmSync(timeoutHome, { recursive: true, force: true });
+  });
+  process.env.HOME = timeoutHome;
+  pricing.resetForTests();
+  t.mock.method(childProcess, 'execFile', (
+    _file: Parameters<typeof childProcess.execFile>[0],
+    _args: Parameters<typeof childProcess.execFile>[1],
+    _options: Parameters<typeof childProcess.execFile>[2],
+    callback: Parameters<typeof childProcess.execFile>[3],
+  ) => {
+    assert.ok(callback);
+    const error: childProcess.ExecFileException = new Error('Command timed out');
+    error.killed = true;
+    error.signal = 'SIGTERM';
+    process.nextTick(() => callback(error, JSON.stringify({ models: [{
+      provider: 'anthropic', id: 'claude-test', cost: { input: 1, output: 2 },
+    }] }), ''));
+    return new childProcess.ChildProcess();
+  });
+
+  const snapshot = await pricing.refreshHarnessPricing('omp', { force: true });
+  assert.ok(snapshot);
+  assert.ok(snapshot.models[0]);
+  assert.equal(snapshot.models[0].id, 'claude-test');
+  const estimated = pricing.estimateUsageCost('omp', 'anthropic', 'claude-test', {
+    input: 1_000_000, output: 1_000_000,
+  });
+  assert.ok(estimated);
+  assert.equal(estimated.total, 3);
+});
+
+test('stale last-known OMP catalog survives refresh failure; missing catalog stays unpriced', async t => {
+  pricing.resetForTests();
+  process.env.PI_DISH_OMP_COMMAND = path.join(tmp, 'missing-omp');
+  const stale = await pricing.refreshHarnessPricing('omp', {
+    now: 1_000_000 + pricing.CATALOG_MAX_AGE_MS + 1,
+  });
+  assert.ok(stale, 'a failed stale refresh retains the persisted snapshot');
+  const combined = pricing.estimateUsageCost('omp', null, 'zai/glm-4.7-flash', { input: 10 });
+  assert.ok(combined);
+  assert.ok(Number.isFinite(combined.total),
+    'combined OMP selectors match provider/id catalog keys');
+
+  const missingHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-missing-'));
+  t.after(() => {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    fs.rmSync(missingHome, { recursive: true, force: true });
+  });
+  process.env.HOME = missingHome;
+  pricing.resetForTests();
+  assert.equal(await pricing.refreshHarnessPricing('omp', { force: true }), null);
+  assert.equal(pricing.estimateUsageCost('omp', 'zai', 'glm-4.7-flash', { input: 10 }), undefined);
+});
+
+test('OMP session usage is catalog-priced while unknown models remain unavailable', async () => {
+  process.env.HOME = tmp;
+  pricing.resetForTests();
+  const candidate: SessionFiles.SessionFileProfile = { harnessId: 'omp', profileId: 'omp-v1', profileVersion: 1 };
+  const content = [
+    { type: 'model_change', model: 'zai/glm-4.7-flash' },
+    { type: 'message', message: { role: 'assistant', content: [], usage: {
+      input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 250_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    } } },
+    { type: 'model_change', model: 'zai/not-in-catalog' },
+    { type: 'message', message: { role: 'assistant', content: [], usage: { input: 10, output: 2 } } },
+  ].map(value => JSON.stringify(value)).join('\n') + '\n';
+  const usage: IndexedUsage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
+  assert.ok(usage.models['zai/glm-4.7-flash'].costs);
+  assert.ok(usage.models['zai/glm-4.7-flash'].costUnavailable);
+  assert.ok(usage.models['zai/not-in-catalog'].costs);
+  assert.ok(usage.models['zai/not-in-catalog'].costUnavailable);
+  assert.equal(usage.models['zai/glm-4.7-flash'].costs.total, 2.12);
+  assert.equal(usage.models['zai/glm-4.7-flash'].costUnavailable.total, 0);
+  assert.equal(usage.models['zai/not-in-catalog'].costs.total, 0);
+  assert.equal(usage.models['zai/not-in-catalog'].costUnavailable.total, 1);
+
+  const file = path.join(tmp, 'omp-usage.jsonl');
+  fs.writeFileSync(file, content);
+  const source = { ...candidate, file };
+  const messages: readonly SessionFiles.SessionMessage[] = sessionFiles.readSessionMessages(source).filter(message => message.role === 'assistant');
+  assert.ok(messages[0]?.usage?.cost);
+  assert.equal(messages[0].usage.cost.total, 2.12, 'per-response details use the OMP estimate');
+  assert.ok(messages[1]?.usage);
+  assert.equal(messages[1].usage.cost, undefined, 'unknown per-response models do not become free');
+  const stats = sessionFiles.getSessionStats(source);
+  assert.equal(stats.cost, 2.12, 'known subtotal survives an unknown call');
+  assert.equal(stats.costUnavailable.total, 1);
+});
+
+test('OMP subscription-plan zero rates stay unpriced while free tiers remain free', () => {
+  const planHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-plan-'));
+  process.env.HOME = planHome;
+  pricing.resetForTests();
+  try {
+    fs.mkdirSync(path.join(planHome, '.pi', 'dish', 'pricing'), { recursive: true });
+    fs.writeFileSync(path.join(planHome, '.pi', 'dish', 'pricing', 'omp.json'), JSON.stringify({
+      updatedAt: 1, models: [
+        { provider: 'kimi-code', id: 'k3', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        { provider: 'google-antigravity', id: 'gemini-3.7-flash', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        { provider: 'opencode-zen', id: 'mimo-v2.5-free', cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+        { provider: 'kimi-code', id: 'k3-priced', cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 } },
+      ],
+    }) + '\n');
+
+    assert.equal(pricing.estimateUsageCost('omp', 'kimi-code', 'k3', { input: 1_000_000 }), undefined,
+      'zero-rate Kimi subscription entries are unpriced, not free');
+    assert.equal(pricing.estimateUsageCost('omp', 'google-antigravity', 'gemini-3.7-flash', { input: 1_000_000 }), undefined,
+      'zero-rate Antigravity subscription entries are unpriced, not free');
+    assert.deepEqual(pricing.estimateUsageCost('omp', 'opencode-zen', 'mimo-v2.5-free', { input: 1_000_000 }),
+      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      'genuinely free tiers keep their authoritative $0');
+    const pricedPlan = pricing.estimateUsageCost('omp', 'kimi-code', 'k3-priced', { input: 1_000_000 });
+    assert.ok(pricedPlan);
+    assert.equal(pricedPlan.total, 3,
+      'a rate-card override prices the same provider normally');
+
+    const zeroCost: UsageCosts = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    const candidate: SessionFiles.SessionFileProfile = { harnessId: 'omp', profileId: 'omp-v1', profileVersion: 1 };
+    const content = [
+      { type: 'message', message: { role: 'assistant', provider: 'kimi-code', model: 'k3', content: [],
+        usage: { input: 100, output: 10, cost: zeroCost } } },
+      { type: 'message', message: { role: 'assistant', provider: 'opencode-zen', model: 'mimo-v2.5-free', content: [],
+        usage: { input: 100, output: 10, cost: zeroCost } } },
+    ].map(value => JSON.stringify(value)).join('\n') + '\n';
+    const usage: IndexedUsage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
+    assert.ok(usage.models['kimi-code/k3'].costs);
+    assert.ok(usage.models['kimi-code/k3'].costUnavailable);
+    assert.ok(usage.models['opencode-zen/mimo-v2.5-free'].costs);
+    assert.ok(usage.models['opencode-zen/mimo-v2.5-free'].costUnavailable);
+    assert.equal(usage.models['kimi-code/k3'].costs.total, 0);
+    assert.equal(usage.models['kimi-code/k3'].costUnavailable.total, 1,
+      'plan-reported zeros count as unavailable, not free');
+    assert.equal(usage.models['opencode-zen/mimo-v2.5-free'].costs.total, 0);
+    assert.equal(usage.models['opencode-zen/mimo-v2.5-free'].costUnavailable.total, 0);
+
+    const file = path.join(planHome, 'omp-plan.jsonl');
+    fs.writeFileSync(file, content);
+    const messages: readonly SessionFiles.SessionMessage[] = sessionFiles.readSessionMessages({ ...candidate, file })
+      .filter(message => message.role === 'assistant');
+    assert.ok(messages[0]?.usage);
+    assert.equal(messages[0].usage.cost, undefined, 'plan session messages show no fake $0 cost');
+    assert.ok(messages[1]?.usage);
+    assert.deepEqual(messages[1].usage.cost, zeroCost, 'free-tier messages keep their reported $0');
+  } finally {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    fs.rmSync(planHome, { recursive: true, force: true });
+  }
+});
+
+test('OMP session usage keeps recorded costs when catalog pricing is unavailable', () => {
+  const missingHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-recorded-'));
+  process.env.HOME = missingHome;
+  pricing.resetForTests();
+  try {
+    const candidate: SessionFiles.SessionFileProfile = { harnessId: 'omp', profileId: 'omp-v1', profileVersion: 1 };
+    const recorded: UsageCosts = { input: 0.1, output: 0.2, cacheRead: 0.03, cacheWrite: 0.04, total: 0.37 };
+    const content = JSON.stringify({ type: 'message', message: {
+      role: 'assistant', provider: 'anthropic', model: 'claude-recorded', content: [],
+      usage: { input: 10, output: 5, cost: recorded },
+    } }) + '\n';
+
+    const usage: IndexedUsage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
+    assert.deepEqual(usage.total.costs, recorded);
+    const file = path.join(missingHome, 'omp-recorded.jsonl');
+    fs.writeFileSync(file, content);
+    const messages: readonly SessionFiles.SessionMessage[] = sessionFiles.readSessionMessages({ ...candidate, file });
+    assert.ok(messages[0]?.usage);
+    assert.deepEqual(messages[0].usage.cost, recorded);
+    assert.equal(sessionFiles.getSessionStats({ ...candidate, file }).cost, recorded.total);
+  } finally {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    fs.rmSync(missingHome, { recursive: true, force: true });
+  }
+});
+
+test('OMP models.yml rate card prices dead ids and beats catalog rows', () => {
+  const cardHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-card-'));
+  process.env.HOME = cardHome;
+  pricing.resetForTests();
+  try {
+    fs.mkdirSync(path.join(cardHome, '.pi', 'dish', 'pricing'), { recursive: true });
+    fs.mkdirSync(path.join(cardHome, '.omp', 'agent'), { recursive: true });
+    fs.writeFileSync(path.join(cardHome, '.pi', 'dish', 'pricing', 'omp.json'), JSON.stringify({
+      updatedAt: 1, models: [
+        { provider: 'zai', id: 'glm-4.7-flash', cost: { input: 0.6, output: 2.2, cacheRead: 0.11, cacheWrite: 0.8 } },
+      ],
+    }) + '\n');
+    const modelsYml = path.join(cardHome, '.omp', 'agent', 'models.yml');
+    fs.writeFileSync(modelsYml, [
+      'providers:',
+      '  google-antigravity:',
+      '    modelOverrides:',
+      '      gemini-3.7-flash-tiered:',
+      '        cost: { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 }',
+      '  zai:',
+      '    modelOverrides:',
+      '      glm-4.7-flash:',
+      '        cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 }',
+      '',
+    ].join('\n'));
+
+    const overrideOnly = pricing.estimateUsageCost('omp', 'google-antigravity', 'gemini-3.7-flash-tiered',
+      { input: 1_000_000, output: 1_000_000 });
+    assert.ok(overrideOnly);
+    assert.equal(overrideOnly.total, 4.5,
+      'an override-only id OMP drops from its catalog still prices');
+    const overridden = pricing.estimateUsageCost('omp', 'zai', 'glm-4.7-flash',
+      { input: 1_000_000, output: 1_000_000 });
+    assert.ok(overridden);
+    assert.equal(overridden.total, 3,
+      'a user rate-card row wins over the catalog row');
+    const revision = pricing.pricingRevision('omp');
+    assert.notEqual(revision, 'missing');
+
+    // Editing the rate card must shift the pricing revision so indexed
+    // sessions re-price through the normal mismatch path.
+    fs.writeFileSync(modelsYml, fs.readFileSync(modelsYml, 'utf8').replace('input: 0.75', 'input: 0.95'));
+    assert.notEqual(pricing.pricingRevision('omp'), revision,
+      'rate-card edits shift the pricing revision');
+
+    // A broken file degrades to no overrides rather than breaking pricing.
+    fs.writeFileSync(modelsYml, 'providers: [unclosed\n');
+    const fallback = pricing.estimateUsageCost('omp', 'zai', 'glm-4.7-flash',
+      { input: 1_000_000, output: 1_000_000 });
+    assert.ok(fallback);
+    assert.ok(Math.abs(fallback.total - 2.8) < 1e-9,
+      'broken models.yml falls back to the plain catalog');
+  } finally {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    fs.rmSync(cardHome, { recursive: true, force: true });
+  }
+});

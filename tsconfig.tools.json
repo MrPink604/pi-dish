@@ -46,6 +46,8 @@
     "test/source-policy.test.ts",
     "test/install.test.ts",
     "test/skill-mining.test.ts",
-    "test/skills-core.test.ts"
+    "test/skills-core.test.ts",
+    "test/harness-pricing.test.ts",
+    "test/fixtures/fake-omp-models.ts"
   ]
 }
