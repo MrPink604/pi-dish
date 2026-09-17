@@ -34,6 +34,7 @@
     "test/skills-coverage.test.ts",
     "test/transport-frames.test.ts",
     "test/routines.test.ts",
+    "test/session-bounces.test.ts",
     "eslint.config.js",
     "playwright.config.ts",
     "server.js",

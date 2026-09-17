@@ -83,9 +83,22 @@ export interface SessionBounces {
   tick(): Promise<void>;
 }
 
+export interface SessionBounceOperationPorts {
+  beginBounceAction: SessionOperations['beginBounceAction'];
+  endBounceAction: SessionOperations['endBounceAction'];
+  restartSession: SessionOperations['restartSession'];
+}
+
+export interface SessionBounceOwnershipPorts {
+  captureBounceAuthority: SessionOwnership['captureBounceAuthority'];
+  bounceIdentityFailure: SessionOwnership['bounceIdentityFailure'];
+  getLiveSession: SessionOwnership['getLiveSession'];
+  refreshRegisteredSession: SessionOwnership['refreshRegisteredSession'];
+}
+
 export interface SessionBounceRuntimeOptions extends SessionBounceBounds {
-  operations: SessionOperations;
-  ownership: SessionOwnership;
+  operations: SessionBounceOperationPorts;
+  ownership: SessionBounceOwnershipPorts;
   /** Raw catalog data only; capture, inspection, and execution belong to this module. */
   catalog(): unknown;
 }
