@@ -45,8 +45,12 @@ listener policy. Its generated `lib/server-app.js` receives the application root
 explicitly; assets, docs and package metadata must not resolve relative to `lib/`.
 The strict-checkJs launcher is only
 `module.exports = require('./lib/server-app').startServer(__dirname);`.
-It exports the actual initial native `http.Server` synchronously. Startup ordering
-and close behavior are preserved; the readiness redesign remains R7.
+It exports the actual initial native `http.Server` synchronously. Construction
+registers upgrade handling and closeable resources before binding. Electron
+requires that same cached root export, then observes `observeServerStartup`;
+navigation uses the first ready owned main or alias listener's actual address,
+including ephemeral ports and retry replacements, never an advertised share URL.
+Native close, signal and error policies remain distinct from readiness notification.
 
 `tsconfig.tools.json` checks actual build/tool implementations and emits their
 existing sibling runtime paths through `build:tools`; its generated bootstrap
@@ -1140,8 +1144,8 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   unbuffered (the only exception: the tiny JSON bodies the fleet-artifact
   hook must read), strips caller `Authorization`/`host`/`origin`, attaches
   the peer credential, and is excluded from compression and `express.json`
-  entirely. WS upgrades go through one dispatcher (`upgradeHandlers` —
-  every `'upgrade'` listener sees every socket, so handlers claim or pass);
+  entirely. WS upgrades use the dispatcher constructed before listener binding;
+  handlers claim or pass each socket in the existing order;
   the proxied terminal splices raw sockets and works with the hub's own
   terminal feature off. Proxy failures answer 502 with the same classified
   `reason` vocabulary `/api/hosts` uses.

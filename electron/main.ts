@@ -1,13 +1,14 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, dialog, shell } from 'electron';
 import { Server } from 'node:http';
 import path = require('node:path');
+import type * as ServerApp from '../lib/server-app';
 
 // Keep reference to prevent GC.
 let mainWindow: BrowserWindow | null = null;
 
-const PORT = process.env.PORT || 3333;
+let readyUrl: string | null = null;
 
-function createWindow(): void {
+function createWindow(url: string): void {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -22,7 +23,7 @@ function createWindow(): void {
     },
   });
 
-  mainWindow.loadURL(`http://localhost:${PORT}`);
+  mainWindow.loadURL(url);
 
   // Open external links in the system browser.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -35,27 +36,34 @@ function createWindow(): void {
   });
 }
 
-function startServer(): Server {
-  // Root server.js remains unchecked until M7; validate its actual export
-  // instead of declaring an ambient contract over the implementation.
+function showStartupFailure(error: unknown): void {
+  dialog.showErrorBox('pi-dish could not start', error instanceof Error ? error.message : String(error));
+}
+
+app.whenReady().then(() => {
+  // Require the actual root so other in-process consumers share its native server.
   const server: unknown = require(path.join(__dirname, '..', 'server.js'));
   if (!(server instanceof Server)) {
     throw new TypeError('server.js must export the listening HTTP server');
   }
-  return server;
-}
-
-app.whenReady().then(() => {
-  startServer();
-
-  // Small delay to let Express bind before loading the URL (R7 owns readiness).
-  setTimeout(createWindow, 300);
+  const { observeServerStartup } = require('../lib/server-app') as typeof ServerApp;
+  observeServerStartup(server, {
+    ready(url) {
+      readyUrl = url;
+      createWindow(url);
+    },
+    failed: showStartupFailure,
+  });
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+    if (readyUrl !== null && BrowserWindow.getAllWindows().length === 0) {
+      createWindow(readyUrl);
     }
   });
+}).catch(error => {
+  showStartupFailure(error);
+  // Preserve the native unhandled-rejection policy for synchronous root failures.
+  throw error;
 });
 
 app.on('window-all-closed', () => {

@@ -1696,3 +1696,55 @@ Proof: `/tmp/pi-dish-parent-r11-main-smoke-proof.json`; screenshot:
 home and throwaway smoke script were removed. The complete combined local
 gates and all five exact-source CI jobs with required steps above passed.
 R11 is formally accepted; remaining R packages and full C1/C2 are not implied.
+
+### Implementation record — R7
+
+**Integrated and locally verified; exact pushed-main CI and formal acceptance
+pending.** Reviewed source `85b9860b8085658095c0386eef8bec7379fa640d`,
+owner `01a0ab39-80e9-74a5-ae1a-3145b3e52556`, exact
+`openai-codex/gpt-6-astra`/High/OMP. The same complete source was independently
+accepted by `zai/glm-5.3` (final 178/179 messages),
+`opencode-go/deepseek-v4.1-flash` (228/229) and `kimi-code/k3` (233/234).
+Parent audited all eight primary bodies, required consumer units and fourteen
+decoded proof drivers. All three semantic closures succeeded and resolved
+inactive. Earlier incomplete-read claims and their precise corrections remain
+in [the review record](r7-review.json); [owner evidence](r7-evidence.json)
+retains the native baseline/retry comparisons.
+
+Construction installs upgrade handling and closeable resources before binding.
+The synchronous CommonJS export remains the actual initial native server;
+Electron requires that cached root, observes owned-listener startup, and uses
+the first ready main or alias listener's actual address. Delayed binds,
+ephemeral ports and retry replacement listeners no longer depend on a timer
+or independently guessed/advertised URL. Restricted-share error notification
+does not swallow native errors or impose a new shutdown policy.
+
+Integrated on `701bb90`, the serial local gates passed: check with 265
+compiler-owned sources, 1,049 backend tests with zero failures/skips, 291
+browser cases, all eight isolated scenarios and full desktop/mobile/terminal/
+multi-host UI. The chain took 345.86 seconds, not an isolated UI duration.
+Exact 200,819-byte raw output:
+`/tmp/pi-dish-parent-r7-full-gates.log`, SHA256
+`7086d61d3e833941495fdcb9845314310ec337a135fe874ff079ab83a4f84ee6`.
+
+Parent then exercised actual Electron 44.4.1 development and newly packaged
+Linux runtimes on an owned isolated X display. Both loaded the real viewport
+only after delayed native binding on port zero, preserving root identity.
+Occupied-main-port failures displayed the native startup dialog, never
+navigated and exited 1 after dismissal. Native invalid-port `RangeError`
+displayed a startup dialog and retained its rejected-promise warning; the
+process was still alive at observation, then cleaned up by the driver—not
+an exit-1 claim. A restricted-share failure before delayed main readiness
+showed both the explicit notification and original native uncaught-error
+dialog; the same process subsequently loaded main once and served HTTP 200.
+
+Eight probes exited 0; actual viewport/error screenshots were inspected.
+Driver source, trace/results, preserved failed attempts and exact limits are
+recorded in [the review record](r7-review.json) and
+`/tmp/pi-dish-parent-r7-main-native-proof.json`. The private evidence archive
+SHA256 is `d162167d4c389f86c7c774e15e0fc9db4ae590784edb9915f0da4f286fbb00c1`.
+The isolated display, successful-probe homes, packaged output and throwaway
+drivers were removed. An earlier nonisolated screenshot-command failure is
+retained separately without a blanket descendant-cleanup claim. No macOS,
+live harness spawn, successful terminal attachment or naturally unavailable
+interface proof is claimed. R7 is not formally accepted before exact-source CI.

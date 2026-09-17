@@ -1,0 +1,6093 @@
+{
+  "milestone": "R7",
+  "status": "All three independent exact-model HIGH OMP whole-source reviews and parent actual-read audits PASS for85b. Integrated on701bb90; full local gates and eight Linux dev/packaged native observations passed with explicit limits. Exact pushed-main CI remains pending; not yet formally accepted.",
+  "baseline": "272a338e0fe0292dfd5f45131890c1bcb273c3eb",
+  "sourceSha": "85b9860b8085658095c0386eef8bec7379fa640d",
+  "branch": "migration/r7-startup-readiness",
+  "manifest": {
+    "files": [
+      "src/core/server-app.ts",
+      "lib/server-app.js",
+      "lib/server-app.d.ts",
+      "electron/main.ts",
+      "electron/main.js",
+      "test/fixtures/listener-server.js",
+      "test/listener-lifecycle.test.js",
+      "docs/r7-evidence.json"
+    ],
+    "sha256ExcludingEvidenceSelf": {
+      "src/core/server-app.ts": "f0ffc6cb42436259a2301b58361b7d77cb75b21f35266732da805138eabc9149",
+      "lib/server-app.js": "e0129d1b9f26ee04ef7173edc08e12f38bba62352c9e931f32192cc898c7ec63",
+      "lib/server-app.d.ts": "c102480421d6b67043850ce04692611ebc066ac3e41c50d57eda4ec2b286a134",
+      "electron/main.ts": "7dbab6e90e02cc60264e1e712d55055ae20498c2d5718ed58d30b2c8d22bea72",
+      "electron/main.js": "0bbf14f819fadc95f7644c471448a19b0406acf343ba8ee0f88ab84052f96008",
+      "test/fixtures/listener-server.js": "f005e0ccaec9b03b630a1de28fce21f645051b4b0c444cf0db9eb00e4988d5cc",
+      "test/listener-lifecycle.test.js": "99d9a1ed8f89708203b95efb33ade6e52529dad8ff74b9718a7f2975b8d8f223"
+    },
+    "intentionallyUnchanged": [
+      "server.js",
+      "electron/main.d.ts",
+      "package.json",
+      "compiler/source-policy files",
+      "browser source and generated assets",
+      "accepted R6 replay implementation",
+      "parent-owned global acceptance docs"
+    ],
+    "unrelatedPreserved": [
+      ".amp/"
+    ],
+    "packageSha256": {
+      "app.asar": "af27b95635eb231cb37c13fa0182a4c6ddf02b43bb7ec36a390fe78d01b44471",
+      "pi-dish": "8407787e90832dceaf83d751cc2ad89a92b92f90c9c5dedcc126e54258649a6f"
+    }
+  },
+  "owner": "01a0ab39-80e9-74a5-ae1a-3145b3e52556",
+  "parent": "01a0a3fd-9825-70bd-b000-dc85c59a7421",
+  "dispatch": "/tmp/pi-dish-parent-r7-independent-review-dispatch.json",
+  "reviewBarrier": "No source change during all three reviews. Earlier incomplete claims were withheld, not accepted; each same reviewer received only its finite actual evidence gaps. Final decisions cover identical complete source, not selected corrections. Reviewers ran no suites or runtime proofs.",
+  "reviewers": [
+    {
+      "label": "glm",
+      "model": "zai/glm-5.3",
+      "thinking": "high",
+      "harness": "omp",
+      "session": "2026-09-17T03-01-18-468Z_01a0ad4f-ba04-764f-92d2-0c5c1f517b91",
+      "decision": "ACCEPT",
+      "sourceSha": "85b9860b8085658095c0386eef8bec7379fa640d",
+      "pre": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+        "ref": "01a0ad4f-ba",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-17T03-01-18-468Z_01a0ad4f-ba04-764f-92d2-0c5c1f517b91",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R7-Final-GLM",
+          "model": "zai/glm-5.3",
+          "contextPercent": 1.7,
+          "contextTokens": 17082,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-17T03:01:30.547Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-18-468Z_01a0ad4f-ba04-764f-92d2-0c5c1f517b91.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 2768247,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": null
+        }
+      },
+      "post": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+        "ref": "01a0ad4f-ba",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-17T03-01-18-468Z_01a0ad4f-ba04-764f-92d2-0c5c1f517b91",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R7-Final-GLM",
+          "model": "zai/glm-5.3",
+          "contextPercent": 30.4,
+          "contextTokens": 303638,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 2,
+          "lastActivity": "2026-09-17T03:32:12.340Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-18-468Z_01a0ad4f-ba04-764f-92d2-0c5c1f517b91.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 2768247,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": null
+        }
+      },
+      "archive": {
+        "path": "/tmp/pi-dish-parent-r7-independent-review-evidence/glm-179.json",
+        "sha256": "75b22ab365d1ca3f2b30d6e8005bd2fb3cdee294e41b9ec701e0e5a01b3643ac",
+        "messages": 179
+      },
+      "finalIndex": 178,
+      "finalMessageId": "1ae2d71e",
+      "verbatimFinal": "**ACCEPT — renewed** for same complete `85b9860b8085658095c0386eef8bec7379fa640d`; delivered live to parent `01a0a3fd-…7421` (`{\"success\":true,\"result\":{\"queued\":false}}`), superseding the earlier incomplete-scope reservation. Not self-closed.\n\n**Completed this round (read-only, nothing repeated from passed work):**\n\n- **`docs/r7-evidence.json` read whole as a literal file** — raw ranges 1-2748 in four sequential chunks, the single 87-line tool elision (1201-1287) recovered by bounded re-read. Previously-unseen metadata now literally covered: all **118 archive member entries** with index/bytes/sha256 (index 117 = `results/synchronous-native-comparison.json`, confirming that member is the 118th added in the 117→118 correction), the `verification` string, per-snapshot `path`+`sha256` fields, untruncated sync-case logs (before-fix kill/force-kill sequence, full share-node error tail `Node.js v26.8.2`), and the complete cleanup/preserved/processCheck sections. Zero discrepancy against my independent byte audit and the decoded sources.\n- **All 19 requested consumer/declaration ranges read literally** — tmux/pi-bridge/browser-fixture blocks (native `listening`/`address().port`/`close`; fixture base via IPC after real listening); four spawn-boot suites (explicit freePort + `/api/host` polling — independent of readiness internals); `session-catalog-baseline.js` (in-process require + native `request` listener + `closeAllConnections`/`close` — all preserved Server surface); readme-shots and lineage canary blocks; `pi-dish-tmux.sh` /proc argv match and `run-tailnet.sh` `exec node server.js` (process-level, unaffected); `relay-handlers.ts:468` boolean-claim upgrade entry; `terminal.ts:274-276` `killAllTerminals`; `terminal-handlers.ts:1-18` declaration boundary; `electron/main.d.ts` trivial `export {}` (byte-identical claim holds); `tsconfig.edges.json` strict NodeNext edge mapping; `package.json` whole (ASAR entry `electron/main.js`, ships `server.js`+`lib/*.js`, excludes TS/decls; pinned electron 44.4.1 / builder 26.15.3).\n\nNo consumer relies on the removed registries or anything R7 changed beyond the approved startup contract; no contradiction anywhere in the now-complete dossier. Assessment unchanged, coverage now complete: **ACCEPT, no source fix requested.**",
+      "primaryCoverage": {
+        "src/core/server-app.ts": {
+          "lines": 2605,
+          "seen": 2605,
+          "gaps": [],
+          "records": [
+            {
+              "index": 31,
+              "lines": 709
+            },
+            {
+              "index": 33,
+              "lines": 705
+            },
+            {
+              "index": 35,
+              "lines": 702
+            },
+            {
+              "index": 37,
+              "lines": 504
+            }
+          ]
+        },
+        "lib/server-app.js": {
+          "lines": 2511,
+          "seen": 2511,
+          "gaps": [],
+          "records": [
+            {
+              "index": 39,
+              "lines": 659
+            },
+            {
+              "index": 41,
+              "lines": 656
+            },
+            {
+              "index": 43,
+              "lines": 654
+            },
+            {
+              "index": 45,
+              "lines": 563
+            }
+          ]
+        },
+        "lib/server-app.d.ts": {
+          "lines": 10,
+          "seen": 10,
+          "gaps": [],
+          "records": [
+            {
+              "index": 25,
+              "lines": 10
+            }
+          ]
+        },
+        "electron/main.ts": {
+          "lines": 74,
+          "seen": 74,
+          "gaps": [],
+          "records": [
+            {
+              "index": 24,
+              "lines": 74
+            }
+          ]
+        },
+        "electron/main.js": {
+          "lines": 66,
+          "seen": 66,
+          "gaps": [],
+          "records": [
+            {
+              "index": 27,
+              "lines": 66
+            }
+          ]
+        },
+        "test/fixtures/listener-server.js": {
+          "lines": 59,
+          "seen": 59,
+          "gaps": [],
+          "records": [
+            {
+              "index": 26,
+              "lines": 59
+            }
+          ]
+        },
+        "test/listener-lifecycle.test.js": {
+          "lines": 264,
+          "seen": 264,
+          "gaps": [],
+          "records": [
+            {
+              "index": 29,
+              "lines": 264
+            }
+          ]
+        },
+        "docs/r7-evidence.json": {
+          "lines": 2748,
+          "seen": 2748,
+          "gaps": [],
+          "records": [
+            {
+              "index": 145,
+              "lines": 700
+            },
+            {
+              "index": 147,
+              "lines": 500
+            },
+            {
+              "index": 149,
+              "lines": 87
+            },
+            {
+              "index": 151,
+              "lines": 700
+            },
+            {
+              "index": 153,
+              "lines": 648
+            }
+          ],
+          "literalTailRecovery": {
+            "range": [
+              1288,
+              1400
+            ],
+            "indices": [
+              147
+            ],
+            "reason": "Original raw chunk147 delivers113-line tail after middle elision. Exact full-tail source match; no duplicate read requested."
+          }
+        }
+      },
+      "consumerCoverage": {
+        "test/server.test.js": {
+          "lines": 4447,
+          "seen": 150,
+          "gaps": [
+            [
+              1,
+              194
+            ],
+            [
+              196,
+              198
+            ],
+            [
+              240,
+              240
+            ],
+            [
+              242,
+              2446
+            ],
+            [
+              2448,
+              2448
+            ],
+            [
+              2499,
+              2524
+            ],
+            [
+              2526,
+              3808
+            ],
+            [
+              3864,
+              4447
+            ]
+          ],
+          "records": [
+            {
+              "index": 57,
+              "lines": 55
+            },
+            {
+              "index": 58,
+              "lines": 43
+            },
+            {
+              "index": 59,
+              "lines": 52
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/terminal.test.js": {
+          "lines": 344,
+          "seen": 19,
+          "gaps": [
+            [
+              1,
+              43
+            ],
+            [
+              63,
+              344
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [
+            {
+              "index": 63,
+              "range": [
+                44,
+                62
+              ],
+              "attribution": "sed -n '44,62p' test/terminal.test.js",
+              "literalBody": true
+            }
+          ],
+          "otherLiteralRecords": []
+        },
+        "test/tmux.test.js": {
+          "lines": 1732,
+          "seen": 30,
+          "gaps": [
+            [
+              1,
+              53
+            ],
+            [
+              71,
+              104
+            ],
+            [
+              118,
+              1732
+            ]
+          ],
+          "records": [
+            {
+              "index": 159,
+              "lines": 13
+            }
+          ],
+          "cliLiteralRecords": [
+            {
+              "index": 63,
+              "range": [
+                54,
+                70
+              ],
+              "attribution": "sed -n '54,70p' test/tmux.test.js",
+              "literalBody": true
+            }
+          ],
+          "otherLiteralRecords": []
+        },
+        "test/omp-web-pilot.test.js": {
+          "lines": 243,
+          "seen": 21,
+          "gaps": [
+            [
+              1,
+              19
+            ],
+            [
+              41,
+              243
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [
+            {
+              "index": 63,
+              "range": [
+                20,
+                40
+              ],
+              "attribution": "sed -n '20,40p' test/omp-web-pilot.test.js",
+              "literalBody": true
+            }
+          ],
+          "otherLiteralRecords": []
+        },
+        "test/pi-bridge.integration.test.js": {
+          "lines": 686,
+          "seen": 31,
+          "gaps": [
+            [
+              1,
+              139
+            ],
+            [
+              161,
+              169
+            ],
+            [
+              175,
+              219
+            ],
+            [
+              225,
+              686
+            ]
+          ],
+          "records": [
+            {
+              "index": 155,
+              "lines": 5
+            },
+            {
+              "index": 161,
+              "lines": 5
+            }
+          ],
+          "cliLiteralRecords": [
+            {
+              "index": 63,
+              "range": [
+                140,
+                160
+              ],
+              "attribution": "sed -n '140,160p' test/pi-bridge.integration.test.js",
+              "literalBody": true
+            }
+          ],
+          "otherLiteralRecords": []
+        },
+        "test/routines-api.test.js": {
+          "lines": 480,
+          "seen": 19,
+          "gaps": [
+            [
+              1,
+              29
+            ],
+            [
+              49,
+              480
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [
+            {
+              "index": 63,
+              "range": [
+                30,
+                48
+              ],
+              "attribution": "sed -n '30,48p' test/routines-api.test.js",
+              "literalBody": true
+            }
+          ],
+          "otherLiteralRecords": []
+        },
+        "test/rpc-session.test.js": {
+          "lines": 776,
+          "seen": 18,
+          "gaps": [
+            [
+              1,
+              32
+            ],
+            [
+              51,
+              776
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [
+            {
+              "index": 63,
+              "range": [
+                33,
+                50
+              ],
+              "attribution": "sed -n '33,50p' test/rpc-session.test.js",
+              "literalBody": true
+            }
+          ],
+          "otherLiteralRecords": []
+        },
+        "test/skills-cli.test.js": {
+          "lines": 306,
+          "seen": 21,
+          "gaps": [
+            [
+              1,
+              54
+            ],
+            [
+              76,
+              306
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [
+            {
+              "index": 63,
+              "range": [
+                55,
+                75
+              ],
+              "attribution": "sed -n '55,75p' test/skills-cli.test.js",
+              "literalBody": true
+            }
+          ],
+          "otherLiteralRecords": []
+        },
+        "test/ui-smoke.js": {
+          "lines": 3915,
+          "seen": 83,
+          "gaps": [
+            [
+              1,
+              470
+            ],
+            [
+              472,
+              481
+            ],
+            [
+              483,
+              483
+            ],
+            [
+              564,
+              3914
+            ]
+          ],
+          "records": [
+            {
+              "index": 62,
+              "lines": 83
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/browser/fixtures.js": {
+          "lines": 116,
+          "seen": 22,
+          "gaps": [
+            [
+              1,
+              24
+            ],
+            [
+              26,
+              31
+            ],
+            [
+              53,
+              116
+            ]
+          ],
+          "records": [
+            {
+              "index": 157,
+              "lines": 22
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/skill-sessions-fleet.test.js": {
+          "lines": 274,
+          "seen": 25,
+          "gaps": [
+            [
+              1,
+              68
+            ],
+            [
+              92,
+              93
+            ],
+            [
+              95,
+              95
+            ],
+            [
+              97,
+              274
+            ]
+          ],
+          "records": [
+            {
+              "index": 158,
+              "lines": 25
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/fleet-artifacts.test.js": {
+          "lines": 575,
+          "seen": 33,
+          "gaps": [
+            [
+              1,
+              86
+            ],
+            [
+              119,
+              119
+            ],
+            [
+              121,
+              575
+            ]
+          ],
+          "records": [
+            {
+              "index": 163,
+              "lines": 33
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/host-auth.test.js": {
+          "lines": 333,
+          "seen": 31,
+          "gaps": [
+            [
+              1,
+              34
+            ],
+            [
+              37,
+              42
+            ],
+            [
+              70,
+              71
+            ],
+            [
+              73,
+              73
+            ],
+            [
+              75,
+              333
+            ]
+          ],
+          "records": [
+            {
+              "index": 160,
+              "lines": 31
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/remote-hosts.test.js": {
+          "lines": 658,
+          "seen": 31,
+          "gaps": [
+            [
+              1,
+              76
+            ],
+            [
+              78,
+              81
+            ],
+            [
+              112,
+              658
+            ]
+          ],
+          "records": [
+            {
+              "index": 162,
+              "lines": 31
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/session-catalog-baseline.js": {
+          "lines": 189,
+          "seen": 56,
+          "gaps": [
+            [
+              1,
+              132
+            ],
+            [
+              188,
+              188
+            ]
+          ],
+          "records": [
+            {
+              "index": 165,
+              "lines": 56
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/readme-shots.js": {
+          "lines": 286,
+          "seen": 6,
+          "gaps": [
+            [
+              1,
+              186
+            ],
+            [
+              193,
+              286
+            ]
+          ],
+          "records": [
+            {
+              "index": 166,
+              "lines": 6
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/test-real-lineage-harnesses.js": {
+          "lines": 624,
+          "seen": 8,
+          "gaps": [
+            [
+              1,
+              594
+            ],
+            [
+              596,
+              598
+            ],
+            [
+              606,
+              624
+            ]
+          ],
+          "records": [
+            {
+              "index": 174,
+              "lines": 8
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/pi-dish-tmux.sh": {
+          "lines": 192,
+          "seen": 23,
+          "gaps": [
+            [
+              1,
+              31
+            ],
+            [
+              33,
+              35
+            ],
+            [
+              37,
+              42
+            ],
+            [
+              44,
+              44
+            ],
+            [
+              62,
+              63
+            ],
+            [
+              66,
+              84
+            ],
+            [
+              86,
+              192
+            ]
+          ],
+          "records": [
+            {
+              "index": 175,
+              "lines": 23
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/run-tailnet.sh": {
+          "lines": 54,
+          "seen": 2,
+          "gaps": [
+            [
+              1,
+              52
+            ]
+          ],
+          "records": [
+            {
+              "index": 170,
+              "lines": 2
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/relay-handlers.ts": {
+          "lines": 527,
+          "seen": 62,
+          "gaps": [
+            [
+              1,
+              92
+            ],
+            [
+              94,
+              466
+            ]
+          ],
+          "records": [
+            {
+              "index": 70,
+              "lines": 61
+            },
+            {
+              "index": 169,
+              "lines": 7
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/recovery-runner.ts": {
+          "lines": 349,
+          "seen": 59,
+          "gaps": [
+            [
+              1,
+              137
+            ],
+            [
+              139,
+              278
+            ],
+            [
+              334,
+              339
+            ],
+            [
+              341,
+              347
+            ]
+          ],
+          "records": [
+            {
+              "index": 69,
+              "lines": 59
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/routine-runner.ts": {
+          "lines": 493,
+          "seen": 72,
+          "gaps": [
+            [
+              1,
+              396
+            ],
+            [
+              398,
+              418
+            ],
+            [
+              489,
+              490
+            ],
+            [
+              492,
+              493
+            ]
+          ],
+          "records": [
+            {
+              "index": 66,
+              "lines": 72
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/remote-hosts.ts": {
+          "lines": 575,
+          "seen": 28,
+          "gaps": [
+            [
+              1,
+              318
+            ],
+            [
+              320,
+              362
+            ],
+            [
+              364,
+              378
+            ],
+            [
+              404,
+              404
+            ],
+            [
+              406,
+              575
+            ]
+          ],
+          "records": [
+            {
+              "index": 68,
+              "lines": 28
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/session-bounces.ts": {
+          "lines": 404,
+          "seen": 82,
+          "gaps": [
+            [
+              1,
+              10
+            ],
+            [
+              16,
+              79
+            ],
+            [
+              86,
+              107
+            ],
+            [
+              113,
+              116
+            ],
+            [
+              122,
+              140
+            ],
+            [
+              146,
+              148
+            ],
+            [
+              160,
+              186
+            ],
+            [
+              194,
+              221
+            ],
+            [
+              232,
+              256
+            ],
+            [
+              262,
+              296
+            ],
+            [
+              302,
+              304
+            ],
+            [
+              310,
+              321
+            ],
+            [
+              327,
+              352
+            ],
+            [
+              361,
+              404
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 72,
+              "line": 11
+            },
+            {
+              "index": 72,
+              "line": 12
+            },
+            {
+              "index": 72,
+              "line": 13
+            },
+            {
+              "index": 72,
+              "line": 14
+            },
+            {
+              "index": 72,
+              "line": 15
+            },
+            {
+              "index": 72,
+              "line": 80
+            },
+            {
+              "index": 72,
+              "line": 81
+            },
+            {
+              "index": 72,
+              "line": 82
+            },
+            {
+              "index": 72,
+              "line": 83
+            },
+            {
+              "index": 72,
+              "line": 84
+            },
+            {
+              "index": 72,
+              "line": 85
+            },
+            {
+              "index": 72,
+              "line": 108
+            },
+            {
+              "index": 72,
+              "line": 109
+            },
+            {
+              "index": 72,
+              "line": 110
+            },
+            {
+              "index": 72,
+              "line": 111
+            },
+            {
+              "index": 72,
+              "line": 112
+            },
+            {
+              "index": 72,
+              "line": 117
+            },
+            {
+              "index": 72,
+              "line": 118
+            },
+            {
+              "index": 72,
+              "line": 119
+            },
+            {
+              "index": 72,
+              "line": 120
+            },
+            {
+              "index": 72,
+              "line": 121
+            },
+            {
+              "index": 72,
+              "line": 141
+            },
+            {
+              "index": 72,
+              "line": 142
+            },
+            {
+              "index": 72,
+              "line": 143
+            },
+            {
+              "index": 72,
+              "line": 144
+            },
+            {
+              "index": 72,
+              "line": 145
+            },
+            {
+              "index": 72,
+              "line": 149
+            },
+            {
+              "index": 72,
+              "line": 150
+            },
+            {
+              "index": 72,
+              "line": 151
+            },
+            {
+              "index": 72,
+              "line": 152
+            },
+            {
+              "index": 72,
+              "line": 153
+            },
+            {
+              "index": 72,
+              "line": 154
+            },
+            {
+              "index": 72,
+              "line": 155
+            },
+            {
+              "index": 72,
+              "line": 156
+            },
+            {
+              "index": 72,
+              "line": 157
+            },
+            {
+              "index": 72,
+              "line": 158
+            },
+            {
+              "index": 72,
+              "line": 159
+            },
+            {
+              "index": 72,
+              "line": 187
+            },
+            {
+              "index": 72,
+              "line": 188
+            },
+            {
+              "index": 72,
+              "line": 189
+            },
+            {
+              "index": 72,
+              "line": 190
+            },
+            {
+              "index": 72,
+              "line": 191
+            },
+            {
+              "index": 72,
+              "line": 192
+            },
+            {
+              "index": 72,
+              "line": 193
+            },
+            {
+              "index": 72,
+              "line": 222
+            },
+            {
+              "index": 72,
+              "line": 223
+            },
+            {
+              "index": 72,
+              "line": 224
+            },
+            {
+              "index": 72,
+              "line": 225
+            },
+            {
+              "index": 72,
+              "line": 226
+            },
+            {
+              "index": 72,
+              "line": 227
+            },
+            {
+              "index": 72,
+              "line": 228
+            },
+            {
+              "index": 72,
+              "line": 229
+            },
+            {
+              "index": 72,
+              "line": 230
+            },
+            {
+              "index": 72,
+              "line": 231
+            },
+            {
+              "index": 72,
+              "line": 257
+            },
+            {
+              "index": 72,
+              "line": 258
+            },
+            {
+              "index": 72,
+              "line": 259
+            },
+            {
+              "index": 72,
+              "line": 260
+            },
+            {
+              "index": 72,
+              "line": 261
+            },
+            {
+              "index": 72,
+              "line": 297
+            },
+            {
+              "index": 72,
+              "line": 298
+            },
+            {
+              "index": 72,
+              "line": 299
+            },
+            {
+              "index": 72,
+              "line": 300
+            },
+            {
+              "index": 72,
+              "line": 301
+            },
+            {
+              "index": 72,
+              "line": 305
+            },
+            {
+              "index": 72,
+              "line": 306
+            },
+            {
+              "index": 72,
+              "line": 307
+            },
+            {
+              "index": 72,
+              "line": 308
+            },
+            {
+              "index": 72,
+              "line": 309
+            },
+            {
+              "index": 72,
+              "line": 322
+            },
+            {
+              "index": 72,
+              "line": 323
+            },
+            {
+              "index": 72,
+              "line": 324
+            },
+            {
+              "index": 72,
+              "line": 325
+            },
+            {
+              "index": 72,
+              "line": 326
+            },
+            {
+              "index": 72,
+              "line": 353
+            },
+            {
+              "index": 72,
+              "line": 354
+            },
+            {
+              "index": 72,
+              "line": 355
+            },
+            {
+              "index": 72,
+              "line": 356
+            },
+            {
+              "index": 72,
+              "line": 357
+            },
+            {
+              "index": 72,
+              "line": 358
+            },
+            {
+              "index": 72,
+              "line": 359
+            },
+            {
+              "index": 72,
+              "line": 360
+            }
+          ]
+        },
+        "src/core/terminal.ts": {
+          "lines": 276,
+          "seen": 4,
+          "gaps": [
+            [
+              1,
+              272
+            ]
+          ],
+          "records": [
+            {
+              "index": 171,
+              "lines": 4
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "server.js": {
+          "lines": 1,
+          "seen": 1,
+          "gaps": [],
+          "records": [
+            {
+              "index": 48,
+              "lines": 1
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/fixtures/browser-server.js": {
+          "lines": 55,
+          "seen": 55,
+          "gaps": [],
+          "records": [
+            {
+              "index": 56,
+              "lines": 55
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/terminal-handlers.ts": {
+          "lines": 92,
+          "seen": 92,
+          "gaps": [],
+          "records": [
+            {
+              "index": 67,
+              "lines": 61
+            },
+            {
+              "index": 73,
+              "lines": 24
+            },
+            {
+              "index": 168,
+              "lines": 22
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "electron/main.d.ts": {
+          "lines": 2,
+          "seen": 2,
+          "gaps": [],
+          "records": [
+            {
+              "index": 172,
+              "lines": 2
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "tsconfig.edges.json": {
+          "lines": 22,
+          "seen": 22,
+          "gaps": [],
+          "records": [
+            {
+              "index": 167,
+              "lines": 22
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "package.json": {
+          "lines": 143,
+          "seen": 143,
+          "gaps": [],
+          "records": [
+            {
+              "index": 173,
+              "lines": 143
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        }
+      },
+      "requiredConsumerRanges": {
+        "test/server.test.js": [
+          [
+            207,
+            220
+          ],
+          [
+            2455,
+            2484
+          ]
+        ],
+        "test/terminal.test.js": [
+          [
+            47,
+            57
+          ]
+        ],
+        "test/tmux.test.js": [
+          [
+            56,
+            56
+          ],
+          [
+            107,
+            114
+          ]
+        ],
+        "test/omp-web-pilot.test.js": [
+          [
+            23,
+            32
+          ]
+        ],
+        "test/pi-bridge.integration.test.js": [
+          [
+            143,
+            143
+          ],
+          [
+            171,
+            171
+          ],
+          [
+            221,
+            221
+          ]
+        ],
+        "test/routines-api.test.js": [
+          [
+            33,
+            43
+          ]
+        ],
+        "test/rpc-session.test.js": [
+          [
+            35,
+            49
+          ]
+        ],
+        "test/skills-cli.test.js": [
+          [
+            60,
+            68
+          ]
+        ],
+        "test/ui-smoke.js": [
+          [
+            491,
+            495
+          ],
+          [
+            554,
+            555
+          ]
+        ],
+        "test/browser/fixtures.js": [
+          [
+            33,
+            49
+          ]
+        ],
+        "test/skill-sessions-fleet.test.js": [
+          [
+            70,
+            88
+          ]
+        ],
+        "test/fleet-artifacts.test.js": [
+          [
+            89,
+            115
+          ]
+        ],
+        "test/host-auth.test.js": [
+          [
+            44,
+            66
+          ]
+        ],
+        "test/remote-hosts.test.js": [
+          [
+            83,
+            108
+          ]
+        ],
+        "scripts/session-catalog-baseline.js": [
+          [
+            134,
+            184
+          ]
+        ],
+        "scripts/readme-shots.js": [
+          [
+            188,
+            189
+          ]
+        ],
+        "scripts/test-real-lineage-harnesses.js": [
+          [
+            600,
+            602
+          ]
+        ],
+        "scripts/pi-dish-tmux.sh": [
+          [
+            46,
+            58
+          ]
+        ],
+        "scripts/run-tailnet.sh": [
+          [
+            54,
+            54
+          ]
+        ]
+      },
+      "ownerUnitRanges": {
+        "src/core/routine-runner.ts": [
+          [
+            421,
+            461
+          ],
+          [
+            463,
+            479
+          ]
+        ],
+        "src/core/recovery-runner.ts": [
+          [
+            289,
+            308
+          ],
+          [
+            316,
+            316
+          ]
+        ],
+        "src/core/session-bounces.ts": [
+          [
+            223,
+            228
+          ]
+        ],
+        "src/core/remote-hosts.ts": [
+          [
+            384,
+            393
+          ]
+        ],
+        "src/core/relay-handlers.ts": [
+          [
+            467,
+            517
+          ]
+        ],
+        "src/core/terminal.ts": [
+          [
+            274,
+            282
+          ]
+        ]
+      },
+      "wholeConsumers": [
+        "server.js",
+        "test/fixtures/browser-server.js",
+        "src/core/terminal-handlers.ts",
+        "electron/main.d.ts",
+        "tsconfig.edges.json",
+        "package.json"
+      ],
+      "decodedProofCoverage": [
+        {
+          "path": "/tmp/pi-dish-r7-electron-preload.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-electron-preload.cjs",
+          "sha256": "5ef3bf8473adb313d50f93a01a5a05f9388f3548ad56a1831703c222d320a7e0",
+          "coverage": {
+            "lines": 33,
+            "seen": 33,
+            "gaps": [],
+            "records": [
+              {
+                "index": 81,
+                "lines": 33
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-electron-launch.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-electron-launch.cjs",
+          "sha256": "90134c40c826567cc09dabf9af43445b7957fe73073478f0888e535a2dc82ab0",
+          "coverage": {
+            "lines": 88,
+            "seen": 88,
+            "gaps": [],
+            "records": [
+              {
+                "index": 83,
+                "lines": 88
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-electron-proof.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-electron-proof.cjs",
+          "sha256": "24d20915d775269f7d8a89da5ed7a1cba47616f9aaa99a031f4a52a40bc02ddd",
+          "coverage": {
+            "lines": 62,
+            "seen": 62,
+            "gaps": [],
+            "records": [
+              {
+                "index": 80,
+                "lines": 62
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-electron-failure.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-electron-failure.cjs",
+          "sha256": "7b6ff8644ad7e2ad069f347326f986d7b68bff0ad9544998e3195afe611ee1b6",
+          "coverage": {
+            "lines": 72,
+            "seen": 72,
+            "gaps": [],
+            "records": [
+              {
+                "index": 82,
+                "lines": 72
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-share-failure.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-share-failure.cjs",
+          "sha256": "b1bd8a3ad4df0cf45b12aa80189f318acfb8d80152ccd940f6db53ab03704d71",
+          "coverage": {
+            "lines": 85,
+            "seen": 85,
+            "gaps": [],
+            "records": [
+              {
+                "index": 87,
+                "lines": 85
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-dismiss-dialog.py",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-dismiss-dialog.py",
+          "sha256": "c0087bc6c49e90b3ac2e03b8d253d5831fa8a91b72d9a5701f1ea91345557d22",
+          "coverage": {
+            "lines": 21,
+            "seen": 21,
+            "gaps": [],
+            "records": [
+              {
+                "index": 84,
+                "lines": 21
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-sync-preload.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-sync-preload.cjs",
+          "sha256": "9501b13f4eed2231b5741a4e2b5265120e9fe93caf01c2c78a5b1e26ecdef8e5",
+          "coverage": {
+            "lines": 32,
+            "seen": 32,
+            "gaps": [],
+            "records": [
+              {
+                "index": 88,
+                "lines": 32
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-sync-failure.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-sync-failure.cjs",
+          "sha256": "fc3315106601866366e277097dc59a148d413bc42af14fc0fe47ea51de63b3ab",
+          "coverage": {
+            "lines": 78,
+            "seen": 78,
+            "gaps": [],
+            "records": [
+              {
+                "index": 89,
+                "lines": 78
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-lifecycle-proof.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-lifecycle-proof.cjs",
+          "sha256": "24b62a47a078f0a530c99c1eb6eba3243cadcafea0658802503be731a61d54c3",
+          "coverage": {
+            "lines": 96,
+            "seen": 96,
+            "gaps": [],
+            "records": [
+              {
+                "index": 91,
+                "lines": 96
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-share-node.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-share-node.cjs",
+          "sha256": "8ab9b26499d3338043c7e9138277ef5170341f4ccb1bfa560b4428a2dc7b184d",
+          "coverage": {
+            "lines": 47,
+            "seen": 47,
+            "gaps": [],
+            "records": [
+              {
+                "index": 92,
+                "lines": 47
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-retry-proof.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-retry-proof.cjs",
+          "sha256": "bf1a7e37afcf22b4b14b022a21884b73e1037b06093cd4dffc03e1b90a18d1c6",
+          "coverage": {
+            "lines": 82,
+            "seen": 82,
+            "gaps": [],
+            "records": [
+              {
+                "index": 96,
+                "lines": 82
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-declaration-proof.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-r7-declaration-proof.cjs",
+          "sha256": "05ef3a424e401fead0aad5b7f22dab0f2038d2ea1f1174d6917621a17b2f1952",
+          "coverage": {
+            "lines": 35,
+            "seen": 35,
+            "gaps": [],
+            "records": [
+              {
+                "index": 93,
+                "lines": 35
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-proof-originals/pi-dish-m7-runtime-probe.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-m7-runtime-probe.cjs",
+          "sha256": "40c739c99de2b96e475d26311a59d5c531c9a150b86358ca542caa5d2be4c481",
+          "coverage": {
+            "lines": 48,
+            "seen": 48,
+            "gaps": [],
+            "records": [
+              {
+                "index": 94,
+                "lines": 48
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-proof-originals/pi-dish-m7-declaration-proof.cjs",
+          "attributedPath": "/tmp/pi-dish-r7-review-8jv50jp4/sources/pi-dish-m7-declaration-proof.cjs",
+          "sha256": "aa97dfe640985a301dc63056373bbfa8517372a83af0e8e8e1bd3eac3e25bc44",
+          "coverage": {
+            "lines": 12,
+            "seen": 12,
+            "gaps": [],
+            "records": [
+              {
+                "index": 95,
+                "lines": 12
+              }
+            ]
+          }
+        }
+      ],
+      "nestedBrowserEvidence": {
+        "ownerIndex": 377,
+        "reviewerIndex": 114,
+        "completeCoalescedBody": true,
+        "bodyBytes": 4415,
+        "bodySha256": "9f6cc38f4493baaab76ebdfe156342e29228fa36d2e447c5dd86c22d65d31d28",
+        "notUnderlyingRawLog": true
+      },
+      "superseded": "Initial selected JSON-section claim was incomplete. Complete literal primary dossier and specified consumer reads now pass; raw tool147 tail1288-1400 verified rather than requested again.",
+      "closure": {
+        "before": {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+          "ref": "01a0ad4f-ba",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-17T03-01-18-468Z_01a0ad4f-ba04-764f-92d2-0c5c1f517b91",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": true,
+              "steer": true,
+              "followUp": true,
+              "abort": true,
+              "compact": true,
+              "models": true,
+              "setModel": true,
+              "setThinking": true,
+              "rename": true,
+              "commands": true,
+              "queueCancel": false,
+              "tree": true,
+              "export": true,
+              "close": true,
+              "restart": true,
+              "resume": false
+            },
+            "closeMode": "owned-pane",
+            "conflicted": false,
+            "liveInstanceCount": 1,
+            "name": "R7-Final-GLM",
+            "model": "zai/glm-5.3",
+            "contextPercent": 30.4,
+            "contextTokens": 303638,
+            "contextWindow": 1000000,
+            "thinkingLevel": "high",
+            "messageCount": 2,
+            "lastActivity": "2026-09-17T03:32:12.340Z",
+            "isActive": true,
+            "turnInProgress": false,
+            "compacting": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-18-468Z_01a0ad4f-ba04-764f-92d2-0c5c1f517b91.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "pid": 2768247,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": null
+          }
+        },
+        "close": {
+          "success": true
+        },
+        "after": {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+          "ref": "01a0ad4f-ba",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE4LTQ2OFpfMDFhMGFkNGYtYmEwNC03NjRmLTkyZDItMGM1YzFmNTE3YjkxIl0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-17T03-01-18-468Z_01a0ad4f-ba04-764f-92d2-0c5c1f517b91",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": false,
+              "steer": false,
+              "followUp": false,
+              "abort": false,
+              "compact": false,
+              "models": false,
+              "setModel": false,
+              "setThinking": false,
+              "rename": false,
+              "commands": false,
+              "queueCancel": false,
+              "tree": false,
+              "export": true,
+              "close": false,
+              "restart": false,
+              "resume": true
+            },
+            "closeMode": "owned-pane",
+            "profileId": "omp-v1",
+            "profileVersion": 1,
+            "name": "R7-Final-GLM",
+            "model": "zai/glm-5.3",
+            "contextPercent": 100,
+            "contextTokens": 304247,
+            "messageCount": 2,
+            "lastActivity": "2026-09-17T03:44:02.604Z",
+            "isActive": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-18-468Z_01a0ad4f-ba04-764f-92d2-0c5c1f517b91.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": null
+          }
+        }
+      },
+      "parentAudit": "/tmp/pi-dish-parent-r7-glm-acceptance-audit.json"
+    },
+    {
+      "label": "deepseek",
+      "model": "opencode-go/deepseek-v4.1-flash",
+      "thinking": "high",
+      "harness": "omp",
+      "session": "2026-09-17T03-01-19-683Z_01a0ad4f-bec3-73ef-a052-f032da0ccabe",
+      "decision": "ACCEPT",
+      "sourceSha": "85b9860b8085658095c0386eef8bec7379fa640d",
+      "pre": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+        "ref": "01a0ad4f-be",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-17T03-01-19-683Z_01a0ad4f-bec3-73ef-a052-f032da0ccabe",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R7-Final-DeepSeek",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "contextPercent": 1.7,
+          "contextTokens": 16542,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-17T03:01:20.220Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-19-683Z_01a0ad4f-bec3-73ef-a052-f032da0ccabe.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 2768412,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": null
+        }
+      },
+      "post": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+        "ref": "01a0ad4f-be",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-17T03-01-19-683Z_01a0ad4f-bec3-73ef-a052-f032da0ccabe",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R7-Final-DeepSeek",
+          "model": "opencode-go/deepseek-v4.1-flash",
+          "contextPercent": 29.2,
+          "contextTokens": 292352,
+          "contextWindow": 1000000,
+          "thinkingLevel": "high",
+          "messageCount": 3,
+          "lastActivity": "2026-09-17T03:30:08.141Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-19-683Z_01a0ad4f-bec3-73ef-a052-f032da0ccabe.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 2768412,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": null
+        }
+      },
+      "archive": {
+        "path": "/tmp/pi-dish-parent-r7-independent-review-evidence/deepseek-229.json",
+        "sha256": "8686997317a8d0d82248ea1614969db121d358699cf17b93c6e59d8943dbec07",
+        "messages": 229
+      },
+      "finalIndex": 228,
+      "finalMessageId": "7ffa0852",
+      "verbatimFinal": "🔒 **ACCEPT renewed** over the same frozen `85b9860b8085658095c0386eef8bec7379fa640d` — sent to parent `01a0a3fd-9825-70bd-b000-dc85c59a7421` (delivered, not queued).\n\n## Recovered unit: `src/core/routine-runner.ts:421-454` (raw)\n`recoverAfterRestart` is now **complete at 421-465**:\n- 421-425 doc comment; signature `async recoverAfterRestart(at = now())`; loop over `store.activeInvocations()`.\n- `status === 'starting'` → `errored` + `endedAt: at` + `'pi-dish restarted'`, `continue`.\n- routine lookup with deleted-routine fallback `mode = routine?.mode === 'oneShot' ? 'oneShot' : 'continue'` (documented guarantee: recovery never closes a session it cannot attribute).\n- session resolution `invocation.sessionId ? await getLiveSession(...).catch(() => null) : null`; recovery gate `recoveryOutcome(...)` status not in `['live','continued']` → `interrupted` with `recovery.reason` or the review-required message; absent session → `interrupted`.\n- 455-461 (read earlier): live turn → `observe(sess, id, { mode })`, `continue`; else `completed` with `scheduleClose` only for `oneShot`.\n\n## Effect on the R7 claim\nThe chain entry that `server-app` invokes in `onMainListening` (`recoveryRunner.start()` → `routineRunner.recoverAfterRestart()` → `recoveryStopped`-guarded `routineRunner.start()`) is now read end-to-end in its own producer unit, so \"recovery precedes reconciliation and scheduling\" rests on the full body, not a tail window. The body starts no scheduler and creates no session; `routine-runner.ts` is untouched by the frozen commit (stat = exactly the eight manifest files).\n\n## Standing\nHEAD and all seven manifest sha256 unchanged; tree clean apart from untracked `.amp/`. Findings unchanged: (a) dossier member 115 `commands/browser-scenarios-ui.txt` is a truncated capture (`docs/r7-evidence.json:1224-1228`) whose claim is substantiated at named owner archive index 377; (b) dev/packaged `window.png` byte-identical (packaged provenance = `app.isPackaged` + `app.asar/electron/main.js` assertion), dialog images 64/68/73 share one sha with zero baseline dialogs. Limits preserved (no macOS; injected `EADDRNOTAVAIL` retry — not a terminal attachment; PORT=-1 non-deferred preload; browser/scenario/UI precede the Electron-only catch fix with check265·backend1046/0/0·package rerun after; 117→118 correction and earlier failure history). Read-only honored; no self-close.",
+      "primaryCoverage": {
+        "src/core/server-app.ts": {
+          "lines": 2605,
+          "seen": 2605,
+          "gaps": [],
+          "records": [
+            {
+              "index": 18,
+              "lines": 41
+            },
+            {
+              "index": 20,
+              "lines": 330
+            },
+            {
+              "index": 21,
+              "lines": 330
+            },
+            {
+              "index": 23,
+              "lines": 340
+            },
+            {
+              "index": 24,
+              "lines": 330
+            },
+            {
+              "index": 26,
+              "lines": 330
+            },
+            {
+              "index": 27,
+              "lines": 330
+            },
+            {
+              "index": 29,
+              "lines": 285
+            },
+            {
+              "index": 30,
+              "lines": 330
+            }
+          ]
+        },
+        "lib/server-app.js": {
+          "lines": 2511,
+          "seen": 2511,
+          "gaps": [],
+          "records": [
+            {
+              "index": 32,
+              "lines": 320
+            },
+            {
+              "index": 35,
+              "lines": 340
+            },
+            {
+              "index": 36,
+              "lines": 340
+            },
+            {
+              "index": 38,
+              "lines": 330
+            },
+            {
+              "index": 39,
+              "lines": 330
+            },
+            {
+              "index": 41,
+              "lines": 330
+            },
+            {
+              "index": 42,
+              "lines": 330
+            },
+            {
+              "index": 44,
+              "lines": 191
+            }
+          ]
+        },
+        "lib/server-app.d.ts": {
+          "lines": 10,
+          "seen": 10,
+          "gaps": [],
+          "records": []
+        },
+        "electron/main.ts": {
+          "lines": 74,
+          "seen": 74,
+          "gaps": [],
+          "records": []
+        },
+        "electron/main.js": {
+          "lines": 66,
+          "seen": 66,
+          "gaps": [],
+          "records": []
+        },
+        "test/fixtures/listener-server.js": {
+          "lines": 59,
+          "seen": 59,
+          "gaps": [],
+          "records": []
+        },
+        "test/listener-lifecycle.test.js": {
+          "lines": 264,
+          "seen": 264,
+          "gaps": [],
+          "records": [
+            {
+              "index": 86,
+              "lines": 264
+            }
+          ]
+        },
+        "docs/r7-evidence.json": {
+          "lines": 2748,
+          "seen": 2748,
+          "gaps": [],
+          "records": [
+            {
+              "index": 68,
+              "lines": 360
+            },
+            {
+              "index": 69,
+              "lines": 360
+            },
+            {
+              "index": 71,
+              "lines": 360
+            },
+            {
+              "index": 72,
+              "lines": 184
+            },
+            {
+              "index": 75,
+              "lines": 360
+            },
+            {
+              "index": 80,
+              "lines": 360
+            },
+            {
+              "index": 83,
+              "lines": 340
+            },
+            {
+              "index": 84,
+              "lines": 248
+            },
+            {
+              "index": 87,
+              "lines": 51
+            },
+            {
+              "index": 210,
+              "lines": 105
+            },
+            {
+              "index": 211,
+              "lines": 20
+            }
+          ]
+        }
+      },
+      "consumerCoverage": {
+        "test/server.test.js": {
+          "lines": 4447,
+          "seen": 73,
+          "gaps": [
+            [
+              1,
+              194
+            ],
+            [
+              196,
+              198
+            ],
+            [
+              234,
+              2449
+            ],
+            [
+              2451,
+              2453
+            ],
+            [
+              2489,
+              2489
+            ],
+            [
+              2491,
+              4447
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/terminal.test.js": {
+          "lines": 344,
+          "seen": 38,
+          "gaps": [
+            [
+              1,
+              37
+            ],
+            [
+              74,
+              74
+            ],
+            [
+              77,
+              344
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/tmux.test.js": {
+          "lines": 1732,
+          "seen": 31,
+          "gaps": [
+            [
+              1,
+              55
+            ],
+            [
+              57,
+              74
+            ],
+            [
+              76,
+              78
+            ],
+            [
+              80,
+              84
+            ],
+            [
+              86,
+              90
+            ],
+            [
+              92,
+              96
+            ],
+            [
+              122,
+              122
+            ],
+            [
+              124,
+              1732
+            ]
+          ],
+          "records": [
+            {
+              "index": 216,
+              "lines": 1
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/omp-web-pilot.test.js": {
+          "lines": 243,
+          "seen": 24,
+          "gaps": [
+            [
+              1,
+              16
+            ],
+            [
+              41,
+              243
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/pi-bridge.integration.test.js": {
+          "lines": 686,
+          "seen": 54,
+          "gaps": [
+            [
+              1,
+              133
+            ],
+            [
+              135,
+              136
+            ],
+            [
+              179,
+              182
+            ],
+            [
+              186,
+              211
+            ],
+            [
+              213,
+              219
+            ],
+            [
+              222,
+              417
+            ],
+            [
+              419,
+              445
+            ],
+            [
+              447,
+              506
+            ],
+            [
+              508,
+              532
+            ],
+            [
+              534,
+              623
+            ],
+            [
+              625,
+              686
+            ]
+          ],
+          "records": [
+            {
+              "index": 215,
+              "lines": 1
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 130,
+              "line": 220
+            },
+            {
+              "index": 130,
+              "line": 418
+            },
+            {
+              "index": 130,
+              "line": 446
+            },
+            {
+              "index": 130,
+              "line": 507
+            },
+            {
+              "index": 130,
+              "line": 533
+            },
+            {
+              "index": 130,
+              "line": 624
+            }
+          ]
+        },
+        "test/routines-api.test.js": {
+          "lines": 480,
+          "seen": 26,
+          "gaps": [
+            [
+              1,
+              26
+            ],
+            [
+              52,
+              53
+            ],
+            [
+              55,
+              480
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/rpc-session.test.js": {
+          "lines": 776,
+          "seen": 38,
+          "gaps": [
+            [
+              1,
+              28
+            ],
+            [
+              59,
+              61
+            ],
+            [
+              63,
+              349
+            ],
+            [
+              351,
+              382
+            ],
+            [
+              384,
+              406
+            ],
+            [
+              408,
+              419
+            ],
+            [
+              422,
+              450
+            ],
+            [
+              452,
+              470
+            ],
+            [
+              472,
+              776
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 130,
+              "line": 350
+            },
+            {
+              "index": 130,
+              "line": 383
+            },
+            {
+              "index": 130,
+              "line": 407
+            },
+            {
+              "index": 130,
+              "line": 420
+            },
+            {
+              "index": 130,
+              "line": 421
+            },
+            {
+              "index": 130,
+              "line": 451
+            },
+            {
+              "index": 130,
+              "line": 471
+            }
+          ]
+        },
+        "test/skills-cli.test.js": {
+          "lines": 306,
+          "seen": 24,
+          "gaps": [
+            [
+              1,
+              52
+            ],
+            [
+              76,
+              76
+            ],
+            [
+              78,
+              306
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/ui-smoke.js": {
+          "lines": 3915,
+          "seen": 60,
+          "gaps": [
+            [
+              1,
+              2
+            ],
+            [
+              4,
+              470
+            ],
+            [
+              472,
+              481
+            ],
+            [
+              483,
+              483
+            ],
+            [
+              504,
+              504
+            ],
+            [
+              506,
+              517
+            ],
+            [
+              519,
+              546
+            ],
+            [
+              579,
+              579
+            ],
+            [
+              583,
+              3915
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 127,
+              "line": 3
+            }
+          ]
+        },
+        "test/browser/fixtures.js": {
+          "lines": 116,
+          "seen": 50,
+          "gaps": [
+            [
+              1,
+              11
+            ],
+            [
+              13,
+              17
+            ],
+            [
+              64,
+              64
+            ],
+            [
+              67,
+              67
+            ],
+            [
+              69,
+              116
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/skill-sessions-fleet.test.js": {
+          "lines": 274,
+          "seen": 41,
+          "gaps": [
+            [
+              1,
+              57
+            ],
+            [
+              99,
+              274
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/fleet-artifacts.test.js": {
+          "lines": 575,
+          "seen": 139,
+          "gaps": [
+            [
+              139,
+              174
+            ],
+            [
+              176,
+              575
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/host-auth.test.js": {
+          "lines": 333,
+          "seen": 68,
+          "gaps": [
+            [
+              67,
+              73
+            ],
+            [
+              75,
+              249
+            ],
+            [
+              251,
+              333
+            ]
+          ],
+          "records": [
+            {
+              "index": 213,
+              "lines": 3
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 59,
+              "line": 250
+            }
+          ]
+        },
+        "test/remote-hosts.test.js": {
+          "lines": 658,
+          "seen": 115,
+          "gaps": [
+            [
+              1,
+              18
+            ],
+            [
+              129,
+              145
+            ],
+            [
+              148,
+              156
+            ],
+            [
+              158,
+              165
+            ],
+            [
+              167,
+              506
+            ],
+            [
+              508,
+              658
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 59,
+              "line": 507
+            }
+          ]
+        },
+        "scripts/session-catalog-baseline.js": {
+          "lines": 189,
+          "seen": 66,
+          "gaps": [
+            [
+              1,
+              123
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/readme-shots.js": {
+          "lines": 286,
+          "seen": 20,
+          "gaps": [
+            [
+              1,
+              181
+            ],
+            [
+              199,
+              277
+            ],
+            [
+              279,
+              283
+            ],
+            [
+              285,
+              285
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/test-real-lineage-harnesses.js": {
+          "lines": 624,
+          "seen": 24,
+          "gaps": [
+            [
+              1,
+              591
+            ],
+            [
+              616,
+              624
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/pi-dish-tmux.sh": {
+          "lines": 192,
+          "seen": 30,
+          "gaps": [
+            [
+              1,
+              31
+            ],
+            [
+              33,
+              35
+            ],
+            [
+              37,
+              38
+            ],
+            [
+              66,
+              84
+            ],
+            [
+              86,
+              192
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/run-tailnet.sh": {
+          "lines": 54,
+          "seen": 16,
+          "gaps": [
+            [
+              1,
+              38
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/relay-handlers.ts": {
+          "lines": 527,
+          "seen": 92,
+          "gaps": [
+            [
+              1,
+              92
+            ],
+            [
+              94,
+              426
+            ],
+            [
+              428,
+              435
+            ],
+            [
+              437,
+              438
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/recovery-runner.ts": {
+          "lines": 349,
+          "seen": 39,
+          "gaps": [
+            [
+              1,
+              45
+            ],
+            [
+              47,
+              137
+            ],
+            [
+              139,
+              288
+            ],
+            [
+              324,
+              347
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 61,
+              "line": 46
+            }
+          ]
+        },
+        "src/core/routine-runner.ts": {
+          "lines": 493,
+          "seen": 75,
+          "gaps": [
+            [
+              1,
+              31
+            ],
+            [
+              33,
+              86
+            ],
+            [
+              88,
+              420
+            ]
+          ],
+          "records": [
+            {
+              "index": 225,
+              "lines": 34
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 61,
+              "line": 32
+            }
+          ]
+        },
+        "src/core/remote-hosts.ts": {
+          "lines": 575,
+          "seen": 37,
+          "gaps": [
+            [
+              1,
+              318
+            ],
+            [
+              320,
+              362
+            ],
+            [
+              364,
+              364
+            ],
+            [
+              366,
+              370
+            ],
+            [
+              372,
+              373
+            ],
+            [
+              404,
+              404
+            ],
+            [
+              406,
+              406
+            ],
+            [
+              408,
+              426
+            ],
+            [
+              428,
+              575
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 59,
+              "line": 407
+            },
+            {
+              "index": 59,
+              "line": 427
+            }
+          ]
+        },
+        "src/core/session-bounces.ts": {
+          "lines": 404,
+          "seen": 44,
+          "gaps": [
+            [
+              1,
+              81
+            ],
+            [
+              83,
+              108
+            ],
+            [
+              110,
+              110
+            ],
+            [
+              112,
+              112
+            ],
+            [
+              114,
+              117
+            ],
+            [
+              119,
+              141
+            ],
+            [
+              143,
+              149
+            ],
+            [
+              151,
+              153
+            ],
+            [
+              155,
+              155
+            ],
+            [
+              157,
+              178
+            ],
+            [
+              180,
+              186
+            ],
+            [
+              188,
+              213
+            ],
+            [
+              243,
+              244
+            ],
+            [
+              246,
+              252
+            ],
+            [
+              254,
+              355
+            ],
+            [
+              358,
+              404
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 61,
+              "line": 82
+            },
+            {
+              "index": 61,
+              "line": 109
+            },
+            {
+              "index": 61,
+              "line": 118
+            },
+            {
+              "index": 61,
+              "line": 142
+            },
+            {
+              "index": 61,
+              "line": 150
+            },
+            {
+              "index": 61,
+              "line": 154
+            },
+            {
+              "index": 61,
+              "line": 156
+            },
+            {
+              "index": 61,
+              "line": 356
+            },
+            {
+              "index": 61,
+              "line": 357
+            }
+          ]
+        },
+        "src/core/terminal.ts": {
+          "lines": 276,
+          "seen": 16,
+          "gaps": [
+            [
+              1,
+              260
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "server.js": {
+          "lines": 1,
+          "seen": 1,
+          "gaps": [],
+          "records": [
+            {
+              "index": 214,
+              "lines": 1
+            }
+          ],
+          "cliLiteralRecords": [
+            {
+              "index": 51,
+              "range": [
+                1,
+                1
+              ],
+              "literalBody": true
+            }
+          ],
+          "otherLiteralRecords": []
+        },
+        "test/fixtures/browser-server.js": {
+          "lines": 55,
+          "seen": 55,
+          "gaps": [],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/terminal-handlers.ts": {
+          "lines": 92,
+          "seen": 92,
+          "gaps": [],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "electron/main.d.ts": {
+          "lines": 2,
+          "seen": 2,
+          "gaps": [],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "tsconfig.edges.json": {
+          "lines": 22,
+          "seen": 22,
+          "gaps": [],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "package.json": {
+          "lines": 143,
+          "seen": 143,
+          "gaps": [],
+          "records": [
+            {
+              "index": 218,
+              "lines": 143
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        }
+      },
+      "requiredConsumerRanges": {
+        "test/server.test.js": [
+          [
+            207,
+            220
+          ],
+          [
+            2455,
+            2484
+          ]
+        ],
+        "test/terminal.test.js": [
+          [
+            47,
+            57
+          ]
+        ],
+        "test/tmux.test.js": [
+          [
+            56,
+            56
+          ],
+          [
+            107,
+            114
+          ]
+        ],
+        "test/omp-web-pilot.test.js": [
+          [
+            23,
+            32
+          ]
+        ],
+        "test/pi-bridge.integration.test.js": [
+          [
+            143,
+            143
+          ],
+          [
+            171,
+            171
+          ],
+          [
+            221,
+            221
+          ]
+        ],
+        "test/routines-api.test.js": [
+          [
+            33,
+            43
+          ]
+        ],
+        "test/rpc-session.test.js": [
+          [
+            35,
+            49
+          ]
+        ],
+        "test/skills-cli.test.js": [
+          [
+            60,
+            68
+          ]
+        ],
+        "test/ui-smoke.js": [
+          [
+            491,
+            495
+          ],
+          [
+            554,
+            555
+          ]
+        ],
+        "test/browser/fixtures.js": [
+          [
+            33,
+            49
+          ]
+        ],
+        "test/skill-sessions-fleet.test.js": [
+          [
+            70,
+            88
+          ]
+        ],
+        "test/fleet-artifacts.test.js": [
+          [
+            89,
+            115
+          ]
+        ],
+        "test/host-auth.test.js": [
+          [
+            44,
+            66
+          ]
+        ],
+        "test/remote-hosts.test.js": [
+          [
+            83,
+            108
+          ]
+        ],
+        "scripts/session-catalog-baseline.js": [
+          [
+            134,
+            184
+          ]
+        ],
+        "scripts/readme-shots.js": [
+          [
+            188,
+            189
+          ]
+        ],
+        "scripts/test-real-lineage-harnesses.js": [
+          [
+            600,
+            602
+          ]
+        ],
+        "scripts/pi-dish-tmux.sh": [
+          [
+            46,
+            58
+          ]
+        ],
+        "scripts/run-tailnet.sh": [
+          [
+            54,
+            54
+          ]
+        ]
+      },
+      "ownerUnitRanges": {
+        "src/core/routine-runner.ts": [
+          [
+            421,
+            461
+          ],
+          [
+            463,
+            479
+          ]
+        ],
+        "src/core/recovery-runner.ts": [
+          [
+            289,
+            308
+          ],
+          [
+            316,
+            316
+          ]
+        ],
+        "src/core/session-bounces.ts": [
+          [
+            223,
+            228
+          ]
+        ],
+        "src/core/remote-hosts.ts": [
+          [
+            384,
+            393
+          ]
+        ],
+        "src/core/relay-handlers.ts": [
+          [
+            467,
+            517
+          ]
+        ],
+        "src/core/terminal.ts": [
+          [
+            274,
+            282
+          ]
+        ]
+      },
+      "wholeConsumers": [
+        "server.js",
+        "test/fixtures/browser-server.js",
+        "src/core/terminal-handlers.ts",
+        "electron/main.d.ts",
+        "tsconfig.edges.json",
+        "package.json"
+      ],
+      "decodedProofCoverage": [
+        {
+          "path": "/tmp/pi-dish-r7-electron-preload.cjs",
+          "sha256": "5ef3bf8473adb313d50f93a01a5a05f9388f3548ad56a1831703c222d320a7e0",
+          "readIndices": [
+            92
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-electron-launch.cjs",
+          "sha256": "90134c40c826567cc09dabf9af43445b7957fe73073478f0888e535a2dc82ab0",
+          "readIndices": [
+            94
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-electron-proof.cjs",
+          "sha256": "24d20915d775269f7d8a89da5ed7a1cba47616f9aaa99a031f4a52a40bc02ddd",
+          "readIndices": [
+            91
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-electron-failure.cjs",
+          "sha256": "7b6ff8644ad7e2ad069f347326f986d7b68bff0ad9544998e3195afe611ee1b6",
+          "readIndices": [
+            93
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-share-failure.cjs",
+          "sha256": "b1bd8a3ad4df0cf45b12aa80189f318acfb8d80152ccd940f6db53ab03704d71",
+          "readIndices": [
+            98
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-dismiss-dialog.py",
+          "sha256": "c0087bc6c49e90b3ac2e03b8d253d5831fa8a91b72d9a5701f1ea91345557d22",
+          "readIndices": [
+            96
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-sync-preload.cjs",
+          "sha256": "9501b13f4eed2231b5741a4e2b5265120e9fe93caf01c2c78a5b1e26ecdef8e5",
+          "readIndices": [
+            97
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-sync-failure.cjs",
+          "sha256": "fc3315106601866366e277097dc59a148d413bc42af14fc0fe47ea51de63b3ab",
+          "readIndices": [
+            99
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-lifecycle-proof.cjs",
+          "sha256": "24b62a47a078f0a530c99c1eb6eba3243cadcafea0658802503be731a61d54c3",
+          "readIndices": [
+            104
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-share-node.cjs",
+          "sha256": "8ab9b26499d3338043c7e9138277ef5170341f4ccb1bfa560b4428a2dc7b184d",
+          "readIndices": [
+            103
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-retry-proof.cjs",
+          "sha256": "bf1a7e37afcf22b4b14b022a21884b73e1037b06093cd4dffc03e1b90a18d1c6",
+          "readIndices": [
+            102
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-declaration-proof.cjs",
+          "sha256": "05ef3a424e401fead0aad5b7f22dab0f2038d2ea1f1174d6917621a17b2f1952",
+          "readIndices": [
+            101
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-proof-originals/pi-dish-m7-runtime-probe.cjs",
+          "sha256": "40c739c99de2b96e475d26311a59d5c531c9a150b86358ca542caa5d2be4c481",
+          "readIndices": [
+            108
+          ]
+        },
+        {
+          "path": "/tmp/pi-dish-r7-proof-originals/pi-dish-m7-declaration-proof.cjs",
+          "sha256": "aa97dfe640985a301dc63056373bbfa8517372a83af0e8e8e1bd3eac3e25bc44",
+          "readIndices": [
+            106
+          ]
+        }
+      ],
+      "nestedBrowserEvidence": {
+        "ownerArchive": "/tmp/pi-dish-parent-r7-review-evidence/semantic-441.json",
+        "ownerIndex": 377,
+        "bodyBytes": 4415,
+        "bodySha256": "9f6cc38f4493baaab76ebdfe156342e29228fa36d2e447c5dd86c22d65d31d28",
+        "reviewerReadIndices": [
+          184
+        ],
+        "correction": "Archived browser-scenarios-ui member is truncated; actual delivered owner377 supplies complete coalesced291/all8/fullUI result. Not a claim to have read every underlying raw successful-test line."
+      },
+      "superseded": "Initial207 omitted dossier/consumer bytes; later continuation still lacked full routine reconciliation body. Final228 follows all actual missing reads.",
+      "closure": {
+        "before": {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+          "ref": "01a0ad4f-be",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-17T03-01-19-683Z_01a0ad4f-bec3-73ef-a052-f032da0ccabe",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": true,
+              "steer": true,
+              "followUp": true,
+              "abort": true,
+              "compact": true,
+              "models": true,
+              "setModel": true,
+              "setThinking": true,
+              "rename": true,
+              "commands": true,
+              "queueCancel": false,
+              "tree": true,
+              "export": true,
+              "close": true,
+              "restart": true,
+              "resume": false
+            },
+            "closeMode": "owned-pane",
+            "conflicted": false,
+            "liveInstanceCount": 1,
+            "name": "R7-Final-DeepSeek",
+            "model": "opencode-go/deepseek-v4.1-flash",
+            "contextPercent": 29.2,
+            "contextTokens": 292352,
+            "contextWindow": 1000000,
+            "thinkingLevel": "high",
+            "messageCount": 3,
+            "lastActivity": "2026-09-17T03:30:08.141Z",
+            "isActive": true,
+            "turnInProgress": false,
+            "compacting": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-19-683Z_01a0ad4f-bec3-73ef-a052-f032da0ccabe.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "pid": 2768412,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": null
+          }
+        },
+        "close": {
+          "success": true
+        },
+        "after": {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+          "ref": "01a0ad4f-be",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE5LTY4M1pfMDFhMGFkNGYtYmVjMy03M2VmLWEwNTItZjAzMmRhMGNjYWJlIl0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-17T03-01-19-683Z_01a0ad4f-bec3-73ef-a052-f032da0ccabe",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": false,
+              "steer": false,
+              "followUp": false,
+              "abort": false,
+              "compact": false,
+              "models": false,
+              "setModel": false,
+              "setThinking": false,
+              "rename": false,
+              "commands": false,
+              "queueCancel": false,
+              "tree": false,
+              "export": true,
+              "close": false,
+              "restart": false,
+              "resume": true
+            },
+            "closeMode": "owned-pane",
+            "profileId": "omp-v1",
+            "profileVersion": 1,
+            "name": "R7-Final-DeepSeek",
+            "model": "opencode-go/deepseek-v4.1-flash",
+            "contextPercent": 100,
+            "contextTokens": 293009,
+            "messageCount": 3,
+            "lastActivity": "2026-09-17T03:36:12.210Z",
+            "isActive": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-19-683Z_01a0ad4f-bec3-73ef-a052-f032da0ccabe.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": null
+          }
+        }
+      },
+      "parentAudit": "/tmp/pi-dish-parent-r7-deepseek-acceptance-audit.json"
+    },
+    {
+      "label": "kimi",
+      "model": "kimi-code/k3",
+      "thinking": "high",
+      "harness": "omp",
+      "session": "2026-09-17T03-01-17-371Z_01a0ad4f-b5bb-72a7-ad27-5f6fcb111ef5",
+      "decision": "ACCEPT",
+      "sourceSha": "85b9860b8085658095c0386eef8bec7379fa640d",
+      "pre": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+        "ref": "01a0ad4f-b5",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-17T03-01-17-371Z_01a0ad4f-b5bb-72a7-ad27-5f6fcb111ef5",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R7-Final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 1.7,
+          "contextTokens": 17549,
+          "contextWindow": 1048576,
+          "thinkingLevel": "high",
+          "messageCount": 0,
+          "lastActivity": "2026-09-17T03:01:17.691Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-17-371Z_01a0ad4f-b5bb-72a7-ad27-5f6fcb111ef5.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 2768121,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": null
+        }
+      },
+      "post": {
+        "host": null,
+        "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+        "ref": "01a0ad4f-b5",
+        "session": {
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+          "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+          "harnessId": "omp",
+          "nativeSessionId": "2026-09-17T03-01-17-371Z_01a0ad4f-b5bb-72a7-ad27-5f6fcb111ef5",
+          "harnessLabel": "Oh My Pi",
+          "capabilities": {
+            "prompt": true,
+            "steer": true,
+            "followUp": true,
+            "abort": true,
+            "compact": true,
+            "models": true,
+            "setModel": true,
+            "setThinking": true,
+            "rename": true,
+            "commands": true,
+            "queueCancel": false,
+            "tree": true,
+            "export": true,
+            "close": true,
+            "restart": true,
+            "resume": false
+          },
+          "closeMode": "owned-pane",
+          "conflicted": false,
+          "liveInstanceCount": 1,
+          "name": "R7-Final-Kimi",
+          "model": "kimi-code/k3",
+          "contextPercent": 24.7,
+          "contextTokens": 259243,
+          "contextWindow": 1048576,
+          "thinkingLevel": "high",
+          "messageCount": 2,
+          "lastActivity": "2026-09-17T03:42:06.465Z",
+          "isActive": true,
+          "turnInProgress": false,
+          "compacting": false,
+          "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+          "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-17-371Z_01a0ad4f-b5bb-72a7-ad27-5f6fcb111ef5.jsonl",
+          "parentSession": null,
+          "parentSessionSource": null,
+          "pid": 2768121,
+          "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+          "parentSource": "pi-dish-launch",
+          "familyParentId": null
+        }
+      },
+      "archive": {
+        "path": "/tmp/pi-dish-parent-r7-independent-review-evidence/kimi-234.json",
+        "sha256": "ec2b073daf7e4376baa0cc2522e8ad41d65a86eab04c1a3eca28f1a22b60bfdc",
+        "messages": 234
+      },
+      "finalIndex": 233,
+      "finalMessageId": "f4773b50",
+      "verbatimFinal": "Renewed **ACCEPT** for exact `85b9860b8085658095c0386eef8bec7379fa640d`, delivered to parent via semantic CLI (success, not queued). All finite gaps closed:\n\n- **Dossier 1299–1600** read raw in two bounded windows — dossier now complete 1–2749 with no unread ranges.\n- **All 10 consumer/header ranges** read raw (terminal-handlers header, terminal.ts `killAllTerminals`, server.test.js child-process block, tmux test lifecycle, pi-bridge close, ui-smoke spawn block, fleet-artifacts:115, remote-hosts:105-108, session-catalog-baseline tail, pi-dish-tmux.sh pid-matching block).\n- **Decoded-body evidence**: all 14 scriptSnapshots re-decoded to private scratch, hashes re-verified, and each body personally read as actual unescaped code (33+88+62+72+85+21+32+78+96+47+82+35+48+12 lines). None executed.\n- **Driver reassessment** explicitly mapped real vs injected: real kernel occupied-port EADDRINUSE (electron-failure dev/packaged, share-failure, share-node), real native synchronous RangeError (sync PORT=-1 baseline/final comparison), injected EADDRNOTAVAIL retry with genuinely exercised 15s cadence/replacement/close semantics, timing-only bind delays, Inspector frame-only packaged injection.\n- Scratch removed; tree unchanged (only pre-existing unrelated `.amp/`); HEAD still exact. Not self-closing.",
+      "primaryCoverage": {
+        "src/core/server-app.ts": {
+          "lines": 2605,
+          "seen": 2605,
+          "gaps": [],
+          "records": [
+            {
+              "index": 38,
+              "lines": 500
+            },
+            {
+              "index": 40,
+              "lines": 600
+            },
+            {
+              "index": 42,
+              "lines": 600
+            },
+            {
+              "index": 44,
+              "lines": 600
+            },
+            {
+              "index": 46,
+              "lines": 305
+            }
+          ]
+        },
+        "lib/server-app.js": {
+          "lines": 2511,
+          "seen": 2511,
+          "gaps": [],
+          "records": [
+            {
+              "index": 55,
+              "lines": 450
+            },
+            {
+              "index": 57,
+              "lines": 600
+            },
+            {
+              "index": 59,
+              "lines": 650
+            },
+            {
+              "index": 61,
+              "lines": 600
+            },
+            {
+              "index": 63,
+              "lines": 211
+            }
+          ]
+        },
+        "lib/server-app.d.ts": {
+          "lines": 10,
+          "seen": 10,
+          "gaps": [],
+          "records": [
+            {
+              "index": 48,
+              "lines": 10
+            }
+          ]
+        },
+        "electron/main.ts": {
+          "lines": 74,
+          "seen": 74,
+          "gaps": [],
+          "records": [
+            {
+              "index": 50,
+              "lines": 74
+            }
+          ]
+        },
+        "electron/main.js": {
+          "lines": 66,
+          "seen": 66,
+          "gaps": [],
+          "records": [
+            {
+              "index": 49,
+              "lines": 66
+            }
+          ]
+        },
+        "test/fixtures/listener-server.js": {
+          "lines": 59,
+          "seen": 59,
+          "gaps": [],
+          "records": [
+            {
+              "index": 53,
+              "lines": 59
+            }
+          ]
+        },
+        "test/listener-lifecycle.test.js": {
+          "lines": 264,
+          "seen": 264,
+          "gaps": [],
+          "records": [
+            {
+              "index": 65,
+              "lines": 264
+            }
+          ]
+        },
+        "docs/r7-evidence.json": {
+          "lines": 2748,
+          "seen": 2748,
+          "gaps": [],
+          "records": [
+            {
+              "index": 15,
+              "lines": 400
+            },
+            {
+              "index": 17,
+              "lines": 400
+            },
+            {
+              "index": 19,
+              "lines": 400
+            },
+            {
+              "index": 21,
+              "lines": 66
+            },
+            {
+              "index": 23,
+              "lines": 33
+            },
+            {
+              "index": 25,
+              "lines": 400
+            },
+            {
+              "index": 27,
+              "lines": 400
+            },
+            {
+              "index": 29,
+              "lines": 348
+            },
+            {
+              "index": 185,
+              "lines": 152
+            },
+            {
+              "index": 187,
+              "lines": 150
+            }
+          ]
+        }
+      },
+      "consumerCoverage": {
+        "test/server.test.js": {
+          "lines": 4447,
+          "seen": 76,
+          "gaps": [
+            [
+              1,
+              194
+            ],
+            [
+              241,
+              2454
+            ],
+            [
+              2485,
+              4447
+            ]
+          ],
+          "records": [
+            {
+              "index": 75,
+              "lines": 46
+            },
+            {
+              "index": 191,
+              "lines": 30
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/terminal.test.js": {
+          "lines": 344,
+          "seen": 41,
+          "gaps": [
+            [
+              1,
+              39
+            ],
+            [
+              81,
+              344
+            ]
+          ],
+          "records": [
+            {
+              "index": 81,
+              "lines": 41
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/tmux.test.js": {
+          "lines": 1732,
+          "seen": 49,
+          "gaps": [
+            [
+              1,
+              44
+            ],
+            [
+              86,
+              106
+            ],
+            [
+              115,
+              1732
+            ]
+          ],
+          "records": [
+            {
+              "index": 84,
+              "lines": 41
+            },
+            {
+              "index": 195,
+              "lines": 8
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/omp-web-pilot.test.js": {
+          "lines": 243,
+          "seen": 60,
+          "gaps": [
+            [
+              61,
+              243
+            ]
+          ],
+          "records": [
+            {
+              "index": 74,
+              "lines": 60
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/pi-bridge.integration.test.js": {
+          "lines": 686,
+          "seen": 57,
+          "gaps": [
+            [
+              1,
+              134
+            ],
+            [
+              191,
+              220
+            ],
+            [
+              222,
+              686
+            ]
+          ],
+          "records": [
+            {
+              "index": 76,
+              "lines": 56
+            },
+            {
+              "index": 193,
+              "lines": 1
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/routines-api.test.js": {
+          "lines": 480,
+          "seen": 36,
+          "gaps": [
+            [
+              1,
+              24
+            ],
+            [
+              61,
+              480
+            ]
+          ],
+          "records": [
+            {
+              "index": 79,
+              "lines": 36
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/rpc-session.test.js": {
+          "lines": 776,
+          "seen": 46,
+          "gaps": [
+            [
+              1,
+              24
+            ],
+            [
+              71,
+              776
+            ]
+          ],
+          "records": [
+            {
+              "index": 80,
+              "lines": 46
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/skills-cli.test.js": {
+          "lines": 306,
+          "seen": 36,
+          "gaps": [
+            [
+              1,
+              49
+            ],
+            [
+              86,
+              306
+            ]
+          ],
+          "records": [
+            {
+              "index": 78,
+              "lines": 36
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/ui-smoke.js": {
+          "lines": 3915,
+          "seen": 56,
+          "gaps": [
+            [
+              1,
+              490
+            ],
+            [
+              496,
+              539
+            ],
+            [
+              591,
+              3915
+            ]
+          ],
+          "records": [
+            {
+              "index": 85,
+              "lines": 51
+            },
+            {
+              "index": 199,
+              "lines": 5
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/browser/fixtures.js": {
+          "lines": 116,
+          "seen": 41,
+          "gaps": [
+            [
+              1,
+              19
+            ],
+            [
+              61,
+              116
+            ]
+          ],
+          "records": [
+            {
+              "index": 92,
+              "lines": 41
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/skill-sessions-fleet.test.js": {
+          "lines": 274,
+          "seen": 30,
+          "gaps": [
+            [
+              1,
+              65
+            ],
+            [
+              96,
+              274
+            ]
+          ],
+          "records": [
+            {
+              "index": 90,
+              "lines": 30
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/fleet-artifacts.test.js": {
+          "lines": 575,
+          "seen": 32,
+          "gaps": [
+            [
+              1,
+              84
+            ],
+            [
+              117,
+              575
+            ]
+          ],
+          "records": [
+            {
+              "index": 88,
+              "lines": 30
+            },
+            {
+              "index": 194,
+              "lines": 2
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/host-auth.test.js": {
+          "lines": 333,
+          "seen": 30,
+          "gaps": [
+            [
+              1,
+              43
+            ],
+            [
+              74,
+              333
+            ]
+          ],
+          "records": [
+            {
+              "index": 87,
+              "lines": 30
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/remote-hosts.test.js": {
+          "lines": 658,
+          "seen": 35,
+          "gaps": [
+            [
+              1,
+              73
+            ],
+            [
+              109,
+              658
+            ]
+          ],
+          "records": [
+            {
+              "index": 89,
+              "lines": 31
+            },
+            {
+              "index": 197,
+              "lines": 4
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/session-catalog-baseline.js": {
+          "lines": 189,
+          "seen": 65,
+          "gaps": [
+            [
+              1,
+              119
+            ],
+            [
+              185,
+              189
+            ]
+          ],
+          "records": [
+            {
+              "index": 96,
+              "lines": 41
+            },
+            {
+              "index": 196,
+              "lines": 24
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/readme-shots.js": {
+          "lines": 286,
+          "seen": 16,
+          "gaps": [
+            [
+              1,
+              179
+            ],
+            [
+              196,
+              286
+            ]
+          ],
+          "records": [
+            {
+              "index": 97,
+              "lines": 16
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/test-real-lineage-harnesses.js": {
+          "lines": 624,
+          "seen": 40,
+          "gaps": [
+            [
+              1,
+              584
+            ]
+          ],
+          "records": [
+            {
+              "index": 98,
+              "lines": 40
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/pi-dish-tmux.sh": {
+          "lines": 192,
+          "seen": 54,
+          "gaps": [
+            [
+              1,
+              45
+            ],
+            [
+              60,
+              95
+            ],
+            [
+              136,
+              192
+            ]
+          ],
+          "records": [
+            {
+              "index": 94,
+              "lines": 40
+            },
+            {
+              "index": 198,
+              "lines": 14
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "scripts/run-tailnet.sh": {
+          "lines": 54,
+          "seen": 54,
+          "gaps": [],
+          "records": [
+            {
+              "index": 93,
+              "lines": 54
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/relay-handlers.ts": {
+          "lines": 527,
+          "seen": 88,
+          "gaps": [
+            [
+              1,
+              439
+            ]
+          ],
+          "records": [
+            {
+              "index": 103,
+              "lines": 88
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/recovery-runner.ts": {
+          "lines": 349,
+          "seen": 51,
+          "gaps": [
+            [
+              1,
+              279
+            ],
+            [
+              331,
+              349
+            ]
+          ],
+          "records": [
+            {
+              "index": 105,
+              "lines": 51
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/routine-runner.ts": {
+          "lines": 493,
+          "seen": 71,
+          "gaps": [
+            [
+              1,
+              419
+            ],
+            [
+              491,
+              493
+            ]
+          ],
+          "records": [
+            {
+              "index": 106,
+              "lines": 71
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/remote-hosts.ts": {
+          "lines": 575,
+          "seen": 31,
+          "gaps": [
+            [
+              1,
+              379
+            ],
+            [
+              411,
+              575
+            ]
+          ],
+          "records": [
+            {
+              "index": 107,
+              "lines": 31
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/session-bounces.ts": {
+          "lines": 404,
+          "seen": 81,
+          "gaps": [
+            [
+              1,
+              79
+            ],
+            [
+              86,
+              133
+            ],
+            [
+              139,
+              177
+            ],
+            [
+              188,
+              221
+            ],
+            [
+              232,
+              273
+            ],
+            [
+              279,
+              294
+            ],
+            [
+              315,
+              316
+            ],
+            [
+              332,
+              354
+            ],
+            [
+              360,
+              379
+            ],
+            [
+              385,
+              404
+            ]
+          ],
+          "records": [],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": [
+            {
+              "index": 109,
+              "line": 80
+            },
+            {
+              "index": 109,
+              "line": 81
+            },
+            {
+              "index": 109,
+              "line": 82
+            },
+            {
+              "index": 109,
+              "line": 83
+            },
+            {
+              "index": 109,
+              "line": 84
+            },
+            {
+              "index": 109,
+              "line": 85
+            },
+            {
+              "index": 109,
+              "line": 134
+            },
+            {
+              "index": 109,
+              "line": 135
+            },
+            {
+              "index": 109,
+              "line": 136
+            },
+            {
+              "index": 109,
+              "line": 137
+            },
+            {
+              "index": 109,
+              "line": 138
+            },
+            {
+              "index": 109,
+              "line": 178
+            },
+            {
+              "index": 109,
+              "line": 179
+            },
+            {
+              "index": 109,
+              "line": 180
+            },
+            {
+              "index": 109,
+              "line": 181
+            },
+            {
+              "index": 109,
+              "line": 182
+            },
+            {
+              "index": 109,
+              "line": 183
+            },
+            {
+              "index": 109,
+              "line": 184
+            },
+            {
+              "index": 109,
+              "line": 185
+            },
+            {
+              "index": 109,
+              "line": 186
+            },
+            {
+              "index": 109,
+              "line": 187
+            },
+            {
+              "index": 109,
+              "line": 222
+            },
+            {
+              "index": 109,
+              "line": 223
+            },
+            {
+              "index": 109,
+              "line": 224
+            },
+            {
+              "index": 109,
+              "line": 225
+            },
+            {
+              "index": 109,
+              "line": 226
+            },
+            {
+              "index": 109,
+              "line": 227
+            },
+            {
+              "index": 109,
+              "line": 228
+            },
+            {
+              "index": 109,
+              "line": 229
+            },
+            {
+              "index": 109,
+              "line": 230
+            },
+            {
+              "index": 109,
+              "line": 231
+            },
+            {
+              "index": 109,
+              "line": 274
+            },
+            {
+              "index": 109,
+              "line": 275
+            },
+            {
+              "index": 109,
+              "line": 276
+            },
+            {
+              "index": 109,
+              "line": 277
+            },
+            {
+              "index": 109,
+              "line": 278
+            },
+            {
+              "index": 109,
+              "line": 295
+            },
+            {
+              "index": 109,
+              "line": 296
+            },
+            {
+              "index": 109,
+              "line": 297
+            },
+            {
+              "index": 109,
+              "line": 298
+            },
+            {
+              "index": 109,
+              "line": 299
+            },
+            {
+              "index": 109,
+              "line": 300
+            },
+            {
+              "index": 109,
+              "line": 301
+            },
+            {
+              "index": 109,
+              "line": 302
+            },
+            {
+              "index": 109,
+              "line": 303
+            },
+            {
+              "index": 109,
+              "line": 304
+            },
+            {
+              "index": 109,
+              "line": 305
+            },
+            {
+              "index": 109,
+              "line": 306
+            },
+            {
+              "index": 109,
+              "line": 307
+            },
+            {
+              "index": 109,
+              "line": 308
+            },
+            {
+              "index": 109,
+              "line": 309
+            },
+            {
+              "index": 109,
+              "line": 310
+            },
+            {
+              "index": 109,
+              "line": 311
+            },
+            {
+              "index": 109,
+              "line": 312
+            },
+            {
+              "index": 109,
+              "line": 313
+            },
+            {
+              "index": 109,
+              "line": 314
+            },
+            {
+              "index": 109,
+              "line": 317
+            },
+            {
+              "index": 109,
+              "line": 318
+            },
+            {
+              "index": 109,
+              "line": 319
+            },
+            {
+              "index": 109,
+              "line": 320
+            },
+            {
+              "index": 109,
+              "line": 321
+            },
+            {
+              "index": 109,
+              "line": 322
+            },
+            {
+              "index": 109,
+              "line": 323
+            },
+            {
+              "index": 109,
+              "line": 324
+            },
+            {
+              "index": 109,
+              "line": 325
+            },
+            {
+              "index": 109,
+              "line": 326
+            },
+            {
+              "index": 109,
+              "line": 327
+            },
+            {
+              "index": 109,
+              "line": 328
+            },
+            {
+              "index": 109,
+              "line": 329
+            },
+            {
+              "index": 109,
+              "line": 330
+            },
+            {
+              "index": 109,
+              "line": 331
+            },
+            {
+              "index": 109,
+              "line": 355
+            },
+            {
+              "index": 109,
+              "line": 356
+            },
+            {
+              "index": 109,
+              "line": 357
+            },
+            {
+              "index": 109,
+              "line": 358
+            },
+            {
+              "index": 109,
+              "line": 359
+            },
+            {
+              "index": 109,
+              "line": 380
+            },
+            {
+              "index": 109,
+              "line": 381
+            },
+            {
+              "index": 109,
+              "line": 382
+            },
+            {
+              "index": 109,
+              "line": 383
+            },
+            {
+              "index": 109,
+              "line": 384
+            }
+          ]
+        },
+        "src/core/terminal.ts": {
+          "lines": 276,
+          "seen": 3,
+          "gaps": [
+            [
+              1,
+              273
+            ]
+          ],
+          "records": [
+            {
+              "index": 190,
+              "lines": 3
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "server.js": {
+          "lines": 1,
+          "seen": 1,
+          "gaps": [],
+          "records": [
+            {
+              "index": 52,
+              "lines": 1
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "test/fixtures/browser-server.js": {
+          "lines": 55,
+          "seen": 55,
+          "gaps": [],
+          "records": [
+            {
+              "index": 83,
+              "lines": 55
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "src/core/terminal-handlers.ts": {
+          "lines": 92,
+          "seen": 92,
+          "gaps": [],
+          "records": [
+            {
+              "index": 102,
+              "lines": 69
+            },
+            {
+              "index": 189,
+              "lines": 23
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "electron/main.d.ts": {
+          "lines": 2,
+          "seen": 2,
+          "gaps": [],
+          "records": [
+            {
+              "index": 115,
+              "lines": 2
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "tsconfig.edges.json": {
+          "lines": 22,
+          "seen": 22,
+          "gaps": [],
+          "records": [
+            {
+              "index": 117,
+              "lines": 22
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        },
+        "package.json": {
+          "lines": 143,
+          "seen": 143,
+          "gaps": [],
+          "records": [
+            {
+              "index": 114,
+              "lines": 143
+            }
+          ],
+          "cliLiteralRecords": [],
+          "otherLiteralRecords": []
+        }
+      },
+      "requiredConsumerRanges": {
+        "test/server.test.js": [
+          [
+            207,
+            220
+          ],
+          [
+            2455,
+            2484
+          ]
+        ],
+        "test/terminal.test.js": [
+          [
+            47,
+            57
+          ]
+        ],
+        "test/tmux.test.js": [
+          [
+            56,
+            56
+          ],
+          [
+            107,
+            114
+          ]
+        ],
+        "test/omp-web-pilot.test.js": [
+          [
+            23,
+            32
+          ]
+        ],
+        "test/pi-bridge.integration.test.js": [
+          [
+            143,
+            143
+          ],
+          [
+            171,
+            171
+          ],
+          [
+            221,
+            221
+          ]
+        ],
+        "test/routines-api.test.js": [
+          [
+            33,
+            43
+          ]
+        ],
+        "test/rpc-session.test.js": [
+          [
+            35,
+            49
+          ]
+        ],
+        "test/skills-cli.test.js": [
+          [
+            60,
+            68
+          ]
+        ],
+        "test/ui-smoke.js": [
+          [
+            491,
+            495
+          ],
+          [
+            554,
+            555
+          ]
+        ],
+        "test/browser/fixtures.js": [
+          [
+            33,
+            49
+          ]
+        ],
+        "test/skill-sessions-fleet.test.js": [
+          [
+            70,
+            88
+          ]
+        ],
+        "test/fleet-artifacts.test.js": [
+          [
+            89,
+            115
+          ]
+        ],
+        "test/host-auth.test.js": [
+          [
+            44,
+            66
+          ]
+        ],
+        "test/remote-hosts.test.js": [
+          [
+            83,
+            108
+          ]
+        ],
+        "scripts/session-catalog-baseline.js": [
+          [
+            134,
+            184
+          ]
+        ],
+        "scripts/readme-shots.js": [
+          [
+            188,
+            189
+          ]
+        ],
+        "scripts/test-real-lineage-harnesses.js": [
+          [
+            600,
+            602
+          ]
+        ],
+        "scripts/pi-dish-tmux.sh": [
+          [
+            46,
+            58
+          ]
+        ],
+        "scripts/run-tailnet.sh": [
+          [
+            54,
+            54
+          ]
+        ]
+      },
+      "ownerUnitRanges": {
+        "src/core/routine-runner.ts": [
+          [
+            421,
+            461
+          ],
+          [
+            463,
+            479
+          ]
+        ],
+        "src/core/recovery-runner.ts": [
+          [
+            289,
+            308
+          ],
+          [
+            316,
+            316
+          ]
+        ],
+        "src/core/session-bounces.ts": [
+          [
+            223,
+            228
+          ]
+        ],
+        "src/core/remote-hosts.ts": [
+          [
+            384,
+            393
+          ]
+        ],
+        "src/core/relay-handlers.ts": [
+          [
+            467,
+            517
+          ]
+        ],
+        "src/core/terminal.ts": [
+          [
+            274,
+            282
+          ]
+        ]
+      },
+      "wholeConsumers": [
+        "server.js",
+        "test/fixtures/browser-server.js",
+        "src/core/terminal-handlers.ts",
+        "electron/main.d.ts",
+        "tsconfig.edges.json",
+        "package.json"
+      ],
+      "decodedProofCoverage": [
+        {
+          "path": "/tmp/pi-dish-r7-electron-preload.cjs",
+          "sha256": "5ef3bf8473adb313d50f93a01a5a05f9388f3548ad56a1831703c222d320a7e0",
+          "coverage": {
+            "lines": 33,
+            "seen": 33,
+            "gaps": [],
+            "records": [
+              {
+                "index": 205,
+                "lines": 33
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-electron-launch.cjs",
+          "sha256": "90134c40c826567cc09dabf9af43445b7957fe73073478f0888e535a2dc82ab0",
+          "coverage": {
+            "lines": 88,
+            "seen": 88,
+            "gaps": [],
+            "records": [
+              {
+                "index": 206,
+                "lines": 88
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-electron-proof.cjs",
+          "sha256": "24d20915d775269f7d8a89da5ed7a1cba47616f9aaa99a031f4a52a40bc02ddd",
+          "coverage": {
+            "lines": 62,
+            "seen": 62,
+            "gaps": [],
+            "records": [
+              {
+                "index": 209,
+                "lines": 62
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-electron-failure.cjs",
+          "sha256": "7b6ff8644ad7e2ad069f347326f986d7b68bff0ad9544998e3195afe611ee1b6",
+          "coverage": {
+            "lines": 72,
+            "seen": 72,
+            "gaps": [],
+            "records": [
+              {
+                "index": 208,
+                "lines": 72
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-share-failure.cjs",
+          "sha256": "b1bd8a3ad4df0cf45b12aa80189f318acfb8d80152ccd940f6db53ab03704d71",
+          "coverage": {
+            "lines": 85,
+            "seen": 85,
+            "gaps": [],
+            "records": [
+              {
+                "index": 211,
+                "lines": 85
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-dismiss-dialog.py",
+          "sha256": "c0087bc6c49e90b3ac2e03b8d253d5831fa8a91b72d9a5701f1ea91345557d22",
+          "coverage": {
+            "lines": 21,
+            "seen": 21,
+            "gaps": [],
+            "records": [
+              {
+                "index": 212,
+                "lines": 21
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-sync-preload.cjs",
+          "sha256": "9501b13f4eed2231b5741a4e2b5265120e9fe93caf01c2c78a5b1e26ecdef8e5",
+          "coverage": {
+            "lines": 32,
+            "seen": 32,
+            "gaps": [],
+            "records": [
+              {
+                "index": 214,
+                "lines": 32
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-sync-failure.cjs",
+          "sha256": "fc3315106601866366e277097dc59a148d413bc42af14fc0fe47ea51de63b3ab",
+          "coverage": {
+            "lines": 78,
+            "seen": 78,
+            "gaps": [],
+            "records": [
+              {
+                "index": 215,
+                "lines": 78
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-lifecycle-proof.cjs",
+          "sha256": "24b62a47a078f0a530c99c1eb6eba3243cadcafea0658802503be731a61d54c3",
+          "coverage": {
+            "lines": 96,
+            "seen": 96,
+            "gaps": [],
+            "records": [
+              {
+                "index": 218,
+                "lines": 96
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-share-node.cjs",
+          "sha256": "8ab9b26499d3338043c7e9138277ef5170341f4ccb1bfa560b4428a2dc7b184d",
+          "coverage": {
+            "lines": 47,
+            "seen": 47,
+            "gaps": [],
+            "records": [
+              {
+                "index": 217,
+                "lines": 47
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-retry-proof.cjs",
+          "sha256": "bf1a7e37afcf22b4b14b022a21884b73e1037b06093cd4dffc03e1b90a18d1c6",
+          "coverage": {
+            "lines": 82,
+            "seen": 82,
+            "gaps": [],
+            "records": [
+              {
+                "index": 220,
+                "lines": 82
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-declaration-proof.cjs",
+          "sha256": "05ef3a424e401fead0aad5b7f22dab0f2038d2ea1f1174d6917621a17b2f1952",
+          "coverage": {
+            "lines": 35,
+            "seen": 35,
+            "gaps": [],
+            "records": [
+              {
+                "index": 221,
+                "lines": 35
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-proof-originals/pi-dish-m7-runtime-probe.cjs",
+          "sha256": "40c739c99de2b96e475d26311a59d5c531c9a150b86358ca542caa5d2be4c481",
+          "coverage": {
+            "lines": 48,
+            "seen": 48,
+            "gaps": [],
+            "records": [
+              {
+                "index": 223,
+                "lines": 48
+              }
+            ]
+          }
+        },
+        {
+          "path": "/tmp/pi-dish-r7-proof-originals/pi-dish-m7-declaration-proof.cjs",
+          "sha256": "aa97dfe640985a301dc63056373bbfa8517372a83af0e8e8e1bd3eac3e25bc44",
+          "coverage": {
+            "lines": 12,
+            "seen": 12,
+            "gaps": [],
+            "records": [
+              {
+                "index": 224,
+                "lines": 12
+              }
+            ]
+          }
+        }
+      ],
+      "nestedBrowserEvidence": {
+        "ownerIndex": 377,
+        "reviewerIndex": 156,
+        "actualTailBytes": 4000,
+        "totalCoalescedBodyBytes": 4415,
+        "exactTailMatched": true,
+        "tailSha256": "289e703bece5314aaa19e435afbb9d68ec0b766cd9454670b6b5b70078aa0d41",
+        "scope": "Actual tail contains291/all8/fullUI; not the first415 bytes and not underlying full raw log."
+      },
+      "superseded": "181-message claim omitted literal dossier/consumer bytes and all14 decoded bodies. Hashing/writing JSON strings was not decoded read evidence. Finite continuation closes those gaps without rerun.",
+      "closure": {
+        "before": {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+          "ref": "01a0ad4f-b5",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-17T03-01-17-371Z_01a0ad4f-b5bb-72a7-ad27-5f6fcb111ef5",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": true,
+              "steer": true,
+              "followUp": true,
+              "abort": true,
+              "compact": true,
+              "models": true,
+              "setModel": true,
+              "setThinking": true,
+              "rename": true,
+              "commands": true,
+              "queueCancel": false,
+              "tree": true,
+              "export": true,
+              "close": true,
+              "restart": true,
+              "resume": false
+            },
+            "closeMode": "owned-pane",
+            "conflicted": false,
+            "liveInstanceCount": 1,
+            "name": "R7-Final-Kimi",
+            "model": "kimi-code/k3",
+            "contextPercent": 24.7,
+            "contextTokens": 259243,
+            "contextWindow": 1048576,
+            "thinkingLevel": "high",
+            "messageCount": 2,
+            "lastActivity": "2026-09-17T03:42:06.465Z",
+            "isActive": true,
+            "turnInProgress": false,
+            "compacting": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-17-371Z_01a0ad4f-b5bb-72a7-ad27-5f6fcb111ef5.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "pid": 2768121,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": null
+          }
+        },
+        "close": {
+          "success": true
+        },
+        "after": {
+          "host": null,
+          "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+          "ref": "01a0ad4f-b5",
+          "session": {
+            "id": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+            "sessionKey": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE3VDAzLTAxLTE3LTM3MVpfMDFhMGFkNGYtYjViYi03MmE3LWFkMjctNWY2ZmNiMTExZWY1Il0",
+            "harnessId": "omp",
+            "nativeSessionId": "2026-09-17T03-01-17-371Z_01a0ad4f-b5bb-72a7-ad27-5f6fcb111ef5",
+            "harnessLabel": "Oh My Pi",
+            "capabilities": {
+              "prompt": false,
+              "steer": false,
+              "followUp": false,
+              "abort": false,
+              "compact": false,
+              "models": false,
+              "setModel": false,
+              "setThinking": false,
+              "rename": false,
+              "commands": false,
+              "queueCancel": false,
+              "tree": false,
+              "export": true,
+              "close": false,
+              "restart": false,
+              "resume": true
+            },
+            "closeMode": "owned-pane",
+            "profileId": "omp-v1",
+            "profileVersion": 1,
+            "name": "R7-Final-Kimi",
+            "model": "kimi-code/k3",
+            "contextPercent": 100,
+            "contextTokens": 259591,
+            "messageCount": 2,
+            "lastActivity": "2026-09-17T03:47:02.692Z",
+            "isActive": false,
+            "cwd": "/home/jyarwood/workspace/pi-dish-r7",
+            "sessionFile": "/home/jyarwood/.omp/agent/sessions/-workspace-pi-dish-r7/2026-09-17T03-01-17-371Z_01a0ad4f-b5bb-72a7-ad27-5f6fcb111ef5.jsonl",
+            "parentSession": null,
+            "parentSessionSource": null,
+            "parentId": "~sk1_WyJvbXAiLCIyMDI2LTA5LTE1VDA3LTM1LTAwLTkwMVpfMDFhMGEzZmQtOTgyNS03MGJkLWIwMDAtZGM4NWM1OWE3NDIxIl0",
+            "parentSource": "pi-dish-launch",
+            "familyParentId": null
+          }
+        }
+      },
+      "parentAudit": "/tmp/pi-dish-parent-r7-kimi-acceptance-audit.json"
+    }
+  ],
+  "parentFrozenProof": {
+    "freezeAudit": "/tmp/pi-dish-parent-r7-freeze-audit.json",
+    "nativeComparisonAudit": "/tmp/pi-dish-parent-r7-native-comparison-audit.json",
+    "ownerSemantic": "/tmp/pi-dish-parent-r7-review-evidence/semantic-441.json",
+    "ownerSemanticSha256": "a4400f46e62428f1dec47c3441b8b7968807a6c3c8e934ac7a1a12070d56a832"
+  },
+  "evidenceCorrections": [
+    "commands/browser-scenarios-ui.txt inside the frozen archive is truncated300/1180 and stops before final counts. Owner semantic message377 supplies the coalesced291/all8/fullUI297.36s outcome. This is not a claim to read the entire underlying successful-test log.",
+    "GLM initial selected Python dossier sections omitted literal metadata; final complete raw ranges and recovered middle gap pass. Raw chunk147 retains tail1288-1400; parent exact-tail matching avoids a false duplicate-read request.",
+    "Kimi initial decoding/write/hash did not deliver executable bodies. All14 actual unescaped bodies were subsequently read and byte/line matched. Kimi read the final4000 bytes of owner377, not its first415 bytes.",
+    "Dev and packaged screenshots are byte-identical; independent packaged entry/ASAR and Inspector injection trace establishes runtime provenance, not pixel differences. One-pixel full-page screenshots do not visually prove the complete app surface; parent integrated proof must capture the actual viewport.",
+    "Injected initial EADDRNOTAVAIL drives real15s retry/replacement/nativeclose/HTTP/WS404 refusal behavior. It does not prove a naturally unavailable interface or successful terminal attachment. Real occupied-port and native synchronous RangeError outcomes are separately recorded."
+  ],
+  "limits": [
+    "Read-only reviews; no reviewer reruns.",
+    "Linux x64 native evidence only; no macOS.",
+    "Restricted-share errorMonitor is notification only; preserve native exception/error/close policy.",
+    "Private complete semantic archives remain0700/0600, not copied into repository.",
+    "Parent local/runtime proof is complete; exact pushed-main CI and formal acceptance remain pending."
+  ],
+  "parentIntegration": {
+    "source": "85b9860b8085658095c0386eef8bec7379fa640d",
+    "integratedOn": "701bb90",
+    "platform": "Linux x64",
+    "runtime": "Electron44.4.1 Node24.21.0 Chromium152.0.7977.78",
+    "display": "Parent-owned Xvfb :1; all8 probes exited0; Xvfb stopped exit0 after proofs.",
+    "drivers": [
+      {
+        "path": "/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-proof.cjs",
+        "originalPath": "/tmp/pi-dish-r7-electron-proof.cjs",
+        "originalSha256": "24d20915d775269f7d8a89da5ed7a1cba47616f9aaa99a031f4a52a40bc02ddd",
+        "adaptedSha256": "b2e85e640af93272a9d3c617a3cfc69a0787038aad85f5baf188f17b8429f72f",
+        "adaptation": "Only absolute throwaway helper references relocate to parent-owned scratch; CLI repo argument selects integrated main. Also fullPage:false replaces fullPage:true for a real1280x860 viewport screenshot; initial1524x1 full-page artifact is explicitly not visual proof.",
+        "beforeViewportFixSha256": "ff4a1c1671558335d2b1d00c26b977efe27910086f0a786e7ef95fdb68d3fe40",
+        "source": "'use strict';\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst os = require('node:os');\nconst { createRequire } = require('node:module');\nconst [repo, mode = 'dev', packaged] = process.argv.slice(2);\nconst load = createRequire(path.join(repo, 'package.json'));\nconst { _electron } = load('playwright');\nconst { sanitizeTestEnv } = load('./test/test-env');\nconst output = fs.mkdtempSync(path.join(os.tmpdir(), `pd-r7-${mode}-`));\nconsole.log(`Proof artifacts: ${output}`);\nconst home = path.join(output, 'home');\nfs.mkdirSync(home);\nfs.mkdirSync(path.join(output, 'tmux'));\nconst inherited = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'LANG'].filter(key => process.env[key]).map(key => [key, process.env[key]]));\nconst env = { ...sanitizeTestEnv({ ...inherited, HOME: home }), TMUX_TMPDIR: path.join(output, 'tmux'),\n  XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),\n  PI_DISH_URL: 'https://foreign.invalid/not-our-listener', R7_DELAY_MS: '1500', R7_TRACE: path.join(output, 'trace.json') };\n(async () => {\n  const app = await require('/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-launch.cjs')(_electron, { executablePath: mode === 'dev' ? load('electron') : packaged,\n    args: ['-r', '/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-preload.cjs', ...(mode === 'dev' ? [path.join(repo, 'electron/main.js')] : [])],\n    cwd: output, env, timeout: 30000 }, mode === 'packaged');\n  const logs = [];\n  app.process().stdout?.on('data', data => logs.push(String(data)));\n  app.process().stderr?.on('data', data => logs.push(String(data)));\n  try {\n    const window = await app.firstWindow({ timeout: 20000 });\n    await window.waitForLoadState('domcontentloaded');\n    const trace = await app.evaluate(() => globalThis.__r7Proof);\n    fs.writeFileSync(path.join(output, 'observed.json'), JSON.stringify(trace, null, 2));\n    assert.equal(trace.loads.length, 1);\n    const first = trace.loads[0];\n    const ready = trace.binds.find(bind => bind.listening && bind.listening <= first.at);\n    assert.ok(ready, `navigation preceded owned listener readiness: ${JSON.stringify(trace)}`);\n    assert.ok(ready.listening - ready.called >= 1400, 'real bind must be delayed beyond old300ms');\n    assert.equal(new URL(first.url).port, String(ready.address.port));\n    assert.equal(new URL(first.url).hostname, '127.0.0.1');\n    const response = await fetch(`${first.url}/api/host`);\n    assert.equal(response.status, 200);\n    const host = await response.json();\n    assert.ok(host.hostId);\n    await window.locator('.global-settings-btn').waitFor({ state: 'visible' });\n    assert.equal(await window.evaluate(() => typeof window.require), 'undefined');\n    const root = await app.evaluate(({ app }, repo) => {\n      const path = process.getBuiltinModule('node:path');\n      const load = process.getBuiltinModule('node:module').createRequire(path.join(app.isPackaged ? app.getAppPath() : repo, 'package.json'));\n      const server = load('./server.js');\n      return { packaged: app.isPackaged, applicationPath: app.getAppPath(), native: server instanceof process.getBuiltinModule('node:http').Server, listening: server.listening, address: server.address(), versions: process.versions };\n    }, repo);\n    assert.equal(root.native, true);\n    assert.equal(root.packaged, mode === 'packaged');\n    assert.equal(root.listening, true);\n    assert.equal(root.address.port, ready.address.port);\n    await window.screenshot({ path: path.join(output, 'window.png'), fullPage: false });\n    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ mode, result: 'PASS', host, root, trace }, null, 2));\n    console.log(`${mode}: actual delayed-bind/PORT0/foreign-advertised-URL/root-identity proof PASS`);\n  } finally {\n    await app.close();\n    fs.writeFileSync(path.join(output, 'process.log'), logs.join(''));\n  }\n})().catch(error => { console.error(error); process.exitCode = 1; });\n"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-launch.cjs",
+        "originalPath": "/tmp/pi-dish-r7-electron-launch.cjs",
+        "originalSha256": "90134c40c826567cc09dabf9af43445b7957fe73073478f0888e535a2dc82ab0",
+        "adaptedSha256": "90134c40c826567cc09dabf9af43445b7957fe73073478f0888e535a2dc82ab0",
+        "adaptation": "Only absolute throwaway helper references relocate to parent-owned scratch; CLI repo argument selects integrated main.",
+        "source": "'use strict';\nconst assert = require('node:assert/strict');\nconst childProcess = require('node:child_process');\nconst fs = require('node:fs');\n\nasync function injectBeforeMain(url, traceFile, preloadPath) {\n  const socket = new WebSocket(url);\n  let nextId = 0;\n  const pending = new Map();\n  let paused;\n  const onPause = new Promise(resolve => { paused = resolve; });\n  socket.addEventListener('message', event => {\n    const message = JSON.parse(String(event.data));\n    if (message.id) {\n      const request = pending.get(message.id);\n      if (!request) return;\n      pending.delete(message.id);\n      if (message.error) request.reject(new Error(JSON.stringify(message.error)));\n      else request.resolve(message.result);\n    } else if (message.method === 'Debugger.paused') paused(message.params);\n  });\n  const send = (method, params = {}) => new Promise((resolve, reject) => {\n    const id = ++nextId;\n    pending.set(id, { resolve, reject });\n    socket.send(JSON.stringify({ id, method, params }));\n  });\n  try {\n    await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });\n    await send('Debugger.enable');\n    await send('Runtime.runIfWaitingForDebugger');\n    const pause = await onPause;\n    const entry = await send('Debugger.evaluateOnCallFrame', {\n      callFrameId: pause.callFrames[0].callFrameId,\n      expression: \"({ filename: __filename, packaged: require('electron').app.isPackaged })\",\n      returnByValue: true,\n    });\n    if (entry.exceptionDetails) throw new Error(JSON.stringify(entry.exceptionDetails));\n    assert.equal(entry.result.value.packaged, true);\n    assert.ok(entry.result.value.filename.endsWith('/app.asar/electron/main.js'));\n    fs.writeFileSync(`${traceFile}.injection.json`, JSON.stringify({ reason: pause.reason, entry: entry.result.value, frames: pause.callFrames.map(frame => ({ url: frame.url, functionName: frame.functionName, location: frame.location })) }, null, 2));\n    const result = await send('Debugger.evaluateOnCallFrame', {\n      callFrameId: pause.callFrames[0].callFrameId,\n      expression: `require(${JSON.stringify(preloadPath)}); 'r7-native-preload-injected'`,\n      returnByValue: true,\n    });\n    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));\n    assert.equal(result.result.value, 'r7-native-preload-injected');\n    await send('Debugger.resume');\n  } finally { socket.close(); }\n}\n\nmodule.exports = async function launchElectron(electron, options, packaged) {\n  if (!packaged) return electron.launch(options);\n  // Packaged Electron ignores -r. Inject the exact same throwaway observer into\n  // its paused native entry frame, without replacing its entry or changing ASAR.\n  const nativeSpawn = childProcess.spawn;\n  let child;\n  let injectedResolve;\n  let injectedReject;\n  const injected = new Promise((resolve, reject) => { injectedResolve = resolve; injectedReject = reject; });\n  childProcess.spawn = function (...args) {\n    const result = nativeSpawn.apply(this, args);\n    if (args[0] === options.executablePath) {\n      child = result;\n      let captured = false;\n      let stderr = '';\n      result.stderr.on('data', bytes => {\n        stderr += String(bytes);\n        const match = stderr.match(/Debugger listening on (ws:\\/\\/[^\\s]+)/);\n        if (!captured && match) {\n          captured = true;\n          injectBeforeMain(match[1], options.env.R7_TRACE, options.args[1]).then(injectedResolve, injectedReject);\n        }\n      });\n    }\n    return result;\n  };\n  try {\n    assert.equal(options.args[0], '-r');\n    const launched = electron.launch({ ...options, args: ['--inspect-brk=0', ...options.args.slice(2)] });\n    const app = await Promise.race([launched, injected.then(() => launched)]);\n    await injected;\n    return app;\n  } catch (error) {\n    if (child?.exitCode === null) child.kill('SIGTERM');\n    throw error;\n  } finally { childProcess.spawn = nativeSpawn; }\n};\n"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-preload.cjs",
+        "originalPath": "/tmp/pi-dish-r7-electron-preload.cjs",
+        "originalSha256": "5ef3bf8473adb313d50f93a01a5a05f9388f3548ad56a1831703c222d320a7e0",
+        "adaptedSha256": "5ef3bf8473adb313d50f93a01a5a05f9388f3548ad56a1831703c222d320a7e0",
+        "adaptation": "Only absolute throwaway helper references relocate to parent-owned scratch; CLI repo argument selects integrated main.",
+        "source": "'use strict';\nconst net = require('node:net');\nconst http = require('node:http');\nconst fs = require('node:fs');\nconst { errorMonitor } = require('node:events');\nconst electron = require('electron');\nconst nativeListen = net.Server.prototype.listen;\nconst originalLoad = electron.BrowserWindow.prototype.loadURL;\nconst originalDialog = electron.dialog.showErrorBox;\nconst trace = globalThis.__r7Proof = { started: Date.now(), binds: [], loads: [], dialogs: [] };\nfunction save() { fs.writeFileSync(process.env.R7_TRACE, JSON.stringify(trace, null, 2)); }\nnet.Server.prototype.listen = function (...args) {\n  if (!(this instanceof http.Server)) return nativeListen.apply(this, args);\n  const item = { called: Date.now(), port: args[0], host: args[1] };\n  trace.binds.push(item);\n  this.prependOnceListener('listening', () => { item.listening = Date.now(); item.address = this.address(); save(); });\n  this.prependOnceListener(errorMonitor, error => { item.error = error.message; save(); });\n  save();\n  const mainDelay = typeof args[0] === 'number' ? process.env.R7_MAIN_DELAY_MS : undefined;\n  setTimeout(() => nativeListen.apply(this, args), Number(mainDelay || process.env.R7_DELAY_MS || 1500));\n  return this;\n};\nelectron.BrowserWindow.prototype.loadURL = function (url, ...args) {\n  trace.loads.push({ at: Date.now(), url });\n  save();\n  return originalLoad.call(this, url, ...args);\n};\nelectron.dialog.showErrorBox = function (title, content) {\n  trace.dialogs.push({ at: Date.now(), title, content });\n  save();\n  return originalDialog.call(this, title, content);\n};\nsave();\n"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-failure.cjs",
+        "originalPath": "/tmp/pi-dish-r7-electron-failure.cjs",
+        "originalSha256": "7b6ff8644ad7e2ad069f347326f986d7b68bff0ad9544998e3195afe611ee1b6",
+        "adaptedSha256": "c7ceb301f55a85ab91fbd18fb55ba130e1a1dd21e1fffcfeccf4098b882677b7",
+        "adaptation": "Only absolute throwaway helper references relocate to parent-owned scratch; CLI repo argument selects integrated main.",
+        "source": "'use strict';\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst os = require('node:os');\nconst net = require('node:net');\nconst { createRequire } = require('node:module');\nconst { execFile } = require('node:child_process');\nconst { promisify } = require('node:util');\nconst { setTimeout: delay } = require('node:timers/promises');\nconst run = promisify(execFile);\nconst [repo, mode = 'dev', packaged] = process.argv.slice(2);\nconst load = createRequire(path.join(repo, 'package.json'));\nconst { _electron } = load('playwright');\nconst { sanitizeTestEnv } = load('./test/test-env');\nconst output = fs.mkdtempSync(path.join(os.tmpdir(), `pd-r7-failure-${mode}-`));\nconsole.log(`Failure artifacts: ${output}`);\nconst home = path.join(output, 'home');\nfs.mkdirSync(home);\nfs.mkdirSync(path.join(output, 'tmux'));\nconst inherited = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'LANG'].filter(key => process.env[key]).map(key => [key, process.env[key]]));\nconst env = { ...sanitizeTestEnv({ ...inherited, HOME: home }), TMUX_TMPDIR: path.join(output, 'tmux'),\n  XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),\n  R7_DELAY_MS: '1500', R7_TRACE: path.join(output, 'trace.json') };\nconst watchdog = setTimeout(() => { console.error('Main failure proof watchdog expired'); process.exit(1); }, 35000);\n(async () => {\n  const sockets = new Set();\n  const occupied = net.createServer(socket => {\n    sockets.add(socket);\n    socket.on('close', () => sockets.delete(socket));\n    socket.end();\n  });\n  await new Promise(resolve => occupied.listen(0, '127.0.0.1', resolve));\n  env.PORT = String(occupied.address().port);\n  let app;\n  let child;\n  try {\n    app = await require('/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-launch.cjs')(_electron, { executablePath: mode === 'dev' ? load('electron') : packaged,\n      args: ['-r', '/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-preload.cjs', ...(mode === 'dev' ? [path.join(repo, 'electron/main.js')] : [])],\n      cwd: output, env, timeout: 30000 }, mode === 'packaged');\n    child = app.process();\n    const exit = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));\n    let trace;\n    for (let i = 0; i < 200; i++) {\n      trace = JSON.parse(fs.readFileSync(env.R7_TRACE));\n      if (trace.dialogs.length) break;\n      if (child.exitCode !== null) throw new Error(`Exited before visible startup failure: ${child.exitCode}`);\n      await delay(50);\n    }\n    assert.equal(trace.dialogs.length, 1, 'actual native error dialog is required');\n    assert.match(trace.dialogs[0].content, /EADDRINUSE|address already in use/i);\n    assert.deepEqual(trace.loads, [], 'startup failure must not open an empty browser window');\n    await delay(400);\n    await run('import', ['-window', 'root', path.join(output, 'dialog.png')], { env });\n    await run('python3', ['/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-dismiss-dialog.py'], { env });\n    const ended = await Promise.race([exit, delay(10000).then(() => { throw new Error('Electron did not exit after dismissing failure'); })]);\n    assert.deepEqual(ended, { code: 1, signal: null });\n    assert.equal(occupied.listening, true);\n    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ result: 'PASS', mode, ended, trace }, null, 2));\n    console.log(`${mode}: native startup failure dialog, zero navigation, exit1 PASS`);\n  } catch (error) {\n    console.error(error);\n    process.exitCode = 1;\n  } finally {\n    try { if (app && child?.exitCode === null) await app.close(); }\n    finally {\n      for (const socket of sockets) socket.destroy();\n      await new Promise(resolve => occupied.close(resolve));\n      clearTimeout(watchdog);\n    }\n  }\n})().catch(error => { console.error(error); process.exitCode = 1; clearTimeout(watchdog); });\n"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-dismiss-dialog.py",
+        "originalPath": "/tmp/pi-dish-r7-dismiss-dialog.py",
+        "originalSha256": "c0087bc6c49e90b3ac2e03b8d253d5831fa8a91b72d9a5701f1ea91345557d22",
+        "adaptedSha256": "c0087bc6c49e90b3ac2e03b8d253d5831fa8a91b72d9a5701f1ea91345557d22",
+        "adaptation": "Only absolute throwaway helper references relocate to parent-owned scratch; CLI repo argument selects integrated main.",
+        "source": "import ctypes\nimport ctypes.util\nx11 = ctypes.CDLL(ctypes.util.find_library('X11'))\nxtst = ctypes.CDLL(ctypes.util.find_library('Xtst'))\nx11.XOpenDisplay.argtypes = [ctypes.c_char_p]\nx11.XOpenDisplay.restype = ctypes.c_void_p\nx11.XStringToKeysym.argtypes = [ctypes.c_char_p]\nx11.XStringToKeysym.restype = ctypes.c_ulong\nx11.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]\nx11.XKeysymToKeycode.restype = ctypes.c_ubyte\nx11.XFlush.argtypes = [ctypes.c_void_p]\nx11.XCloseDisplay.argtypes = [ctypes.c_void_p]\nxtst.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]\ndisplay = x11.XOpenDisplay(None)\nif not display:\n    raise RuntimeError('Unable to open isolated X display')\nkey = x11.XKeysymToKeycode(display, x11.XStringToKeysym(b'Return'))\nxtst.XTestFakeKeyEvent(display, key, 1, 0)\nxtst.XTestFakeKeyEvent(display, key, 0, 0)\nx11.XFlush(display)\nx11.XCloseDisplay(display)\n"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-sync-preload.cjs",
+        "originalPath": "/tmp/pi-dish-r7-sync-preload.cjs",
+        "originalSha256": "9501b13f4eed2231b5741a4e2b5265120e9fe93caf01c2c78a5b1e26ecdef8e5",
+        "adaptedSha256": "9501b13f4eed2231b5741a4e2b5265120e9fe93caf01c2c78a5b1e26ecdef8e5",
+        "adaptation": "Only absolute throwaway helper references relocate to parent-owned scratch; CLI repo argument selects integrated main.",
+        "source": "'use strict';\nconst fs = require('node:fs');\nconst net = require('node:net');\nconst electron = require('electron');\nconst trace = { loads: [], dialogs: [], throws: [], monitor: [] };\nconst save = () => fs.writeFileSync(process.env.R7_TRACE, JSON.stringify(trace, null, 2));\nconst listen = net.Server.prototype.listen;\nnet.Server.prototype.listen = function (...args) {\n  try { return listen.apply(this, args); }\n  catch (error) {\n    trace.throws.push({ at: Date.now(), name: error.name, code: error.code, message: error.message });\n    save();\n    throw error;\n  }\n};\nconst show = electron.dialog.showErrorBox;\nelectron.dialog.showErrorBox = function (title, content) {\n  trace.dialogs.push({ at: Date.now(), title, content });\n  save();\n  return show.call(this, title, content);\n};\nconst load = electron.BrowserWindow.prototype.loadURL;\nelectron.BrowserWindow.prototype.loadURL = function (url, ...args) {\n  trace.loads.push({ at: Date.now(), url });\n  save();\n  return load.call(this, url, ...args);\n};\nprocess.on('uncaughtExceptionMonitor', (error, origin) => {\n  trace.monitor.push({ name: error.name, code: error.code, message: error.message, origin });\n  save();\n});\nsave();\n"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-sync-failure.cjs",
+        "originalPath": "/tmp/pi-dish-r7-sync-failure.cjs",
+        "originalSha256": "fc3315106601866366e277097dc59a148d413bc42af14fc0fe47ea51de63b3ab",
+        "adaptedSha256": "3653659c3820d7ca6159edb58cdc06d2c4caa4ef4b9f46b247e4b3de46d92f29",
+        "adaptation": "Only absolute throwaway helper references relocate to parent-owned scratch; CLI repo argument selects integrated main.",
+        "source": "'use strict';\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst os = require('node:os');\nconst cp = require('node:child_process');\nconst { createRequire } = require('node:module');\nconst { promisify } = require('node:util');\nconst { setTimeout: delay } = require('node:timers/promises');\nconst [repo, runtimeRoot, phase, packaged] = process.argv.slice(2);\nconst load = createRequire(path.join(repo, 'package.json'));\nconst { _electron } = load('playwright');\nconst executable = packaged || load('electron');\nconst run = promisify(cp.execFile);\nconst output = fs.mkdtempSync(path.join(os.tmpdir(), `pd-r7-sync-${phase}-`));\nconsole.log(`Synchronous failure artifacts: ${output}`);\nconst home = path.join(output, 'home');\nfs.mkdirSync(home);\nfs.mkdirSync(path.join(output, 'tmux'));\nconst inherited = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'LANG'].filter(key => process.env[key]).map(key => [key, process.env[key]]));\nconst env = { ...load('./test/test-env').sanitizeTestEnv({ ...inherited, HOME: home }), PORT: '-1', TMUX_TMPDIR: path.join(output, 'tmux'),\n  XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'), R7_TRACE: path.join(output, 'trace.json') };\nlet child;\nlet app;\nlet launchError;\nlet outputText = '';\nlet exit = null;\nconst nativeSpawn = cp.spawn;\ncp.spawn = function (...args) {\n  const spawned = nativeSpawn.apply(this, args);\n  if (args[0] === executable) {\n    child = spawned;\n    child.once('exit', (code, signal) => { exit = { code, signal }; });\n    child.stderr.on('data', data => { outputText += data; });\n    child.stdout.on('data', data => { outputText += data; });\n  }\n  return spawned;\n};\nconst watchdog = setTimeout(() => { if (child?.exitCode === null) child.kill('SIGKILL'); console.error('Synchronous proof watchdog expired'); process.exit(1); }, 25000);\n(async () => {\n  const launched = require('/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-launch.cjs')(_electron, {\n    executablePath: executable,\n    args: ['-r', '/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-sync-preload.cjs', ...(packaged ? [] : [path.join(runtimeRoot, 'electron/main.js')])],\n    cwd: output, env, timeout: 15000,\n  }, !!packaged);\n  launched.then(value => { app = value; }, error => { launchError = String(error); });\n  let trace;\n  let dismissed = 0;\n  let thrownAt;\n  try {\n    for (let attempt = 0; attempt < 160; attempt++) {\n      if (fs.existsSync(env.R7_TRACE)) trace = JSON.parse(fs.readFileSync(env.R7_TRACE));\n      if (trace?.throws.length && !thrownAt) thrownAt = Date.now();\n      if ((trace?.dialogs.length || 0) > dismissed) {\n        await delay(400);\n        await run('import', ['-window', 'root', path.join(output, `dialog${dismissed + 1}.png`)], { env });\n        await run('python3', ['/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-dismiss-dialog.py'], { env });\n        dismissed++;\n      }\n      if (exit || (thrownAt && Date.now() - thrownAt > 2500)) break;\n      await delay(50);\n    }\n    assert.ok(trace?.throws.some(error => error.name === 'RangeError' && error.code === 'ERR_SOCKET_BAD_PORT'));\n    assert.deepEqual(trace.loads, []);\n    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ phase, runtimeRoot, result: 'OBSERVED', processAlive: child.exitCode === null, exit, dismissed, trace, outputText, launchError }, null, 2));\n    console.log(JSON.stringify({ phase, processAlive: child.exitCode === null, exit, dialogs: trace.dialogs.length, nativeMonitor: trace.monitor }, null, 2));\n  } finally {\n    cp.spawn = nativeSpawn;\n    fs.writeFileSync(path.join(output, 'process.log'), outputText);\n    if (app && child.exitCode === null) await app.close();\n    else if (child?.exitCode === null) {\n      child.kill('SIGTERM');\n      await new Promise(resolve => child.once('exit', resolve));\n    }\n    await launched.catch(() => {});\n    clearTimeout(watchdog);\n  }\n})().catch(error => { console.error(error); process.exitCode = 1; clearTimeout(watchdog); });\n"
+      },
+      {
+        "path": "/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-share-failure.cjs",
+        "originalPath": "/tmp/pi-dish-r7-share-failure.cjs",
+        "originalSha256": "b1bd8a3ad4df0cf45b12aa80189f318acfb8d80152ccd940f6db53ab03704d71",
+        "adaptedSha256": "06d0f895183ed8e5257ba0bc7736a2233f303ee21075e90a317cc6b0506b22cb",
+        "adaptation": "Only absolute throwaway helper references relocate to parent-owned scratch; CLI repo argument selects integrated main.",
+        "source": "'use strict';\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst os = require('node:os');\nconst net = require('node:net');\nconst { createRequire } = require('node:module');\nconst { execFile } = require('node:child_process');\nconst { promisify } = require('node:util');\nconst { setTimeout: delay } = require('node:timers/promises');\nconst run = promisify(execFile);\nconst [repo, mode = 'dev', phase = 'baseline', packaged, timing = 'together'] = process.argv.slice(2);\nconst load = createRequire(path.join(repo, 'package.json'));\nconst { _electron } = load('playwright');\nconst { sanitizeTestEnv } = load('./test/test-env');\nconst output = fs.mkdtempSync(path.join(os.tmpdir(), `pd-r7-share-${mode}-${phase}-${timing}-`));\nconsole.log(`Share failure artifacts: ${output}`);\nconst home = path.join(output, 'home');\nfs.mkdirSync(home);\nfs.mkdirSync(path.join(output, 'tmux'));\nconst inherited = Object.fromEntries(['PATH', 'DISPLAY', 'XAUTHORITY', 'LANG'].filter(key => process.env[key]).map(key => [key, process.env[key]]));\nconst env = { ...sanitizeTestEnv({ ...inherited, HOME: home }), TMUX_TMPDIR: path.join(output, 'tmux'),\n  XDG_CONFIG_HOME: path.join(home, '.config'), XDG_CACHE_HOME: path.join(home, '.cache'),\n  R7_DELAY_MS: '1500', R7_TRACE: path.join(output, 'trace.json') };\nif (timing === 'late-main') env.R7_MAIN_DELAY_MS = '5000';\nconst watchdog = setTimeout(() => { console.error('Share proof watchdog expired'); process.exit(1); }, 35000);\n(async () => {\n  const occupied = net.createServer(socket => socket.end());\n  await new Promise(resolve => occupied.listen(0, '127.0.0.1', resolve));\n  env.PI_DISH_SHARE_PORT = String(occupied.address().port);\n  let app;\n  let child;\n  try {\n    app = await require('/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-launch.cjs')(_electron, { executablePath: mode === 'dev' ? load('electron') : packaged,\n      args: ['-r', '/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-electron-preload.cjs', ...(mode === 'dev' ? [path.join(repo, 'electron/main.js')] : [])],\n      cwd: output, env, timeout: 15000 }, mode === 'packaged');\n    child = app.process();\n    const logs = [];\n    child.stderr?.on('data', data => { logs.push(String(data)); fs.writeFileSync(path.join(output, 'stderr.log'), logs.join('')); });\n    let trace;\n    for (let expected = 1; expected <= (phase === 'baseline' ? 1 : 2); expected++) {\n      for (let i = 0; i < 200; i++) {\n        trace = JSON.parse(fs.readFileSync(env.R7_TRACE));\n        if (trace.dialogs.length >= expected) break;\n        if (child.exitCode !== null) throw new Error(`Exited before native error dialog: ${child.exitCode}`);\n        await delay(50);\n      }\n      assert.ok(trace.dialogs.length >= expected, `Missing dialog${expected}: ${JSON.stringify(trace)}`);\n      assert.match(trace.dialogs[expected - 1].content, /EADDRINUSE|address already in use/);\n      await delay(500);\n      await run('import', ['-window', 'root', path.join(output, `dialog${expected}.png`)], { env });\n      await run('python3', ['/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-dismiss-dialog.py'], { env });\n    }\n    await delay(700);\n    assert.equal(child.exitCode, null, 'Electron native uncaught-exception handler keeps its process alive');\n    let main;\n    for (let attempt = 0; attempt < 100; attempt++) {\n      trace = JSON.parse(fs.readFileSync(env.R7_TRACE));\n      main = trace.binds.find(bind => bind.listening && bind.port === 0);\n      if (main) break;\n      await delay(50);\n    }\n    assert.ok(main);\n    if (timing === 'late-main') assert.ok(trace.dialogs[0].at < main.listening);\n    if (phase === 'final') {\n      const window = await app.firstWindow({ timeout: 10000 });\n      await window.waitForURL(`http://127.0.0.1:${main.address.port}/`, { waitUntil: 'domcontentloaded' });\n      trace = JSON.parse(fs.readFileSync(env.R7_TRACE));\n      assert.equal(trace.loads.length, 1);\n      assert.ok(trace.loads[0].at >= main.listening);\n      await window.screenshot({ path: path.join(output, 'window.png') });\n    }\n    const response = await fetch(`http://127.0.0.1:${main.address.port}/api/host`, { signal: AbortSignal.timeout(3000) });\n    assert.equal(response.status, 200);\n    assert.equal(occupied.listening, true);\n    fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ result: 'PASS', mode, phase, timing, trace, nativeHostOutcome: 'alive with main HTTP200 after uncaught share error' }, null, 2));\n    console.log(`${mode}/${phase}: native Electron share failure outcome PASS`);\n  } catch (error) {\n    console.error(error);\n    process.exitCode = 1;\n  } finally {\n    try { if (app && child?.exitCode === null) await app.close(); }\n    finally { await new Promise(resolve => occupied.close(resolve)); clearTimeout(watchdog); }\n  }\n})().catch(error => { console.error(error); process.exitCode = 1; clearTimeout(watchdog); });\n"
+      }
+    ],
+    "results": [
+      {
+        "path": "/tmp/pd-r7-dev-CJixhF",
+        "result": {
+          "mode": "dev",
+          "result": "PASS",
+          "host": {
+            "hostId": "6214a0ec-1612-4973-93c3-5382c7df7e00",
+            "label": "framework",
+            "version": "1.0.0",
+            "capabilities": {
+              "sessions": true,
+              "search": true,
+              "usage": true,
+              "spawns": true,
+              "shares": true,
+              "pages": true,
+              "comments": true,
+              "skills": true,
+              "harnesses": true,
+              "resolve": true,
+              "docs": true,
+              "routines": true,
+              "recovery": true,
+              "sessionBounces": true,
+              "refAliases": true,
+              "tmux": true,
+              "usageLimits": true
+            }
+          },
+          "root": {
+            "packaged": false,
+            "applicationPath": "/home/jyarwood/workspace/pi-dish/electron",
+            "native": true,
+            "listening": true,
+            "address": {
+              "address": "127.0.0.1",
+              "family": "IPv4",
+              "port": 32937
+            },
+            "versions": {
+              "node": "24.21.0",
+              "acorn": "8.18.0",
+              "ada": "4.0.0",
+              "amaro": "1.1.11",
+              "ares": "1.34.8",
+              "brotli": "1.2.0",
+              "cldr": "48.0",
+              "icu": "78.2",
+              "llhttp": "9.4.3",
+              "merve": "1.2.2",
+              "modules": "149",
+              "napi": "10",
+              "nbytes": "0.1.4",
+              "ncrypto": "0.0.1",
+              "nghttp2": "1.70.0",
+              "nghttp3": "",
+              "ngtcp2": "",
+              "openssl": "0.0.0",
+              "simdjson": "4.6.7",
+              "simdutf": "7.7.0",
+              "sqlite": "3.53.4",
+              "tz": "2025c",
+              "undici": "7.29.1",
+              "unicode": "17.0",
+              "uv": "1.52.1",
+              "uvwasi": "0.0.23",
+              "v8": "15.2.124.19-electron.0",
+              "zlib": "1.3.2.1-motley",
+              "zstd": "1.6.0",
+              "electron": "44.4.1",
+              "chrome": "152.0.7977.78"
+            }
+          },
+          "trace": {
+            "started": 1789617231209,
+            "binds": [
+              {
+                "called": 1789617231344,
+                "port": 0,
+                "host": "127.0.0.1",
+                "listening": 1789617232846,
+                "address": {
+                  "address": "127.0.0.1",
+                  "family": "IPv4",
+                  "port": 32937
+                }
+              }
+            ],
+            "loads": [
+              {
+                "at": 1789617232878,
+                "url": "http://127.0.0.1:32937"
+              }
+            ],
+            "dialogs": []
+          }
+        }
+      },
+      {
+        "path": "/tmp/pd-r7-packaged-HFPLtf",
+        "result": {
+          "mode": "packaged",
+          "result": "PASS",
+          "host": {
+            "hostId": "14bfb261-5171-441d-8e06-21578621d5ba",
+            "label": "framework",
+            "version": "1.0.0",
+            "capabilities": {
+              "sessions": true,
+              "search": true,
+              "usage": true,
+              "spawns": true,
+              "shares": true,
+              "pages": true,
+              "comments": true,
+              "skills": true,
+              "harnesses": true,
+              "resolve": true,
+              "docs": true,
+              "routines": true,
+              "recovery": true,
+              "sessionBounces": true,
+              "refAliases": true,
+              "tmux": true,
+              "usageLimits": true
+            }
+          },
+          "root": {
+            "packaged": true,
+            "applicationPath": "/tmp/pi-dish-parent-r7-main-YyExzk/package/linux-unpacked/resources/app.asar",
+            "native": true,
+            "listening": true,
+            "address": {
+              "address": "127.0.0.1",
+              "family": "IPv4",
+              "port": 33309
+            },
+            "versions": {
+              "node": "24.21.0",
+              "acorn": "8.18.0",
+              "ada": "4.0.0",
+              "amaro": "1.1.11",
+              "ares": "1.34.8",
+              "brotli": "1.2.0",
+              "cldr": "48.0",
+              "icu": "78.2",
+              "llhttp": "9.4.3",
+              "merve": "1.2.2",
+              "modules": "149",
+              "napi": "10",
+              "nbytes": "0.1.4",
+              "ncrypto": "0.0.1",
+              "nghttp2": "1.70.0",
+              "nghttp3": "",
+              "ngtcp2": "",
+              "openssl": "0.0.0",
+              "simdjson": "4.6.7",
+              "simdutf": "7.7.0",
+              "sqlite": "3.53.4",
+              "tz": "2025c",
+              "undici": "7.29.1",
+              "unicode": "17.0",
+              "uv": "1.52.1",
+              "uvwasi": "0.0.23",
+              "v8": "15.2.124.19-electron.0",
+              "zlib": "1.3.2.1-motley",
+              "zstd": "1.6.0",
+              "electron": "44.4.1",
+              "chrome": "152.0.7977.78"
+            }
+          },
+          "trace": {
+            "started": 1789617482747,
+            "binds": [
+              {
+                "called": 1789617482938,
+                "port": 0,
+                "host": "127.0.0.1",
+                "listening": 1789617484441,
+                "address": {
+                  "address": "127.0.0.1",
+                  "family": "IPv4",
+                  "port": 33309
+                }
+              }
+            ],
+            "loads": [
+              {
+                "at": 1789617484465,
+                "url": "http://127.0.0.1:33309"
+              }
+            ],
+            "dialogs": []
+          }
+        }
+      },
+      {
+        "path": "/tmp/pd-r7-failure-dev-kWnVf7",
+        "result": {
+          "result": "PASS",
+          "mode": "dev",
+          "ended": {
+            "code": 1,
+            "signal": null
+          },
+          "trace": {
+            "started": 1789617395857,
+            "binds": [
+              {
+                "called": 1789617396019,
+                "port": 42707,
+                "host": "127.0.0.1",
+                "error": "listen EADDRINUSE: address already in use 127.0.0.1:42707"
+              }
+            ],
+            "loads": [],
+            "dialogs": [
+              {
+                "at": 1789617397523,
+                "title": "pi-dish could not start",
+                "content": "listen EADDRINUSE: address already in use 127.0.0.1:42707"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "path": "/tmp/pd-r7-failure-packaged-pim07o",
+        "result": {
+          "result": "PASS",
+          "mode": "packaged",
+          "ended": {
+            "code": 1,
+            "signal": null
+          },
+          "trace": {
+            "started": 1789617643561,
+            "binds": [
+              {
+                "called": 1789617643734,
+                "port": 40479,
+                "host": "127.0.0.1",
+                "error": "listen EADDRINUSE: address already in use 127.0.0.1:40479"
+              }
+            ],
+            "loads": [],
+            "dialogs": [
+              {
+                "at": 1789617645237,
+                "title": "pi-dish could not start",
+                "content": "listen EADDRINUSE: address already in use 127.0.0.1:40479"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "path": "/tmp/pd-r7-sync-final-UT112L",
+        "result": {
+          "phase": "final",
+          "runtimeRoot": "/home/jyarwood/workspace/pi-dish",
+          "result": "OBSERVED",
+          "processAlive": true,
+          "exit": null,
+          "dismissed": 1,
+          "trace": {
+            "loads": [],
+            "dialogs": [
+              {
+                "at": 1789617684363,
+                "title": "pi-dish could not start",
+                "content": "options.port should be >= 0 and < 65536. Received type number (-1)."
+              }
+            ],
+            "throws": [
+              {
+                "at": 1789617684363,
+                "name": "RangeError",
+                "code": "ERR_SOCKET_BAD_PORT",
+                "message": "options.port should be >= 0 and < 65536. Received type number (-1)."
+              }
+            ],
+            "monitor": []
+          },
+          "outputText": "Debugger listening on ws://127.0.0.1:40305/367799aa-f1b2-4487-98dd-250693c09967\nFor help, see: https://nodejs.org/learn/getting-started/debugging\nDebugger attached.\n[3072304:0916/210124.236017:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")\n\nDevTools listening on ws://127.0.0.1:44911/devtools/browser/595812cf-17d2-4124-ae8c-6706325938da\n(node:3072304) UnhandledPromiseRejectionWarning: RangeError [ERR_SOCKET_BAD_PORT]: options.port should be >= 0 and < 65536. Received type number (-1).\n    at Server.listen (node:net:2551:5)\n    at net.Server.listen (/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-sync-preload.cjs:9:23)\n    at startMainListener (/home/jyarwood/workspace/pi-dish/lib/server-app.js:2488:14)\n    at Object.startServer (/home/jyarwood/workspace/pi-dish/lib/server-app.js:2496:5)\n    at Object.<anonymous> (/home/jyarwood/workspace/pi-dish/server.js:1:46)\n    at Module._compile (node:internal/modules/cjs/loader:1937:14)\n    at Object..js (node:internal/modules/cjs/loader:2070:10)\n    at Module.load (node:internal/modules/cjs/loader:1658:32)\n    at node:internal/modules/cjs/loader:1450:12\n    at Module._load (node:electron/js2c/node_init:1:18197)\n(Use `electron --trace-warnings ...` to show where the warning was created)\n(node:3072304) UnhandledPromiseRejectionWarning: Unhandled promise rejection. This error originated either by throwing inside of an async function without a catch block, or by rejecting a promise which was not handled with .catch(). To terminate the node process on unhandled promise rejection, use the CLI flag `--unhandled-rejections=strict` (see https://nodejs.org/api/cli.html#cli_unhandled_rejections_mode). (rejection id: 1)\n[3072304:0916/210124.877628:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: \n[3072304:0916/210124.877735:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")\n[3072304:0916/210124.880210:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: \npi --list-models output was not parseable, using SDK registry fallback\n"
+        }
+      },
+      {
+        "path": "/tmp/pd-r7-sync-final-packaged-LrR50d",
+        "result": {
+          "phase": "final-packaged",
+          "runtimeRoot": "/home/jyarwood/workspace/pi-dish",
+          "result": "OBSERVED",
+          "processAlive": true,
+          "exit": null,
+          "dismissed": 1,
+          "trace": {
+            "loads": [],
+            "dialogs": [
+              {
+                "at": 1789617744667,
+                "title": "pi-dish could not start",
+                "content": "options.port should be >= 0 and < 65536. Received type number (-1)."
+              }
+            ],
+            "throws": [
+              {
+                "at": 1789617744667,
+                "name": "RangeError",
+                "code": "ERR_SOCKET_BAD_PORT",
+                "message": "options.port should be >= 0 and < 65536. Received type number (-1)."
+              }
+            ],
+            "monitor": []
+          },
+          "outputText": "Debugger listening on ws://127.0.0.1:39111/93282b64-aede-41a9-9193-ddc44e6e28fd\nFor help, see: https://nodejs.org/learn/getting-started/debugging\nDebugger attached.\nDebugger attached.\n[3074123:0916/210224.529092:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")\n\nDevTools listening on ws://127.0.0.1:42421/devtools/browser/002aad4e-f134-4578-8993-8030f706832c\n(node:3074123) UnhandledPromiseRejectionWarning: RangeError [ERR_SOCKET_BAD_PORT]: options.port should be >= 0 and < 65536. Received type number (-1).\n    at Server.listen (node:net:2551:5)\n    at net.Server.listen (/tmp/pi-dish-parent-r7-main-YyExzk/pi-dish-r7-sync-preload.cjs:9:23)\n    at startMainListener (/tmp/pi-dish-parent-r7-main-YyExzk/package/linux-unpacked/resources/app.asar/lib/server-app.js:2488:14)\n    at Object.startServer (/tmp/pi-dish-parent-r7-main-YyExzk/package/linux-unpacked/resources/app.asar/lib/server-app.js:2496:5)\n    at Object.<anonymous> (/tmp/pi-dish-parent-r7-main-YyExzk/package/linux-unpacked/resources/app.asar/server.js:1:46)\n    at Module._compile (node:internal/modules/cjs/loader:1937:14)\n    at Object..js (node:internal/modules/cjs/loader:2070:10)\n    at Module.load (node:internal/modules/cjs/loader:1658:32)\n    at node:internal/modules/cjs/loader:1450:12\n    at Module._load (node:electron/js2c/node_init:1:18197)\n(Use `pi-dish --trace-warnings ...` to show where the warning was created)\n(node:3074123) UnhandledPromiseRejectionWarning: Unhandled promise rejection. This error originated either by throwing inside of an async function without a catch block, or by rejecting a promise which was not handled with .catch(). To terminate the node process on unhandled promise rejection, use the CLI flag `--unhandled-rejections=strict` (see https://nodejs.org/api/cli.html#cli_unhandled_rejections_mode). (rejection id: 1)\n[3074123:0916/210225.170843:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: \n[3074123:0916/210225.170931:ERROR:dbus/bus.cc:406] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")\n[3074123:0916/210225.173762:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: \npi --list-models output was not parseable, using SDK registry fallback\n"
+        }
+      },
+      {
+        "path": "/tmp/pd-r7-share-dev-final-late-main-y8vbKA",
+        "result": {
+          "result": "PASS",
+          "mode": "dev",
+          "phase": "final",
+          "timing": "late-main",
+          "trace": {
+            "started": 1789617777241,
+            "binds": [
+              {
+                "called": 1789617777397,
+                "port": 0,
+                "host": "127.0.0.1",
+                "listening": 1789617782400,
+                "address": {
+                  "address": "127.0.0.1",
+                  "family": "IPv4",
+                  "port": 40723
+                }
+              },
+              {
+                "called": 1789617777397,
+                "port": "35357",
+                "host": "127.0.0.1",
+                "error": "listen EADDRINUSE: address already in use 127.0.0.1:35357"
+              }
+            ],
+            "loads": [
+              {
+                "at": 1789617782427,
+                "url": "http://127.0.0.1:40723"
+              }
+            ],
+            "dialogs": [
+              {
+                "at": 1789617778902,
+                "title": "pi-dish could not start",
+                "content": "listen EADDRINUSE: address already in use 127.0.0.1:35357"
+              },
+              {
+                "at": 1789617779527,
+                "title": "A JavaScript error occurred in the main process",
+                "content": "Uncaught Exception:\nError: listen EADDRINUSE: address already in use 127.0.0.1:35357\n    at Server.setupListenHandle [as _listen2] (node:net:2328:16)\n    at listenInCluster (node:net:2437:12)\n    at node:net:2666:7\n    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)"
+              }
+            ]
+          },
+          "nativeHostOutcome": "alive with main HTTP200 after uncaught share error"
+        }
+      },
+      {
+        "path": "/tmp/pd-r7-share-packaged-final-late-main-UkUYrc",
+        "result": {
+          "result": "PASS",
+          "mode": "packaged",
+          "phase": "final",
+          "timing": "late-main",
+          "trace": {
+            "started": 1789617803791,
+            "binds": [
+              {
+                "called": 1789617804006,
+                "port": 0,
+                "host": "127.0.0.1",
+                "listening": 1789617809009,
+                "address": {
+                  "address": "127.0.0.1",
+                  "family": "IPv4",
+                  "port": 45265
+                }
+              },
+              {
+                "called": 1789617804006,
+                "port": "44509",
+                "host": "127.0.0.1",
+                "error": "listen EADDRINUSE: address already in use 127.0.0.1:44509"
+              }
+            ],
+            "loads": [
+              {
+                "at": 1789617809033,
+                "url": "http://127.0.0.1:45265"
+              }
+            ],
+            "dialogs": [
+              {
+                "at": 1789617805510,
+                "title": "pi-dish could not start",
+                "content": "listen EADDRINUSE: address already in use 127.0.0.1:44509"
+              },
+              {
+                "at": 1789617806128,
+                "title": "A JavaScript error occurred in the main process",
+                "content": "Uncaught Exception:\nError: listen EADDRINUSE: address already in use 127.0.0.1:44509\n    at Server.setupListenHandle [as _listen2] (node:net:2328:16)\n    at listenInCluster (node:net:2437:12)\n    at node:net:2666:7\n    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)"
+              }
+            ]
+          },
+          "nativeHostOutcome": "alive with main HTTP200 after uncaught share error"
+        }
+      }
+    ],
+    "gates": {
+      "path": "/tmp/pi-dish-parent-r7-full-gates.log",
+      "bytes": 200819,
+      "sha256": "7086d61d3e833941495fdcb9845314310ec337a135fe874ff079ab83a4f84ee6",
+      "check": 265,
+      "backend": {
+        "tests": 1049,
+        "pass": 1049,
+        "fail": 0,
+        "skipped": 0,
+        "cancelled": 0
+      },
+      "browser": 291,
+      "scenarios": 8,
+      "fullUI": "PASS",
+      "serialChainSeconds": 345.86
+    },
+    "limitations": [
+      "Actual delayed binds use private preload injection, while HTTP/native listeners and dev/packaged Electron are real.",
+      "Real occupied-main-port asynchronous failure displayed native dialog, never navigated, exited1 after dismissal in both modes.",
+      "Synchronous native RangeError on port-1 displayed explicit dialog and retained native rejected-promise warning, zero navigation. Process still alive at observation, then driver cleanup; this is NOT an exit1 or unhandled-exception-monitor claim.",
+      "Restricted-share error before delayed main: explicit notification and original native uncaught-error dialog both shown; same native process stays alive, main eventually loads once after ready and HTTP200. Notification does not swallow error or impose shutdown.",
+      "Real viewport screenshots visually inspected. Previous full-page1524x1 screenshot not visual proof.",
+      "First nonisolated failure driver /tmp/pd-r7-failure-dev-gv8vFZ failed ImageMagick import before XTest; watchdog/stop occurred. No Enter sent on user display; no complete descendant cleanup claimed from stop alone. Preserved separately, not counted as a successful proof.",
+      "No macOS, live harness spawn, successful terminal attachment or natural unavailable-interface proof. Owner independently preserved native retry/baseline comparison evidence remains separately attributed."
+    ],
+    "archive": {
+      "path": "/tmp/pi-dish-parent-r7-main-native-evidence.tar.gz",
+      "sha256": "d162167d4c389f86c7c774e15e0fc9db4ae590784edb9915f0da4f286fbb00c1",
+      "excludes": "home,tmux,packaged output; includes exact drivers/results/screenshots/logs and failed attempts"
+    },
+    "packagedAsarSha256": "add27a2516199cd3c510be54bde83782c0a67d6bf7719e07ee6ccfb869e35c2d",
+    "cleanup": {
+      "paths": [
+        {
+          "path": "/tmp/pd-r7-dev-CJixhF/home",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-dev-CJixhF/tmux",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-packaged-HFPLtf/home",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-packaged-HFPLtf/tmux",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-failure-dev-kWnVf7/home",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-failure-dev-kWnVf7/tmux",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-failure-packaged-pim07o/home",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-failure-packaged-pim07o/tmux",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-sync-final-UT112L/home",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-sync-final-UT112L/tmux",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-sync-final-packaged-LrR50d/home",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-sync-final-packaged-LrR50d/tmux",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-share-dev-final-late-main-y8vbKA/home",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-share-dev-final-late-main-y8vbKA/tmux",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-share-packaged-final-late-main-UkUYrc/home",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-share-packaged-final-late-main-UkUYrc/tmux",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-dev-7qnCuz/home",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pd-r7-dev-7qnCuz/tmux",
+          "removed": true
+        },
+        {
+          "path": "/tmp/pi-dish-parent-r7-main-YyExzk",
+          "removed": true
+        }
+      ],
+      "display": "parent-r7-x11 stopped exit0",
+      "retainedFailure": "/tmp/pd-r7-failure-dev-gv8vFZ retained; no blanket descendant-cleanup claim"
+    }
+  }
+}

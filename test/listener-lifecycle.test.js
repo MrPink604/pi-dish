@@ -125,23 +125,26 @@ test('loopback stays usable while a missing interface waits for the real bind re
 for (const explicitUrl of ['', 'https://fixture.invalid/dish']) {
   test(`a delayed alias advertises ${explicitUrl ? 'the explicit URL unchanged' : 'only an address already listening'}`, { timeout: 15000 }, async t => {
     if (!await alternateLoopback(t)) return;
-    const server = boot(t, { HOST: '127.0.0.2', PI_DISH_TEST_HOLD_ALIAS: '1', PI_DISH_URL: explicitUrl });
+    const server = boot(t, { HOST: '127.0.0.2', PI_DISH_TEST_HOLD_ALIAS: '1', PI_DISH_URL: explicitUrl, PI_DISH_TEST_OBSERVE_STARTUP: '1' });
     await server.wait(event => event.type === 'alias-held');
     const main = await server.wait(event => event.address?.address === '127.0.0.2');
     assert.equal(main.advertised, explicitUrl || `http://127.0.0.2:${main.address.port}`);
     assert.equal(server.events.some(event => event.address?.address === '127.0.0.1'), false);
     assert.ok((await descriptor('127.0.0.2', main.address.port)).hostId);
+    const ready = await server.wait(event => event.type === 'startup-ready');
+    assert.equal(ready.url, `http://127.0.0.2:${main.address.port}`);
     server.child.send({ releaseAlias: true });
     const alias = await server.wait(event => event.address?.address === '127.0.0.1');
     assert.equal(alias.advertised, explicitUrl || `http://127.0.0.1:${main.address.port}`);
     assert.ok((await descriptor('127.0.0.1', main.address.port)).hostId);
+    assert.equal(server.events.filter(event => event.type === 'startup-ready').length, 1);
     await stopAndRebind(t, server, 'SIGTERM', [main, alias]);
   });
 }
 
 test('an alias failure after primary startup keeps advertising the reachable primary', { timeout: 15000 }, async t => {
   if (!await alternateLoopback(t)) return;
-  const server = boot(t, { HOST: '127.0.0.2', PI_DISH_TEST_HOLD_ALIAS: '1' });
+  const server = boot(t, { HOST: '127.0.0.2', PI_DISH_TEST_HOLD_ALIAS: '1', PI_DISH_TEST_OBSERVE_STARTUP: '1' });
   await server.wait(event => event.type === 'alias-held');
   const main = await server.wait(event => event.address?.address === '127.0.0.2');
   const occupied = await bind(t, '127.0.0.1', main.address.port);
@@ -150,6 +153,7 @@ test('an alias failure after primary startup keeps advertising the reachable pri
   assert.equal(failed.code, 'EADDRINUSE');
   assert.equal(failed.advertised, `http://127.0.0.2:${main.address.port}`);
   assert.ok((await descriptor('127.0.0.2', main.address.port)).hostId);
+  assert.equal(server.events.some(event => event.type === 'startup-failed'), false);
   await stopAndRebind(t, server, 'SIGTERM', [main]);
   assert.equal(occupied.listening, true);
 });
@@ -167,11 +171,14 @@ test('a failed loopback alias leaves the primary usable and advertises the prima
   if (!await alternateLoopback(t)) return;
   const occupied = await bind(t);
   const port = occupied.address().port;
-  const server = boot(t, { HOST: '127.0.0.2', PORT: String(port) });
+  const server = boot(t, { HOST: '127.0.0.2', PORT: String(port), PI_DISH_TEST_OBSERVE_STARTUP: '1' });
   const main = await server.wait(event => event.address?.address === '127.0.0.2');
   assert.match(server.output(), /loopback alias not listening.*EADDRINUSE/);
   assert.equal(main.advertised, `http://127.0.0.2:${port}`);
   assert.ok((await descriptor('127.0.0.2', port)).hostId);
+  const ready = await server.wait(event => event.type === 'startup-ready');
+  assert.equal(ready.url, `http://127.0.0.2:${port}`);
+  assert.equal(server.events.some(event => event.type === 'startup-failed'), false);
   await stopAndRebind(t, server, 'SIGTERM', [main]);
   assert.equal(occupied.listening, true);
 });
@@ -181,4 +188,77 @@ test('startup preserves an explicit advertised URL', { timeout: 15000 }, async t
   const main = await server.wait(event => event.type === 'listening');
   assert.equal(main.advertised, 'https://fixture.invalid/dish');
   assert.ok((await descriptor('127.0.0.1', main.address.port)).hostId);
+});
+
+test('readiness waits for the full app, not a restricted share or an explicit advertised URL', { timeout: 15000 }, async t => {
+  const server = boot(t, {
+    PI_DISH_TEST_OBSERVE_STARTUP: '1', PI_DISH_TEST_HOLD_MAIN: '1',
+    PI_DISH_SHARE_PORT: '0', PI_DISH_URL: 'https://fixture.invalid/dish',
+  });
+  await server.wait(event => event.type === 'main-held');
+  const share = await server.wait(event => event.type === 'listening');
+  const shareResponse = await fetch(`http://127.0.0.1:${share.address.port}/api/host`);
+  assert.equal(shareResponse.status, 404);
+  await delay(350);
+  assert.equal(server.events.some(event => event.type === 'startup-ready'), false);
+  server.child.send({ releaseMain: true });
+  const ready = await server.wait(event => event.type === 'startup-ready');
+  const endpoint = new URL(ready.url);
+  assert.equal(endpoint.hostname, '127.0.0.1');
+  assert.notEqual(Number(endpoint.port), share.address.port);
+  assert.ok((await descriptor(endpoint.hostname, endpoint.port)).hostId);
+  assert.equal(ready.initialListening, true);
+  server.child.send({ observeLate: true });
+  const late = await server.wait(event => event.type === 'late-ready');
+  assert.equal(late.url, ready.url);
+});
+
+test('ephemeral readiness follows the replacement listener after the initial bind fails', { timeout: 30000 }, async t => {
+  const server = boot(t, { PI_DISH_TEST_OBSERVE_STARTUP: '1', PI_DISH_TEST_BIND_FAIL_ONCE: '1' });
+  await server.wait(event => event.type === 'bind-failed');
+  assert.equal(server.events.some(event => event.type === 'startup-ready'), false);
+  const ready = await server.wait(event => event.type === 'startup-ready', 20000);
+  assert.equal(ready.initialListening, false);
+  const endpoint = new URL(ready.url);
+  assert.ok(Number(endpoint.port) > 0);
+  assert.ok((await descriptor(endpoint.hostname, endpoint.port)).hostId);
+});
+
+test('a bound alias supplies readiness while the main listener is still retrying', { timeout: 15000 }, async t => {
+  if (!await alternateLoopback(t)) return;
+  const reservation = await bind(t);
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const server = boot(t, {
+    HOST: '127.0.0.2', PORT: String(port),
+    PI_DISH_TEST_OBSERVE_STARTUP: '1', PI_DISH_TEST_BIND_FAIL_ONCE: '1',
+  });
+  await server.wait(event => event.type === 'bind-failed');
+  const ready = await server.wait(event => event.type === 'startup-ready');
+  assert.equal(ready.url, `http://127.0.0.1:${port}`);
+  assert.equal(ready.initialListening, false);
+  assert.ok((await descriptor('127.0.0.1', port)).hostId);
+});
+
+test('a fatal bind failure is observable before the existing exit code', { timeout: 15000 }, async t => {
+  const occupied = await bind(t);
+  const server = boot(t, { PORT: String(occupied.address().port), PI_DISH_TEST_OBSERVE_STARTUP: '1' });
+  assert.deepEqual(await server.exited, { code: 1, signal: null });
+  const failed = server.events.find(event => event.type === 'startup-failed');
+  assert.equal(failed?.code, 'EADDRINUSE');
+  assert.match(failed.message, /address already in use/);
+  assert.equal(failed.nativeErrorIdentity, true);
+  assert.equal(server.events.some(event => event.type === 'startup-ready'), false);
+  assert.equal(occupied.listening, true);
+});
+
+test('restricted-share startup failure stays an unhandled native Node error', { timeout: 15000 }, async t => {
+  const occupied = await bind(t);
+  const server = boot(t, { PI_DISH_SHARE_PORT: String(occupied.address().port), PI_DISH_TEST_OBSERVE_STARTUP: '1' });
+  assert.deepEqual(await server.exited, { code: 1, signal: null });
+  const failed = server.events.find(event => event.type === 'startup-failed');
+  assert.equal(failed?.code, 'EADDRINUSE');
+  assert.equal(failed.nativeErrorIdentity, true);
+  assert.match(server.output(), /Unhandled 'error' event/);
+  assert.equal(occupied.listening, true);
 });
