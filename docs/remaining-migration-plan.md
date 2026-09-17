@@ -1816,8 +1816,8 @@ R4 and full C1/C2 remain separately unfinished.
 
 ### Implementation record — R4
 
-**Whole-source review and integrated local proof complete; exact pushed-main
-CI pending.** Reviewed source `db5dfa9b5aadba00d5957aaca7033022358cadea`,
+**Accepted on exact pushed main `4cae6026fe50c2b413e26cd717ce30f691b7bad6`.**
+Reviewed source `db5dfa9b5aadba00d5957aaca7033022358cadea`,
 owner `01a0ab39-779b-70ed-b2d7-6b2ed6087488`, exact
 `openai-codex/gpt-6-astra`/High/OMP, baseline
 `2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424`.
@@ -1862,6 +1862,17 @@ were removed with ENOENT receipts; retained logs/results are not cleanup leaks.
 The unchanged browser screenshot producer regenerated three existing untracked
 PNG artifacts. Exact before/after observations are recorded; no manual
 edit/restore/delete/staging or blanket across-browser byte preservation is claimed.
+
+[Exact-source CI run 35194783835](https://github.com/MrPink604/pi-dish/actions/runs/35194783835)
+passed all five jobs: backend on Node 22.19.0, 22.x, 24.x and 26.x, plus
+browser on Node 24. All eleven required check/test steps passed. Complete
+public API responses and their byte/hash receipts are retained in the review
+record and `/tmp/pi-dish-parent-r4-main-ci-result.json`. This binds CI to
+`4cae602`, not the later documentation-only acceptance commit.
+The parent's first read-only observer failed parsing before making requests;
+its source, correction and output remain recorded. The corrected observer
+exited zero and its executable was removed. No CI or product-validation rerun
+was performed.
 
 This is Linux Node 26.8.2/Chromium evidence, not macOS, Electron packaging,
 native harness-agent launch or live-provider proof. Reference comparisons use
