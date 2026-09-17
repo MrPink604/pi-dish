@@ -70,7 +70,7 @@ export interface GitDiffFile extends GitFileCounts {
 }
 
 /** The selected snapshot member, not an arbitrary client-supplied path. */
-export interface GitFilePatchSelection {
+interface GitFilePatchSelection {
   path: string;
   oldPath?: string | null;
   status?: string;
@@ -428,7 +428,7 @@ function aggregateVersion(root: string, repoPaths: readonly string[], states: re
   return hash.digest('hex');
 }
 
-export async function getDiffVersion(root: string): Promise<string | null> {
+async function getDiffVersion(root: string): Promise<string | null> {
   if (!isGitAvailable()) return null;
   const repoPaths = findGitRepos(root);
   const states = await Promise.all(repoPaths.map(getRepoState));
@@ -497,7 +497,7 @@ export async function getRepoDiff(repoPath: string): Promise<GitRepoDiff> {
 }
 
 /** Generate one patch selected from a previously gated repo summary. */
-export async function getFilePatch(repoPath: string, file: GitFilePatchSelection | null | undefined): Promise<GitFilePatch | null> {
+async function getFilePatch(repoPath: string, file: GitFilePatchSelection | null | undefined): Promise<GitFilePatch | null> {
   if (!file || typeof file.path !== 'string' || !file.path) return null;
   const abs = path.resolve(repoPath, file.path);
   const root = path.resolve(repoPath);
@@ -532,4 +532,82 @@ export async function aggregateDiffs(root: string, { inlineLimit = null }: GitDi
   repos.sort((a, b) =>
     Number(b.files.length > 0) - Number(a.files.length > 0) || a.path.localeCompare(b.path));
   return { root, gitAvailable: true, repos, version };
+}
+
+export interface DiffViewSummary {
+  root: unknown;
+  gitAvailable: boolean;
+  repos: GitDiffRepo[];
+  snapshotId: string;
+}
+
+export interface DiffViewPatch {
+  patch: string;
+  truncated: boolean;
+  binary: boolean;
+}
+
+export interface DiffView {
+  summary(sessionId: string, cwd: unknown): Promise<DiffViewSummary>;
+  patch(sessionId: string, cwd: unknown, snapshotId: string, repoPath: string, filePath: string): Promise<DiffViewPatch | 'stale' | null>;
+  retireSession(sessionId: string): void;
+}
+
+interface DiffSnapshot {
+  id: string;
+  cwd: unknown;
+  at: number;
+  version: GitDiffAggregate['version'];
+  data: Omit<GitDiffAggregate, 'version'>;
+}
+
+const DIFF_INLINE_FILE_LIMIT = 6;
+const DIFF_SNAPSHOT_TTL_MS = 60 * 1000;
+
+/** Owns the captured diff pane and every operation allowed to use its members. */
+export function createDiffView(): DiffView {
+  const snapshots = new Map<string, DiffSnapshot>();
+
+  return {
+    async summary(sessionId, cwd) {
+      // cwd remains a raw session value. These assertions preserve the existing
+      // filesystem/git coercions and errors rather than adding a validation gate.
+      const { version, ...data } = await aggregateDiffs(cwd as string, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
+      const snapshot = {
+        id: crypto.randomBytes(12).toString('hex'),
+        cwd,
+        at: Date.now(),
+        version,
+        data,
+      };
+      snapshots.delete(sessionId);
+      snapshots.set(sessionId, snapshot);
+      while (snapshots.size > 4) {
+        const oldest = snapshots.keys().next();
+        if (!oldest.done) snapshots.delete(oldest.value);
+      }
+      return { ...data, snapshotId: snapshot.id };
+    },
+
+    async patch(sessionId, cwd, snapshotId, repoPath, filePath) {
+      const snapshot = snapshots.get(sessionId);
+      if (!snapshot || snapshot.id !== snapshotId || snapshot.cwd !== cwd ||
+          Date.now() - snapshot.at > DIFF_SNAPSHOT_TTL_MS) return 'stale';
+      const repo = snapshot.data.repos.find(item => item.path === repoPath);
+      const file = repo?.files.find(item => item.path === filePath);
+      if (!repo || !file) return null;
+      // Even an inline patch must pass both checks. A deferred git invocation
+      // can race a file change; never serve that patch under the old snapshot.
+      if (await getDiffVersion(cwd as string) !== snapshot.version) return 'stale';
+      const patch = file.patch ? file : await getFilePatch(path.resolve(cwd as string, repo.path), file);
+      if (await getDiffVersion(cwd as string) !== snapshot.version) return 'stale';
+      if (!patch?.patch) return null;
+      snapshot.at = Date.now();
+      snapshots.delete(sessionId);
+      snapshots.set(sessionId, snapshot);
+      return { patch: patch.patch, truncated: !!patch.truncated, binary: !!patch.binary };
+    },
+
+    retireSession(sessionId) { snapshots.delete(sessionId); },
+  };
 }

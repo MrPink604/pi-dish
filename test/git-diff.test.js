@@ -195,13 +195,85 @@ test('inline limit returns numstat summaries and generates one selected patch on
   ));
   for (let i = 0; i < 7; i++) fs.writeFileSync(path.join(dir, `file-${i}.txt`), `old ${i}\nnew ${i}\n`);
 
-  const out = await GD.aggregateDiffs(dir, { inlineLimit: 6 });
+  const view = GD.createDiffView();
+  const out = await view.summary('session', dir);
   const files = out.repos[0].files;
   assert.equal(files.length, 7);
   assert.ok(files.every(file => file.patch === undefined && file.patchDeferred === true));
   assert.ok(files.every(file => file.additions === 1 && file.deletions === 0));
 
-  const selected = await GD.getFilePatch(dir, files[3]);
+  const selected = await view.patch('session', dir, out.snapshotId, '.', files[3].path);
   assert.match(selected.patch, /\+new 3/);
   assert.equal(selected.truncated, false);
+  fs.renameSync(path.join(dir, '.git'), path.join(dir, '.git-unavailable'));
+  assert.equal(await view.patch('session', dir, out.snapshotId, '.', files[3].path), 'stale',
+    'repository disappearance is stale, not a failed arbitrary-path git invocation');
+});
+
+test('diff views gate patches by captured session, cwd, snapshot and membership', { skip: !gitOk }, async () => {
+  const dir = makeRepo('gated', { 'tracked.txt': 'old\n', 'clean.txt': 'clean\n' });
+  fs.writeFileSync(path.join(dir, 'tracked.txt'), 'old\nnew\n');
+  const view = GD.createDiffView();
+  const first = await view.summary('a', dir);
+  assert.equal(await view.patch('b', dir, first.snapshotId, '.', 'tracked.txt'), 'stale');
+  assert.equal(await view.patch('a', dir + '/', first.snapshotId, '.', 'tracked.txt'), 'stale');
+  assert.equal(await view.patch('a', dir, first.snapshotId, '../gated', 'tracked.txt'), null);
+  assert.equal(await view.patch('a', dir, first.snapshotId, '.', 'clean.txt'), null);
+  assert.equal(await view.patch('a', dir, first.snapshotId, '.', '../gated/tracked.txt'), null);
+  assert.match((await view.patch('a', dir, first.snapshotId, '.', 'tracked.txt')).patch, /\+new/);
+  const second = await view.summary('a', dir);
+  assert.equal(await view.patch('a', dir, first.snapshotId, '.', 'tracked.txt'), 'stale');
+  fs.writeFileSync(path.join(dir, 'tracked.txt'), 'old\nchanged after inline summary\n');
+  assert.equal(await view.patch('a', dir, second.snapshotId, '.', 'tracked.txt'), 'stale');
+  const third = await view.summary('a', dir);
+  view.retireSession('a');
+  assert.equal(await view.patch('a', dir, third.snapshotId, '.', 'tracked.txt'), 'stale');
+});
+
+test('successful patch access refreshes diff LRU and sliding expiry; missing paths do not', { skip: !gitOk }, async (t) => {
+  const dir = makeRepo('expiry', { 'tracked.txt': 'old\n' });
+  fs.writeFileSync(path.join(dir, 'tracked.txt'), 'old\nnew\n');
+  let now = 1000;
+  t.mock.method(Date, 'now', () => now);
+  const view = GD.createDiffView();
+  const snapshots = [];
+  for (const id of ['a', 'b', 'c', 'd']) snapshots.push(await view.summary(id, dir));
+  assert.match((await view.patch('a', dir, snapshots[0].snapshotId, '.', 'tracked.txt')).patch, /\+new/);
+  await view.summary('e', dir);
+  assert.equal(await view.patch('b', dir, snapshots[1].snapshotId, '.', 'tracked.txt'), 'stale');
+  now += 60000;
+  assert.match((await view.patch('a', dir, snapshots[0].snapshotId, '.', 'tracked.txt')).patch, /\+new/);
+  assert.equal(await view.patch('c', dir, snapshots[2].snapshotId, '.', 'missing.txt'), null);
+  now++;
+  assert.equal(await view.patch('c', dir, snapshots[2].snapshotId, '.', 'tracked.txt'), 'stale');
+  assert.match((await view.patch('a', dir, snapshots[0].snapshotId, '.', 'tracked.txt')).patch, /\+new/);
+  now += 60001;
+  assert.equal(await view.patch('a', dir, snapshots[0].snapshotId, '.', 'tracked.txt'), 'stale');
+});
+
+test('a file change while a real deferred patch is in flight makes the result stale', { skip: !gitOk, timeout: 10000 }, async (t) => {
+  const dir = makeRepo('delayed', Object.fromEntries(
+    Array.from({ length: 7 }, (_, i) => [`file-${i}.txt`, `old ${i}\n`]),
+  ));
+  for (let i = 0; i < 7; i++) fs.appendFileSync(path.join(dir, `file-${i}.txt`), `new ${i}\n`);
+  const view = GD.createDiffView();
+  const summary = await view.summary('a', dir);
+  const childProcess = require('node:child_process');
+  const execFile = childProcess.execFile;
+  let release;
+  const patchReady = new Promise(resolve => {
+    t.mock.method(childProcess, 'execFile', (command, args, options, callback) =>
+      execFile(command, args, options, (error, stdout, stderr) => {
+        if (args.includes('diff') && args.includes('--no-color')) {
+          release = () => callback(error, stdout, stderr);
+          resolve();
+        } else callback(error, stdout, stderr);
+      }));
+  });
+  t.after(() => release?.());
+  const pending = view.patch('a', dir, summary.snapshotId, '.', 'file-3.txt');
+  await patchReady;
+  fs.appendFileSync(path.join(dir, 'file-3.txt'), 'changed while patch was delayed\n');
+  release();
+  assert.equal(await pending, 'stale', 'the post-generation version guard rejects old patch bytes');
 });

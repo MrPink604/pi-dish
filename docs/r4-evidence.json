@@ -1,0 +1,658 @@
+{
+  "milestone": "R4",
+  "status": "Complete approved R4 source, generated output and consumers verified on accepted2181e5; ready for immutable source commit and parent-owned review dispatch. No acceptance claim.",
+  "baseline": "dc4ae84568fda976cfb136082b1dda405ccf54d8",
+  "branch": "migration/r4-file-diff",
+  "ownerSession": "01a0ab39-779b-70ed-b2d7-6b2ed6087488",
+  "parentSession": "01a0a3fd-9825-70bd-b000-dc85c59a7421",
+  "provenance": {
+    "harness": "omp",
+    "model": "openai-codex/gpt-6-astra",
+    "thinking": "high",
+    "verification": "Parent verified before substantive prompt; no implementation delegation",
+    "currentSemanticVerification": {
+      "command": "node /home/jyarwood/.pi/agent/skills/pi-dish-sessions/scripts/pi-dish-sessions.js resolve 01a0ab39-779b-70ed-b2d7-6b2ed6087488 --json",
+      "harnessId": "omp",
+      "model": "openai-codex/gpt-6-astra",
+      "thinkingLevel": "high",
+      "cwd": "/home/jyarwood/workspace/pi-dish-r4",
+      "name": "Refactor R4 - Astra High"
+    }
+  },
+  "readBasis": [
+    "AGENTS.md supplied context",
+    "CLAUDE.md checked-server, browser-source, test-isolation sections",
+    "docs/remaining-migration-plan.md M3, entire R4, invariants, deliberate limits, verification policy",
+    "docs/m3-evidence.json consumed behavior and final verification",
+    "docs/m3-review.json final decisions and malformed-message correction",
+    "docs/m7-review.json supplemental raw cwd compatibility script/results"
+  ],
+  "sourceInventory": [
+    {
+      "source": "src/core/file-handlers.ts",
+      "change": "Single local prepareViewerFile operation validates mention, resolves session reach, reads capped file once, returns prepared success or HTTP error; preview/raw retain own response policy. Replace route snapshot map and guarded patch algorithm with one DiffView owner.",
+      "outputs": [
+        "lib/file-handlers.js",
+        "lib/file-handlers.d.ts"
+      ]
+    },
+    {
+      "source": "src/core/git-diff.ts",
+      "change": "Own createDiffView, private four-entry sliding-TTL snapshot map, aggregate capture, membership and both version checks, patch retrieval and retirement. Make raw getFilePatch/getDiffVersion and patch-selection type private after caller cutover; retain actual aggregate/parser/discovery APIs used by existing behavioral suites.",
+      "outputs": [
+        "lib/git-diff.js",
+        "lib/git-diff.d.ts"
+      ]
+    },
+    {
+      "source": "src/core/command-paths.ts",
+      "change": "New narrow Node-only matchCommandPaths(command: string) returns existing native matchAll iterator with unchanged regex; no collected token array, generator, normalization or policy.",
+      "outputs": [
+        "lib/command-paths.js",
+        "lib/command-paths.d.ts"
+      ]
+    },
+    {
+      "source": "src/core/file-mention.ts",
+      "change": "Replace local command regex/matchAll call with shared primitive only.",
+      "outputs": [
+        "lib/file-mention.js",
+        "lib/file-mention.d.ts"
+      ]
+    },
+    {
+      "source": "src/core/file-page.ts",
+      "change": "Delete duplicate escapeHtml and import helper-format implementation; rendering and URL policy unchanged.",
+      "outputs": [
+        "lib/file-page.js",
+        "lib/file-page.d.ts"
+      ]
+    },
+    {
+      "source": "src/core/skill-mining.ts",
+      "change": "Parent-released accepted R1 source: replace duplicate regex/comment and native matchAll loop with approved matcher; preserve m[1], parser, ranges/classification/bare~ policy.",
+      "outputs": [
+        "lib/skill-mining.js",
+        "lib/skill-mining.d.ts (unchanged declaration; existing exported contract retained)"
+      ]
+    },
+    {
+      "source": "test/git-diff.test.js",
+      "change": "Migrate selected patch case to guarded owner; add uncertain observable snapshot membership/version/TTL/LRU/retirement regressions and delayed real git patch change if practical."
+    }
+  ],
+  "callerInventory": {
+    "fileHandlers": [
+      "src/core/server-app.ts createFileHandlers composition, onRetired callback and seven unchanged route mounts"
+    ],
+    "fileViewer": [
+      "src/core/publication-handlers.ts readFileForViewer and renderFilePage; separate public cache/CSP/sendFile policy intentionally unchanged",
+      "test/file-mention.test.js",
+      "test/server.test.js file/raw/page cases"
+    ],
+    "gitDiff": [
+      "src/core/file-handlers.ts only product aggregateDiffs/getDiffVersion/getFilePatch caller",
+      "test/git-diff.test.js aggregate/parser/discovery and one direct patch consumer"
+    ],
+    "browser": [
+      "src/browser/file-views.ts captured view/host/generation and delayed patch response guards",
+      "src/browser/file-view-data.ts JSON decode fields",
+      "src/browser/file-view-render.ts escaped snapshot/repo/file attributes",
+      "test/browser/file-views.spec.js",
+      "test/browser-file-views.test.js",
+      "test/ui-smoke.js"
+    ],
+    "matcher": [
+      "src/core/file-mention.ts extractSessionPaths",
+      "src/core/skill-mining.ts mineSkillsFromEntries (accepted R1 caller cut over after parent formal release)",
+      "test/file-mention.test.js",
+      "test/skill-mining.test.js"
+    ]
+  },
+  "contracts": {
+    "filePreparation": "Local to createFileHandlers; ports remain resolveSessionCwd:string->unknown and findSessionSource:string->SessionSource|null. Invalid path 400 before session lookup; unknown/unresolved 404; file errors 413/415 include resolved path; native throws reach existing route catch500. No broader shared file/publication service.",
+    "diffOwner": "Named DiffView interface in git-diff: summary(sessionId:string,cwd:unknown), patch(sessionId:string,cwd:unknown,snapshotId:string,repoPath:string,filePath:string), retireSession(sessionId:string). Routes retain query validation, missing-cwd404 and HTTP translation. Owner alone holds and mutates snapshots; no exposed snapshot/version/map. No dependency bag or runtime injection API.",
+    "matcher": "Approved native matchAll iterator primitive now used by file-mention and accepted R1 skill-mining caller; no token collection/generator or policy merge",
+    "compiler": "Existing src/core/**/*.ts membership and source-policy roots cover new Node-only primitive. Existing build:core output mapping; no package/compiler/host exceptions or browser entry mapping changes.",
+    "lsp": "xd://lsp status reports no language servers configured; exact repository text caller inventory used, no mutation attempted."
+  },
+  "preservedBehavior": {
+    "file": "Query String(value||'') coercion and 1024 cap; cwd raw unknown pass-through via compile-time-only assertions; readSessionMessages failure remains ignored; lexical reach and symlink semantics; qualified-vs-bare recency ranking; last200 join bases; bounded500KiB text/8MiB image; binary sniff first8192; image metadata-only; raw HTML/SVG text/plain nosniff private no-cache; JSON image URL includes captured route session, mention, mtime-size; relPath and line semantics.",
+    "diff": "Four-session LRU capacity; 60s sliding TTL with strict > expiration; random12-byte id; inline <=6 files; cwd strict identity comparison; captured repo/file membership before first version check; both pre/post version checks including inline patch; success alone refreshes TTL/LRU; errors/missing/stale do not refresh; retirement deletes; repo degradation and discovery/patch caps unchanged. Existing asynchronous completion ordering remains unchanged, not upgraded to a new atomicity promise.",
+    "unknownCwd": "Truthy number/boolean cwd can yield empty diff with raw root, preview native500, absolute completion success and relative completion native500. Do not narrow or sanitize resolveSessionCwd.",
+    "matcher": "Absolute and ~/ tokens only, unchanged delimiters and partial-token behavior; mentions resolve structured bare~ relative to cwd while miner expands bare~ home; authorization/ranking/classification/range parsing/dedupe remain separate.",
+    "page": "Same five HTML entities, null-to-empty and native String conversion behavior; local assets, inert raw Markdown HTML and unsafe URL handling retained."
+  },
+  "deletionLedger": [
+    "Delete duplicate route validation/read preparation, not just wrap two read paths.",
+    "Remove route-owned DiffSnapshot/map/constants/remember mutation/patch membership+version algorithm; transfer state and guarded operations together into git-diff owner.",
+    "Remove exported arbitrary-path patch/version surface and migrate its one direct test consumer; lower-level internal algorithms remain.",
+    "Delete two local regex declarations in favor of one Node-only primitive (both callers cut over after formal release).",
+    "Delete standalone file page escape function and per-character map allocation; reuse existing helper without claiming measured aggregate performance."
+  ],
+  "retainedCheckLedger": [
+    "Retain native null/undefined message TypeError regression, reach/ranking/image/binary tests, real git discovery/status/rename/unborn/aggregate tests.",
+    "Retain server file/raw/publication/comments/deferred/stale cases and browser captured ownership/retry/stale response cases.",
+    "No implementation-count/source-text/export-count tests or new negative fixture merely to claim coverage."
+  ],
+  "requiredProofs": [
+    "Actual isolated generated HTTP handlers and real git/files: preview/raw parity/errors/inert HTML+SVG/image resource, standalone local file page rendered in browser.",
+    "Actual delayed git patch/file-change returning stale409 after patch generation; pre-generation stale409, both inline and deferred checks, membership rejection.",
+    "Snapshot replacement/cwd identity/retirement/LRU/TTL observable scenarios; raw unknown cwd compatibility compared to accepted baseline.",
+    "Existing mention/mining parser examples plus shared matcher edge examples without merging policy.",
+    "npm run build:core; npm run check; full npm test; full npm run test:browser; all npm run test:ui:scenarios; full desktop/mobile npm run test:ui. Browser bundles unchanged unless actual source mapping requires otherwise."
+  ],
+  "opaqueBoundaries": [
+    "Raw cwd remains unknown; casts do not authorize or normalize it.",
+    "Persisted session entries, native filesystem/git errors and external tool args retain existing consumer-specific narrowing.",
+    "No lifecycle/process authority, relay authorization or browser selection contract changes.",
+    "No macOS/Electron package claim for this core-only package."
+  ],
+  "verification": [
+    {
+      "command": "npm ci --no-audit --no-fund",
+      "result": "exit0, 798 packages; existing allowScripts policy blocked six dependency lifecycle scripts; node-pty rebuild completed"
+    },
+    {
+      "command": "npm run build:core",
+      "result": "Initial prepare result property-presence narrowing failed strict checking; corrected to status !== undefined discriminant, subsequent build passed. No suppression."
+    },
+    {
+      "command": "npm test -- test/file-mention.test.js test/git-diff.test.js test/skill-mining.test.js test/server.test.js test/comments-cli.test.js test/fleet-artifacts.test.js",
+      "result": "188 passed, 0 failed, 0 skipped; 9617.699995ms",
+      "output": "artifact://9"
+    },
+    {
+      "command": "npm run check",
+      "result": "exit0,259 compiler-owned sources,no explicit-any exceptions; lint and all drift/types passed"
+    },
+    {
+      "command": "node /tmp/pi-dish-r4-proof-FMWnFY/smoke.cjs",
+      "result": {
+        "runtime": "v26.8.2",
+        "platform": "linux",
+        "isolation": "Allowlisted sanitizeTestEnv, temporary HOME/tmux/git, loopback ephemeral servers; no live sessions/provider credentials",
+        "proofs": [
+          "Actual server preview/raw: line, capped text, metadata-only image bytes, inert HTML/SVG, identical400/404/413/415 errors",
+          "Real deferred git patch output held after pre-version check; changed file before callback release; actual HTTP409 stale without patch, then pre-generation stale409",
+          "Actual publication standalone file renderer: title/raw HTML escaped, unsafe URL inert, restrictive CSP",
+          "72 accepted-baseline/current HTTP comparisons preserve raw unknown cwd response/errors and valid cwd",
+          "Nine native title/coercion standalone output comparisons and five matcher delimiter/partial/duplicate/relative examples"
+        ],
+        "base": "http://127.0.0.1:36475",
+        "pageUrl": "http://127.0.0.1:36475/page/eh3Jw73GxXhP9i9xZtY2fQ"
+      },
+      "scriptSource": "'use strict';\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst cp = require('node:child_process');\nconst Module = require('node:module');\nconst { once } = require('node:events');\nconst root = '/home/jyarwood/workspace/pi-dish-r4';\nconst dir = __dirname;\nconst req = Module.createRequire(path.join(root, 'package.json'));\nconst home = path.join(dir, 'home');\nfs.mkdirSync(home, { recursive: true });\nconst env = req('./test/test-env').sanitizeTestEnv({ PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: home, SHELL: '/bin/sh', TMPDIR: dir, TMUX_TMPDIR: path.join(dir, 'tmux') });\nfor (const key of Object.keys(process.env)) delete process.env[key];\nObject.assign(process.env, env, { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'R4', GIT_AUTHOR_EMAIL: 'r4@test', GIT_COMMITTER_NAME: 'R4', GIT_COMMITTER_EMAIL: 'r4@test' });\nfs.mkdirSync(process.env.TMUX_TMPDIR, { recursive: true });\nconst workspace = path.join(home, 'workspace');\nconst repo = path.join(workspace, 'repo');\nfs.mkdirSync(repo, { recursive: true });\nfunction git(...args) { return cp.execFileSync('git', args, { cwd: repo, encoding: 'utf8' }); }\ngit('init', '-q', '-b', 'main');\nfor (let i = 0; i < 7; i++) fs.writeFileSync(path.join(repo, `file-${i}.txt`), `old ${i}\\n`);\ngit('add', '-A'); git('commit', '-q', '-m', 'fixture');\nfor (let i = 0; i < 7; i++) fs.appendFileSync(path.join(repo, `file-${i}.txt`), `new ${i}\\n`);\nconst markdown = '# R4 inert file\\n\\nA **rendered** finding.\\n\\n<script>globalThis.r4Executed = true</script>\\n\\n[unsafe](javascript:alert(1))\\n';\nfs.writeFileSync(path.join(workspace, 'view.md'), markdown);\nfs.writeFileSync(path.join(workspace, 'raw.html'), '<script>globalThis.r4Executed=true</script>');\nfs.writeFileSync(path.join(workspace, 'raw.svg'), '<svg xmlns=\"http://www.w3.org/2000/svg\"><script>globalThis.r4Executed=true</script></svg>');\nfs.writeFileSync(path.join(workspace, 'binary.bin'), Buffer.from([65, 0, 66]));\nfs.writeFileSync(path.join(workspace, 'large.txt'), 'a'.repeat(512001));\nfs.writeFileSync(path.join(workspace, 'large.png'), Buffer.alloc(8 * 1024 * 1024 + 1));\nconst png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');\nfs.writeFileSync(path.join(workspace, 'small.png'), png);\nfs.writeFileSync(path.join(home, 'secret.txt'), 'not reachable');\nconst sessions = path.join(home, '.pi/agent/sessions/fixture');\nfs.mkdirSync(sessions, { recursive: true });\nconst id = 'r4-runtime-fixture';\nfs.writeFileSync(path.join(sessions, id + '.jsonl'), JSON.stringify({ type: 'session', cwd: workspace, timestamp: new Date().toISOString() }) + '\\n');\nconst results = { runtime: process.version, platform: process.platform, isolation: 'Allowlisted sanitizeTestEnv, temporary HOME/tmux/git, loopback ephemeral servers; no live sessions/provider credentials', proofs: [] };\nfunction baseline(name, overrides = {}) {\n  const filename = path.join(root, 'lib', '__r4_baseline_' + name + '.js');\n  const mod = new Module(filename, module);\n  mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));\n  const original = mod.require.bind(mod);\n  mod.require = value => Object.hasOwn(overrides, value) ? overrides[value] : original(value);\n  mod._compile(fs.readFileSync(path.join(dir, 'baseline-' + name + '.js'), 'utf8'), filename);\n  return mod.exports;\n}\nasync function main() {\n  const server = req('./server');\n  if (!server.listening) await once(server, 'listening');\n  const base = `http://127.0.0.1:${server.address().port}`;\n  const get = async route => { const res = await fetch(base + route); return { status: res.status, headers: Object.fromEntries(res.headers), body: await res.json() }; };\n  const file = name => `/api/sessions/${id}/file?path=${encodeURIComponent(name)}`;\n  assert.equal((await get(file('view.md:2'))).body.line, 2);\n  for (const name of ['raw.html', 'raw.svg']) {\n    const preview = await get(file(name)); assert.equal(preview.status, 200);\n    const response = await fetch(base + `/api/sessions/${id}/file/content?path=${name}`);\n    assert.equal(response.status, 200); assert.match(response.headers.get('content-type'), /^text\\/plain/);\n    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');\n    assert.equal(response.headers.get('cache-control'), 'private, no-cache');\n    assert.equal(await response.text(), fs.readFileSync(path.join(workspace, name), 'utf8'));\n  }\n  const image = await get(file('small.png')); assert.equal(image.body.image.data, undefined);\n  assert.deepEqual(Buffer.from(await (await fetch(base + image.body.image.url)).arrayBuffer()), png);\n  const large = await get(file('large.txt')); assert.equal(large.body.truncated, true); assert.equal(large.body.content.length, 512000);\n  for (const [name, status] of [['', 400], ['x'.repeat(1025), 400], ['binary.bin', 415], ['large.png', 413], ['../secret.txt', 404], ['missing.txt', 404]]) {\n    const preview = await get(file(name));\n    const raw = await get(`/api/sessions/${id}/file/content?path=${encodeURIComponent(name)}`);\n    assert.equal(preview.status, status); assert.equal(raw.status, status); assert.deepEqual(raw.body, preview.body);\n  }\n  results.proofs.push('Actual server preview/raw: line, capped text, metadata-only image bytes, inert HTML/SVG, identical400/404/413/415 errors');\n  const summary = await get(`/api/sessions/${id}/diff`); assert.equal(summary.status, 200);\n  assert.ok(summary.body.repos[0].files.every(f => f.patchDeferred && f.patch === undefined));\n  const patchRoute = name => `/api/sessions/${id}/diff/patch?${new URLSearchParams({repo: 'repo', path: name, snapshot: summary.body.snapshotId})}`;\n  assert.equal((await get(patchRoute('../view.md'))).status, 404);\n  assert.match((await get(patchRoute('file-3.txt'))).body.patch, /\\+new 3/);\n  const originalExec = cp.execFile;\n  let release;\n  let notify;\n  const ready = new Promise(resolve => { notify = resolve; });\n  cp.execFile = function(command, args, options, callback) {\n    return originalExec.call(this, command, args, options, (error, stdout, stderr) => {\n      if (options.cwd === repo && args.includes('diff') && args.includes('--no-color')) {\n        release = () => callback(error, stdout, stderr); notify();\n      } else callback(error, stdout, stderr);\n    });\n  };\n  const pending = get(patchRoute('file-3.txt'));\n  await Promise.race([ready, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('patch delay not reached')), 5000); timer.unref(); })]);\n  fs.appendFileSync(path.join(repo, 'file-3.txt'), 'changed while real patch callback held\\n');\n  cp.execFile = originalExec; release();\n  const delayed = await pending; assert.equal(delayed.status, 409); assert.equal(delayed.body.stale, true); assert.equal(delayed.body.patch, undefined);\n  assert.equal((await get(patchRoute('file-3.txt'))).status, 409);\n  results.proofs.push('Real deferred git patch output held after pre-version check; changed file before callback release; actual HTTP409 stale without patch, then pre-generation stale409');\n  const published = await fetch(base + '/api/pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: path.join(workspace, 'view.md'), sessionId: id, title: '<R4 & inert>', renderer: 'file' }) });\n  assert.equal(published.status, 200); const page = await published.json();\n  const rendered = await fetch(base + page.path); const html = await rendered.text();\n  assert.match(rendered.headers.get('content-security-policy'), /default-src 'none'/);\n  assert.match(html, /&lt;R4 &amp; inert&gt;/); assert.match(html, /&lt;script&gt;/); assert.match(html, /href=\"#\"/);\n  results.proofs.push('Actual publication standalone file renderer: title/raw HTML escaped, unsafe URL inert, restrictive CSP');\n\n  // Compare accepted baseline and current HTTP handlers with exact same raw cwd values.\n  const express = req('express'); const app = express();\n  const old = baseline('file-handlers', { './git-diff': baseline('git-diff') });\n  const current = req('./lib/file-handlers');\n  let cwd;\n  for (const [prefix, owner] of [['old', old], ['current', current]]) {\n    const handlers = owner.createFileHandlers({ resolveSessionCwd() { return cwd; }, findSessionSource() { return null; } });\n    for (const [route, handler] of [['files', 'searchSessionFiles'], ['file', 'filePreview'], ['file/content', 'fileContent'], ['diff', 'diffSummary'], ['diff/patch', 'diffPatch']]) app.get(`/${prefix}/:id/${route}`, handlers[handler]);\n  }\n  const compatibility = app.listen(0, '127.0.0.1'); await once(compatibility, 'listening');\n  const compareBase = `http://127.0.0.1:${compatibility.address().port}`;\n  let comparisons = 0;\n  const values = [42, true, false, null, undefined, '', [], {}, workspace];\n  for (const value of values) {\n    cwd = value;\n    for (const route of [`files?q=${encodeURIComponent(workspace + '/view')}`, 'files?q=./view', 'files?q=view', `file?path=${encodeURIComponent(path.join(workspace, 'view.md'))}`, 'file?path=view.md', 'file/content?path=view.md', 'diff', `diff/patch?repo=repo&path=file-3.txt&snapshot=${'a'.repeat(24)}`]) {\n      const responses = [];\n      for (const prefix of ['old', 'current']) {\n        const response = await fetch(`${compareBase}/${prefix}/fixture/${route}`);\n        const text = await response.text();\n        let body;\n        try { body = JSON.parse(text); } catch { body = text; }\n        if (body && typeof body === 'object' && body.snapshotId) { assert.match(body.snapshotId, /^[a-f0-9]{24}$/); body.snapshotId = '<snapshot>'; }\n        responses.push({ status: response.status, type: response.headers.get('content-type'), body });\n      }\n      assert.deepEqual(responses[1], responses[0], `cwd ${String(value)} route ${route}`); comparisons++;\n    }\n  }\n  compatibility.close(); await once(compatibility, 'close');\n  results.proofs.push(`${comparisons} accepted-baseline/current HTTP comparisons preserve raw unknown cwd response/errors and valid cwd`);\n  const beforePage = baseline('file-page'); const afterPage = req('./lib/file-page');\n  for (const title of [null, undefined, '', 42, true, {}, ['x'], '<&>\"\\'', { toString() { return '<custom>'; } }]) {\n    const input = { token: 'token', root: '/view.md', title, file: { content: markdown, truncated: false, size: markdown.length, mtime: 1 } };\n    assert.equal(afterPage.renderFilePage(input), beforePage.renderFilePage(input));\n  }\n  const { matchCommandPaths } = req('./lib/command-paths');\n  const commands = [['cat /a/b ~/c/d', ['/a/b', '~/c/d']], ['X=/tmp/a <~/in >\"/out/a\"', ['/tmp/a', '~/in', '/out/a']], ['cat ~ ./relative ../up https://host/a /a:b /a\\\\ b', ['/a', '/a']], ['cat /tmp/a /tmp/a', ['/tmp/a', '/tmp/a']], ['cat /a.b/@x/%y/+z-1', ['/a.b/@x/%y/+z-1']]];\n  for (const [command, expected] of commands) assert.deepEqual([...matchCommandPaths(command)].map(m => m[1]), expected);\n  results.proofs.push('Nine native title/coercion standalone output comparisons and five matcher delimiter/partial/duplicate/relative examples');\n  results.base = base; results.pageUrl = base + page.path;\n  fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(results, null, 2) + '\\n');\n  console.log('R4_SMOKE_READY ' + JSON.stringify(results));\n  process.on('SIGTERM', () => server.close(() => process.exit(0)));\n}\nmain().catch(error => { console.error(error); process.exit(1); });\n",
+      "scriptSha256": "6f16b1c52c6459cf41e3b552ff9e71e80612deb4ddc2bd895f3abf69241c6f1b",
+      "browser": {
+        "result": "Observed real standalone page with escaped title, rendered heading/bold, literal script text, unsafeHref #, globalThis.r4Executed absent",
+        "screenshot": "/tmp/omp-sshots-15821dc41368f636.webp"
+      },
+      "teardown": "Browser released; supervised isolated server stopped"
+    },
+    {
+      "command": "npm test",
+      "scope": "Independent R4 changes before R1 miner release",
+      "result": "1030 passed,0 failed,0 skipped;34712.090443ms",
+      "output": "artifact://18"
+    },
+    {
+      "command": "npm run test:ui:scenarios",
+      "result": "All eight independent scenarios passed: models,drafts,sidebar,usage,skills,routines,bounce,mobile;55.59s",
+      "output": "artifact://23"
+    },
+    {
+      "command": "npm run test:ui",
+      "result": "Full desktop/mobile smoke passed including file viewer/artifacts/diff/lazy patches/mentions and ownership scenarios;67.25s",
+      "output": "artifact://24"
+    },
+    {
+      "command": "npm test -- test/git-diff.test.js",
+      "result": "13 passed,0 failed,0 skipped;297.251704ms. Added missing .git scenario makes first-version-check protection observable: stale instead of failing raw git invocation.",
+      "output": "artifact://26"
+    },
+    {
+      "command": "node -e \"$PROBE\"",
+      "result": "PASS actual inline snapshot post-version check rejects file change after first version stat; no deferred patch or fake git output",
+      "method": "Temporary HOME/repo; actual git inline summary; wrap fs.statSync returning native original stat, then queueMicrotask appends file after first captured bigint identity; actual owner patch returns stale. Original fs restored and fixture removed."
+    },
+    {
+      "command": "npm run test:browser",
+      "result": "286 passed (3.9m), Chromium153.0.8010.12",
+      "output": "artifact://29"
+    },
+    {
+      "command": "npm run build:core && npm run check",
+      "result": "exit0 after query-before-session-id access ordering preservation;259 compiler-owned sources,all types/drift/lint pass"
+    },
+    {
+      "command": "node /tmp/pi-dish-r4-proof-FMWnFY/smoke.cjs",
+      "scope": "Current generated source after query access ordering preservation",
+      "result": {
+        "runtime": "v26.8.2",
+        "platform": "linux",
+        "isolation": "Allowlisted sanitizeTestEnv, temporary HOME/tmux/git, loopback ephemeral servers; no live sessions/provider credentials",
+        "proofs": [
+          "Actual server preview/raw: line, capped text, metadata-only image bytes, inert HTML/SVG, identical400/404/413/415 errors",
+          "Real deferred git patch output held after pre-version check; changed file before callback release; actual HTTP409 stale without patch, then pre-generation stale409",
+          "Actual publication standalone file renderer: title/raw HTML escaped, unsafe URL inert, restrictive CSP",
+          "72 accepted-baseline/current HTTP comparisons preserve raw unknown cwd response/errors and valid cwd",
+          "Nine native title/coercion standalone output comparisons and five matcher delimiter/partial/duplicate/relative examples"
+        ],
+        "base": "http://127.0.0.1:38013",
+        "pageUrl": "http://127.0.0.1:38013/page/G3jSFWg9EOIy3428lDsnUw"
+      },
+      "scriptSha256": "6f16b1c52c6459cf41e3b552ff9e71e80612deb4ddc2bd895f3abf69241c6f1b",
+      "scriptSourceRecord": "Earlier verification entry retains exact identical scriptSource",
+      "teardown": "Supervised server stopped; own temporary fixture removed"
+    },
+    {
+      "command": "node -e \"$PROBE\"",
+      "result": "Both prepared routes reject empty mention with400/path required before request params getter or session lookup; native read precedence preserved"
+    },
+    {
+      "command": "npm test",
+      "scope": "Settled independent source after request access-order preservation and missing-repo regression",
+      "result": "1030 passed,0 failed,0 skipped;32436.845649ms",
+      "output": "artifact://37"
+    }
+  ],
+  "review": {
+    "status": "Awaiting parent-owned exact trio dispatch on frozen source; no owner reviewer/provider operations performed",
+    "requiredModels": [
+      "zai/glm-5.3",
+      "opencode-go/deepseek-v4.1-flash",
+      "kimi-code/k3"
+    ],
+    "gate": "Owner commits/pushes only migration/r4-file-diff and supplies frozen SHA; no source edits after freeze. Parent retains review dispatch and integration/CI acceptance."
+  },
+  "contributorPath": {
+    "before": "Changing snapshot expiry/refresh required editing route-owned constants/map, summary remember function, patch pre/post guards and on-retirement deletion in file-handlers.ts, alongside git-diff generation. Preview/raw each independently validated/read/rejected the resolved file; command mining regex was maintained in two domain modules; standalone escaping had a third implementation.",
+    "after": "Snapshot expiry, membership/version policy, refresh/eviction and retirement are together in createDiffView in git-diff.ts; routes only validate HTTP query/missing cwd and map result to response. prepareViewerFile is the sole session-aware validate/resolve/read/error path; JSON image metadata and raw resource headers/sendFile remain distinct. Command token matching has one Node-only primitive while separate policies stay with each consumer (including released accepted miner). Page escaping reuses helper-format; no new general service/framework."
+  },
+  "cleanup": {
+    "documentation": "Package-specific ownership/contracts/deletion/check/contributor-path record is this evidence JSON; global acceptance docs are parent-owned and intentionally unchanged.",
+    "temporaryProof": "Smoke scriptSource and SHA256/results retained in this evidence; temporary baseline modules, script, temporary HOME/repositories removed after actual smoke and browser proof. Screenshot retained at recorded path.",
+    "tests": "Three observable snapshot tests kept: membership/identity/retirement+inline drift, success-only sliding expiry/LRU, delayed real deferred patch drift. Existing direct raw-patch test now exercises captured owner, not module wiring.",
+    "final": {
+      "proofSources": "All four final executable proof sources plus failed initial miner fixture source are preserved verbatim with SHA256 in this JSON; disposable executable files and temporary HTTP fixture HOME removed after proof.",
+      "retained": "Full mandatory command logs and receipt plus HTTP/miner/inline receipts retained in /tmp/pi-dish-r4-final-Cp9M3f; screenshot preserved at recorded path.",
+      "testDisposition": "No new permanent miner test needed: unchanged exported contract, direct native baseline comparisons and real full/delta-index HTTP smoke plus existing mining regressions defend behavior. Three focused permanent snapshot regressions retained; old raw patch call migrated.",
+      "generated": "Only affected core outputs regenerated; unchanged declarations and accepted browser/edge/tool outputs intentionally not rewritten.",
+      "globalRecords": "No R4 edits to global acceptance docs/configs/package/type fixtures; accepted2181e5 integration retained its committed records. Unrelated .amp preserved."
+    }
+  },
+  "implementationNotes": [
+    "prepareViewerFile reads/coerces/validates req.query.path before reading req.params.id, matching original route access order. Final changed-path proof confirms empty-query rejection precedes params getter/session access.",
+    "No behavior/performance atomicity upgrade: summary/patch captured asynchronous ordering and existing refresh after successful patch remain unchanged."
+  ],
+  "dependencyRelease": {
+    "acceptedMain": "2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424",
+    "acceptanceLedger": "701bb90 (documentation only; read R1/R11 acceptance without changing parent records)",
+    "ci": "https://github.com/MrPink604/pi-dish/actions/runs/35177938477",
+    "parentProof": "/tmp/pi-dish-parent-r1-r11-final-ci-result.json",
+    "integration": "git merge --ff-only 2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424",
+    "overlap": [],
+    "preservedBeforeAfter": {
+      "lib/file-handlers.js": "e624c7dc84439120859fe5811f4999fa0fb2376baee6c9ec831af20b590a4a0b",
+      "lib/file-mention.js": "dd92fdd9001cc7029f9328741404e54ebffd52a36d15cc02096ad57c8e28b919",
+      "lib/file-page.js": "7fcb1cfac744cface5b3fe42ba000e273cb55d850f4e66df507f688a18302d90",
+      "lib/git-diff.d.ts": "a505a39ff07f67710bde9905c3bf036ef9868b86cbea957ef9e8c98698e5e754",
+      "lib/git-diff.js": "4852f8e2fe78ed5f3eea0abd316c8cd8e786cf3c66025a7257172174b025ede4",
+      "src/core/file-handlers.ts": "d03cc99e6ee4895bc83274b6d8dae8d52d9a0bd2ee537518a078629cc6025e77",
+      "src/core/file-mention.ts": "cb0f82dc2aea24a96e40d4c18568031adc7017c916958f709837b56ecef91ba9",
+      "src/core/file-page.ts": "ae2df3629aac9ba670a4db824a5d68151a98f486d184a9ff6d5a495981c6cc33",
+      "src/core/git-diff.ts": "265acbaf81a7ce9671ea94b4b13d97c409f329dd976734eab06cdd60cb28d80d",
+      "test/git-diff.test.js": "41e8326c153c2de2df27999c5b80eb22846f35293475ddfaa3a3b24c66968bb5",
+      "docs/r4-evidence.json": "3b5211d8e28e4828752bdad11a045b052fcae5ae19871149adc2ed32ae748432",
+      "lib/command-paths.d.ts": "c8ec1647d0d9961050cb8bac3eed33fe328ce1eb129039212ab1c50c0b7c7693",
+      "lib/command-paths.js": "43c5a797cf79dd1cf440f1d5007681487e1ed23b87803e827014e1010b7ec296",
+      "src/core/command-paths.ts": "2f134948a5a132dd0093d5623bc3e8897675380b6599f6408a42691618a73a3d"
+    },
+    "unrelated": ".amp/ untouched and excluded from package",
+    "scope": "Only accepted miner matchCommandPaths import, loop substitution and duplicate regex/comment deletion; m[1], parseSessionEntries, mining/classification/range/tilde policies unchanged",
+    "reGrounded": [
+      "AGENTS.md updated checked runner boundaries",
+      "CLAUDE.md checked server and browser contracts",
+      "docs/r1-evidence.json ownership/callers/behaviorFreeze",
+      "701bb90 docs/remaining-migration-plan.md full R1 and R11 acceptance records",
+      "src/core/skill-mining.ts complete implementation",
+      "src/core/session-files.ts parseSessionEntries",
+      "src/core/session-index.ts full and delta mining consumers",
+      "test/skill-mining.test.js targeted range/framing/archive/batch-local truncation cases",
+      "Accepted src/core/server-app.ts composition/retirement/seven route mounts and src/core/publication-handlers.ts standalone response owner"
+    ],
+    "lsp": "Readonly status: no configured servers; exact consumed symbol searches used; no LSP mutation"
+  },
+  "previousHold": {
+    "owner": "Parent release of R1 exclusive skill-mining.ts ownership",
+    "needed": "Exact settled accepted R1 baseline and explicit release for approved matchCommandPaths import/loop/duplicate-regex cutover",
+    "alreadyRequested": true,
+    "noWorkaround": "Do not write held miner, import old M branches, freeze incomplete package, commit partial source or request final reviewers early",
+    "next": "Apply released actual miner caller, regenerate core, rerun affected smoke and final mandatory gates, then commit/push only assigned branch and request trio capacity"
+  },
+  "finalVerification": [
+    {
+      "command": "npm run build:core",
+      "result": "exit0; only affected core runtime/declarations regenerated on accepted2181e5 baseline after miner caller cutover"
+    },
+    {
+      "command": "node /tmp/pi-dish-r4-final-Cp9M3f/smoke.cjs",
+      "scope": "Complete final generated implementation after miner cutover on accepted2181e5",
+      "result": {
+        "runtime": "v26.8.2",
+        "platform": "linux",
+        "isolation": "Allowlisted sanitizeTestEnv, temporary HOME/tmux/git, loopback ephemeral servers; no live sessions/provider credentials",
+        "proofs": [
+          "Actual server preview/raw: line, capped text, metadata-only image bytes, inert HTML/SVG, identical400/404/413/415 errors",
+          "Real deferred git patch output held after pre-version check; changed file before callback release; actual HTTP409 stale without patch, then pre-generation stale409",
+          "Actual publication standalone file renderer: title/raw HTML escaped, unsafe URL inert, restrictive CSP",
+          "72 accepted-baseline/current HTTP comparisons preserve raw unknown cwd response/errors and valid cwd",
+          "Nine native title/coercion standalone output comparisons and five matcher delimiter/partial/duplicate/relative examples"
+        ],
+        "base": "http://127.0.0.1:41923",
+        "pageUrl": "http://127.0.0.1:41923/page/fiIVYBRwNqRzQ3I0lHBjfQ"
+      },
+      "proofSource": "finalProofSources.smoke.cjs",
+      "browser": {
+        "observation": {
+          "title": "<R4 & inert>",
+          "heading": "R4 inert file",
+          "inert": true,
+          "unsafeHref": "#",
+          "literalScript": true
+        },
+        "screenshot": "/tmp/omp-sshots-1582ad301ffcd5bd.webp",
+        "sha256": "27dcd9ddd40a928b3ad3c06a8e71aee53efcea581cbac88d0d44988f6479fbd3"
+      },
+      "teardown": "Browser released and owned supervised listener stopped"
+    },
+    {
+      "command": "node /tmp/pi-dish-r4-final-Cp9M3f/miner-proof.cjs",
+      "scope": "Changed accepted miner plus actual full-index and append HTTP consumption",
+      "result": {
+        "node": "v26.8.2",
+        "platform": "linux",
+        "baseline": "2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424",
+        "proofs": [
+          "Accepted baseline/current miner records match with tolerant framing, targeted dedupe, absolute and tilde paths, sed ranges, grep null ranges, relative and bare-tilde commands ignored",
+          "Incremental mining retains cwd/model and range semantics; native null/undefined entry failures unchanged",
+          "Native match arrays retain capture/index/input and independent lazy iteration",
+          "Structured bare-tilde remains different: miner expands home while mention trail resolves cwd/~",
+          "Actual server inventory and NDJSON activations expose generated miner full-index evidence and appended-session incremental range/model/cwd evidence"
+        ],
+        "isolation": "Temporary HOME/session/skill files and tmux root; allowlisted sanitizeTestEnv; loopback ephemeral HTTP; no live sessions or provider credentials"
+      },
+      "proofSource": "finalProofSources.miner-proof.cjs"
+    },
+    {
+      "command": "node /tmp/pi-dish-r4-final-Cp9M3f/inline-proof.cjs",
+      "result": {
+        "node": "v26.8.2",
+        "proofs": [
+          "Actual inline snapshot post-version check rejects file change after first native version stat; no deferred patch or fake Git output",
+          "Both prepared routes reject empty mention before request params getter or session access"
+        ]
+      },
+      "proofSource": "finalProofSources.inline-proof.cjs"
+    },
+    {
+      "command": "node /tmp/pi-dish-r4-final-Cp9M3f/gates.cjs",
+      "scope": "Complete final implementation after formal R1 dependency release and miner caller cutover; not earlier independent1030/286 proofs",
+      "result": "All commands exit0: check266 compiler-owned sources; backend1047 passed/0fail/0skip; full browser291 passed; all8 isolated scenarios; full desktop/mobile/terminal/multi-host UI passed.",
+      "receipt": {
+        "root": "/home/jyarwood/workspace/pi-dish-r4",
+        "baseline": "2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424",
+        "node": "v26.8.2",
+        "platform": "linux",
+        "commands": [
+          {
+            "command": "npm run check",
+            "started": "2026-09-17T03:50:01.605Z",
+            "seconds": 4.547673351,
+            "exitCode": 0,
+            "signal": null,
+            "log": "/tmp/pi-dish-r4-final-Cp9M3f/gate-1.log",
+            "logBytes": 873,
+            "sha256": "1f9c14e75a28804326a84adf70e45a0a6e441ccbdb69d404c63a97f0e705bbb1"
+          },
+          {
+            "command": "npm test",
+            "started": "2026-09-17T03:50:06.155Z",
+            "seconds": 32.487160908,
+            "exitCode": 0,
+            "signal": null,
+            "log": "/tmp/pi-dish-r4-final-Cp9M3f/gate-2.log",
+            "logBytes": 108201,
+            "sha256": "629db180608546c7433ac4bbe8c0205934e5e4137ff8acad9a223220c2c5b21b"
+          },
+          {
+            "command": "npm run test:browser",
+            "started": "2026-09-17T03:50:38.642Z",
+            "seconds": 194.32758726600002,
+            "exitCode": 0,
+            "signal": null,
+            "log": "/tmp/pi-dish-r4-final-Cp9M3f/gate-3.log",
+            "logBytes": 41426,
+            "sha256": "1ca314769506be206adafc7807a89f5d998a40531562ff48f6449ab20082f3f8"
+          },
+          {
+            "command": "npm run test:ui:scenarios",
+            "started": "2026-09-17T03:53:52.970Z",
+            "seconds": 48.150235623000015,
+            "exitCode": 0,
+            "signal": null,
+            "log": "/tmp/pi-dish-r4-final-Cp9M3f/gate-4.log",
+            "logBytes": 12216,
+            "sha256": "0477965a0352e5db2da38bea21a38ca59efbf5be26cfaa9b67ce1023de2cc5f2"
+          },
+          {
+            "command": "npm run test:ui",
+            "started": "2026-09-17T03:54:41.121Z",
+            "seconds": 61.33012265899998,
+            "exitCode": 0,
+            "signal": null,
+            "log": "/tmp/pi-dish-r4-final-Cp9M3f/gate-5.log",
+            "logBytes": 38222,
+            "sha256": "de547ce7f33b03c7a3da512406be73e6f530c0239ade181d672e4095a7a3049b"
+          }
+        ]
+      },
+      "proofSource": "finalProofSources.gates.cjs"
+    }
+  ],
+  "finalProofSources": {
+    "smoke.cjs": {
+      "source": "'use strict';\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst cp = require('node:child_process');\nconst Module = require('node:module');\nconst { once } = require('node:events');\nconst root = process.env.R4_WORKTREE || process.cwd();\nconst dir = __dirname;\nconst req = Module.createRequire(path.join(root, 'package.json'));\nconst home = path.join(dir, 'home');\nfs.mkdirSync(home, { recursive: true });\nconst env = req('./test/test-env').sanitizeTestEnv({ PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: home, SHELL: '/bin/sh', TMPDIR: dir, TMUX_TMPDIR: path.join(dir, 'tmux') });\nfor (const key of Object.keys(process.env)) delete process.env[key];\nObject.assign(process.env, env, { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'R4', GIT_AUTHOR_EMAIL: 'r4@test', GIT_COMMITTER_NAME: 'R4', GIT_COMMITTER_EMAIL: 'r4@test' });\nfs.mkdirSync(process.env.TMUX_TMPDIR, { recursive: true });\nconst workspace = path.join(home, 'workspace');\nconst repo = path.join(workspace, 'repo');\nfs.mkdirSync(repo, { recursive: true });\nfunction git(...args) { return cp.execFileSync('git', args, { cwd: repo, encoding: 'utf8' }); }\ngit('init', '-q', '-b', 'main');\nfor (let i = 0; i < 7; i++) fs.writeFileSync(path.join(repo, `file-${i}.txt`), `old ${i}\\n`);\ngit('add', '-A'); git('commit', '-q', '-m', 'fixture');\nfor (let i = 0; i < 7; i++) fs.appendFileSync(path.join(repo, `file-${i}.txt`), `new ${i}\\n`);\nconst markdown = '# R4 inert file\\n\\nA **rendered** finding.\\n\\n<script>globalThis.r4Executed = true</script>\\n\\n[unsafe](javascript:alert(1))\\n';\nfs.writeFileSync(path.join(workspace, 'view.md'), markdown);\nfs.writeFileSync(path.join(workspace, 'raw.html'), '<script>globalThis.r4Executed=true</script>');\nfs.writeFileSync(path.join(workspace, 'raw.svg'), '<svg xmlns=\"http://www.w3.org/2000/svg\"><script>globalThis.r4Executed=true</script></svg>');\nfs.writeFileSync(path.join(workspace, 'binary.bin'), Buffer.from([65, 0, 66]));\nfs.writeFileSync(path.join(workspace, 'large.txt'), 'a'.repeat(512001));\nfs.writeFileSync(path.join(workspace, 'large.png'), Buffer.alloc(8 * 1024 * 1024 + 1));\nconst png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');\nfs.writeFileSync(path.join(workspace, 'small.png'), png);\nfs.writeFileSync(path.join(home, 'secret.txt'), 'not reachable');\nconst sessions = path.join(home, '.pi/agent/sessions/fixture');\nfs.mkdirSync(sessions, { recursive: true });\nconst id = 'r4-runtime-fixture';\nfs.writeFileSync(path.join(sessions, id + '.jsonl'), JSON.stringify({ type: 'session', cwd: workspace, timestamp: new Date().toISOString() }) + '\\n');\nconst results = { runtime: process.version, platform: process.platform, isolation: 'Allowlisted sanitizeTestEnv, temporary HOME/tmux/git, loopback ephemeral servers; no live sessions/provider credentials', proofs: [] };\nfunction baseline(name, overrides = {}) {\n  const filename = path.join(root, 'lib', '__r4_baseline_' + name + '.js');\n  const mod = new Module(filename, module);\n  mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));\n  const original = mod.require.bind(mod);\n  mod.require = value => Object.hasOwn(overrides, value) ? overrides[value] : original(value);\n  mod._compile(cp.execFileSync('git', ['show', '2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424:lib/' + name + '.js'], { cwd: root, encoding: 'utf8' }), filename);\n  return mod.exports;\n}\nasync function main() {\n  const server = req('./server');\n  if (!server.listening) await once(server, 'listening');\n  const base = `http://127.0.0.1:${server.address().port}`;\n  const get = async route => { const res = await fetch(base + route); return { status: res.status, headers: Object.fromEntries(res.headers), body: await res.json() }; };\n  const file = name => `/api/sessions/${id}/file?path=${encodeURIComponent(name)}`;\n  assert.equal((await get(file('view.md:2'))).body.line, 2);\n  for (const name of ['raw.html', 'raw.svg']) {\n    const preview = await get(file(name)); assert.equal(preview.status, 200);\n    const response = await fetch(base + `/api/sessions/${id}/file/content?path=${name}`);\n    assert.equal(response.status, 200); assert.match(response.headers.get('content-type'), /^text\\/plain/);\n    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');\n    assert.equal(response.headers.get('cache-control'), 'private, no-cache');\n    assert.equal(await response.text(), fs.readFileSync(path.join(workspace, name), 'utf8'));\n  }\n  const image = await get(file('small.png')); assert.equal(image.body.image.data, undefined);\n  assert.deepEqual(Buffer.from(await (await fetch(base + image.body.image.url)).arrayBuffer()), png);\n  const large = await get(file('large.txt')); assert.equal(large.body.truncated, true); assert.equal(large.body.content.length, 512000);\n  for (const [name, status] of [['', 400], ['x'.repeat(1025), 400], ['binary.bin', 415], ['large.png', 413], ['../secret.txt', 404], ['missing.txt', 404]]) {\n    const preview = await get(file(name));\n    const raw = await get(`/api/sessions/${id}/file/content?path=${encodeURIComponent(name)}`);\n    assert.equal(preview.status, status); assert.equal(raw.status, status); assert.deepEqual(raw.body, preview.body);\n  }\n  results.proofs.push('Actual server preview/raw: line, capped text, metadata-only image bytes, inert HTML/SVG, identical400/404/413/415 errors');\n  const summary = await get(`/api/sessions/${id}/diff`); assert.equal(summary.status, 200);\n  assert.ok(summary.body.repos[0].files.every(f => f.patchDeferred && f.patch === undefined));\n  const patchRoute = name => `/api/sessions/${id}/diff/patch?${new URLSearchParams({repo: 'repo', path: name, snapshot: summary.body.snapshotId})}`;\n  assert.equal((await get(patchRoute('../view.md'))).status, 404);\n  assert.match((await get(patchRoute('file-3.txt'))).body.patch, /\\+new 3/);\n  const originalExec = cp.execFile;\n  let release;\n  let notify;\n  const ready = new Promise(resolve => { notify = resolve; });\n  cp.execFile = function(command, args, options, callback) {\n    return originalExec.call(this, command, args, options, (error, stdout, stderr) => {\n      if (options.cwd === repo && args.includes('diff') && args.includes('--no-color')) {\n        release = () => callback(error, stdout, stderr); notify();\n      } else callback(error, stdout, stderr);\n    });\n  };\n  const pending = get(patchRoute('file-3.txt'));\n  await Promise.race([ready, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('patch delay not reached')), 5000); timer.unref(); })]);\n  fs.appendFileSync(path.join(repo, 'file-3.txt'), 'changed while real patch callback held\\n');\n  cp.execFile = originalExec; release();\n  const delayed = await pending; assert.equal(delayed.status, 409); assert.equal(delayed.body.stale, true); assert.equal(delayed.body.patch, undefined);\n  assert.equal((await get(patchRoute('file-3.txt'))).status, 409);\n  results.proofs.push('Real deferred git patch output held after pre-version check; changed file before callback release; actual HTTP409 stale without patch, then pre-generation stale409');\n  const published = await fetch(base + '/api/pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: path.join(workspace, 'view.md'), sessionId: id, title: '<R4 & inert>', renderer: 'file' }) });\n  assert.equal(published.status, 200); const page = await published.json();\n  const rendered = await fetch(base + page.path); const html = await rendered.text();\n  assert.match(rendered.headers.get('content-security-policy'), /default-src 'none'/);\n  assert.match(html, /&lt;R4 &amp; inert&gt;/); assert.match(html, /&lt;script&gt;/); assert.match(html, /href=\"#\"/);\n  results.proofs.push('Actual publication standalone file renderer: title/raw HTML escaped, unsafe URL inert, restrictive CSP');\n\n  // Compare accepted baseline and current HTTP handlers with exact same raw cwd values.\n  const express = req('express'); const app = express();\n  const old = baseline('file-handlers', { './git-diff': baseline('git-diff') });\n  const current = req('./lib/file-handlers');\n  let cwd;\n  for (const [prefix, owner] of [['old', old], ['current', current]]) {\n    const handlers = owner.createFileHandlers({ resolveSessionCwd() { return cwd; }, findSessionSource() { return null; } });\n    for (const [route, handler] of [['files', 'searchSessionFiles'], ['file', 'filePreview'], ['file/content', 'fileContent'], ['diff', 'diffSummary'], ['diff/patch', 'diffPatch']]) app.get(`/${prefix}/:id/${route}`, handlers[handler]);\n  }\n  const compatibility = app.listen(0, '127.0.0.1'); await once(compatibility, 'listening');\n  const compareBase = `http://127.0.0.1:${compatibility.address().port}`;\n  let comparisons = 0;\n  const values = [42, true, false, null, undefined, '', [], {}, workspace];\n  for (const value of values) {\n    cwd = value;\n    for (const route of [`files?q=${encodeURIComponent(workspace + '/view')}`, 'files?q=./view', 'files?q=view', `file?path=${encodeURIComponent(path.join(workspace, 'view.md'))}`, 'file?path=view.md', 'file/content?path=view.md', 'diff', `diff/patch?repo=repo&path=file-3.txt&snapshot=${'a'.repeat(24)}`]) {\n      const responses = [];\n      for (const prefix of ['old', 'current']) {\n        const response = await fetch(`${compareBase}/${prefix}/fixture/${route}`);\n        const text = await response.text();\n        let body;\n        try { body = JSON.parse(text); } catch { body = text; }\n        if (body && typeof body === 'object' && body.snapshotId) { assert.match(body.snapshotId, /^[a-f0-9]{24}$/); body.snapshotId = '<snapshot>'; }\n        responses.push({ status: response.status, type: response.headers.get('content-type'), body });\n      }\n      assert.deepEqual(responses[1], responses[0], `cwd ${String(value)} route ${route}`); comparisons++;\n    }\n  }\n  compatibility.close(); await once(compatibility, 'close');\n  results.proofs.push(`${comparisons} accepted-baseline/current HTTP comparisons preserve raw unknown cwd response/errors and valid cwd`);\n  const beforePage = baseline('file-page'); const afterPage = req('./lib/file-page');\n  for (const title of [null, undefined, '', 42, true, {}, ['x'], '<&>\"\\'', { toString() { return '<custom>'; } }]) {\n    const input = { token: 'token', root: '/view.md', title, file: { content: markdown, truncated: false, size: markdown.length, mtime: 1 } };\n    assert.equal(afterPage.renderFilePage(input), beforePage.renderFilePage(input));\n  }\n  const { matchCommandPaths } = req('./lib/command-paths');\n  const commands = [['cat /a/b ~/c/d', ['/a/b', '~/c/d']], ['X=/tmp/a <~/in >\"/out/a\"', ['/tmp/a', '~/in', '/out/a']], ['cat ~ ./relative ../up https://host/a /a:b /a\\\\ b', ['/a', '/a']], ['cat /tmp/a /tmp/a', ['/tmp/a', '/tmp/a']], ['cat /a.b/@x/%y/+z-1', ['/a.b/@x/%y/+z-1']]];\n  for (const [command, expected] of commands) assert.deepEqual([...matchCommandPaths(command)].map(m => m[1]), expected);\n  results.proofs.push('Nine native title/coercion standalone output comparisons and five matcher delimiter/partial/duplicate/relative examples');\n  results.base = base; results.pageUrl = base + page.path;\n  fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(results, null, 2) + '\\n');\n  console.log('R4_SMOKE_READY ' + JSON.stringify(results));\n  process.on('SIGTERM', () => server.close(() => process.exit(0)));\n}\nmain().catch(error => { console.error(error); process.exit(1); });\n",
+      "sha256": "cd149d025f559c8393e7202d9590d8715d977a079551101ea93dabae91a21284",
+      "bytes": 11566
+    },
+    "miner-proof.cjs": {
+      "source": "'use strict';\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst cp = require('node:child_process');\nconst Module = require('node:module');\nconst { once } = require('node:events');\nconst root = process.env.R4_WORKTREE || process.cwd();\nconst req = Module.createRequire(path.join(root, 'package.json'));\nconst home = fs.mkdtempSync(path.join(__dirname, 'miner-home-'));\nconst env = req('./test/test-env').sanitizeTestEnv({ PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8', SHELL: '/bin/sh', TMPDIR: home, TMUX_TMPDIR: path.join(home, 'tmux') });\nfor (const key of Object.keys(process.env)) delete process.env[key];\nObject.assign(process.env, env);\nfs.mkdirSync(process.env.TMUX_TMPDIR);\nconst cwd = path.join(home, 'project'); fs.mkdirSync(cwd);\nconst skillDir = path.join(home, '.pi/agent/skills/r4-probe');\nfs.mkdirSync(path.join(skillDir, 'references'), { recursive: true });\nconst skill = path.join(skillDir, 'SKILL.md');\nfs.writeFileSync(skill, '---\\nname: r4-probe\\ndescription: Isolated R4 mining proof\\n---\\n# Probe\\n');\nconst reference = path.join(skillDir, 'references/a.md'); fs.writeFileSync(reference, 'reference\\n');\nconst skillCtx = { roots: new Map([[skillDir, skill]]) };\nconst options = { sessionId: 'r4-miner-fixture', home, skillCtx };\nconst session = { type: 'session', cwd, timestamp: '2026-09-16T12:00:00Z' };\nconst model = { type: 'model_change', provider: 'fixture', modelId: 'selected' };\nconst bash = (id, command) => ({ type: 'message', id, timestamp: '2026-09-16T12:00:01Z', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'bash', id: id + '-call', arguments: { command } }] } });\nconst entries = [session, model,\n  bash('whole', `cat ${skill} ${skill}`),\n  bash('range', \"sed -n '5,20p' ~/.pi/agent/skills/r4-probe/references/a.md\"),\n  bash('grep', `grep token ${skill}`),\n  bash('relative', 'cat ./.pi/agent/skills/r4-probe/SKILL.md ~'),\n];\nconst content = '\\n{torn\\n42\\n' + entries.map(e => JSON.stringify(e)).join('\\n') + '\\n';\nconst beforeCode = cp.execFileSync('git', ['show', '2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424:lib/skill-mining.js'], { cwd: root, encoding: 'utf8' });\nconst before = new Module(path.join(root, 'lib/__r4_accepted_miner.js'), module);\nbefore.filename = path.join(root, 'lib/__r4_accepted_miner.js');\nbefore.paths = Module._nodeModulePaths(path.join(root, 'lib'));\nbefore._compile(beforeCode, before.filename);\nconst current = req('./lib/skill-mining');\nconst observed = current.mineSkillsFromContent(content, options);\nassert.deepEqual(observed, before.exports.mineSkillsFromContent(content, options));\nassert.deepEqual(observed.map(r => [r.entryId, r.file, r.ranges]), [\n  ['whole', 'SKILL.md', 'all'], ['range', 'references/a.md', [[5, 20]]], ['grep', 'SKILL.md', null],\n]);\nassert.ok(observed.every(r => r.cwd === cwd && r.model === 'fixture/selected' && r.kind === 'targeted'));\nconst first = current.mineSkillsFromEntries(entries.slice(0, 3), options);\nconst delta = [bash('delta', `head -n 7 ${reference}`)];\nconst next = current.mineSkillsFromEntries(delta, { ...options, initialState: first.state });\nassert.deepEqual(next, before.exports.mineSkillsFromEntries(delta, { ...options, initialState: first.state }));\nassert.deepEqual(next.records[0].ranges, [[1, 7]]);\nassert.equal(next.records[0].model, 'fixture/selected');\nfor (const rows of [[null], [undefined]]) {\n  let previousError; try { before.exports.mineSkillsFromEntries(rows, options); } catch (error) { previousError = error; }\n  assert.throws(() => current.mineSkillsFromEntries(rows, options), error => error.name === previousError.name && error.message === previousError.message);\n}\nconst { matchCommandPaths } = req('./lib/command-paths');\nconst iterator = matchCommandPaths(`cat ${skill} ${reference}`);\nconst other = matchCommandPaths('cat /elsewhere');\nassert.equal(iterator[Symbol.iterator](), iterator);\nconst firstMatch = iterator.next().value;\nassert.equal(firstMatch[1], skill); assert.equal(firstMatch.index, 3); assert.equal(firstMatch.input, `cat ${skill} ${reference}`);\nassert.equal(other.next().value[1], '/elsewhere');\nassert.equal(iterator.next().value[1], reference); assert.equal(iterator.next().done, true);\nconst bare = { type: 'message', id: 'bare', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'read', arguments: { path: '~' } }] } };\nconst specialHome = '/fixture/home';\nconst bareOptions = { home: specialHome, skillCtx: { roots: new Map([['/fixture', '/fixture/SKILL.md']]) } };\nconst minedBare = current.mineSkillsFromEntries([{ type: 'session', cwd: '/cwd' }, bare], bareOptions);\nassert.deepEqual(minedBare, before.exports.mineSkillsFromEntries([{ type: 'session', cwd: '/cwd' }, bare], bareOptions));\nassert.equal(minedBare.records[0].file, 'home');\nconst mentionPaths = req('./lib/file-mention').extractSessionPaths([bare.message], '/cwd', specialHome);\nassert.equal(mentionPaths.has('/cwd/~'), true); assert.equal(mentionPaths.has(specialHome), false);\nconst sessionDir = path.join(home, '.pi/agent/sessions/fixture'); fs.mkdirSync(sessionDir, { recursive: true });\nconst sessionFile = path.join(sessionDir, options.sessionId + '.jsonl');\nlet server;\nasync function main() {\n  server = req('./server'); if (!server.listening) await once(server, 'listening');\n  const base = `http://127.0.0.1:${server.address().port}`;\n  const inventory = await fetch(base + '/api/skills'); assert.equal(inventory.status, 200);\n  assert.ok((await inventory.json()).skills.some(s => s.filePath === skill));\n  // Prime inventory before creating this session. Existing indexes deliberately\n  // are not re-mined merely because skill roots arrived after startup.\nfs.writeFileSync(sessionFile, entries.map(e => JSON.stringify(e)).join('\\n') + '\\n');\n  async function activations() {\n    const response = await fetch(base + '/api/skills/activations?' + new URLSearchParams({skill}));\n    assert.equal(response.status, 200);\n    return (await response.text()).trim().split('\\n').filter(Boolean).map(line => JSON.parse(line));\n  }\n  let records = await activations();\n  assert.deepEqual(records.map(r => [r.entryId, r.file, r.ranges]).sort(), observed.map(r => [r.entryId, r.file, r.ranges]).sort());\n  assert.ok(records.every(r => r.sessionId === options.sessionId));\n  fs.appendFileSync(sessionFile, JSON.stringify(delta[0]) + '\\n');\n  records = await activations();\n  const appended = records.find(r => r.entryId === 'delta');\n  assert.deepEqual(appended.ranges, [[1, 7]]); assert.equal(appended.model, 'fixture/selected'); assert.equal(appended.cwd, cwd);\n  const result = { node: process.version, platform: process.platform, baseline: '2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424', proofs: [\n    'Accepted baseline/current miner records match with tolerant framing, targeted dedupe, absolute and tilde paths, sed ranges, grep null ranges, relative and bare-tilde commands ignored',\n    'Incremental mining retains cwd/model and range semantics; native null/undefined entry failures unchanged',\n    'Native match arrays retain capture/index/input and independent lazy iteration',\n    'Structured bare-tilde remains different: miner expands home while mention trail resolves cwd/~',\n    'Actual server inventory and NDJSON activations expose generated miner full-index evidence and appended-session incremental range/model/cwd evidence',\n  ], isolation: 'Temporary HOME/session/skill files and tmux root; allowlisted sanitizeTestEnv; loopback ephemeral HTTP; no live sessions or provider credentials' };\n  fs.writeFileSync(path.join(__dirname, 'miner-result.json'), JSON.stringify(result, null, 2) + '\\n');\n  console.log('R4_MINER_PROOF_PASS ' + JSON.stringify(result));\n}\nmain().then(() => server.close(() => { fs.rmSync(home, {recursive:true,force:true}); process.exit(0); })).catch(error => {\n  console.error(error); if (server) server.close(); fs.rmSync(home, {recursive:true,force:true}); process.exit(1);\n});\n",
+      "sha256": "750215667cde497f635a40d414ec204b51dab7dc0abe70736000291edca2dcc1",
+      "bytes": 7960
+    },
+    "gates.cjs": {
+      "source": "'use strict';\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst cp = require('node:child_process');\nconst crypto = require('node:crypto');\nconst root = process.env.R4_WORKTREE || process.cwd();\nconst commands = [\n  ['npm', 'run', 'check'],\n  ['npm', 'test'],\n  ['npm', 'run', 'test:browser'],\n  ['npm', 'run', 'test:ui:scenarios'],\n  ['npm', 'run', 'test:ui'],\n];\nconst results = { root, baseline: '2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424', node: process.version, platform: process.platform, commands: [] };\nfor (let i = 0; i < commands.length; i++) {\n  const [command, ...args] = commands[i];\n  const log = path.join(__dirname, `gate-${i + 1}.log`);\n  const fd = fs.openSync(log, 'w');\n  const started = new Date().toISOString();\n  const start = performance.now();\n  const result = cp.spawnSync(command, args, { cwd: root, stdio: ['ignore', fd, fd], timeout: 900000 });\n  fs.closeSync(fd);\n  const bytes = fs.readFileSync(log);\n  const entry = { command: [command, ...args].join(' '), started, seconds: (performance.now() - start) / 1000, exitCode: result.status, signal: result.signal, error: result.error?.message, log, logBytes: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex') };\n  results.commands.push(entry);\n  fs.writeFileSync(path.join(__dirname, 'gates-result.json'), JSON.stringify(results, null, 2) + '\\n');\n  console.log(JSON.stringify(entry));\n  console.log(bytes.toString('utf8').split('\\n').slice(-14).join('\\n'));\n  if (result.status !== 0) process.exit(result.status || 1);\n}\nconsole.log('R4_FINAL_GATES_PASS');\n",
+      "sha256": "dc96c129be062e5ede22823fff09c80620d24bfb4ee6f6dbbf71b1bfd76e3456",
+      "bytes": 1583
+    },
+    "inline-proof.cjs": {
+      "source": "'use strict';\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst cp = require('node:child_process');\nconst Module = require('node:module');\nconst root = process.env.R4_WORKTREE || process.cwd();\nconst req = Module.createRequire(path.join(root, 'package.json'));\nconst dir = fs.mkdtempSync(path.join(__dirname, 'inline-home-'));\nconst env = req('./test/test-env').sanitizeTestEnv({ PATH: process.env.PATH, HOME: dir, LANG: 'C.UTF-8' });\nfor (const key of Object.keys(process.env)) delete process.env[key];\nObject.assign(process.env, env, { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null', GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 't@t' });\nconst git = (...args) => cp.execFileSync('git', args, { cwd: dir });\ngit('init', '-q', '-b', 'main');\nconst file = path.join(dir, 'a.txt');\nfs.writeFileSync(file, 'old\\n'); git('add', '.'); git('commit', '-q', '-m', 'fixture');\nfs.appendFileSync(file, 'new\\n');\nasync function main() {\n  const view = req('./lib/git-diff').createDiffView();\n  const summary = await view.summary('a', dir);\n  assert.match(summary.repos[0].files[0].patch, /\\+new/);\n  const stat = fs.statSync;\n  let changed = false;\n  fs.statSync = function(p, options) {\n    const result = stat.call(this, p, options);\n    if (p === file && options?.bigint && !changed) {\n      changed = true;\n      queueMicrotask(() => fs.appendFileSync(file, 'changed after first stat identity\\n'));\n    }\n    return result;\n  };\n  try {\n    assert.equal(await view.patch('a', dir, summary.snapshotId, '.', 'a.txt'), 'stale');\n    assert.equal(changed, true);\n  } finally { fs.statSync = stat; }\n  const handlers = req('./lib/file-handlers').createFileHandlers({ resolveSessionCwd() { throw Error('unreachable lookup'); }, findSessionSource() { throw Error('unreachable source'); } });\n  for (const name of ['fileContent', 'filePreview']) {\n    let status, body;\n    const response = { status(value) { status = value; return this; }, json(value) { body = value; return this; } };\n    await handlers[name]({ query: { path: '' }, get params() { throw Error('must not read params before empty path rejection'); } }, response);\n    assert.equal(status, 400); assert.deepEqual(body, { error: 'path required' });\n  }\n  const result = { node: process.version, proofs: ['Actual inline snapshot post-version check rejects file change after first native version stat; no deferred patch or fake Git output', 'Both prepared routes reject empty mention before request params getter or session access'] };\n  fs.writeFileSync(path.join(__dirname, 'inline-result.json'), JSON.stringify(result, null, 2) + '\\n');\n  console.log('R4_INLINE_PROOF_PASS ' + JSON.stringify(result));\n}\nmain().then(() => fs.rmSync(dir, { recursive: true, force: true })).catch(error => { console.error(error); fs.rmSync(dir, { recursive: true, force: true }); process.exitCode = 1; });\n",
+      "sha256": "d0b9ca1d73c035e5c389c344995d31bde0936494732e8225f4c45be6f534f91b",
+      "bytes": 2977
+    }
+  },
+  "historicalProofFailures": [
+    {
+      "command": "node /tmp/pi-dish-r4-final-Cp9M3f/miner-proof.cjs",
+      "exitCode": 1,
+      "scope": "Throwaway smoke fixture ordering, not product source failure",
+      "observed": "Actual first HTTP index returned whole/grep SKILL.md activations but no reference-file range activation; direct accepted/current miner comparisons had passed before HTTP assertion.",
+      "cause": "Fixture session existed during startup catalog scan before asynchronous skill-root inventory priming. Existing session-index.ts explicitly does not invalidate old entries when roots arrive; they catch up on next session-file change.",
+      "disposition": "Preserve accepted cache/invalidation policy. Establish inventory roots before writing new fixture session, then exercise actual full index and append mining. No product edits.",
+      "scriptSource": "'use strict';\nconst assert = require('node:assert/strict');\nconst fs = require('node:fs');\nconst path = require('node:path');\nconst cp = require('node:child_process');\nconst Module = require('node:module');\nconst { once } = require('node:events');\nconst root = process.env.R4_WORKTREE || process.cwd();\nconst req = Module.createRequire(path.join(root, 'package.json'));\nconst home = fs.mkdtempSync(path.join(__dirname, 'miner-home-'));\nconst env = req('./test/test-env').sanitizeTestEnv({ PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8', SHELL: '/bin/sh', TMPDIR: home, TMUX_TMPDIR: path.join(home, 'tmux') });\nfor (const key of Object.keys(process.env)) delete process.env[key];\nObject.assign(process.env, env);\nfs.mkdirSync(process.env.TMUX_TMPDIR);\nconst cwd = path.join(home, 'project'); fs.mkdirSync(cwd);\nconst skillDir = path.join(home, '.pi/agent/skills/r4-probe');\nfs.mkdirSync(path.join(skillDir, 'references'), { recursive: true });\nconst skill = path.join(skillDir, 'SKILL.md');\nfs.writeFileSync(skill, '---\\nname: r4-probe\\ndescription: Isolated R4 mining proof\\n---\\n# Probe\\n');\nconst reference = path.join(skillDir, 'references/a.md'); fs.writeFileSync(reference, 'reference\\n');\nconst skillCtx = { roots: new Map([[skillDir, skill]]) };\nconst options = { sessionId: 'r4-miner-fixture', home, skillCtx };\nconst session = { type: 'session', cwd, timestamp: '2026-09-16T12:00:00Z' };\nconst model = { type: 'model_change', provider: 'fixture', modelId: 'selected' };\nconst bash = (id, command) => ({ type: 'message', id, timestamp: '2026-09-16T12:00:01Z', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'bash', id: id + '-call', arguments: { command } }] } });\nconst entries = [session, model,\n  bash('whole', `cat ${skill} ${skill}`),\n  bash('range', \"sed -n '5,20p' ~/.pi/agent/skills/r4-probe/references/a.md\"),\n  bash('grep', `grep token ${skill}`),\n  bash('relative', 'cat ./.pi/agent/skills/r4-probe/SKILL.md ~'),\n];\nconst content = '\\n{torn\\n42\\n' + entries.map(e => JSON.stringify(e)).join('\\n') + '\\n';\nconst beforeCode = cp.execFileSync('git', ['show', '2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424:lib/skill-mining.js'], { cwd: root, encoding: 'utf8' });\nconst before = new Module(path.join(root, 'lib/__r4_accepted_miner.js'), module);\nbefore.filename = path.join(root, 'lib/__r4_accepted_miner.js');\nbefore.paths = Module._nodeModulePaths(path.join(root, 'lib'));\nbefore._compile(beforeCode, before.filename);\nconst current = req('./lib/skill-mining');\nconst observed = current.mineSkillsFromContent(content, options);\nassert.deepEqual(observed, before.exports.mineSkillsFromContent(content, options));\nassert.deepEqual(observed.map(r => [r.entryId, r.file, r.ranges]), [\n  ['whole', 'SKILL.md', 'all'], ['range', 'references/a.md', [[5, 20]]], ['grep', 'SKILL.md', null],\n]);\nassert.ok(observed.every(r => r.cwd === cwd && r.model === 'fixture/selected' && r.kind === 'targeted'));\nconst first = current.mineSkillsFromEntries(entries.slice(0, 3), options);\nconst delta = [bash('delta', `head -n 7 ${reference}`)];\nconst next = current.mineSkillsFromEntries(delta, { ...options, initialState: first.state });\nassert.deepEqual(next, before.exports.mineSkillsFromEntries(delta, { ...options, initialState: first.state }));\nassert.deepEqual(next.records[0].ranges, [[1, 7]]);\nassert.equal(next.records[0].model, 'fixture/selected');\nfor (const rows of [[null], [undefined]]) {\n  let previousError; try { before.exports.mineSkillsFromEntries(rows, options); } catch (error) { previousError = error; }\n  assert.throws(() => current.mineSkillsFromEntries(rows, options), error => error.name === previousError.name && error.message === previousError.message);\n}\nconst { matchCommandPaths } = req('./lib/command-paths');\nconst iterator = matchCommandPaths(`cat ${skill} ${reference}`);\nconst other = matchCommandPaths('cat /elsewhere');\nassert.equal(iterator[Symbol.iterator](), iterator);\nconst firstMatch = iterator.next().value;\nassert.equal(firstMatch[1], skill); assert.equal(firstMatch.index, 3); assert.equal(firstMatch.input, `cat ${skill} ${reference}`);\nassert.equal(other.next().value[1], '/elsewhere');\nassert.equal(iterator.next().value[1], reference); assert.equal(iterator.next().done, true);\nconst bare = { type: 'message', id: 'bare', message: { role: 'assistant', content: [{ type: 'toolCall', name: 'read', arguments: { path: '~' } }] } };\nconst specialHome = '/fixture/home';\nconst bareOptions = { home: specialHome, skillCtx: { roots: new Map([['/fixture', '/fixture/SKILL.md']]) } };\nconst minedBare = current.mineSkillsFromEntries([{ type: 'session', cwd: '/cwd' }, bare], bareOptions);\nassert.deepEqual(minedBare, before.exports.mineSkillsFromEntries([{ type: 'session', cwd: '/cwd' }, bare], bareOptions));\nassert.equal(minedBare.records[0].file, 'home');\nconst mentionPaths = req('./lib/file-mention').extractSessionPaths([bare.message], '/cwd', specialHome);\nassert.equal(mentionPaths.has('/cwd/~'), true); assert.equal(mentionPaths.has(specialHome), false);\nconst sessionDir = path.join(home, '.pi/agent/sessions/fixture'); fs.mkdirSync(sessionDir, { recursive: true });\nconst sessionFile = path.join(sessionDir, options.sessionId + '.jsonl');\nfs.writeFileSync(sessionFile, entries.map(e => JSON.stringify(e)).join('\\n') + '\\n');\nlet server;\nasync function main() {\n  server = req('./server'); if (!server.listening) await once(server, 'listening');\n  const base = `http://127.0.0.1:${server.address().port}`;\n  const inventory = await fetch(base + '/api/skills'); assert.equal(inventory.status, 200);\n  assert.ok((await inventory.json()).skills.some(s => s.filePath === skill));\n  async function activations() {\n    const response = await fetch(base + '/api/skills/activations?' + new URLSearchParams({skill}));\n    assert.equal(response.status, 200);\n    return (await response.text()).trim().split('\\n').filter(Boolean).map(line => JSON.parse(line));\n  }\n  let records = await activations();\n  assert.deepEqual(records.map(r => [r.entryId, r.file, r.ranges]).sort(), observed.map(r => [r.entryId, r.file, r.ranges]).sort());\n  assert.ok(records.every(r => r.sessionId === options.sessionId));\n  fs.appendFileSync(sessionFile, JSON.stringify(delta[0]) + '\\n');\n  records = await activations();\n  const appended = records.find(r => r.entryId === 'delta');\n  assert.deepEqual(appended.ranges, [[1, 7]]); assert.equal(appended.model, 'fixture/selected'); assert.equal(appended.cwd, cwd);\n  const result = { node: process.version, platform: process.platform, baseline: '2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424', proofs: [\n    'Accepted baseline/current miner records match with tolerant framing, targeted dedupe, absolute and tilde paths, sed ranges, grep null ranges, relative and bare-tilde commands ignored',\n    'Incremental mining retains cwd/model and range semantics; native null/undefined entry failures unchanged',\n    'Native match arrays retain capture/index/input and independent lazy iteration',\n    'Structured bare-tilde remains different: miner expands home while mention trail resolves cwd/~',\n    'Actual server inventory and NDJSON activations expose generated miner full-index evidence and appended-session incremental range/model/cwd evidence',\n  ], isolation: 'Temporary HOME/session/skill files and tmux root; allowlisted sanitizeTestEnv; loopback ephemeral HTTP; no live sessions or provider credentials' };\n  fs.writeFileSync(path.join(__dirname, 'miner-result.json'), JSON.stringify(result, null, 2) + '\\n');\n  console.log('R4_MINER_PROOF_PASS ' + JSON.stringify(result));\n}\nmain().then(() => server.close(() => { fs.rmSync(home, {recursive:true,force:true}); process.exit(0); })).catch(error => {\n  console.error(error); if (server) server.close(); fs.rmSync(home, {recursive:true,force:true}); process.exit(1);\n});\n",
+      "sha256": "6f655c688a3c4fdd39ad12a580f51d981ced6bd1828869d8eae1e5d08484d8b9"
+    }
+  ],
+  "proofReproduction": {
+    "instructions": "Extract each finalProofSources[name].source verbatim into a fresh temporary directory, verify its sha256/byte size, then run R4_WORKTREE=/absolute/checkout node /temp/name.cjs. Checkout must contain accepted2181e5 git object and installed pinned dependencies. gates.cjs runs the five mandatory gates serially and retains full logs/result receipts. smoke.cjs stays alive after R4_SMOKE_READY for browser inspection at result.json pageUrl; terminate only its owned process after inspection. miner-proof.cjs and inline-proof.cjs exit and remove their temporary homes.",
+    "sourceBoundary": "All finalProofSources ran against the same settled implementation; prior verification entries remain historical independent pre-release proofs, not final-source proofs.",
+    "platformLimits": "Executed Linux Node26.8.2 and managed Chromium. No macOS, Electron packaging, live-provider, or native harness launch claim."
+  },
+  "finalBase": "2181e5ba7ff5ed71ae8c2aeaba4f139cdbd36424",
+  "finalImplementationManifest": [
+    {
+      "path": "lib/command-paths.d.ts",
+      "bytes": 189,
+      "sha256": "c8ec1647d0d9961050cb8bac3eed33fe328ce1eb129039212ab1c50c0b7c7693"
+    },
+    {
+      "path": "lib/command-paths.js",
+      "bytes": 550,
+      "sha256": "43c5a797cf79dd1cf440f1d5007681487e1ed23b87803e827014e1010b7ec296"
+    },
+    {
+      "path": "lib/file-handlers.js",
+      "bytes": 7014,
+      "sha256": "e624c7dc84439120859fe5811f4999fa0fb2376baee6c9ec831af20b590a4a0b"
+    },
+    {
+      "path": "lib/file-mention.js",
+      "bytes": 10409,
+      "sha256": "dd92fdd9001cc7029f9328741404e54ebffd52a36d15cc02096ad57c8e28b919"
+    },
+    {
+      "path": "lib/file-page.js",
+      "bytes": 5881,
+      "sha256": "7fcb1cfac744cface5b3fe42ba000e273cb55d850f4e66df507f688a18302d90"
+    },
+    {
+      "path": "lib/git-diff.d.ts",
+      "bytes": 3822,
+      "sha256": "a505a39ff07f67710bde9905c3bf036ef9868b86cbea957ef9e8c98698e5e754"
+    },
+    {
+      "path": "lib/git-diff.js",
+      "bytes": 23511,
+      "sha256": "4852f8e2fe78ed5f3eea0abd316c8cd8e786cf3c66025a7257172174b025ede4"
+    },
+    {
+      "path": "lib/skill-mining.js",
+      "bytes": 14108,
+      "sha256": "e54e65c073452b9135dd5b734d71755884230d6f03d48fef3ab00cb34ed4bd06"
+    },
+    {
+      "path": "src/core/command-paths.ts",
+      "bytes": 389,
+      "sha256": "2f134948a5a132dd0093d5623bc3e8897675380b6599f6408a42691618a73a3d"
+    },
+    {
+      "path": "src/core/file-handlers.ts",
+      "bytes": 6955,
+      "sha256": "d03cc99e6ee4895bc83274b6d8dae8d52d9a0bd2ee537518a078629cc6025e77"
+    },
+    {
+      "path": "src/core/file-mention.ts",
+      "bytes": 9241,
+      "sha256": "cb0f82dc2aea24a96e40d4c18568031adc7017c916958f709837b56ecef91ba9"
+    },
+    {
+      "path": "src/core/file-page.ts",
+      "bytes": 3983,
+      "sha256": "ae2df3629aac9ba670a4db824a5d68151a98f486d184a9ff6d5a495981c6cc33"
+    },
+    {
+      "path": "src/core/git-diff.ts",
+      "bytes": 23648,
+      "sha256": "265acbaf81a7ce9671ea94b4b13d97c409f329dd976734eab06cdd60cb28d80d"
+    },
+    {
+      "path": "src/core/skill-mining.ts",
+      "bytes": 11904,
+      "sha256": "284ca92cac6177ebea91d795814459e5b7aa99aa500934a827004067811f31f3"
+    },
+    {
+      "path": "test/git-diff.test.js",
+      "bytes": 12687,
+      "sha256": "41e8326c153c2de2df27999c5b80eb22846f35293475ddfaa3a3b24c66968bb5"
+    }
+  ],
+  "finalImplementationManifestSha256": "1608f4db5afb37320eb4cf7f2357a70fe53abeec877c4b07ca49900239dc0fea",
+  "finalConsumedManifest": [
+    {
+      "path": "src/core/server-app.ts",
+      "bytes": 130051,
+      "sha256": "5916206e447fa1666806114d46ccd1c835be753232a174896f5348b57217a6c1"
+    },
+    {
+      "path": "src/core/publication-handlers.ts",
+      "bytes": 28625,
+      "sha256": "7921bf2b3f6cc735b4c5cb330d52ef23923b34b1df2dd30097b118c414b30f25"
+    },
+    {
+      "path": "src/core/session-files.ts",
+      "bytes": 41671,
+      "sha256": "2ece5b6c30b44b75bfa468026b4f930f1903d6d26381c8ec2501e4f1c41739fe"
+    },
+    {
+      "path": "src/core/session-index.ts",
+      "bytes": 29034,
+      "sha256": "d5d9b3ebab1909c2f471d61e0cf9f375526f8318cd5616ef8265919cb1c6ccfa"
+    },
+    {
+      "path": "src/core/skill-feature-handlers.ts",
+      "bytes": 8635,
+      "sha256": "546cd3aee3f8cafcc44a77e0dd00e81e066a67eb902db393676c1c8a68e1b44a"
+    },
+    {
+      "path": "src/core/helper-format.ts",
+      "bytes": 506,
+      "sha256": "02afc9ce8ed4d64cb99951f832165c1e5faf2815011656098c37cf02b5fac276"
+    },
+    {
+      "path": "src/browser/file-views.ts",
+      "bytes": 16001,
+      "sha256": "f35d8bffed6a34544b1edacd839ea6b85141421dd38b0c77d28a0d95a036b3e9"
+    },
+    {
+      "path": "src/browser/file-view-data.ts",
+      "bytes": 2704,
+      "sha256": "d52459ce5e3fab5bc6ac7dfa20d288c872797fdb92b6db36db8041d27ec0043f"
+    },
+    {
+      "path": "src/browser/file-view-render.ts",
+      "bytes": 3492,
+      "sha256": "11f703800b406832ebe314dcda7b9176cdb406059a270f86c64142ff81291761"
+    },
+    {
+      "path": "test/file-mention.test.js",
+      "bytes": 6427,
+      "sha256": "5b770fc9b9856e9d558270d80f01f7388920266bafa936a7be312ced9c129b44"
+    },
+    {
+      "path": "test/skill-mining.test.js",
+      "bytes": 9028,
+      "sha256": "aa116085a550677215a9e5af8ad6133f9a319bbf08fd0147ceb8e84def01995a"
+    },
+    {
+      "path": "test/server.test.js",
+      "bytes": 230935,
+      "sha256": "370c2843a6919e91de318a13476a5801961b1871744b133b0659817582245181"
+    },
+    {
+      "path": "test/browser/file-views.spec.js",
+      "bytes": 8683,
+      "sha256": "5ca0b0b3a39f717742dea25da77c61cc8b622ac46195d7ecc7ef8627e1e2bcac"
+    },
+    {
+      "path": "test/ui-smoke.js",
+      "bytes": 248462,
+      "sha256": "6e94dcbcaa5874195903e3c97601f26e4ae0445b0f936da96e1158a964960edb"
+    }
+  ],
+  "fullFrozenManifest": {
+    "path": "/tmp/pi-dish-r4-final-Cp9M3f/frozen-manifest.json",
+    "description": "External post-finalization manifest includes every changed path, including this evidence JSON. Its SHA256 and source commit are delivered separately to avoid self-reference."
+  }
+}
