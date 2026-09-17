@@ -2360,3 +2360,12 @@ selection retirement; never assign its source or reconnect state externally.
 
 Session selection, resume and header projection are typed. Validate a target
 before teardown, retain request endpoints and reuse cached tools only by identity.
+
+`session-view.ts` owns four ordered retirement phases shared by real and
+provisional selection: `beginSelectionRetirement`, `stashRetiringTranscript`,
+`retireSessionResources` and `resetSelectionActivity`. Their activation seams
+remain distinct: stash the old draft and DOM before clearing/swapping selection;
+pending selection stays synchronous, while real selection retains its captured
+endpoint and ownership checks across awaits. Session view and message stream
+consume named method interfaces, not whole factory-return controllers. Keep
+transcript, stream, terminal, speech and delivery generations independent.

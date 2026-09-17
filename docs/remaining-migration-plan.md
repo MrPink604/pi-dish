@@ -1757,3 +1757,51 @@ and all eleven required steps, not merely the workflow conclusion. Failure-only
 diagnostic steps were correctly skipped. The raw job/step result is retained at
 `/tmp/pi-dish-parent-r7-main-ci-result.json`; the review record binds this proof
 to the exact pushed source. R4, R9 and full C1/C2 remain separate unfinished work.
+
+### Implementation record — R9
+
+**Whole-source review and local integration complete; exact pushed-main CI
+pending, not yet formal acceptance.** Reviewed source
+`7282718f6c25ec69a98186a59bf8fdf6c5de5700`, owner
+`01a0acac-afff-738a-be83-ff17feaf476e`, exact
+`openai-codex/gpt-6-astra`/High/OMP, baseline
+`272a338e0fe0292dfd5f45131890c1bcb273c3eb`.
+`zai/glm-5.3` (final 372/373 messages),
+`opencode-go/deepseek-v4.1-flash` (313/314) and `kimi-code/k3` (328/329)
+independently accepted the same entire frozen source. Parent audited all nine
+primary bodies, 32 required consumer scopes and sixteen decoded proof drivers,
+including complete TAB/ETX bundle-line bytes. Earlier premature completeness
+claims and same-reviewer renewals remain in [the review record](r9-review.json);
+all three graceful semantic closures succeeded and resolved inactive.
+
+Session view remains authoritative. Four ordered phases share retirement
+without merging real/provisional activation: old draft and DOM stashing precede
+selection clear/swap, pending remains synchronous, and real selection retains
+its endpoint/ownership guards. Eleven named consumed-method interfaces replace
+whole-controller factory-return inputs in session view and message stream.
+Unknown targets remain inert; independent transcript, stream, terminal, speech
+and delivery generations and R8's pane policy remain distinct. The only
+`app.ts` change removes the already-dead `closeViews` argument.
+
+Integrated on main `b570618` with all seven authored/type-test/regression/evidence
+files byte-identical to the freeze. Generated bundles auto-merged the separately
+accepted R11 helper-ref change; drift checking confirms generated truth.
+Serial local gates passed: check with 265 compiler-owned sources, 1,049 backend
+tests with zero failures/skips, 293 browser cases, all eight isolated scenarios
+and full desktop/mobile/terminal/multi-host UI. The complete chain took 337.88
+seconds. Five exact logs, hashes and receipts are retained under
+`/tmp/pi-dish-parent-r9-main-0eFT4X` and in the review record.
+
+Parent independently exercised the uninstrumented production browser:
+1280px desktop draft round trip; pending selection with disabled Send, cleared
+search marks, the identical retained DOM node and separate provisional draft;
+then settled 390px mobile navigation without overflow. Three screenshots were
+visually inspected. Proof sources, results and hashes are preserved in the
+review record and `/tmp/pi-dish-parent-r9-main-native-proof.json`; the owned
+browser/server, temporary home and executable scratch were removed.
+Pending POST/status transport was deliberately intercepted and held, not a
+native harness spawn. Evidence is Linux/Chrome 153.0.8010.36 only; no macOS,
+native clipboard or successful terminal-attachment proof is claimed.
+Owner failures at 292/293 and 77/78 remain preserved in
+[owner evidence](r9-evidence.json); only the fixture was corrected.
+R4 and full C1/C2 remain separately unfinished.
