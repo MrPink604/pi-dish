@@ -44,6 +44,8 @@
     "test/core-build.test.ts",
     "test/edge-build.test.ts",
     "test/source-policy.test.ts",
-    "test/install.test.ts"
+    "test/install.test.ts",
+    "test/skill-mining.test.ts",
+    "test/skills-core.test.ts"
   ]
 }
