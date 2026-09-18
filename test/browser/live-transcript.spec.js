@@ -69,6 +69,8 @@ const fixtures_js_1 = require("./fixtures.js");
 });
 (0, fixtures_js_1.test)('stream coalescing renders only the latest pending frame and disposal retires its timer', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
+    await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
     await page.evaluate(() => {
         fixtureApp.features.streamingRenderer.cancel();
         fixtureElement(document.getElementById('messages'), "document.getElementById('messages')").replaceChildren();
@@ -78,9 +80,11 @@ const fixtures_js_1 = require("./fixtures.js");
         window.frameRenderer.queue({ role: 'assistant', content: 'middle' });
         window.frameRenderer.queue({ role: 'assistant', content: 'last' });
     });
-    await fixtures_js_1.expect.poll(() => page.evaluate(() => window.frameTexts)).toEqual(['first', 'last']);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.frameTexts)).toEqual(['first']);
+    await page.clock.runFor(80);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.frameTexts)).toEqual(['first', 'last']);
     await page.evaluate(() => { window.frameRenderer.queue({ role: 'assistant', content: 'retired' }); window.frameRenderer.dispose(); });
-    await page.waitForTimeout(120);
+    await page.clock.runFor(120);
     (0, fixtures_js_1.expect)(await page.evaluate(() => window.frameTexts)).toEqual(['first', 'last']);
 });
 (0, fixtures_js_1.test)('live-tool disposal rejects subsequent mutations and malformed ids', async ({ page, fleet }) => {

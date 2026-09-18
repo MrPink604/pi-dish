@@ -53,14 +53,19 @@ test('same-id tool completion on a newer host cannot replace the older retained 
 });
 test('stream coalescing renders only the latest pending frame and disposal retires its timer', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
   await page.evaluate(() => {
     fixtureApp.features.streamingRenderer.cancel(); fixtureElement(document.getElementById('messages'), "document.getElementById('messages')").replaceChildren(); window.frameTexts = [];
     window.frameRenderer = PiDishBrowser.createStreamingRenderer({ document, sessionState: fixtureApp.features.sessionState, markdown: text => { window.frameTexts.push(text); return text; }, pinned: () => false, scroll() {}, jump() {} });
     window.frameRenderer.queue({ role: 'assistant', content: 'first' }); window.frameRenderer.queue({ role: 'assistant', content: 'middle' }); window.frameRenderer.queue({ role: 'assistant', content: 'last' });
   });
-  await expect.poll(() => page.evaluate(() => window.frameTexts)).toEqual(['first', 'last']);
+  expect(await page.evaluate(() => window.frameTexts)).toEqual(['first']);
+  await page.clock.runFor(80);
+  expect(await page.evaluate(() => window.frameTexts)).toEqual(['first', 'last']);
   await page.evaluate(() => { window.frameRenderer.queue({ role: 'assistant', content: 'retired' }); window.frameRenderer.dispose(); });
-  await page.waitForTimeout(120); expect(await page.evaluate(() => window.frameTexts)).toEqual(['first', 'last']);
+  await page.clock.runFor(120);
+  expect(await page.evaluate(() => window.frameTexts)).toEqual(['first', 'last']);
 });
 test('live-tool disposal rejects subsequent mutations and malformed ids', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
