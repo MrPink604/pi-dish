@@ -26,6 +26,12 @@ const helperGlobals = { ...scriptGlobals('public/helpers.js'),
   ...Object.fromEntries(Object.keys(helperExports).map(name => [name, 'readonly'])),
 };
 const browserGlobals = scriptGlobals('public/browser.js');
+const fixtureGlobals = Object.fromEntries([
+  'fixtureApp', 'fixtureElement', 'fixtureInput', 'fixtureDetails', 'fixtureLink',
+  'fixtureTerminalProbe', 'fixtureCurrentSession', 'Terminal', 'sessionKey',
+  'sessionRefKey', 'parseSessionKey', 'hostSupportsTerminal', 'hostDisplayLabel',
+  'formatTokens', 'THINKING_LEVEL_NAMES',
+].map(name => [name, 'readonly']));
 /** @type {import('eslint').Linter.Config[]} */
 module.exports = [
   { linterOptions: { reportUnusedDisableDirectives: 'off' } },
@@ -42,5 +48,5 @@ module.exports = [
   { files: ['**/*.mjs'], languageOptions: { sourceType: 'module' } },
   { files: ['public/**/*.js'], languageOptions: { sourceType: 'script', globals: { ...globals.browser, ...helperGlobals, ...browserGlobals, marked: 'readonly', hljs: 'readonly', katex: 'readonly', mermaid: 'readonly', Terminal: 'readonly', FitAddon: 'readonly' } } },
   // Feature observations exist only in the intercepted test fixture bundle.
-  { files: ['test/ui-smoke.js', 'test/ui-scenarios/*.js', 'test/browser/*.js', 'scripts/readme-shots.js'], languageOptions: { globals: { ...globals.browser, ...helperGlobals, ...browserGlobals, fixtureApp: 'readonly' } } },
+  { files: ['test/ui-smoke.js', 'test/ui-scenarios/*.js', 'test/browser/*.js', 'test/fixtures/browser-app.js', 'scripts/readme-shots.js'], languageOptions: { globals: { ...globals.browser, ...helperGlobals, ...browserGlobals, ...fixtureGlobals } } },
 ];

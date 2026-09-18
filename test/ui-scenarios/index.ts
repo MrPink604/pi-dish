@@ -1,14 +1,22 @@
-// Only the registry is checked in this runner/support family. Scenario bodies
-// remain authored JavaScript until their product contracts are released; the
-// runner enumerates names and makes no callable claim about these values.
-const scenarios: Record<string, unknown> = {
-  models: require('./models'),
-  drafts: require('./drafts'),
-  sidebar: require('./sidebar'),
-  usage: require('./usage'),
-  skills: require('./skills'),
-  routines: require('./routines'),
-  bounce: require('./bounce'),
-  mobile: require('./mobile'),
-};
+import models = require('./models.js');
+import drafts = require('./drafts.js');
+import sidebar = require('./sidebar.js');
+import usage = require('./usage.js');
+import skills = require('./skills.js');
+import routines = require('./routines.js');
+import bounce = require('./bounce.js');
+import mobile = require('./mobile.js');
+import type { UiScenario } from './contracts.js';
+
+const scenarios = {
+  models,
+  drafts,
+  sidebar,
+  usage,
+  skills,
+  routines,
+  bounce,
+  mobile,
+} satisfies Record<string, UiScenario>;
+
 export = scenarios;

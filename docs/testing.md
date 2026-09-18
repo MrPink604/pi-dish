@@ -66,20 +66,35 @@ CommonJS files. Run `npm run build:core` to regenerate after source edits.
 
 The same command checks compile-only consumers in `test/types/core.ts`, including
 negative cases for mixed identity types and unvalidated response/store payloads.
-It also checks the build-tool implementations and their checked-in runtime output
-through `tsconfig.tools.json` and `npm run build:tools -- --check`. Missing,
-stale, orphaned and wrong-mode tool outputs fail without being repaired.
+It also checks every compiler-owned build/tool/test implementation and its
+checked-in runtime output. `npm run build:tools -- --check` covers build and
+development tools; `npm run build:tests -- --check` covers pure Node tests and
+support, browser-capable VM/Playwright tests, and UI smoke/scenarios through
+separate strict programs. Missing, stale, orphaned and wrong-mode outputs fail
+without being repaired. Build mode removes obsolete test declarations after a
+source moves to a no-declaration program.
+
+The Node-test program's actual compiler membership excludes `lib.dom.d.ts` and
+all `src/browser/` producers. Node-run tests of the browser bundle live in the
+browser-capable program with their exact source projections while retaining
+their generated `.test.js` discovery paths. Native fake hosts executed directly
+by Bun are strict no-emit members of `tsconfig.extensions.json`. Subprocess
+drivers are checked fixture files rather than hidden `-e` implementations.
+The authored-source policy inventories TypeScript recursively under every
+script/test/extension/skill/Electron source root, so an existing executable
+fixture cannot be omitted merely because it has no generated sibling.
+
 `tsconfig.configs.json` strictly checks the actual `eslint.config.js` body and
 `playwright.config.ts`; the latter uses Playwright's existing host transform.
 No TypeScript runtime loader or Node minimum change is required.
-The Node test runner, isolated scenario runner, real `test-env` implementation
-and scenario registry are also checked by `tsconfig.tools.json`; regenerate
-their existing sibling `.js` files with `npm run build:tools`.
-The registry's scenario values remain explicitly `unknown` because only key
-enumeration is owned by this family. The eight behavioral scenario modules,
-other fixtures/support and observational tools remain separately gated; see
-the [runner-family evidence](c1-runners-evidence.json) and
-[frozen execution inventory](c1-tools-evidence.json).
+
+`npm test`, Playwright and the UI runners continue to execute generated `.js`
+paths except for the intentionally Bun-executed native `.ts` fixtures.
+Playwright's `testMatch` is generated-JS-only; source `.spec.ts` files are
+compiler inputs, not a second discovery surface. Browser fixture contracts live
+in a checked test-owned `.ts` module; production desktop/mobile scenarios
+explicitly run without fixture instrumentation. Regenerate emitted test outputs
+with `npm run build:tests`.
 All browser implementation in `src/browser/` compiles strictly, including the
 application entrypoint, static bindings, state, transport and feature controllers. See
 [TypeScript migration guide](typescript.md) for the exact migrated scope.
@@ -160,6 +175,13 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Extracted selector DOM/actions/disposal and repeatable timing baseline | `test/browser/model-selector.spec.js` |
 | Models, drafts, sidebar, usage, skills, routines, bounce, mobile | `test/ui-scenarios/` |
 | Streaming, retained transcripts, terminal and desktop/mobile integration | `test/ui-smoke.js` |
+
+`test/terminal.test.ts` intentionally passes a short `node -e` expression as
+the command argv to `terminal.attachClient`. That expression is the input under
+test: it proves command execution, environment overlay/removal and attach
+metadata. It is not a subprocess bootstrap hidden from the compiler. Server,
+tmux, skill-client and canary infrastructure children use checked fixture
+entrypoints instead.
 
 List extracted smoke features with `npm run test:ui -- --list`. Run one with
 `npm run test:ui -- --scenario models`; the all-features runner launches each in

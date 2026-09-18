@@ -16,6 +16,12 @@
     "extensions/pi-dish-bridge-omp/index.ts",
     "extensions/pi-dish-bridge-omp/native-state.ts",
     "extensions/pi-dish-bridge-prime/index.ts",
+    "test/fixtures/session-recovery-bridge.ts",
+    "test/fixtures/fake-omp-bridge-host.ts",
+    "test/fixtures/fake-omp-tree-host.ts",
+    "test/fixtures/fake-session-switch-host.ts",
+    "test/fixtures/native-boundary-host.ts",
+    "test/fixtures/native-queue-boundary-host.ts",
     "test/types/omp-host.d.ts",
     "test/types/extensions.ts"
   ]

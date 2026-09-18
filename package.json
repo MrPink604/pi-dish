@@ -24,11 +24,12 @@
     "test:browser:install": "playwright install chromium",
     "test:ui:scenarios": "node scripts/run-ui-scenarios.js",
     "lint": "eslint .",
-    "typecheck": "node scripts/build-tools.js --check && node scripts/build-core.js --check && node scripts/build-browser.js --check && node scripts/build-edges.js --check && tsc -p tsconfig.extensions.json && tsc -p tsconfig.helpers.json && tsc -p tsconfig.check.json && tsc -p tsconfig.configs.json",
+    "typecheck": "node scripts/build-tools.js --check && node scripts/build-tests.js --check && node scripts/build-core.js --check && node scripts/build-browser.js --check && node scripts/build-edges.js --check && tsc -p tsconfig.extensions.json && tsc -p tsconfig.helpers.json && tsc -p tsconfig.check.json && tsc -p tsconfig.configs.json",
     "check": "npm run check:source-policy && npm run lint && npm run typecheck",
     "build:browser": "node scripts/build-browser.js",
     "check:source-policy": "node scripts/check-source-policy.mjs",
-    "build:tools": "node scripts/build-tools.js"
+    "build:tools": "node scripts/build-tools.js",
+    "build:tests": "node scripts/build-tests.js"
   },
   "build": {
     "appId": "com.pidish.app",
@@ -124,7 +125,9 @@
     "@types/express": "4.17.25",
     "@types/katex": "0.16.8",
     "@types/node": "22.20.2",
+    "@types/proper-lockfile": "4.1.4",
     "@types/ws": "8.18.1",
+    "@xmldom/xmldom": "0.8.15",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "electron": "44.4.1",

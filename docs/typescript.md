@@ -288,10 +288,10 @@ decision and packaging checks.
 paths listed by `source-policy.json`. Named type-negative fixtures require their
 diagnostic purpose; tsc still checks that their errors actually occur. Strings and
 template text are not directives. No explicit-any type-utility exception exists.
-The current gate covers `src/core`, `src/browser`, the exact edge/native source
-lists, checked tool/configuration bodies and named fixtures, not remaining JS
-implementations. Cron is authored in `src/core/cron.ts`; its former checked-JS
-exception is removed.
+The current gate covers `src/core`, `src/browser`, runtime edges, host
+configurations, build/development tools, all authored Node and browser test
+implementations, Playwright probes/specifications and UI scenario/smoke bodies.
+Cron is authored in `src/core/cron.ts`; its former checked-JS exception is removed.
 Every new migration compiler target must enroll its authored sources and fixtures.
 See the [M0 contract](m0-contracts.md#dependencies-and-authored-source-policy).
 
@@ -327,44 +327,63 @@ no JS alias or additional runtime loader. Both configurations and all seven
 tool implementations are enrolled in `source-policy.json`.
 
 The runner/support family additionally checks `scripts/run-tests.ts`,
-`scripts/run-ui-scenarios.ts`, `test/test-env.ts` and
-`test/ui-scenarios/index.ts` in that same Node-only program. Their existing
-CommonJS `.js` paths and generated declarations are checked in. `npm test`
+`scripts/run-ui-scenarios.ts` and `test/test-env.ts` in the Node-only tools
+program. Their existing CommonJS `.js` paths and generated declarations are
+checked in. `test/ui-scenarios/index.ts` belongs to `tsconfig.ui-tests.json`;
+it emits only its runtime `.js`, and the obsolete tools-owned declaration is
+removed. `npm test`
 still discovers only top-level `.test.js` files; explicit file/flag arguments,
 sanitized environment, signal forwarding and exit status are preserved.
 The isolated scenario runner still launches the real `test/ui-smoke.js` once
 per registry key, in registry order, stopping on interruption but continuing
 after an ordinary scenario failure.
 
-The checked registry constructs its actual own-key object and eagerly requires
-the eight scenario modules in the same order. Its values are `unknown`: the
-runner only enumerates keys. This is not a callable schema or a claim that
-those behavioral JavaScript bodies are checked. Their eventual callable types
-must come from actual checked producers, not declaration-only assertions.
-The bootstrap admits only the explicitly named support/canary paths outside
-`scripts/`; banner-only orphan checks cover their output directories without
-classifying other authored test files as generated. Runner/support proof is in
-[`c1-runners-evidence.json`](c1-runners-evidence.json).
+The completed C1 cutover checks the full test/tool inventory through separate
+strict environments:
 
-`test/native-extensions.smoke.ts` adds the standalone native mood/share canary
-as the twelfth checked tool body. Its existing opt-in `.js` command retains
-mode 0755 and its shebang; the generated `.d.ts` is 0644. The type-only
-`.d.mjs` specifier selects the actual generated share `.d.mts` through standard
-NodeNext extension substitution, without a runtime alias, new loader or
-re-enrolling the edge-owned implementation. The canary exercises pinned Pi mood
-and real OMP sharing against an isolated local provider. This does not convert
-other native fixtures or tests; see
-[`c1-native-canary-evidence.json`](c1-native-canary-evidence.json).
+- `tsconfig.node-tests.json` owns pure Node/server/CLI tests and Node-only
+  fixtures/support; its actual membership contains no DOM library or browser
+  producer.
+- `tsconfig.browser-tests.json` owns Playwright specifications, browser probes,
+  Node-run browser bundle/VM tests and their exact producer projections.
+- `tsconfig.ui-tests.json` owns the UI smoke and eight scenario modules.
+- `tsconfig.dev-tools.json` owns the remaining observational and real-lineage
+  scripts without enrolling provider canaries in ordinary test execution.
+- `tsconfig.extensions.json` additionally owns the five Bun-executed native
+  fake-host/boundary fixtures in its strict no-emit environment.
 
-This is not full C1 completion. Remaining support/fixture implementations,
-observational tools and behavioral test families remain separately gated.
-The frozen inventory and proposed family/runtime mapping are recorded in
-[`c1-tools-evidence.json`](c1-tools-evidence.json). Later sibling test compilation
-must preserve `.test.js`/`.spec.js`, explicit-file arguments and resource paths.
-Before Playwright source siblings land, configure generated-JS-only discovery:
-its default would otherwise discover both `.spec.ts` and `.spec.js`.
-Browser-evaluation bodies need their own DOM compiler environment, not DOM
-globals in the Node tool program.
+`scripts/build-tests.ts` validates all four emitting programs before writing and
+maps every authored `.ts`/`.mts` source back to its existing `.js`/`.mjs`
+runtime path and declaration where that program emits one. `npm run
+build:tests -- --check` rejects missing, stale and orphaned outputs; build mode
+removes obsolete compiler-owned outputs after an ownership move. Playwright
+discovery remains generated-JS-only, so `.spec.ts` sources are never executed
+twice.
+
+The corrected inventory has 161 authored executable/test/support bodies:
+45 explicit Node-only roots, 97 browser-capable roots, 11 UI roots, three
+development scripts and five Bun-executed native host fixtures. The four
+emitting programs own 156 unique non-declaration roots. The five native
+fixtures are strict no-emit members of `tsconfig.extensions.json`; Bun still
+executes their checked `.ts` paths directly.
+
+`tsconfig.node-tests.json` has no `lib.dom.d.ts` or `src/browser/` membership.
+Node-run browser bundle/VM tests and their exact producer projections belong to
+the browser-capable program instead. Their generated `.test.js` discovery paths
+are unchanged, while obsolete declarations from the former Node program are
+removed. `source-policy.json` also scans every authored TypeScript body under
+`scripts/`, `test/`, `extensions/`, `skills/` and `electron/`, preventing an
+existing executable fixture from falling outside all compiler programs.
+
+Browser fixture contracts are derived in the checked test-owned
+`test/browser/fixture-contracts.ts` module with exact
+`typeof`/`Parameters`/`ReturnType` projections. They preserve each app binding's
+factory association without publishing product interfaces. The actual
+instrumented fixture registry may be partially populated while the production
+desktop/mobile scenarios run with `instrumentApp: false` and prove those fixture
+globals are absent. Product factory parameters retain their original DOM
+contracts; Node-run browser tests use actual test DOM objects rather than
+widening those contracts.
 
 ### M1 read and SDK boundaries
 

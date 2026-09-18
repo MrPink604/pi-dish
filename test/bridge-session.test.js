@@ -1,451 +1,412 @@
+// Generated test/tool from test/bridge-session.test.ts; edit that source and run npm run build:tests.
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
 /**
  * Unit tests for BridgeSession's socket protocol guards. A stub Unix-socket
  * server stands in for the bridge extension: it answers get_commands and
  * ignores everything else, proving the send() timeout rejects instead of
  * leaving the caller hanging forever (the pre-timeout behavior).
  */
-const test = require('node:test');
-const assert = require('node:assert');
-const fs = require('node:fs');
-const net = require('node:net');
-const os = require('node:os');
-const path = require('node:path');
-
+const test = require("node:test");
+const test_types_js_1 = require("./test-types.js");
+const assert = require("node:assert");
+const fs = require("node:fs");
+const net = require("node:net");
+const os = require("node:os");
+const path = require("node:path");
+const listenServer = (server, socketPath) => new Promise(resolve => server.listen(socketPath, resolve));
+const closeServer = (server) => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bridge-test-'));
 process.env.HOME = tmpDir;
-
-const {
-  BridgeSession,
-  REGISTRY_DIR,
-  invalidateRegistryCache,
-  listRegisteredSessions,
-  pruneRegisteredSession,
-} = require('../lib/bridge-session.js');
+const { BridgeSession, REGISTRY_DIR, invalidateRegistryCache, listRegisteredSessions, pruneRegisteredSession, } = require('../lib/bridge-session.js');
 const { processIdentity } = require('../lib/process-identity');
-
 function writeRegistryEntry(name, entry) {
-  fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-  const registryPath = path.join(REGISTRY_DIR, `${name}.json`);
-  fs.writeFileSync(registryPath, JSON.stringify(entry));
-  invalidateRegistryCache();
-  return registryPath;
+    fs.mkdirSync(REGISTRY_DIR, { recursive: true });
+    const registryPath = path.join(REGISTRY_DIR, `${name}.json`);
+    fs.writeFileSync(registryPath, JSON.stringify(entry));
+    invalidateRegistryCache();
+    return registryPath;
 }
-
 function alternateClaim(socketPath, overrides = {}) {
-  const identity = processIdentity(process.pid);
-  return {
-    protocolVersion: 2,
-    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
-    harnessId: 'omp',
-    nativeSessionId: 'alternate-session',
-    sessionId: 'alternate-session',
-    sessionFile: path.join(tmpDir, 'alternate-session.jsonl'),
-    bridgeInstanceId: 'alternate-instance',
-    instanceId: 'alternate-instance',
-    socketPath,
-    pid: identity.pid,
-    startTime: identity.startTime,
-    spawnToken: null,
-    capabilities: { prompt: true, reload: false },
-    ...overrides,
-  };
+    const identity = (0, test_types_js_1.present)(processIdentity(process.pid));
+    return (0, test_types_js_1.bridgeEntry)({
+        protocolVersion: 2,
+        wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+        harnessId: 'omp',
+        nativeSessionId: (0, test_types_js_1.nativeId)('alternate-session'),
+        sessionId: (0, test_types_js_1.nativeId)('alternate-session'),
+        sessionFile: path.join(tmpDir, 'alternate-session.jsonl'),
+        bridgeInstanceId: 'alternate-instance',
+        instanceId: 'alternate-instance',
+        socketPath,
+        pid: identity.pid,
+        startTime: identity.startTime,
+        spawnToken: null,
+        capabilities: { prompt: true, reload: false },
+        ...overrides,
+    });
 }
-
 test('send() resolves matched responses and times out on unanswered commands', async () => {
-  const socketPath = path.join(tmpDir, 'bridge.sock');
-  const server = net.createServer((sock) => {
-    sock.on('data', (chunk) => {
-      for (const line of chunk.toString().trim().split('\n')) {
-        const cmd = JSON.parse(line);
-        if (cmd.command === 'get_commands') {
-          sock.write(JSON.stringify({ type: 'response', id: cmd.id, success: true, data: { commands: [] } }) + '\n');
-        }
-        // Anything else is deliberately never answered.
-      }
+    const socketPath = path.join(tmpDir, 'bridge.sock');
+    const server = net.createServer((sock) => {
+        sock.on('data', (chunk) => {
+            for (const line of chunk.toString().trim().split('\n')) {
+                const cmd = JSON.parse(line);
+                if (cmd.command === 'get_commands') {
+                    sock.write(JSON.stringify({ type: 'response', id: cmd.id, success: true, data: { commands: [] } }) + '\n');
+                }
+                // Anything else is deliberately never answered.
+            }
+        });
     });
-  });
-  await new Promise((r) => server.listen(socketPath, r));
-
-  const sess = new BridgeSession({ sessionId: 'test-session', socketPath, pid: process.pid, cwd: tmpDir });
-  await sess.connect();
-
-  assert.deepEqual(await sess.getCommands(), { commands: [] });
-
-  await assert.rejects(
-    sess.send('never_answered', {}, { timeout: 100 }),
-    /timed out after 100ms/,
-    'an unanswered command must reject instead of hanging',
-  );
-
-  sess.close();
-  await new Promise((r) => server.close(r));
-});
-
-test('registry scan prunes a current entry whose process starttime does not match', () => {
-  fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-  const socketPath = path.join(tmpDir, 'reused-pid.sock');
-  const registryPath = path.join(REGISTRY_DIR, 'reused-pid.json');
-  fs.writeFileSync(socketPath, 'stale socket path');
-  fs.writeFileSync(registryPath, JSON.stringify({
-    sessionId: 'reused-pid',
-    socketPath,
-    pid: process.pid,
-    startTime: '0',
-  }));
-  invalidateRegistryCache();
-
-  assert.deepEqual(listRegisteredSessions(), [], 'PID reuse cannot satisfy the old birth identity');
-  assert.equal(fs.existsSync(registryPath), false, 'stale claim is pruned');
-  assert.equal(fs.existsSync(socketPath), true, 'scanner never unlinks a possibly rebound socket path');
-});
-
-test('legacy registry compatibility is limited to Pi', () => {
-  const identity = processIdentity(process.pid);
-  const piSocketPath = path.join(tmpDir, 'legacy-pi.sock');
-  const ompSocketPath = path.join(tmpDir, 'legacy-omp.sock');
-  fs.writeFileSync(piSocketPath, 'socket placeholder');
-  fs.writeFileSync(ompSocketPath, 'socket placeholder');
-  const piPath = writeRegistryEntry('legacy-pi', {
-    harnessId: 'pi', sessionId: 'legacy-pi', socketPath: piSocketPath,
-    pid: identity.pid, startTime: identity.startTime,
-  });
-  const ompPath = writeRegistryEntry('legacy-omp', {
-    harnessId: 'omp', sessionId: 'legacy-omp', socketPath: ompSocketPath,
-    pid: identity.pid, startTime: identity.startTime,
-  });
-
-  const sessions = listRegisteredSessions();
-  assert.equal(sessions.some((entry) => entry.sessionId === 'legacy-pi'), true, 'legacy Pi remains supported');
-  assert.equal(sessions.some((entry) => entry.sessionId === 'legacy-omp'), false, 'legacy alternate claims are rejected');
-  assert.equal(fs.existsSync(piPath), true);
-  assert.equal(fs.existsSync(ompPath), false, 'invalid alternate claim is pruned');
-  fs.rmSync(piPath, { force: true });
-});
-
-test('registry scan rejects contradictory alternate wrapper identity', () => {
-  const socketPath = path.join(tmpDir, 'contradictory-wrapper.sock');
-  fs.writeFileSync(socketPath, 'socket placeholder');
-  const registryPath = writeRegistryEntry('contradictory-wrapper', alternateClaim(socketPath, {
-    harnessId: 'omp',
-    wrapper: { harnessId: 'prime', name: 'Prime Agent', wrapperVersion: 'test' },
-  }));
-
-  assert.equal(
-    listRegisteredSessions().some((entry) => entry.socketPath === socketPath),
-    false,
-    'outer and wrapper harness identities must agree',
-  );
-  assert.equal(fs.existsSync(registryPath), false);
-});
-
-test('pruning an inspected claim preserves a replacement bridge registry entry', () => {
-  fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-  const socketPath = path.join(tmpDir, 'replacement.sock');
-  const registryPath = path.join(REGISTRY_DIR, 'replacement.json');
-  const identity = processIdentity(process.pid);
-  const inspected = {
-    sessionId: 'replacement', socketPath, pid: identity.pid,
-    startTime: identity.startTime, instanceId: 'old-instance',
-  };
-  const replacement = { ...inspected, instanceId: 'new-instance' };
-  fs.writeFileSync(registryPath, JSON.stringify(replacement));
-
-  assert.equal(pruneRegisteredSession(inspected), false, 'old claim cannot prune a replacement instance');
-  assert.deepEqual(JSON.parse(fs.readFileSync(registryPath, 'utf8')), replacement);
-  fs.rmSync(registryPath, { force: true });
-});
-
-test('tracks compacting state from the hello and compaction events', async () => {
-  const socketPath = path.join(tmpDir, 'bridge-compact.sock');
-  let clientSock = null;
-  const server = net.createServer((sock) => {
-    clientSock = sock;
-    sock.on('error', () => {});
-    // Connect mid-compaction: the hello snapshot must seed sess.compacting.
-    sock.write(JSON.stringify({ type: 'hello', turnInProgress: false, compacting: true }) + '\n');
-  });
-  await new Promise((r) => server.listen(socketPath, r));
-
-  const sess = new BridgeSession({ sessionId: 'compact-session', socketPath, pid: process.pid, cwd: tmpDir });
-  await sess.connect();
-  const hello = await sess.waitForHello();
-  assert.equal(hello.type, 'hello', 'hello can be awaited as identity proof');
-  assert.equal(sess.compacting, true, 'hello with compacting seeds the flag');
-
-  clientSock.write(JSON.stringify({ type: 'event', event: 'compaction_end', data: {} }) + '\n');
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(sess.compacting, false, 'compaction_end clears the flag');
-
-  clientSock.write(JSON.stringify({ type: 'event', event: 'compaction_start', data: {} }) + '\n');
-  await new Promise((r) => setTimeout(r, 20));
-  assert.equal(sess.compacting, true, 'compaction_start sets the flag');
-
-  sess.close();
-  await new Promise((r) => server.close(r));
-});
-
-test('tracks running tools, including update-only phases, until a completion boundary', () => {
-  const sess = new BridgeSession({
-    sessionId: 'tool-state-session', socketPath: '/unused', pid: process.pid, cwd: tmpDir,
-  });
-  sess._handle({ type: 'event', event: 'tool_execution_start', data: {
-    toolCallId: 'tc1', toolName: 'Bash', args: { command: 'sleep 1' }, startedAt: 123,
-  } });
-  sess._handle({ type: 'event', event: 'tool_execution_update', data: {
-    toolCallId: 'tc1', partialResult: { content: [{ type: 'text', text: 'partial' }] },
-  } });
-  assert.deepEqual(sess.runningToolCalls.get('tc1'), {
-    toolName: 'Bash',
-    args: { command: 'sleep 1' },
-    startedAt: 123,
-    lastPartialResult: { content: [{ type: 'text', text: 'partial' }] },
-  });
-
-  sess._handle({ type: 'event', event: 'tool_execution_end', data: { toolCallId: 'tc1' } });
-  assert.equal(sess.runningToolCalls.has('tc1'), false, 'end removes the completed call');
-
-  sess._handle({ type: 'event', event: 'tool_execution_update', data: {
-    toolCallId: 'late', toolName: 'Bash', args: { command: 'jobs' },
-    partialResult: { content: [{ type: 'text', text: 'background output' }] },
-  } });
-  assert.equal(sess.runningToolCalls.get('late').toolName, 'Bash',
-    'a post-turn/update-only background phase is replayable');
-  sess._handle({ type: 'event', event: 'agent_end', data: {} });
-  assert.equal(sess.runningToolCalls.size, 0, 'agent_end clears orphaned running calls');
-});
-
-test('captures extension UI replay before server listeners attach', () => {
-  const sess = new BridgeSession({
-    sessionId: 'ui-state-session', socketPath: '/unused', pid: process.pid, cwd: tmpDir,
-  });
-  const { widgets, statuses, dialogs } = sess.extUIState;
-  sess._handle({ type: 'event', event: 'extension_ui_request', data: {
-    method: 'setWidget', widgetKey: 'Todos', widgetLines: ['[>] Verify browser'],
-  } });
-  sess._handle({ type: 'event', event: 'extension_ui_request', data: {
-    method: 'setStatus', statusKey: 'planmode', statusText: 'Plan mode · parallel',
-  } });
-  sess._handle({ type: 'event', event: 'extension_ui_request', data: {
-    method: 'ask', id: 'ask-1', questions: [{ id: 'q', question: 'Continue?' }],
-  } });
-
-  assert.deepEqual(widgets.get('Todos').widgetLines, ['[>] Verify browser']);
-  assert.equal(statuses.get('planmode').statusText, 'Plan mode · parallel');
-  assert.equal(dialogs.get('ask-1').method, 'ask');
-
-  const resolved = [];
-  sess.on('extension_ui_resolved', ({ id }) => resolved.push(dialogs.has(id)));
-  sess._handle({ type: 'event', event: 'extension_ui_resolved', data: { id: 'ask-1' } });
-  assert.deepEqual(resolved, [false], 'resolution listeners must not replay the answered dialog');
-  sess._handle({ type: 'event', event: 'session_switch', data: {} });
-  assert.equal(widgets.size, 0);
-  assert.equal(statuses.size, 0);
-});
-
-test('extension UI listeners can resolve a newly admitted dialog without it reappearing', () => {
-  const sess = new BridgeSession({
-    sessionId: 'ui-listener-session', socketPath: '/unused', pid: process.pid, cwd: tmpDir,
-  });
-  const observed = [];
-  sess.on('extension_ui_request', data => {
-    observed.push(sess.extUIState.dialogs.get(data.id));
-    sess._handle({ type: 'event', event: 'extension_ui_resolved', data: { id: data.id } });
-  });
-  const dialog = { method: 'confirm', id: 'confirm-1', title: 'Continue?' };
-  sess._handle({ type: 'event', event: 'extension_ui_request', data: dialog });
-  assert.deepEqual(observed, [dialog], 'listeners see the admitted dialog before acting on it');
-  assert.equal(sess.extUIState.dialogs.has(dialog.id), false, 'ingress must not restore a dialog resolved by a listener');
-});
-
-test('protocol-v2 connections reject a hello from a different registry claim', async () => {
-  const socketPath = path.join(tmpDir, 'bridge-wrong-claim.sock');
-  const server = net.createServer((sock) => {
-    sock.write(JSON.stringify({
-      type: 'hello',
-      protocolVersion: 2,
-      wrapper: { harnessId: 'omp' },
-      harnessId: 'omp',
-      nativeSessionId: 'other-session',
-      sessionId: 'other-session',
-      bridgeInstanceId: 'other-bridge',
-      instanceId: 'other-bridge',
-      pid: process.pid,
-      spawnToken: 'wrong-token',
-      capabilities: { prompt: true },
-    }) + '\n');
-  });
-  await new Promise((r) => server.listen(socketPath, r));
-
-  const sess = new BridgeSession({
-    protocolVersion: 2,
-    wrapper: { harnessId: 'prime' },
-    harnessId: 'prime',
-    nativeSessionId: 'expected-session',
-    sessionId: 'expected-session',
-    bridgeInstanceId: 'expected-bridge',
-    instanceId: 'expected-bridge',
-    socketPath,
-    pid: process.pid,
-    spawnToken: 'expected-token',
-    capabilities: { prompt: false },
-  });
-  await assert.rejects(sess.connect(), /does not match the selected registry claim/);
-  assert.equal(sess.harnessId, 'prime', 'untrusted hello cannot replace claim identity');
-  assert.equal(sess.capabilities.prompt, false, 'untrusted hello cannot elevate capabilities');
-
-  await new Promise((r) => server.close(r));
-});
-
-test('alternate protocol-v2 connections reject every changed static claim field', async (t) => {
-  const cases = [
-    ['wrapper identity', (claim) => ({ wrapper: { ...claim.wrapper, wrapperVersion: 'different' } })],
-    ['capabilities', (claim) => ({ capabilities: { ...claim.capabilities, reload: true } })],
-    ['socket path', (claim) => ({ socketPath: `${claim.socketPath}.different` })],
-    ['contradictory outer harness', () => ({ harnessId: 'prime' })],
-  ];
-  for (const [name, change] of cases) {
-    await t.test(name, async () => {
-      const socketPath = path.join(tmpDir, `bridge-changed-${name.replace(/\W+/g, '-')}.sock`);
-      const claim = alternateClaim(socketPath);
-      const server = net.createServer((sock) => {
-        sock.write(JSON.stringify({ type: 'hello', ...claim, ...change(claim) }) + '\n');
-      });
-      await new Promise((r) => server.listen(socketPath, r));
-
-      const sess = new BridgeSession(claim);
-      await assert.rejects(sess.connect(), /does not match the selected registry claim/);
-      assert.deepEqual(sess.wrapper, claim.wrapper, 'untrusted hello cannot replace wrapper identity');
-      assert.deepEqual(sess.capabilities, claim.capabilities, 'untrusted hello cannot replace capabilities');
-      await new Promise((r) => server.close(r));
-    });
-  }
-});
-
-test('alternate protocol-v2 connections accept an exact static claim', async () => {
-  const socketPath = path.join(tmpDir, 'bridge-exact-static-claim.sock');
-  const claim = alternateClaim(socketPath);
-  const server = net.createServer((sock) => {
-    sock.write(JSON.stringify({
-      type: 'hello',
-      ...claim,
-      turnInProgress: false,
-      model: 'openai/test-model',
-    }) + '\n');
-  });
-  await new Promise((r) => server.listen(socketPath, r));
-
-  const sess = new BridgeSession(claim);
-  await sess.connect();
-  const hello = await sess.waitForHello();
-  assert.equal(hello.instanceId, claim.instanceId);
-  assert.equal(sess.model, 'openai/test-model', 'volatile hello state remains accepted');
-
-  sess.close();
-  await new Promise((r) => server.close(r));
-});
-
-test('protocol-v2 events before hello cannot rewrite the claim used to prove the socket', async () => {
-  const socketPath = path.join(tmpDir, 'bridge-pre-hello.sock');
-  const claim = alternateClaim(socketPath);
-  const original = structuredClone(claim);
-  const changed = { ...claim, sessionId: 'unproven-session', nativeSessionId: 'unproven-session', sessionFile: path.join(tmpDir, 'unproven.jsonl') };
-  const sockets = [];
-  const server = net.createServer(sock => {
-    sockets.push(sock);
-    sock.on('error', () => {});
-    sock.write(JSON.stringify({ type: 'event', event: 'session_switch', data: changed }) + '\n'
-      + JSON.stringify({ type: 'hello', ...changed }) + '\n');
-  });
-  await new Promise(resolve => server.listen(socketPath, resolve));
-  const sess = new BridgeSession(claim);
-  try {
-    await assert.rejects(sess.connect(), /does not match the selected registry claim/);
-    assert.deepEqual(claim, original, 'an unproven event cannot change the expected ownership evidence');
-    assert.equal(sess.id, original.sessionId);
-  } finally {
-    sess.close();
-    for (const sock of sockets) sock.destroy();
-    await new Promise(resolve => server.close(resolve));
-  }
-});
-
-test('protocol-v2 replay starts only after an exact hello and valid later events still flow', async () => {
-  const socketPath = path.join(tmpDir, 'bridge-ordered-proof.sock');
-  const claim = alternateClaim(socketPath);
-  const sockets = [];
-  const server = net.createServer(sock => {
-    sockets.push(sock);
-    sock.on('error', () => {});
-    sock.write([
-      { type: 'event', event: 'extension_ui_request', data: { method: 'setWidget', widgetKey: 'unproven', widgetLines: ['bad'] } },
-      { type: 'event', event: 'turn_start', data: {} },
-      { type: 'hello', ...claim, turnInProgress: false },
-      { type: 'event', event: 'turn_start', data: { verified: true } },
-    ].map(frame => JSON.stringify(frame)).join('\n') + '\n');
-  });
-  await new Promise(resolve => server.listen(socketPath, resolve));
-  const sess = new BridgeSession(claim);
-  const starts = [];
-  sess.on('turn_start', data => starts.push(data));
-  const started = new Promise(resolve => sess.once('turn_start', resolve));
-  try {
+    await listenServer(server, socketPath);
+    const sess = new BridgeSession({ sessionId: (0, test_types_js_1.nativeId)('test-session'), socketPath, pid: process.pid, cwd: tmpDir });
     await sess.connect();
-    await started;
-    assert.deepEqual(starts, [{ verified: true }]);
-    assert.equal(sess.extUIState.widgets.size, 0);
-    assert.equal(sess.turnInProgress, true);
-  } finally {
+    assert.deepEqual(await sess.getCommands(), { commands: [] });
+    await assert.rejects(sess.send('never_answered', {}, { timeout: 100 }), /timed out after 100ms/, 'an unanswered command must reject instead of hanging');
     sess.close();
-    for (const sock of sockets) sock.destroy();
-    await new Promise(resolve => server.close(resolve));
-  }
+    await closeServer(server);
 });
-
+test('registry scan prunes a current entry whose process starttime does not match', () => {
+    fs.mkdirSync(REGISTRY_DIR, { recursive: true });
+    const socketPath = path.join(tmpDir, 'reused-pid.sock');
+    const registryPath = path.join(REGISTRY_DIR, 'reused-pid.json');
+    fs.writeFileSync(socketPath, 'stale socket path');
+    fs.writeFileSync(registryPath, JSON.stringify({
+        sessionId: 'reused-pid',
+        socketPath,
+        pid: process.pid,
+        startTime: '0',
+    }));
+    invalidateRegistryCache();
+    assert.deepEqual(listRegisteredSessions(), [], 'PID reuse cannot satisfy the old birth identity');
+    assert.equal(fs.existsSync(registryPath), false, 'stale claim is pruned');
+    assert.equal(fs.existsSync(socketPath), true, 'scanner never unlinks a possibly rebound socket path');
+});
+test('legacy registry compatibility is limited to Pi', () => {
+    const identity = (0, test_types_js_1.present)(processIdentity(process.pid));
+    const piSocketPath = path.join(tmpDir, 'legacy-pi.sock');
+    const ompSocketPath = path.join(tmpDir, 'legacy-omp.sock');
+    fs.writeFileSync(piSocketPath, 'socket placeholder');
+    fs.writeFileSync(ompSocketPath, 'socket placeholder');
+    const piPath = writeRegistryEntry('legacy-pi', {
+        harnessId: 'pi', sessionId: 'legacy-pi', socketPath: piSocketPath,
+        pid: identity.pid, startTime: identity.startTime,
+    });
+    const ompPath = writeRegistryEntry('legacy-omp', {
+        harnessId: 'omp', sessionId: 'legacy-omp', socketPath: ompSocketPath,
+        pid: identity.pid, startTime: identity.startTime,
+    });
+    const sessions = listRegisteredSessions();
+    assert.equal(sessions.some((entry) => (0, test_types_js_1.record)(entry).sessionId === 'legacy-pi'), true, 'legacy Pi remains supported');
+    assert.equal(sessions.some((entry) => (0, test_types_js_1.record)(entry).sessionId === 'legacy-omp'), false, 'legacy alternate claims are rejected');
+    assert.equal(fs.existsSync(piPath), true);
+    assert.equal(fs.existsSync(ompPath), false, 'invalid alternate claim is pruned');
+    fs.rmSync(piPath, { force: true });
+});
+test('registry scan rejects contradictory alternate wrapper identity', () => {
+    const socketPath = path.join(tmpDir, 'contradictory-wrapper.sock');
+    fs.writeFileSync(socketPath, 'socket placeholder');
+    const registryPath = writeRegistryEntry('contradictory-wrapper', alternateClaim(socketPath, {
+        harnessId: 'omp',
+        wrapper: { harnessId: 'prime', name: 'Prime Agent', wrapperVersion: 'test' },
+    }));
+    assert.equal(listRegisteredSessions().some((entry) => (0, test_types_js_1.record)(entry).socketPath === socketPath), false, 'outer and wrapper harness identities must agree');
+    assert.equal(fs.existsSync(registryPath), false);
+});
+test('pruning an inspected claim preserves a replacement bridge registry entry', () => {
+    fs.mkdirSync(REGISTRY_DIR, { recursive: true });
+    const socketPath = path.join(tmpDir, 'replacement.sock');
+    const registryPath = path.join(REGISTRY_DIR, 'replacement.json');
+    const identity = (0, test_types_js_1.present)(processIdentity(process.pid));
+    const inspected = (0, test_types_js_1.bridgeEntry)({
+        sessionId: (0, test_types_js_1.nativeId)('replacement'), socketPath, pid: identity.pid,
+        startTime: identity.startTime, instanceId: 'old-instance',
+    });
+    const replacement = { ...inspected, instanceId: 'new-instance' };
+    fs.writeFileSync(registryPath, JSON.stringify(replacement));
+    assert.equal(pruneRegisteredSession(inspected), false, 'old claim cannot prune a replacement instance');
+    assert.deepEqual(JSON.parse(fs.readFileSync(registryPath, 'utf8')), replacement);
+    fs.rmSync(registryPath, { force: true });
+});
+test('tracks compacting state from the hello and compaction events', async () => {
+    const socketPath = path.join(tmpDir, 'bridge-compact.sock');
+    let clientSock = null;
+    const server = net.createServer((sock) => {
+        clientSock = sock;
+        sock.on('error', () => { });
+        // Connect mid-compaction: the hello snapshot must seed sess.compacting.
+        sock.write(JSON.stringify({ type: 'hello', turnInProgress: false, compacting: true }) + '\n');
+    });
+    const socket = () => {
+        if (clientSock === null)
+            throw new Error('Bridge client socket not connected');
+        return clientSock;
+    };
+    await listenServer(server, socketPath);
+    const sess = new BridgeSession({ sessionId: (0, test_types_js_1.nativeId)('compact-session'), socketPath, pid: process.pid, cwd: tmpDir });
+    await sess.connect();
+    const hello = await sess.waitForHello();
+    assert.equal(hello.type, 'hello', 'hello can be awaited as identity proof');
+    assert.equal(sess.compacting, true, 'hello with compacting seeds the flag');
+    socket().write(JSON.stringify({ type: 'event', event: 'compaction_end', data: {} }) + '\n');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(sess.compacting, false, 'compaction_end clears the flag');
+    socket().write(JSON.stringify({ type: 'event', event: 'compaction_start', data: {} }) + '\n');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(sess.compacting, true, 'compaction_start sets the flag');
+    sess.close();
+    await closeServer(server);
+});
+test('tracks running tools, including update-only phases, until a completion boundary', () => {
+    const sess = new BridgeSession({
+        sessionId: (0, test_types_js_1.nativeId)('tool-state-session'), socketPath: '/unused', pid: process.pid, cwd: tmpDir,
+    });
+    sess._handle({ type: 'event', event: 'tool_execution_start', data: {
+            toolCallId: 'tc1', toolName: 'Bash', args: { command: 'sleep 1' }, startedAt: 123,
+        } });
+    sess._handle({ type: 'event', event: 'tool_execution_update', data: {
+            toolCallId: 'tc1', partialResult: { content: [{ type: 'text', text: 'partial' }] },
+        } });
+    assert.deepEqual(sess.runningToolCalls.get('tc1'), {
+        toolName: 'Bash',
+        args: { command: 'sleep 1' },
+        startedAt: 123,
+        lastPartialResult: { content: [{ type: 'text', text: 'partial' }] },
+    });
+    sess._handle({ type: 'event', event: 'tool_execution_end', data: { toolCallId: 'tc1' } });
+    assert.equal(sess.runningToolCalls.has('tc1'), false, 'end removes the completed call');
+    sess._handle({ type: 'event', event: 'tool_execution_update', data: {
+            toolCallId: 'late', toolName: 'Bash', args: { command: 'jobs' },
+            partialResult: { content: [{ type: 'text', text: 'background output' }] },
+        } });
+    assert.equal((0, test_types_js_1.record)((0, test_types_js_1.present)(sess.runningToolCalls.get('late'))).toolName, 'Bash', 'a post-turn/update-only background phase is replayable');
+    sess._handle({ type: 'event', event: 'agent_end', data: {} });
+    assert.equal(sess.runningToolCalls.size, 0, 'agent_end clears orphaned running calls');
+});
+test('captures extension UI replay before server listeners attach', () => {
+    const sess = new BridgeSession({
+        sessionId: (0, test_types_js_1.nativeId)('ui-state-session'), socketPath: '/unused', pid: process.pid, cwd: tmpDir,
+    });
+    const { widgets, statuses, dialogs } = sess.extUIState;
+    sess._handle({ type: 'event', event: 'extension_ui_request', data: {
+            method: 'setWidget', widgetKey: 'Todos', widgetLines: ['[>] Verify browser'],
+        } });
+    sess._handle({ type: 'event', event: 'extension_ui_request', data: {
+            method: 'setStatus', statusKey: 'planmode', statusText: 'Plan mode · parallel',
+        } });
+    sess._handle({ type: 'event', event: 'extension_ui_request', data: {
+            method: 'ask', id: 'ask-1', questions: [{ id: 'q', question: 'Continue?' }],
+        } });
+    assert.deepEqual((0, test_types_js_1.record)((0, test_types_js_1.present)(widgets.get('Todos'))).widgetLines, ['[>] Verify browser']);
+    assert.equal((0, test_types_js_1.record)((0, test_types_js_1.present)(statuses.get('planmode'))).statusText, 'Plan mode · parallel');
+    assert.equal((0, test_types_js_1.record)((0, test_types_js_1.present)(dialogs.get('ask-1'))).method, 'ask');
+    const resolved = [];
+    sess.on('extension_ui_resolved', (data) => { const id = (0, test_types_js_1.record)(data).id; resolved.push(typeof id === 'string' && dialogs.has(id)); });
+    sess._handle({ type: 'event', event: 'extension_ui_resolved', data: { id: 'ask-1' } });
+    assert.deepEqual(resolved, [false], 'resolution listeners must not replay the answered dialog');
+    sess._handle({ type: 'event', event: 'session_switch', data: {} });
+    assert.equal(widgets.size, 0);
+    assert.equal(statuses.size, 0);
+});
+test('extension UI listeners can resolve a newly admitted dialog without it reappearing', () => {
+    const sess = new BridgeSession({
+        sessionId: (0, test_types_js_1.nativeId)('ui-listener-session'), socketPath: '/unused', pid: process.pid, cwd: tmpDir,
+    });
+    const observed = [];
+    sess.on('extension_ui_request', (data) => {
+        const id = (0, test_types_js_1.record)(data).id;
+        observed.push(typeof id === 'string' ? sess.extUIState.dialogs.get(id) : undefined);
+        sess._handle({ type: 'event', event: 'extension_ui_resolved', data: { id } });
+    });
+    const dialog = { method: 'confirm', id: 'confirm-1', title: 'Continue?' };
+    sess._handle({ type: 'event', event: 'extension_ui_request', data: dialog });
+    assert.deepEqual(observed, [dialog], 'listeners see the admitted dialog before acting on it');
+    assert.equal(sess.extUIState.dialogs.has(dialog.id), false, 'ingress must not restore a dialog resolved by a listener');
+});
+test('protocol-v2 connections reject a hello from a different registry claim', async () => {
+    const socketPath = path.join(tmpDir, 'bridge-wrong-claim.sock');
+    const server = net.createServer((sock) => {
+        sock.write(JSON.stringify({
+            type: 'hello',
+            protocolVersion: 2,
+            wrapper: { harnessId: 'omp' },
+            harnessId: 'omp',
+            nativeSessionId: 'other-session',
+            sessionId: 'other-session',
+            bridgeInstanceId: 'other-bridge',
+            instanceId: 'other-bridge',
+            pid: process.pid,
+            spawnToken: 'wrong-token',
+            capabilities: { prompt: true },
+        }) + '\n');
+    });
+    await listenServer(server, socketPath);
+    const sess = new BridgeSession((0, test_types_js_1.bridgeEntry)({
+        protocolVersion: 2,
+        wrapper: { harnessId: 'prime' },
+        harnessId: 'prime',
+        nativeSessionId: (0, test_types_js_1.nativeId)('expected-session'),
+        sessionId: (0, test_types_js_1.nativeId)('expected-session'),
+        bridgeInstanceId: 'expected-bridge',
+        instanceId: 'expected-bridge',
+        socketPath,
+        pid: process.pid,
+        spawnToken: 'expected-token',
+        capabilities: { prompt: false },
+    }));
+    await assert.rejects(sess.connect(), /does not match the selected registry claim/);
+    assert.equal(sess.harnessId, 'prime', 'untrusted hello cannot replace claim identity');
+    assert.equal(sess.capabilities.prompt, false, 'untrusted hello cannot elevate capabilities');
+    await closeServer(server);
+});
+test('alternate protocol-v2 connections reject every changed static claim field', async (t) => {
+    const cases = [
+        ['wrapper identity', claim => ({ wrapper: { ...claim.wrapper, wrapperVersion: 'different' } })],
+        ['capabilities', claim => ({ capabilities: { ...claim.capabilities, reload: true } })],
+        ['socket path', claim => ({ socketPath: `${claim.socketPath}.different` })],
+        ['contradictory outer harness', () => ({ harnessId: 'prime' })],
+    ];
+    for (const [name, change] of cases) {
+        await t.test(name, async () => {
+            const socketPath = path.join(tmpDir, `bridge-changed-${name.replace(/\W+/g, '-')}.sock`);
+            const claim = alternateClaim(socketPath);
+            const server = net.createServer((sock) => {
+                sock.write(JSON.stringify({ type: 'hello', ...claim, ...change(claim) }) + '\n');
+            });
+            await listenServer(server, socketPath);
+            const sess = new BridgeSession(claim);
+            await assert.rejects(sess.connect(), /does not match the selected registry claim/);
+            assert.deepEqual(sess.wrapper, claim.wrapper, 'untrusted hello cannot replace wrapper identity');
+            assert.deepEqual(sess.capabilities, claim.capabilities, 'untrusted hello cannot replace capabilities');
+            await closeServer(server);
+        });
+    }
+});
+test('alternate protocol-v2 connections accept an exact static claim', async () => {
+    const socketPath = path.join(tmpDir, 'bridge-exact-static-claim.sock');
+    const claim = alternateClaim(socketPath);
+    const server = net.createServer((sock) => {
+        sock.write(JSON.stringify({
+            type: 'hello',
+            ...claim,
+            turnInProgress: false,
+            model: 'openai/test-model',
+        }) + '\n');
+    });
+    await listenServer(server, socketPath);
+    const sess = new BridgeSession(claim);
+    await sess.connect();
+    const hello = await sess.waitForHello();
+    assert.equal(hello.instanceId, claim.instanceId);
+    assert.equal(sess.model, 'openai/test-model', 'volatile hello state remains accepted');
+    sess.close();
+    await closeServer(server);
+});
+test('protocol-v2 events before hello cannot rewrite the claim used to prove the socket', async () => {
+    const socketPath = path.join(tmpDir, 'bridge-pre-hello.sock');
+    const claim = alternateClaim(socketPath);
+    const original = structuredClone(claim);
+    const changed = { ...claim, sessionId: 'unproven-session', nativeSessionId: 'unproven-session', sessionFile: path.join(tmpDir, 'unproven.jsonl') };
+    const sockets = [];
+    const server = net.createServer(sock => {
+        sockets.push(sock);
+        sock.on('error', () => { });
+        sock.write(JSON.stringify({ type: 'event', event: 'session_switch', data: changed }) + '\n'
+            + JSON.stringify({ type: 'hello', ...changed }) + '\n');
+    });
+    await listenServer(server, socketPath);
+    const sess = new BridgeSession(claim);
+    try {
+        await assert.rejects(sess.connect(), /does not match the selected registry claim/);
+        assert.deepEqual(claim, original, 'an unproven event cannot change the expected ownership evidence');
+        assert.equal(sess.id, original.sessionId);
+    }
+    finally {
+        sess.close();
+        for (const sock of sockets)
+            sock.destroy();
+        await closeServer(server);
+    }
+});
+test('protocol-v2 replay starts only after an exact hello and valid later events still flow', async () => {
+    const socketPath = path.join(tmpDir, 'bridge-ordered-proof.sock');
+    const claim = alternateClaim(socketPath);
+    const sockets = [];
+    const server = net.createServer(sock => {
+        sockets.push(sock);
+        sock.on('error', () => { });
+        sock.write([
+            { type: 'event', event: 'extension_ui_request', data: { method: 'setWidget', widgetKey: 'unproven', widgetLines: ['bad'] } },
+            { type: 'event', event: 'turn_start', data: {} },
+            { type: 'hello', ...claim, turnInProgress: false },
+            { type: 'event', event: 'turn_start', data: { verified: true } },
+        ].map(frame => JSON.stringify(frame)).join('\n') + '\n');
+    });
+    await listenServer(server, socketPath);
+    const sess = new BridgeSession(claim);
+    const starts = [];
+    sess.on('turn_start', (data) => starts.push(data));
+    const started = new Promise(resolve => sess.once('turn_start', resolve));
+    try {
+        await sess.connect();
+        await started;
+        assert.deepEqual(starts, [{ verified: true }]);
+        assert.equal(sess.extUIState.widgets.size, 0);
+        assert.equal(sess.turnInProgress, true);
+    }
+    finally {
+        sess.close();
+        for (const sock of sockets)
+            sock.destroy();
+        await closeServer(server);
+    }
+});
 test('registry scanning rejects malformed native ids and socket paths before filesystem use', () => {
-  for (const patch of [{ sessionId: 7 }, { sessionId: 'bad id' }, { socketPath: 7 }]) {
-    const file = writeRegistryEntry('malformed-entry', { sessionId: 'valid-id', socketPath: '/unused', ...patch });
-    assert.doesNotThrow(() => listRegisteredSessions());
-    assert.equal(fs.existsSync(file), false);
-  }
+    for (const patch of [{ sessionId: 7 }, { sessionId: 'bad id' }, { socketPath: 7 }]) {
+        const file = writeRegistryEntry('malformed-entry', { sessionId: 'valid-id', socketPath: '/unused', ...patch });
+        assert.doesNotThrow(() => listRegisteredSessions());
+        assert.equal(fs.existsSync(file), false);
+    }
 });
-
 test('malformed identity updates preserve the selected bridge and valid switches preserve emit ordering', () => {
-  const claim = { sessionId: 'old-id', socketPath: '/unused', capabilities: { prompt: false } };
-  const sess = new BridgeSession(claim);
-  sess._handle({ type: 'hello', capabilities: 'malformed' });
-  assert.equal(sess.capabilities.prompt, false, 'malformed capability containers cannot erase an explicit denial');
-  sess._handle({ type: 'event', event: 'turn_start', data: {} });
-  sess._handle({ type: 'event', event: 'extension_ui_request', data: { method: 'setStatus', statusKey: 'owned', statusText: 'ready' } });
-  const switches = [];
-  sess.on('session_switch', data => switches.push({ data, id: sess.id, statuses: sess.extUIState.statuses.size }));
-  sess._handle({ type: 'event', event: 'session_switch', data: { sessionId: 'invalid id' } });
-  assert.equal(sess.turnInProgress, true);
-  assert.equal(sess.extUIState.statuses.size, 1);
-  assert.deepEqual(switches, []);
-  const next = { sessionId: 'new-id', sessionFile: '/new.jsonl', cwd: '/new' };
-  sess._handle({ type: 'event', event: 'session_switch', data: next });
-  assert.deepEqual(switches, [{ data: next, id: 'old-id', statuses: 0 }], 'listeners see the old identity after replay state is cleared');
-  assert.equal(sess.id, 'new-id');
-  assert.equal(sess.nativeSessionId, 'new-id');
-  assert.equal(claim.sessionId, 'new-id');
-  assert.equal(claim.sessionFile, '/new.jsonl');
+    const claim = (0, test_types_js_1.bridgeEntry)({ sessionId: (0, test_types_js_1.nativeId)('old-id'), socketPath: '/unused', capabilities: { prompt: false }, sessionFile: undefined });
+    const sess = new BridgeSession(claim);
+    sess._handle({ type: 'hello', capabilities: 'malformed' });
+    assert.equal(sess.capabilities.prompt, false, 'malformed capability containers cannot erase an explicit denial');
+    sess._handle({ type: 'event', event: 'turn_start', data: {} });
+    sess._handle({ type: 'event', event: 'extension_ui_request', data: { method: 'setStatus', statusKey: 'owned', statusText: 'ready' } });
+    const switches = [];
+    sess.on('session_switch', (data) => switches.push({ data, id: sess.id, statuses: sess.extUIState.statuses.size }));
+    sess._handle({ type: 'event', event: 'session_switch', data: { sessionId: 'invalid id' } });
+    assert.equal(sess.turnInProgress, true);
+    assert.equal(sess.extUIState.statuses.size, 1);
+    assert.deepEqual(switches, []);
+    const next = { sessionId: 'new-id', sessionFile: '/new.jsonl', cwd: '/new' };
+    sess._handle({ type: 'event', event: 'session_switch', data: next });
+    assert.deepEqual(switches, [{ data: next, id: 'old-id', statuses: 0 }], 'listeners see the old identity after replay state is cleared');
+    assert.equal(sess.id, 'new-id');
+    assert.equal(sess.nativeSessionId, 'new-id');
+    assert.equal(claim.sessionId, 'new-id');
+    assert.equal(claim.sessionFile, '/new.jsonl');
 });
-
 test('legacy hello with an invalid native id reports a protocol error and destroys its socket', () => {
-  const sess = new BridgeSession({ sessionId: 'old-id', socketPath: '/unused' });
-  const errors = [];
-  const hellos = [];
-  let destroyed = false;
-  sess.sock = { destroy() { destroyed = true; } };
-  sess.on('protocol_error', error => errors.push(error));
-  sess.on('hello', hello => hellos.push(hello));
-  sess._handle({ type: 'hello', sessionId: 'invalid id', turnInProgress: true });
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0].code, 'EPROTO');
-  assert.match(errors[0].message, /invalid native session id/);
-  assert.equal(destroyed, true);
-  assert.equal(sess.hello, null);
-  assert.deepEqual(hellos, []);
-  assert.equal(sess.nativeSessionId, 'old-id');
-  assert.equal(sess.turnInProgress, false);
+    const sess = new BridgeSession({ sessionId: (0, test_types_js_1.nativeId)('old-id'), socketPath: '/unused' });
+    const errors = [];
+    const hellos = [];
+    let destroyed = false;
+    const socket = new net.Socket();
+    socket.destroy = () => { destroyed = true; return socket; };
+    sess.sock = socket;
+    sess.on('protocol_error', (error) => errors.push(error));
+    sess.on('hello', (hello) => hellos.push(hello));
+    sess._handle({ type: 'hello', sessionId: 'invalid id', turnInProgress: true });
+    assert.equal(errors.length, 1);
+    assert.equal((0, test_types_js_1.record)((0, test_types_js_1.present)(errors[0])).code, 'EPROTO');
+    assert.match(String((0, test_types_js_1.record)((0, test_types_js_1.present)(errors[0])).message), /invalid native session id/);
+    assert.equal(destroyed, true);
+    assert.equal(sess.hello, null);
+    assert.deepEqual(hellos, []);
+    assert.equal(sess.nativeSessionId, 'old-id');
+    assert.equal(sess.turnInProgress, false);
 });

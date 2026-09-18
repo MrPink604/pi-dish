@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "strict": true,
+    "noEmitOnError": true,
+    "declaration": false,
+    "newLine": "lf",
+    "skipLibCheck": true,
+    "types": [
+      "node"
+    ]
+  },
+  "files": [
+    "test/browser/globals.d.ts",
+    "test/ui-scenarios/index.ts",
+    "test/ui-scenarios/contracts.ts",
+    "test/ui-smoke.ts",
+    "test/ui-scenarios/models.ts",
+    "test/ui-scenarios/drafts.ts",
+    "test/ui-scenarios/bounce.ts",
+    "test/ui-scenarios/sidebar.ts",
+    "test/ui-scenarios/skills.ts",
+    "test/ui-scenarios/usage.ts",
+    "test/ui-scenarios/routines.ts",
+    "test/ui-scenarios/mobile.ts"
+  ]
+}

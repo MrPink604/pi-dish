@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": ".",
+    "strict": true,
+    "noEmitOnError": true,
+    "declaration": true,
+    "newLine": "lf",
+    "skipLibCheck": true,
+    "types": [
+      "node"
+    ]
+  },
+  "files": [
+    "scripts/readme-shots.ts",
+    "scripts/test-real-lineage-harnesses.ts",
+    "scripts/session-catalog-baseline.ts"
+  ]
+}

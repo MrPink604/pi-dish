@@ -5,7 +5,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // Every scenario starts a new process, HOME, server and browser context.
 const node_child_process_1 = require("node:child_process");
 const path = require("node:path");
-const scenarios = require("../test/ui-scenarios/index.js");
+const loaded = require('../test/ui-scenarios/index.js');
+if (!loaded || typeof loaded !== 'object' || Array.isArray(loaded))
+    throw new TypeError('Invalid UI scenario registry');
+const scenarios = Object.fromEntries(Object.entries(loaded));
 let child;
 let interrupted = false;
 for (const signal of ['SIGINT', 'SIGTERM'])

@@ -1,115 +1,145 @@
-const { test, expect, ROOT } = require('./fixtures');
-test.use({ liveSessions: true });
+// Generated test/tool from test/browser/extension-ui.spec.ts; edit that source and run npm run build:tests.
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const fixtures_js_1 = require("./fixtures.js");
+fixtures_js_1.test.use({ liveSessions: true });
 let delivery = 0;
 async function show(page, request, fleet) {
-  const nonce = ++delivery;
-  const host = await page.evaluate(() => {
-    if (!window.extensionDeliveryHook) {
-      window.extensionDeliveryHook = true;
-      const original = fixtureApp.features.extensionUI.handle;
-      fixtureApp.features.extensionUI.handle = (request, session) => { original(request, session); window.extensionDelivery = request.__fixtureNonce; };
-    }
-    return fixtureApp.features.sessionState.captureSelection().host;
-  });
-  const fixtureHost = host === fleet.peer.hostId ? fleet.peer : fleet.self;
-  if (['select', 'confirm', 'input', 'editor', 'ask'].includes(request.method)) fixtureHost.emit('turn_start', {});
-  fixtureHost.emit('extension_ui_request', { ...request, __fixtureNonce: nonce });
-  await expect.poll(() => page.evaluate(() => window.extensionDelivery)).toBe(nonce);
+    const nonce = ++delivery;
+    const host = await page.evaluate(() => {
+        if (!window.extensionDeliveryHook) {
+            window.extensionDeliveryHook = true;
+            const original = fixtureApp.features.extensionUI.handle;
+            fixtureApp.features.extensionUI.handle = (request, session) => {
+                original(request, session);
+                if (typeof request === 'object' && request !== null && '__fixtureNonce' in request && typeof request.__fixtureNonce === 'number')
+                    window.extensionDelivery = request.__fixtureNonce;
+            };
+        }
+        return fixtureElement(fixtureApp.features.sessionState.captureSelection(), 'extension UI selection').host;
+    });
+    const fixtureHost = host === fleet.peer.hostId ? fleet.peer : fleet.self;
+    const method = typeof request.method === 'string' ? request.method : '';
+    if (['select', 'confirm', 'input', 'editor', 'ask'].includes(method))
+        fixtureHost.emit('turn_start', {});
+    fixtureHost.emit('extension_ui_request', { ...request, __fixtureNonce: nonce });
+    await fixtures_js_1.expect.poll(() => page.evaluate(() => window.extensionDelivery)).toBe(nonce);
 }
 const editor = { id: 'shared-dialog', method: 'editor', title: 'Edit answer', prefill: 'Initial answer' };
-
-test('stashed dialogs preserve edits while same-id peer cards cannot answer the current host', async ({ page, fleet }) => {
-  const answers = [];
-  await page.route('**/api/sessions/*/ui-response', route => { answers.push({ origin: new URL(route.request().url()).origin, body: route.request().postDataJSON() }); return route.fulfill({ json: { ok: true } }); });
-  await fleet.select(fleet.peer); await show(page, editor, fleet);
-  await page.locator('.ext-ui-dialog-editor').fill('Unfinished peer answer');
-  await page.evaluate(() => { window.peerDialog = document.querySelector('.ext-ui-docked-dialog'); window.peerSubmit = window.peerDialog.querySelector('[data-action="submit"]'); });
-  await fleet.select(fleet.self); await show(page, editor, fleet);
-  await expect(page.locator('.ext-ui-dialog-editor')).toBeVisible();
-  await page.evaluate(() => window.peerSubmit.click());
-  expect(answers).toEqual([]); await expect(page.locator('.ext-ui-dialog-editor')).toHaveValue('Initial answer');
-  await fleet.select(fleet.peer); await show(page, editor, fleet);
-  await expect(page.locator('.ext-ui-dialog-editor')).toHaveValue('Unfinished peer answer');
-  expect(await page.evaluate(() => document.querySelector('.ext-ui-docked-dialog') === window.peerDialog)).toBe(true);
-  await page.locator('[data-action="submit"]').click();
-  await expect.poll(() => answers.length).toBe(1);
-  expect(answers[0]).toEqual({ origin: fleet.peer.base, body: { requestId: editor.id, value: 'Unfinished peer answer' } });
+(0, fixtures_js_1.test)('stashed dialogs preserve edits while same-id peer cards cannot answer the current host', async ({ page, fleet }) => {
+    const answers = [];
+    await page.route('**/api/sessions/*/ui-response', route => { answers.push({ origin: new URL(route.request().url()).origin, body: route.request().postDataJSON() }); return route.fulfill({ json: { ok: true } }); });
+    await fleet.select(fleet.peer);
+    await show(page, editor, fleet);
+    await page.locator('.ext-ui-dialog-editor').fill('Unfinished peer answer');
+    await page.evaluate(() => { window.peerDialog = document.querySelector('.ext-ui-docked-dialog'); window.peerSubmit = fixtureElement(window.peerDialog, 'peer dialog').querySelector('[data-action="submit"]'); });
+    await fleet.select(fleet.self);
+    await show(page, editor, fleet);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-editor')).toBeVisible();
+    await page.evaluate(() => fixtureElement(window.peerSubmit, 'peer submit').click());
+    (0, fixtures_js_1.expect)(answers).toEqual([]);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-editor')).toHaveValue('Initial answer');
+    await fleet.select(fleet.peer);
+    await show(page, editor, fleet);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-editor')).toHaveValue('Unfinished peer answer');
+    (0, fixtures_js_1.expect)(await page.evaluate(() => document.querySelector('.ext-ui-docked-dialog') === window.peerDialog)).toBe(true);
+    await page.locator('[data-action="submit"]').click();
+    await fixtures_js_1.expect.poll(() => answers.length).toBe(1);
+    (0, fixtures_js_1.expect)(answers[0]).toEqual({ origin: fleet.peer.base, body: { requestId: editor.id, value: 'Unfinished peer answer' } });
 });
-
-test('resolved dialog controls cannot answer a replacement using the same request id', async ({ page, fleet }) => {
-  await fleet.select(fleet.self); await show(page, { id: editor.id, method: 'confirm', title: 'Old confirmation' }, fleet);
-  await page.evaluate(() => { window.oldConfirm = [...document.querySelectorAll('.ext-ui-docked-dialog button')]; fixtureApp.features.extensionUI.resolve('shared-dialog', fixtureApp.features.sessionState.captureSelection()); });
-  await show(page, { id: editor.id, method: 'confirm', title: 'New confirmation' }, fleet);
-  let writes = 0;
-  await page.route('**/api/sessions/*/ui-response', route => { writes++; return route.fulfill({ json: { ok: true } }); });
-  await page.evaluate(() => window.oldConfirm.forEach(button => button.click()));
-  expect(writes).toBe(0); await expect(page.locator('.ext-ui-dialog-title')).toHaveText('New confirmation');
-  await page.locator('[data-action="yes"]').click(); await expect.poll(() => writes).toBe(1);
+(0, fixtures_js_1.test)('resolved dialog controls cannot answer a replacement using the same request id', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    await show(page, { id: editor.id, method: 'confirm', title: 'Old confirmation' }, fleet);
+    await page.evaluate(() => { window.oldConfirm = [...document.querySelectorAll('.ext-ui-docked-dialog button')]; fixtureApp.features.extensionUI.resolve('shared-dialog', fixtureElement(fixtureApp.features.sessionState.captureSelection(), 'extension UI selection')); });
+    await show(page, { id: editor.id, method: 'confirm', title: 'New confirmation' }, fleet);
+    let writes = 0;
+    await page.route('**/api/sessions/*/ui-response', route => { writes++; return route.fulfill({ json: { ok: true } }); });
+    await page.evaluate(() => window.oldConfirm.forEach(button => button.click()));
+    (0, fixtures_js_1.expect)(writes).toBe(0);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-title')).toHaveText('New confirmation');
+    await page.locator('[data-action="yes"]').click();
+    await fixtures_js_1.expect.poll(() => writes).toBe(1);
 });
-
-test('ask answers retain typed labels, custom notes and selections through redocking', async ({ page, fleet }) => {
-  await fleet.select(fleet.self);
-  const ask = { id: 'ask', method: 'ask', questions: [
-    { id: 'single', question: '\x1b[31mChoose one\x1b[0m', options: ['First', { label: 'Second', description: 'Description', preview: 'Preview' }] },
-    { id: 'multi', question: 'Choose several', multi: true, options: ['A', 'B'] },
-  ] };
-  await show(page, ask, fleet);
-  await page.locator('[data-action="submit-ask"]').click();
-  await expect(page.locator('.ext-ui-ask-error:not([hidden])')).toHaveCount(1);
-  await page.locator('.ext-ui-ask-option[data-question-index="0"][data-option-index="1"]').click();
-  await page.locator('.ext-ui-ask-option[data-question-index="1"][data-option-index="0"]').click();
-  await page.locator('.ext-ui-ask-custom[data-question-index="1"]').fill('Custom extra');
-  await page.locator('.ext-ui-ask-note[data-question-index="0"]').fill('Keep the note');
-  await fleet.select(fleet.peer); await fleet.select(fleet.self); await show(page, ask, fleet);
-  await expect(page.locator('.ext-ui-ask-option[aria-pressed="true"]')).toHaveCount(2);
-  let answer;
-  await page.route('**/api/sessions/*/ui-response', route => { answer = route.request().postDataJSON(); return route.fulfill({ json: { ok: true } }); });
-  await page.locator('[data-action="submit-ask"]').click();
-  await expect.poll(() => !!answer).toBe(true);
-  expect(answer.value).toEqual({ kind: 'submit', results: [
-    { id: 'single', question: 'Choose one', options: ['First', 'Second'], multi: false, selectedOptions: ['Second'], note: 'Keep the note' },
-    { id: 'multi', question: 'Choose several', options: ['A', 'B'], multi: true, selectedOptions: ['A'], customInput: 'Custom extra' },
-  ] });
+(0, fixtures_js_1.test)('ask answers retain typed labels, custom notes and selections through redocking', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const ask = { id: 'ask', method: 'ask', questions: [
+            { id: 'single', question: '\x1b[31mChoose one\x1b[0m', options: ['First', { label: 'Second', description: 'Description', preview: 'Preview' }] },
+            { id: 'multi', question: 'Choose several', multi: true, options: ['A', 'B'] },
+        ] };
+    await show(page, ask, fleet);
+    await page.locator('[data-action="submit-ask"]').click();
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-ask-error:not([hidden])')).toHaveCount(1);
+    await page.locator('.ext-ui-ask-option[data-question-index="0"][data-option-index="1"]').click();
+    await page.locator('.ext-ui-ask-option[data-question-index="1"][data-option-index="0"]').click();
+    await page.locator('.ext-ui-ask-custom[data-question-index="1"]').fill('Custom extra');
+    await page.locator('.ext-ui-ask-note[data-question-index="0"]').fill('Keep the note');
+    await fleet.select(fleet.peer);
+    await fleet.select(fleet.self);
+    await show(page, ask, fleet);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-ask-option[aria-pressed="true"]')).toHaveCount(2);
+    let answer;
+    await page.route('**/api/sessions/*/ui-response', route => {
+        const payload = route.request().postDataJSON();
+        if (!(0, wire_protocol_js_1.isRecord)(payload))
+            throw new Error('Invalid extension UI answer');
+        answer = payload;
+        return route.fulfill({ json: { ok: true } });
+    });
+    await page.locator('[data-action="submit-ask"]').click();
+    await fixtures_js_1.expect.poll(() => !!answer).toBe(true);
+    (0, fixtures_js_1.expect)(answer?.value).toEqual({ kind: 'submit', results: [
+            { id: 'single', question: 'Choose one', options: ['First', 'Second'], multi: false, selectedOptions: ['Second'], note: 'Keep the note' },
+            { id: 'multi', question: 'Choose several', options: ['A', 'B'], multi: true, selectedOptions: ['A'], customInput: 'Custom extra' },
+        ] });
 });
-
-test('authoritative dialog reconciliation prunes only its owning host and ignores malformed state', async ({ page, fleet }) => {
-  await fleet.select(fleet.peer); await show(page, editor, fleet);
-  await fleet.select(fleet.self); await show(page, editor, fleet);
-  await page.evaluate(({ id, host }) => { fixtureApp.features.extensionUI.reconcile({ dialogs: [] }, { id, host }); fixtureApp.features.extensionUI.reconcile({ dialogs: false }, fixtureApp.features.sessionState.captureSelection()); }, { id: ROOT, host: fleet.peer.hostId });
-  await expect(page.locator('.ext-ui-docked-dialog')).toHaveCount(1);
-  await page.evaluate(() => fixtureApp.features.extensionUI.reconcile({ dialogs: [] }, fixtureApp.features.sessionState.captureSelection()));
-  await expect(page.locator('.ext-ui-docked-dialog')).toHaveCount(0);
-  await fleet.select(fleet.peer); await show(page, editor, fleet);
-  await expect(page.locator('.ext-ui-dialog-editor')).toHaveValue('Initial answer');
+(0, fixtures_js_1.test)('authoritative dialog reconciliation prunes only its owning host and ignores malformed state', async ({ page, fleet }) => {
+    await fleet.select(fleet.peer);
+    await show(page, editor, fleet);
+    await fleet.select(fleet.self);
+    await show(page, editor, fleet);
+    await page.evaluate(({ id, host }) => { fixtureApp.features.extensionUI.reconcile({ dialogs: [] }, { id, host }); fixtureApp.features.extensionUI.reconcile({ dialogs: false }, fixtureElement(fixtureApp.features.sessionState.captureSelection(), 'extension UI selection')); }, { id: fixtures_js_1.ROOT, host: fleet.peer.hostId });
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-docked-dialog')).toHaveCount(1);
+    await page.evaluate(() => fixtureApp.features.extensionUI.reconcile({ dialogs: [] }, fixtureElement(fixtureApp.features.sessionState.captureSelection(), 'extension UI selection')));
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-docked-dialog')).toHaveCount(0);
+    await fleet.select(fleet.peer);
+    await show(page, editor, fleet);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-editor')).toHaveValue('Initial answer');
 });
-
-test('widget reprojection cancels both removal phases and old headers cannot replace peer state', async ({ page, fleet }) => {
-  await page.clock.install(); await fleet.select(fleet.self);
-  const widget = { method: 'setWidget', widgetKey: 'quoted"key', widgetLines: ['Original'] };
-  await show(page, widget, fleet);
-  await page.evaluate(() => { window.oldWidget = document.querySelector('.ext-ui-widget'); window.oldWidgetHeader = window.oldWidget.querySelector('.ext-ui-widget-header'); });
-  await show(page, { ...widget, widgetLines: [] }, fleet); await page.clock.runFor(550);
-  await expect(page.locator('.ext-ui-widget')).toHaveClass(/hidden/);
-  await show(page, { ...widget, widgetLines: ['Restored'] }, fleet); await page.clock.runFor(250);
-  await expect(page.locator('.ext-ui-widget')).toBeVisible();
-  expect(await page.evaluate(() => document.querySelector('.ext-ui-widget') === window.oldWidget)).toBe(true);
-  await fleet.select(fleet.peer); await show(page, { ...widget, widgetLines: ['Peer state'] }, fleet);
-  await page.evaluate(() => window.oldWidgetHeader.click());
-  await expect(page.locator('.ext-ui-widget')).not.toHaveClass(/collapsed/); await expect(page.locator('.ext-ui-widget')).toContainText('Peer state');
+(0, fixtures_js_1.test)('widget reprojection cancels both removal phases and old headers cannot replace peer state', async ({ page, fleet }) => {
+    await page.clock.install();
+    await fleet.select(fleet.self);
+    const widget = { method: 'setWidget', widgetKey: 'quoted"key', widgetLines: ['Original'] };
+    await show(page, widget, fleet);
+    await page.evaluate(() => { window.oldWidget = document.querySelector('.ext-ui-widget'); window.oldWidgetHeader = fixtureElement(window.oldWidget, 'old widget').querySelector('.ext-ui-widget-header'); });
+    await show(page, { ...widget, widgetLines: [] }, fleet);
+    await page.clock.runFor(550);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-widget')).toHaveClass(/hidden/);
+    await show(page, { ...widget, widgetLines: ['Restored'] }, fleet);
+    await page.clock.runFor(250);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-widget')).toBeVisible();
+    (0, fixtures_js_1.expect)(await page.evaluate(() => document.querySelector('.ext-ui-widget') === window.oldWidget)).toBe(true);
+    await fleet.select(fleet.peer);
+    await show(page, { ...widget, widgetLines: ['Peer state'] }, fleet);
+    await page.evaluate(() => fixtureElement(window.oldWidgetHeader, 'old widget header').click());
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-widget')).not.toHaveClass(/collapsed/);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-widget')).toContainText('Peer state');
 });
-
-test('extension UI disposal retires toast, widget, status and dialog listeners and timers', async ({ page, fleet }) => {
-  await page.clock.install(); await fleet.select(fleet.self);
-  await show(page, { method: 'notify', message: 'Toast' }, fleet);
-  await show(page, { method: 'setWidget', widgetKey: 'widget', widgetLines: ['Widget'] }, fleet);
-  await show(page, { method: 'setStatus', statusKey: 'status', statusText: 'Status' }, fleet);
-  await show(page, editor, fleet);
-  let writes = 0;
-  await page.route('**/api/sessions/*/ui-response', route => { writes++; return route.fulfill({ json: { ok: true } }); });
-  await page.evaluate(() => {
-    window.retiredExtensionButtons = [...document.querySelectorAll('.ext-ui-docked-dialog button, .ext-ui-toast button')];
-    fixtureApp.features.extensionUI.dispose(); window.retiredExtensionButtons.forEach(button => button.click());
-  });
-  await page.clock.runFor(7000);
-  await expect(page.locator('.ext-ui-widget, .ext-ui-status-badge, .ext-ui-toast, .ext-ui-docked-dialog')).toHaveCount(0); expect(writes).toBe(0);
+(0, fixtures_js_1.test)('extension UI disposal retires toast, widget, status and dialog listeners and timers', async ({ page, fleet }) => {
+    await page.clock.install();
+    await fleet.select(fleet.self);
+    await show(page, { method: 'notify', message: 'Toast' }, fleet);
+    await show(page, { method: 'setWidget', widgetKey: 'widget', widgetLines: ['Widget'] }, fleet);
+    await show(page, { method: 'setStatus', statusKey: 'status', statusText: 'Status' }, fleet);
+    await show(page, editor, fleet);
+    let writes = 0;
+    await page.route('**/api/sessions/*/ui-response', route => { writes++; return route.fulfill({ json: { ok: true } }); });
+    await page.evaluate(() => {
+        window.retiredExtensionButtons = [...document.querySelectorAll('.ext-ui-docked-dialog button, .ext-ui-toast button')];
+        fixtureApp.features.extensionUI.dispose();
+        window.retiredExtensionButtons.forEach(button => button.click());
+    });
+    await page.clock.runFor(7000);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-widget, .ext-ui-status-badge, .ext-ui-toast, .ext-ui-docked-dialog')).toHaveCount(0);
+    (0, fixtures_js_1.expect)(writes).toBe(0);
 });

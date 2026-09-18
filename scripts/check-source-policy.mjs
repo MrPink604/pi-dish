@@ -65,18 +65,26 @@ function stringList(value, field) {
 export function checkPolicy(root) {
     const policy = JSON.parse(fs.readFileSync(path.join(root, 'source-policy.json'), 'utf8'));
     if (typeof policy !== 'object' || policy === null
-        || !('programs' in policy) || !('negativeFixtures' in policy) || !('files' in policy) || !('roots' in policy)) {
-        throw new Error('Source policy must name programs, negativeFixtures, files and roots');
+        || !('authoredRoots' in policy) || !('programs' in policy) || !('negativeFixtures' in policy)
+        || !('files' in policy) || !('roots' in policy)) {
+        throw new Error('Source policy must name programs, negativeFixtures, files, roots and authoredRoots');
     }
     const projectFiles = stringList(policy.programs, 'programs');
     const fixtures = new Set(stringList(policy.negativeFixtures, 'negativeFixtures'));
     const governed = new Set(stringList(policy.files, 'files'));
     const roots = stringList(policy.roots, 'roots');
+    const authoredRoots = stringList(policy.authoredRoots, 'authoredRoots');
     const api = new API();
     const failures = [];
     for (const dir of roots) {
         for (const entry of fs.readdirSync(path.join(root, dir), { recursive: true, encoding: 'utf8' })) {
             if (/\.(?:[cm]?[jt]s|tsx|jsx)$/.test(entry))
+                governed.add(`${dir}/${entry}`);
+        }
+    }
+    for (const dir of authoredRoots) {
+        for (const entry of fs.readdirSync(path.join(root, dir), { recursive: true, encoding: 'utf8' })) {
+            if (/\.(?:[cm]?ts)$/.test(entry) && !/\.d\.(?:[cm]?ts)$/.test(entry))
                 governed.add(`${dir}/${entry}`);
         }
     }

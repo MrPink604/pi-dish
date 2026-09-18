@@ -2,7 +2,9 @@
 // Every scenario starts a new process, HOME, server and browser context.
 import { spawn, type ChildProcess } from 'node:child_process';
 import path = require('node:path');
-import scenarios = require('../test/ui-scenarios/index.js');
+const loaded: unknown = require('../test/ui-scenarios/index.js');
+if (!loaded || typeof loaded !== 'object' || Array.isArray(loaded)) throw new TypeError('Invalid UI scenario registry');
+const scenarios = Object.fromEntries(Object.entries(loaded));
 let child: ChildProcess | undefined;
 let interrupted = false;
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { interrupted = true; child?.kill(signal); });

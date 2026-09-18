@@ -1,0 +1,803 @@
+import { errorMessage, nativeId as checkedNativeId, present, record, records, type TestRecord } from './test-types.js';
+/**
+ * Tests for the RPC session backend (lib/rpc-session.js) and the server
+ * routes that ride on it — the default headless `pi --mode rpc` path that
+ * POST /api/sessions/new and /resume take when no tmux target is given.
+ *
+ * PI_DISH_PI_COMMAND points at test/fixtures/fake-rpc-pi.js, which speaks
+ * pi's real RPC stdio protocol (JSONL commands in, responses + agent events
+ * out) and logs every command it receives to PI_FIXTURE_LOG, so tests assert
+ * both the HTTP-visible outcome and what pi was actually asked.
+ *
+ * Run with: npm test
+ */
+import test = require('node:test');
+import assert = require('node:assert');
+import fs = require('node:fs');
+import os = require('node:os');
+import path = require('node:path');
+import { pathToFileURL } from 'node:url';
+
+const { sseReader }: typeof import('./sse-reader') = require('./sse-reader')
+
+const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-rpc-test-'));
+process.env.HOME = tmpHome;
+process.env.PORT = '0';
+// This suite is about the RPC child backend — pin the headless dispatch to it
+// so a host with tmux doesn't divert target-less spawns to hidden tmux.
+process.env.PI_DISH_HEADLESS = 'rpc';
+
+const FIXTURE = path.join(__dirname, 'fixtures', 'fake-rpc-pi.js');
+const CMD_LOG = path.join(tmpHome, 'rpc-commands.jsonl');
+const START_LOG = path.join(tmpHome, 'rpc-starts.jsonl');
+const STATE_LOG = path.join(tmpHome, 'rpc-state-requests.txt');
+process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} ${process.execPath} ${FIXTURE}`;
+process.env.PI_FIXTURE_START_LOG = START_LOG;
+
+const server: import('node:http').Server = require('../server.js');
+const { getAllRPCSessions, getRPCSession }: typeof import('../lib/rpc-session') = require('../lib/rpc-session')
+const { invalidateRegistryCache }: typeof import('../lib/bridge-session') = require('../lib/bridge-session')
+const { processIdentity }: typeof import('../lib/process-identity') = require('../lib/process-identity')
+
+let base = '';
+test.before(async () => {
+  if (!server.listening) await new Promise<void>(resolve => server.once('listening', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Test server lacks TCP address');
+  base = `http://127.0.0.1:${address.port}`;
+});
+test.after(() => {
+  // The spawned fixture children are live handles — without killing them the
+  // node:test process never exits.
+  for (const rpc of getAllRPCSessions()) rpc.kill();
+  server.close();
+});
+
+const get = async (requestPath: string) => {
+  const response = await fetch(base + requestPath);
+  return { status: response.status, body: record(await response.json()) };
+};
+const post = async (requestPath: string, body?: unknown, signal?: AbortSignal) => {
+  const response = await fetch(base + requestPath, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), signal,
+  });
+  return { status: response.status, body: record(await response.json().catch(() => ({}))) };
+};
+const text = (value: unknown): string => String(value ?? '');
+const eventName = (value: unknown): unknown => record(value).event;
+const eventData = (value: unknown): TestRecord => record(record(value).data);
+
+const readLog = (): TestRecord[] => {
+  try {
+    return fs.readFileSync(CMD_LOG, 'utf8').trim().split('\n').filter(Boolean).map(line => record(JSON.parse(line)));
+  } catch { return []; }
+};
+
+const readStarts = (): TestRecord[] => {
+  try {
+    return fs.readFileSync(START_LOG, 'utf8').trim().split('\n').filter(Boolean).map(line => record(JSON.parse(line)));
+  } catch { return []; }
+};
+
+const findActive = async (id: string): Promise<TestRecord | null> => {
+  const { body } = await get('/api/sessions?active=1');
+  return records(body.active).find(session => session.id === id) || null;
+};
+
+// One RPC session shared by the ordered tests below (each spawn is a real
+// child process; reusing it also proves the session stays usable).
+let sessionId = '';
+
+test('getPiLaunchSpec resolves a bare `pi` past node_modules/.bin shims', () => {
+  // Under npm-run PATHs, pi-dish's own dependency shim would shadow the host
+  // pi — the spec must skip node_modules dirs when resolving the bare word.
+  const { getPiLaunchSpec }: typeof import('../lib/rpc-session') = require('../lib/rpc-session')
+  const saved = { cmd: process.env.PI_DISH_PI_COMMAND, path: process.env.PATH };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-path-'));
+  const shimDir = path.join(dir, 'node_modules', '.bin');
+  const binDir = path.join(dir, 'bin');
+  fs.mkdirSync(shimDir, { recursive: true });
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(path.join(shimDir, 'pi'), '#!/bin/sh\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(binDir, 'pi'), '#!/bin/sh\n', { mode: 0o755 });
+  try {
+    delete process.env.PI_DISH_PI_COMMAND;
+    process.env.PATH = `${shimDir}${path.delimiter}${binDir}`;
+    assert.equal(getPiLaunchSpec().argv[0], path.join(binDir, 'pi'),
+      'shim dir is skipped, host pi wins');
+    // With nothing but shims on PATH, degrade to the bare word.
+    process.env.PATH = shimDir;
+    assert.equal(getPiLaunchSpec().argv[0], 'pi');
+  } finally {
+    process.env.PI_DISH_PI_COMMAND = saved.cmd;
+    process.env.PATH = saved.path;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/models lists what the host pi reports, not the vendored CLI', async () => {
+  // lib/pi-sdk.js runs --list-models through the same launch spec sessions
+  // use (PI_DISH_PI_COMMAND here) — a host pi upgrade must show up without
+  // touching pi-dish's own node_modules copy.
+  const response = await fetch(base + '/api/models');
+  assert.equal(response.status, 200);
+  const models = records(await response.json());
+  const ids = models.map(model => `${model.provider}/${model.id}`);
+  assert.ok(ids.includes('test/fake-model'), `host pi models listed (got ${ids.join(', ')})`);
+  assert.ok(ids.includes('test/fresh-model'), 'a model only the host pi knows shows up');
+  assert.equal(present(models.find(model => model.id === 'fresh-model')).contextWindow, 200000,
+    'context window parsed from the host table');
+});
+
+test('POST /api/sessions/new spawns a headless RPC pi and lists it active', async () => {
+  const { status, body } = await post('/api/sessions/new', { name: 'Named from creation', thinking: 'high' });
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.ok(body.id, 'a session id is returned');
+  assert.equal(Object.hasOwn(body, 'operationId'), false, 'ordinary blocking response stays backward-compatible');
+  sessionId = text(body.id);
+  const start = present(readStarts().find(entry => text(entry.sessionFile).endsWith(`${sessionId}.jsonl`)));
+  const startArgs = Array.isArray(start?.args) ? start.args : [];
+  assert.deepEqual(startArgs.slice(startArgs.indexOf('--thinking'), startArgs.indexOf('--thinking') + 2),
+    ['--thinking', 'high'], 'reasoning level is forwarded to the pi CLI');
+
+  const sess = await findActive(sessionId);
+  assert.ok(sess, 'spawned session is in the active list');
+  assert.equal(sess.isActive, true);
+  assert.equal(sess.name, 'Named from creation', 'the requested name is applied before creation completes');
+  assert.ok(readLog().some(c => c.type === 'set_session_name' && c.name === 'Named from creation'),
+    'creation names the session through the live RPC backend');
+  assert.equal(sess.model, 'test/fake-model', 'model comes from get_state');
+  assert.equal(sess.turnInProgress, false);
+  assert.ok(sess.pid, 'the child pid is reported');
+
+  // The fixture created a real session JSONL — the message reader sees it.
+  const messages = await get(`/api/sessions/${sessionId}/messages`);
+  assert.equal(messages.status, 200);
+});
+
+test('POST /api/sessions/new rejects an invalid reasoning level', async () => {
+  const { status, body } = await post('/api/sessions/new', { thinking: 'extreme' });
+  assert.equal(status, 400);
+  assert.match(text(body.error), /reasoning level/i);
+});
+
+test('RPC startup waits for a valid state object and session file before registering', async () => {
+  for (const invalid of [[], { sessionFile: 123 }]) {
+    process.env.PI_FIXTURE_INVALID_STATE_ONCE = JSON.stringify(invalid);
+    process.env.PI_FIXTURE_STATE_LOG = STATE_LOG;
+    let id = '';
+    try {
+      const created = await post('/api/sessions/new', {});
+      assert.equal(created.status, 200, JSON.stringify(created.body));
+      id = text(created.body.id);
+      assert.match(id, /^2026-07-10T00-00-00-/,
+        'a malformed first reply must not publish the provisional rpc id');
+      const rpc = record(getRPCSession(checkedNativeId(id)));
+      const rpcProcess = record(rpc.proc);
+      assert.equal(fs.readFileSync(STATE_LOG, 'utf8').trim().split('\n').filter(pid => pid === String(rpcProcess.pid)).length, 2,
+        'the same child must receive a second get_state request after the malformed reply');
+      assert.equal(path.basename(text(rpc.sessionFile), '.jsonl'), id);
+      assert.equal(record(rpc.state).sessionFile, rpc.sessionFile);
+    } finally {
+      delete process.env.PI_FIXTURE_INVALID_STATE_ONCE;
+      delete process.env.PI_FIXTURE_STATE_LOG;
+      if (id) getRPCSession(checkedNativeId(id))?.kill();
+    }
+  }
+});
+
+test('RPC startup rejects an unroutable session id without retrying and stops its child', async () => {
+  process.env.PI_FIXTURE_INVALID_STATE_ONCE = JSON.stringify({ sessionFile: path.join(tmpHome, 'not a valid id.jsonl') });
+  process.env.PI_FIXTURE_STATE_LOG = STATE_LOG;
+  const before = readStarts().length;
+  try {
+    const created = await post('/api/sessions/new', {});
+    assert.equal(created.status, 500);
+    assert.match(text(created.body.error), /Invalid RPC session identity/);
+    const start = present(readStarts()[before]);
+    assert.ok(start.pid);
+    assert.equal(fs.readFileSync(STATE_LOG, 'utf8').trim().split('\n').filter(pid => pid === String(start.pid)).length, 1);
+    const identity = processIdentity(Number(start.pid));
+    if (identity) {
+      for (let i = 0; i < 100 && processIdentity(Number(start.pid))?.startTime === identity.startTime; i++) {
+        await new Promise<void>(resolve => setTimeout(resolve, 10));
+      }
+      assert.notEqual(processIdentity(Number(start.pid))?.startTime, identity.startTime, 'failed startup cannot leave its child running');
+    }
+    assert.equal(getAllRPCSessions().some((rpc: unknown) => record(record(rpc).proc).pid === start.pid), false);
+  } finally {
+    delete process.env.PI_FIXTURE_INVALID_STATE_ONCE;
+    delete process.env.PI_FIXTURE_STATE_LOG;
+  }
+});
+
+test('direct RPC file URL cwd metadata matches the actual child filesystem path', async () => {
+  const { createRPCSession }: typeof import('../lib/rpc-session') = require('../lib/rpc-session')
+  const directory = path.join(tmpHome, 'cwd space é #');
+  fs.mkdirSync(directory);
+  const rpc = await createRPCSession({ cwd: pathToFileURL(directory) });
+  try {
+    const actual = JSON.parse(fs.readFileSync(present(rpc.sessionFile), 'utf8').split('\n')[0]).cwd;
+    assert.equal(rpc.cwd, actual, 'published metadata must match the actual child directory');
+    assert.equal(rpc.cwd, directory);
+  } finally {
+    rpc.kill();
+  }
+});
+
+test('unrepresentable cwd metadata cleans its child and does not mask native spawn failure', async (t) => {
+  const childProcess: typeof import('node:child_process') = require('node:child_process')
+  const { createRPCSession }: typeof import('../lib/rpc-session') = require('../lib/rpc-session')
+  const nativeSpawn = childProcess.spawn;
+  let spawned: ReturnType<typeof nativeSpawn> | undefined;
+  t.mock.method(childProcess, 'spawn', (...args: Parameters<typeof nativeSpawn>) => {
+    spawned = nativeSpawn(...args);
+    return spawned;
+  });
+  const cwd = Buffer.from(tmpHome);
+  await assert.rejects(createRPCSession({ cwd }), TypeError);
+  assert.equal(typeof spawned?.pid, 'number', 'native launch succeeded before metadata failed');
+  assert.equal(processIdentity(spawned?.pid), null, 'rejection waits for child cleanup');
+  assert.equal(getAllRPCSessions().some((rpc: unknown) => record(record(rpc).proc).pid === spawned?.pid), false);
+
+  const missing = pathToFileURL(path.join(tmpHome, 'missing-native-cwd'));
+  await assert.rejects(createRPCSession({ cwd: missing }), /failed to spawn pi:.*ENOENT/);
+  assert.equal(spawned?.pid, undefined, 'native failure must precede metadata normalization');
+});
+
+test('POST /api/sessions/new rejects a blank session name', async () => {
+  const { status, body } = await post('/api/sessions/new', { name: '   ' });
+  assert.equal(status, 400);
+  assert.match(text(body.error), /name/i);
+});
+
+test('a bogus local caller id is rejected, a host-qualified one is advisory-accepted', async () => {
+  const rejected = await post('/api/sessions/new', { requestedBySessionId: 'no-such-session' });
+  assert.equal(rejected.status, 400);
+  assert.match(text(rejected.body.error), /must identify an existing session/);
+
+  // A fleet caller (TASKS/multi-host.md block 6) names a session this host
+  // cannot verify; provenance is advisory, so the spawn proceeds and the
+  // qualified id is recorded as-is.
+  const qualified = `aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa:${sessionId}`;
+  const spawned = await post('/api/sessions/new', { requestedBySessionId: qualified });
+  assert.equal(spawned.status, 200, JSON.stringify(spawned.body));
+  assert.ok(spawned.body.operationId, 'qualified attribution still records an operation');
+  const spawnedId = text(spawned.body.id);
+  const related = await get(`/api/sessions/${spawnedId}/related`);
+  assert.ok(records(related.body.relations).every(relation => record(relation.session).id !== sessionId),
+    'a foreign-host id must not resolve to a local session of the same name');
+  await post(`/api/sessions/${encodeURIComponent(spawnedId)}/close`, {});
+});
+
+test('source-aware spawn records advisory peer provenance', async () => {
+  const spawned = await post('/api/sessions/new', { requestedBySessionId: sessionId });
+  assert.equal(spawned.status, 200, JSON.stringify(spawned.body));
+  const peerId = text(spawned.body.id);
+  assert.ok(spawned.body.operationId, 'attributed blocking spawn returns its recorded operation id');
+  assert.ok(await findActive(peerId), 'peer is an otherwise ordinary active RPC session');
+
+  const sourceRelated = await get(`/api/sessions/${sessionId}/related`);
+  assert.ok(records(sourceRelated.body.relations).some(relation => relation.kind === 'startedHere' && record(relation.session).id === peerId));
+  const peerRelated = await get(`/api/sessions/${peerId}/related`);
+  assert.ok(records(peerRelated.body.relations).some(relation => relation.kind === 'startedFrom' && record(relation.session).id === sessionId));
+
+  const pending = await post('/api/sessions/new', {
+    async: true,
+    name: 'Named async peer',
+    requestedBySessionId: sessionId,
+  });
+  assert.equal(pending.status, 202, JSON.stringify(pending.body));
+  let operation: TestRecord | null = null;
+  for (let i = 0; i < 80; i++) {
+    const state = await get(`/api/session-spawns/${pending.body.spawnId}`);
+    operation = state.body;
+    if (state.status !== 202) break;
+    await new Promise<void>(resolve => setTimeout(resolve, 50));
+  }
+  assert.equal(operation?.status, 'ready', JSON.stringify(operation));
+  const operationId = text(operation?.sessionId);
+  assert.equal((await findActive(operationId))?.name, 'Named async peer',
+    'an async spawn is not ready until its requested name is applied');
+  const asyncRelated = await get(`/api/sessions/${operationId}/related`);
+  assert.ok(records(asyncRelated.body.relations).some(relation => relation.kind === 'startedFrom' && record(relation.session).id === sessionId),
+    'async spawn persists the same advisory provenance');
+});
+
+test('an unreachable bridge falls back to the existing RPC transport without spawning', async () => {
+  const rpc = present(getRPCSession(checkedNativeId(sessionId)));
+  assert.ok(rpc?.alive, 'fixture RPC transport is healthy');
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const registryPath = path.join(registryDir, `${sessionId}.json`);
+  const socketPath = path.join(tmpHome, 'unreachable-bridge.sock');
+  fs.mkdirSync(registryDir, { recursive: true });
+  // A regular file exists (so registry scanning retains the claim) but cannot
+  // accept a Unix-socket connection, deterministically yielding ECONNREFUSED.
+  fs.writeFileSync(socketPath, 'not a listening socket');
+  const identity = present(processIdentity(process.pid));
+  fs.writeFileSync(registryPath, JSON.stringify({
+    sessionId,
+    sessionFile: rpc.sessionFile,
+    cwd: rpc.cwd,
+    socketPath,
+    pid: identity.pid,
+    startTime: identity.startTime,
+  }));
+  invalidateRegistryCache();
+  const startsBefore = readStarts().length;
+  const processCountBefore = getAllRPCSessions().length;
+
+  try {
+    const commands = await fetch(`${base}/api/commands?sessionId=${encodeURIComponent(sessionId)}`);
+    assert.equal(commands.status, 200);
+    assert.equal(readStarts().length, startsBefore, 'transport fallback did not launch another pi');
+    assert.equal(getAllRPCSessions().length, processCountBefore, 'RPC session set is unchanged');
+    assert.equal(getRPCSession(checkedNativeId(sessionId)), rpc, 'the already-owned RPCSession was reused');
+    assert.equal(fs.existsSync(registryPath), false, 'definitively unreachable claim was pruned');
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    fs.rmSync(socketPath, { force: true });
+    invalidateRegistryCache();
+  }
+});
+
+test('prompt round-trips: RPC events stream over SSE and land in the JSONL', async () => {
+  const sse = sseReader(`${base}/api/sessions/${sessionId}/stream`);
+  try {
+    await sse.waitFor((e: unknown) => eventName(e) === 'init');
+
+    const { status } = await post(`/api/sessions/${sessionId}/prompt`, { message: 'hello fixture' });
+    assert.equal(status, 200);
+
+    await sse.waitFor((e: unknown) => eventName(e) === 'turn_start');
+    const update = await sse.waitFor((e: unknown) => eventName(e) === 'message_update');
+    const updateMessage = record(eventData(update).message);
+    assert.equal(updateMessage.role, 'assistant');
+    assert.ok(text(records(updateMessage.content)[0]?.text).length > 0,
+      'Pi 0.84 delta-only updates are reassembled into full SSE messages');
+    const end = await sse.waitFor((e: unknown) => eventName(e) === 'message_end');
+    assert.equal(text(records(record(eventData(end).message).content)[0]?.text), 'reply to: hello fixture');
+    await sse.waitFor((e: unknown) => eventName(e) === 'turn_end');
+
+    // The turn's final message was appended to the session JSONL.
+    const { body } = await get(`/api/sessions/${sessionId}/messages`);
+    const texts = records(body.messages).map(message => text(records(message.content)[0]?.text));
+    assert.ok(texts.includes('reply to: hello fixture'), 'assistant reply is in the JSONL');
+  } finally {
+    sse.close();
+  }
+});
+
+test('RPC SSE reconnect replays a running tool start and latest update', async () => {
+  const rpc = present(getRPCSession(checkedNativeId(sessionId)));
+  rpc._handleMessage({ type: 'turn_start' });
+  rpc._handleMessage({
+    type: 'tool_execution_start', toolCallId: 'rpc-replay-tool',
+    toolName: 'Read', args: { path: 'README.md' }, startedAt: 456,
+  });
+  rpc._handleMessage({
+    type: 'tool_execution_update', toolCallId: 'rpc-replay-tool',
+    partialResult: { content: [{ type: 'text', text: 'partial read' }] },
+  });
+
+  const sse = sseReader(`${base}/api/sessions/${sessionId}/stream`);
+  try {
+    await sse.waitFor((e: unknown) => eventName(e) === 'init');
+    const start = await sse.waitFor((e: unknown) => eventName(e) === 'tool_execution_start' && eventData(e).toolCallId === 'rpc-replay-tool');
+    const update = await sse.waitFor((e: unknown) => eventName(e) === 'tool_execution_update' && eventData(e).toolCallId === 'rpc-replay-tool');
+    assert.equal(eventData(start).toolName, 'Read');
+    assert.deepEqual(eventData(start).args, { path: 'README.md' });
+    assert.equal(eventData(start).startedAt, 456);
+    assert.equal(text(records(record(eventData(update).partialResult).content)[0]?.text), 'partial read');
+
+    rpc._handleMessage({
+      type: 'tool_execution_end', toolCallId: 'rpc-replay-tool', toolName: 'Read',
+      args: { path: 'README.md' }, result: { content: [{ type: 'text', text: 'done' }] }, isError: false,
+    });
+    await sse.waitFor((e: unknown) => eventName(e) === 'tool_execution_end' && eventData(e).toolCallId === 'rpc-replay-tool');
+  } finally {
+    rpc._handleMessage({ type: 'turn_end' });
+    sse.close();
+  }
+});
+
+test('RPC remembers dialogs before observers attach and HTTP answers retire their SSE replay without a resolved event', async () => {
+  const { createRPCSession }: typeof import('../lib/rpc-session') = require('../lib/rpc-session')
+  const rpc = await createRPCSession();
+  const dialog = { type: 'extension_ui_request', method: 'confirm', id: 'rpc-confirm', title: 'Continue?' };
+  const observed: unknown[] = [];
+  const resolved: unknown[] = [];
+  const offRequest = rpc.on('extension_ui_request', (data: unknown) => observed.push(rpc.extUIState.dialogs.get(record(data).id)));
+  const offResolved = rpc.on('extension_ui_resolved', (data: unknown) => resolved.push(data));
+  let first;
+  let reconnect;
+  try {
+    rpc._handleMessage({ type: 'turn_start' });
+    rpc._handleMessage(dialog);
+    assert.deepEqual(observed, [dialog], 'transport listeners see admitted replay state without composition observers');
+
+    first = sseReader(`${base}/api/sessions/${rpc.id}/stream`);
+    const replay = await first.waitFor((e: unknown) => eventName(e) === 'extension_ui_request' && eventData(e).id === dialog.id);
+    assert.deepEqual(eventData(replay), dialog);
+    const pending = await first.waitFor((e: unknown) => eventName(e) === 'extension_ui_state');
+    assert.deepEqual(eventData(pending).dialogs, [dialog.id]);
+    first.close();
+
+    const answer = await post(`/api/sessions/${rpc.id}/ui-response`, { requestId: dialog.id, confirmed: true });
+    assert.equal(answer.status, 200, JSON.stringify(answer.body));
+    assert.equal(rpc.extUIState.dialogs.has(dialog.id), false, 'successful HTTP answer releases the pending-dialog blocker');
+    assert.deepEqual(resolved, [], 'RPC answers do not fabricate a resolved event');
+
+    reconnect = sseReader(`${base}/api/sessions/${rpc.id}/stream`);
+    const remaining = await reconnect.waitFor((e: unknown) => eventName(e) === 'extension_ui_state');
+    assert.deepEqual(eventData(remaining).dialogs, []);
+    assert.equal(reconnect.events.some((e: unknown) => eventName(e) === 'extension_ui_request' && eventData(e).id === dialog.id), false,
+      'an answered RPC dialog must not return on reconnect');
+  } finally {
+    first?.close();
+    reconnect?.close();
+    offRequest();
+    offResolved();
+    rpc.kill();
+  }
+});
+
+test('a prompt sent mid-turn is delivered with steer behavior', async () => {
+  const sse = sseReader(`${base}/api/sessions/${sessionId}/stream`);
+  try {
+    await sse.waitFor((e: unknown) => eventName(e) === 'init');
+    await post(`/api/sessions/${sessionId}/prompt`, { message: 'slow: take your time' });
+    await sse.waitFor((e: unknown) => eventName(e) === 'turn_start');
+
+    const before = readLog().length;
+    const { status } = await post(`/api/sessions/${sessionId}/prompt`, { message: 'second thought' });
+    assert.equal(status, 200);
+
+    const steered = readLog().slice(before).find(c => c.type === 'prompt' && c.message === 'second thought');
+    assert.ok(steered, 'the mid-turn prompt reached pi');
+    assert.equal(steered.streamingBehavior, 'steer', 'mid-turn prompts auto-steer instead of erroring');
+
+    const followBefore = readLog().length;
+    const follow = await post(`/api/sessions/${sessionId}/follow-up`, { message: 'after that' });
+    assert.equal(follow.status, 200);
+    const queued = readLog().slice(followBefore).find(c => c.type === 'prompt' && c.message === 'after that');
+    assert.equal(present(queued).streamingBehavior, 'followUp', 'dedicated endpoint requests Pi follow-up delivery');
+
+    await sse.waitFor((e: unknown) => eventName(e) === 'turn_end');
+  } finally {
+    sse.close();
+  }
+});
+
+test('abort mid-turn ends the turn via agent_end (no paired turn_end)', async () => {
+  const sse = sseReader(`${base}/api/sessions/${sessionId}/stream`);
+  try {
+    await sse.waitFor((e: unknown) => eventName(e) === 'init');
+    await post(`/api/sessions/${sessionId}/prompt`, { message: 'slow: doomed turn' });
+    await sse.waitFor((e: unknown) => eventName(e) === 'turn_start');
+
+    const { status } = await post(`/api/sessions/${sessionId}/abort`, {});
+    assert.equal(status, 200);
+    await sse.waitFor((e: unknown) => eventName(e) === 'agent_end');
+    assert.ok(!sse.events.some((e: unknown) => eventName(e) === 'turn_end'), 'aborted turn has no turn_end');
+
+    // The backend must not think a turn is still running.
+    const sess = await findActive(sessionId);
+    assert.equal(present(sess).turnInProgress, false);
+  } finally {
+    sse.close();
+  }
+});
+
+test('slash commands map onto RPC protocol commands', async () => {
+  // /name → set_session_name, and the session list reflects it without a
+  // re-fetch of get_state (setName patches this.state itself).
+  const rename = await post(`/api/sessions/${sessionId}/command`, { message: '/name renamed via rpc' });
+  assert.equal(rename.status, 200);
+  assert.ok(readLog().some(c => c.type === 'set_session_name' && c.name === 'renamed via rpc'));
+  assert.equal(present(await findActive(sessionId)).name, 'renamed via rpc');
+
+  // /model with an explicit provider/id → set_model, state patched likewise.
+  const model = await post(`/api/sessions/${sessionId}/command`, { message: '/model test/other-model' });
+  assert.equal(model.status, 200);
+  const setModel = readLog().find(c => c.type === 'set_model' && c.modelId === 'other-model');
+  assert.ok(setModel, 'set_model was sent');
+  assert.equal(setModel.provider, 'test');
+  assert.equal(present(await findActive(sessionId)).model, 'test/other-model');
+
+  // /thinking → set_thinking_level.
+  const thinking = await post(`/api/sessions/${sessionId}/command`, { message: '/thinking high' });
+  assert.equal(thinking.status, 200);
+  assert.ok(readLog().some(c => c.type === 'set_thinking_level' && c.level === 'high'));
+
+  // /compact → compact, with the token delta surfaced.
+  const compact = await post(`/api/sessions/${sessionId}/command`, { message: '/compact' });
+  assert.equal(compact.status, 200);
+  assert.match(text(compact.body.info), /Compacted \(1000 → ~200 tokens\)/);
+
+  // An extension command known via get_commands is sent as a prompt…
+  const before = readLog().length;
+  const ext = await post(`/api/sessions/${sessionId}/command`, { message: '/dish-ext' });
+  assert.equal(ext.status, 200);
+  assert.ok(readLog().slice(before).some(c => c.type === 'prompt' && c.message === '/dish-ext'));
+
+  // …but a typo is rejected instead of reaching the model as literal text.
+  const typo = await post(`/api/sessions/${sessionId}/command`, { message: '/nope' });
+  assert.equal(typo.status, 400);
+  assert.match(text(typo.body.error), /unknown or unsupported command/);
+});
+
+test('POST /thinking validates the level against the session harness vocabulary', async () => {
+  // 'max' exists only in Prime/OMP vocabularies: a live pi session rejects
+  // it after lookup, and the fixture is never asked.
+  const before = readLog().filter(c => c.type === 'set_thinking_level').length;
+  const max = await post(`/api/sessions/${sessionId}/thinking`, { level: 'max' });
+  assert.equal(max.status, 400);
+  assert.match(text(max.body.error), /level must be one of: off, minimal, low, medium, high, xhigh$/);
+  // A nonsense level is rejected before any session lookup, same as ever.
+  const bogus = await post(`/api/sessions/${sessionId}/thinking`, { level: 'ultra' });
+  assert.equal(bogus.status, 400);
+  assert.equal(readLog().filter(c => c.type === 'set_thinking_level').length, before,
+    'rejected levels never reach pi');
+
+  const ok = await post(`/api/sessions/${sessionId}/thinking`, { level: 'xhigh' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.level, 'xhigh');
+  assert.ok(readLog().some(c => c.type === 'set_thinking_level' && c.level === 'xhigh'));
+});
+
+test('a /compact issued while one runs is refused, not forwarded to pi', { timeout: 10000 }, async () => {
+  const before = readLog().filter(c => c.type === 'compact').length;
+  // Hold the real stdio response until all mid-compaction HTTP assertions
+  // finish. A fixed 150ms window races session listing on busy CI runners.
+  const rpc = present(getRPCSession(checkedNativeId(sessionId)));
+  await rpc.send('fixture_hold_compaction');
+  let off: () => void = () => {};
+  let startTimer: ReturnType<typeof setTimeout> | undefined;
+  const started = new Promise<unknown>((resolve, reject) => {
+    off = rpc.on('compaction_start', (event: unknown) => { off(); resolve(event); });
+    startTimer = setTimeout(() => reject(new Error('compaction_start was not received')), 5000);
+  });
+  const firstP = post(`/api/sessions/${sessionId}/command`, { message: '/compact' });
+  try {
+    await started;
+    // Deliberately exceed the old fixture window, reproducing the CI schedule.
+    await new Promise(resolve => setTimeout(resolve, 250));
+
+    // Mid-compaction the session list must say so (the client's sidebar dot
+    // and SSE init frame read this flag).
+    assert.equal(present(await findActive(sessionId)).compacting, true, 'list reflects compacting');
+
+    // If a regression forwards this command, abort the wait so finally can
+    // release both held responses instead of waiting for the RPC timeout.
+    const second = await post(`/api/sessions/${sessionId}/command`, { message: '/compact' }, AbortSignal.timeout(5000));
+    assert.equal(second.status, 400);
+    assert.match(text(second.body.error), /already in progress/i);
+  } finally {
+    clearTimeout(startTimer);
+    off();
+    await rpc.send('fixture_release_compaction');
+    await firstP;
+  }
+
+  const first = await firstP;
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.match(text(first.body.info), /Compacted/);
+  assert.equal(present(await findActive(sessionId)).compacting, false, 'flag clears when compaction ends');
+
+  const compacts = readLog().filter(c => c.type === 'compact').length;
+  assert.equal(compacts - before, 1, 'exactly one compact command reached pi');
+});
+
+test('overlapping RPC resumes launch exactly one process for the JSONL', async () => {
+  const id = '2026-07-10T09-00-00-rpcflight';
+  const dir = path.join(tmpHome, '.pi', 'agent', 'sessions', 'rpcflight');
+  const startLog = path.join(tmpHome, 'rpc-resume-starts.jsonl');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), JSON.stringify({ type: 'session', cwd: tmpHome }) + '\n');
+
+  const saved = process.env.PI_DISH_PI_COMMAND;
+  process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} PI_FIXTURE_START_LOG=${startLog} PI_FIXTURE_STARTUP_DELAY_MS=400 ${process.execPath} ${FIXTURE}`;
+  try {
+    const [a, b] = await Promise.all([
+      post(`/api/sessions/${id}/resume`, {}),
+      post(`/api/sessions/${id}/resume`, {}),
+    ]);
+    assert.equal(a.status, 200, JSON.stringify(a.body));
+    assert.equal(b.status, 200, JSON.stringify(b.body));
+    assert.equal(a.body.id, id);
+    assert.equal(b.body.id, id);
+    assert.equal([a.body, b.body].filter((body) => body.sharedResume).length, 1,
+      'one caller owns the launch and one reports sharing it');
+    const starts = fs.readFileSync(startLog, 'utf8').trim().split('\n').filter(Boolean).map(line => record(JSON.parse(line)));
+    assert.equal(starts.length, 1, `exactly one RPC process started (got ${starts.length})`);
+    assert.equal(path.resolve(text(present(starts[0]).sessionFile)), path.resolve(path.join(dir, `${id}.jsonl`)));
+
+    const closed = await post(`/api/sessions/${id}/close`, {});
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    const recoveryBody = await get('/api/recovery');
+    const recovery = present(records(recoveryBody.body.sessions).find(row => row.id === id));
+    assert.equal(recovery.status, 'closed', 'manual close durably prevents automatic recovery');
+    const resumed = await post(`/api/sessions/${id}/resume`, {});
+    assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+    const nextRecovery = records((await get('/api/recovery')).body.sessions).find(row => row.id === id);
+    assert.notEqual(nextRecovery?.status, 'closed',
+      'an explicit successful resume clears the prior close intent');
+    await post(`/api/sessions/${id}/close`, {});
+  } finally {
+    process.env.PI_DISH_PI_COMMAND = saved;
+  }
+});
+
+test('POST /resume spawns pi --session and keeps the original id', async () => {
+  const id = '2026-07-10T09-00-00-rpcres01';
+  const dir = path.join(tmpHome, '.pi', 'agent', 'sessions', 'resumerpc');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${id}.jsonl`), [
+    { type: 'session', cwd: tmpHome },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'old prompt' }], timestamp: '2026-07-10T09:00:01.000Z' } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const { status, body } = await post(`/api/sessions/${id}/resume`, {});
+  assert.equal(status, 200, JSON.stringify(body));
+  assert.equal(body.id, id, 'resume keeps the session id (derived from the --session file)');
+  assert.ok(await findActive(id), 'resumed session is active');
+
+  const again = await post(`/api/sessions/${id}/resume`, {});
+  assert.equal(again.body.alreadyActive, true, 'resuming an active session is a no-op');
+});
+
+test('POST /resume preserves a nested generic session header id', async () => {
+  const id = 'nested-rpc-core-id';
+  const file = path.join(tmpHome, '.pi', 'agent', 'sessions', 'resumerpc', 'parent', 'scope', 'run-0', 'session.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, [
+    { type: 'session', id, cwd: tmpHome },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'nested prompt' }] } },
+  ].map(e => JSON.stringify(e)).join('\n') + '\n');
+
+  const resumed = await post(`/api/sessions/${id}/resume`, {});
+  assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  assert.equal(resumed.body.id, id, 'RPC identity matches bridge and historical discovery');
+  assert.ok(await findActive(id), 'nested session is active under its header id');
+  assert.equal(getRPCSession(checkedNativeId('session')), null, 'generic basename does not create a duplicate live identity');
+
+  const closed = await post(`/api/sessions/${id}/close`, {});
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+});
+
+test('a dead pi disappears from the active list', async () => {
+  const sess = await findActive(sessionId);
+  assert.ok(sess?.pid, 'need the child pid');
+  process.kill(Number(sess.pid), 'SIGKILL');
+
+  // The exit handler prunes rpcSessions; poll until the list reflects it.
+  let gone = false;
+  for (let i = 0; i < 50 && !gone; i++) {
+    gone = !(await findActive(sessionId));
+    if (!gone) await new Promise(r => setTimeout(r, 100));
+  }
+  assert.ok(gone, 'killed session left the active list');
+});
+
+test('POST /close shuts down an RPC child and removes it from the active list', async () => {
+  const { status, body } = await post('/api/sessions/new', {});
+  assert.equal(status, 200, JSON.stringify(body));
+  const id = text(body.id);
+  assert.ok(await findActive(id), 'fresh session is active');
+
+  // The stats modal's "Running in" row: a server-owned headless child.
+  const stats = await get(`/api/sessions/${id}/stats`);
+  assert.equal(stats.status, 200);
+  const runtime = record(stats.body.runtime);
+  assert.equal(runtime.kind, 'rpc');
+  assert.ok(runtime.pid, 'child pid is reported');
+
+  const closed = await post(`/api/sessions/${id}/close`, {});
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.equal(closed.body.success, true);
+  // /close responds only after the child exited, so no pruning race here.
+  assert.equal(await findActive(id), null, 'closed session left the active list');
+});
+
+test('POST /restart replaces an RPC child without changing backend or session id', async () => {
+  const created = await post('/api/sessions/new', {});
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const id = text(created.body.id);
+  const before = present(await findActive(id));
+  assert.equal(record(before.capabilities).restart, true);
+  assert.ok(before?.pid);
+
+  const exited = new Promise<void>(resolve => present(getRPCSession(checkedNativeId(id))).on('exit', () => resolve()));
+  const previousDelay = process.env.PI_FIXTURE_STARTUP_DELAY_MS;
+  process.env.PI_FIXTURE_STARTUP_DELAY_MS = '400';
+  try {
+    const restarting = post(`/api/sessions/${id}/restart`, {});
+    await exited;
+    const concurrentResume = await post(`/api/sessions/${id}/resume`, {});
+    assert.equal(concurrentResume.status, 409, 'resume cannot start a second writer during replacement');
+    const restarted = await restarting;
+    assert.equal(restarted.status, 200, JSON.stringify(restarted.body));
+    assert.deepEqual(restarted.body, { success: true, id, placement: 'rpc' });
+  } finally {
+    if (previousDelay === undefined) delete process.env.PI_FIXTURE_STARTUP_DELAY_MS;
+    else process.env.PI_FIXTURE_STARTUP_DELAY_MS = previousDelay;
+  }
+
+  const after = present(await findActive(id));
+  assert.notEqual(after.pid, before.pid, 'restart launched a fresh process');
+  assert.equal(getRPCSession(checkedNativeId(id))?.proc.pid, after.pid, 'replacement remains managed by the RPC backend');
+  const recovery = records((await get('/api/recovery')).body.sessions).find(row => row.id === id);
+  assert.ok(recovery && recovery.status !== 'closed', 'restart preserves recovery intent');
+
+  const closed = await post(`/api/sessions/${id}/close`, {});
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+});
+
+test('a pi that dies on startup surfaces as a 500, not a hang', async () => {
+  const saved = process.env.PI_DISH_PI_COMMAND;
+  process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_EXIT_ON_START=1 ${process.execPath} ${FIXTURE}`;
+  try {
+    const { status, body } = await post('/api/sessions/new', {});
+    assert.equal(status, 500);
+    assert.match(text(body.error), /exited during startup/);
+  } finally {
+    process.env.PI_DISH_PI_COMMAND = saved;
+  }
+});
+
+test('bulk API previews ownership, validates requests, cancels waiting targets and restarts an idle RPC runtime', async () => {
+  const created = await post('/api/sessions/new', {});
+  assert.equal(created.status, 200);
+  const id = text(created.body.id);
+  const original = present(getRPCSession(checkedNativeId(id)));
+  try {
+    assert.equal(record((await get('/api/host')).body.capabilities).sessionBounces, true);
+    assert.equal((await get('/api/session-bounces/preview?mode=force')).status, 400);
+    assert.equal((await post('/api/session-bounces', { mode: 'restart', sessionIds: [] })).status, 400);
+    const preview = await get('/api/session-bounces/preview?mode=restart');
+    assert.equal(preview.status, 200);
+    const previewTarget = present(records(preview.body.targets).find(target => target.sessionId === id));
+    assert.equal(previewTarget.eligible, true);
+    const reload = await get('/api/session-bounces/preview?mode=reload');
+    assert.equal(present(records(reload.body.targets).find(target => target.sessionId === id)).eligible, false,
+      'an RPC runtime without a bridge never falls back to typing reload');
+
+    // Keep the live event flag busy independently of timing the fixture turn.
+    original.turnInProgress = true;
+    const queued = await post('/api/session-bounces', { mode: 'restart', sessionIds: [id, 'unknown-bulk-target'] });
+    assert.equal(queued.status, 202);
+    const queuedOperation = record(queued.body.operation);
+    assert.equal(present(records(queuedOperation.targets)[1]).status, 'skipped');
+    const operations = records((await get('/api/session-bounces')).body.operations);
+    const waiting = present(operations.find(operation => operation.id === queuedOperation.id));
+    assert.match(text(present(records(waiting.targets)[0]).reason), /turn/);
+    const duplicate = await post('/api/session-bounces', { mode: 'restart', sessionIds: [id] });
+    assert.equal(present(records(record(duplicate.body.operation).targets)[0]).status, 'skipped');
+    const cancelledResponse = await fetch(base + `/api/session-bounces/${queuedOperation.id}`, { method: 'DELETE' });
+    assert.equal(cancelledResponse.status, 200);
+    const cancelled = record((await cancelledResponse.json()));
+    assert.equal(present(records(record(cancelled.operation).targets)[0]).status, 'cancelled');
+    assert.equal(original.alive, true);
+    original.turnInProgress = false;
+
+    const ready = await post('/api/session-bounces', { mode: 'restart', sessionIds: [id] });
+    const deadline = Date.now() + 10000;
+    let result: TestRecord = {};
+    do {
+      const operations = records((await get('/api/session-bounces')).body.operations);
+      const operation = present(operations.find(candidate => candidate.id === record(ready.body.operation).id));
+      result = present(records(operation.targets)[0]);
+      if (!['waiting', 'executing'].includes(text(result.status))) break;
+      await new Promise<void>(resolve => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    assert.equal(result.status, 'completed', text(result.reason));
+    assert.equal(original.alive, false);
+    assert.notEqual(getRPCSession(checkedNativeId(id)), original);
+    assert.equal(result.replacementId, id);
+  } finally {
+    getRPCSession(checkedNativeId(id))?.kill();
+  }
+});
+
+export {};

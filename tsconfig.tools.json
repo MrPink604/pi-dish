@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "rootDir": ".",
@@ -10,10 +12,13 @@
     "declaration": true,
     "newLine": "lf",
     "skipLibCheck": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
   "files": [
     "scripts/build-tools.ts",
+    "scripts/build-tests.ts",
     "scripts/build-core.ts",
     "scripts/build-browser.ts",
     "scripts/build-edges.ts",
@@ -23,7 +28,6 @@
     "scripts/run-tests.ts",
     "scripts/run-ui-scenarios.ts",
     "test/test-env.ts",
-    "test/ui-scenarios/index.ts",
     "test/native-extensions.smoke.ts",
     "test/cron.test.ts",
     "test/session-capabilities.test.ts",
@@ -49,6 +53,8 @@
     "test/skills-core.test.ts",
     "test/harness-pricing.test.ts",
     "test/fixtures/fake-omp-models.ts",
-    "test/host-auth.test.ts"
+    "test/host-auth.test.ts",
+    "test/session-recovery.test.ts",
+    "test/fixtures/session-recovery-writer.ts"
   ]
 }

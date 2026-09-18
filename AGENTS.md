@@ -24,9 +24,10 @@ drift and type checks are included in `npm run check`.
 Checked build/tool sources use sibling `.ts`/`.mts` files under `scripts/`.
 Run `npm run build:tools` after editing sources enrolled in `tsconfig.tools.json`;
 commit generated runtime files and declarations, preserving modes and shebangs.
-The same Node-only program checks the named runners, `test/test-env.ts`,
-`test/ui-scenarios/index.ts` and `test/native-extensions.smoke.ts`. Do not enroll
-other fixtures implicitly or add DOM libraries to this program.
+The same Node-only program checks the named runners, `test/test-env.ts` and
+`test/native-extensions.smoke.ts`. `test/ui-scenarios/index.ts` belongs to
+`tsconfig.ui-tests.json` and emits no declaration. Do not enroll other fixtures
+implicitly or add DOM libraries to the Node-only tools program.
 Playwright loads `playwright.config.ts` through its existing host transform;
 `eslint.config.js` is an explicitly retained, strict-checkJs host configuration.
 The remaining test/tool families are tracked separately in the migration plan.

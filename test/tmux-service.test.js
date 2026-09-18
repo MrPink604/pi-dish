@@ -57,8 +57,7 @@ function fixtureRoot(t) {
         fs.copyFileSync(path.join(ROOT, 'scripts', script), path.join(root, 'scripts', script));
         fs.chmodSync(path.join(root, 'scripts', script), 0o755);
     }
-    fs.writeFileSync(path.join(root, 'server.js'), `require('fs').writeFileSync(${JSON.stringify(path.join(root, 'started'))}, String(process.pid));\n`
-        + 'setInterval(() => {}, 1000);\n');
+    fs.copyFileSync(path.join(__dirname, 'fixtures', 'service-marker-server.js'), path.join(root, 'server.js'));
     // tmux and curl are stubbed: the duplicate-instance guards under test are
     // process-level, and a real tmux server would outlive the temp root.
     fs.writeFileSync(path.join(root, 'bin', 'tmux'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
@@ -74,6 +73,7 @@ function fixtureEnv(root, port) {
         PI_DISH_LEGACY_ROOT: '',
         XDG_RUNTIME_DIR: root,
         TMUX_LOG: path.join(root, 'tmux-env.log'),
+        PI_DISH_SERVICE_MARKER: path.join(root, 'started'),
         HOST: '127.0.0.1',
         PORT: String(port),
         PI_DISH_RESTART_DELAY: '1',

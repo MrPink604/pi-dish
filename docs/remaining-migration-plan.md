@@ -1624,6 +1624,46 @@ Stable-contract C1 families could continue independently; this checkpoint did
 not release the then-held R1/R11 or unfinished R4/R7/R9 families wholesale.
 No full C1/C2 completion is claimed.
 
+### Implementation record — C1 completion candidate
+
+**Corrected and locally verified on 2026-09-18; independent review and
+integration acceptance remain pending.** The complete inventory contains 161
+authored executable/test/support bodies. The four emitting test/tool programs
+own 156 unique non-declaration roots: 45 explicit Node-only roots, 97
+browser-capable roots, 11 UI roots and three development scripts. Five
+Bun-executed native host fixtures are strict no-emit members of
+`tsconfig.extensions.json`.
+
+Actual `tsconfig.node-tests.json` membership contains neither `lib.dom.d.ts` nor
+`src/browser/` producers. Node-run browser bundle/VM tests and their exact
+producer projections moved to `tsconfig.browser-tests.json`; their generated
+`.test.js` discovery paths remain, while obsolete declarations are removed.
+The source-policy gate recursively inventories authored TypeScript under every
+script/test/extension/skill/Electron source root. Previously inline child
+implementations now live in checked fixture files, preserving their arguments,
+environment, timing, lifecycle and error assertions.
+Static first-party, builtin and declared-dependency `require` bindings now carry
+their canonical module types, including function-local bindings whose load
+order is behaviorally significant. Deliberate malformed-input probes narrow
+`unknown` at their runtime boundary instead of weakening production contracts.
+
+`scripts/build-tests.ts` owns the emitting source/output map and
+`npm run build:tests -- --check`; Playwright remains generated-JS-only. The
+checked test-owned `test/browser/fixture-contracts.ts` derives exact private
+fixture projections with `typeof`/`Parameters`/`ReturnType`, preserves the
+binding-to-factory registry and actual observation probes, and does not publish
+product interfaces. The two temporary structural product parameter widenings
+were removed: new-session config preview inputs are again `HTMLElement`s and
+sidebar lists again consume `Document`. Production desktop/mobile scenarios
+run with `instrumentApp: false` and prove fixture globals are absent.
+
+The original candidate's successful and failed evidence remains immutable in
+the parent audit snapshot. Corrected-source focused and complete-gate evidence
+is recorded separately; the real provider/native lineage script remains opt-in
+and was not executed. This record is an implementation handoff, not a review
+waiver, pushed-commit claim, CI result or C2 completion.
+
+
 ### Implementation record — R1
 
 **Accepted by the integration lead at main

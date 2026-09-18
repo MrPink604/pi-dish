@@ -21,6 +21,7 @@ const banner = '// Generated tool from ';
 // historical tool executable. The new bootstrap itself is directly executable.
 const executables: Record<string, true | undefined> = {
   'scripts/build-tools.ts': true,
+  'scripts/build-tests.ts': true,
   'scripts/build-edges.ts': true,
   'scripts/check-source-policy.mts': true,
   'scripts/run-tests.ts': true,
@@ -29,7 +30,7 @@ const executables: Record<string, true | undefined> = {
 const outputs = new Map<string, { source: string; executable: boolean }>();
 for (const source of config.files as string[]) {
   if ((!/^scripts\/[^/]+\.(?:ts|mts)$/.test(source)
-      && source !== 'test/test-env.ts' && source !== 'test/ui-scenarios/index.ts'
+      && source !== 'test/test-env.ts'
       && source !== 'test/native-extensions.smoke.ts'
       && source !== 'test/cron.test.ts' && source !== 'test/session-capabilities.test.ts'
       && source !== 'test/session-provenance.test.ts'
@@ -45,7 +46,8 @@ for (const source of config.files as string[]) {
       && source !== 'test/install.test.ts'
       && source !== 'test/skill-mining.test.ts' && source !== 'test/skills-core.test.ts'
       && source !== 'test/harness-pricing.test.ts' && source !== 'test/fixtures/fake-omp-models.ts'
-      && source !== 'test/host-auth.test.ts')
+      && source !== 'test/host-auth.test.ts' && source !== 'test/session-recovery.test.ts'
+      && source !== 'test/fixtures/session-recovery-writer.ts')
       || /\.d\.(?:ts|mts)$/.test(source)) {
     throw new Error(`Unsupported tool source: ${source}`);
   }
