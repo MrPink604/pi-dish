@@ -6,6 +6,7 @@
     "tsconfig.edges.json",
     "tsconfig.extensions.json",
     "tsconfig.tools.json",
+    "tsconfig.helpers.json",
     "tsconfig.configs.json",
     "tsconfig.node-tests.json",
     "tsconfig.browser-tests.json",
@@ -291,5 +292,141 @@
     "test/types/browser-transcript.ts",
     "test/types/browser-usage-view.ts",
     "test/types/core.ts"
-  ]
+  ],
+  "inventory": {
+    "generatedGroups": [
+      {
+        "name": "core",
+        "strategy": "flat",
+        "programs": ["tsconfig.core.json"],
+        "sourceRoot": "src/core",
+        "outputRoot": "lib",
+        "builder": "scripts/build-core.ts",
+        "checkCommand": "npm run build:core -- --check",
+        "consumer": "server.js, backend tests, Electron and installed runtime modules require the checked-in CommonJS lib entrypoints"
+      },
+      {
+        "name": "tools",
+        "strategy": "siblings",
+        "programs": ["tsconfig.tools.json"],
+        "declarationPrograms": ["tsconfig.tools.json"],
+        "builder": "scripts/build-tools.ts",
+        "checkCommand": "npm run build:tools -- --check",
+        "consumer": "package scripts and clean-checkout bootstrap commands execute the checked-in Node tool siblings"
+      },
+      {
+        "name": "tests",
+        "strategy": "siblings",
+        "programs": [
+          "tsconfig.node-tests.json",
+          "tsconfig.browser-tests.json",
+          "tsconfig.ui-tests.json",
+          "tsconfig.dev-tools.json"
+        ],
+        "declarationPrograms": [
+          "tsconfig.node-tests.json",
+          "tsconfig.dev-tools.json"
+        ],
+        "builder": "scripts/build-tests.ts",
+        "checkCommand": "npm run build:tests -- --check",
+        "consumer": "the Node runner, Playwright, UI runners and subprocess fixtures execute the checked-in JavaScript siblings"
+      },
+      {
+        "name": "edges",
+        "strategy": "siblings",
+        "programs": ["tsconfig.edges.json"],
+        "declarationPrograms": ["tsconfig.edges.json"],
+        "builder": "scripts/build-edges.ts",
+        "checkCommand": "npm run build:edges -- --check",
+        "consumer": "Electron, installed skill CLIs and the OMP share hook load their existing checked-in runtime entrypoints"
+      },
+      {
+        "name": "browser",
+        "strategy": "bundles",
+        "builder": "scripts/build-browser.ts",
+        "checkCommand": "npm run build:browser -- --check",
+        "consumer": "public HTML, VM/parity tests, browser fixtures and ESLint consume five independent local browser/helper entrypoints",
+        "entries": [
+          {"source": "src/browser/app.ts", "output": "public/app.js"},
+          {"source": "src/browser/theme-prepaint.ts", "output": "public/theme-prepaint.js"},
+          {"source": "src/browser/index.ts", "output": "public/browser.js"},
+          {"source": "src/browser/artifact-comments.ts", "output": "public/artifact-comments.js"},
+          {"source": "src/browser/shared-helpers.ts", "output": "public/helpers.js"}
+        ]
+      },
+      {
+        "name": "vendor",
+        "strategy": "external",
+        "builder": "scripts/build-vendor.ts",
+        "checkCommand": "npm run build:vendor -- --check",
+        "consumer": "public HTML and lazy rich-text, diagram and terminal loaders consume pinned local third-party browser assets",
+        "entries": [
+          {"source": "node_modules/marked/marked.min.js", "output": "public/vendor/marked.min.js"},
+          {"source": "node_modules/highlight.js/lib/common", "output": "public/vendor/highlight.js"},
+          {"source": "node_modules/katex/dist/katex.min.js", "output": "public/vendor/katex.min.js"},
+          {"source": "node_modules/mermaid/dist/mermaid.min.js", "output": "public/vendor/mermaid.min.js"},
+          {"source": "node_modules/@xterm/xterm/lib/xterm.js", "output": "public/vendor/xterm.js"},
+          {"source": "node_modules/@xterm/addon-fit/lib/addon-fit.js", "output": "public/vendor/xterm-addon-fit.js"}
+        ]
+      }
+    ],
+    "compilerSupportDeclarations": [
+      {
+        "path": "test/browser/globals.d.ts",
+        "consumer": "browser and UI test compiler programs receive the test host globals; this declaration is not an implementation"
+      },
+      {
+        "path": "test/types/omp-host.d.ts",
+        "consumer": "the no-emit native extension compiler narrows the literal host-only OMP module; this declaration is not an implementation"
+      }
+    ],
+    "exceptions": [
+      {
+        "path": "docs/codex-re/appserver-connection-class.js",
+        "kind": "historical-document",
+        "consumer": "human reverse-engineering reference only; no package, test, build or runtime command loads it",
+        "rationale": "verbatim historical executable-shaped documentation is retained as data rather than maintained application source"
+      },
+      {
+        "path": "docs/codex-re/request-client-class.js",
+        "kind": "historical-document",
+        "consumer": "human reverse-engineering reference only; no package, test, build or runtime command loads it",
+        "rationale": "verbatim historical executable-shaped documentation is retained as data rather than maintained application source"
+      },
+      {
+        "path": "docs/codex-re/threadstore-class.js",
+        "kind": "historical-document",
+        "consumer": "human reverse-engineering reference only; no package, test, build or runtime command loads it",
+        "rationale": "verbatim historical executable-shaped documentation is retained as data rather than maintained application source"
+      }
+    ],
+    "shell": [
+      {
+        "path": ".agents/setup",
+        "consumer": "the documented OMP orb bootstrap provisions system packages, Node, Bun, OMP, repository dependencies and Chromium",
+        "evidence": "TASKS/omp-full-support.md documents the consumer; C2 verifies the accepted 64-line Bash body, mode and hash statically and never executes its sudo/network/global-install operations"
+      },
+      {
+        "path": "install.sh",
+        "consumer": "README installation command links checked extensions and skills and optionally installs dependencies",
+        "evidence": "test/install.test.js exercises isolated links-only installation"
+      },
+      {
+        "path": "scripts/pi-dish-tmux.sh",
+        "consumer": "documented operator command manages the default tmux server and supervised service",
+        "evidence": "test/tmux-service.test.js covers service discovery, reconciliation and exit behavior"
+      },
+      {
+        "path": "scripts/run-tailnet.sh",
+        "consumer": "the tmux supervisor launches the Node server at the configured tailnet endpoint",
+        "evidence": "test/tmux-service.test.js covers endpoint lock acquisition, inherited lock FD and duplicate-owner exit 3"
+      },
+      {
+        "path": "scripts/supervise-tailnet.sh",
+        "consumer": "scripts/pi-dish-tmux.sh launches the restart supervisor",
+        "evidence": "test/tmux-service.test.js covers ordinary restart, clean exit and duplicate-owner exit-code propagation"
+      }
+    ],
+    "linguistAttributes": ".gitattributes"
+  }
 }

@@ -1,0 +1,242 @@
+{
+  "schemaVersion": 2,
+  "milestone": "C2 simplification and deletion closure",
+  "status": "all twelve accepted R evidence/review records retained through three C2 corrections without reopening their milestones",
+  "acceptedBase": "f0b7721931ae11ed957888b063da81d4fbe000dc",
+  "policy": [
+    "C2 does not reinterpret or rerun accepted R behavior work.",
+    "Each exact evidence artifact and its deletion ledger remain byte-identical to the accepted C1 base.",
+    "Each exact review artifact remains linked separately from source, compiler and delivery evidence."
+  ],
+  "packages": [
+    {
+      "package": "R1",
+      "evidence": "docs/r1-evidence.json",
+      "evidenceSha256": "4baf653b7fc2f2922e8ebc34e25bdb6dc0805efacfb37d980ccc8bb254bb9a15",
+      "recordedStatus": "Complete R1 candidate with only parent test correction272a338: released private focused1/server135/check258/backend1032 passed. Fresh complete-candidate reviews and parent R1/R4 formal gates pending; historic453 approvals do not transfer.",
+      "review": "docs/r1-review.json",
+      "reviewSha256": "d4fe16b16c3cf7f0ad60c82f8a8a1468fb5dcfc212d7c0b1057304a1106ddf8c",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.deletionLedger",
+        "evidence.deletionLedger.relocated",
+        "evidence.deletionLedger.checksRelocatedInR1",
+        "evidence.testOnlyIntegrationRevision.deletionLedger",
+        "review.deletionAndRetainedChecks",
+        "review.deletionAndRetainedChecks.relocated",
+        "review.deletionAndRetainedChecks.checksRelocatedInR1",
+        "review.newCompleteCandidateGate.deletionLedger"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R2",
+      "evidence": "docs/r2-evidence.json",
+      "evidenceSha256": "13a220b690b1fb3f1fdef21a165373f82908deecb672f4ebdd442f59125c2181",
+      "recordedStatus": "Complete source/consumer cutover and owner proofs; ready for independent exact-source review, not parent acceptance",
+      "review": "docs/r2-review.json",
+      "reviewSha256": "0d9afd9b6ed2b306d64a6aca8a4c7d8e15bd86a5768ac8d8dcf86809d025a80d",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.existingBehavior.httpDelete",
+        "evidence.existingBehavior.directLedgerOrder",
+        "evidence.deletionLedger",
+        "evidence.retainedCheckLedger",
+        "review.deletionLedger",
+        "review.retainedCheckLedger"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R3",
+      "evidence": "docs/r3-evidence.json",
+      "evidenceSha256": "53af5df321942cfe7a8420c6403084cb67e5f2dd46ee25b55ad05c92b7d43d01",
+      "recordedStatus": "Complete source/consumer cutover and required runtime proofs; ready for independent review, parent acceptance pending",
+      "review": "docs/r3-review.json",
+      "reviewSha256": "f10a56e8e055af118c63aebc9046809c2a3b30da83035066fd3087969f6e5a95",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.deletionLedger",
+        "review.ownershipAndDeletionLedger"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R4",
+      "evidence": "docs/r4-evidence.json",
+      "evidenceSha256": "79297ba1eef57564cc88a9fc24c453789e23a5caa94bd6450cd2f107188bca0c",
+      "recordedStatus": "Complete approved R4 source, generated output and consumers verified on accepted2181e5; ready for immutable source commit and parent-owned review dispatch. No acceptance claim.",
+      "review": "docs/r4-review.json",
+      "reviewSha256": "bfbcb8814990070c2486ecbc697dbc8017bca8a658aa9da920c7e620c0ce011f",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.deletionLedger",
+        "evidence.retainedCheckLedger",
+        "evidence.dependencyRelease.acceptanceLedger"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R5",
+      "evidence": "docs/r5-evidence.json",
+      "evidenceSha256": "317a1cfc501a7dcfcc7a626d38cfe6b68053e9a81d251c06b801ee2a1c8d63e1",
+      "recordedStatus": "Implementation, generated output and required runtime/check/backend proofs complete; pending exact-source independent review and parent acceptance",
+      "review": "docs/r5-review.json",
+      "reviewSha256": "3e708e520589d9555ae601e1e2ec98962f65f43cc4aab0b713b685ee3b6dc815",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.deletionLedger",
+        "evidence.retainedCheckLedger",
+        "review.deletionLedger",
+        "review.retainedCheckLedger"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R6",
+      "evidence": "docs/r6-evidence.json",
+      "evidenceSha256": "5e99c9bef297a80820f6988ae25187fb004b87884736a6bf9818874cd716ff12",
+      "recordedStatus": "Both subpackages implemented; isolated runtime proofs passed; aggregate suites and frozen-source reviews pending",
+      "review": "docs/r6-review.json",
+      "reviewSha256": "0a2b4ffdfac7dcaaa4bb208a6b49cda0aab930680968125219c1267385b8976a",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.deletionLedger",
+        "evidence.checksLedger",
+        "evidence.checksLedger.delete"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R7",
+      "evidence": "docs/r7-evidence.json",
+      "evidenceSha256": "662f214fdcffd31c566682ecfe3706566b783ff13282766ff493cf8dcb5e7ff0",
+      "recordedStatus": "Implemented, regenerated, owner-verified and frozen on accepted 272a338; proof archive and cleanup complete; independent reviews and parent acceptance remain gated. Exact source SHA is supplied separately in the handoff.",
+      "review": "docs/r7-review.json",
+      "reviewSha256": "2f510148b5e4de22bb3645892ad160f7dffb75b12119f7c3c2ddf3b6e7c33f69",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.acceptedEvidence.releasedDependency.acceptanceLedger",
+        "evidence.deletionLedger",
+        "evidence.retainedCheckLedger"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R8",
+      "evidence": "docs/r8-evidence.json",
+      "evidenceSha256": "0c67b9d3152977d2257da8e156bc424478bb18044a9eeda7aeea2437e60749da",
+      "recordedStatus": "accepted evidence retained",
+      "review": "docs/r8-review.json",
+      "reviewSha256": "ecbbc6e86952bf4275bf117d76ded82b63ebdd0b6f617cb0e61dc25d8c623e7e",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.freeze.deletionLedger",
+        "evidence.deletionAndChecks",
+        "evidence.deletionAndChecks.deleted",
+        "review.ownershipAndDeletionLedger",
+        "review.ownershipAndDeletionLedger.deleted"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R9",
+      "evidence": "docs/r9-evidence.json",
+      "evidenceSha256": "904f8df5ef3ed1a1ec257d7e531315d5d61ef2809f6948c0b56d28fc72363634",
+      "recordedStatus": "Complete source, generated outputs and required local proofs settled for frozen-source handoff. Corrected focused 78/78 and full browser 293/293 passed. Both failed fixture attempts and probe corrections retained. Review/provider capacity hold remains; no milestone acceptance claimed.",
+      "review": "docs/r9-review.json",
+      "reviewSha256": "df1d52489aa4d34c1c927ed04b9e5aa2f320134db89c5f96cd6d95e23b279ce8",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.deletionLedger",
+        "evidence.deletionLedger.delete"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R10",
+      "evidence": "docs/r10-evidence.json",
+      "evidenceSha256": "f8901d64f4e072d5096b9b0892e7c9e8158fc8ed6ee4af75624692c1ec2072e7",
+      "recordedStatus": "complete-source-and-proofs-awaiting-independent-review",
+      "review": "docs/r10-review.json",
+      "reviewSha256": "1e89e0c5d208d599a36e98307f776f3d3810334db76c17734fab65bf8bdd45a4",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.deletionLedger",
+        "review.deletionLedger"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R11",
+      "evidence": "docs/r11-evidence.json",
+      "evidenceSha256": "a0339a6d2a4b1e3ef7c138a61974f3604592897a44d8bf79b91ce345d155482b",
+      "recordedStatus": "Authorized canonical identity correction complete and all owner gates passed; new source freeze pending; same-actor review renewal and Kimi quota authorization still required",
+      "review": "docs/r11-review.json",
+      "reviewSha256": "90788d30e16446187fa118c6108c4cb2a9e9e1e7684b39e4a07bad276de47782",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.deletionLedger",
+        "evidence.retainedCheckLedger",
+        "evidence.finalDisposition.deleted",
+        "review.deletionLedger",
+        "review.retainedCheckLedger"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    },
+    {
+      "package": "R12",
+      "evidence": "docs/r12-evidence.json",
+      "evidenceSha256": "5568825ca16d116eed88577346425eba66c263727c601e4caea4c4f48163abdd",
+      "recordedStatus": "Implementation and all local verification complete; ready for independent exact-source review, not parent acceptance",
+      "review": "docs/r12-review.json",
+      "reviewSha256": "26e2025e8063a25f4f12e6a5d25ba03767efb4943efdba1158b58af77fc52146",
+      "dispositionPointer": "review record; retained unchanged by C2",
+      "ledgerKeys": [
+        "evidence.deletionLedger",
+        "evidence.checksLedger",
+        "evidence.checksLedger.deleted",
+        "review.deletionLedger",
+        "review.retainedChecks.deleted"
+      ],
+      "acceptedLinkAudit": "parent supplemental read-only audit"
+    }
+  ],
+  "packageCount": 12,
+  "missingLedgers": [],
+  "acceptedLedgerLinkAudit": {
+    "path": "/tmp/pi-dish-parent-c2-accepted-r-ledger-link-audit.json",
+    "sha256": "6757d86f76ba242d30a21b8052066f39cc8059dd9bf4cc2d88f6ea0efaeb33e3",
+    "status": "Accepted-evidence link inventory only; no milestone re-review or rerun"
+  },
+  "correctionHistory": [
+    {
+      "release": {
+        "path": "/tmp/pi-dish-parent-c2-correction-release.json",
+        "bytes": 5666,
+        "sha256": "4c054e9ab9d068eb0b269a5903a096da7b82fafd4329b78fca995e730fe86ccb"
+      },
+      "rejectedCandidateDigest": "10001888dd47ce1a00a9342f0ef5d1e5834cb5ad94310b57d0b0953b1609cdbd",
+      "effect": "source-policy enforcement metadata only; accepted R ledgers unchanged"
+    },
+    {
+      "release": {
+        "path": "/tmp/pi-dish-parent-c2-shell-integrity-correction-release.json",
+        "bytes": 4913,
+        "sha256": "bf296837d421da3f54270e38c4a59e5ad3d289755d0742dc9ed1cc0f9284ddd8"
+      },
+      "rejectedCandidateDigest": "d97c610574368f2a74e7315cadd403f932e83ee11e837195f1a93a420881099e",
+      "effect": "named shell inventory enforcement only; accepted R ledgers unchanged"
+    },
+    {
+      "release": {
+        "path": "/tmp/pi-dish-parent-c2-shell-kind-correction-release.json",
+        "bytes": 4024,
+        "sha256": "50aace23033277b9b52b5ea9e20aaa12d63aa1217dfebfd361417a2279749afa"
+      },
+      "rejectedCandidateDigest": "f7456e2daf408017d396aa794efc35412ddfaab831afff95d9a5772f76f22a45",
+      "effect": "non-following declared-shell worktree kind enforcement only; accepted R ledgers unchanged"
+    }
+  ],
+  "coverageDigest": "71eda6f2f05e4fdb591b8a3eeefbfc32d445d778a84813121e54e44335d95cc6"
+}

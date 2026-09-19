@@ -24,7 +24,7 @@
     "test:browser:install": "playwright install chromium",
     "test:ui:scenarios": "node scripts/run-ui-scenarios.js",
     "lint": "eslint .",
-    "typecheck": "node scripts/build-tools.js --check && node scripts/build-tests.js --check && node scripts/build-core.js --check && node scripts/build-browser.js --check && node scripts/build-edges.js --check && tsc -p tsconfig.extensions.json && tsc -p tsconfig.helpers.json && tsc -p tsconfig.check.json && tsc -p tsconfig.configs.json",
+    "typecheck": "node scripts/build-tools.js --check && node scripts/build-tests.js --check && node scripts/build-core.js --check && node scripts/build-browser.js --check && node scripts/build-edges.js --check && node scripts/build-vendor.js --check && tsc -p tsconfig.extensions.json && tsc -p tsconfig.helpers.json && tsc -p tsconfig.check.json && tsc -p tsconfig.configs.json",
     "check": "npm run check:source-policy && npm run lint && npm run typecheck",
     "build:browser": "node scripts/build-browser.js",
     "check:source-policy": "node scripts/check-source-policy.mjs",

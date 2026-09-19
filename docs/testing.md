@@ -74,15 +74,31 @@ separate strict programs. Missing, stale, orphaned and wrong-mode outputs fail
 without being repaired. Build mode removes obsolete test declarations after a
 source moves to a no-declaration program.
 
+`npm run typecheck` also runs `npm run build:vendor -- --check`. The vendor
+builder recreates its 29 pinned outputs in a temporary directory and compares
+bytes and modes without repairing the checkout; obsolete files in its owned
+KaTeX font directory fail as orphans.
+
 The Node-test program's actual compiler membership excludes `lib.dom.d.ts` and
 all `src/browser/` producers. Node-run tests of the browser bundle live in the
 browser-capable program with their exact source projections while retaining
-their generated `.test.js` discovery paths. Native fake hosts executed directly
-by Bun are strict no-emit members of `tsconfig.extensions.json`. Subprocess
-drivers are checked fixture files rather than hidden `-e` implementations.
-The authored-source policy inventories TypeScript recursively under every
-script/test/extension/skill/Electron source root, so an existing executable
-fixture cannot be omitted merely because it has no generated sibling.
+their generated `.test.js` discovery paths. Six native fake-host, boundary and
+recovery fixtures executed directly by Bun are strict no-emit members of
+`tsconfig.extensions.json`. Subprocess drivers are checked fixture files rather
+than hidden `-e` implementations. The source policy accounts for all 928
+existing JS/JSX/MJS/CJS/TS/TSX/MTS/CTS paths and five shell paths, including
+paths outside its historical authored roots and any executable path tracked
+under `.amp`. Untracked `.amp` remains untouched. Declared shell paths are
+unioned with discovered executable additions, then checked independently for
+Git tracking and index mode `100755`. Non-following worktree metadata must show
+a regular file at mode `0755`; a symlink, other object kind, missing body or
+mode-only change is a gate failure. The policy rejects unclassified additions
+and stale exceptions, validates all 469 generated mappings, and asks Git for
+the effective `linguist-generated` value of every repository path, so
+bare, unset, false and nested overrides cannot bypass the gate. Exact fixture,
+vendor, historical-document and shell inventories live in
+[`c2-source-coverage.json`](c2-source-coverage.json); actual membership for all
+12 compiler programs lives in [`c2-compiler-coverage.json`](c2-compiler-coverage.json).
 
 `tsconfig.configs.json` strictly checks the actual `eslint.config.js` body and
 `playwright.config.ts`; the latter uses Playwright's existing host transform.

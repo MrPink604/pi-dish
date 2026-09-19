@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 2,
+  "milestone": "C2 delivery evidence",
+  "status": "third-corrected local implementation awaiting fourth immutable candidate proof and renewed exact same-source review",
+  "acceptedBase": {
+    "commit": "f0b7721931ae11ed957888b063da81d4fbe000dc",
+    "sourceDigest": "4a68f0b5bfe14aa8ceab2a29b40d753e7aeed2a7e1cdb68f963eb3a8311c23fb",
+    "acceptance": {
+      "path": "/tmp/pi-dish-parent-c1-final-acceptance.json",
+      "bytes": 1918,
+      "sha256": "2ea53436c0d9cb3ba2983ab9b374ec75ee57370e339d3e391643cdd4c956b7b8"
+    },
+    "passingCI": {
+      "runId": 35406720021,
+      "url": "https://github.com/MrPink604/pi-dish/actions/runs/35406720021",
+      "result": {
+        "path": "/tmp/pi-dish-parent-c1-ci-f0b7721931ae11ed957888b063da81d4fbe000dc/result.json",
+        "bytes": 27098,
+        "sha256": "862de394b7f866c445c93f92b3e09074d13cdf7df4879bae1eeafe0e04a7c396"
+      }
+    },
+    "failedHistory": {
+      "path": "/tmp/pi-dish-parent-c1-exact-ci-failure.json",
+      "bytes": 1731,
+      "sha256": "2d906a0c22bcc829a4094954eec1f25907c4881ce24a4c75f5ee0849b5f5f07c"
+    }
+  },
+  "separateReports": {
+    "sourceCoverage": "docs/c2-source-coverage.json",
+    "compilerCoverage": "docs/c2-compiler-coverage.json",
+    "simplificationResults": "docs/c2-simplification-results.json"
+  },
+  "localCandidateProof": {
+    "externalManifest": "/tmp/pi-dish-c2-shell-kind-candidate/manifest.json",
+    "rawOutputsDirectory": "/tmp/pi-dish-c2-shell-kind-candidate/commands",
+    "requiredSerialCommands": [
+      "npm run check",
+      "npm test",
+      "npm run test:browser",
+      "npm run test:ui:scenarios",
+      "npm run test:ui"
+    ],
+    "rule": "The external immutable manifest is created only after this source file is frozen, so this tracked report does not invent a self-referential final digest.",
+    "correctedFocusedProof": {
+      "path": "/tmp/pi-dish-c2-corrected-focused-probes.json",
+      "bytes": 3796,
+      "sha256": "230470f41c40e0f1f228146d7c0dfd49b834cb72a5895a0e8e1d1978b9aa3a6c"
+    },
+    "shellIntegrityFocusedProof": {
+      "path": "/tmp/pi-dish-c2-shell-integrity-focused-probes.json",
+      "bytes": 3888,
+      "sha256": "79df3611efc1368086f9bf48fa6fcb6fffa7ecc25de64cd1e6178bb2321c0a3a"
+    },
+    "shellKindFocusedProof": {
+      "path": "/tmp/pi-dish-c2-shell-kind-focused-probes.json",
+      "bytes": 3154,
+      "sha256": "22ac6b13cbf16b5bf65442cc3bc0e7c471d3d1bc00b5eaf378738030710d19a8"
+    }
+  },
+  "reviewGate": {
+    "required": [
+      "zai/glm-5.3 via OMP, HIGH, exact candidate digest",
+      "opencode-go/deepseek-v4.1-flash via OMP, HIGH, exact candidate digest",
+      "parent complete-source audit"
+    ],
+    "status": "pending parent release; no third reviewer"
+  },
+  "finalDelivery": {
+    "privateCommit": "pending parent release",
+    "mainIntegration": "pending parent",
+    "push": "pending parent",
+    "exactPushedMainCI": "pending parent; must bind exact final commit and required jobs/steps",
+    "providerCanary": "not run (opt-in)"
+  },
+  "safety": [
+    "No commit, push, integration or self-acceptance is performed by the implementation owner.",
+    "The failed 18e C1 CI remains failed history; the corrected f0b C1 CI remains passing evidence.",
+    "Ignored machine-local launch-tailnet.sh, credentials and the forbidden failed host-auth root are not inventory inputs; untracked .amp is preserved, while any tracked .amp path is enforced."
+  ],
+  "rejectedCandidates": [
+    {
+      "digest": "10001888dd47ce1a00a9342f0ef5d1e5834cb5ad94310b57d0b0953b1609cdbd",
+      "manifest": "/tmp/pi-dish-c2-final-candidate/manifest.json",
+      "reviews": [
+        "/tmp/pi-dish-parent-c2-glm-review.json",
+        "/tmp/pi-dish-parent-c2-glm-review-addendum.json",
+        "/tmp/c2-deepseek-final-verdict-10001888.json"
+      ],
+      "verdict": "REQUEST_CHANGES from both reviewers; preserved unchanged"
+    },
+    {
+      "digest": "d97c610574368f2a74e7315cadd403f932e83ee11e837195f1a93a420881099e",
+      "manifest": "/tmp/pi-dish-c2-corrected-candidate/manifest.json",
+      "reviews": [
+        "/tmp/pi-dish-parent-c2-glm-corrected-review.json",
+        "/tmp/pi-dish-parent-c2-deepseek-corrected-review.json"
+      ],
+      "verdict": "REQUEST_CHANGES from both reviewers for sole named-shell integrity gap; preserved unchanged"
+    },
+    {
+      "digest": "f7456e2daf408017d396aa794efc35412ddfaab831afff95d9a5772f76f22a45",
+      "manifest": "/tmp/pi-dish-c2-shell-integrity-candidate/manifest.json",
+      "reviews": [
+        "/tmp/pi-dish-parent-c2-glm-shell-integrity-review.json",
+        "/tmp/pi-dish-parent-c2-deepseek-shell-integrity-review.json"
+      ],
+      "verdict": "REQUEST_CHANGES from both reviewers for sole symlink-following shell-kind gap; preserved unchanged"
+    }
+  ],
+  "correctionReleases": [
+    {
+      "path": "/tmp/pi-dish-parent-c2-correction-release.json",
+      "bytes": 5666,
+      "sha256": "4c054e9ab9d068eb0b269a5903a096da7b82fafd4329b78fca995e730fe86ccb"
+    },
+    {
+      "path": "/tmp/pi-dish-parent-c2-shell-integrity-correction-release.json",
+      "bytes": 4913,
+      "sha256": "bf296837d421da3f54270e38c4a59e5ad3d289755d0742dc9ed1cc0f9284ddd8"
+    },
+    {
+      "path": "/tmp/pi-dish-parent-c2-shell-kind-correction-release.json",
+      "bytes": 4024,
+      "sha256": "50aace23033277b9b52b5ea9e20aaa12d63aa1217dfebfd361417a2279749afa"
+    }
+  ],
+  "reportDigest": "94086352fa468daf538a73b3864c01a47d65a6e8e2710a2130ae718388fc6d65"
+}

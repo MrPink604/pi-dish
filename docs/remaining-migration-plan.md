@@ -716,9 +716,9 @@ restructuring. R12 can then replace the migrated vendor loader.
 
 **Depends on:** M, R and C1 completion; basic accounting can be introduced in M0.
 
-Every tracked repository-owned executable JS/MJS/CJS/TS path must belong to one
-compiler-owned implementation, generated-output mapping, or named justified
-exception. Reject unclassified additions, missing/stale/orphan outputs and stale
+Every tracked repository-owned executable JS/JSX/MJS/CJS/TS/TSX/MTS/CTS path
+must belong to one compiler-owned implementation, generated-output mapping, or
+named justified exception. Reject unclassified additions, missing/stale/orphan outputs and stale
 exceptions. Enumerate deliberate fixture/vendor/historical-doc data separately.
 Shell installers/tmux/tailnet scripts remain shell with behavior coverage;
 preserve lock-FD inheritance and exit-code contracts. Do not touch the ignored
@@ -735,6 +735,58 @@ temporary scaffolding removed; docs/build commands/coverage map reflect reality;
 full required suites and exact pushed-commit CI green. Publish source coverage,
 compiler coverage, simplification results and delivery evidence separately.
 Product migration is not declared repository completion until this gate passes.
+
+#### Implementation record — C2
+
+The accepted C1 base is `f0b7721931ae11ed957888b063da81d4fbe000dc`
+([passing CI run 35406720021](https://github.com/MrPink604/pi-dish/actions/runs/35406720021)).
+The earlier `18e124e` timing failure remains failed history; C2 does not rewrite
+either record. C2 source implementation adds whole-repository accounting to the
+existing source-policy and drift gates:
+
+- [`c2-source-coverage.json`](c2-source-coverage.json) lists all 928 existing
+  JS/JSX/MJS/CJS/TS/TSX/MTS/CTS paths plus five executable shell paths. Its
+  mutually exclusive classifications are 454 compiler-owned bodies, 288
+  first-party generated runtimes, six vendor-generated runtimes, 175 generated
+  declarations, two compiler-support declarations, three historical-document
+  data files and five shell files.
+- [`c2-compiler-coverage.json`](c2-compiler-coverage.json) records actual
+  membership for all 12 compiler programs, all 469 source/output mappings and
+  the 13 native TypeScript entrypoints executed directly by a harness or Bun.
+  The five browser/helper bundles remain independent outputs with their real
+  HTML, VM, parity, fixture and lint consumers.
+- [`c2-simplification-results.json`](c2-simplification-results.json) links the
+  exact retained deletion ledger and review record for every accepted R1–R12
+  package. C2 neither reruns nor reinterprets those accepted milestones.
+- [`c2-delivery-evidence.json`](c2-delivery-evidence.json) records local gates
+  separately from final review, integration and exact pushed-main CI. The latter
+  remain parent-owned and pending until the immutable C2 source is accepted.
+
+`check:source-policy` derives actual compiler membership, generated siblings and
+bundles from the checked programs and policy, then rejects unclassified additions
+(including tracked `.amp`, JSX and TSX), missing or orphaned outputs, declaration
+facades, stale exceptions and unowned executable shell files. Git's effective
+attribute result for every repository path must classify exactly the 469 genuine
+generated files; bare, unset, false and nested overrides cannot bypass the gate.
+`.gitattributes` keeps one exact entry per output rather than directory globs.
+`build:vendor -- --check` compares all 29 pinned vendor outputs in a temporary tree and is
+part of `typecheck`; the other five builders retain their established freshness
+checks. Fixtures are listed as compiler-owned source/output, not exempted.
+
+The four operational shell wrappers and their accepted lock-FD/exit behavior are
+unchanged. The fifth shell path, `.agents/setup`, retains its accepted 64-line
+Bash body, executable mode and hash; C2 records its documented orb-bootstrap
+consumer statically and never executes its sudo, network or global-install steps.
+The declared five-path set is authoritative and reconciled bidirectionally with
+mode-discovered additions. Every declaration must remain tracked at index mode
+`100755`. Non-following worktree metadata must identify a regular file at mode
+`0755`; staged or worktree-only mode loss, absence, symlinks and other object
+kinds all fail without lowering the inventory count.
+The ignored machine-local `launch-tailnet.sh`, credentials and provider canaries
+remain outside this work; the provider canary is not run. Source implementation
+and local proof are not repository completion: exact GLM/DeepSeek HIGH review,
+parent acceptance, private commit, main integration, push and exact-source CI
+must bind the final delivery record before this milestone is accepted.
 
 ## Dependency waves and integration ownership
 

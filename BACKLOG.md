@@ -1,7 +1,8 @@
 # pi-dish roadmap and migration status
 
-Updated 2026-09-17. **Browser application source migration and C1 repository
-test/tool source closure are implemented; architectural simplification and C2 delivery closure are not complete.**
+Updated 2026-09-18. **M0–M7, R1–R12 and C1 are accepted and delivered.
+C2 whole-repository source enforcement is implemented locally; independent
+same-source review, parent integration and exact pushed-main CI remain.**
 
 All first-party browser application logic is authored in `src/browser/`, including
 the application entrypoint and static control bindings. The five scripts shipped
@@ -82,9 +83,9 @@ controller/port observations.
 | Browser contracts | Implemented, verified and reviewed | Readonly state/cache borrowing, decoded message ports and session-only model loading passed strict checks, 984 backend tests, 286 browser cases and both UI suites. Fable approved `811d473` without blocking findings. |
 | Shared runtime helpers | Implemented, locally verified and reviewed | Actual portable core source serves browser and Node consumers; 121 compatibility exports remain. Strict checks, 984 backend tests, 286 browser cases and UI suites passed. Fable approved `1cbd826` without blocking findings. |
 | Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
-| Server application and feature modules | M1–M5 and M7 accepted | Actual implementations and composition are checked; the policy-free root preserves the synchronous native server export. Required R simplifications remain open. |
+| Server application and feature modules | M1–M5 and M7 accepted | Actual implementations and composition are checked; the policy-free root preserves the synchronous native server export. |
 | Harness extensions and Electron shell | M6 and R7 accepted on Linux x64 | Strict edge programs, installed CLIs and real development/packaged Electron passed. R7's same-source trio, integrated gates, native readiness/failure proofs and all five exact pushed-main CI jobs passed on `a441edab`. macOS delivery is unverified. |
-| Test and tooling closure | Revised C1 implementation candidate; acceptance pending, C2 open | 161 authored executable/test/support bodies are compiler-owned: 156 roots across separate Node-only, browser-capable, UI and development programs plus five Bun-native fixtures in the extension no-emit program. Static first-party, builtin and dependency bindings retain canonical APIs instead of `any`; hidden child bootstraps are checked fixtures; original product contracts remain restored. Final independent same-source review/exact-commit delivery remains. |
+| Repository source and delivery closure | C1 accepted; third corrected C2 source candidate in validation | C1 passed all five jobs and 11 required steps on exact main `f0b7721`. C2 accounts for all 928 existing JS/JSX/MJS/CJS/TS/TSX/MTS/CTS paths, 177 declarations and five named shell paths; declared/discovered shell sets, Git index modes and non-following worktree kind/presence/modes are enforced. Its four reports retain accepted R evidence and separate local proof from parent-owned final delivery. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
@@ -99,8 +100,9 @@ checking, Electron and remaining backend boundaries retain separate scopes.
 
 The foundation lives in `src/core/`, with generated CommonJS and declarations
 in `lib/`. Its full module inventory is in [the migration guide](docs/typescript.md).
-Most remaining JavaScript callers are not yet type checked. Cron is now authored
-in `src/core/cron.ts`; its original `lib/cron.js` path is generated output.
+Every repository JavaScript/TypeScript-family path is now either an actual
+compiler-owned body, exact generated output or named data exception. Cron is
+authored in `src/core/cron.ts`; its original `lib/cron.js` path is generated output.
 
 Browser source compiles strictly into five committed local scripts:
 `public/app.js`, `public/browser.js`, `public/helpers.js`,
@@ -290,25 +292,30 @@ on `db5dfa9b`, integrated local checks, 1,052 backend tests, 293 browser cases,
 all eight scenarios and independent HTTP/browser proofs passed.
 [All five exact-source CI jobs and eleven required steps passed](https://github.com/MrPink604/pi-dish/actions/runs/35194783835).
 The earlier quota stop and incomplete-read claims remain in the
-[R4 review record](docs/r4-review.json). C1 is now a locally verified completion
-candidate; independent review, integration acceptance and C2 exact-commit closure remain.
+[R4 review record](docs/r4-review.json). C1 was subsequently accepted and
+delivered on exact main `f0b7721931ae11ed957888b063da81d4fbe000dc`;
+[all five jobs and 11 required steps passed](https://github.com/MrPink604/pi-dish/actions/runs/35406720021).
+The earlier `18e124e` timing run remains failed history rather than being
+relabeled. C2 retains both records.
 
 1. **Product migration accepted (M0–M7).** Actual session-read/SDK/projection,
    routine, publication/file, feature, fleet/terminal, runtime-edge and server
    composition owners are checked. The original 30 authored product JS files and
    seven uncovered extension TS files have their implemented compiler/runtime
    owners; the small root launcher is policy-free and strict-checkJs.
-2. **Deliver simplifying refactors (R1–R12).** Explicit deletion ledgers cover
-   duplicate projection/admission/coverage work, file/diff ownership, relay mechanics,
-   extension replay/private-adapter ownership, startup/Electron readiness, browser
-   pane/selection/mutation plumbing, CLI references and the handwritten vendor loader.
-   These are required scope, not a vague optional cleanup pass.
-3. **Close the repository migration (C1 implemented; C2 remains).** C1 now
-   checks the complete test/tool inventory while preserving runner/loader paths
-   and generated runtime siblings. Freeze and independently review that source,
-   then complete C2's source/output/exception inventory and supported-runtime,
-   exact-commit CI evidence. Runtime migration or local C1 proof alone does not
-   finish repository delivery.
+2. **Simplifying refactors accepted (R1–R12).** The exact evidence and review
+   files remain authoritative. C2 links each deletion/retained-check ledger in
+   [`c2-simplification-results.json`](docs/c2-simplification-results.json)
+   without rerunning or reopening those milestones.
+3. **Close repository delivery (C1 accepted; C2 source implemented).** C2's
+   source policy rejects unclassified executable paths, missing/stale/orphan
+   generated outputs, stale exceptions and inaccurate generated attributes.
+   [Source](docs/c2-source-coverage.json),
+   [compiler](docs/c2-compiler-coverage.json),
+   [simplification](docs/c2-simplification-results.json) and
+   [delivery](docs/c2-delivery-evidence.json) evidence remain separate.
+   Exact final review, parent integration and pushed-main CI are still required;
+   local source proof alone does not finish repository delivery.
 
 The prior [browser contract](docs/browser-contract-cleanup.md),
 [shared helper](docs/shared-runtime-helpers.md) and

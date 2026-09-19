@@ -288,12 +288,27 @@ decision and packaging checks.
 paths listed by `source-policy.json`. Named type-negative fixtures require their
 diagnostic purpose; tsc still checks that their errors actually occur. Strings and
 template text are not directives. No explicit-any type-utility exception exists.
-The current gate covers `src/core`, `src/browser`, runtime edges, host
-configurations, build/development tools, all authored Node and browser test
-implementations, Playwright probes/specifications and UI scenario/smoke bodies.
-Cron is authored in `src/core/cron.ts`; its former checked-JS exception is removed.
-Every new migration compiler target must enroll its authored sources and fixtures.
-See the [M0 contract](m0-contracts.md#dependencies-and-authored-source-policy).
+The C2 gate covers `src/core`, `src/browser`, runtime edges, host
+configurations, build/development tools, every authored Node and browser test
+implementation, Playwright probes/specifications and UI scenario/smoke bodies.
+It also compares the complete repository JS/JSX/MJS/CJS/TS/TSX/MTS/CTS
+inventory with actual compiler membership, exact generated mappings, two named
+support declarations and three historical-document exceptions. New unclassified
+paths—including tracked `.amp` paths—removed exceptions, missing outputs,
+ownership-banner orphans and incorrect effective Git Linguist attributes fail.
+Untracked `.amp` remains private and outside enumeration. Declarations never
+count as implementation bodies. The five named shell entries are reconciled
+against mode-discovered additions; each declaration must remain tracked at index
+mode `100755`. Non-following worktree metadata must identify a regular file at
+mode `0755`, so symlinks, other object kinds, mode changes and absence all fail
+instead of lowering the reported shell count.
+Cron is authored in `src/core/cron.ts`; its
+former checked-JS exception is removed. Every new compiler target, fixture or
+generated entrypoint must enter this inventory. The exact 933-path source report
+and 12-program compiler report are
+[`c2-source-coverage.json`](c2-source-coverage.json) and
+[`c2-compiler-coverage.json`](c2-compiler-coverage.json). See the
+[M0 contract](m0-contracts.md#dependencies-and-authored-source-policy).
 
 ### Checked build tools and host configurations
 
@@ -312,9 +327,11 @@ and preserves first-line shebangs and the existing executable modes.
 outputs without repairing them; `npm run typecheck` includes this gate.
 Commit sources and generated outputs together. This compiler is specific to
 the tool siblings and named runner support files; core/browser/edge build
-algorithms and output locations stay unchanged. R12 replaces the vendor tool's
+algorithms and output locations stay unchanged. R12 replaced the vendor tool's
 handwritten highlight dependency collector and module loader with the pinned
-esbuild bundle; the browser still consumes the same local `window.hljs` API.
+esbuild bundle. `npm run build:vendor -- --check` now recreates all 29 owned
+vendor outputs in a temporary tree and rejects missing, stale, orphaned-font or
+wrong-mode files; the browser still consumes the same local `window.hljs` API.
 
 `tsconfig.configs.json` checks the actual host configuration bodies without
 emission. `eslint.config.js` is the named strict-`checkJs` exception because
@@ -349,8 +366,8 @@ strict environments:
 - `tsconfig.ui-tests.json` owns the UI smoke and eight scenario modules.
 - `tsconfig.dev-tools.json` owns the remaining observational and real-lineage
   scripts without enrolling provider canaries in ordinary test execution.
-- `tsconfig.extensions.json` additionally owns the five Bun-executed native
-  fake-host/boundary fixtures in its strict no-emit environment.
+- `tsconfig.extensions.json` additionally owns the six Bun-executed native
+  fake-host/boundary/recovery fixtures in its strict no-emit environment.
 
 `scripts/build-tests.ts` validates all four emitting programs before writing and
 maps every authored `.ts`/`.mts` source back to its existing `.js`/`.mjs`
@@ -360,10 +377,10 @@ removes obsolete compiler-owned outputs after an ownership move. Playwright
 discovery remains generated-JS-only, so `.spec.ts` sources are never executed
 twice.
 
-The corrected inventory has 161 authored executable/test/support bodies:
+The corrected inventory has 162 authored executable/test/support bodies:
 45 explicit Node-only roots, 97 browser-capable roots, 11 UI roots, three
-development scripts and five Bun-executed native host fixtures. The four
-emitting programs own 156 unique non-declaration roots. The five native
+development scripts and six Bun-executed native host fixtures. The four
+emitting programs own 156 unique non-declaration roots. The six native
 fixtures are strict no-emit members of `tsconfig.extensions.json`; Bun still
 executes their checked `.ts` paths directly.
 
