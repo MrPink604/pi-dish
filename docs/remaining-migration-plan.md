@@ -759,8 +759,11 @@ existing source-policy and drift gates:
   exact retained deletion ledger and review record for every accepted R1–R12
   package. C2 neither reruns nor reinterprets those accepted milestones.
 - [`c2-delivery-evidence.json`](c2-delivery-evidence.json) records local gates
-  separately from final review, integration and exact pushed-main CI. The latter
-  remain parent-owned and pending until the immutable C2 source is accepted.
+  separately from final review, integration and exact pushed-main CI. That
+  separation is deliberate: the report keeps its reviewed bytes and hash, and
+  the parent-owned delivery is bound by a tracked separate receipt,
+  [`c2-final-acceptance.json`](c2-final-acceptance.json), whose receipts are
+  archived by [`c2-evidence-archive.json`](c2-evidence-archive.json).
 
 `check:source-policy` derives actual compiler membership, generated siblings and
 bundles from the checked programs and policy, then rejects unclassified additions
@@ -786,7 +789,13 @@ The ignored machine-local `launch-tailnet.sh`, credentials and provider canaries
 remain outside this work; the provider canary is not run. Source implementation
 and local proof are not repository completion: exact GLM/DeepSeek HIGH review,
 parent acceptance, private commit, main integration, push and exact-source CI
-must bind the final delivery record before this milestone is accepted.
+must bind the final delivery record before this milestone is accepted. They are
+bound in [`c2-final-acceptance.json`](c2-final-acceptance.json): both reviewers
+returned ACCEPT on the frozen shell-kind candidate, `main` carries `1dc8bf8`, and
+[exact-commit CI](https://github.com/MrPink604/pi-dish/actions/runs/35414102192)
+passed all five jobs and eleven required steps. The recorded owner-session close
+failure was resolved afterwards: the process set it left behind is gone, while
+the failure itself remains in the receipt as failed history.
 
 ## Dependency waves and integration ownership
 

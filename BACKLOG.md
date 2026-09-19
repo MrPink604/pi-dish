@@ -1,8 +1,8 @@
 # pi-dish roadmap and migration status
 
-Updated 2026-09-18. **M0–M7, R1–R12 and C1 are accepted and delivered.
-C2 whole-repository source enforcement is implemented locally; independent
-same-source review, parent integration and exact pushed-main CI remain.**
+Updated 2026-09-19. **M0–M7, R1–R12, C1 and C2 are accepted and delivered on
+exact pushed main `1dc8bf8`. The parent acceptance receipt and its evidence are
+tracked in [the final acceptance record](docs/c2-final-acceptance.json).**
 
 All first-party browser application logic is authored in `src/browser/`, including
 the application entrypoint and static control bindings. The five scripts shipped
@@ -85,7 +85,7 @@ controller/port observations.
 | Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
 | Server application and feature modules | M1–M5 and M7 accepted | Actual implementations and composition are checked; the policy-free root preserves the synchronous native server export. |
 | Harness extensions and Electron shell | M6 and R7 accepted on Linux x64 | Strict edge programs, installed CLIs and real development/packaged Electron passed. R7's same-source trio, integrated gates, native readiness/failure proofs and all five exact pushed-main CI jobs passed on `a441edab`. macOS delivery is unverified. |
-| Repository source and delivery closure | C1 accepted; third corrected C2 source candidate in validation | C1 passed all five jobs and 11 required steps on exact main `f0b7721`. C2 accounts for all 928 existing JS/JSX/MJS/CJS/TS/TSX/MTS/CTS paths, 177 declarations and five named shell paths; declared/discovered shell sets, Git index modes and non-following worktree kind/presence/modes are enforced. Its four reports retain accepted R evidence and separate local proof from parent-owned final delivery. |
+| Repository source and delivery closure | C1 and C2 accepted and delivered | C1 passed all five jobs and 11 required steps on exact main `f0b7721`. C2 accounts for all 928 existing JS/JSX/MJS/CJS/TS/TSX/MTS/CTS paths, 177 declarations and five named shell paths; declared/discovered shell sets, Git index modes and non-following worktree kind/presence/modes are enforced. Its four reports retain accepted R evidence and separate local proof from parent-owned final delivery. The frozen shell-kind candidate was accepted by `zai/glm-5.3` and `opencode-go/deepseek-v4.1-flash` (both high thinking, OMP), integrated on exact main `1dc8bf8` and passed [all five jobs and 11 required steps](https://github.com/MrPink604/pi-dish/actions/runs/35414102192). |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application
@@ -307,15 +307,19 @@ relabeled. C2 retains both records.
    files remain authoritative. C2 links each deletion/retained-check ledger in
    [`c2-simplification-results.json`](docs/c2-simplification-results.json)
    without rerunning or reopening those milestones.
-3. **Close repository delivery (C1 accepted; C2 source implemented).** C2's
-   source policy rejects unclassified executable paths, missing/stale/orphan
-   generated outputs, stale exceptions and inaccurate generated attributes.
+3. **Repository delivery closed (C1 and C2 accepted).** C2's source policy rejects
+   unclassified executable paths, missing/stale/orphan generated outputs, stale
+   exceptions and inaccurate generated attributes.
    [Source](docs/c2-source-coverage.json),
    [compiler](docs/c2-compiler-coverage.json),
    [simplification](docs/c2-simplification-results.json) and
-   [delivery](docs/c2-delivery-evidence.json) evidence remain separate.
-   Exact final review, parent integration and pushed-main CI are still required;
-   local source proof alone does not finish repository delivery.
+   [delivery](docs/c2-delivery-evidence.json) evidence remain separate. Exact
+   final review, parent integration and pushed-main CI are bound by the
+   [final acceptance receipt](docs/c2-final-acceptance.json) and its
+   [evidence archive](docs/c2-evidence-archive.json); `main` is `1dc8bf8` and its
+   exact-commit CI passed all five jobs and eleven required steps. The tracked
+   reports stay byte-identical to the reviewed hashes: the receipt binds the
+   delivery instead of rewriting an accepted report's own digest.
 
 The prior [browser contract](docs/browser-contract-cleanup.md),
 [shared helper](docs/shared-runtime-helpers.md) and

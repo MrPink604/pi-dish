@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "milestone": "C2 final acceptance evidence archive",
+  "status": "durable archive; tracked receipt is verbatim",
+  "trackedReceipt": {
+    "path": "docs/c2-final-acceptance.json",
+    "bytes": 14559,
+    "sha256": "1a795a4a50de88c0baf374406a52718808c42ab6e4955dac5fe77f6d77ae9eb0"
+  },
+  "archiveRoot": "/home/jyarwood/.local/share/pi-dish-migration-evidence",
+  "archiveLayout": "<archiveRoot>/tmp/<original name> mirrors the original /tmp path",
+  "sourceRoot": "/tmp",
+  "reason": "The parent receipt and the reports' evidence receipts lived only in /tmp; that is not durable. Archived before pruning /tmp test-fixture litter.",
+  "contents": {
+    "citedTopLevelEntries": 174,
+    "archivedFiles": 2314,
+    "archiveMiB": 699.0
+  },
+  "verification": {
+    "documentedPairs": 219,
+    "verifiedIdentical": 200,
+    "alreadyLostBeforeArchive": 19,
+    "receiptPairs": 12,
+    "receiptVerifiedIdentical": 11,
+    "receiptLostAtSource": [
+      "/tmp/pi-dish-parent-c1-ci-1dc8bf8d1808779d27c3263bcadeb8542233b4f0/result.json"
+    ],
+    "method": "Every archived file whose path, byte count and sha256 are recorded in docs/*.json or in docs/c2-final-acceptance.json was re-hashed and re-sized; all present files matched."
+  },
+  "independentChecks": {
+    "githubActionsRun": {
+      "runId": 35414102192,
+      "headSha": "1dc8bf8d1808779d27c3263bcadeb8542233b4f0",
+      "status": "completed",
+      "conclusion": "success",
+      "checkedAt": "2026-09-19T18:07:56.127941Z",
+      "note": "Fetched from the public GitHub API during cleanup; the parent's original stored result.json for this commit was no longer present in /tmp."
+    }
+  },
+  "publishedPages": "Not archived: /tmp/pi-dish-share-*.html are live publication outputs served from the OS temporary directory (lib/publication-handlers.js), not evidence receipts.",
+  "note": "Targeted /tmp entries were pruned before archiving (86 of 250 cited paths were already gone), so this archive is partial by construction."
+}
