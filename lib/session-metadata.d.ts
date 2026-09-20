@@ -1,9 +1,16 @@
 // Generated from src/core/session-metadata.ts; edit that source and run npm run build:core.
-import type { SessionEntries, SessionInfo } from './session-metadata-contracts';
+import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata-contracts';
 interface MetadataProfile {
     readonly profileId?: string;
 }
 export declare function isRecord(value: unknown): value is Record<string, unknown>;
+export declare function hasCacheActivity(message: Record<string, unknown>): boolean;
+export declare function isHardCacheMiss(usage: unknown): boolean;
+/**
+ * Providers report cache token activity, not expiry timestamps. Derive only
+ * documented fixed/minimum windows and conservative provider estimates.
+ */
+export declare function cacheExpiryForMessage(message: Record<string, unknown>, previous?: CacheExpiry | null, fallbackTimestamp?: unknown): CacheExpiry | null;
 /** Validate persisted accumulator output, reviving its serialized activity Date. */
 export declare function decodeSessionInfo(value: unknown): SessionInfo | null;
 export declare function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile): SessionInfo;

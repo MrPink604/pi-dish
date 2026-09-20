@@ -1,5 +1,5 @@
 // Generated from src/core/session-files.ts; edit that source and run npm run build:core.
-import type { SessionEntries, SessionInfo } from './session-metadata-contracts.js';
+import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata-contracts.js';
 import type { IndexedUsage, UsageCosts, UsageTokens } from './session-index-data.js';
 export interface SessionFileProfile {
     readonly profileId?: string;
@@ -13,6 +13,7 @@ export interface SessionFileSource extends SessionFileProfile {
 export interface SanitizedUsage extends Partial<UsageTokens> {
     totalTokens?: number;
     cost?: Readonly<Partial<UsageCosts>>;
+    cacheWrite1h?: number;
 }
 export interface AssistantGenStats {
     readonly durationMs?: number;
@@ -28,6 +29,7 @@ export interface SessionMessage extends AssistantGenStats {
     readonly provider?: unknown;
     readonly responseModel?: unknown;
     readonly usage?: Readonly<SanitizedUsage>;
+    readonly cacheExpiry?: Readonly<CacheExpiry>;
     readonly errorMessage?: unknown;
     readonly stopReason?: unknown;
     readonly toolName?: unknown;
@@ -55,6 +57,7 @@ export interface SessionStats {
     readonly compactions: number;
     readonly genMs: number;
     readonly genOutput: number;
+    readonly hardCacheMisses: number;
 }
 /** Direct parser output retains malformed JSON tree ids; the index validates its leaf. */
 export interface SessionSearchProjection {

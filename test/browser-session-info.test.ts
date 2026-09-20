@@ -9,8 +9,9 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'),
 assertBrowserApiContext(context);
 const { decodeSessionStats, decodeSessionShare, decodePublishedPages } = context.PiDishBrowser;
 test('session stats retain unavailable prices and narrow context and runtime metadata', () => {
-  const stats = decodeSessionStats({ costs: { total: null, input: 0.25 }, costUnavailable: { total: 1 }, contextUsage: { tokens: 100, percent: 'bad' }, runtime: { kind: 'tmux', pid: 'bad', windowIndex: 0 } });
+  const stats = decodeSessionStats({ hardCacheMisses: 3, costs: { total: null, input: 0.25 }, costUnavailable: { total: 1 }, contextUsage: { tokens: 100, percent: 'bad' }, runtime: { kind: 'tmux', pid: 'bad', windowIndex: 0 } });
   assert.equal(stats.costs.total, null); assert.equal(stats.costs.input, 0.25); assert.equal(stats.costUnavailable.total, 1);
+  assert.equal(stats.hardCacheMisses, 3);
   assert.equal(stats.contextUsage.tokens, 100); assert.equal(stats.contextUsage.percent, null);
   assert.ok(stats.runtime); assert.equal(stats.runtime.pid, null); assert.equal(stats.runtime.windowIndex, 0);
   assert.throws(() => decodeSessionStats({ error: 'unavailable' }), /unavailable/);

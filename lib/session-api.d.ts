@@ -1,4 +1,12 @@
 // Generated from src/core/session-api.ts; edit that source and run npm run build:core.
+export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate';
+export interface CacheExpiryProjection {
+    readonly refreshedAt: number;
+    readonly expiresAt: number;
+    readonly retentionMs: number;
+    readonly retention: string;
+    readonly basis: CacheExpiryBasis;
+}
 /** Closed first-party metadata. Identity and opaque extras are separate owners. */
 export interface SessionFields<Timestamp = string | number> {
     name?: string | null;
@@ -14,6 +22,7 @@ export interface SessionFields<Timestamp = string | number> {
     contextPercent?: number;
     contextTokens?: number;
     contextWindow?: number;
+    cacheExpiry?: CacheExpiryProjection | null;
     messageCount?: number;
     lastActivity?: Timestamp | null;
     turnInProgress?: boolean;
@@ -41,7 +50,7 @@ export interface SessionRow {
 }
 export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'thinkingLevel'>;
 export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'compacting'>;
-export type SessionTranscriptPatch = Pick<SessionFields, 'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'lastActivity' | 'isActive'>;
+export type SessionTranscriptPatch = Pick<SessionFields, 'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'cacheExpiry' | 'lastActivity' | 'isActive'>;
 export interface SessionList {
     active: SessionRow[];
     previous: SessionRow[];

@@ -2485,6 +2485,19 @@ body.sidebar-open {
   color: var(--text);
 }
 
+/* Likely provider-cache lifetime. Width follows the short value ("cache ~4m")
+   and disappears when the provider does not expose enough cache telemetry. */
+.composer-tools .tool-cache {
+  min-width: auto;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.composer-tools .tool-cache.cold {
+  opacity: .65;
+}
+
 /* Context readout. Fixed slot, and quiet until the fill matters: the same
    muted weight as the glyphs, then warning past a third, error past two. */
 .composer-tools .tool-ctx {

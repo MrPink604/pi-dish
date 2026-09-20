@@ -1,10 +1,11 @@
+import type { CacheExpiryProjection } from '../core/session-api';
 import type { SessionState } from './session-state';
 import type { RenderMessage, MessageUsage } from './message-data';
 import type { ResponseMode } from './display-preferences';
 import { sessionRefKey } from './helper-identity';
 import { escapeHtml } from '../core/helper-format';
-import { formatResponseMetadata, formatDuration, formatTokSpeed, formatTokens, formatEstimatedCost } from './helper-format';
-interface Detail { key: string | null; selectedModel: string; usage?: MessageUsage; durationMs?: number; outputTokens?: number; provider?: string; model?: string; responseModel?: string; stopReason?: string; pricingKnown: boolean }
+import { cacheExpiryPresentation, formatResponseMetadata, formatDuration, formatTokSpeed, formatTokens, formatEstimatedCost } from './helper-format';
+interface Detail { key: string | null; selectedModel: string; usage?: MessageUsage; cacheExpiry?: CacheExpiryProjection; durationMs?: number; outputTokens?: number; provider?: string; model?: string; responseModel?: string; stopReason?: string; pricingKnown: boolean }
 export function createResponseDetails(options: { document: Document; sessionState: SessionState; mode: () => ResponseMode }) {
   const { document, sessionState } = options;
   const responseDetails = new Map<string, Detail>(); let responseDetailSeq = 0, disposed = false;
@@ -34,6 +35,7 @@ function responsePricingKnown(msg: Detail | RenderMessage | null) {
 function responseDetailProjection(msg: RenderMessage): Detail {
   return {
     key: key(), selectedModel: model(), usage: msg.usage,
+    cacheExpiry: msg.cacheExpiry,
     durationMs: msg.durationMs,
     outputTokens: msg.outputTokens,
     provider: msg.provider,
@@ -56,6 +58,13 @@ function openResponseDetails(id: string) {
   const selected = m.model || m.selectedModel || '—';
   const model = m.responseModel || selected;
   const prompt = (u.input||0)+(u.cacheRead||0)+(u.cacheWrite||0);
+  const cacheRead = u.cacheRead || 0, cacheWrite = u.cacheWrite || 0;
+  const cacheResult = cacheWrite > 0 && cacheRead === 0
+    ? `Hard miss · ${formatTokens(cacheWrite)} tokens written`
+    : cacheRead > 0 && cacheWrite > 0
+      ? `Partial hit · ${formatTokens(cacheWrite)} tokens added`
+      : cacheRead > 0 ? `Hit · ${formatTokens(cacheRead)} tokens read` : 'No cache activity reported';
+  const cacheExpiry = cacheExpiryPresentation(m.cacheExpiry);
   const modelRows = m.responseModel && m.responseModel !== selected
     ? [['Selected model', selected], ['Response model', model]]
     : [['Model', model]];
@@ -65,6 +74,8 @@ function openResponseDetails(id: string) {
     ['Effective speed', formatTokSpeed(m.outputTokens || u.output, m.durationMs) || '—'],
     ['Tokens', `${formatTokens(u.input)} input · ${formatTokens(u.output)} output${u.reasoning ? ` · ${formatTokens(u.reasoning)} reasoning` : ''}`],
     ['Cache', `${formatTokens(u.cacheRead)} read · ${formatTokens(u.cacheWrite)} write${prompt ? ` · ${Math.round((u.cacheRead||0)/prompt*100)}% hit` : ''}`],
+    ['Cache result', cacheResult],
+    ['Likely cache expiry', cacheExpiry?.detail || 'Provider-managed / unavailable'],
     ['Estimated input', formatEstimatedCost(c.input)],
     ['Estimated output', formatEstimatedCost(c.output)],
     ['Estimated cache read / write', `${formatEstimatedCost(c.cacheRead)} / ${formatEstimatedCost(c.cacheWrite)}`],

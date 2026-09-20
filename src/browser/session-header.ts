@@ -1,6 +1,6 @@
 import { shortModelName } from './helper-usage';
 import { harnessBadgeInnerHtml } from './sidebar-render';
-import { contextClass, formatTokens } from './helper-format';
+import { cacheExpiryPresentation, contextClass, formatTokens } from './helper-format';
 import { harnessBadgeInfo, sessionSupports } from './helper-identity';
 import type { SessionState, SessionEntry } from './session-state';
 export function createSessionHeader(options: {
@@ -20,6 +20,15 @@ function setModelChipLabel(btn: HTMLElement, model: string | null | undefined, s
     const short = shortModelName(full);
     if (short !== full) btn.textContent = short + suffix;
   }
+}
+
+function updateCacheExpiry() {
+  const cacheEl = element('sessionCache');
+  const presentation = cacheExpiryPresentation(sessionState.currentSession?.cacheExpiry);
+  cacheEl.style.display = presentation ? '' : 'none';
+  cacheEl.textContent = presentation?.compact || '';
+  cacheEl.title = presentation ? `Session stats — ${presentation.detail}` : 'Session stats';
+  cacheEl.className = 'tool-btn tool-cache' + (presentation?.cold ? ' cold' : '');
 }
 
 function updateSessionHeader() {
@@ -88,6 +97,7 @@ function updateSessionHeader() {
   contextEl.title = current.contextTokens
     ? `Session stats — ${formatTokens(current.contextTokens)} tokens of context`
     : 'Session stats';
+  updateCacheExpiry();
 
   options.thinking();
   options.terminal();
@@ -104,5 +114,6 @@ function updateSessionHeader() {
   }
 }
 
-return { update: updateSessionHeader, label: setModelChipLabel, dispose() { disposed = true; } };
+const cacheExpiryTimer = setInterval(updateCacheExpiry, 15_000);
+return { update: updateSessionHeader, label: setModelChipLabel, dispose() { disposed = true; clearInterval(cacheExpiryTimer); } };
 }

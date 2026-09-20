@@ -22,7 +22,7 @@ function source(harnessId = 'pi', nativeSessionId = (0, test_types_js_1.nativeId
 }
 function info(extras = {}) {
     return { model: 'historical/model', name: 'History name', messageCount: 5, contextTokens: 200,
-        lastActivity: new Date('2026-01-01T01:00:00Z'), cwd: '/workspace', sessionId: 'header', parentSession: null, ...extras };
+        lastActivity: new Date('2026-01-01T01:00:00Z'), cwd: '/workspace', sessionId: 'header', parentSession: null, cacheExpiry: null, ...extras };
 }
 function advice(harnessId = 'pi', active = false, extras = {}) {
     const descriptor = registry[harnessId];

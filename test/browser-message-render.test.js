@@ -14,7 +14,7 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'),
 const { decodeRenderMessage } = context.PiDishBrowser;
 test('message projection preserves text/image content but narrows identifiers and telemetry', () => {
     const raw = { role: 'assistant', index: '0" onclick="bad', timestamp: 'literal', content: ['plain', { type: 'text', text: 'text' }, { type: 'image', url: '/image', mimeType: 'image/png' }, null],
-        usage: { input: '9', output: 4, cost: { total: null, output: 0.1 } }, durationMs: Infinity };
+        usage: { input: '9', output: 4, cacheWrite1h: 3, cost: { total: null, output: 0.1 } }, cacheExpiry: { refreshedAt: 1000, expiresAt: 301000, retentionMs: 300000, retention: '5m', basis: 'fixed', identity: 'private-cache-key' }, durationMs: Infinity };
     const row = decodeRenderMessage(raw);
     assert.equal(row.index, undefined);
     assert.equal(row.timestamp, 'literal');
@@ -29,6 +29,9 @@ test('message projection preserves text/image content but narrows identifiers an
     assert.equal(cost.total, null);
     raw.usage.cost.output = 99;
     assert.equal(cost.output, 0.1);
+    assert.equal(usage.cacheWrite1h, 3);
+    assert.equal((0, test_types_js_1.present)(row.cacheExpiry).retention, '5m');
+    assert.equal('identity' in (0, test_types_js_1.present)(row.cacheExpiry), false, 'browser projection drops the internal cache identity');
 });
 test('custom-message projection separates hidden state, structured advisor notes and job metadata', () => {
     const row = decodeRenderMessage({ role: 'custom', display: false, details: { notes: ['plain', { note: '<literal>', severity: 'concern', advisor: 'a' }, { note: {} }], jobs: [{ jobId: 'job', durationMs: 2500 }, { label: {}, durationMs: '3' }], from: 'Main', message: 'body', extra: 'dropped' } });

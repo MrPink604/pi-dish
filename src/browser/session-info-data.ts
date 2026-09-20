@@ -3,7 +3,7 @@ import { record, finite } from '../core/helper-values';
 import { USAGE_MERGE_COST_KEYS, USAGE_MERGE_TOKEN_KEYS } from './helper-usage';
 export interface SessionStats {
   readonly model: string; readonly thinkingLevel: string; readonly cwd: string; readonly sessionFile: string;
-  readonly userMessages: number; readonly assistantMessages: number; readonly toolCalls: number; readonly compactions: number;
+  readonly userMessages: number; readonly assistantMessages: number; readonly toolCalls: number; readonly compactions: number; readonly hardCacheMisses: number;
   readonly genOutput: number; readonly genMs: number; readonly reasoningTokens: number; readonly cost: number | null;
   readonly contextUsage: { readonly tokens: number | null; readonly contextWindow: number | null; readonly percent: number | null };
   readonly responseTiming: { readonly medianMs: number; readonly slowestMs: number };
@@ -20,7 +20,7 @@ export function decodeSessionStats(value: unknown): SessionStats {
   if (typeof value.error === 'string' && value.error) throw new Error(value.error);
   const context = object(value.contextUsage), timing = object(value.responseTiming), costs = object(value.costs), unavailable = object(value.costUnavailable), tokens = object(value.tokens), runtime = object(value.runtime);
   return { model: text(value.model), thinkingLevel: text(value.thinkingLevel), cwd: text(value.cwd), sessionFile: text(value.sessionFile),
-    userMessages: number(value.userMessages), assistantMessages: number(value.assistantMessages), toolCalls: number(value.toolCalls), compactions: number(value.compactions),
+    userMessages: number(value.userMessages), assistantMessages: number(value.assistantMessages), toolCalls: number(value.toolCalls), compactions: number(value.compactions), hardCacheMisses: number(value.hardCacheMisses),
     genOutput: number(value.genOutput), genMs: number(value.genMs), reasoningTokens: number(value.reasoningTokens), cost: nullable(value.cost),
     contextUsage: { tokens: nullable(context.tokens), contextWindow: nullable(context.contextWindow), percent: nullable(context.percent) }, responseTiming: { medianMs: number(timing.medianMs), slowestMs: number(timing.slowestMs) },
     costs: Object.fromEntries(USAGE_MERGE_COST_KEYS.map(key => [key, nullable(costs[key])])), costUnavailable: Object.fromEntries(USAGE_MERGE_COST_KEYS.map(key => [key, number(unavailable[key])])) as Record<CostKey, number>, tokens: Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map(key => [key, number(tokens[key])])),

@@ -90,7 +90,10 @@ Rules of thumb:
   Preview eligibility, inspect per-agent blockers, and cancel waiting work.
 - **Usage insights** — quiet per-response effective speed by default, with
   device-local metadata density controls and click-through token/cache/cost
-  details. The global Settings → Usage view summarizes estimated spend by
+  details. The composer shows the likely remaining provider-cache lifetime
+  when response telemetry makes one inferable; response details show its
+  retention basis, and session stats count provider-confirmed hard misses.
+  The global Settings → Usage view summarizes estimated spend by
   day, model, workspace, and session, with an optional server-wide monthly
   warning, and pivots every cost into read (uncached), cached read, output,
   and cache-write buckets — a Spend-by-bucket section, a Models/Cost-buckets

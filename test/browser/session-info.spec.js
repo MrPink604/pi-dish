@@ -4,7 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fixtures_js_1 = require("./fixtures.js");
 const pages = (label) => [{ token: 'shared-page', root: '/fixture/plan.html', path: '/p/shared-page', title: label + ' plan', createdAt: Date.now() }];
 async function setup(page, fleet) {
-    await page.route('**/api/sessions/*/stats', (route) => route.fulfill({ json: { model: new URL(route.request().url()).origin === fleet.self.base ? 'Self model' : 'Peer model', cwd: '/fixture/project', costs: { total: 0.5 } } }));
+    await page.route('**/api/sessions/*/stats', (route) => route.fulfill({ json: { model: new URL(route.request().url()).origin === fleet.self.base ? 'Self model' : 'Peer model', cwd: '/fixture/project', hardCacheMisses: 3, costs: { total: 0.5 } } }));
     await page.route('**/api/pages?*', (route) => route.fulfill({ json: pages(new URL(route.request().url()).origin === fleet.self.base ? 'Self' : 'Peer') }));
     await page.route('**/api/sessions/*/share', (route) => route.request().method() === 'GET'
         ? route.fulfill({ status: 404, json: { error: 'No share' } }) : route.fulfill({ json: { url: 'https://fixture.invalid/shared' } }));
@@ -20,6 +20,7 @@ async function setup(page, fleet) {
         writes++; return route.fallback(); });
     await page.evaluate(() => fixtureApp.features.sessionInfo.openStats());
     await (0, fixtures_js_1.expect)(page.locator('#statsPages .stats-page-row')).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(page.locator('#statsBody')).toContainText('3 hard misses');
     await (0, fixtures_js_1.expect)(page.locator('#sessionCloseBtn')).toBeVisible();
     await page.evaluate(() => {
         window.oldInfoControls = [

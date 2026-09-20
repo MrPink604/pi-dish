@@ -77,9 +77,10 @@ const FLUSH_MS = 500;
 const COMPACT_MIN_DEAD_BYTES = 1_000_000;
 // v8 preserves known cost subtotals beside unavailable-call counts and adds
 // Pi rate-card revisions. v9 treats OMP subscription-plan providers' zero
-// rates as unpriced rather than free. Older entries need their source JSONL
-// reread, so the normal bounded backlog rebuilds them like prior upgrades.
-const META_SCHEMA_VERSION = 9;
+// rates as unpriced rather than free. v10 records inferred provider cache
+// expiry state. Older entries need their source JSONL reread, so the normal
+// bounded backlog rebuilds them like prior upgrades.
+const META_SCHEMA_VERSION = 10;
 // v2 indexed tool-call names/args (file paths, bash commands); v3 raises the
 // per-message prose cap to 100K and the session cap to 4M with keep-newest
 // overflow (corpus-measured: the old caps trimmed real pasted logs and the

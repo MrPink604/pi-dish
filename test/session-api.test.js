@@ -31,6 +31,15 @@ test('closed session ingress separates authority, endpoint identity and opaque p
     assert.throws(() => decodeSessionRow({ id: 'bad', model: 42 }), /Invalid session/);
     assert.throws(() => decodeSessionRow(Object.create({ id: 'inherited' })), /Invalid session/);
 });
+test('session ingress preserves validated cache expiry and drops malformed projections', () => {
+    const cacheExpiry = { refreshedAt: 1000, expiresAt: 301000, retentionMs: 300000,
+        retention: '5m', basis: 'fixed', identity: 'anthropic\u0000claude' };
+    const row = decodeSessionRow({ id: 'cached', cacheExpiry });
+    assert.deepEqual(row.fields.cacheExpiry, { refreshedAt: 1000, expiresAt: 301000, retentionMs: 300000, retention: '5m', basis: 'fixed' });
+    assert.equal(decodeSessionRow({ id: 'bad-cache', cacheExpiry: { ...cacheExpiry, expiresAt: 'soon' } }).fields.cacheExpiry, undefined);
+    assert.deepEqual(decodeSessionTranscriptPatch({ cacheExpiry: null }), { cacheExpiry: null });
+    assert.deepEqual(decodeSessionTranscriptPatch({ cacheExpiry }), { cacheExpiry: row.fields.cacheExpiry });
+});
 test('wire and server timestamp boundaries preserve existing Date projection', () => {
     const date = new Date('2026-09-12T00:00:00Z');
     const projected = sessionForClient({ id: 'a', lastActivity: date, sessionFile: '/private' });

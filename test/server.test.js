@@ -2429,6 +2429,7 @@ test('GET /stats aggregates tokens, cost, and message counts from the JSONL', as
     assert.deepEqual(body.costs, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.05 });
     assert.deepEqual(body.costUnavailable, { input: 2, output: 2, cacheRead: 2, cacheWrite: 2, total: 0 });
     assert.equal(body.reasoningTokens, 0);
+    assert.equal(body.hardCacheMisses, 0);
     assert.deepEqual(body.responseTiming, { measured: 1, medianMs: 2000, slowestMs: 2000 });
     // Effective speed inputs: only the last assistant message has measurable
     // timing (2s for 60 output tokens) — the other's timestamps are unusable.

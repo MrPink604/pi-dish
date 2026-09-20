@@ -118,6 +118,9 @@ function showPendingSessionView(spawnId: string) {
   const ctxReset = element('sessionContext');
   ctxReset.textContent = '0%';
   ctxReset.className = 'tool-btn tool-ctx';
+  const cacheReset = element('sessionCache');
+  cacheReset.style.display = 'none';
+  cacheReset.textContent = '';
   options.thinking();
   options.terminal();
   options.mic();

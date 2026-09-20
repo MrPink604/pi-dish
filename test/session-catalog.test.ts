@@ -27,7 +27,7 @@ function source(harnessId: HarnessId = 'pi', nativeSessionId: NativeSessionId = 
 }
 function info(extras: Partial<SessionInfo> = {}): SessionInfo {
   return { model: 'historical/model', name: 'History name', messageCount: 5, contextTokens: 200,
-    lastActivity: new Date('2026-01-01T01:00:00Z'), cwd: '/workspace', sessionId: 'header', parentSession: null, ...extras };
+    lastActivity: new Date('2026-01-01T01:00:00Z'), cwd: '/workspace', sessionId: 'header', parentSession: null, cacheExpiry: null, ...extras };
 }
 function advice(harnessId: HarnessId = 'pi', active = false, extras: Record<string, unknown> = {}) {
   const descriptor = registry[harnessId];

@@ -231,7 +231,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
       }
       if (source.harnessId === 'pi' || source.harnessId === 'omp') await refreshHarnessPricing(source.harnessId);
       const {
-        tokens, reasoningTokens, cost, costs, costUnavailable, responseTiming,
+        tokens, reasoningTokens, hardCacheMisses, cost, costs, costUnavailable, responseTiming,
         userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput,
       } = getSessionStats(source);
       const reg = getRegisteredSession(sessionId);
@@ -248,7 +248,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
         userMessages, assistantMessages, toolCalls, toolResults, compactions,
         totalMessages: userMessages + assistantMessages + toolResults,
         tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },
-        cost, costs, costUnavailable, reasoningTokens, responseTiming, genMs, genOutput,
+        cost, costs, costUnavailable, reasoningTokens, hardCacheMisses, responseTiming, genMs, genOutput,
         contextUsage: contextUsage || {
           tokens: info.contextTokens || null,
           contextWindow: info.contextWindow,

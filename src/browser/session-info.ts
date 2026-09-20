@@ -114,7 +114,7 @@ export function createSessionInfo(options: {
           ['__section', 'Tokens & cache'],
           ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
           s.reasoningTokens ? ['Reasoning', formatTokens(s.reasoningTokens)] : null,
-          ['Cache', formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)],
+          ['Cache', `${formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)} · ${s.hardCacheMisses} hard ${s.hardCacheMisses === 1 ? 'miss' : 'misses'}`],
           ['__section', 'Estimated spend'],
           ['Estimated total', formatUsageCost(s.costs?.total ?? s.cost, s.costUnavailable?.total)],
           ['Components', `input ${formatUsageCost(s.costs?.input, s.costUnavailable?.input)} · output ${formatUsageCost(s.costs?.output, s.costUnavailable?.output)} · cache read ${formatUsageCost(s.costs?.cacheRead, s.costUnavailable?.cacheRead)} · write ${formatUsageCost(s.costs?.cacheWrite, s.costUnavailable?.cacheWrite)}`],

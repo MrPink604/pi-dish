@@ -186,12 +186,36 @@ test('readSessionMessages carries entry ids and assistant generation stats', () 
     assert.equal(all[1].outputTokens, 100);
     assert.equal(all[2].durationMs, undefined, 'missing start timestamp yields no duration');
 });
+test('cache telemetry preserves retention, refreshes expiry, and counts hard misses', () => {
+    const firstStart = Date.parse('2026-07-01T10:00:00.000Z');
+    const secondStart = Date.parse('2026-07-01T10:10:00.000Z');
+    const file = writeSession([
+        { type: 'session', cwd: '/cache' },
+        { type: 'model_change', provider: 'anthropic', modelId: 'claude-sonnet-4-5' },
+        { type: 'message', timestamp: '2026-07-01T10:00:05.000Z', message: {
+                role: 'assistant', api: 'anthropic-messages', provider: 'anthropic', model: 'claude-sonnet-4-5',
+                timestamp: firstStart, content: [], usage: { input: 20, cacheRead: 0, cacheWrite: 100, cacheWrite1h: 100 },
+            } },
+        { type: 'message', timestamp: '2026-07-01T10:10:05.000Z', message: {
+                role: 'assistant', api: 'anthropic-messages', provider: 'anthropic', model: 'claude-sonnet-4-5',
+                timestamp: secondStart, content: [], usage: { input: 5, cacheRead: 90, cacheWrite: 10 },
+            } },
+    ]);
+    const messages = SF.readSessionMessages(file);
+    assert.equal((0, test_types_js_1.present)(messages[0].usage).cacheWrite1h, 100);
+    assert.equal((0, test_types_js_1.present)(messages[0].cacheExpiry).retention, '1h');
+    assert.equal((0, test_types_js_1.present)(messages[0].cacheExpiry).expiresAt, firstStart + 60 * 60_000);
+    assert.equal((0, test_types_js_1.present)(messages[1].cacheExpiry).expiresAt, secondStart + 60 * 60_000, 'a cache hit carries the earlier retention policy forward');
+    assert.equal(SF.getSessionStats(file).hardCacheMisses, 1, 'only a write with no cache reads is a provider-confirmed hard miss');
+    assert.equal((0, test_types_js_1.present)(SF.getSessionInfo(file).cacheExpiry).expiresAt, secondStart + 60 * 60_000);
+});
 test('sanitizeUsage preserves missing and explicit-zero cost components', () => {
     assert.deepEqual(SF.sanitizeUsage({
         input: 12,
+        cacheWrite1h: 8,
         providerRaw: 'private',
         cost: { total: 0.25, providerRaw: 99 },
-    }), { input: 12, cost: { total: 0.25 } }, 'total-only data does not acquire zero components');
+    }), { input: 12, cacheWrite1h: 8, cost: { total: 0.25 } }, 'total-only data does not acquire zero components');
     assert.deepEqual(SF.sanitizeUsage({
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     }), {
@@ -614,7 +638,7 @@ test('typed metadata accumulation narrows malformed known fields without promoti
     ].map((entry) => JSON.stringify(entry)).join('\n'));
     const info = sessionInfoFromEntries(entries, new Date(0));
     assert.deepEqual(info, { model: 'valid-model', name: 'valid-name', messageCount: 0,
-        contextTokens: 0, lastActivity: new Date(0), cwd: '/valid', sessionId: 'first', parentSession: '/parent' });
+        contextTokens: 0, lastActivity: new Date(0), cwd: '/valid', sessionId: 'first', parentSession: '/parent', cacheExpiry: null });
     const delta = SF.parseSessionEntries(JSON.stringify({ type: 'session', id: 'delta-header', parentSession: '/delta' }));
     assert.strictEqual(extendSessionInfoFromEntries(info, delta, new Date(1000)), info);
     assert.equal(info.sessionId, 'first');

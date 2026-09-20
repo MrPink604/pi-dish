@@ -1,4 +1,5 @@
 import type { Timestamp } from '../core/helper-types';
+import type { CacheExpiryProjection } from '../core/session-api';
 import type { RuntimeInfo, ResponseMetadata } from './shared-helper-types';
 import { finite } from '../core/helper-values';
 
@@ -39,6 +40,34 @@ export function formatCacheStat(cacheRead?: number | null, cacheWrite?: number |
   if (write > 0) s += ` · ${formatTokens(write)} written`;
   else if (read > 0) s += ' · writes not reported';
   return s;
+}
+
+export interface CacheExpiryPresentation {
+  readonly compact: string;
+  readonly detail: string;
+  readonly cold: boolean;
+}
+
+/**
+ * Provider cache retention is inferred from the request policy, never an exact
+ * provider eviction deadline. Round remaining time up so the UI does not
+ * announce a cold cache while a partial final minute is still plausible.
+ */
+export function cacheExpiryPresentation(expiry?: CacheExpiryProjection | null, now = Date.now()): CacheExpiryPresentation | null {
+  if (!expiry) return null;
+  const remaining = expiry.expiresAt - now;
+  if (remaining <= 0) {
+    return { compact: 'cache cold', detail: `Likely cold · ${expiry.retention} retention`, cold: true };
+  }
+  const minutes = Math.ceil(remaining / 60_000);
+  const duration = minutes < 60
+    ? `${minutes}m`
+    : minutes % 60 === 0 ? `${minutes / 60}h` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  if (expiry.basis === 'minimum') {
+    return { compact: `cache ≥${duration}`, detail: `At least ${duration} remaining · ${expiry.retention} minimum retention`, cold: false };
+  }
+  const qualifier = expiry.basis === 'estimate' ? 'provider estimate' : 'retention';
+  return { compact: `cache ~${duration}`, detail: `About ${duration} remaining · ${expiry.retention} ${qualifier}`, cold: false };
 }
 
 // One line for the stats modal's "Running in" row, from the server's runtime

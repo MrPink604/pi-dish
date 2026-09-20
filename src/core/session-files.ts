@@ -11,8 +11,8 @@
  * treat it as immutable.
  */
 import fs from 'node:fs';
-import { sessionInfoFromEntries, isRecord } from './session-metadata.js';
-import type { SessionEntries, SessionInfo } from './session-metadata-contracts.js';
+import { cacheExpiryForMessage, hasCacheActivity, isHardCacheMiss, sessionInfoFromEntries, isRecord } from './session-metadata.js';
+import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata-contracts.js';
 import type { IndexedUsage, UsageBucket, UsageCosts, UsageTokens } from './session-index-data.js';
 import { extractTextContent } from './helper-content.js';
 import { estimateUsageCost, isPlanProvider, pricingRevision } from './harness-pricing.js';
@@ -27,6 +27,7 @@ export interface SessionFileSource extends SessionFileProfile { readonly file: s
 export interface SanitizedUsage extends Partial<UsageTokens> {
   totalTokens?: number;
   cost?: Readonly<Partial<UsageCosts>>;
+  cacheWrite1h?: number;
 }
 export interface AssistantGenStats { readonly durationMs?: number; readonly outputTokens?: unknown }
 /** Borrowed display projection: external payloads retain their original values. */
@@ -39,6 +40,7 @@ export interface SessionMessage extends AssistantGenStats {
   readonly provider?: unknown;
   readonly responseModel?: unknown;
   readonly usage?: Readonly<SanitizedUsage>;
+  readonly cacheExpiry?: Readonly<CacheExpiry>;
   readonly errorMessage?: unknown;
   readonly stopReason?: unknown;
   readonly toolName?: unknown;
@@ -62,6 +64,7 @@ export interface SessionStats {
   readonly compactions: number;
   readonly genMs: number;
   readonly genOutput: number;
+  readonly hardCacheMisses: number;
 }
 /** Direct parser output retains malformed JSON tree ids; the index validates its leaf. */
 export interface SessionSearchProjection { text: string; tree: boolean; leafId: unknown }
@@ -263,7 +266,8 @@ function advanceModelChange(entry: Record<string, unknown>, state: ModelContinui
   }
 }
 
-function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFileProfile | undefined, fallbackModel: { provider?: unknown; model?: unknown } = {}): SessionMessage | null {
+function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFileProfile | undefined,
+  fallbackModel: { provider?: unknown; model?: unknown } = {}, cacheExpiry?: CacheExpiry | null): SessionMessage | null {
   if (entry.type === 'message' && entry.message) {
     const message = fields(entry.message);
     // Hidden custom messages are model continuity/state, not transcript UI.
@@ -287,6 +291,7 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
       model: message.model,
       provider: message.provider || undefined,
       responseModel: message.responseModel || undefined,
+      ...(cacheExpiry ? { cacheExpiry } : {}),
       usage,
       errorMessage: message.errorMessage || undefined,
       stopReason: message.stopReason || undefined,
@@ -369,11 +374,27 @@ function parseMessageData(content: string, candidate?: SessionFileProfile, leafO
   const messages: SessionMessage[] = [];
   const byId = new Map<unknown, SessionMessage>();
   const model: ModelContinuity = { provider: null, model: null };
+  let cacheExpiry: CacheExpiry | null = null;
   for (const raw of entries) {
     try {
       const entry = fields(raw);
-      if (entry.type === 'model_change') advanceModelChange(entry, model, candidate?.profileId, 'display');
-      const message = messageFromEntry(entry, candidate, model);
+      if (entry.type === 'model_change') {
+        advanceModelChange(entry, model, candidate?.profileId, 'display');
+        cacheExpiry = null;
+      }
+      if (entry.type === 'compaction') cacheExpiry = null;
+      let responseCacheExpiry: CacheExpiry | null = null;
+      const rawMessage = entry.type === 'message' && entry.message ? fields(entry.message) : null;
+      if (rawMessage?.role === 'assistant' && hasCacheActivity(rawMessage)) {
+        const cacheMessage = {
+          ...rawMessage,
+          provider: rawMessage.provider ?? model.provider,
+          model: rawMessage.model ?? model.model,
+        };
+        responseCacheExpiry = cacheExpiryForMessage(cacheMessage, cacheExpiry, entry.timestamp);
+        cacheExpiry = responseCacheExpiry;
+      }
+      const message = messageFromEntry(entry, candidate, model, responseCacheExpiry);
       if (!message) continue;
       // Resource lookup is by stable JSONL id across the whole tree. Keep
       // abandoned entries addressable so an already-rendered lazy image URL
@@ -392,7 +413,7 @@ export function sanitizeUsage(usage: unknown): SanitizedUsage | undefined {
   if (!usage || typeof usage !== 'object') return undefined;
   const raw = fields(usage);
   const out: SanitizedUsage = {};
-  for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens'] as const) {
+  for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'cacheWrite1h', 'reasoning', 'totalTokens'] as const) {
     const value = raw[key];
     if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
   }
@@ -669,7 +690,7 @@ function addReportedCosts(bucket: UsageBucket, cost: Partial<UsageCosts> | undef
 function computeSessionStats(filePath: string, _stats: fs.Stats, candidate: SessionFileProfile = {}): SessionStats {
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const costBucket = { costs: emptyCosts(), costUnavailable: emptyCostUnavailable() };
-  let reasoningTokens = 0;
+  let reasoningTokens = 0, hardCacheMisses = 0;
   let userMessages = 0, assistantMessages = 0, toolCalls = 0, toolResults = 0, compactions = 0;
   // Session-wide effective speed: output tokens over response seconds,
   // summed only across messages whose timing is measurable (genOutput can be
@@ -701,6 +722,7 @@ function computeSessionStats(filePath: string, _stats: fs.Stats, candidate: Sess
         tokens.cacheRead += tokenAmount(u.cacheRead);
         tokens.cacheWrite += tokenAmount(u.cacheWrite);
         reasoningTokens += tokenAmount(u.reasoning);
+        if (isHardCacheMiss(u)) hardCacheMisses++;
       }
       addReportedCosts(costBucket, messageUsageCost(candidate, m, model));
       const gen = assistantGenStats(entry);
@@ -719,7 +741,7 @@ function computeSessionStats(filePath: string, _stats: fs.Stats, candidate: Sess
     slowestMs: responseDurations.length ? responseDurations[responseDurations.length - 1] : null,
   };
   const { costs, costUnavailable } = costBucket;
-  return { tokens, reasoningTokens, cost: costs.total, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput };
+  return { tokens, reasoningTokens, hardCacheMisses, cost: costs.total, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput };
 }
 
 /** Compact corpus-index usage, derived during the same read as metadata/text. */

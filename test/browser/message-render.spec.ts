@@ -54,7 +54,7 @@ test('transcript image resources and share controls use the selected owning host
 test('retained telemetry keeps its original host and remains usable after restoring that transcript', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);
   await page.evaluate(() => {
-    const template = document.createElement('template'); template.innerHTML = fixtureApp.features.messageRenderer.message({ role: 'assistant', model: 'chosen-model', responseModel: 'actual-model', provider: 'provider', content: 'body', usage: { input: 4, output: 8, cost: { total: 0.1 } }, durationMs: 500 });
+    const template = document.createElement('template'); template.innerHTML = fixtureApp.features.messageRenderer.message({ role: 'assistant', model: 'chosen-model', responseModel: 'actual-model', provider: 'provider', content: 'body', usage: { input: 4, output: 8, cacheRead: 0, cacheWrite: 4, cost: { total: 0.1 } }, cacheExpiry: { refreshedAt: Date.now(), expiresAt: Date.now() + 5 * 60_000, retentionMs: 5 * 60_000, retention: '5m', basis: 'fixed' }, durationMs: 500 });
     window.retainedTelemetry = template.content.firstElementChild instanceof HTMLElement ? template.content.firstElementChild : null;
     fixtureElement(document.getElementById('messages'), '#messages').append(fixtureElement(window.retainedTelemetry, 'retained telemetry'));
   });
@@ -64,6 +64,9 @@ test('retained telemetry keeps its original host and remains usable after restor
   await fleet.select(fleet.peer);
   await page.evaluate(() => { const telemetry = fixtureElement(window.retainedTelemetry, 'retained telemetry'); fixtureElement(document.getElementById('messages'), '#messages').append(telemetry); fixtureElement(telemetry.querySelector<HTMLElement>('.message-metadata-btn'), 'metadata button').click(); });
   await expect(page.locator('#responseDetailsBody')).toContainText('actual-model'); await expect(page.locator('#responseDetailsBody')).toContainText('chosen-model');
+  await expect(page.locator('#responseDetailsBody')).toContainText('Hard miss');
+  await expect(page.locator('#responseDetailsBody')).toContainText('Likely cache expiry');
+  await expect(page.locator('#responseDetailsBody')).toContainText('5m retention');
 });
 test('tool grouping preserves the later page anchor and open state when adjacent groups merge', async ({ page, fleet }) => {
   void fleet;

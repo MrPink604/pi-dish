@@ -210,6 +210,17 @@ var PiDishBrowser = (() => {
   var nullableString = (value) => value === null ? null : optionalString(value);
   var optionalNumber = (value) => finite(value) ? value : void 0;
   var optionalBoolean = (value) => typeof value === "boolean" ? value : void 0;
+  var optionalCacheExpiry = (value) => {
+    if (value === null) return null;
+    if (!record(value) || !finite(value.refreshedAt) || !finite(value.expiresAt) || !finite(value.retentionMs) || typeof value.retention !== "string" || !["fixed", "minimum", "estimate"].includes(String(value.basis))) return void 0;
+    return {
+      refreshedAt: value.refreshedAt,
+      expiresAt: value.expiresAt,
+      retentionMs: value.retentionMs,
+      retention: value.retention,
+      basis: value.basis
+    };
+  };
   var fieldDecoders = {
     name: nullableString,
     model: nullableString,
@@ -224,6 +235,7 @@ var PiDishBrowser = (() => {
     contextPercent: optionalNumber,
     contextTokens: optionalNumber,
     contextWindow: optionalNumber,
+    cacheExpiry: optionalCacheExpiry,
     messageCount: optionalNumber,
     lastActivity: (value) => value === null || typeof value === "string" || finite(value) ? value : void 0,
     turnInProgress: optionalBoolean,
@@ -287,7 +299,7 @@ var PiDishBrowser = (() => {
     return decodePatch(value, ["turnInProgress", "compacting"]);
   }
   function decodeSessionTranscriptPatch(value) {
-    return decodePatch(value, ["name", "model", "cwd", "messageCount", "contextTokens", "contextWindow", "contextPercent", "lastActivity", "isActive"]);
+    return decodePatch(value, ["name", "model", "cwd", "messageCount", "contextTokens", "contextWindow", "contextPercent", "cacheExpiry", "lastActivity", "isActive"]);
   }
   function validateSessionControls(value) {
     if (!record(value) || !text(value.id)) return invalid("session");
@@ -2985,6 +2997,20 @@ var PiDishBrowser = (() => {
     if (write > 0) s += ` \xB7 ${formatTokens(write)} written`;
     else if (read > 0) s += " \xB7 writes not reported";
     return s;
+  }
+  function cacheExpiryPresentation(expiry, now = Date.now()) {
+    if (!expiry) return null;
+    const remaining = expiry.expiresAt - now;
+    if (remaining <= 0) {
+      return { compact: "cache cold", detail: `Likely cold \xB7 ${expiry.retention} retention`, cold: true };
+    }
+    const minutes = Math.ceil(remaining / 6e4);
+    const duration = minutes < 60 ? `${minutes}m` : minutes % 60 === 0 ? `${minutes / 60}h` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+    if (expiry.basis === "minimum") {
+      return { compact: `cache \u2265${duration}`, detail: `At least ${duration} remaining \xB7 ${expiry.retention} minimum retention`, cold: false };
+    }
+    const qualifier = expiry.basis === "estimate" ? "provider estimate" : "retention";
+    return { compact: `cache ~${duration}`, detail: `About ${duration} remaining \xB7 ${expiry.retention} ${qualifier}`, cold: false };
   }
   function formatRuntime(r) {
     if (!r || !r.kind) return "\u2014";
@@ -6271,6 +6297,7 @@ var PiDishBrowser = (() => {
       reasoning: number3(value.reasoning),
       cacheRead: number3(value.cacheRead),
       cacheWrite: number3(value.cacheWrite),
+      cacheWrite1h: number3(value.cacheWrite1h),
       cost: cost ? { input: price(cost.input), output: price(cost.output), cacheRead: price(cost.cacheRead), cacheWrite: price(cost.cacheWrite), total: price(cost.total) } : void 0
     };
   }
@@ -6288,6 +6315,16 @@ var PiDishBrowser = (() => {
       data: string(block.data),
       mimeType: string(block.mimeType)
     }]);
+  }
+  function decodeCacheExpiry(value) {
+    if (!record8(value) || !finite2(value.refreshedAt) || !finite2(value.expiresAt) || !finite2(value.retentionMs) || typeof value.retention !== "string" || !["fixed", "minimum", "estimate"].includes(String(value.basis))) return void 0;
+    return {
+      refreshedAt: value.refreshedAt,
+      expiresAt: value.expiresAt,
+      retentionMs: value.retentionMs,
+      retention: value.retention,
+      basis: value.basis
+    };
   }
   function decodeRenderMessage(value) {
     const row = record8(value) ? value : {}, details = record8(row.details) ? row.details : null;
@@ -6308,6 +6345,7 @@ var PiDishBrowser = (() => {
       customType: string(row.customType),
       display: typeof row.display === "boolean" ? row.display : void 0,
       usage: decodeMessageUsage(row.usage),
+      cacheExpiry: decodeCacheExpiry(row.cacheExpiry),
       durationMs: number3(row.durationMs),
       outputTokens: number3(row.outputTokens),
       sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record8(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
@@ -9761,6 +9799,7 @@ var PiDishBrowser = (() => {
       assistantMessages: number6(value.assistantMessages),
       toolCalls: number6(value.toolCalls),
       compactions: number6(value.compactions),
+      hardCacheMisses: number6(value.hardCacheMisses),
       genOutput: number6(value.genOutput),
       genMs: number6(value.genMs),
       reasoningTokens: number6(value.reasoningTokens),
@@ -9905,7 +9944,7 @@ var PiDishBrowser = (() => {
           ["__section", "Tokens & cache"],
           ["Tokens in / out", `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
           s.reasoningTokens ? ["Reasoning", formatTokens(s.reasoningTokens)] : null,
-          ["Cache", formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)],
+          ["Cache", `${formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)} \xB7 ${s.hardCacheMisses} hard ${s.hardCacheMisses === 1 ? "miss" : "misses"}`],
           ["__section", "Estimated spend"],
           ["Estimated total", formatUsageCost(s.costs?.total ?? s.cost, s.costUnavailable?.total)],
           ["Components", `input ${formatUsageCost(s.costs?.input, s.costUnavailable?.input)} \xB7 output ${formatUsageCost(s.costs?.output, s.costUnavailable?.output)} \xB7 cache read ${formatUsageCost(s.costs?.cacheRead, s.costUnavailable?.cacheRead)} \xB7 write ${formatUsageCost(s.costs?.cacheWrite, s.costUnavailable?.cacheWrite)}`],
@@ -15782,6 +15821,7 @@ ${restored}`;
         key: key(),
         selectedModel: model(),
         usage: msg.usage,
+        cacheExpiry: msg.cacheExpiry,
         durationMs: msg.durationMs,
         outputTokens: msg.outputTokens,
         provider: msg.provider,
@@ -15803,6 +15843,9 @@ ${restored}`;
       const selected = m.model || m.selectedModel || "\u2014";
       const model2 = m.responseModel || selected;
       const prompt = (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0);
+      const cacheRead = u.cacheRead || 0, cacheWrite = u.cacheWrite || 0;
+      const cacheResult = cacheWrite > 0 && cacheRead === 0 ? `Hard miss \xB7 ${formatTokens(cacheWrite)} tokens written` : cacheRead > 0 && cacheWrite > 0 ? `Partial hit \xB7 ${formatTokens(cacheWrite)} tokens added` : cacheRead > 0 ? `Hit \xB7 ${formatTokens(cacheRead)} tokens read` : "No cache activity reported";
+      const cacheExpiry = cacheExpiryPresentation(m.cacheExpiry);
       const modelRows = m.responseModel && m.responseModel !== selected ? [["Selected model", selected], ["Response model", model2]] : [["Model", model2]];
       const rows = [
         ...modelRows,
@@ -15811,6 +15854,8 @@ ${restored}`;
         ["Effective speed", formatTokSpeed(m.outputTokens || u.output, m.durationMs) || "\u2014"],
         ["Tokens", `${formatTokens(u.input)} input \xB7 ${formatTokens(u.output)} output${u.reasoning ? ` \xB7 ${formatTokens(u.reasoning)} reasoning` : ""}`],
         ["Cache", `${formatTokens(u.cacheRead)} read \xB7 ${formatTokens(u.cacheWrite)} write${prompt ? ` \xB7 ${Math.round((u.cacheRead || 0) / prompt * 100)}% hit` : ""}`],
+        ["Cache result", cacheResult],
+        ["Likely cache expiry", cacheExpiry?.detail || "Provider-managed / unavailable"],
         ["Estimated input", formatEstimatedCost(c.input)],
         ["Estimated output", formatEstimatedCost(c.output)],
         ["Estimated cache read / write", `${formatEstimatedCost(c.cacheRead)} / ${formatEstimatedCost(c.cacheWrite)}`],
@@ -17434,6 +17479,9 @@ ${restored}`;
       const ctxReset = element("sessionContext");
       ctxReset.textContent = "0%";
       ctxReset.className = "tool-btn tool-ctx";
+      const cacheReset = element("sessionCache");
+      cacheReset.style.display = "none";
+      cacheReset.textContent = "";
       options2.thinking();
       options2.terminal();
       options2.mic();
@@ -17630,6 +17678,14 @@ ${restored}`;
         if (short !== full) btn.textContent = short + suffix;
       }
     }
+    function updateCacheExpiry() {
+      const cacheEl = element("sessionCache");
+      const presentation = cacheExpiryPresentation(sessionState.currentSession?.cacheExpiry);
+      cacheEl.style.display = presentation ? "" : "none";
+      cacheEl.textContent = presentation?.compact || "";
+      cacheEl.title = presentation ? `Session stats \u2014 ${presentation.detail}` : "Session stats";
+      cacheEl.className = "tool-btn tool-cache" + (presentation?.cold ? " cold" : "");
+    }
     function updateSessionHeader() {
       if (disposed || !sessionState.currentSession) return;
       const current = sessionState.currentSession;
@@ -17678,6 +17734,7 @@ ${restored}`;
       contextEl.textContent = `${contextPercent}%`;
       contextEl.className = "tool-btn tool-ctx" + (ctxClass ? " " + ctxClass : "");
       contextEl.title = current.contextTokens ? `Session stats \u2014 ${formatTokens(current.contextTokens)} tokens of context` : "Session stats";
+      updateCacheExpiry();
       options2.thinking();
       options2.terminal();
       options2.mic();
@@ -17689,8 +17746,10 @@ ${restored}`;
         cwdChip.title = cwd ? `${cwd} \u2014 session stats` : "Session stats";
       }
     }
+    const cacheExpiryTimer = setInterval(updateCacheExpiry, 15e3);
     return { update: updateSessionHeader, label: setModelChipLabel, dispose() {
       disposed = true;
+      clearInterval(cacheExpiryTimer);
     } };
   }
 

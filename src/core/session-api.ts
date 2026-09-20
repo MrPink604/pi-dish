@@ -1,3 +1,12 @@
+export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate';
+export interface CacheExpiryProjection {
+  readonly refreshedAt: number;
+  readonly expiresAt: number;
+  readonly retentionMs: number;
+  readonly retention: string;
+  readonly basis: CacheExpiryBasis;
+}
+
 /** Closed first-party metadata. Identity and opaque extras are separate owners. */
 export interface SessionFields<Timestamp = string | number> {
   name?: string | null;
@@ -13,6 +22,7 @@ export interface SessionFields<Timestamp = string | number> {
   contextPercent?: number;
   contextTokens?: number;
   contextWindow?: number;
+  cacheExpiry?: CacheExpiryProjection | null;
   messageCount?: number;
   lastActivity?: Timestamp | null;
   turnInProgress?: boolean;
@@ -42,7 +52,7 @@ export interface SessionRow {
 export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'thinkingLevel'>;
 export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'compacting'>;
 export type SessionTranscriptPatch = Pick<SessionFields,
-  'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'lastActivity' | 'isActive'>;
+  'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'cacheExpiry' | 'lastActivity' | 'isActive'>;
 export interface SessionList {
   active: SessionRow[];
   previous: SessionRow[];
@@ -88,12 +98,20 @@ const optionalString = (value: unknown) => typeof value === 'string' ? value : u
 const nullableString = (value: unknown) => value === null ? null : optionalString(value);
 const optionalNumber = (value: unknown) => finite(value) ? value : undefined;
 const optionalBoolean = (value: unknown) => typeof value === 'boolean' ? value : undefined;
+const optionalCacheExpiry = (value: unknown): CacheExpiryProjection | null | undefined => {
+  if (value === null) return null;
+  if (!record(value) || !finite(value.refreshedAt) || !finite(value.expiresAt) || !finite(value.retentionMs) ||
+      typeof value.retention !== 'string' || !['fixed', 'minimum', 'estimate'].includes(String(value.basis))) return undefined;
+  return { refreshedAt: value.refreshedAt, expiresAt: value.expiresAt, retentionMs: value.retentionMs,
+    retention: value.retention, basis: value.basis as CacheExpiryBasis };
+};
 const fieldDecoders: FieldDecoders = {
   name: nullableString, model: nullableString, thinkingLevel: nullableString,
   harnessId: optionalString, harnessLabel: optionalString, capabilities: decodeCapabilities,
   isActive: optionalBoolean, closeMode: optionalString, conflicted: optionalBoolean,
   liveInstanceCount: optionalNumber, contextPercent: optionalNumber, contextTokens: optionalNumber,
-  contextWindow: optionalNumber, messageCount: optionalNumber,
+  contextWindow: optionalNumber, cacheExpiry: optionalCacheExpiry,
+  messageCount: optionalNumber,
   lastActivity: value => value === null || typeof value === 'string' || finite(value) ? value : undefined,
   turnInProgress: optionalBoolean, compacting: optionalBoolean, cwd: nullableString,
   subagentLive: optionalBoolean, parentId: nullableString, parentSource: nullableString,
@@ -154,7 +172,7 @@ export function decodeSessionActivityPatch(value: unknown): SessionActivityPatch
   return decodePatch(value, ['turnInProgress', 'compacting']);
 }
 export function decodeSessionTranscriptPatch(value: unknown): SessionTranscriptPatch {
-  return decodePatch(value, ['name', 'model', 'cwd', 'messageCount', 'contextTokens', 'contextWindow', 'contextPercent', 'lastActivity', 'isActive']);
+  return decodePatch(value, ['name', 'model', 'cwd', 'messageCount', 'contextTokens', 'contextWindow', 'contextPercent', 'cacheExpiry', 'lastActivity', 'isActive']);
 }
 
 function validateSessionControls(value: unknown): asserts value is Record<string, unknown> & { id: string } {
