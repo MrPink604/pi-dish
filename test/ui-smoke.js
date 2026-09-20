@@ -1799,14 +1799,17 @@ let remoteHost = null;
             emit('turn_end', {});
             await desktop.waitForFunction(() => document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
             check(true, 'working badge resets after the turn');
-            // 8c. Compaction status: compaction_start/compaction_end drive the status
-            // line. The bridge reports tokensBefore only (post-compaction size is
-            // unknown until the next LLM response), and a failed manual compaction
-            // must not leave "Compacting..." stuck.
+            // 8c. Compaction status: compaction_start drives the working badge — the
+            // run chip carries turn/compaction state alone, so the status line stays
+            // free of working prose (only outcomes and errors speak). The bridge
+            // reports tokensBefore only (post-compaction size is unknown until the
+            // next LLM response), and a failed manual compaction must not leave the
+            // badge stuck.
             console.log('compaction status:');
             emit('compaction_start', { reason: 'manual' });
-            await desktop.waitForFunction(() => document.getElementById('status')?.textContent === 'Compacting context...', { timeout: 3000 });
-            check(true, 'compaction_start shows working status');
+            await desktop.waitForFunction(() => /^Compacting context…/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
+            check(true, 'compaction_start drives the working badge');
+            check(!(await desktop.evaluate(() => /Compacting context/.test(document.getElementById('status')?.textContent || ''))), 'working prose stays off the status line');
             emit('compaction_end', { reason: 'manual', errorMessage: 'model refused' });
             await desktop.waitForFunction(() => (document.getElementById('status')?.textContent || '').startsWith('Compaction failed: model refused'), { timeout: 3000 });
             check(true, 'failed compaction reports the error');

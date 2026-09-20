@@ -16973,8 +16973,6 @@ ${restored}`;
           sessionActivity.setTurn(false);
           options2.status("Queued \u2014 will send when compaction finishes", "working");
           delivery.render(delivery.queue);
-        } else {
-          options2.status("Waiting for response...", "working");
         }
       } catch (error) {
         if (disposed) return;
@@ -17127,8 +17125,6 @@ ${restored}`;
             if (!data.turnInProgress) options2.activity.endAbort(sessionKey(hostId, sessionId));
             options2.activity.setCompacting(!!data.compacting);
             options2.activity.setTurn(!!data.turnInProgress);
-            if (data.compacting) options2.status("Compacting context...", "working");
-            else if (data.turnInProgress) options2.status("Waiting for response...", "working");
             if (!data.turnInProgress) {
               options2.catchup(owner);
             }
@@ -17278,7 +17274,6 @@ ${restored}`;
           }
         });
         addOwnedListener("compaction_start", () => {
-          options2.status("Compacting context...", "working");
           options2.activity.setCompacting(true);
         });
         addOwnedListener("compaction_end", (e) => {

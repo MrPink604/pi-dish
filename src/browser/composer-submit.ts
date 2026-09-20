@@ -134,8 +134,6 @@ async function sendPrompt() {
       sessionActivity.setTurn(false);
       options.status('Queued — will send when compaction finishes', 'working');
       delivery.render(delivery.queue);
-    } else {
-      options.status('Waiting for response...', 'working');
     }
   } catch (error) {
     if (disposed) return; const e = { message: error instanceof Error ? error.message : String(error) };

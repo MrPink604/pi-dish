@@ -109,8 +109,6 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
         // turn-off path doesn't wipe status a live compaction still owns.
         options.activity.setCompacting(!!data.compacting);
         options.activity.setTurn(!!data.turnInProgress);
-        if (data.compacting) options.status('Compacting context...', 'working');
-        else if (data.turnInProgress) options.status('Waiting for response...', 'working');
         if (!data.turnInProgress) {
           // No turn running — incremental catch-up for any messages written
           // since our initial load (avoids full reload stall).
@@ -286,7 +284,6 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     });
 
     addOwnedListener('compaction_start', () => {
-      options.status('Compacting context...', 'working');
       options.activity.setCompacting(true);
     });
     addOwnedListener('compaction_end', (e) => {
