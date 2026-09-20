@@ -4531,6 +4531,9 @@ var PiDishBrowser = (() => {
     let renderEndpoint = null;
     let headerEvents = new AbortController();
     let indexingTimer;
+    let pollTimer;
+    let lastIndexing = false;
+    let loadInFlight = false;
     let lineage = EMPTY_LINEAGE;
     function sameEndpoint(host, endpoint) {
       const current = options2.endpoint(host);
@@ -4540,6 +4543,8 @@ var PiDishBrowser = (() => {
     function clearSessionRelations() {
       sessionRelationsSeq += 1;
       clearTimeout(indexingTimer);
+      clearInterval(pollTimer);
+      pollTimer = void 0;
       headerEvents.abort();
       renderOwner = null;
       renderEndpoint = null;
@@ -4580,6 +4585,15 @@ var PiDishBrowser = (() => {
       }, { signal: headerEvents.signal });
       el.appendChild(link);
     }
+    function startPoll(owner, endpoint) {
+      clearInterval(pollTimer);
+      pollTimer = setInterval(() => {
+        if (disposed || !owns(owner, endpoint) || loadInFlight) return;
+        if (options2.takeoverActive?.()) return;
+        if (!sessionState.currentSession?.isActive && !lastIndexing) return;
+        void loadSessionRelations(owner);
+      }, 4e3);
+    }
     async function loadSessionRelations(owner) {
       if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
       const resolved = options2.endpoint(owner.host);
@@ -4587,6 +4601,8 @@ var PiDishBrowser = (() => {
       const endpoint = Object.freeze({ ...resolved });
       const seq = ++sessionRelationsSeq;
       clearTimeout(indexingTimer);
+      loadInFlight = true;
+      startPoll(owner, endpoint);
       const current = () => seq === sessionRelationsSeq && owns(owner, endpoint);
       try {
         const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
@@ -4594,6 +4610,7 @@ var PiDishBrowser = (() => {
         if (!current()) return;
         if (!res.ok) throw new Error(record8(data) && text6(data.error) || `HTTP ${res.status}`);
         const indexing = record8(data) && data.indexing === true;
+        lastIndexing = indexing;
         lineage = decodeSessionLineage(data);
         renderRelationsLink(owner, endpoint);
         if (indexing) indexingTimer = setTimeout(() => {
@@ -4605,6 +4622,8 @@ var PiDishBrowser = (() => {
           renderRelationsLink(owner, endpoint);
           console.error("Failed to load session lineage:", error);
         }
+      } finally {
+        if (seq === sessionRelationsSeq) loadInFlight = false;
       }
     }
     async function openRelatedSession(id, owner, endpoint = owner ? options2.endpoint(owner.host) : null) {

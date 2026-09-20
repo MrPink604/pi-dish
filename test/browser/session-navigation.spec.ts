@@ -136,6 +136,30 @@ test('relation disposal retires the indexing repoll as well as rendered controls
   await expect(page.locator('#sessionRelations')).toBeHidden();
 });
 
+test.describe('live family chip', () => {
+  test.use({ liveSessions: true });
+
+  test('the header chip picks up spawned subagents without a reselect', async ({ page, fleet }) => {
+    let reads = 0;
+    await page.route('**/api/sessions/*/lineage', route => {
+      reads++;
+      return route.fulfill({ json: reads === 1
+        ? { session: { id: ROOT }, tree: null, members: 0 }
+        : lineagePayload('Spawned child') });
+    });
+    await fleet.select(fleet.self);
+    // The selection's own load reports no relatives yet: no chip to show.
+    await expect.poll(() => reads, { timeout: 5000 }).toBeGreaterThanOrEqual(1);
+    await expect(page.locator('#sessionRelations .session-relation-chip')).toHaveCount(0);
+    // Only the repoll can fetch again — the family grew while the session ran.
+    await expect.poll(async () => {
+      const chip = page.locator('#sessionRelations .session-relation-chip');
+      return await chip.count() ? await chip.first().textContent() : '';
+    }, { timeout: 10000 }).toContain('Subagents · 1');
+    expect(reads).toBeGreaterThanOrEqual(2);
+  });
+});
+
 for (const close of [false, true]) test(`a late same-session search cannot overwrite ${close ? 'a closed bar' : 'a newer query'}`, async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   let held: Route | null | undefined;

@@ -121,6 +121,28 @@ const lineagePayload = (childName = 'Related child') => ({
     (0, fixtures_js_1.expect)(reads).toBe(before);
     await (0, fixtures_js_1.expect)(page.locator('#sessionRelations')).toBeHidden();
 });
+fixtures_js_1.test.describe('live family chip', () => {
+    fixtures_js_1.test.use({ liveSessions: true });
+    (0, fixtures_js_1.test)('the header chip picks up spawned subagents without a reselect', async ({ page, fleet }) => {
+        let reads = 0;
+        await page.route('**/api/sessions/*/lineage', route => {
+            reads++;
+            return route.fulfill({ json: reads === 1
+                    ? { session: { id: fixtures_js_1.ROOT }, tree: null, members: 0 }
+                    : lineagePayload('Spawned child') });
+        });
+        await fleet.select(fleet.self);
+        // The selection's own load reports no relatives yet: no chip to show.
+        await fixtures_js_1.expect.poll(() => reads, { timeout: 5000 }).toBeGreaterThanOrEqual(1);
+        await (0, fixtures_js_1.expect)(page.locator('#sessionRelations .session-relation-chip')).toHaveCount(0);
+        // Only the repoll can fetch again — the family grew while the session ran.
+        await fixtures_js_1.expect.poll(async () => {
+            const chip = page.locator('#sessionRelations .session-relation-chip');
+            return await chip.count() ? await chip.first().textContent() : '';
+        }, { timeout: 10000 }).toContain('Subagents · 1');
+        (0, fixtures_js_1.expect)(reads).toBeGreaterThanOrEqual(2);
+    });
+});
 for (const close of [false, true])
     (0, fixtures_js_1.test)(`a late same-session search cannot overwrite ${close ? 'a closed bar' : 'a newer query'}`, async ({ page, fleet }) => {
         await fleet.select(fleet.self);

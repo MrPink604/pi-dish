@@ -79,6 +79,9 @@ export function createSessionRelations(options: {
   loadPrevious: () => Promise<unknown>; selectSession: (id: string, options: { host: string | null }) => Promise<unknown>;
   openView: (owner: SelectionOwner, endpoint: HostEndpoint, initial: SessionLineage) => void;
   status: (message: string, kind: 'error') => void;
+  // True while the subagents takeover owns the main pane. Its own poll covers
+  // the family there and the header chip is hidden, so this poll stands down.
+  takeoverActive?: () => boolean;
 }) {
   const { document, sessionState } = options;
   const element = (id: string) => document.getElementById(id);
@@ -88,6 +91,9 @@ export function createSessionRelations(options: {
   let renderEndpoint: HostEndpoint | null = null;
   let headerEvents = new AbortController();
   let indexingTimer: ReturnType<typeof setTimeout> | undefined;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+  let lastIndexing = false;
+  let loadInFlight = false;
   let lineage: SessionLineage = EMPTY_LINEAGE;
 
   function sameEndpoint(host: string | null, endpoint: HostEndpoint | null): boolean {
@@ -99,6 +105,7 @@ export function createSessionRelations(options: {
   function clearSessionRelations() {
     sessionRelationsSeq += 1;
     clearTimeout(indexingTimer);
+    clearInterval(pollTimer); pollTimer = undefined;
     headerEvents.abort();
     renderOwner = null; renderEndpoint = null;
     lineage = EMPTY_LINEAGE;
@@ -140,6 +147,21 @@ export function createSessionRelations(options: {
     el.appendChild(link);
   }
 
+  // The family keeps growing while the session runs, and the chip is the
+  // glanceable count: repoll on the takeover view's cadence so spawned
+  // subagents appear without a reselect or refresh. Stands down once the
+  // session can no longer gain relatives (ended, catalog indexed) and while
+  // the takeover polls for its own — hidden-header — copy.
+  function startPoll(owner: SelectionOwner, endpoint: HostEndpoint) {
+    clearInterval(pollTimer);
+    pollTimer = setInterval(() => {
+      if (disposed || !owns(owner, endpoint) || loadInFlight) return;
+      if (options.takeoverActive?.()) return;
+      if (!sessionState.currentSession?.isActive && !lastIndexing) return;
+      void loadSessionRelations(owner);
+    }, 4000);
+  }
+
   async function loadSessionRelations(owner: SelectionOwner | null): Promise<void> {
     if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
     const resolved = options.endpoint(owner.host);
@@ -147,6 +169,8 @@ export function createSessionRelations(options: {
     const endpoint = Object.freeze({ ...resolved });
     const seq = ++sessionRelationsSeq;
     clearTimeout(indexingTimer);
+    loadInFlight = true;
+    startPoll(owner, endpoint);
     const current = () => seq === sessionRelationsSeq && owns(owner, endpoint);
     try {
       const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
@@ -154,6 +178,7 @@ export function createSessionRelations(options: {
       if (!current()) return;
       if (!res.ok) throw new Error(record(data) && text(data.error) || `HTTP ${res.status}`);
       const indexing = record(data) && data.indexing === true;
+      lastIndexing = indexing;
       lineage = decodeSessionLineage(data);
       renderRelationsLink(owner, endpoint);
       if (indexing) indexingTimer = setTimeout(() => {
@@ -165,6 +190,8 @@ export function createSessionRelations(options: {
         renderRelationsLink(owner, endpoint);
         console.error('Failed to load session lineage:', error);
       }
+    } finally {
+      if (seq === sessionRelationsSeq) loadInFlight = false;
     }
   }
   async function openRelatedSession(id: string, owner: SelectionOwner | null, endpoint: HostEndpoint | null = owner ? options.endpoint(owner.host) : null): Promise<void> {

@@ -4775,6 +4775,9 @@
     let renderEndpoint = null;
     let headerEvents = new AbortController();
     let indexingTimer;
+    let pollTimer;
+    let lastIndexing = false;
+    let loadInFlight = false;
     let lineage = EMPTY_LINEAGE;
     function sameEndpoint(host, endpoint) {
       const current = options2.endpoint(host);
@@ -4784,6 +4787,8 @@
     function clearSessionRelations() {
       sessionRelationsSeq += 1;
       clearTimeout(indexingTimer);
+      clearInterval(pollTimer);
+      pollTimer = void 0;
       headerEvents.abort();
       renderOwner = null;
       renderEndpoint = null;
@@ -4824,6 +4829,15 @@
       }, { signal: headerEvents.signal });
       el.appendChild(link);
     }
+    function startPoll(owner, endpoint) {
+      clearInterval(pollTimer);
+      pollTimer = setInterval(() => {
+        if (disposed || !owns(owner, endpoint) || loadInFlight) return;
+        if (options2.takeoverActive?.()) return;
+        if (!sessionState2.currentSession?.isActive && !lastIndexing) return;
+        void loadSessionRelations(owner);
+      }, 4e3);
+    }
     async function loadSessionRelations(owner) {
       if (disposed || !owner || !sessionState2.ownsSelection(owner)) return;
       const resolved = options2.endpoint(owner.host);
@@ -4831,6 +4845,8 @@
       const endpoint = Object.freeze({ ...resolved });
       const seq = ++sessionRelationsSeq;
       clearTimeout(indexingTimer);
+      loadInFlight = true;
+      startPoll(owner, endpoint);
       const current = () => seq === sessionRelationsSeq && owns(owner, endpoint);
       try {
         const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
@@ -4838,6 +4854,7 @@
         if (!current()) return;
         if (!res.ok) throw new Error(record2(data) && text5(data.error) || `HTTP ${res.status}`);
         const indexing = record2(data) && data.indexing === true;
+        lastIndexing = indexing;
         lineage = decodeSessionLineage(data);
         renderRelationsLink(owner, endpoint);
         if (indexing) indexingTimer = setTimeout(() => {
@@ -4849,6 +4866,8 @@
           renderRelationsLink(owner, endpoint);
           console.error("Failed to load session lineage:", error);
         }
+      } finally {
+        if (seq === sessionRelationsSeq) loadInFlight = false;
       }
     }
     async function openRelatedSession(id, owner, endpoint = owner ? options2.endpoint(owner.host) : null) {
@@ -18336,6 +18355,9 @@ ${restored}`;
     endpoint: hostEntryFor,
     loadPrevious: () => sidebarLists.load(void 0, { withPrevious: true }),
     openView: (owner, endpoint, initial) => subagentsController.open(owner, endpoint, initial),
+    // The takeover's own lineage poll covers an open view (the header chip is
+    // hidden there); the header poll defers to it instead of doubling requests.
+    takeoverActive: () => subagentsController.isOpen(),
     selectSession: (id, options2) => sessionView.select(id, options2),
     status: setStatus
   });

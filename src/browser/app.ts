@@ -605,6 +605,9 @@ const sessionRelationsController: ReturnType<typeof createSessionRelations> = cr
   document, window, sessionState, request: (host, path, init) => apiTransport.request(host, path, init), endpoint: hostEntryFor,
   loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
   openView: (owner, endpoint, initial) => subagentsController.open(owner, endpoint, initial),
+  // The takeover's own lineage poll covers an open view (the header chip is
+  // hidden there); the header poll defers to it instead of doubling requests.
+  takeoverActive: () => subagentsController.isOpen(),
   selectSession: (id, options) => sessionView.select(id, options), status: setStatus,
 });
 
