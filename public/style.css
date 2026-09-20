@@ -921,6 +921,19 @@ body.sidebar-open {
   white-space: nowrap;
 }
 
+.session-item-cache {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+
+.session-item-cache + .session-item-context {
+  margin-left: 0;
+}
+
+.session-item-cache.warning { color: var(--warning); }
+.session-item-cache.critical { color: var(--error); }
+
 .session-item-context {
   font-family: var(--font-mono);
   flex-shrink: 0;
@@ -2485,22 +2498,24 @@ body.sidebar-open {
   color: var(--text);
 }
 
-/* Likely provider-cache lifetime. Width follows the short value ("cache ~4m")
-   and disappears when the provider does not expose enough cache telemetry. */
+/* Likely provider-cache lifetime. Width follows the short value ("~4m") and
+   disappears when the provider does not expose enough cache telemetry. Match
+   the context readout's type metrics so their visual baselines stay aligned. */
 .composer-tools .tool-cache {
   min-width: auto;
   padding: 0 4px;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1;
   color: var(--text-muted);
 }
 
-.composer-tools .tool-cache.cold {
-  opacity: .65;
-}
+.composer-tools .tool-cache.warning { color: var(--warning); }
+.composer-tools .tool-cache.critical { color: var(--error); }
 
 /* Context readout. Fixed slot, and quiet until the fill matters: the same
    muted weight as the glyphs, then warning past a third, error past two. */
 .composer-tools .tool-ctx {
+  line-height: 1;
   color: var(--text-muted);
 }
 

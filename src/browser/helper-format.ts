@@ -45,7 +45,7 @@ export function formatCacheStat(cacheRead?: number | null, cacheWrite?: number |
 export interface CacheExpiryPresentation {
   readonly compact: string;
   readonly detail: string;
-  readonly cold: boolean;
+  readonly severity: '' | 'warning' | 'critical';
 }
 
 /**
@@ -57,17 +57,18 @@ export function cacheExpiryPresentation(expiry?: CacheExpiryProjection | null, n
   if (!expiry) return null;
   const remaining = expiry.expiresAt - now;
   if (remaining <= 0) {
-    return { compact: 'cache cold', detail: `Likely cold · ${expiry.retention} retention`, cold: true };
+    return { compact: '<1m', detail: `Possibly expired · ${expiry.retention} retention`, severity: 'critical' };
   }
   const minutes = Math.ceil(remaining / 60_000);
   const duration = minutes < 60
     ? `${minutes}m`
     : minutes % 60 === 0 ? `${minutes / 60}h` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  const severity = remaining <= 60_000 ? 'critical' : remaining <= 5 * 60_000 ? 'warning' : '';
   if (expiry.basis === 'minimum') {
-    return { compact: `cache ≥${duration}`, detail: `At least ${duration} remaining · ${expiry.retention} minimum retention`, cold: false };
+    return { compact: `≥${duration}`, detail: `At least ${duration} remaining · ${expiry.retention} minimum retention`, severity };
   }
   const qualifier = expiry.basis === 'estimate' ? 'provider estimate' : 'retention';
-  return { compact: `cache ~${duration}`, detail: `About ${duration} remaining · ${expiry.retention} ${qualifier}`, cold: false };
+  return { compact: `~${duration}`, detail: `About ${duration} remaining · ${expiry.retention} ${qualifier}`, severity };
 }
 
 // One line for the stats modal's "Running in" row, from the server's runtime

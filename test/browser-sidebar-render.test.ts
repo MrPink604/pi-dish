@@ -25,6 +25,15 @@ test('sidebar presents decoded optional fields and retains explicit null family 
   assert.equal(Object.hasOwn(implicitChild, 'familyParentId'), false);
   assert.equal(separated.familyParentId, null);
 });
+test('sidebar places the warning cache countdown immediately before context', () => {
+  const cacheExpiry = { refreshedAt: Date.now(), expiresAt: Date.now() + 4 * 60_000,
+    retentionMs: 5 * 60_000, retention: '5m', basis: 'fixed', identity: '' };
+  const { html } = render({ previous: [{ id: 'cached', name: 'Cached', cwd: '/repo',
+    contextPercent: 42, cacheExpiry }] });
+  assert.match(html, /session-item-cache warning[^>]*>~4m<\/span>/);
+  assert.ok(html.indexOf('session-item-cache') < html.indexOf('session-item-context'),
+    'cache countdown precedes context utilization');
+});
 test('host-qualified workspace collapse and family status stay independent for identical ids and paths', () => {
   const hosts = ['self', 'peer'].map(hostId => ({ hostId, label: hostId, state: 'reachable', key: hostId, color: '#abc', dot: '', hasCache: true }));
   const active = ['self', 'peer'].flatMap(host => [{ id: 'parent', host, cwd: '/repo', name: host + ' parent', isActive: true },

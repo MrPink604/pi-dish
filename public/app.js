@@ -589,15 +589,16 @@
     if (!expiry) return null;
     const remaining = expiry.expiresAt - now;
     if (remaining <= 0) {
-      return { compact: "cache cold", detail: `Likely cold \xB7 ${expiry.retention} retention`, cold: true };
+      return { compact: "<1m", detail: `Possibly expired \xB7 ${expiry.retention} retention`, severity: "critical" };
     }
     const minutes = Math.ceil(remaining / 6e4);
     const duration = minutes < 60 ? `${minutes}m` : minutes % 60 === 0 ? `${minutes / 60}h` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+    const severity = remaining <= 6e4 ? "critical" : remaining <= 5 * 6e4 ? "warning" : "";
     if (expiry.basis === "minimum") {
-      return { compact: `cache \u2265${duration}`, detail: `At least ${duration} remaining \xB7 ${expiry.retention} minimum retention`, cold: false };
+      return { compact: `\u2265${duration}`, detail: `At least ${duration} remaining \xB7 ${expiry.retention} minimum retention`, severity };
     }
     const qualifier = expiry.basis === "estimate" ? "provider estimate" : "retention";
-    return { compact: `cache ~${duration}`, detail: `About ${duration} remaining \xB7 ${expiry.retention} ${qualifier}`, cold: false };
+    return { compact: `~${duration}`, detail: `About ${duration} remaining \xB7 ${expiry.retention} ${qualifier}`, severity };
   }
   function formatRuntime(r) {
     if (!r || !r.kind) return "\u2014";
@@ -4125,6 +4126,8 @@
       const displayName = session.name || "Unnamed";
       const ctxText = options2.contextMetric === "tokens" && session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : `${contextPercent}%`;
       const ctxTitle = session.contextTokens ? `${contextPercent}% of context \xB7 ${formatTokens(session.contextTokens)} tokens` : `${contextPercent}% of context`;
+      const cache = cacheExpiryPresentation(session.cacheExpiry);
+      const cacheHtml = cache ? `<span class="session-item-cache${cache.severity ? ` ${cache.severity}` : ""}" title="${escapeHtml(cache.detail)}">${escapeHtml(cache.compact)}</span>` : "";
       const timeAgo = formatRelativeTime(hasChildren ? familyNode.activity : session.lastActivity);
       const canonicalRootKey = canonical(opts.familyRootKey || sessionRefKey(session));
       const isPinned = opts.familyPinned ?? options2.pinned.some((pin) => canonical(pin) === canonicalRootKey);
@@ -4156,7 +4159,7 @@
       <div class="session-item-meta">
         <span class="session-item-model" title="${escapeHtml(session.model || "")}">${escapeHtml(shortModelName(session.model))}</span>
         ${thinkingChip}
-        <span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
+        ${cacheHtml}<span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
       </div>
       <div class="session-item-tags${hostChip ? " with-host" : ""}">
         ${hostChip}${harnessBadge}${routineChip}${cwdHint}
@@ -5809,7 +5812,7 @@
       cacheEl.style.display = presentation ? "" : "none";
       cacheEl.textContent = presentation?.compact || "";
       cacheEl.title = presentation ? `Session stats \u2014 ${presentation.detail}` : "Session stats";
-      cacheEl.className = "tool-btn tool-cache" + (presentation?.cold ? " cold" : "");
+      cacheEl.className = "tool-btn tool-cache" + (presentation?.severity ? ` ${presentation.severity}` : "");
     }
     function updateSessionHeader() {
       if (disposed || !sessionState2.currentSession) return;

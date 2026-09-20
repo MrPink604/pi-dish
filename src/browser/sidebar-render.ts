@@ -3,7 +3,7 @@ import type { HelperHost } from '../core/helper-types';
 import type { SessionFamily, WorkspaceNode } from './shared-helper-types';
 import type { PendingSessionSpawn } from './session-spawns';
 import { escapeHtml } from '../core/helper-format';
-import { contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
+import { cacheExpiryPresentation, contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
 import { shortModelName } from './helper-usage';
 import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDisplayLabel, sortHostSections, hostSectionKey } from './helper-identity';
 import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
@@ -76,6 +76,10 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const ctxTitle = session.contextTokens
     ? `${contextPercent}% of context · ${formatTokens(session.contextTokens)} tokens`
     : `${contextPercent}% of context`;
+  const cache = cacheExpiryPresentation(session.cacheExpiry);
+  const cacheHtml = cache
+    ? `<span class="session-item-cache${cache.severity ? ` ${cache.severity}` : ''}" title="${escapeHtml(cache.detail)}">${escapeHtml(cache.compact)}</span>`
+    : '';
   const timeAgo = formatRelativeTime(hasChildren ? familyNode!.activity : session.lastActivity);
   const canonicalRootKey = canonical(opts.familyRootKey || sessionRefKey(session));
   const isPinned = opts.familyPinned ?? options.pinned.some(pin =>
@@ -135,7 +139,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
       <div class="session-item-meta">
         <span class="session-item-model" title="${escapeHtml(session.model || '')}">${escapeHtml(shortModelName(session.model))}</span>
         ${thinkingChip}
-        <span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
+        ${cacheHtml}<span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
       </div>
       <div class="session-item-tags${hostChip ? ' with-host' : ''}">
         ${hostChip}${harnessBadge}${routineChip}${cwdHint}
