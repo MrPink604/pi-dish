@@ -59,12 +59,15 @@ async function startHost(mode: string) {
 
   try {
     const registryDir = path.join(home, '.pi', 'dish', 'sessions');
-    const registryPath = await waitForValue(() => {
+    const registered = await waitForValue(() => {
       if (child.exitCode !== null) throw new Error(`fake host exited ${child.exitCode}: ${stderr}`);
       const name = fs.readdirSync(registryDir).find((file) => file.endsWith('.json'));
-      return name && path.join(registryDir, name);
-    }, 'fake OMP registry entry');
-    const entry = bridgeEntry(record(JSON.parse(fs.readFileSync(registryPath, 'utf8'))));
+      if (!name) return null;
+      const registryPath = path.join(registryDir, name);
+      const entry = bridgeEntry(record(JSON.parse(fs.readFileSync(registryPath, 'utf8'))));
+      return { registryPath, entry };
+    }, 'complete fake OMP registry entry');
+    const { registryPath, entry } = registered;
     const session = new BridgeSession(entry);
     await session.connect();
     return {
