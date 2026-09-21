@@ -28,6 +28,7 @@ function updateCacheExpiry() {
   cacheEl.style.display = presentation ? '' : 'none';
   cacheEl.textContent = presentation?.compact || '';
   cacheEl.title = presentation ? `Session stats — ${presentation.detail}` : 'Session stats';
+  cacheEl.setAttribute('aria-label', presentation ? `Session stats — ${presentation.detail}` : 'Session stats');
   cacheEl.className = 'tool-btn tool-cache' + (presentation?.severity ? ` ${presentation.severity}` : '');
 }
 

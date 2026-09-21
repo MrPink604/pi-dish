@@ -78,7 +78,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
     : `${contextPercent}% of context`;
   const cache = cacheExpiryPresentation(session.cacheExpiry);
   const cacheHtml = cache
-    ? `<span class="session-item-cache${cache.severity ? ` ${cache.severity}` : ''}" title="${escapeHtml(cache.detail)}">${escapeHtml(cache.compact)}</span>`
+    ? `<span class="session-item-cache${cache.severity ? ` ${cache.severity}` : ''}" title="${escapeHtml(cache.detail)}" aria-label="${escapeHtml(cache.detail)}">${escapeHtml(cache.compact)}</span>`
     : '';
   const timeAgo = formatRelativeTime(hasChildren ? familyNode!.activity : session.lastActivity);
   const canonicalRootKey = canonical(opts.familyRootKey || sessionRefKey(session));

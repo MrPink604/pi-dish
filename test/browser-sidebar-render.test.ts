@@ -34,6 +34,15 @@ test('sidebar places the warning cache countdown immediately before context', ()
   assert.ok(html.indexOf('session-item-cache') < html.indexOf('session-item-context'),
     'cache countdown precedes context utilization');
 });
+
+test('sidebar replaces an expired countdown with the cold-cache glyph', () => {
+  const cacheExpiry = { refreshedAt: Date.now() - 6 * 60_000, expiresAt: Date.now() - 60_000,
+    retentionMs: 5 * 60_000, retention: '5m', basis: 'fixed', identity: '' };
+  const { html } = render({ previous: [{ id: 'cold', name: 'Cold', cwd: '/repo',
+    contextPercent: 42, cacheExpiry }] });
+  assert.match(html, /session-item-cache cold[^>]*title="Cache likely cold · 5m retention"[^>]*aria-label="Cache likely cold · 5m retention"[^>]*>❄<\/span>/);
+  assert.doesNotMatch(html, /&lt;1m/);
+});
 test('host-qualified workspace collapse and family status stay independent for identical ids and paths', () => {
   const hosts = ['self', 'peer'].map(hostId => ({ hostId, label: hostId, state: 'reachable', key: hostId, color: '#abc', dot: '', hasCache: true }));
   const active = ['self', 'peer'].flatMap(host => [{ id: 'parent', host, cwd: '/repo', name: host + ' parent', isActive: true },

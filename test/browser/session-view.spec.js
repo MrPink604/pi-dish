@@ -73,7 +73,7 @@ const fixtures_js_1 = require("./fixtures.js");
     await (0, fixtures_js_1.expect)(page.locator('#sessionName img')).toHaveCount(0);
     await (0, fixtures_js_1.expect)(page.locator('#sessionContext')).toHaveText('0%');
 });
-(0, fixtures_js_1.test)('composer cache countdown aligns with context and escalates near expiry', async ({ page, fleet }) => {
+(0, fixtures_js_1.test)('composer cache countdown aligns with context and becomes a cold-cache glyph after expiry', async ({ page, fleet }) => {
     await page.evaluate(({ id, host }) => window.fixtureSessionListPatch(id, { isActive: true }, host), { id: fixtures_js_1.ROOT, host: fleet.self.hostId });
     await fleet.select(fleet.self);
     await page.evaluate(() => window.fixtureSessionListPatch(fixtureCurrentSession().id, { cacheExpiry: {
@@ -89,8 +89,9 @@ const fixtures_js_1 = require("./fixtures.js");
             refreshedAt: Date.now() - 6 * 60_000, expiresAt: Date.now() - 60_000, retentionMs: 5 * 60_000,
             retention: '5m', basis: 'fixed', identity: 'fixture',
         } }));
-    await (0, fixtures_js_1.expect)(page.locator('#sessionCache')).toHaveText('<1m');
-    await (0, fixtures_js_1.expect)(page.locator('#sessionCache')).toHaveClass(/\bcritical\b/);
+    await (0, fixtures_js_1.expect)(page.locator('#sessionCache')).toHaveText('❄');
+    await (0, fixtures_js_1.expect)(page.locator('#sessionCache')).toHaveClass(/\bcold\b/);
+    await (0, fixtures_js_1.expect)(page.locator('#sessionCache')).toHaveAttribute('aria-label', /Cache likely cold/);
 });
 (0, fixtures_js_1.test)('restored same-host tool panels retain their node and duration after a new selection generation', async ({ page, fleet }) => {
     await fleet.select(fleet.self);

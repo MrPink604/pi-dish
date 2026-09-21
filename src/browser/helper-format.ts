@@ -45,7 +45,7 @@ export function formatCacheStat(cacheRead?: number | null, cacheWrite?: number |
 export interface CacheExpiryPresentation {
   readonly compact: string;
   readonly detail: string;
-  readonly severity: '' | 'warning' | 'critical';
+  readonly severity: '' | 'warning' | 'cold';
 }
 
 /**
@@ -57,13 +57,13 @@ export function cacheExpiryPresentation(expiry?: CacheExpiryProjection | null, n
   if (!expiry) return null;
   const remaining = expiry.expiresAt - now;
   if (remaining <= 0) {
-    return { compact: '<1m', detail: `Possibly expired · ${expiry.retention} retention`, severity: 'critical' };
+    return { compact: '❄', detail: `Cache likely cold · ${expiry.retention} retention`, severity: 'cold' };
   }
   const minutes = Math.ceil(remaining / 60_000);
   const duration = minutes < 60
     ? `${minutes}m`
     : minutes % 60 === 0 ? `${minutes / 60}h` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-  const severity = remaining <= 60_000 ? 'critical' : remaining <= 5 * 60_000 ? 'warning' : '';
+  const severity = remaining <= 5 * 60_000 ? 'warning' : '';
   if (expiry.basis === 'minimum') {
     return { compact: `≥${duration}`, detail: `At least ${duration} remaining · ${expiry.retention} minimum retention`, severity };
   }

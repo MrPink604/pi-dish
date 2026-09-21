@@ -932,7 +932,7 @@ body.sidebar-open {
 }
 
 .session-item-cache.warning { color: var(--warning); }
-.session-item-cache.critical { color: var(--error); }
+.session-item-cache.cold { color: color-mix(in srgb, var(--cyan) 60%, var(--text-muted)); }
 
 .session-item-context {
   font-family: var(--font-mono);
@@ -2498,9 +2498,10 @@ body.sidebar-open {
   color: var(--text);
 }
 
-/* Likely provider-cache lifetime. Width follows the short value ("~4m") and
-   disappears when the provider does not expose enough cache telemetry. Match
-   the context readout's type metrics so their visual baselines stay aligned. */
+/* Likely provider-cache lifetime. Width follows the short countdown or cold
+   snowflake and disappears when the provider does not expose enough cache
+   telemetry. Match the context readout's type metrics so their visual
+   baselines stay aligned. */
 .composer-tools .tool-cache {
   min-width: auto;
   padding: 0 4px;
@@ -2510,7 +2511,7 @@ body.sidebar-open {
 }
 
 .composer-tools .tool-cache.warning { color: var(--warning); }
-.composer-tools .tool-cache.critical { color: var(--error); }
+.composer-tools .tool-cache.cold { color: color-mix(in srgb, var(--cyan) 60%, var(--text-muted)); }
 
 /* Context readout. Fixed slot, and quiet until the fill matters: the same
    muted weight as the glyphs, then warning past a third, error past two. */

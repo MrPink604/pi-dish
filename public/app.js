@@ -589,11 +589,11 @@
     if (!expiry) return null;
     const remaining = expiry.expiresAt - now;
     if (remaining <= 0) {
-      return { compact: "<1m", detail: `Possibly expired \xB7 ${expiry.retention} retention`, severity: "critical" };
+      return { compact: "\u2744", detail: `Cache likely cold \xB7 ${expiry.retention} retention`, severity: "cold" };
     }
     const minutes = Math.ceil(remaining / 6e4);
     const duration = minutes < 60 ? `${minutes}m` : minutes % 60 === 0 ? `${minutes / 60}h` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-    const severity = remaining <= 6e4 ? "critical" : remaining <= 5 * 6e4 ? "warning" : "";
+    const severity = remaining <= 5 * 6e4 ? "warning" : "";
     if (expiry.basis === "minimum") {
       return { compact: `\u2265${duration}`, detail: `At least ${duration} remaining \xB7 ${expiry.retention} minimum retention`, severity };
     }
@@ -4127,7 +4127,7 @@
       const ctxText = options2.contextMetric === "tokens" && session.contextTokens ? `${formatTokens(session.contextTokens)} tok` : `${contextPercent}%`;
       const ctxTitle = session.contextTokens ? `${contextPercent}% of context \xB7 ${formatTokens(session.contextTokens)} tokens` : `${contextPercent}% of context`;
       const cache = cacheExpiryPresentation(session.cacheExpiry);
-      const cacheHtml = cache ? `<span class="session-item-cache${cache.severity ? ` ${cache.severity}` : ""}" title="${escapeHtml(cache.detail)}">${escapeHtml(cache.compact)}</span>` : "";
+      const cacheHtml = cache ? `<span class="session-item-cache${cache.severity ? ` ${cache.severity}` : ""}" title="${escapeHtml(cache.detail)}" aria-label="${escapeHtml(cache.detail)}">${escapeHtml(cache.compact)}</span>` : "";
       const timeAgo = formatRelativeTime(hasChildren ? familyNode.activity : session.lastActivity);
       const canonicalRootKey = canonical(opts.familyRootKey || sessionRefKey(session));
       const isPinned = opts.familyPinned ?? options2.pinned.some((pin) => canonical(pin) === canonicalRootKey);
@@ -5812,6 +5812,7 @@
       cacheEl.style.display = presentation ? "" : "none";
       cacheEl.textContent = presentation?.compact || "";
       cacheEl.title = presentation ? `Session stats \u2014 ${presentation.detail}` : "Session stats";
+      cacheEl.setAttribute("aria-label", presentation ? `Session stats \u2014 ${presentation.detail}` : "Session stats");
       cacheEl.className = "tool-btn tool-cache" + (presentation?.severity ? ` ${presentation.severity}` : "");
     }
     function updateSessionHeader() {

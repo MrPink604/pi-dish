@@ -62,7 +62,7 @@ test('list ingress omits malformed presentation fields before header rendering a
   await expect(page.locator('#sessionName img')).toHaveCount(0);
   await expect(page.locator('#sessionContext')).toHaveText('0%');
 });
-test('composer cache countdown aligns with context and escalates near expiry', async ({ page, fleet }) => {
+test('composer cache countdown aligns with context and becomes a cold-cache glyph after expiry', async ({ page, fleet }) => {
   await page.evaluate(({ id, host }) => window.fixtureSessionListPatch(id, { isActive: true }, host),
     { id: ROOT, host: fleet.self.hostId });
   await fleet.select(fleet.self);
@@ -80,8 +80,9 @@ test('composer cache countdown aligns with context and escalates near expiry', a
     refreshedAt: Date.now() - 6 * 60_000, expiresAt: Date.now() - 60_000, retentionMs: 5 * 60_000,
     retention: '5m', basis: 'fixed', identity: 'fixture',
   } }));
-  await expect(page.locator('#sessionCache')).toHaveText('<1m');
-  await expect(page.locator('#sessionCache')).toHaveClass(/\bcritical\b/);
+  await expect(page.locator('#sessionCache')).toHaveText('❄');
+  await expect(page.locator('#sessionCache')).toHaveClass(/\bcold\b/);
+  await expect(page.locator('#sessionCache')).toHaveAttribute('aria-label', /Cache likely cold/);
 });
 test('restored same-host tool panels retain their node and duration after a new selection generation', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
