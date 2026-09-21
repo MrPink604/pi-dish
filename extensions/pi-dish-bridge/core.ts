@@ -1258,11 +1258,24 @@ export function createBridge(descriptor: BridgeDescriptor) {
       return ret;
     });
 
+    // Every OMP dialog renderer (#R) wires options.signal to a teardown that
+    // disposes the TUI component, restores the editor and resolves the dialog
+    // promise with undefined. Injecting a per-dialog controller and aborting
+    // it when the remote answer wins therefore dismisses the tmux-side dialog
+    // instead of leaving it over the composer. Hosts that ignore signal keep
+    // the old behavior: the late local result is simply discarded.
+    const withDismissSignal = (options: unknown, dismiss: AbortController): Record<string, unknown> => {
+      const caller = field(options, "signal");
+      const signal = caller instanceof AbortSignal ? AbortSignal.any([caller, dismiss.signal]) : dismiss.signal;
+      return { ...(isObject(options) ? options : {}), signal };
+    };
+
     // OMP's native ask tool uses the same shared UI context as extensions but
     // prefers the richer askDialog primitive. Intercept it directly so the web
     // can answer the native tool without reducing multi-question forms to a
     // sequence of lossy select dialogs.
     installUIWrapper(ui, "askDialog", originalAskDialog => function (this: unknown, questions: unknown, options?: unknown) {
+      const dismiss = new AbortController();
       const req = {
         method: "ask",
         id: crypto.randomUUID(),
@@ -1273,6 +1286,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       const settle = (source: string) => {
         if (settled) return;
         settled = true;
+        dismiss.abort();
         pendingDialogs.delete(req.id);
         dialogRequests.delete(req.id);
         broadcast({ type: "event", event: "extension_ui_resolved", data: { id: req.id, source } });
@@ -1287,7 +1301,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       try { emitExtensionUIRequest(req); } catch {}
       let local: unknown;
       try {
-        local = Reflect.apply(originalAskDialog, this, [questions, options]);
+        local = Reflect.apply(originalAskDialog, this, [questions, withDismissSignal(options, dismiss)]);
       } catch (error) {
         settle("tui-error");
         throw error;
@@ -1303,9 +1317,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
     // Dialogs: broadcast the request and race the local TUI dialog against a
     // remote answer from a connected pi-dish client. Whichever side answers
-    // first wins; the loser's UI is dismissed/ignored. The TUI dialog cannot
-    // be programmatically closed, so after a remote answer it stays visible
-    // until dismissed, but its (late) result is discarded.
+    // first wins; the loser's result is discarded, and aborting the injected
+    // signal tears down a still-visible local dialog after a remote answer.
+    // select/confirm/input/editor all take their options object at args[2].
     const wrapDialog = (
       name: string,
       makeReq: (...args: unknown[]) => UIRequest,
@@ -1315,10 +1329,12 @@ export function createBridge(descriptor: BridgeDescriptor) {
         const req = makeReq(...args);
         const id = crypto.randomUUID();
         req.id = id;
+        const dismiss = new AbortController();
         let settled = false;
         const settle = (source: string) => {
           if (settled) return;
           settled = true;
+          dismiss.abort();
           pendingDialogs.delete(id);
           dialogRequests.delete(id);
           broadcast({ type: "event", event: "extension_ui_resolved", data: { id, source } });
@@ -1330,6 +1346,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         try { emitExtensionUIRequest(req); } catch {}
         let local: unknown;
         try {
+          args[2] = withDismissSignal(args[2], dismiss);
           local = original.apply(this, args);
         } catch (error) {
           settle("tui-error");

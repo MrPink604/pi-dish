@@ -5,9 +5,11 @@
 // PI_DISH_REAL_OMP_BIN=/absolute/omp PI_DISH_REAL_BUN_BIN_DIR=/absolute/bin \
 //   node test/native-extensions.smoke.js share
 // Run share only after the owner has emitted extensions/pi-dish-share-omp.mjs.
+// PI_DISH_REAL_OMP_BIN=/absolute/omp node test/native-extensions.smoke.js dialogs
 import assert = require('node:assert/strict');
 import fs = require('node:fs');
 import http = require('node:http');
+import net = require('node:net');
 import os = require('node:os');
 import path = require('node:path');
 import { pathToFileURL } from 'node:url';
@@ -31,8 +33,8 @@ function array(value: unknown): unknown[] {
 }
 
 const selection = process.argv[2];
-if (process.argv.length !== 3 || !['mood', 'share'].includes(selection!)) {
-  throw new Error('Usage: node test/native-extensions.smoke.js mood|share');
+if (process.argv.length !== 3 || !['mood', 'share', 'dialogs'].includes(selection!)) {
+  throw new Error('Usage: node test/native-extensions.smoke.js mood|share|dialogs');
 }
 const repo = path.resolve(__dirname, '..');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-native-'));
@@ -255,6 +257,118 @@ async function shareSmoke(base: string) {
   console.log('PASS share: real OMP /share, installed ESM hook, native snapshot, byte preservation, URL fallback and HTTP errors');
 }
 
+// Regression for the bridged-dialog dismissal defect: answering an OMP
+// ask/select through the pi-dish bridge used to leave the TUI dialog on
+// screen, blocking the composer for anyone attached to the terminal. The
+// bridge now injects an AbortSignal into the local dialog call and aborts it
+// when the remote answer wins, so OMP tears the component down itself.
+async function dialogsSmoke() {
+  const omp = process.env.PI_DISH_REAL_OMP_BIN;
+  if (!omp || !path.isAbsolute(omp)) throw new Error('PI_DISH_REAL_OMP_BIN must name an absolute real OMP executable');
+  fs.accessSync(omp, fs.constants.X_OK);
+  const agent = path.join(home, '.omp', 'agent');
+  fs.mkdirSync(agent, { recursive: true });
+  execFileSync(omp, ['config', 'set', 'startup.setupWizard', 'false'], { env, cwd: work, stdio: 'pipe' });
+  execFileSync(omp, ['config', 'set', 'startup.checkUpdate', 'false'], { env, cwd: work, stdio: 'pipe' });
+  fs.writeFileSync(path.join(agent, 'models.yml'), [
+    'providers:', '  openai:', '    apiKey: local-smoke-key', '',
+  ].join('\n'));
+  const socks = path.join(root, 'socks');
+  fs.mkdirSync(socks, { recursive: true, mode: 0o700 });
+  env.PI_DISH_SOCKET_DIR = socks;
+  const trigger = path.join(root, 'dialog-trigger.ts');
+  fs.writeFileSync(trigger, `export default function (pi) {
+  pi.registerCommand("asktest", {
+    description: "trigger the native ask dialog",
+    handler: async (_args, ctx) => {
+      const res = await ctx.ui.askDialog([
+        { id: "q1", question: "NATIVE_ASK_DISMISS pick one", options: [{ label: "Alpha" }, { label: "Beta" }] },
+      ]);
+      ctx.ui.notify("NATIVE_ASK_RESOLVED " + JSON.stringify(res), "info");
+    },
+  });
+  pi.registerCommand("selecttest", {
+    description: "trigger a select dialog",
+    handler: async (_args, ctx) => {
+      const res = await ctx.ui.select("NATIVE_SELECT_DISMISS pick one", ["Gamma", "Delta"]);
+      ctx.ui.notify("NATIVE_SELECT_RESOLVED " + JSON.stringify(res), "info");
+    },
+  });
+}
+`);
+  start(omp, ['--no-extensions', '--no-skills', '--no-rules', '--model', 'openai/gpt-4o-mini',
+    '--extension', path.join(repo, 'extensions', 'pi-dish-bridge-omp', 'index.ts'),
+    '--extension', trigger]);
+  await waitFor(() => /gpt.?4o.?mini/i.test(output), 'OMP native TUI startup');
+  let registryFile: string | undefined;
+  await waitFor(() => {
+    const dir = path.join(home, '.pi', 'dish', 'sessions');
+    if (!fs.existsSync(dir)) return false;
+    const entry = fs.readdirSync(dir).find(name => name.startsWith('omp-') && name.endsWith('.json'));
+    registryFile = entry ? path.join(dir, entry) : undefined;
+    return !!registryFile;
+  }, 'bridge registry entry');
+  const socketPath = String(record(JSON.parse(fs.readFileSync(registryFile!, 'utf8')) as unknown).socketPath);
+  const sock = net.connect(socketPath);
+  await new Promise<void>(resolve => sock.once('connect', resolve));
+  let buffer = '';
+  const messages: unknown[] = [];
+  sock.on('data', (chunk: Buffer) => {
+    buffer += chunk.toString('utf8');
+    let end;
+    while ((end = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, end);
+      buffer = buffer.slice(end + 1);
+      if (line.trim()) messages.push(JSON.parse(line));
+    }
+  });
+  const waitMessage = async (predicate: (message: Record<string, unknown>) => unknown, label: string) => {
+    let found: unknown;
+    await waitFor(() => {
+      found = messages.find(candidate => predicate(record(candidate)));
+      return !!found;
+    }, label);
+    return record(found);
+  };
+  const isDialogRequest = (message: Record<string, unknown>, method: string) =>
+    message.type === 'event' && message.event === 'extension_ui_request' && record(message.data).method === method;
+  await waitMessage(message => message.type === 'hello', 'bridge hello');
+
+  // A remote answer to the native ask dialog dismisses the TUI component.
+  submit('/asktest');
+  const askRequest = await waitMessage(message => isDialogRequest(message, 'ask'), 'bridged ask request');
+  const askId = String(record(askRequest.data).id);
+  await waitFor(() => output.includes('NATIVE_ASK_DISMISS'), 'ask dialog rendered by the TUI');
+  output = '';
+  sock.write(JSON.stringify({ id: 1, command: 'extension_ui_response', requestId: askId,
+    value: { kind: 'submit', results: [{ id: 'q1', selectedOptions: ['Alpha'] }] } }) + '\n');
+  await waitFor(() => output.includes('NATIVE_ASK_RESOLVED'), 'remote ask answer delivered');
+  assert.ok(!output.includes('NATIVE_ASK_DISMISS'), 'remote ask answer dismisses the TUI dialog');
+
+  // Same for an extension select dialog.
+  submit('/selecttest');
+  const selectRequest = await waitMessage(message => isDialogRequest(message, 'select'), 'bridged select request');
+  const selectId = String(record(selectRequest.data).id);
+  await waitFor(() => output.includes('NATIVE_SELECT_DISMISS'), 'select dialog rendered by the TUI');
+  output = '';
+  sock.write(JSON.stringify({ id: 2, command: 'extension_ui_response', requestId: selectId, value: 'Gamma' }) + '\n');
+  await waitFor(() => output.includes('NATIVE_SELECT_RESOLVED'), 'remote select answer delivered');
+  assert.ok(!output.includes('NATIVE_SELECT_DISMISS'), 'remote select answer dismisses the TUI dialog');
+
+  // The local TUI still wins the race when the terminal user answers first.
+  submit('/selecttest');
+  const localRequest = await waitMessage(message =>
+    isDialogRequest(message, 'select') && record(message.data).id !== selectId, 'second bridged select request');
+  const localId = String(record(localRequest.data).id);
+  await waitFor(() => output.includes('NATIVE_SELECT_DISMISS'), 'second select dialog rendered by the TUI');
+  terminal!.write('\r');
+  await waitMessage(message => message.type === 'event' && message.event === 'extension_ui_resolved'
+    && record(message.data).id === localId && record(message.data).source === 'tui', 'local answer wins the race');
+  await waitFor(() => output.includes('NATIVE_SELECT_RESOLVED'), 'local select answer delivered');
+  sock.end();
+  console.log('PASS dialogs: remote bridge answers dismiss the OMP TUI ask/select dialog; local TUI answers still win');
+}
+
 (async () => {
   try {
     await new Promise<void>((resolve, reject) => {
@@ -263,7 +377,7 @@ async function shareSmoke(base: string) {
     });
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     if (selection === 'mood') await moodSmoke(base);
-    else await shareSmoke(base);
+    else if (selection === 'dialogs') await dialogsSmoke();
   } finally {
     if (terminal && !exited) {
       terminal.kill('SIGTERM');
