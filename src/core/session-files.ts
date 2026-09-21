@@ -11,6 +11,7 @@
  * treat it as immutable.
  */
 import fs from 'node:fs';
+import { cacheRetentionRevision, loadCacheRetentionConfig } from './cache-retention.js';
 import { cacheExpiryForMessage, hasCacheActivity, isHardCacheMiss, sessionInfoFromEntries, isRecord } from './session-metadata.js';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata-contracts.js';
 import type { IndexedUsage, UsageBucket, UsageCosts, UsageTokens } from './session-index-data.js';
@@ -154,7 +155,8 @@ export function parseSessionContent(content: string, mtime?: Date, candidate: Se
 const infoCache = new Map<string, Cached<SessionInfo>>(); // filePath -> { mtimeMs, size, value }
 
 export function getSessionInfo(filePath: string | SessionFileSource): SessionInfo {
-  return { ...statCached(infoCache, filePath, 1000, (fp, stats, candidate) => parseSessionFile(fp, stats.mtime, candidate)) };
+  return { ...statCached(infoCache, filePath, 1000,
+    (fp, stats, candidate) => parseSessionFile(fp, stats.mtime, candidate), `cache:${cacheRetentionRevision()}`) };
 }
 
 /**
@@ -367,6 +369,7 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
  * history (the tree modal is where they remain reachable).
  */
 function parseMessageData(content: string, candidate?: SessionFileProfile, leafOverride?: unknown): MessageData {
+  const cacheConfig = loadCacheRetentionConfig();
   const entries = parseSessionEntries(content);
   const active = leafOverride === undefined
     ? activeEntryIds(entries)
@@ -391,7 +394,7 @@ function parseMessageData(content: string, candidate?: SessionFileProfile, leafO
           provider: rawMessage.provider ?? model.provider,
           model: rawMessage.model ?? model.model,
         };
-        responseCacheExpiry = cacheExpiryForMessage(cacheMessage, cacheExpiry, entry.timestamp);
+        responseCacheExpiry = cacheExpiryForMessage(cacheMessage, cacheExpiry, entry.timestamp, cacheConfig);
         cacheExpiry = responseCacheExpiry;
       }
       const message = messageFromEntry(entry, candidate, model, responseCacheExpiry);
@@ -454,7 +457,8 @@ export function readSessionMessages(filePath: string | SessionFileSource): reado
   // cache, and a smaller LRU turns each off-screen image fetch into a full
   // JSONL re-parse.
   return statCached(messagesCache, filePath, 8,
-    (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate)).messages;
+    (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate),
+    `cache:${cacheRetentionRevision()}`).messages;
 }
 
 // OMP can move its in-memory leaf without appending a JSONL anchor. For a
@@ -466,12 +470,13 @@ export function readSessionMessages(filePath: string | SessionFileSource): reado
 export function readSessionMessagesAtLeaf(filePath: string | SessionFileSource, leafId: unknown): readonly SessionMessage[] {
   return statCached(messagesCache, filePath, 8,
     (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate, leafId),
-    `leaf:${leafId ?? ''}`).messages;
+    `leaf:${leafId ?? ''}\0cache:${cacheRetentionRevision()}`).messages;
 }
 
 export function readSessionMessageById(filePath: string | SessionFileSource, entryId: unknown): SessionMessage | null {
   return statCached(messagesCache, filePath, 8,
-    (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate)).byId.get(entryId) || null;
+    (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate),
+    `cache:${cacheRetentionRevision()}`).byId.get(entryId) || null;
 }
 
 /**

@@ -325,6 +325,36 @@ To open it from your phone at `http://<your-machine>:3333` you need one of
 the `HOST` overrides above, or a reverse proxy in front of the localhost
 bind (see the security section; you did read the security section?).
 
+### Cache TTL overrides
+
+pi-dish infers provider prompt-cache expiry from session telemetry. If your
+gateway or provider account uses a different cache header, describe that policy
+in the private host config at `~/.pi/dish/settings.json`:
+
+```json
+{
+  "cacheTtlOverrides": [
+    { "model": "opencode-go/deepseek-*", "ttl": "24h", "basis": "minimum" },
+    { "provider": "openai", "ttl": "1h" },
+    { "provider": "openai-codex", "ttl": "1h" },
+    { "provider": "anthropic", "ttl": "1h" }
+  ]
+}
+```
+
+Rules are checked in order; the first match wins. Each rule may constrain a
+`provider`, a `model`, or both. Model selectors accept full `provider/model`
+slugs, bare model IDs and `*`/`?` globs (`*` does not cross `/`). `ttl` accepts
+whole minutes, hours or days from `1m` through `365d`. `basis` is optional:
+`fixed` is the default, while `minimum` renders the countdown as “at least” and
+`estimate` marks it as approximate. Invalid rules are ignored.
+
+`opencode-go/deepseek-*` already has a built-in 24-hour minimum, so its example
+rule is only needed to replace that default. User rules win over built-in
+provider inference, apply without restarting pi-dish, and invalidate cached
+session projections. They only teach pi-dish the policy you configured; they do
+not send cache headers or change a provider's retention.
+
 ### Speech to text (bring your own endpoint)
 
 Dictation into the composer, off by default. pi-dish runs no model of its

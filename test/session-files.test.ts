@@ -28,6 +28,7 @@ fs.writeFileSync(path.join(tmpDir, '.pi', 'dish', 'pricing', 'pi.json'), JSON.st
     provider: 'zai', id, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   })),
 }) + '\n');
+const dishSettingsFile = path.join(tmpDir, '.pi', 'dish', 'settings.json');
 
 const SF: typeof import('../lib/session-files.js') = require('../lib/session-files.js')
 
@@ -231,6 +232,42 @@ test('cache telemetry preserves retention, refreshes expiry, and counts hard mis
   assert.equal(SF.getSessionStats(file).hardCacheMisses, 1,
     'only a write with no cache reads is a provider-confirmed hard miss');
   assert.equal(present(SF.getSessionInfo(file).cacheExpiry).expiresAt, secondStart + 60 * 60_000);
+});
+
+test('cache TTL policy supports built-in model slugs and live provider overrides', () => {
+  const startedAt = Date.parse('2026-07-01T10:00:00.000Z');
+  const deepseek = writeSession([
+    { type: 'session', cwd: '/cache' },
+    { type: 'message', message: {
+      role: 'assistant', provider: 'opencode-go', model: 'deepseek-r1', timestamp: startedAt,
+      content: [], usage: { input: 20, cacheWrite: 100 },
+    } },
+  ]);
+  const builtIn = present(SF.readSessionMessages(deepseek)[0].cacheExpiry);
+  assert.equal(builtIn.retention, '24h');
+  assert.equal(builtIn.basis, 'minimum');
+
+  const anthropic = writeSession([
+    { type: 'session', cwd: '/cache' },
+    { type: 'message', message: {
+      role: 'assistant', provider: 'anthropic', model: 'claude-sonnet-4-5', timestamp: startedAt,
+      content: [], usage: { input: 20, cacheWrite: 100 },
+    } },
+  ]);
+  assert.equal(present(SF.readSessionMessages(anthropic)[0].cacheExpiry).retention, '5m');
+  fs.writeFileSync(dishSettingsFile, JSON.stringify({ cacheTtlOverrides: [
+    { model: 'opencode-go/deepseek-*', ttl: '2d', basis: 'minimum' },
+    { provider: 'opencode-go', ttl: '1h' },
+    { provider: 'anthropic', ttl: '1h' },
+    { provider: 'openai', ttl: '1h' },
+    { provider: 'ignored', ttl: 'forever' },
+  ] }) + '\n');
+  assert.equal(present(SF.readSessionMessages(deepseek)[0].cacheExpiry).retention, '2d',
+    'model override replaces the built-in without touching the session file');
+  assert.equal(present(SF.readSessionMessages(anthropic)[0].cacheExpiry).retention, '1h',
+    'provider override invalidates the cached projection');
+  assert.equal(present(SF.getSessionInfo(anthropic).cacheExpiry).expiresAt, startedAt + 60 * 60_000);
+  fs.rmSync(dishSettingsFile);
 });
 
 

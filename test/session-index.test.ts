@@ -30,6 +30,7 @@ function sourceForFile(file: string) {
 const sessionsDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--proj--');
 fs.mkdirSync(sessionsDir, { recursive: true });
 const indexDir = path.join(tmpHome, '.pi', 'dish', 'session-index');
+const dishSettingsFile = path.join(tmpHome, '.pi', 'dish', 'settings.json');
 
 test.after(() => {
   index.resetForTests();
@@ -77,6 +78,30 @@ test('scanSessions indexes files and revalidates on append', () => {
   fs.appendFileSync(file, JSON.stringify(userMsg('second question')) + '\n');
   ({ infos } = index.scanSessions([sourceForFile(file)]));
   assert.equal(present(infos.get(file)).messageCount, 2, 'appended file re-indexed');
+});
+
+test('cache TTL settings invalidate indexed expiry without a session append', () => {
+  const startedAt = Date.parse('2026-07-01T10:00:00.000Z');
+  const file = writeSession([
+    userMsg('cache policy'),
+    { type: 'message', message: {
+      role: 'assistant', provider: 'anthropic', model: 'claude-sonnet-4-5',
+      timestamp: startedAt, content: [], usage: { input: 5, cacheWrite: 20 },
+    } },
+  ]);
+  const source = sourceForFile(file);
+  assert.equal(present(present(index.scanSessions([source]).infos.get(file)).cacheExpiry).retention, '5m');
+  try {
+    fs.mkdirSync(path.dirname(dishSettingsFile), { recursive: true });
+    fs.writeFileSync(dishSettingsFile, JSON.stringify({
+      cacheTtlOverrides: [{ provider: 'anthropic', ttl: '1h' }],
+    }) + '\n');
+    const updated = present(index.scanSessions([source]).infos.get(file));
+    assert.equal(present(updated.cacheExpiry).retention, '1h');
+    assert.equal(present(updated.cacheExpiry).expiresAt, startedAt + 60 * 60_000);
+  } finally {
+    fs.rmSync(dishSettingsFile, { force: true });
+  }
 });
 
 test('OMP candidates retain their combined model in indexed usage', () => {

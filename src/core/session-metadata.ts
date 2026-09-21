@@ -1,3 +1,5 @@
+import { configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
+import type { CacheRetentionConfig } from './cache-retention';
 import type { CacheExpiry, CacheExpiryBasis, SessionEntries, SessionInfo } from './session-metadata-contracts';
 
 import { extractTextContent } from './helper-content';
@@ -47,7 +49,7 @@ export function isHardCacheMiss(usage: unknown): boolean {
  * documented fixed/minimum windows and conservative provider estimates.
  */
 export function cacheExpiryForMessage(message: Record<string, unknown>, previous: CacheExpiry | null = null,
-  fallbackTimestamp?: unknown): CacheExpiry | null {
+  fallbackTimestamp?: unknown, config: CacheRetentionConfig = loadCacheRetentionConfig()): CacheExpiry | null {
   if (!isRecord(message.usage) || !hasCacheActivity(message)) return null;
   const identity = cacheIdentity(message);
   const read = cacheTokens(message.usage, 'cacheRead');
@@ -63,9 +65,28 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
     ({ retentionMs, retention, basis } = previous);
   } else {
     const api = typeof message.api === 'string' ? message.api : '';
-    const provider = typeof message.provider === 'string' ? message.provider : '';
-    const model = typeof message.model === 'string' ? message.model : '';
-    if (api === 'anthropic-messages' || provider === 'anthropic') {
+    let provider = typeof message.provider === 'string' ? message.provider.toLowerCase() : '';
+    let model = typeof message.model === 'string' ? message.model : '';
+    if (!provider) {
+      const slash = model.indexOf('/');
+      if (slash > 0) {
+        provider = model.slice(0, slash);
+        model = model.slice(slash + 1);
+      }
+    }
+    if (!provider) {
+      if (api === 'anthropic-messages') provider = 'anthropic';
+      else if (api === 'bedrock-converse-stream') provider = 'amazon-bedrock';
+      else if (api.startsWith('openai-')) provider = 'openai';
+    }
+    const configured = configuredCacheRetention(config, provider, model);
+    if (configured) {
+      ({ retentionMs, retention, basis } = configured);
+    } else if (provider === 'opencode-go' && /^deepseek-/i.test(model)) {
+      retentionMs = 24 * 60 * 60_000;
+      retention = '24h';
+      basis = 'minimum';
+    } else if (api === 'anthropic-messages' || provider === 'anthropic') {
       const long = write > 0 && write1h >= write;
       retentionMs = long ? 60 * 60_000 : 5 * 60_000;
       retention = long ? '1h' : '5m';
@@ -103,13 +124,14 @@ export function decodeSessionInfo(value: unknown): SessionInfo | null {
     cacheExpiry: decodeCacheExpiry(value.cacheExpiry) };
 }
 
-export function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, candidate: MetadataProfile = {}): SessionInfo {
+export function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, candidate: MetadataProfile = {},
+  config: CacheRetentionConfig = loadCacheRetentionConfig()): SessionInfo {
   const info: SessionInfo = {
     model: 'unknown', name: null, messageCount: 0, contextTokens: 0,
     lastActivity: mtime || new Date(0), cwd: null, sessionId: null, parentSession: null,
     cacheExpiry: null,
   };
-  return accumulateSessionInfo(info, entries, candidate, true);
+  return accumulateSessionInfo(info, entries, candidate, true, config);
 }
 
 /**
@@ -120,12 +142,14 @@ export function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, ca
  * new mtime (a full parse floors lastActivity at the mtime, so the extension
  * must too).
  */
-export function extendSessionInfoFromEntries(info: SessionInfo, entries: SessionEntries, mtime?: Date, candidate: MetadataProfile = {}): SessionInfo {
+export function extendSessionInfoFromEntries(info: SessionInfo, entries: SessionEntries, mtime?: Date, candidate: MetadataProfile = {},
+  config: CacheRetentionConfig = loadCacheRetentionConfig()): SessionInfo {
   if (mtime && mtime.getTime() > new Date(info.lastActivity).getTime()) info.lastActivity = mtime;
-  return accumulateSessionInfo(info, entries, candidate, false);
+  return accumulateSessionInfo(info, entries, candidate, false, config);
 }
 
-function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candidate: MetadataProfile, fromStart: boolean): SessionInfo {
+function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candidate: MetadataProfile, fromStart: boolean,
+  config: CacheRetentionConfig): SessionInfo {
   const profileId = candidate.profileId || 'pi-v3';
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
@@ -180,7 +204,7 @@ function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candi
       if (hasCacheActivity(message)) {
         info.cacheExpiry = cacheExpiryForMessage(
           message.model === undefined ? { ...message, model: info.model } : message,
-          info.cacheExpiry, entry.timestamp);
+          info.cacheExpiry, entry.timestamp, config);
       }
     }
     if (entry.type === 'compaction') {

@@ -1,4 +1,5 @@
 // Generated from src/core/session-metadata.ts; edit that source and run npm run build:core.
+import type { CacheRetentionConfig } from './cache-retention';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata-contracts';
 interface MetadataProfile {
     readonly profileId?: string;
@@ -10,10 +11,10 @@ export declare function isHardCacheMiss(usage: unknown): boolean;
  * Providers report cache token activity, not expiry timestamps. Derive only
  * documented fixed/minimum windows and conservative provider estimates.
  */
-export declare function cacheExpiryForMessage(message: Record<string, unknown>, previous?: CacheExpiry | null, fallbackTimestamp?: unknown): CacheExpiry | null;
+export declare function cacheExpiryForMessage(message: Record<string, unknown>, previous?: CacheExpiry | null, fallbackTimestamp?: unknown, config?: CacheRetentionConfig): CacheExpiry | null;
 /** Validate persisted accumulator output, reviving its serialized activity Date. */
 export declare function decodeSessionInfo(value: unknown): SessionInfo | null;
-export declare function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile): SessionInfo;
+export declare function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile, config?: CacheRetentionConfig): SessionInfo;
 /**
  * Extend an info object with entries appended after the range it was built
  * from — the O(delta) path lib/session-index.js uses for a streaming active
@@ -22,5 +23,5 @@ export declare function sessionInfoFromEntries(entries: SessionEntries, mtime?: 
  * new mtime (a full parse floors lastActivity at the mtime, so the extension
  * must too).
  */
-export declare function extendSessionInfoFromEntries(info: SessionInfo, entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile): SessionInfo;
+export declare function extendSessionInfoFromEntries(info: SessionInfo, entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile, config?: CacheRetentionConfig): SessionInfo;
 export {};

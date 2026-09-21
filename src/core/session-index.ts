@@ -35,6 +35,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { SessionSource } from './session-source-contracts';
+import { loadCacheRetentionConfig } from './cache-retention';
+import type { CacheRetentionConfig } from './cache-retention';
 import type { SessionInfo } from './session-metadata-contracts';
 import { sessionInfoFromEntries, extendSessionInfoFromEntries, decodeSessionInfo, isRecord } from './session-metadata';
 import { checkSearchLeaf, decodeUsage, decodeSkillRecords, decodeSkillState, finite } from './session-index-data';
@@ -57,13 +59,13 @@ export interface IndexedSessionInfo extends SessionInfo {
   usage: IndexedUsage;
 }
 interface CacheStamp { mtimeMs: number; size: number; version: number; _bytes?: number }
-interface MetaEntry extends CacheStamp { info: IndexedSessionInfo; profileId: string; profileVersion: number; pricingRevision: string }
+interface MetaEntry extends CacheStamp { info: IndexedSessionInfo; profileId: string; profileVersion: number; pricingRevision: string; cacheRetentionRevision: string }
 interface TextEntry extends CacheStamp { text: string; endsNl: boolean; tree: boolean; leafId: string | null }
 interface SkillsEntry extends CacheStamp { records: SkillActivation[]; state: SkillState | null }
 interface IndexState {
   metaLog: NdjsonLog; textLog: NdjsonLog; skillsLog: NdjsonLog;
   meta: Map<string, MetaEntry>; text: Map<string, TextEntry>; skills: Map<string, SkillsEntry>;
-  backlog: Map<string, { candidate: SessionSource; stats: fs.Stats }>;
+  backlog: Map<string, { candidate: SessionSource; stats: fs.Stats; cacheConfig: CacheRetentionConfig }>;
   building: boolean;
 }
 type LogRow = Record<string, unknown> & { f: string; _bytes: number };
@@ -78,9 +80,9 @@ const COMPACT_MIN_DEAD_BYTES = 1_000_000;
 // v8 preserves known cost subtotals beside unavailable-call counts and adds
 // Pi rate-card revisions. v9 treats OMP subscription-plan providers' zero
 // rates as unpriced rather than free. v10 records inferred provider cache
-// expiry state. Older entries need their source JSONL reread, so the normal
-// bounded backlog rebuilds them like prior upgrades.
-const META_SCHEMA_VERSION = 10;
+// expiry state. v11 applies host cache-TTL overrides and records their
+// revision so hand-edited settings invalidate derived expiry projections.
+const META_SCHEMA_VERSION = 11;
 // v2 indexed tool-call names/args (file paths, bash commands); v3 raises the
 // per-message prose cap to 100K and the session cap to 4M with keep-newest
 // overflow (corpus-measured: the old caps trimmed real pasted logs and the
@@ -228,12 +230,14 @@ function getState(): IndexState {
       if (!info || !finite(e.m) || !finite(e.s) ||
           !(e.p === undefined || typeof e.p === 'string') ||
           !(e.pv === undefined || finite(e.pv)) ||
-          !(e.pr === undefined || typeof e.pr === 'string')) { st.metaLog.markDead(e._bytes); continue; }
+          !(e.pr === undefined || typeof e.pr === 'string') ||
+          !(e.cr === undefined || typeof e.cr === 'string')) { st.metaLog.markDead(e._bytes); continue; }
       st.meta.set(f, {
         mtimeMs: e.m, size: e.s, info,
         version: finite(e.ver) ? e.ver : 0,
         profileId: typeof e.p === 'string' ? e.p : 'pi-v3', profileVersion: finite(e.pv) ? e.pv : 1,
-        pricingRevision: typeof e.pr === 'string' ? e.pr : 'native', _bytes: e._bytes,
+        pricingRevision: typeof e.pr === 'string' ? e.pr : 'native',
+        cacheRetentionRevision: typeof e.cr === 'string' ? e.cr : '', _bytes: e._bytes,
       });
     }
     for (const [f, e] of st.textLog.load()) {
@@ -264,7 +268,7 @@ function getState(): IndexState {
   return st;
 }
 
-const encodeMeta = (f: string, e: MetaEntry) => ({ f, m: e.mtimeMs, s: e.size, ver: META_SCHEMA_VERSION, p: e.profileId, pv: e.profileVersion, pr: e.pricingRevision, v: e.info });
+const encodeMeta = (f: string, e: MetaEntry) => ({ f, m: e.mtimeMs, s: e.size, ver: META_SCHEMA_VERSION, p: e.profileId, pv: e.profileVersion, pr: e.pricingRevision, cr: e.cacheRetentionRevision, v: e.info });
 const encodeText = (f: string, e: TextEntry) => ({
   f, m: e.mtimeMs, s: e.size, ver: TEXT_SCHEMA_VERSION,
   nl: e.endsNl ? 1 : 0, tr: e.tree ? 1 : 0, l: e.leafId || undefined, t: e.text,
@@ -300,7 +304,8 @@ function decodeIndexedInfo(value: unknown): IndexedSessionInfo | null {
 }
 
 /** Parse one file once and update all index tables + their logs. */
-function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats): IndexedSessionInfo {
+function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
+  cacheConfig: CacheRetentionConfig = loadCacheRetentionConfig()): IndexedSessionInfo {
   const file = candidate.file;
   const content = fs.readFileSync(file, 'utf-8');
   // One JSON pass feeds all four derivations (metadata, usage, search text,
@@ -309,7 +314,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats): I
   const entries = parseSessionEntries(content);
   const { nativeSessionId, sessionKey } = candidate;
   const info: IndexedSessionInfo = {
-    ...sessionInfoFromEntries(entries, stats.mtime, candidate),
+    ...sessionInfoFromEntries(entries, stats.mtime, candidate, cacheConfig),
     sessionKey, harnessId: candidate.harnessId, nativeSessionId,
     profileId: candidate.profileId, profileVersion: candidate.profileVersion,
     usage: buildIndexedUsageFromEntries(entries, candidate),
@@ -317,7 +322,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats): I
   const search = buildSearchIndexFromEntries(entries);
   checkSearchLeaf(search);
   setEntry(st.meta, st.metaLog, file,
-    { mtimeMs: stats.mtimeMs, size: stats.size, version: META_SCHEMA_VERSION, profileId: candidate.profileId, profileVersion: candidate.profileVersion, pricingRevision: pricingRevision(candidate.harnessId), info }, encodeMeta);
+    { mtimeMs: stats.mtimeMs, size: stats.size, version: META_SCHEMA_VERSION, profileId: candidate.profileId, profileVersion: candidate.profileVersion, pricingRevision: pricingRevision(candidate.harnessId), cacheRetentionRevision: cacheConfig.revision, info }, encodeMeta);
   setEntry(st.text, st.textLog, file,
     {
       mtimeMs: stats.mtimeMs,
@@ -342,7 +347,8 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats): I
 }
 
 /** The all-tables freshness test scanSessions and getSessionInfo share. */
-function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, stats: fs.Stats): boolean {
+function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, stats: fs.Stats,
+  cacheConfig: CacheRetentionConfig): boolean {
   const cached = st.meta.get(file);
   const cachedText = st.text.get(file);
   const cachedSkills = st.skills.get(file);
@@ -354,6 +360,7 @@ function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, st
     cached.info.sessionKey === candidate.sessionKey && cached.info.nativeSessionId === candidate.nativeSessionId &&
     cached.profileId === candidate.profileId && cached.profileVersion === candidate.profileVersion &&
     cached.pricingRevision === pricingRevision(candidate.harnessId) &&
+    cached.cacheRetentionRevision === cacheConfig.revision &&
     cachedText && cachedText.version === TEXT_SCHEMA_VERSION &&
     cachedSkills && cachedSkills.version === SKILLS_SCHEMA_VERSION &&
     cached.mtimeMs === stats.mtimeMs && cached.size === stats.size &&
@@ -373,7 +380,8 @@ function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, st
  * hot files churn far too fast to persist per delta; a restart re-parses
  * them once (the same contract getSearchText has always had).
  */
-function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs.Stats): IndexedSessionInfo | null {
+function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs.Stats,
+  cacheConfig: CacheRetentionConfig): IndexedSessionInfo | null {
   const file = candidate.file;
   const meta = st.meta.get(file), text = st.text.get(file), skills = st.skills.get(file);
   if (!meta || !text || !skills) return null;
@@ -382,6 +390,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
   if (meta.info.sessionKey !== candidate.sessionKey || meta.info.nativeSessionId !== candidate.nativeSessionId) return null;
   if (meta.profileId !== candidate.profileId || meta.profileVersion !== candidate.profileVersion) return null;
   if (meta.pricingRevision !== pricingRevision(candidate.harnessId)) return null;
+  if (meta.cacheRetentionRevision !== cacheConfig.revision) return null;
   // The three tables are written together; extend only from a coherent base.
   if (meta.mtimeMs !== text.mtimeMs || meta.size !== text.size ||
       meta.mtimeMs !== skills.mtimeMs || meta.size !== skills.size) return null;
@@ -398,7 +407,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
   } catch { return null; }
   if (!extension) return null;
   try {
-    extendSessionInfoFromEntries(meta.info, entries, stats.mtime, candidate);
+    extendSessionInfoFromEntries(meta.info, entries, stats.mtime, candidate, cacheConfig);
     extendIndexedUsageFromEntries(meta.info.usage, entries, candidate);
     const mined = mineSkillsFromEntries(entries, {
       sessionId: candidate.harnessId === 'pi' ? meta.info.nativeSessionId : meta.info.sessionKey,
@@ -466,7 +475,7 @@ function kickBuilder(st: IndexState) {
     if (next.done) { st.building = false; return; }
     const [file, work] = next.value;
     st.backlog.delete(file);
-    try { indexFile(st, work.candidate, work.stats); } catch {} // vanished/unreadable: skip
+    try { indexFile(st, work.candidate, work.stats, work.cacheConfig); } catch {} // vanished/unreadable: skip
     setImmediate(step);
   };
   setImmediate(step);
@@ -485,6 +494,7 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
   const infos = new Map<string, IndexedSessionInfo>();
   const seen = new Set<string>();
   let budget = syncBudget();
+  const cacheConfig = loadCacheRetentionConfig();
 
   for (const input of files) {
     const candidate = normalize(input);
@@ -492,14 +502,14 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
     seen.add(file);
     let stats;
     try { stats = fs.statSync(file); } catch { dropEntry(st, file); continue; }
-    if (isEntryFresh(st, file, candidate, stats)) {
+    if (isEntryFresh(st, file, candidate, stats, cacheConfig)) {
       st.backlog.delete(file); // a stale queue entry for a file we just served
       infos.set(file, st.meta.get(file)!.info);
       continue;
     }
     // A file that merely grew (the streaming active session) extends in
     // O(delta) instead of consuming sync budget on a whole-file re-parse.
-    const extended = tryExtendIndexEntry(st, candidate, stats);
+    const extended = tryExtendIndexEntry(st, candidate, stats, cacheConfig);
     if (extended) {
       st.backlog.delete(file);
       infos.set(file, extended);
@@ -507,9 +517,9 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
     }
     if (budget > 0) {
       budget--;
-      try { infos.set(file, indexFile(st, candidate, stats)); } catch {}
+      try { infos.set(file, indexFile(st, candidate, stats, cacheConfig)); } catch {}
     } else {
-      st.backlog.set(file, { candidate, stats });
+      st.backlog.set(file, { candidate, stats, cacheConfig });
     }
   }
 
@@ -537,6 +547,7 @@ export function getSearchText(input: SessionSource): string {
   const candidate = normalize(input);
   const file = candidate.file;
   const st = getState();
+  const cacheConfig = loadCacheRetentionConfig();
   const cached = st.text.get(file);
   let stats;
   try { stats = fs.statSync(file); } catch { return ''; }
@@ -547,8 +558,8 @@ export function getSearchText(input: SessionSource): string {
   // The shared O(delta) extension keeps all three tables coherent — a
   // text-only extension here used to leave meta/skills behind, which would
   // now force the scan's extension path into a full re-index.
-  if (tryExtendIndexEntry(st, candidate, stats)) return st.text.get(file)!.text;
-  try { indexFile(st, candidate, stats); } catch { return cached ? cached.text : ''; }
+  if (tryExtendIndexEntry(st, candidate, stats, cacheConfig)) return st.text.get(file)!.text;
+  try { indexFile(st, candidate, stats, cacheConfig); } catch { return cached ? cached.text : ''; }
   return st.text.get(file)!.text;
 }
 
@@ -563,12 +574,13 @@ export function getSearchText(input: SessionSource): string {
 export function getSessionInfo(input: SessionSource): SessionInfo {
   const candidate = normalize(input);
   const st = getState();
+  const cacheConfig = loadCacheRetentionConfig();
   const stats = fs.statSync(candidate.file);
   let info;
-  if (isEntryFresh(st, candidate.file, candidate, stats)) {
+  if (isEntryFresh(st, candidate.file, candidate, stats, cacheConfig)) {
     info = st.meta.get(candidate.file)!.info;
   } else {
-    info = tryExtendIndexEntry(st, candidate, stats) || indexFile(st, candidate, stats);
+    info = tryExtendIndexEntry(st, candidate, stats, cacheConfig) || indexFile(st, candidate, stats, cacheConfig);
   }
   st.backlog.delete(candidate.file); // just indexed/served; a queued rebuild is stale
   // Strip index-internal fields (identity resolution, usage with its
