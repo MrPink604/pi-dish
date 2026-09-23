@@ -105,6 +105,13 @@ the manual-review boundaries. Recovery does not configure host autostart.
 4. **Widgets are keyed.** One card per `key`, updated in place; collapse
    state survives updates. Clear with `setWidget(key, [])` or `undefined`.
 
+Set `PI_DISH_BRIDGE_DEBUG=1` in the harness's environment to append every
+native todo-projection transition (counts, clear markers, timestamps) to
+`~/.pi/dish/projection-debug.log`. Use it when the web Todos card flickers:
+the client absorbs clear/set churn under ~500ms, so visible flicker means the
+projection itself oscillates and this log shows the gap and whether the raw
+todos value was an array.
+
 Pi's private queue arrays, event subscription and captured command receiver belong
 to `pi-private.ts`. Shared bridge core consumes only its queue/subscription/
 compaction/command operations; it owns protocol handling and the compaction send

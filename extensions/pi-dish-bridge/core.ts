@@ -106,6 +106,20 @@ const ROOT = path.join(os.homedir(), ".pi", "dish");
 const REGISTRY_DIR = path.join(ROOT, "sessions");
 const DEFAULT_SOCKET_DIR = path.join(ROOT, "sockets");
 const SOCKET_DIR_OVERRIDE = process.env.PI_DISH_SOCKET_DIR || null;
+// Opt-in projection churn logging (PI_DISH_BRIDGE_DEBUG=1): the web client's
+// widget removal grace absorbs clear/set churn under ~500ms, so a visibly
+// flickering Todos frame means the host projection itself oscillates with
+// longer gaps. Transitions append to ~/.pi/dish/projection-debug.log (a file,
+// not stderr, because harness TUIs own the pane) with timing and whether the
+// raw todos value was even an array — distinguishing "harness emptied the
+// list" from "reader fell back to []".
+const DEBUG_PROJECTION_LOG = process.env.PI_DISH_BRIDGE_DEBUG
+  ? path.join(ROOT, "projection-debug.log")
+  : null;
+function debugProjection(line: string): void {
+  if (!DEBUG_PROJECTION_LOG) return;
+  try { fs.appendFileSync(DEBUG_PROJECTION_LOG, line + "\n"); } catch {}
+}
 const SOCKET_DIR = (() => {
   if (!SOCKET_DIR_OVERRIDE) return DEFAULT_SOCKET_DIR;
   if (!path.isAbsolute(SOCKET_DIR_OVERRIDE)) {
@@ -1102,12 +1116,27 @@ export function createBridge(descriptor: BridgeDescriptor) {
     return lines;
   }
 
+  // Last projected todo-render state for PI_DISH_BRIDGE_DEBUG logging.
+  let debugTodoProjection: { signature: string; count: number } | null = null;
+
   function projectNativeState(value: unknown): void {
     const projection = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    const todoLines = renderNativeTodoLines(projection.todos);
+    if (DEBUG_PROJECTION_LOG) {
+      const signature = JSON.stringify(todoLines);
+      if (!debugTodoProjection || debugTodoProjection.signature !== signature) {
+        const from = debugTodoProjection ? String(debugTodoProjection.count) : "init";
+        const raw = Array.isArray(projection.todos) ? String(projection.todos.length) : "non-array";
+        const sample = todoLines[0] ? ` first=${JSON.stringify(todoLines[0].slice(0, 60))}` : "";
+        debugProjection(
+          `[${new Date().toISOString()}] todo projection ${from} -> ${todoLines.length} lines (raw todos: ${raw})${todoLines.length ? "" : " CLEAR"}${sample} pid=${process.pid}`);
+        debugTodoProjection = { signature, count: todoLines.length };
+      }
+    }
     emitExtensionUIRequest({
       method: "setWidget",
       widgetKey: "Todos",
-      widgetLines: renderNativeTodoLines(projection.todos),
+      widgetLines: todoLines,
       widgetPlacement: "aboveEditor",
     });
 
