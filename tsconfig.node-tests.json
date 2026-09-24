@@ -37,6 +37,7 @@
     "test/session-source.test.ts",
     "test/session-catalog.test.ts",
     "test/session-discovery.test.ts",
+    "test/cache-lifetime.test.ts",
     "test/session-index.test.ts",
     "test/terminal.test.ts",
     "test/bridge-session.test.ts",

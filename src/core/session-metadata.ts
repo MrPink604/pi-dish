@@ -24,15 +24,16 @@ function decodeCacheExpiry(value: unknown): CacheExpiry | null {
   const basis = value.basis;
   if (refreshedAt === null || expiresAt === null || retentionMs === null ||
       typeof value.retention !== 'string' || typeof value.identity !== 'string' ||
-      !['fixed', 'minimum', 'estimate'].includes(String(basis))) return null;
+      !['fixed', 'minimum', 'estimate', 'learned'].includes(String(basis))) return null;
   return { refreshedAt, expiresAt, retentionMs, retention: value.retention,
-    basis: basis as CacheExpiryBasis, identity: value.identity };
+    basis: basis as CacheExpiryBasis, identity: value.identity,
+    ...(value.tier === '1h' ? { tier: '1h' as const } : {}) };
 }
 
-function cacheIdentity(message: Record<string, unknown>): string {
+export function cacheIdentity(message: Record<string, unknown>): string {
   return [message.api, message.provider, message.model].map(value => typeof value === 'string' ? value : '').join('\u0000');
 }
-function cacheTokens(usage: Record<string, unknown>, key: 'cacheRead' | 'cacheWrite' | 'cacheWrite1h'): number {
+export function cacheTokens(usage: Record<string, unknown>, key: 'cacheRead' | 'cacheWrite' | 'cacheWrite1h'): number {
   const value = finiteNumber(usage[key]);
   return value !== null && value > 0 ? value : 0;
 }
@@ -44,6 +45,66 @@ export function isHardCacheMiss(usage: unknown): boolean {
   return isRecord(usage) && cacheTokens(usage, 'cacheRead') === 0 && cacheTokens(usage, 'cacheWrite') > 0;
 }
 
+export interface CacheTarget {
+  readonly api: string;
+  readonly provider: string;
+  readonly model: string;
+}
+
+/** Normalize a message's cache ownership: explicit fields, model slug, then API. */
+export function resolveCacheTarget(message: Record<string, unknown>): CacheTarget {
+  const api = typeof message.api === 'string' ? message.api : '';
+  let provider = typeof message.provider === 'string' ? message.provider.toLowerCase() : '';
+  let model = typeof message.model === 'string' ? message.model : '';
+  if (!provider) {
+    const slash = model.indexOf('/');
+    if (slash > 0) {
+      provider = model.slice(0, slash).toLowerCase();
+      model = model.slice(slash + 1);
+    }
+  }
+  if (!provider) {
+    if (api === 'anthropic-messages') provider = 'anthropic';
+    else if (api === 'bedrock-converse-stream') provider = 'amazon-bedrock';
+    else if (api.startsWith('openai-')) provider = 'openai';
+  }
+  return { api, provider, model };
+}
+
+/** Anthropic's extended retention tier, reported as cacheWrite1h dominating cacheWrite. */
+export function cacheTier1h(usage: Record<string, unknown>): boolean {
+  const write = cacheTokens(usage, 'cacheWrite');
+  return write > 0 && cacheTokens(usage, 'cacheWrite1h') >= write;
+}
+
+/**
+ * Documented fixed/minimum windows and conservative provider estimates. This
+ * ladder is the learner's Bayesian prior and the fallback when no learned
+ * model has activated.
+ */
+export function builtinCacheRetention(target: CacheTarget, long1h: boolean): { retentionMs: number; retention: string; basis: CacheExpiryBasis } | null {
+  const { api, provider, model } = target;
+  if (provider === 'opencode-go' && /^deepseek-/i.test(model)) {
+    return { retentionMs: 24 * 60 * 60_000, retention: '24h', basis: 'minimum' };
+  }
+  if (api === 'anthropic-messages' || provider === 'anthropic') {
+    return long1h
+      ? { retentionMs: 60 * 60_000, retention: '1h', basis: 'fixed' }
+      : { retentionMs: 5 * 60_000, retention: '5m', basis: 'fixed' };
+  }
+  if (api === 'bedrock-converse-stream' || provider === 'amazon-bedrock') {
+    return { retentionMs: 5 * 60_000, retention: '5m', basis: 'estimate' };
+  }
+  if (api.startsWith('openai-') || provider === 'openai' || provider === 'openai-codex') {
+    const version = /^gpt-(\d+)(?:\.(\d+))?/.exec(model);
+    const explicit = !!version && (Number(version[1]) > 5 || (Number(version[1]) === 5 && Number(version[2] || 0) >= 6));
+    return explicit
+      ? { retentionMs: 30 * 60_000, retention: '30m', basis: 'minimum' }
+      : { retentionMs: 10 * 60_000, retention: '~10m', basis: 'estimate' };
+  }
+  return null;
+}
+
 /**
  * Providers report cache token activity, not expiry timestamps. Derive only
  * documented fixed/minimum windows and conservative provider estimates.
@@ -51,10 +112,10 @@ export function isHardCacheMiss(usage: unknown): boolean {
 export function cacheExpiryForMessage(message: Record<string, unknown>, previous: CacheExpiry | null = null,
   fallbackTimestamp?: unknown, config: CacheRetentionConfig = loadCacheRetentionConfig()): CacheExpiry | null {
   if (!isRecord(message.usage) || !hasCacheActivity(message)) return null;
+  const usage = message.usage;
   const identity = cacheIdentity(message);
-  const read = cacheTokens(message.usage, 'cacheRead');
-  const write = cacheTokens(message.usage, 'cacheWrite');
-  const write1h = cacheTokens(message.usage, 'cacheWrite1h');
+  const read = cacheTokens(usage, 'cacheRead');
+  const long = cacheTier1h(usage);
   const startedAt = new Date((message.timestamp ?? fallbackTimestamp) as string | number | Date).getTime();
   if (!Number.isFinite(startedAt)) return null;
 
@@ -64,46 +125,14 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
   if (read > 0 && previous?.identity === identity) {
     ({ retentionMs, retention, basis } = previous);
   } else {
-    const api = typeof message.api === 'string' ? message.api : '';
-    let provider = typeof message.provider === 'string' ? message.provider.toLowerCase() : '';
-    let model = typeof message.model === 'string' ? message.model : '';
-    if (!provider) {
-      const slash = model.indexOf('/');
-      if (slash > 0) {
-        provider = model.slice(0, slash);
-        model = model.slice(slash + 1);
-      }
-    }
-    if (!provider) {
-      if (api === 'anthropic-messages') provider = 'anthropic';
-      else if (api === 'bedrock-converse-stream') provider = 'amazon-bedrock';
-      else if (api.startsWith('openai-')) provider = 'openai';
-    }
-    const configured = configuredCacheRetention(config, provider, model);
-    if (configured) {
-      ({ retentionMs, retention, basis } = configured);
-    } else if (provider === 'opencode-go' && /^deepseek-/i.test(model)) {
-      retentionMs = 24 * 60 * 60_000;
-      retention = '24h';
-      basis = 'minimum';
-    } else if (api === 'anthropic-messages' || provider === 'anthropic') {
-      const long = write > 0 && write1h >= write;
-      retentionMs = long ? 60 * 60_000 : 5 * 60_000;
-      retention = long ? '1h' : '5m';
-      basis = 'fixed';
-    } else if (api === 'bedrock-converse-stream' || provider === 'amazon-bedrock') {
-      retentionMs = 5 * 60_000;
-      retention = '5m';
-    } else if (api.startsWith('openai-') || provider === 'openai' || provider === 'openai-codex') {
-      const version = /^gpt-(\d+)(?:\.(\d+))?/.exec(model);
-      const explicit = !!version && (Number(version[1]) > 5 || (Number(version[1]) === 5 && Number(version[2] || 0) >= 6));
-      retentionMs = explicit ? 30 * 60_000 : 10 * 60_000;
-      retention = explicit ? '30m' : '~10m';
-      basis = explicit ? 'minimum' : 'estimate';
-    }
+    const target = resolveCacheTarget(message);
+    const configured = configuredCacheRetention(config, target.provider, target.model);
+    const derived = configured ?? builtinCacheRetention(target, long);
+    if (derived) ({ retentionMs, retention, basis } = derived);
   }
   if (retentionMs === null) return null;
-  return { refreshedAt: startedAt, expiresAt: startedAt + retentionMs, retentionMs, retention, basis, identity };
+  return { refreshedAt: startedAt, expiresAt: startedAt + retentionMs, retentionMs, retention, basis, identity,
+    ...(long ? { tier: '1h' as const } : {}) };
 }
 
 

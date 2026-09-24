@@ -1,12 +1,33 @@
 // Generated from src/core/session-metadata.ts; edit that source and run npm run build:core.
 import type { CacheRetentionConfig } from './cache-retention';
-import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata-contracts';
+import type { CacheExpiry, CacheExpiryBasis, SessionEntries, SessionInfo } from './session-metadata-contracts';
 interface MetadataProfile {
     readonly profileId?: string;
 }
 export declare function isRecord(value: unknown): value is Record<string, unknown>;
+export declare function cacheIdentity(message: Record<string, unknown>): string;
+export declare function cacheTokens(usage: Record<string, unknown>, key: 'cacheRead' | 'cacheWrite' | 'cacheWrite1h'): number;
 export declare function hasCacheActivity(message: Record<string, unknown>): boolean;
 export declare function isHardCacheMiss(usage: unknown): boolean;
+export interface CacheTarget {
+    readonly api: string;
+    readonly provider: string;
+    readonly model: string;
+}
+/** Normalize a message's cache ownership: explicit fields, model slug, then API. */
+export declare function resolveCacheTarget(message: Record<string, unknown>): CacheTarget;
+/** Anthropic's extended retention tier, reported as cacheWrite1h dominating cacheWrite. */
+export declare function cacheTier1h(usage: Record<string, unknown>): boolean;
+/**
+ * Documented fixed/minimum windows and conservative provider estimates. This
+ * ladder is the learner's Bayesian prior and the fallback when no learned
+ * model has activated.
+ */
+export declare function builtinCacheRetention(target: CacheTarget, long1h: boolean): {
+    retentionMs: number;
+    retention: string;
+    basis: CacheExpiryBasis;
+} | null;
 /**
  * Providers report cache token activity, not expiry timestamps. Derive only
  * documented fixed/minimum windows and conservative provider estimates.

@@ -1054,7 +1054,7 @@
   var optionalBoolean = (value) => typeof value === "boolean" ? value : void 0;
   var optionalCacheExpiry = (value) => {
     if (value === null) return null;
-    if (!record3(value) || !finite2(value.refreshedAt) || !finite2(value.expiresAt) || !finite2(value.retentionMs) || typeof value.retention !== "string" || !["fixed", "minimum", "estimate"].includes(String(value.basis))) return void 0;
+    if (!record3(value) || !finite2(value.refreshedAt) || !finite2(value.expiresAt) || !finite2(value.retentionMs) || typeof value.retention !== "string" || !["fixed", "minimum", "estimate", "learned"].includes(String(value.basis))) return void 0;
     return {
       refreshedAt: value.refreshedAt,
       expiresAt: value.expiresAt,

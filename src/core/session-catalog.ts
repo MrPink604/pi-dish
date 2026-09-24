@@ -1,4 +1,5 @@
 import path = require('path');
+import { applyLearnedCacheExpiry } from './cache-lifetime';
 import { canonicalSessionId, encodeSessionKey } from './session-key';
 import { isRecord } from './wire-protocol';
 import type { HarnessId, NativeSessionId, SessionId } from './contracts';
@@ -137,7 +138,7 @@ function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalo
     model: model || 'unknown', contextPercent: percent == null ? 0 : Math.round(percent * 10) / 10,
     contextTokens: (registered ? fields.contextTokens ?? info?.contextTokens : fields.contextTokens) ?? 0,
     contextWindow: (registered ? fields.contextWindow || options.contextWindowForModel(model) : fields.contextWindow) || 0,
-    cacheExpiry: info?.cacheExpiry ?? null,
+    cacheExpiry: applyLearnedCacheExpiry(info?.cacheExpiry ?? null),
     thinkingLevel: fields.thinkingLevel || null,
     messageCount: (registered ? info?.messageCount : fields.messageCount) || 0,
     lastActivity: registered ? info?.lastActivity || fields.lastActivity || new Date(0) : fields.lastActivity,
@@ -164,7 +165,7 @@ function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advic
     profileId: source.profileId, profileVersion: source.profileVersion,
     name: subsessionLabel(source) || info.name || source.nativeSessionId.slice(0, 8),
     model: info.model || 'unknown', contextPercent: info.contextPercent || 0, contextTokens: info.contextTokens || 0,
-    cacheExpiry: info.cacheExpiry, messageCount: info.messageCount || 0, lastActivity: info.lastActivity, isActive: false,
+    cacheExpiry: applyLearnedCacheExpiry(info.cacheExpiry), messageCount: info.messageCount || 0, lastActivity: info.lastActivity, isActive: false,
     ...(liveChild ? { subagentLive: true } : {}),
     cwd, sessionFile: source.file, parentSession: info.parentSession || source.parentSession || null,
     parentSessionSource: !info.parentSession && source.parentSession ? 'omp-subsession-layout' : null,

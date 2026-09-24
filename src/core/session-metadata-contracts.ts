@@ -1,4 +1,4 @@
-export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate';
+export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
 export interface CacheExpiry {
   readonly refreshedAt: number;
   readonly expiresAt: number;
@@ -7,6 +7,8 @@ export interface CacheExpiry {
   readonly basis: CacheExpiryBasis;
   /** Retained for incremental parsing; browser decoders deliberately omit it. */
   readonly identity: string;
+  /** Anthropic's extended cache tier; selects the matching learned model. */
+  readonly tier?: '1h';
 }
 
 /** Accumulator output before read-time model-window overlays. No route authority. */

@@ -49,6 +49,9 @@ import {
 } from './session-files.js';
 import { mineSkillsFromEntries } from './skill-mining.js';
 import { pricingRevision } from './harness-pricing.js';
+import {
+  extendCacheLifetimeFromEntries, flushCacheLifetime, forgetCacheLifetimeFile, observeCacheLifetimeFromEntries,
+} from './cache-lifetime.js';
 
 export interface IndexedSessionInfo extends SessionInfo {
   sessionKey: SessionSource['sessionKey'];
@@ -82,7 +85,9 @@ const COMPACT_MIN_DEAD_BYTES = 1_000_000;
 // rates as unpriced rather than free. v10 records inferred provider cache
 // expiry state. v11 applies host cache-TTL overrides and records their
 // revision so hand-edited settings invalidate derived expiry projections.
-const META_SCHEMA_VERSION = 11;
+// v12 mines cache-lifetime observations for the learned-TTL store; the store
+// is a serve-time overlay, not a freshness input, so it cannot reindex-loop.
+const META_SCHEMA_VERSION = 12;
 // v2 indexed tool-call names/args (file paths, bash commands); v3 raises the
 // per-message prose cap to 100K and the session cap to 4M with keep-newest
 // overflow (corpus-measured: the old caps trimmed real pasted logs and the
@@ -312,6 +317,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
   // skills) — this used to be four separate full parses of the same file,
   // which dominated the cost of re-indexing a large changed session.
   const entries = parseSessionEntries(content);
+  observeCacheLifetimeFromEntries(entries, file, candidate.profileId);
   const { nativeSessionId, sessionKey } = candidate;
   const info: IndexedSessionInfo = {
     ...sessionInfoFromEntries(entries, stats.mtime, candidate, cacheConfig),
@@ -408,6 +414,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
   if (!extension) return null;
   try {
     extendSessionInfoFromEntries(meta.info, entries, stats.mtime, candidate, cacheConfig);
+    extendCacheLifetimeFromEntries(entries, file, candidate.profileId);
     extendIndexedUsageFromEntries(meta.info.usage, entries, candidate);
     const mined = mineSkillsFromEntries(entries, {
       sessionId: candidate.harnessId === 'pi' ? meta.info.nativeSessionId : meta.info.sessionKey,
@@ -459,6 +466,7 @@ function dropEntry(st: IndexState, file: string): void {
     log.append({ f: file, del: 1 });
   }
   st.backlog.delete(file);
+  forgetCacheLifetimeFile(file);
 }
 
 function syncBudget() {
@@ -472,7 +480,7 @@ function kickBuilder(st: IndexState) {
   st.building = true;
   const step = () => {
     const next = st.backlog.entries().next();
-    if (next.done) { st.building = false; return; }
+    if (next.done) { st.building = false; flushCacheLifetime(); return; }
     const [file, work] = next.value;
     st.backlog.delete(file);
     try { indexFile(st, work.candidate, work.stats, work.cacheConfig); } catch {} // vanished/unreadable: skip
@@ -530,6 +538,7 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
   }
 
   kickBuilder(st);
+  flushCacheLifetime();
   return { infos, indexing: st.backlog.size > 0 };
 }
 

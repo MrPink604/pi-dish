@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import { cacheRetentionRevision, loadCacheRetentionConfig } from './cache-retention.js';
 import { cacheExpiryForMessage, hasCacheActivity, isHardCacheMiss, sessionInfoFromEntries, isRecord } from './session-metadata.js';
+import { applyLearnedCacheExpiry } from './cache-lifetime.js';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata-contracts.js';
 import type { IndexedUsage, UsageBucket, UsageCosts, UsageTokens } from './session-index-data.js';
 import { extractTextContent } from './helper-content.js';
@@ -397,7 +398,7 @@ function parseMessageData(content: string, candidate?: SessionFileProfile, leafO
         responseCacheExpiry = cacheExpiryForMessage(cacheMessage, cacheExpiry, entry.timestamp, cacheConfig);
         cacheExpiry = responseCacheExpiry;
       }
-      const message = messageFromEntry(entry, candidate, model, responseCacheExpiry);
+      const message = messageFromEntry(entry, candidate, model, applyLearnedCacheExpiry(responseCacheExpiry, cacheConfig));
       if (!message) continue;
       // Resource lookup is by stable JSONL id across the whole tree. Keep
       // abandoned entries addressable so an already-rendered lazy image URL

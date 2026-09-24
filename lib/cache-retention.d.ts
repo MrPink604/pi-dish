@@ -13,6 +13,8 @@ export interface CacheRetentionConfig {
     readonly revision: string;
     readonly rules: readonly CacheTtlRule[];
 }
+export declare const MIN_TTL_MS = 60000;
+export declare const MAX_TTL_MS: number;
 /**
  * Read the private host-level cache policy. The settings file is revalidated
  * by (mtime,size), matching the other hand-edited pi-dish configuration.

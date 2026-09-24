@@ -1,4 +1,4 @@
-export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate';
+export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
 export interface CacheExpiryProjection {
   readonly refreshedAt: number;
   readonly expiresAt: number;
@@ -101,7 +101,7 @@ const optionalBoolean = (value: unknown) => typeof value === 'boolean' ? value :
 const optionalCacheExpiry = (value: unknown): CacheExpiryProjection | null | undefined => {
   if (value === null) return null;
   if (!record(value) || !finite(value.refreshedAt) || !finite(value.expiresAt) || !finite(value.retentionMs) ||
-      typeof value.retention !== 'string' || !['fixed', 'minimum', 'estimate'].includes(String(value.basis))) return undefined;
+      typeof value.retention !== 'string' || !['fixed', 'minimum', 'estimate', 'learned'].includes(String(value.basis))) return undefined;
   return { refreshedAt: value.refreshedAt, expiresAt: value.expiresAt, retentionMs: value.retentionMs,
     retention: value.retention, basis: value.basis as CacheExpiryBasis };
 };

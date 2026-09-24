@@ -1,5 +1,5 @@
 // Generated from src/core/session-api.ts; edit that source and run npm run build:core.
-export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate';
+export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
 export interface CacheExpiryProjection {
     readonly refreshedAt: number;
     readonly expiresAt: number;

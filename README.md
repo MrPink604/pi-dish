@@ -355,6 +355,22 @@ provider inference, apply without restarting pi-dish, and invalidate cached
 session projections. They only teach pi-dish the policy you configured; they do
 not send cache headers or change a provider's retention.
 
+### Learned cache TTLs
+
+Beyond the built-in defaults, pi-dish measures real provider cache behavior
+from your session history. Every cache-active response is treated as a probe
+of whether the provider's cache survived the idle gap before it; per
+provider/model (and per Anthropic cache tier) a logistic warmth curve is fit
+over a sliding window (200 probes or 45 days, recent probes weighted
+higher). Once enough probes with both hits and misses bracket the crossing,
+projections switch to the learned TTL (shown as `~` with a `learned` basis).
+Documented `fixed` retentions and your `cacheTtlOverrides` always win; the
+learner only replaces built-in guesses. The fitted curve's slope doubles as
+a reliability signal: a deterministic provider TTL produces a steep cliff,
+while best-effort eviction (gateways, capacity pressure) produces a shallow
+slope and a warm-window hit rate below 100%. Learned state lives in
+`~/.pi/dish/cache-lifetime.json`; delete it to re-learn from scratch.
+
 ### Speech to text (bring your own endpoint)
 
 Dictation into the composer, off by default. pi-dish runs no model of its

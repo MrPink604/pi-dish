@@ -29,8 +29,8 @@ interface CachedConfig {
 
 const CONFIG_REVISION = 1;
 const MAX_RULES = 100;
-const MIN_TTL_MS = 60_000;
-const MAX_TTL_MS = 365 * 24 * 60 * 60_000;
+export const MIN_TTL_MS = 60_000;
+export const MAX_TTL_MS = 365 * 24 * 60 * 60_000;
 const cache = new Map<string, CachedConfig>();
 
 function record(value: unknown): Record<string, unknown> | null {
