@@ -7,6 +7,8 @@ import { hostDisplayLabel } from './helper-identity';
 import { mergeUsageSummaries, createFanoutRenderQueue, aggregateUsageWeekly, niceTicks, formatUsageDay, usageUnattributedCost, usageLimitsHtml, shortModelName } from './helper-usage';
 import { finite, record } from '../core/helper-values';
 import { decodeUsageSummary, decodeUsageLimits } from './usage-data';
+import { decodeCacheLifetimes, cacheLifetimesHtml } from './cache-lifetimes';
+import type { CacheLifetimeHost } from './cache-lifetimes';
 export type UsageHost = Readonly<HostEndpoint & HelperHost & { hostId: string | null }>;
 export type UsageMetric = 'cost' | 'tokens' | 'calls';
 export type UsageRange = '1' | '7' | '30' | 'all';
@@ -33,6 +35,11 @@ export function createUsageView(options: {
   let usageData: UsageSummary | null = null, usageChart: UsageChart | null = null, usageSelectedDay: string | null = null;
   let usageHostErrors: string[] = [], usageHostPending: string[] = [];
   let usageLimitsEntries: UsageLimitEntry[] = [], usageFetchSeq = 0;
+  // Cache lifetimes: per-host learner reports, the host being shown, and the
+  // expanded rows. The selection outlives refetches; it is view memory only.
+  let cacheLifetimeHosts: CacheLifetimeHost[] = [], cacheLifetimeHostKey: string | null = null;
+  const cacheLifetimeOpen = new Set<string>();
+  let cacheLifetimeEvents = new AbortController();
   let usageSort: 'cost' | 'tokens' = localStorage.getItem('pi-dish-usage-sort') === 'tokens' ? 'tokens' : 'cost';
   let usageStack: 'buckets' | 'models' = localStorage.getItem('pi-dish-usage-stack') === 'buckets' ? 'buckets' : 'models';
   const usageModelFilter = new Set<string>();
@@ -68,6 +75,7 @@ export function createUsageView(options: {
   function closeUsageView() {
     if (disposed) return;
     usageFetchSeq++; retireRender(); renderQueue?.dispose(); renderQueue = null;
+    cacheLifetimeEvents.abort();
     clearTimeout(usageResizeTimer);
     options.root.classList.remove('usage-open');
     clearTimeout(usageTimer); usageTimer = undefined;
@@ -144,11 +152,56 @@ export function createUsageView(options: {
       if (usageData && dataSequence === fetchSeq) renderUsageView(usageData);
     }));
   }
+  // Learned cache lifetimes are per host (each learns from its own sessions)
+  // and range-independent, so they ride their own capability-gated fan-out
+  // and render into their own container without redrawing the chart.
+  async function loadCacheLifetimes(fetchSeq: number): Promise<void> {
+    const stale = () => fetchSeq !== usageFetchSeq || !isUsageViewOpen();
+    await options.fleetReady();
+    if (stale()) return;
+    const hosts = options.hosts().filter(host => host.capabilities?.cacheLifetimes).map(host => Object.freeze({ ...host }));
+    const results = new Map<string, CacheLifetimeHost>();
+    await Promise.all(hosts.map(async host => {
+      try {
+        const response = await options.request(host, '/api/cache-lifetimes', { timeoutMs: 20000 });
+        if (response.status === 401) { if (sameHost(host)) options.connection(host, 'blocked'); return; }
+        const data: unknown = await response.json();
+        if (!response.ok || stale() || !sameHost(host)) return;
+        const hostKey = host.hostId || host.base;
+        results.set(hostKey, { hostKey, hostLabel: hostDisplayLabel(host), rows: decodeCacheLifetimes(data) });
+      } catch { /* Supplementary: an unavailable host contributes no rows. */ }
+      if (stale()) return;
+      // Fleet order (self first), not arrival order, so the default host is stable.
+      cacheLifetimeHosts = hosts.map(host => results.get(host.hostId || host.base)).filter((host): host is CacheLifetimeHost => !!host);
+      renderCacheLifetimes();
+    }));
+  }
+  function renderCacheLifetimes(): void {
+    const holder = document.getElementById('usageCacheLifetimes');
+    if (!holder || !isUsageViewOpen()) return;
+    cacheLifetimeEvents.abort(); cacheLifetimeEvents = new AbortController();
+    const listener = { signal: cacheLifetimeEvents.signal };
+    holder.innerHTML = cacheLifetimesHtml(cacheLifetimeHosts, { hostKey: cacheLifetimeHostKey, open: cacheLifetimeOpen });
+    holder.querySelectorAll<HTMLElement>('[data-cl-host]').forEach(button => button.addEventListener('click', () => {
+      cacheLifetimeHostKey = button.dataset.clHost || null; cacheLifetimeOpen.clear(); renderCacheLifetimes();
+    }, listener));
+    holder.querySelectorAll<HTMLElement>('[data-cl-key]').forEach(row => {
+      const toggle = () => {
+        const key = decodeURIComponent(row.dataset.clKey || '');
+        if (cacheLifetimeOpen.has(key)) cacheLifetimeOpen.delete(key); else cacheLifetimeOpen.add(key);
+        renderCacheLifetimes();
+        document.querySelector<HTMLElement>(`#usageCacheLifetimes [data-cl-key="${CSS.escape(row.dataset.clKey || '')}"]`)?.focus({ preventScroll: true });
+      };
+      row.addEventListener('click', toggle, listener);
+      row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); } }, listener);
+    });
+  }
   async function loadUsageView(): Promise<void> {
     if (!isUsageViewOpen()) return;
     const fetchSeq = ++usageFetchSeq;
     clearTimeout(usageTimer); renderQueue?.dispose(); renderQueue = null;
     void loadUsageLimits(fetchSeq);
+    void loadCacheLifetimes(fetchSeq);
     const range = usageRange, sort = usageSort, models = usageModelsKey();
     const stale = () => fetchSeq !== usageFetchSeq || range !== usageRange || sort !== usageSort || models !== usageModelsKey() || !isUsageViewOpen();
     const body = element('usageViewBody');
@@ -322,6 +375,7 @@ export function createUsageView(options: {
         ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
       </div>
       ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? '' : 's'} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing and ${d.unpricedModelCalls === 1 ? 'is' : 'are'} omitted.</div>` : ''}
+      <div id="usageCacheLifetimes"></div>
       ${usageLimitsHtml(usageLimitsEntries)}
     `;
     body.querySelectorAll<HTMLElement>('[data-range]').forEach(button => button.addEventListener('click', () => {
@@ -351,6 +405,7 @@ export function createUsageView(options: {
     });
     if (showChart) drawUsageChart();
     renderUsageDayDetail();
+    renderCacheLifetimes();
   }
 
   // Chart geometry is computed against the holder's live width; redraw on

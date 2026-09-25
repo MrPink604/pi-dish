@@ -1,10 +1,16 @@
 export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
+/**
+ * 'unknown' marks cache activity with no documented, estimated or configured
+ * window. It exists only so the serve-time learner overlay has an anchor to
+ * fill in; applyLearnedCacheExpiry never serves it.
+ */
+export type StoredCacheExpiryBasis = CacheExpiryBasis | 'unknown';
 export interface CacheExpiry {
   readonly refreshedAt: number;
   readonly expiresAt: number;
   readonly retentionMs: number;
   readonly retention: string;
-  readonly basis: CacheExpiryBasis;
+  readonly basis: StoredCacheExpiryBasis;
   /** Retained for incremental parsing; browser decoders deliberately omit it. */
   readonly identity: string;
   /** Anthropic's extended cache tier; selects the matching learned model. */

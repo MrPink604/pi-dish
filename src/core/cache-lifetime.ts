@@ -13,7 +13,8 @@
  * TTL produces a cliff; best-effort eviction produces a shallow slope).
  *
  * Fitting is a batch weighted ridge logistic regression (Newton) over a
- * bounded sliding window — 200 observations or 45 days per identity, with a
+ * bounded sliding window — 45 days per identity, stratified by idle gap so
+ * rare long-idle probes survive tool-loop chatter (see WINDOW_MAX_OBS), with a
  * 14-day exponential half-life so provider behavior drift washes out — with
  * an L2 prior anchored on the built-in ladder. A learned policy activates
  * only with enough decayed support, both outcomes observed, and the crossing
@@ -36,7 +37,7 @@ import path from 'node:path';
 import { MAX_TTL_MS, MIN_TTL_MS, configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
 import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, hasCacheActivity, isRecord, resolveCacheTarget } from './session-metadata';
-import type { CacheExpiry, SessionEntries } from './session-metadata-contracts';
+import type { CacheExpiry, CacheExpiryBasis, SessionEntries } from './session-metadata-contracts';
 
 export interface CacheLifetimeStats {
   /** Decayed effective observation count behind the fit. */
@@ -65,6 +66,36 @@ export interface CacheLifetimeSnapshotEntry {
   readonly retention: string | null;
   readonly stats: CacheLifetimeStats | null;
   readonly rawObservations: number;
+}
+
+export interface CacheLifetimeGate {
+  readonly id: 'support' | 'warm' | 'cold' | 'slope' | 'range' | 'bracket';
+  readonly pass: boolean;
+  readonly value: number | null;
+  readonly need: number;
+}
+
+/** Where an identity's served retention comes from, in precedence order. */
+export type CacheLifetimeSource = 'override' | 'documented' | 'learned' | 'builtin' | 'none';
+
+export interface CacheLifetimeReportEntry {
+  readonly api: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly tier: '1h' | null;
+  /** What sessions are served for this identity right now. */
+  readonly effective: { readonly retentionMs: number; readonly retention: string; readonly basis: CacheExpiryBasis } | null;
+  readonly source: CacheLifetimeSource;
+  readonly builtin: { readonly retentionMs: number; readonly retention: string; readonly basis: CacheExpiryBasis } | null;
+  readonly override: { readonly retentionMs: number; readonly retention: string; readonly basis: CacheExpiryBasis } | null;
+  /** The fitted curve P(hit | gap) = σ(alpha + beta·ln gapMs); null below four usable probes. */
+  readonly fit: { readonly active: boolean; readonly ttlMs: number; readonly alpha: number; readonly beta: number;
+    readonly priorTtlMs: number; readonly stats: CacheLifetimeStats } | null;
+  readonly gates: readonly CacheLifetimeGate[];
+  readonly probes: { readonly total: number; readonly hits: number; readonly misses: number;
+    readonly maxHitGapMs: number | null; readonly minMissGapMs: number | null; readonly lastAt: number };
+  /** Window probes as [gapMs, hit], for plotting; raw counts, not decayed. */
+  readonly points: readonly (readonly [number, 0 | 1])[];
 }
 
 interface Observation { readonly t: number; readonly gap: number; readonly hit: boolean; readonly fh: string }
@@ -96,7 +127,17 @@ interface LifetimeStore {
 }
 
 const STORE_VERSION = 1;
-const WINDOW_MAX_OBS = 200;
+// The window is stratified by idle gap: at most WINDOW_BUCKET_OBS probes per
+// doubling of the gap (<15s, 15-30s, 30s-1m, … ≥17h), then WINDOW_MAX_OBS in
+// total, always evicting the oldest probe of the fullest bucket. A plain FIFO
+// filled with seconds-apart tool-loop probes and evicted the rare long-idle
+// returns — the only evidence of where a cache expires — so almost no
+// identity ever observed a miss. Retention conditioned on the gap alone,
+// never on the outcome, leaves the fitted P(hit | gap) unbiased.
+const WINDOW_MAX_OBS = 240;
+const WINDOW_BUCKET_OBS = 24;
+const WINDOW_BUCKET_BASE_MS = 15_000;
+const WINDOW_BUCKETS = 14;
 const WINDOW_MAX_AGE_MS = 45 * 24 * 60 * 60_000;
 const HALF_LIFE_MS = 14 * 24 * 60 * 60_000;
 const RIDGE = 3;
@@ -133,8 +174,40 @@ function decodeObservations(value: unknown): Observation[] {
         !Number.isFinite(gap) || gap <= 0 || (hit !== 0 && hit !== 1) ||
         typeof fh !== 'string' || fh.length > 16) continue;
     obs.push({ t, gap, hit: hit === 1, fh });
+    if (obs.length >= WINDOW_MAX_OBS * 4) break;
   }
-  return obs.slice(-WINDOW_MAX_OBS);
+  return obs;
+}
+
+function gapBucket(gap: number): number {
+  if (gap < WINDOW_BUCKET_BASE_MS) return 0;
+  return Math.min(WINDOW_BUCKETS - 1, 1 + Math.floor(Math.log2(gap / WINDOW_BUCKET_BASE_MS)));
+}
+
+function evictOldest(window: Observation[], bucket: number | null): Observation {
+  let index = -1;
+  for (let i = 0; i < window.length; i++) {
+    if (bucket !== null && gapBucket(window[i].gap) !== bucket) continue;
+    if (index < 0 || window[i].t < window[index].t) index = i;
+  }
+  return window.splice(index, 1)[0];
+}
+
+/** Admit one probe into a stratified window; returns every probe it evicted (possibly itself). */
+function admitObservation(window: Observation[], obs: Observation, now: number): Observation[] {
+  const cutoff = now - WINDOW_MAX_AGE_MS;
+  const evicted: Observation[] = [];
+  for (let i = window.length - 1; i >= 0; i--) {
+    if (window[i].t < cutoff) evicted.push(window.splice(i, 1)[0]);
+  }
+  if (obs.t < cutoff) return [...evicted, obs];
+  window.push(obs);
+  const counts = new Array<number>(WINDOW_BUCKETS).fill(0);
+  for (const o of window) counts[gapBucket(o.gap)]++;
+  const bucket = gapBucket(obs.gap);
+  if (counts[bucket] > WINDOW_BUCKET_OBS) evicted.push(evictOldest(window, bucket));
+  else if (window.length > WINDOW_MAX_OBS) evicted.push(evictOldest(window, counts.indexOf(Math.max(...counts))));
+  return evicted;
 }
 
 function decodeStore(value: unknown): Map<string, IdentityState> {
@@ -144,7 +217,10 @@ function decodeStore(value: unknown): Map<string, IdentityState> {
   const now = Date.now();
   for (const [key, raw] of Object.entries(rawIdentities)) {
     if (key.length > 500 || !isRecord(raw)) continue;
-    const obs = decodeObservations(raw.obs).filter(o => now - o.t <= WINDOW_MAX_AGE_MS);
+    // Re-admitting in time order applies the current window policy to stores
+    // written under an older one.
+    const obs: Observation[] = [];
+    for (const o of decodeObservations(raw.obs).sort((a, b) => a.t - b.t)) admitObservation(obs, o, now);
     if (!obs.length) continue;
     identities.set(key, {
       obs, keys: new Set(obs.map(o => `${o.fh}:${o.t}`)),
@@ -246,11 +322,29 @@ function fitObservations(obs: readonly Observation[], now: number, priorTtlMs: n
     warmHits, warmTotal, minMissGap, maxHitGap };
 }
 
+/**
+ * Activation gates, in the order the UI explains them. `value`/`need` are the
+ * decayed quantity and its threshold; the bracket gate is pass/fail only.
+ * Without a fit (fewer than four usable probes) only support can be judged.
+ */
+function fitGates(fit: Fit | null, rawObservations: number): CacheLifetimeGate[] {
+  if (!fit) {
+    return [{ id: 'support', pass: false, value: rawObservations, need: MIN_EFFECTIVE_OBS }];
+  }
+  const round = (value: number) => Math.round(value * 100) / 100;
+  return [
+    { id: 'support', pass: fit.effN >= MIN_EFFECTIVE_OBS, value: round(fit.effN), need: MIN_EFFECTIVE_OBS },
+    { id: 'warm', pass: fit.effHits >= MIN_EFFECTIVE_OUTCOMES, value: round(fit.effHits), need: MIN_EFFECTIVE_OUTCOMES },
+    { id: 'cold', pass: fit.effMisses >= MIN_EFFECTIVE_OUTCOMES, value: round(fit.effMisses), need: MIN_EFFECTIVE_OUTCOMES },
+    { id: 'slope', pass: fit.beta <= -MIN_SLOPE, value: round(-fit.beta), need: MIN_SLOPE },
+    { id: 'range', pass: fit.ttlMs >= MIN_TTL_MS && fit.ttlMs <= MAX_TTL_MS, value: Math.round(fit.ttlMs), need: MIN_TTL_MS },
+    { id: 'bracket', pass: fit.minMissGap <= fit.ttlMs * BRACKET_TOLERANCE && fit.maxHitGap * BRACKET_TOLERANCE >= fit.ttlMs,
+      value: null, need: BRACKET_TOLERANCE },
+  ];
+}
+
 function fitActive(fit: Fit): boolean {
-  return fit.effN >= MIN_EFFECTIVE_OBS && fit.effHits >= MIN_EFFECTIVE_OUTCOMES &&
-    fit.effMisses >= MIN_EFFECTIVE_OUTCOMES && fit.beta <= -MIN_SLOPE &&
-    fit.ttlMs >= MIN_TTL_MS && fit.ttlMs <= MAX_TTL_MS &&
-    fit.minMissGap <= fit.ttlMs * BRACKET_TOLERANCE && fit.maxHitGap * BRACKET_TOLERANCE >= fit.ttlMs;
+  return fitGates(fit, 0).every(gate => gate.pass);
 }
 
 function fitStats(fit: Fit, brier: number): CacheLifetimeStats {
@@ -302,13 +396,8 @@ function recordObservation(key: string, obs: Observation, now: number): void {
     state.brier = Number.isFinite(state.brier) ? state.brier + BRIER_ALPHA * (err - state.brier) : err;
     state.brierN++;
   }
-  state.obs.push(obs);
   state.keys.add(dedupKey);
-  const cutoff = now - WINDOW_MAX_AGE_MS;
-  while (state.obs.length > WINDOW_MAX_OBS || (state.obs.length && state.obs[0].t < cutoff)) {
-    const dropped = state.obs.shift()!;
-    state.keys.delete(`${dropped.fh}:${dropped.t}`);
-  }
+  for (const dropped of admitObservation(state.obs, obs, now)) state.keys.delete(`${dropped.fh}:${dropped.t}`);
   state.fitDirty = true;
   store.dirty = true;
 }
@@ -345,7 +434,7 @@ function extractObservations(entries: SessionEntries, file: string,
     }
     // A write sets the probed entry's tier; a pure read leaves it unchanged.
     const wrote = cacheTokens(usage, 'cacheWrite') > 0;
-    chain.set(identity, { ts, tier1h: wrote ? cacheTier1h(usage) : (anchor?.tier1h ?? false) });
+    chain.set(identity, { ts, tier1h: wrote ? cacheTier1h(usage, target.provider === 'anthropic') : (anchor?.tier1h ?? false) });
   }
 }
 
@@ -392,19 +481,33 @@ function formatLearnedRetention(ms: number): string {
   return `~${Math.round(hours / 2.4) / 10}d`;
 }
 
+export type ServedCacheExpiry = Omit<CacheExpiry, 'basis'> & { readonly basis: CacheExpiryBasis };
+
+function isServedCacheExpiry(expiry: CacheExpiry): expiry is ServedCacheExpiry {
+  return expiry.basis !== 'unknown';
+}
+
+function splitIdentity(identity: string): { api: string; provider: string; model: string } {
+  const [api = '', provider = '', model = ''] = identity.split('\u0000');
+  return { api, provider, model };
+}
+
 /**
  * Serve-time overlay: substitute an active learned TTL for built-in
- * 'estimate'/'minimum' projections. Documented 'fixed' retentions and user
- * cacheTtlOverrides rules always win; the learner only replaces guesses.
+ * 'estimate'/'minimum' projections, and supply one where no built-in window
+ * exists at all ('unknown' — never served itself). Documented 'fixed'
+ * retentions and user cacheTtlOverrides rules always win; the learner only
+ * replaces guesses.
  */
 export function applyLearnedCacheExpiry(expiry: CacheExpiry | null,
-  config: CacheRetentionConfig = loadCacheRetentionConfig()): CacheExpiry | null {
-  if (!expiry || expiry.basis === 'fixed') return expiry;
-  const [api = '', provider = '', model = ''] = expiry.identity.split('\u0000');
-  const target = resolveCacheTarget({ api, provider, model });
-  if (configuredCacheRetention(config, target.provider, target.model)) return expiry;
+  config: CacheRetentionConfig = loadCacheRetentionConfig()): ServedCacheExpiry | null {
+  if (!expiry) return null;
+  const known = isServedCacheExpiry(expiry) ? expiry : null;
+  if (known?.basis === 'fixed') return known;
+  const target = resolveCacheTarget(splitIdentity(expiry.identity));
+  if (configuredCacheRetention(config, target.provider, target.model)) return known;
   const learned = learnedPolicyFor(expiry.identity, expiry.tier);
-  if (!learned) return expiry;
+  if (!learned) return known;
   return { ...expiry, retentionMs: learned.retentionMs, retention: learned.retention,
     expiresAt: expiry.refreshedAt + learned.retentionMs, basis: 'learned' };
 }
@@ -427,6 +530,52 @@ export function cacheLifetimeSnapshot(): CacheLifetimeSnapshotEntry[] {
     });
   }
   return out;
+}
+
+/**
+ * Everything the cache-lifetimes view explains per identity: the policy
+ * sessions are served (with the same precedence as applyLearnedCacheExpiry),
+ * the fitted curve, each activation gate, and the window's probes.
+ */
+export function cacheLifetimeReport(config: CacheRetentionConfig = loadCacheRetentionConfig()): CacheLifetimeReportEntry[] {
+  const store = getStore();
+  const now = Date.now();
+  const out: CacheLifetimeReportEntry[] = [];
+  for (const [key, state] of store.identities) {
+    if (!state.obs.length) continue;
+    const identity = identityOf(key), tier = tierOf(key);
+    const { api, provider, model } = splitIdentity(identity);
+    const target = resolveCacheTarget({ api, provider, model });
+    const fit = ensureFit(key, state, now);
+    const active = !!fit && fitActive(fit);
+    const override = configuredCacheRetention(config, target.provider, target.model);
+    const builtin = builtinCacheRetention(target, tier === '1h');
+    let source: CacheLifetimeSource = 'none';
+    let effective: CacheLifetimeReportEntry['effective'] = null;
+    if (override) { source = 'override'; effective = override; }
+    else if (builtin?.basis === 'fixed') { source = 'documented'; effective = builtin; }
+    else if (fit && active) {
+      source = 'learned';
+      effective = { retentionMs: Math.round(fit.ttlMs), retention: formatLearnedRetention(fit.ttlMs), basis: 'learned' };
+    } else if (builtin) { source = 'builtin'; effective = builtin; }
+    let hits = 0, maxHitGapMs: number | null = null, minMissGapMs: number | null = null, lastAt = 0;
+    for (const o of state.obs) {
+      if (o.hit) { hits++; if (maxHitGapMs === null || o.gap > maxHitGapMs) maxHitGapMs = o.gap; }
+      else if (minMissGapMs === null || o.gap < minMissGapMs) minMissGapMs = o.gap;
+      if (o.t > lastAt) lastAt = o.t;
+    }
+    out.push({
+      api, provider: target.provider, model: target.model, tier, effective, source,
+      builtin: builtin ? { retentionMs: builtin.retentionMs, retention: builtin.retention, basis: builtin.basis } : null,
+      override,
+      fit: fit ? { active, ttlMs: Math.round(fit.ttlMs), alpha: fit.alpha, beta: fit.beta,
+        priorTtlMs: priorTtlFor(key), stats: fitStats(fit, state.brier) } : null,
+      gates: fitGates(fit, state.obs.length),
+      probes: { total: state.obs.length, hits, misses: state.obs.length - hits, maxHitGapMs, minMissGapMs, lastAt },
+      points: [...state.obs].sort((a, b) => a.t - b.t).map(o => [Math.round(o.gap), o.hit ? 1 : 0] as const),
+    });
+  }
+  return out.sort((a, b) => b.probes.lastAt - a.probes.lastAt);
 }
 
 export function resetCacheLifetimeForTests(): void {

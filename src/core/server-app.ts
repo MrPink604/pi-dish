@@ -971,6 +971,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/usage-summary', featureHandlers.usageSummary);
 
   app.get('/api/usage-limits', featureHandlers.usageLimits);
+  app.get('/api/cache-lifetimes', featureHandlers.cacheLifetimes);
 
   // =========================================================================
   // Skills view (main-pane takeover) — inventory from pi's loader + activation

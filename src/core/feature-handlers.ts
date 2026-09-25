@@ -10,6 +10,7 @@ import type { SessionOwnership } from './session-ownership';
 import type { CatalogModel } from './session-api';
 import type { AvailableModel } from './pi-sdk';
 import { createUsageSummaryHandler } from './usage-feature-handler';
+import { cacheLifetimeReport } from './cache-lifetime';
 import { createSkillFeatureHandlers } from './skill-feature-handlers';
 import { createModelFeatureHandlers } from './model-feature-handlers';
 
@@ -42,6 +43,7 @@ export interface FeatureHandlers {
   settings: FeatureHandler;
   updateSettings: FeatureHandler;
   usageLimits: FeatureHandler;
+  cacheLifetimes: FeatureHandler;
   usageSummary: FeatureHandler;
   skills: FeatureHandler;
   skillActivations: FeatureHandler;
@@ -126,6 +128,11 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
     }));
     res.json({ generatedAt: Date.now(), harnesses: results });
   };
+  // Learned provider cache TTLs: this host's own probe window and fits. The
+  // store is populated by the session indexer; reading it never reindexes.
+  const cacheLifetimes: FeatureHandler = (_req, res) => {
+    res.json({ generatedAt: Date.now(), identities: cacheLifetimeReport() });
+  };
   const settings: FeatureHandler = (_req, res) => res.json(settingsForClient(ports.readDishSettings()));
   const updateSettings: FeatureHandler = (req, res) => {
     // The JSON parser rejects primitives. Preserve the former `in` failure
@@ -178,6 +185,7 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
     ...createSkillFeatureHandlers(ports),
     ...createModelFeatureHandlers(ports),
     usageLimits,
+    cacheLifetimes,
     settings,
     updateSettings,
     harnesses: harnessSettings.harnesses,

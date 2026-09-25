@@ -1,5 +1,6 @@
 import path = require('path');
 import { applyLearnedCacheExpiry } from './cache-lifetime';
+import type { ServedCacheExpiry } from './cache-lifetime';
 import { hasPendingAskDialog } from './extension-ui-state';
 import { canonicalSessionId, encodeSessionKey } from './session-key';
 import { isRecord } from './wire-protocol';
@@ -104,12 +105,17 @@ function decodeRoutineAnnotations(value: unknown): ReadonlyMap<SessionId, Catalo
   return routines;
 }
 
-/** Model catalogs can warm after indexing, so context derivation stays read-time. */
+/**
+ * Model catalogs can warm after indexing, so context derivation stays
+ * read-time. So does the learned cache-TTL overlay: every path that serves
+ * indexed session info goes through here, and the stored projection may be
+ * an internal 'unknown' anchor that must never reach a client.
+ */
 function withSessionContext<T extends Readonly<SessionInfo>>(info: T,
-  contextWindowForModel: SessionCatalogOptions['contextWindowForModel']): T & { contextWindow: number; contextPercent: number } {
+  contextWindowForModel: SessionCatalogOptions['contextWindowForModel']): T & { contextWindow: number; contextPercent: number; cacheExpiry: ServedCacheExpiry | null } {
   const contextWindow = contextWindowForModel(info.model);
   const contextPercent = info.contextTokens > 0 ? Math.min(100, Math.floor(info.contextTokens / contextWindow * 100)) : 0;
-  return { ...info, contextWindow, contextPercent };
+  return { ...info, contextWindow, contextPercent, cacheExpiry: applyLearnedCacheExpiry(info.cacheExpiry) };
 }
 
 function subsessionLabel(source: SessionSource | null): string | null {
@@ -139,7 +145,7 @@ function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalo
     model: model || 'unknown', contextPercent: percent == null ? 0 : Math.round(percent * 10) / 10,
     contextTokens: (registered ? fields.contextTokens ?? info?.contextTokens : fields.contextTokens) ?? 0,
     contextWindow: (registered ? fields.contextWindow || options.contextWindowForModel(model) : fields.contextWindow) || 0,
-    cacheExpiry: applyLearnedCacheExpiry(info?.cacheExpiry ?? null),
+    cacheExpiry: info?.cacheExpiry ?? null,
     thinkingLevel: fields.thinkingLevel || null,
     messageCount: (registered ? info?.messageCount : fields.messageCount) || 0,
     lastActivity: registered ? info?.lastActivity || fields.lastActivity || new Date(0) : fields.lastActivity,
@@ -166,7 +172,7 @@ function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advic
     profileId: source.profileId, profileVersion: source.profileVersion,
     name: subsessionLabel(source) || info.name || source.nativeSessionId.slice(0, 8),
     model: info.model || 'unknown', contextPercent: info.contextPercent || 0, contextTokens: info.contextTokens || 0,
-    cacheExpiry: applyLearnedCacheExpiry(info.cacheExpiry), messageCount: info.messageCount || 0, lastActivity: info.lastActivity, isActive: false,
+    cacheExpiry: info.cacheExpiry, messageCount: info.messageCount || 0, lastActivity: info.lastActivity, isActive: false,
     ...(liveChild ? { subagentLive: true } : {}),
     cwd, sessionFile: source.file, parentSession: info.parentSession || source.parentSession || null,
     parentSessionSource: !info.parentSession && source.parentSession ? 'omp-subsession-layout' : null,

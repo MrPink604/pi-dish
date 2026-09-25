@@ -30,6 +30,8 @@ var PiDishBrowser = (() => {
     NS_THINKING_LABELS: () => NS_THINKING_LABELS,
     applyCachedTheme: () => applyCachedTheme,
     assignHostColor: () => assignHostColor,
+    cacheLifetimeStatus: () => cacheLifetimeStatus,
+    cacheLifetimesHtml: () => cacheLifetimesHtml,
     clampSidebarWidth: () => clampSidebarWidth,
     clampTerminalHeight: () => clampTerminalHeight,
     copyTextToClipboard: () => copyTextToClipboard,
@@ -108,6 +110,7 @@ var PiDishBrowser = (() => {
     decodeBounceOperation: () => decodeBounceOperation,
     decodeBounceOperations: () => decodeBounceOperations,
     decodeBouncePreview: () => decodeBouncePreview,
+    decodeCacheLifetimes: () => decodeCacheLifetimes,
     decodeCommentIndex: () => decodeCommentIndex,
     decodeCommentTarget: () => decodeCommentTarget,
     decodeComposerImages: () => decodeComposerImages,
@@ -153,6 +156,7 @@ var PiDishBrowser = (() => {
     decodeUsageLimits: () => decodeUsageLimits,
     decodeUsageSummary: () => decodeUsageSummary,
     findQuoteOffset: () => findQuoteOffset,
+    formatGap: () => formatGap,
     groupToolActivity: () => groupToolActivity,
     harnessBadgeInnerHtml: () => harnessBadgeInnerHtml,
     hostConnReduce: () => hostConnReduce,
@@ -471,10 +475,10 @@ var PiDishBrowser = (() => {
     const doc = root.ownerDocument;
     let view = null;
     let disposed = false;
-    function element(tag, className, text17) {
+    function element(tag, className, text18) {
       const node = doc.createElement(tag);
       node.className = className;
-      if (text17 !== void 0) node.textContent = text17;
+      if (text18 !== void 0) node.textContent = text18;
       return node;
     }
     const search = element("input", "model-search");
@@ -491,8 +495,8 @@ var PiDishBrowser = (() => {
       node.dataset.value = value;
       return node;
     }
-    function button(text17, name, value = "", primary = false) {
-      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text17);
+    function button(text18, name, value = "", primary = false) {
+      const node = element("button", "model-footer-btn" + (primary ? " primary" : ""), text18);
       node.type = "button";
       return action(node, name, value);
     }
@@ -764,8 +768,8 @@ var PiDishBrowser = (() => {
     const state = prev && typeof prev === "object" ? prev : null;
     const errText = (value) => {
       if (value == null) return null;
-      const text17 = String(typeof value === "object" && "message" in value && value.message || value);
-      return text17 || null;
+      const text18 = String(typeof value === "object" && "message" in value && value.message || value);
+      return text18 || null;
     };
     const eventError = event && typeof event === "object" && "error" in event ? errText(event.error) : null;
     if (kind === "blocked") {
@@ -2958,13 +2962,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/core/helper-format.ts
-  function escapeHtml(text17) {
-    if (text17 == null || text17 === "") return "";
-    return String(text17).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  function escapeHtml(text18) {
+    if (text18 == null || text18 === "") return "";
+    return String(text18).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
-  function truncate(text17, maxLen, suffix = " \u2026 (truncated)") {
-    if (!text17 || text17.length <= maxLen) return text17;
-    return text17.slice(0, maxLen) + suffix;
+  function truncate(text18, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text18 || text18.length <= maxLen) return text18;
+    return text18.slice(0, maxLen) + suffix;
   }
 
   // src/core/helper-values.ts
@@ -2979,9 +2983,9 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/helper-format.ts
-  function stripAnsi(text17) {
-    if (text17 == null || text17 === "") return "";
-    return String(text17).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
+  function stripAnsi(text18) {
+    if (text18 == null || text18 === "") return "";
+    return String(text18).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
   }
   function formatTokens(tokens2) {
     if (!tokens2 || tokens2 === 0) return "0";
@@ -3011,7 +3015,7 @@ var PiDishBrowser = (() => {
     if (expiry.basis === "minimum") {
       return { compact: `\u2265${duration}`, detail: `At least ${duration} remaining \xB7 ${expiry.retention} minimum retention`, severity };
     }
-    const qualifier = expiry.basis === "estimate" ? "provider estimate" : "retention";
+    const qualifier = expiry.basis === "estimate" ? "provider estimate" : expiry.basis === "learned" ? "learned retention" : "retention";
     return { compact: `~${duration}`, detail: `About ${duration} remaining \xB7 ${expiry.retention} ${qualifier}`, severity };
   }
   function formatRuntime(r) {
@@ -3117,9 +3121,9 @@ var PiDishBrowser = (() => {
     if (!hasMediaRecorder) return { code: "no-recorder", message: "This browser can't record audio (no MediaRecorder)." };
     return null;
   }
-  function insertAtCaret(value, selectionStart, selectionEnd, text17) {
+  function insertAtCaret(value, selectionStart, selectionEnd, text18) {
     const source = typeof value === "string" ? value : "";
-    const insert = typeof text17 === "string" ? text17 : "";
+    const insert = typeof text18 === "string" ? text18 : "";
     const max = source.length;
     let start = finite2(selectionStart) ? Math.max(0, Math.min(max, selectionStart)) : max;
     let end = finite2(selectionEnd) ? Math.max(0, Math.min(max, selectionEnd)) : start;
@@ -3368,12 +3372,12 @@ var PiDishBrowser = (() => {
     }
     return true;
   }
-  function countOccurrences(text17, token) {
-    if (!text17 || !token) return 0;
-    let n = 0, i = text17.indexOf(token);
+  function countOccurrences(text18, token) {
+    if (!text18 || !token) return 0;
+    let n = 0, i = text18.indexOf(token);
     while (i !== -1) {
       n++;
-      i = text17.indexOf(token, i + token.length);
+      i = text18.indexOf(token, i + token.length);
     }
     return n;
   }
@@ -3440,8 +3444,8 @@ var PiDishBrowser = (() => {
     result += escapeHtml(str.slice(last));
     return result;
   }
-  function highlightTokens(text17, tokens2) {
-    const str = String(text17);
+  function highlightTokens(text18, tokens2) {
+    const str = String(text18);
     const lower = str.toLowerCase();
     const ranges = [];
     for (const t of tokens2) {
@@ -4862,8 +4866,8 @@ var PiDishBrowser = (() => {
     const textNodes = [];
     while (walker.nextNode()) textNodes.push(walker.currentNode);
     for (const node of textNodes) {
-      const text17 = node.textContent || "";
-      const lower = text17.toLowerCase();
+      const text18 = node.textContent || "";
+      const lower = text18.toLowerCase();
       const ranges = [];
       for (const token of tokens2) {
         let from = 0, at;
@@ -4878,14 +4882,14 @@ var PiDishBrowser = (() => {
       let cursor2 = 0;
       for (const [start, end] of ranges) {
         if (start < cursor2) continue;
-        frag.appendChild(document2.createTextNode(text17.slice(cursor2, start)));
+        frag.appendChild(document2.createTextNode(text18.slice(cursor2, start)));
         const mark = document2.createElement("mark");
         mark.className = "search-mark";
-        mark.textContent = text17.slice(start, end);
+        mark.textContent = text18.slice(start, end);
         frag.appendChild(mark);
         cursor2 = end;
       }
-      frag.appendChild(document2.createTextNode(text17.slice(cursor2)));
+      frag.appendChild(document2.createTextNode(text18.slice(cursor2)));
       node.replaceWith(frag);
     }
   }
@@ -5049,11 +5053,11 @@ var PiDishBrowser = (() => {
       const d = new Date(ms);
       return d.toLocaleDateString(void 0, { month: "short", day: "numeric" });
     }
-    function renderSpark(weeks, { maxPx = 22, cls = "spark", pct = false } = {}) {
+    function renderSpark(weeks, { maxPx = 22, cls = "spark", pct: pct2 = false } = {}) {
       const max = Math.max(1, ...weeks);
       const bars = weeks.map((w) => {
         if (!w) return '<i class="z"></i>';
-        if (pct) return `<i style="height:${Math.max(9, Math.round(w / max * 100))}%"></i>`;
+        if (pct2) return `<i style="height:${Math.max(9, Math.round(w / max * 100))}%"></i>`;
         return `<i style="height:${Math.max(3, Math.round(w / max * maxPx))}px"></i>`;
       }).join("");
       return `<div class="${cls}">${bars}</div>`;
@@ -5248,13 +5252,13 @@ var PiDishBrowser = (() => {
         skipped, so there is no partial-coverage map to show.</div>`;
       } else {
         const secRows = cov.sections.map((sec, i) => {
-          const pct = Math.round(sec.fraction * 100);
+          const pct2 = Math.round(sec.fraction * 100);
           const cold = sec.neverRead ? " cold" : "";
           const never = sec.neverRead ? '<span class="never">never read</span>' : "";
           const heads = escapeHtml(sec.heading === "(intro)" ? "(intro)" : sec.heading);
           return `<div class="sec-row${cold}" data-sec="${i}">
             <span class="sec-name">${heads} <span class="lines">${sec.startLine}\u2013${sec.endLine}</span>${never}</span>
-            <div class="cov-bar">${sec.reads ? `<i style="width:${pct}%"></i>` : ""}</div>
+            <div class="cov-bar">${sec.reads ? `<i style="width:${pct2}%"></i>` : ""}</div>
             <span class="sec-frac">${sec.reads}/${cov.numMapped}</span>
           </div>
           <div class="sec-open" id="skSecOpen${i}" style="display:none"></div>`;
@@ -5780,14 +5784,14 @@ var PiDishBrowser = (() => {
     if (keys.length) return truncate(String(args[keys[0]]), 40);
     return "";
   }
-  function parseIpythonResult(text17) {
-    if (typeof text17 !== "string") return null;
-    const m = /^BashResult\(exit_code=(-?\d+), output=(['"])((?:\\.|(?!\2).)*)\2(?:, duration=([0-9.eE+-]+))?\)\s*$/.exec(text17);
+  function parseIpythonResult(text18) {
+    if (typeof text18 !== "string") return null;
+    const m = /^BashResult\(exit_code=(-?\d+), output=(['"])((?:\\.|(?!\2).)*)\2(?:, duration=([0-9.eE+-]+))?\)\s*$/.exec(text18);
     if (!m) return null;
     return { exitCode: Number(m[1]), output: pythonReprUnescape(m[3]), durationMs: m[4] != null ? Math.round(Number(m[4]) * 1e3) : null };
   }
-  function pythonReprUnescape(text17) {
-    return text17.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (_all, seq) => {
+  function pythonReprUnescape(text18) {
+    return text18.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (_all, seq) => {
       if (seq[0] === "x") return String.fromCharCode(parseInt(seq.slice(1), 16));
       if (seq[0] === "u") return String.fromCharCode(parseInt(seq.slice(1), 16));
       const map = { n: "\n", t: "	", r: "\r", b: "\b", f: "\f", v: "\v", "0": "\0", "\n": "" };
@@ -5880,13 +5884,13 @@ var PiDishBrowser = (() => {
     return best;
   }
   var SESSION_REF_TOKEN_RE = /(?:^|[\s(\[{<"'])#([A-Za-z0-9][A-Za-z0-9._:/-]{3,})/g;
-  function parseSessionRefTokens(text17) {
+  function parseSessionRefTokens(text18) {
     const out = [];
-    if (!text17) return out;
+    if (!text18) return out;
     const seen = /* @__PURE__ */ new Set();
     SESSION_REF_TOKEN_RE.lastIndex = 0;
     let match;
-    while ((match = SESSION_REF_TOKEN_RE.exec(String(text17))) !== null) {
+    while ((match = SESSION_REF_TOKEN_RE.exec(String(text18))) !== null) {
       const ref = match[1].replace(/[.:/]+$/, "");
       if (ref.length < 4 || seen.has(ref)) continue;
       seen.add(ref);
@@ -5919,8 +5923,8 @@ var PiDishBrowser = (() => {
     "transcript (`read <ref>`) or to message it (`send` / `steer` / `follow-up`",
     "<ref>). Never guess what a referenced session holds \u2014 read it."
   ].join("\n");
-  function splitSessionRefContext(text17) {
-    const body = String(text17 == null ? "" : text17);
+  function splitSessionRefContext(text18) {
+    const body = String(text18 == null ? "" : text18);
     const match = body.match(SESSION_REF_BLOCK_RE);
     if (!match) return { text: body, refs: [] };
     const refs = [];
@@ -6019,12 +6023,12 @@ var PiDishBrowser = (() => {
       }).join("");
       return `<div class="session-ref-chips">${chips}</div>`;
     }
-    function parseIrcInterrupt(text17) {
-      const match = /^Current interruptible wait interrupted: IRC message from (?:parent )?agent `([^`]+)`\.\n\n(?:Parent )?IRC message:\n\n([\s\S]+)$/.exec(text17);
+    function parseIrcInterrupt(text18) {
+      const match = /^Current interruptible wait interrupted: IRC message from (?:parent )?agent `([^`]+)`\.\n\n(?:Parent )?IRC message:\n\n([\s\S]+)$/.exec(text18);
       return match ? { from: match[1], body: match[2] } : null;
     }
-    function parseIrcCustomContent(text17) {
-      const inner = text17.replace(/^<irc>\n?/, "").replace(/\n?<\/irc>\s*$/, "");
+    function parseIrcCustomContent(text18) {
+      const inner = text18.replace(/^<irc>\n?/, "").replace(/\n?<\/irc>\s*$/, "");
       const match = /^Incoming IRC message from (?:parent )?agent `([^`]+)`:\n\n([\s\S]+)$/.exec(inner);
       if (!match) return inner.trim() ? { body: inner.trim() } : null;
       const body = match[2].replace(/\n*Sent while waiting\/working\.[\s\S]*$/, "").replace(/\n*If response expected, reply via `hub`[\s\S]*$/, "").trim();
@@ -6050,12 +6054,12 @@ var PiDishBrowser = (() => {
       const rawText = extractTextContent(msg.content);
       const irc = parseIrcInterrupt(rawText);
       if (irc) return renderIrcMessage(msg, time, attrs, msg.timestamp || Date.now(), irc);
-      const { text: text17, refs } = splitSessionRefContext(rawText);
+      const { text: text18, refs } = splitSessionRefContext(rawText);
       const imagesHtml = imageBlocksHtml(msg.content, "attached image");
       const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
       return `<div${attrs} class="message user">
     <div class="message-header"><span class="message-role user">\u276F</span>${time ? `<span class="message-time">${time}</span>` : ""}${messageLinkBtnHtml(msg)}</div>
-    <div class="message-content user-content">${text17 ? `<div class="markdown-body">${options2.markdown(text17)}</div>` : ""}${imagesHtml}${chipsHtml}</div>
+    <div class="message-content user-content">${text18 ? `<div class="markdown-body">${options2.markdown(text18)}</div>` : ""}${imagesHtml}${chipsHtml}</div>
   </div>`;
     }
     function renderAssistantMessage(msg, time, opts = {}) {
@@ -6147,9 +6151,9 @@ var PiDishBrowser = (() => {
   </div>`;
     }
     function renderBranchSummary(msg, time, attrs = "") {
-      const text17 = extractTextContent(msg.content);
+      const text18 = extractTextContent(msg.content);
       const timestamp = msg.timestamp || Date.now();
-      const preview = truncate(text17.split("\n")[0], 80);
+      const preview = truncate(text18.split("\n")[0], 80);
       return `<div${attrs} class="message branch-summary" data-timestamp="${escapeHtml(String(timestamp))}">
     <details class="branch-summary-details">
       <summary class="branch-summary-header">
@@ -6158,7 +6162,7 @@ var PiDishBrowser = (() => {
         ${time ? `<span class="message-time">${time}</span>` : ""}
         <span class="branch-summary-preview">${escapeHtml(preview)}</span>
       </summary>
-      <div class="message-content"><div class="markdown-body">${options2.markdown(text17)}</div></div>
+      <div class="message-content"><div class="markdown-body">${options2.markdown(text18)}</div></div>
     </details>
   </div>`;
     }
@@ -6171,16 +6175,16 @@ var PiDishBrowser = (() => {
       const sev = (value || "").trim().toLowerCase();
       return ADVISOR_SEVERITIES.includes(sev) ? sev : "";
     }
-    function parseAdvisoryContent(text17) {
+    function parseAdvisoryContent(text18) {
       const notes = [];
       const re = /<advisory\b([^>]*)>([\s\S]*?)<\/advisory>/gi;
       let m;
-      while (m = re.exec(text17)) {
+      while (m = re.exec(text18)) {
         const note = m[2].trim();
         if (note) notes.push({ note, severity: advisoryTagAttr(m[1], "severity"), advisor: advisoryTagAttr(m[1], "advisor") });
       }
       if (notes.length) return notes;
-      const bare = String(text17 || "").replace(/<\/?advisory\b[^>]*>/gi, "").trim();
+      const bare = String(text18 || "").replace(/<\/?advisory\b[^>]*>/gi, "").trim();
       return bare ? [{ note: bare }] : [];
     }
     function advisorNotesFrom(msg) {
@@ -6245,10 +6249,10 @@ var PiDishBrowser = (() => {
     </div>`;
       }
       if (customType === "advisor") return renderAdvisorMessage(msg, time, attrs, timestamp);
-      const text17 = extractTextContent(msg.content);
+      const text18 = extractTextContent(msg.content);
       const label = customType.replace(/[-_]+/g, " ");
       return `<div${attrs} class="message custom-message generic" data-timestamp="${escapeHtml(String(timestamp))}">
-    <span class="custom-message-icon">\u25C7</span><span class="custom-message-label">${escapeHtml(label)}</span>${text17 ? `<span class="custom-message-meta">${escapeHtml(truncate(text17.replace(/\s+/g, " "), 240))}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
+    <span class="custom-message-icon">\u25C7</span><span class="custom-message-label">${escapeHtml(label)}</span>${text18 ? `<span class="custom-message-meta">${escapeHtml(truncate(text18.replace(/\s+/g, " "), 240))}</span>` : ""}${time ? `<span class="message-time">${time}</span>` : ""}
   </div>`;
     }
     function liveCustomMessageKey(message3) {
@@ -6388,7 +6392,7 @@ var PiDishBrowser = (() => {
       document: document2,
       sessionState,
       details: options2.details,
-      markdown: (text17) => options2.markdown(text17),
+      markdown: (text18) => options2.markdown(text18),
       assetUrl: options2.assetUrl,
       matchRef: options2.matchRef,
       pinned: (container) => container.scrollHeight - container.scrollTop - container.clientHeight < 40,
@@ -6693,13 +6697,13 @@ var PiDishBrowser = (() => {
       if (!owns() || !peekTarget || !viewEndpoint) return;
       const target = peekTarget, endpoint = viewEndpoint, seq = peekSeq;
       const input = element("subagentsSignalInput");
-      const text17 = input.value.trim();
-      if (!text17) return;
+      const text18 = input.value.trim();
+      if (!text18) return;
       const status = element("subagentsSignalStatus");
       const path = kind === "steer" ? "steer" : kind === "followUp" ? "follow-up" : "prompt";
       status.textContent = "Sending\u2026";
       try {
-        await sendJson(options2.request, endpoint, `/api/sessions/${encodeURIComponent(target.id)}/${path}`, { message: text17 });
+        await sendJson(options2.request, endpoint, `/api/sessions/${encodeURIComponent(target.id)}/${path}`, { message: text18 });
         if (!owns() || seq !== peekSeq || peekTarget !== target) return;
         input.value = "";
         status.textContent = kind === "steer" ? "Steered" : kind === "followUp" ? "Follow-up queued" : "Sent";
@@ -7095,11 +7099,11 @@ var PiDishBrowser = (() => {
     if (!reports.length && !errors.length) return "";
     const body = reports.map((report) => {
       const rows = report.limits.map((limit) => {
-        const pct = Math.min(100, Math.max(0, limit.usedFraction * 100));
-        const cls = pct >= 100 ? " over" : pct >= 80 ? " warn" : "";
+        const pct2 = Math.min(100, Math.max(0, limit.usedFraction * 100));
+        const cls = pct2 >= 100 ? " over" : pct2 >= 80 ? " warn" : "";
         const reset = limit.resetsAt ? ` \xB7 resets ${formatLimitReset(limit.resetsAt, now)}` : "";
         const host = limit.hosts ? ` \xB7 ${escapeHtml(limit.hosts.join(", "))}` : "";
-        return `<div class="usage-limit-row"><div class="usage-limit-head"><span>${escapeHtml(limit.label)}</span><small>${Math.round(limit.usedFraction * 100)}% used${escapeHtml(reset)}${host}</small></div><div class="usage-limit-track"><div class="usage-limit-fill${cls}" style="width:${pct.toFixed(1)}%"></div></div></div>`;
+        return `<div class="usage-limit-row"><div class="usage-limit-head"><span>${escapeHtml(limit.label)}</span><small>${Math.round(limit.usedFraction * 100)}% used${escapeHtml(reset)}${host}</small></div><div class="usage-limit-track"><div class="usage-limit-fill${cls}" style="width:${pct2.toFixed(1)}%"></div></div></div>`;
       }).join("");
       const plan = report.planType ? ` <small>${escapeHtml(report.planType)}</small>` : "";
       return `<div class="usage-limits-provider"><div class="usage-limits-provider-name">${escapeHtml(report.provider)}${plan}</div>${rows}</div>`;
@@ -7200,6 +7204,217 @@ var PiDishBrowser = (() => {
     }) };
   }
 
+  // src/browser/cache-lifetimes.ts
+  var SOURCES = ["override", "documented", "learned", "builtin", "none"];
+  var GATES = ["support", "warm", "cold", "slope", "range", "bracket"];
+  var MAX_POINTS = 400;
+  var DOMAIN_LO_MS = 1e4;
+  var DOMAIN_HI_MS = 24 * 60 * 6e4;
+  var AXIS_TICKS = [["10s", 1e4], ["1m", 6e4], ["5m", 3e5], ["30m", 18e5], ["2h", 72e5], ["24h", 864e5]];
+  var text10 = (value) => typeof value === "string" ? value : "";
+  var num = (value) => finite2(value) ? value : null;
+  function policy(value) {
+    if (!record8(value) || !finite2(value.retentionMs) || typeof value.retention !== "string") return null;
+    return { retentionMs: value.retentionMs, retention: value.retention, basis: text10(value.basis) };
+  }
+  function decodeCacheLifetimes(value) {
+    if (!record8(value) || !Array.isArray(value.identities)) return [];
+    return value.identities.flatMap((raw) => {
+      if (!record8(raw) || typeof raw.model !== "string" || !record8(raw.probes)) return [];
+      const source = SOURCES.includes(raw.source) ? raw.source : "none";
+      const tier = raw.tier === "1h" ? "1h" : null;
+      const fitRaw = record8(raw.fit) ? raw.fit : null, stats = fitRaw && record8(fitRaw.stats) ? fitRaw.stats : {};
+      const fit = fitRaw && finite2(fitRaw.ttlMs) && finite2(fitRaw.alpha) && finite2(fitRaw.beta) ? {
+        active: fitRaw.active === true,
+        ttlMs: fitRaw.ttlMs,
+        alpha: fitRaw.alpha,
+        beta: fitRaw.beta,
+        priorTtlMs: num(fitRaw.priorTtlMs) ?? fitRaw.ttlMs,
+        observations: num(stats.observations) ?? 0,
+        warmHitRate: num(stats.warmHitRate)
+      } : null;
+      const gates = Array.isArray(raw.gates) ? raw.gates.flatMap((gate) => {
+        if (!record8(gate) || !GATES.includes(gate.id)) return [];
+        return [{ id: gate.id, pass: gate.pass === true, value: num(gate.value), need: num(gate.need) ?? 0 }];
+      }) : [];
+      const points = Array.isArray(raw.points) ? raw.points.slice(-MAX_POINTS).flatMap((point) => {
+        if (!Array.isArray(point) || !finite2(point[0]) || point[0] <= 0) return [];
+        return [[point[0], point[1] === 1 ? 1 : 0]];
+      }) : [];
+      const p = raw.probes;
+      const api = text10(raw.api), provider = text10(raw.provider);
+      return [{
+        key: [api, provider, raw.model, tier ?? ""].join("\0"),
+        api,
+        provider,
+        model: raw.model,
+        tier,
+        source,
+        effective: policy(raw.effective),
+        builtin: policy(raw.builtin),
+        override: policy(raw.override),
+        fit,
+        gates,
+        probes: {
+          total: num(p.total) ?? 0,
+          hits: num(p.hits) ?? 0,
+          misses: num(p.misses) ?? 0,
+          maxHitGapMs: num(p.maxHitGapMs),
+          minMissGapMs: num(p.minMissGapMs),
+          lastAt: num(p.lastAt) ?? 0
+        },
+        points
+      }];
+    });
+  }
+  function formatGap(ms) {
+    const s = ms / 1e3;
+    if (s < 90) return `${Math.max(1, Math.round(s))}s`;
+    const m = s / 60;
+    if (m < 90) return `${Math.round(m)}m`;
+    const h = m / 60;
+    if (h < 36) return `${Math.round(h * 10) / 10}h`;
+    return `${Math.round(h / 2.4) / 10}d`;
+  }
+  function ttlLabel(policy2) {
+    if (!policy2) return "\u2014";
+    if (policy2.basis === "minimum") return "\u2265" + policy2.retention;
+    return policy2.retention;
+  }
+  function sourceWord(row) {
+    if (row.source === "builtin") return row.effective?.basis === "minimum" ? "minimum" : "estimate";
+    if (row.source === "none") return "unknown";
+    return row.source;
+  }
+  function disagrees(fit, policy2) {
+    if (!fit?.active || !policy2) return false;
+    const ratio = fit.ttlMs / policy2.retentionMs;
+    return ratio > 1.5 || ratio < 1 / 1.5;
+  }
+  function cacheLifetimeStatus(row) {
+    const measured = row.fit?.active ? ` \xB7 measured ~${formatGap(row.fit.ttlMs)}` : "";
+    if (row.source === "override") {
+      return { label: "Your override", detail: `cacheTtlOverrides${disagrees(row.fit, row.override) ? measured : ""}`, tone: "fixed" };
+    }
+    if (row.source === "documented") {
+      return disagrees(row.fit, row.builtin) ? { label: "Documented", detail: `Provider publishes ${row.builtin?.retention}${measured}`, tone: "fixed" } : { label: "Documented", detail: `Provider publishes ${row.builtin?.retention}`, tone: "fixed" };
+    }
+    if (row.source === "learned" && row.fit) {
+      const warm = row.fit.warmHitRate === null ? "" : ` \xB7 ${Math.round(row.fit.warmHitRate * 100)}% warm inside`;
+      return { label: "Learned", detail: `${Math.round(row.fit.observations)} probes${warm}`, tone: "learned" };
+    }
+    const failing = row.gates.find((gate) => !gate.pass);
+    const tail = row.source === "none" ? " \xB7 no countdown yet" : "";
+    const warmAfter = row.probes.maxHitGapMs ? ` \xB7 warm after ${formatGap(row.probes.maxHitGapMs)}` : "";
+    let detail = "Gathering probes";
+    switch (failing?.id) {
+      case "support":
+        detail = `${Math.floor(failing.value ?? 0)} of ${failing.need} probes`;
+        break;
+      case "warm":
+        detail = "Too few warm returns";
+        break;
+      case "cold":
+        detail = row.probes.misses === 0 ? `Never seen cold${warmAfter}` : `${row.probes.misses} cold return${row.probes.misses === 1 ? "" : "s"}, need ${failing.need}${warmAfter}`;
+        break;
+      case "slope":
+        detail = "No clear expiry cliff yet";
+        break;
+      case "range":
+        detail = "Fitted window out of range";
+        break;
+      case "bracket":
+        detail = "Crossing lies beyond observed gaps";
+        break;
+    }
+    return { label: "Learning", detail: detail + tail, tone: "learning" };
+  }
+  var x = (ms) => Math.max(0, Math.min(1, (Math.log(ms) - Math.log(DOMAIN_LO_MS)) / (Math.log(DOMAIN_HI_MS) - Math.log(DOMAIN_LO_MS))));
+  var pct = (value) => (value * 100).toFixed(2);
+  function cacheLifetimeStripSvg(row) {
+    const ticks = row.points.map(([gap, hit]) => `<line class="${hit ? "cl-warm" : "cl-cold"}" x1="${pct(x(gap))}%" x2="${pct(x(gap))}%" y1="${hit ? 2 : 13}" y2="${hit ? 11 : 22}"/>`).join("");
+    const ttl = row.effective ? `<line class="cl-ttl${row.source === "builtin" || row.source === "none" ? " guess" : ""}" x1="${pct(x(row.effective.retentionMs))}%" x2="${pct(x(row.effective.retentionMs))}%" y1="0" y2="24"/>` : "";
+    return `<svg class="cl-strip" width="100%" height="24" aria-hidden="true"><line class="cl-rule" x1="0" x2="100%" y1="12" y2="12"/>${ticks}${ttl}</svg>`;
+  }
+  var sigmoid = (value) => 1 / (1 + Math.exp(-value));
+  function cacheLifetimeCurveSvg(row) {
+    const W = 600, H = 108, top = 8, plot = 92;
+    const yFor = (p) => top + (1 - p) * plot;
+    const path = (alpha, beta) => {
+      let d = "";
+      for (let i = 0; i <= 96; i++) {
+        const t = i / 96, gap = Math.exp(Math.log(DOMAIN_LO_MS) + t * (Math.log(DOMAIN_HI_MS) - Math.log(DOMAIN_LO_MS)));
+        d += `${i ? "L" : "M"}${(t * W).toFixed(1)} ${yFor(sigmoid(alpha + beta * Math.log(gap))).toFixed(1)}`;
+      }
+      return d;
+    };
+    const parts = [`<line class="cl-grid" x1="0" x2="${W}" y1="${yFor(0.5)}" y2="${yFor(0.5)}"/>`];
+    row.points.forEach(([gap, hit], i) => {
+      const cx = (x(gap) * W).toFixed(1), cy = ((hit ? top + 5 : top + plot - 5) + (i * 37 % 11 - 5) * 0.5).toFixed(1);
+      parts.push(`<line class="cl-dot ${hit ? "cl-warm" : "cl-cold"}" x1="${cx}" x2="${cx}" y1="${cy}" y2="${cy}"/>`);
+    });
+    if (row.fit) {
+      const priorBeta = -6, priorAlpha = -priorBeta * Math.log(row.fit.priorTtlMs);
+      if (row.builtin) parts.push(`<path class="cl-prior" d="${path(priorAlpha, priorBeta)}"/>`);
+      parts.push(`<path class="cl-fit${row.fit.active ? "" : " provisional"}" d="${path(row.fit.alpha, row.fit.beta)}"/>`);
+    }
+    let label = "";
+    if (row.effective) {
+      const ex = x(row.effective.retentionMs);
+      parts.push(`<line class="cl-ttl" x1="${(ex * W).toFixed(1)}" x2="${(ex * W).toFixed(1)}" y1="0" y2="${H}"/>`);
+      label = `<span class="cl-ttl-label${ex > 0.8 ? " left" : ""}" style="left:${pct(ex)}%">${escapeHtml(ttlLabel(row.effective))}</span>`;
+    }
+    const axis = AXIS_TICKS.map(([text18, ms]) => `<span style="left:${pct(x(ms))}%">${text18}</span>`).join("");
+    return `<div class="cl-curve"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" width="100%" height="${H}" aria-hidden="true">${parts.join("")}</svg>${label}<div class="cl-axis">${axis}</div></div>`;
+  }
+  var GATE_LABELS = {
+    support: "Enough recent probes",
+    warm: "Warm returns",
+    cold: "Cold returns",
+    slope: "Clear expiry cliff",
+    range: "Window between 1m and 365d",
+    bracket: "Crossing inside observed gaps"
+  };
+  function gateValue(gate) {
+    if (gate.value === null) return "";
+    if (gate.id === "range") return formatGap(gate.value);
+    if (gate.id === "slope") return `${gate.value.toFixed(1)} / ${gate.need}`;
+    return `${Math.round(gate.value * 10) / 10} / ${gate.need}`;
+  }
+  function detailHtml(row) {
+    const facts = [
+      ["Probes in window", `${row.probes.total} \xB7 ${row.probes.hits} warm, ${row.probes.misses} cold`],
+      ["Longest warm gap", row.probes.maxHitGapMs ? formatGap(row.probes.maxHitGapMs) : "\u2014"],
+      ["Shortest cold gap", row.probes.minMissGapMs ? formatGap(row.probes.minMissGapMs) : "\u2014"],
+      ["Built-in", row.builtin ? `${row.builtin.retention} ${row.builtin.basis === "fixed" ? "documented" : row.builtin.basis}` : "none"]
+    ];
+    if (row.fit) facts.push([row.fit.active ? "Learned crossing" : "Provisional crossing", "~" + formatGap(row.fit.ttlMs)]);
+    if (row.override) facts.push(["Override", row.override.retention]);
+    const gates = row.gates.map((gate) => `<li class="${gate.pass ? "pass" : "fail"}"><span aria-hidden="true">${gate.pass ? "\u2713" : "\u2717"}</span><span>${GATE_LABELS[gate.id]}</span><small>${escapeHtml(gateValue(gate))}</small></li>`).join("");
+    const note = row.source === "documented" || row.source === "override" ? `<p class="cl-note">${row.source === "override" ? "Your cacheTtlOverrides rule" : "The provider\u2019s published window"} always wins; the learner only replaces estimates.</p>` : "";
+    return `<div class="cl-detail">
+    <div class="cl-detail-plot">${cacheLifetimeCurveSvg(row)}<div class="cl-legend"><span class="cl-key warm"></span>warm <span class="cl-key cold"></span>cold <span class="cl-key fit"></span>fitted P(warm)${row.builtin ? ' <span class="cl-key prior"></span>built-in prior' : ""}</div></div>
+    <div class="cl-detail-side"><ul class="cl-gates">${gates}</ul><dl class="cl-facts">${facts.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join("")}</dl>${note}</div>
+  </div>`;
+  }
+  function cacheLifetimesHtml(hosts, view) {
+    const withRows = hosts.filter((host) => host.rows.length);
+    if (!withRows.length) return "";
+    const selected = withRows.find((host) => host.hostKey === view.hostKey) ?? withRows[0];
+    const picker = withRows.length > 1 ? `<div class="cl-hosts">${withRows.map((host) => `<button class="usage-range-btn${host === selected ? " active" : ""}" data-cl-host="${escapeHtml(host.hostKey)}">${escapeHtml(host.hostLabel)}</button>`).join("")}</div>` : "";
+    const rows = selected.rows.map((row) => {
+      const status = cacheLifetimeStatus(row), open = view.open.has(row.key);
+      const model = escapeHtml(row.model) + (row.tier ? " <small>1h tier</small>" : "");
+      return `<div class="cl-row${open ? " open" : ""}" data-cl-key="${escapeHtml(encodeURIComponent(row.key))}" role="button" tabindex="0" aria-expanded="${open}">
+      <div class="cl-model"><span>${model}</span><small>${escapeHtml(row.provider)}</small></div>
+      <div class="cl-ttl-cell"><strong>${escapeHtml(ttlLabel(row.effective))}</strong><small class="cl-source ${row.source}">${sourceWord(row)}</small></div>
+      <div class="cl-strip-cell">${cacheLifetimeStripSvg(row)}</div>
+      <div class="cl-status ${status.tone}"><span>${status.label}</span><small>${escapeHtml(status.detail)}</small></div>
+    </div>${open ? detailHtml(row) : ""}`;
+    }).join("");
+    return `<section class="usage-section cache-lifetimes"><h4>Cache lifetimes <span class="usage-hint">learned from idle gaps between turns \xB7 10s \u2192 24h, log scale</span></h4>${picker}${rows}</section>`;
+  }
+
   // src/browser/usage-view.ts
   function createUsageView(options2) {
     const document2 = options2.root.ownerDocument, window = document2.defaultView;
@@ -7219,6 +7434,9 @@ var PiDishBrowser = (() => {
     let usageData = null, usageChart = null, usageSelectedDay = null;
     let usageHostErrors = [], usageHostPending = [];
     let usageLimitsEntries = [], usageFetchSeq = 0;
+    let cacheLifetimeHosts = [], cacheLifetimeHostKey = null;
+    const cacheLifetimeOpen = /* @__PURE__ */ new Set();
+    let cacheLifetimeEvents = new AbortController();
     let usageSort = localStorage.getItem("pi-dish-usage-sort") === "tokens" ? "tokens" : "cost";
     let usageStack = localStorage.getItem("pi-dish-usage-stack") === "buckets" ? "buckets" : "models";
     const usageModelFilter = /* @__PURE__ */ new Set();
@@ -7251,6 +7469,7 @@ var PiDishBrowser = (() => {
       retireRender();
       renderQueue?.dispose();
       renderQueue = null;
+      cacheLifetimeEvents.abort();
       clearTimeout(usageResizeTimer);
       options2.root.classList.remove("usage-open");
       clearTimeout(usageTimer);
@@ -7317,6 +7536,59 @@ var PiDishBrowser = (() => {
         if (usageData && dataSequence === fetchSeq) renderUsageView(usageData);
       }));
     }
+    async function loadCacheLifetimes(fetchSeq) {
+      const stale = () => fetchSeq !== usageFetchSeq || !isUsageViewOpen();
+      await options2.fleetReady();
+      if (stale()) return;
+      const hosts = options2.hosts().filter((host) => host.capabilities?.cacheLifetimes).map((host) => Object.freeze({ ...host }));
+      const results = /* @__PURE__ */ new Map();
+      await Promise.all(hosts.map(async (host) => {
+        try {
+          const response = await options2.request(host, "/api/cache-lifetimes", { timeoutMs: 2e4 });
+          if (response.status === 401) {
+            if (sameHost(host)) options2.connection(host, "blocked");
+            return;
+          }
+          const data = await response.json();
+          if (!response.ok || stale() || !sameHost(host)) return;
+          const hostKey = host.hostId || host.base;
+          results.set(hostKey, { hostKey, hostLabel: hostDisplayLabel(host), rows: decodeCacheLifetimes(data) });
+        } catch {
+        }
+        if (stale()) return;
+        cacheLifetimeHosts = hosts.map((host2) => results.get(host2.hostId || host2.base)).filter((host2) => !!host2);
+        renderCacheLifetimes();
+      }));
+    }
+    function renderCacheLifetimes() {
+      const holder = document2.getElementById("usageCacheLifetimes");
+      if (!holder || !isUsageViewOpen()) return;
+      cacheLifetimeEvents.abort();
+      cacheLifetimeEvents = new AbortController();
+      const listener = { signal: cacheLifetimeEvents.signal };
+      holder.innerHTML = cacheLifetimesHtml(cacheLifetimeHosts, { hostKey: cacheLifetimeHostKey, open: cacheLifetimeOpen });
+      holder.querySelectorAll("[data-cl-host]").forEach((button) => button.addEventListener("click", () => {
+        cacheLifetimeHostKey = button.dataset.clHost || null;
+        cacheLifetimeOpen.clear();
+        renderCacheLifetimes();
+      }, listener));
+      holder.querySelectorAll("[data-cl-key]").forEach((row) => {
+        const toggle = () => {
+          const key = decodeURIComponent(row.dataset.clKey || "");
+          if (cacheLifetimeOpen.has(key)) cacheLifetimeOpen.delete(key);
+          else cacheLifetimeOpen.add(key);
+          renderCacheLifetimes();
+          document2.querySelector(`#usageCacheLifetimes [data-cl-key="${CSS.escape(row.dataset.clKey || "")}"]`)?.focus({ preventScroll: true });
+        };
+        row.addEventListener("click", toggle, listener);
+        row.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+          }
+        }, listener);
+      });
+    }
     async function loadUsageView() {
       if (!isUsageViewOpen()) return;
       const fetchSeq = ++usageFetchSeq;
@@ -7324,6 +7596,7 @@ var PiDishBrowser = (() => {
       renderQueue?.dispose();
       renderQueue = null;
       void loadUsageLimits(fetchSeq);
+      void loadCacheLifetimes(fetchSeq);
       const range = usageRange, sort = usageSort, models = usageModelsKey();
       const stale = () => fetchSeq !== usageFetchSeq || range !== usageRange || sort !== usageSort || models !== usageModelsKey() || !isUsageViewOpen();
       const body = element("usageViewBody");
@@ -7440,10 +7713,10 @@ var PiDishBrowser = (() => {
       let budgetHtml = "";
       if (budget) {
         if (finite2(h.month)) {
-          const pct = Math.min(100, h.month / budget * 100);
-          const cls = pct >= 100 ? " over" : pct >= 80 ? " warn" : "";
+          const pct2 = Math.min(100, h.month / budget * 100);
+          const cls = pct2 >= 100 ? " over" : pct2 >= 80 ? " warn" : "";
           const partial = hu.month ? ` \xB7 ${hu.month} unpriced calls omitted` : "";
-          budgetHtml = `<div class="usage-budget${cls}"><div class="usage-budget-track"><div class="usage-budget-fill" style="width:${pct.toFixed(1)}%"></div></div><small>${formatUsageCost(h.month, hu.month)} of ~$${Number(budget).toFixed(2)} monthly budget${partial}${pct >= 100 ? " \u2014 over budget" : ""}</small></div>`;
+          budgetHtml = `<div class="usage-budget${cls}"><div class="usage-budget-track"><div class="usage-budget-fill" style="width:${pct2.toFixed(1)}%"></div></div><small>${formatUsageCost(h.month, hu.month)} of ~$${Number(budget).toFixed(2)} monthly budget${partial}${pct2 >= 100 ? " \u2014 over budget" : ""}</small></div>`;
         } else {
           budgetHtml = `<div class="usage-budget"><small>Budget tracking unavailable${hu.month ? ` \u2014 ${hu.month} calls have unavailable pricing` : ""}.</small></div>`;
         }
@@ -7480,6 +7753,7 @@ var PiDishBrowser = (() => {
         ${usageGroupListHtml("Sessions", d.groups?.sessions, "session", metric)}
       </div>
       ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? "" : "s"} ${d.unpricedModelCalls === 1 ? "has" : "have"} unavailable pricing and ${d.unpricedModelCalls === 1 ? "is" : "are"} omitted.</div>` : ""}
+      <div id="usageCacheLifetimes"></div>
       ${usageLimitsHtml(usageLimitsEntries)}
     `;
       body.querySelectorAll("[data-range]").forEach((button) => button.addEventListener("click", () => {
@@ -7522,6 +7796,7 @@ var PiDishBrowser = (() => {
       });
       if (showChart) drawUsageChart();
       renderUsageDayDetail();
+      renderCacheLifetimes();
     }
     function drawUsageChart() {
       if (!isUsageViewOpen()) return;
@@ -7557,8 +7832,8 @@ var PiDishBrowser = (() => {
       const stride = Math.max(1, Math.ceil(n / Math.max(3, Math.floor(plotW / 80))));
       for (let i = 0; i < n; i++) {
         if ((n - 1 - i) % stride !== 0) continue;
-        const x = margin.left + band * (i + 0.5);
-        parts.push(`<text class="tick" x="${x}" y="${margin.top + plotH + 15}" text-anchor="middle">${formatUsageDay(buckets[i].day)}</text>`);
+        const x2 = margin.left + band * (i + 0.5);
+        parts.push(`<text class="tick" x="${x2}" y="${margin.top + plotH + 15}" text-anchor="middle">${formatUsageDay(buckets[i].day)}</text>`);
       }
       let anyOther = false;
       for (let i = 0; i < n; i++) {
@@ -7589,7 +7864,7 @@ var PiDishBrowser = (() => {
             anyOther = true;
           }
         }
-        const x = margin.left + band * i + (band - barW) / 2;
+        const x2 = margin.left + band * i + (band - barW) / 2;
         const label = ((b.days || 1) > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, "long")) + ": " + (metric === "cost" ? formatUsageCost(b.costs?.total, b.costUnavailable?.total) : metric === "tokens" ? `${formatTokens(usageTokensTotal(b.tokens))} tokens` : `${b.calls} calls`);
         const seg = [];
         let cursor2 = yFor(0);
@@ -7601,9 +7876,9 @@ var PiDishBrowser = (() => {
           const yTop = cursor2 - hPx;
           if (isTop) {
             const r = Math.min(3, barW / 2, drawH);
-            seg.push(`<path class="seg ${segs[sI].cls}" d="M${x},${(yTop + drawH).toFixed(1)} V${(yTop + r).toFixed(1)} Q${x},${yTop.toFixed(1)} ${x + r},${yTop.toFixed(1)} H${(x + barW - r).toFixed(1)} Q${x + barW},${yTop.toFixed(1)} ${x + barW},${(yTop + r).toFixed(1)} V${(yTop + drawH).toFixed(1)} Z"/>`);
+            seg.push(`<path class="seg ${segs[sI].cls}" d="M${x2},${(yTop + drawH).toFixed(1)} V${(yTop + r).toFixed(1)} Q${x2},${yTop.toFixed(1)} ${x2 + r},${yTop.toFixed(1)} H${(x2 + barW - r).toFixed(1)} Q${x2 + barW},${yTop.toFixed(1)} ${x2 + barW},${(yTop + r).toFixed(1)} V${(yTop + drawH).toFixed(1)} Z"/>`);
           } else {
-            seg.push(`<rect class="seg ${segs[sI].cls}" x="${x}" y="${yTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${drawH.toFixed(1)}"/>`);
+            seg.push(`<rect class="seg ${segs[sI].cls}" x="${x2}" y="${yTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${drawH.toFixed(1)}"/>`);
           }
           cursor2 = yTop;
         }
@@ -7740,14 +8015,14 @@ var PiDishBrowser = (() => {
       if (restShare > 4e-3) segs.push(`<span class="sother" style="flex-grow:${(restShare * 1e3).toFixed(1)}" title="other models"></span>`);
       const rowHtml = (m, on) => {
         const share = on && total > 0 ? val(m) / total : 0;
-        const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + "%" : "\u2014";
+        const pct2 = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + "%" : "\u2014";
         const spend = `${formatUsageCost(m.costs?.total, m.unpricedCalls)}${m.unpricedCalls ? ` \xB7 ${m.unpricedCalls} unpriced` : ""}`;
         const detail = usageTokensTotal(m.tokens) > 0 ? ` \xB7 ${usageTokensDetail(m.tokens)}` : "";
         const breakdown = usageCostBreakdown(m.costs);
         return `<div class="usage-row model-toggle${filtered ? on ? " on" : " off" : ""}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml([m.key, breakdown].filter(Boolean).join("\n"))} \u2014 click to toggle model filter">
         <i class="swatch ${on ? slotFor(m.key) : "soff"}"></i>
         <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || "")}</small></span>
-        <span class="usage-row-meta">${pct} \xB7 ${m.calls} calls \xB7 ${formatTokens(usageTokensTotal(m.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
+        <span class="usage-row-meta">${pct2} \xB7 ${m.calls} calls \xB7 ${formatTokens(usageTokensTotal(m.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
       </div>`;
       };
       const rows = models.map((m) => rowHtml(m, isOn(m.key))).join("");
@@ -7758,20 +8033,20 @@ var PiDishBrowser = (() => {
     }
     function usageGroupListHtml(title, rows, kind, metric) {
       const list = (rows || []).slice(0, 12);
-      const val = (x) => usageModelValue({ cost: x.costs?.total, calls: x.calls, tokens: x.tokens }, metric);
+      const val = (x2) => usageModelValue({ cost: x2.costs?.total, calls: x2.calls, tokens: x2.tokens }, metric);
       const maxV = Math.max(1e-9, ...list.map(val));
-      const items = list.map((x) => {
-        const name = kind === "workspace" ? shortCwd(x.key) : x.name || x.id;
-        const sub = kind === "session" && x.workspace ? shortCwd(x.workspace) : "";
-        const spend = `${formatUsageCost(x.costs?.total, x.unpricedCalls)}${x.unpricedCalls ? ` \xB7 ${x.unpricedCalls} unpriced` : ""}`;
-        const attrs = kind === "session" ? ` data-session-id="${escapeHtml(x.id)}"${x.host ? ` data-session-host="${escapeHtml(x.host)}"` : ""} role="button" tabindex="0"` : "";
-        const hostTag = isMultiHost() && x.hostLabel ? `<small class="usage-row-host">${escapeHtml(x.hostLabel)}</small>` : "";
-        const detail = usageTokensTotal(x.tokens) > 0 ? ` \xB7 ${usageTokensDetail(x.tokens)}` : "";
-        const breakdown = usageCostBreakdown(x.costs);
-        return `<div class="usage-row usage-bar-row${kind === "session" ? " clickable" : ""}"${attrs} title="${escapeHtml([x.key || x.name || x.id, breakdown].filter(Boolean).join("\n"))}">
+      const items = list.map((x2) => {
+        const name = kind === "workspace" ? shortCwd(x2.key) : x2.name || x2.id;
+        const sub = kind === "session" && x2.workspace ? shortCwd(x2.workspace) : "";
+        const spend = `${formatUsageCost(x2.costs?.total, x2.unpricedCalls)}${x2.unpricedCalls ? ` \xB7 ${x2.unpricedCalls} unpriced` : ""}`;
+        const attrs = kind === "session" ? ` data-session-id="${escapeHtml(x2.id)}"${x2.host ? ` data-session-host="${escapeHtml(x2.host)}"` : ""} role="button" tabindex="0"` : "";
+        const hostTag = isMultiHost() && x2.hostLabel ? `<small class="usage-row-host">${escapeHtml(x2.hostLabel)}</small>` : "";
+        const detail = usageTokensTotal(x2.tokens) > 0 ? ` \xB7 ${usageTokensDetail(x2.tokens)}` : "";
+        const breakdown = usageCostBreakdown(x2.costs);
+        return `<div class="usage-row usage-bar-row${kind === "session" ? " clickable" : ""}"${attrs} title="${escapeHtml([x2.key || x2.name || x2.id, breakdown].filter(Boolean).join("\n"))}">
         <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ""}${hostTag}</span>
-        <span class="usage-row-meta">${x.calls} calls \xB7 ${formatTokens(usageTokensTotal(x.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
-        <span class="usage-row-bar" style="width:${(val(x) / maxV * 100).toFixed(1)}%"></span>
+        <span class="usage-row-meta">${x2.calls} calls \xB7 ${formatTokens(usageTokensTotal(x2.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
+        <span class="usage-row-bar" style="width:${(val(x2) / maxV * 100).toFixed(1)}%"></span>
       </div>`;
       }).join("");
       return `<section class="usage-section"><h4>${title}</h4>${items || '<small class="usage-empty">No usage in this range.</small>'}</section>`;
@@ -7835,11 +8110,11 @@ var PiDishBrowser = (() => {
       }
       el.style.display = "block";
       const pad = 12, r = el.getBoundingClientRect();
-      let x = e.clientX + pad;
-      if (x + r.width > window.innerWidth - 8) x = Math.max(8, e.clientX - r.width - pad);
+      let x2 = e.clientX + pad;
+      if (x2 + r.width > window.innerWidth - 8) x2 = Math.max(8, e.clientX - r.width - pad);
       let y = e.clientY - r.height - pad;
       if (y < 8) y = e.clientY + pad;
-      el.style.left = x + "px";
+      el.style.left = x2 + "px";
       el.style.top = y + "px";
     }
     function hideUsageTooltip() {
@@ -8030,9 +8305,9 @@ var PiDishBrowser = (() => {
           if (!save || disposed) return;
           if (kind === "sidebar") storage.setItem(SIDEBAR_WIDTH_KEY, String(panel.offsetWidth));
           else {
-            const pct = (panel.offsetHeight / parentHeight * 100).toFixed(1);
-            storage.setItem("pi-dish-terminal-size", pct);
-            panel.style.flexBasis = pct + "%";
+            const pct2 = (panel.offsetHeight / parentHeight * 100).toFixed(1);
+            storage.setItem("pi-dish-terminal-size", pct2);
+            panel.style.flexBasis = pct2 + "%";
           }
           options2.fitTerminal();
         };
@@ -8259,10 +8534,10 @@ var PiDishBrowser = (() => {
       })();
       return assets;
     }
-    function status(text17 = "", cls = "") {
+    function status(text18 = "", cls = "") {
       const value = document2.getElementById("terminalStatus");
       if (!value) return;
-      value.textContent = text17;
+      value.textContent = text18;
       value.className = "terminal-status" + (cls ? " " + cls : "");
     }
     function setCtrl(on) {
@@ -8547,7 +8822,7 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/routines-data.ts
-  var text10 = (value) => typeof value === "string" ? value : "";
+  var text11 = (value) => typeof value === "string" ? value : "";
   var number5 = (value) => finite2(value) ? value : 0;
   function decodeRoutineInvocations(value) {
     if (!record8(value)) throw new Error("Invalid routine invocation response");
@@ -8556,17 +8831,17 @@ var PiDishBrowser = (() => {
       return [{
         id: row.id,
         version: finite2(row.version) ? row.version : null,
-        trigger: text10(row.trigger),
-        source: text10(row.source),
-        delivery: text10(row.delivery),
-        status: text10(row.status),
+        trigger: text11(row.trigger),
+        source: text11(row.source),
+        delivery: text11(row.delivery),
+        status: text11(row.status),
         startedAt: finite2(row.startedAt) ? row.startedAt : null,
         durationMs: finite2(row.durationMs) ? row.durationMs : null,
-        sessionId: text10(row.sessionId),
-        skipReason: text10(row.skipReason),
-        error: text10(row.error),
-        closeError: text10(row.closeError),
-        summary: text10(row.summary)
+        sessionId: text11(row.sessionId),
+        skipReason: text11(row.skipReason),
+        error: text11(row.error),
+        closeError: text11(row.closeError),
+        summary: text11(row.summary)
       }];
     }) : [], nextBefore: finite2(value.nextBefore) ? value.nextBefore : null };
   }
@@ -8578,18 +8853,18 @@ var PiDishBrowser = (() => {
     const versions = Array.isArray(row.versions) ? row.versions.flatMap((version) => record8(version) && finite2(version.version) && typeof version.prompt === "string" ? [{ version: version.version, savedAt: number5(version.savedAt), prompt: version.prompt }] : []) : [];
     return {
       id: row.id,
-      name: text10(row.name),
-      description: text10(row.description),
-      harness: text10(row.harness) || "pi",
-      cwd: text10(row.cwd),
-      model: text10(row.model),
-      thinking: text10(row.thinking),
+      name: text11(row.name),
+      description: text11(row.description),
+      harness: text11(row.harness) || "pi",
+      cwd: text11(row.cwd),
+      model: text11(row.model),
+      thinking: text11(row.thinking),
       schedule: record8(row.schedule) && typeof row.schedule.cron === "string" ? { cron: row.schedule.cron } : null,
       enabled: row.enabled !== false,
       mode: row.mode === "continue" ? "continue" : "oneShot",
       onBusy: row.onBusy === "steer" || row.onBusy === "followUp" ? row.onBusy : "skip",
       minIntervalSec: number5(row.minIntervalSec),
-      prompt: text10(row.prompt),
+      prompt: text11(row.prompt),
       promptVersion: number5(row.promptVersion) || 1,
       versions,
       stats: { invocations: number5(stats.invocations), nextRunAt: finite2(stats.nextRunAt) ? stats.nextRunAt : null, lastInvocation: decodeRoutineInvocations({ invocations: [stats.lastInvocation] }).invocations[0] || null },
@@ -9784,7 +10059,7 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/session-info-data.ts
-  var text11 = (value) => typeof value === "string" ? value : "";
+  var text12 = (value) => typeof value === "string" ? value : "";
   var number6 = (value) => finite2(value) ? value : 0;
   var nullable = (value) => finite2(value) ? value : null;
   var object4 = (value) => record8(value) ? value : {};
@@ -9793,10 +10068,10 @@ var PiDishBrowser = (() => {
     if (typeof value.error === "string" && value.error) throw new Error(value.error);
     const context = object4(value.contextUsage), timing = object4(value.responseTiming), costs2 = object4(value.costs), unavailable = object4(value.costUnavailable), tokens2 = object4(value.tokens), runtime = object4(value.runtime);
     return {
-      model: text11(value.model),
-      thinkingLevel: text11(value.thinkingLevel),
-      cwd: text11(value.cwd),
-      sessionFile: text11(value.sessionFile),
+      model: text12(value.model),
+      thinkingLevel: text12(value.thinkingLevel),
+      cwd: text12(value.cwd),
+      sessionFile: text12(value.sessionFile),
       userMessages: number6(value.userMessages),
       assistantMessages: number6(value.assistantMessages),
       toolCalls: number6(value.toolCalls),
@@ -9811,16 +10086,16 @@ var PiDishBrowser = (() => {
       costs: Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, nullable(costs2[key])])),
       costUnavailable: Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, number6(unavailable[key])])),
       tokens: Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map((key) => [key, number6(tokens2[key])])),
-      runtime: typeof runtime.kind === "string" ? { kind: runtime.kind, pid: nullable(runtime.pid), server: text11(runtime.server), tmuxSession: text11(runtime.tmuxSession), windowIndex: nullable(runtime.windowIndex), windowName: text11(runtime.windowName) } : null
+      runtime: typeof runtime.kind === "string" ? { kind: runtime.kind, pid: nullable(runtime.pid), server: text12(runtime.server), tmuxSession: text12(runtime.tmuxSession), windowIndex: nullable(runtime.windowIndex), windowName: text12(runtime.windowName) } : null
     };
   }
   function decodeSessionShare(value) {
     if (!record8(value) || value.error) return null;
-    const path = text11(value.path), url = text11(value.url);
+    const path = text12(value.path), url = text12(value.url);
     return path || url ? { path, url } : null;
   }
   function decodePublishedPages(value) {
-    return Array.isArray(value) ? value.flatMap((page) => record8(page) && typeof page.token === "string" && typeof page.root === "string" && (typeof page.path === "string" || typeof page.url === "string") ? [{ token: page.token, root: page.root, path: text11(page.path), url: text11(page.url), title: text11(page.title), missing: page.missing === true, createdAt: number6(page.createdAt) }] : []) : [];
+    return Array.isArray(value) ? value.flatMap((page) => record8(page) && typeof page.token === "string" && typeof page.root === "string" && (typeof page.path === "string" || typeof page.url === "string") ? [{ token: page.token, root: page.root, path: text12(page.path), url: text12(page.url), title: text12(page.title), missing: page.missing === true, createdAt: number6(page.createdAt) }] : []) : [];
   }
 
   // src/browser/session-info.ts
@@ -10266,10 +10541,10 @@ var PiDishBrowser = (() => {
       }
       body.innerHTML = html;
       body.querySelectorAll(".artifact-copy").forEach((button) => {
-        const text17 = button.dataset.copy || "";
+        const text18 = button.dataset.copy || "";
         button.addEventListener("click", () => {
           if (!current()) return;
-          void copyTextToClipboard2(text17).then(() => {
+          void copyTextToClipboard2(text18).then(() => {
             if (current()) setStatus("Link copied");
           }, () => {
             if (current()) setStatus("Copy failed (clipboard blocked)", "error");
@@ -10328,7 +10603,7 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/transcript-tree-data.ts
-  var text12 = (value) => typeof value === "string" ? value : "";
+  var text13 = (value) => typeof value === "string" ? value : "";
   var count = (value) => finite2(value) ? Math.max(0, Math.floor(value)) : 0;
   function decodeTranscriptTree(value) {
     if (!record8(value) || !Array.isArray(value.nodes)) throw new Error("Invalid session tree");
@@ -10341,22 +10616,22 @@ var PiDishBrowser = (() => {
         return [{
           id: node.id,
           parentId: typeof node.parentId === "string" ? node.parentId : null,
-          type: text12(node.type),
-          role: text12(node.role),
+          type: text13(node.type),
+          role: text13(node.role),
           depth: Math.min(count(node.depth), maxDepth),
           childCount: count(node.childCount),
           isLeaf: node.isLeaf === true,
-          text: text12(node.text),
-          label: text12(node.label),
-          toolName: text12(node.toolName),
-          toolCallId: text12(node.toolCallId),
-          modelId: text12(node.modelId),
-          summary: text12(node.summary),
-          stopReason: text12(node.stopReason),
-          errorMessage: text12(node.errorMessage),
+          text: text13(node.text),
+          label: text13(node.label),
+          toolName: text13(node.toolName),
+          toolCallId: text13(node.toolCallId),
+          modelId: text13(node.modelId),
+          summary: text13(node.summary),
+          stopReason: text13(node.stopReason),
+          errorMessage: text13(node.errorMessage),
           isError: node.isError === true,
           tokensBefore: count(node.tokensBefore),
-          toolCalls: Array.isArray(node.toolCalls) ? node.toolCalls.flatMap((tool) => record8(tool) && typeof tool.id === "string" ? [{ id: tool.id, name: text12(tool.name), args: text12(tool.args) }] : []) : []
+          toolCalls: Array.isArray(node.toolCalls) ? node.toolCalls.flatMap((tool) => record8(tool) && typeof tool.id === "string" ? [{ id: tool.id, name: text13(tool.name), args: text13(tool.args) }] : []) : []
         }];
       })
     };
@@ -10449,8 +10724,8 @@ var PiDishBrowser = (() => {
           if (node.type === "message" && node.role === "assistant" && !node.text && !node.isLeaf) return false;
         }
         if (tokens2.length > 0) {
-          var text17 = getNodeSearchText(node).toLowerCase();
-          return tokens2.every((t) => text17.includes(t));
+          var text18 = getNodeSearchText(node).toLowerCase();
+          return tokens2.every((t) => text18.includes(t));
         }
         return true;
       });
@@ -10505,17 +10780,17 @@ var PiDishBrowser = (() => {
       if (node.type === "message") {
         if (node.role === "user") return '<span class="tree-role user">user:</span><span class="tree-text">' + escapeHtml(node.text || "(empty)") + "</span>";
         if (node.role === "assistant") {
-          var text17 = node.text || "";
-          if (!text17 && node.stopReason === "aborted") text17 = "(aborted)";
-          if (!text17 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
-          if (!text17 && node.toolCalls && node.toolCalls.length) {
+          var text18 = node.text || "";
+          if (!text18 && node.stopReason === "aborted") text18 = "(aborted)";
+          if (!text18 && node.errorMessage) return '<span class="tree-role assistant">assistant:</span><span class="tree-text error-text">' + escapeHtml(node.errorMessage.substring(0, 80)) + "</span>";
+          if (!text18 && node.toolCalls && node.toolCalls.length) {
             var calls = node.toolCalls.map(function(tc2) {
               return tc2.args ? tc2.name + ": " + tc2.args : tc2.name;
             }).join(" \xB7 ");
             return '<span class="tree-role assistant">assistant:</span><span class="tree-text muted">' + escapeHtml(calls) + "</span>";
           }
-          if (!text17) text17 = "(empty)";
-          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text17) + "</span>";
+          if (!text18) text18 = "(empty)";
+          return '<span class="tree-role assistant">assistant:</span><span class="tree-text">' + escapeHtml(text18) + "</span>";
         }
         if (node.role === "toolResult") {
           var tc = node.toolCallId ? treeToolCallMap.get(node.toolCallId) : null;
@@ -10671,11 +10946,11 @@ var PiDishBrowser = (() => {
       tokenizer(src) {
         const match = /^(?:\$\$([\s\S]*?)\$\$|\\\[([\s\S]*?)\\\])/.exec(src);
         if (match) {
-          const text17 = match[1] !== void 0 ? match[1] : match[2];
+          const text18 = match[1] !== void 0 ? match[1] : match[2];
           return {
             type: "blockMath",
             raw: match[0],
-            text: text17.trim()
+            text: text18.trim()
           };
         }
       },
@@ -10764,8 +11039,8 @@ var PiDishBrowser = (() => {
     /^(?:sequenceDiagram|classDiagram(?:-v2)?|stateDiagram(?:-v2)?|erDiagram|journey|gantt|mindmap|timeline|kanban|zenuml|quadrantChart|requirementDiagram|gitGraph|architecture-beta|block-beta|packet(?:-beta)?|radar-beta|sankey-beta|treemap(?:-beta)?|xychart-beta|C4Context|C4Container|C4Component|C4Dynamic|C4Deployment)\b/,
     /^pie(?:\s+(?:title|showData)\b|\s*$)/
   ];
-  function mermaidDeclarationLine(text17) {
-    const lines = String(text17 == null ? "" : text17).split("\n");
+  function mermaidDeclarationLine(text18) {
+    const lines = String(text18 == null ? "" : text18).split("\n");
     let i = 0;
     if (lines[0] !== void 0 && lines[0].trim() === "---") {
       const end = lines.findIndex((l, idx) => idx > 0 && l.trim() === "---");
@@ -10778,8 +11053,8 @@ var PiDishBrowser = (() => {
     }
     return "";
   }
-  function looksLikeMermaid(text17) {
-    const decl = mermaidDeclarationLine(text17);
+  function looksLikeMermaid(text18) {
+    const decl = mermaidDeclarationLine(text18);
     return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
   }
   function diagramKindForFence(lang, source) {
@@ -10801,8 +11076,8 @@ var PiDishBrowser = (() => {
   }
   var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
   var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
-  function looksLikeFilePath(text17) {
-    const s = String(text17 == null ? "" : text17).trim();
+  function looksLikeFilePath(text18) {
+    const s = String(text18 == null ? "" : text18).trim();
     if (!s || s.length > 260) return false;
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return false;
     if (!FILE_MENTION_RE.test(s)) return false;
@@ -10811,8 +11086,8 @@ var PiDishBrowser = (() => {
   }
   var PATH_TOKEN_RE = /(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?/g;
   var BARE_EXT_STOPLIST = /* @__PURE__ */ new Set(["com", "org", "net", "io", "ai", "dev", "co", "app"]);
-  function findPathTokens(text17) {
-    const s = String(text17 == null ? "" : text17);
+  function findPathTokens(text18) {
+    const s = String(text18 == null ? "" : text18);
     const out = [];
     PATH_TOKEN_RE.lastIndex = 0;
     let m;
@@ -10939,15 +11214,15 @@ var PiDishBrowser = (() => {
       },
       extensions: createMathExtensions2()
     });
-    function formatMarkdown(text17) {
-      if (!text17) return "";
+    function formatMarkdown(text18) {
+      if (!text18) return "";
       if (options2.marked) {
         try {
-          return options2.marked.parse(text17);
+          return options2.marked.parse(text18);
         } catch (e) {
         }
       }
-      let html = escapeHtml(text17);
+      let html = escapeHtml(text18);
       html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
       html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
       html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
@@ -11122,7 +11397,7 @@ var PiDishBrowser = (() => {
       const bg = hex("--bg-darker", "#00212b");
       const card = hex("--bg-card", "#073642");
       const hover = hex("--bg-hover", "#0b4354");
-      const text17 = hex("--text-bright", "#dbe5e6");
+      const text18 = hex("--text-bright", "#dbe5e6");
       const muted = hex("--text-muted", "#6f8b93");
       const border = hex("--accent-dim", "#1c6ba3");
       const line = hex("--border", "#11475a");
@@ -11141,30 +11416,30 @@ var PiDishBrowser = (() => {
           darkMode: isDarkColorHex(bg),
           background: bg,
           primaryColor: card,
-          primaryTextColor: text17,
+          primaryTextColor: text18,
           primaryBorderColor: border,
           secondaryColor: hover,
-          secondaryTextColor: text17,
+          secondaryTextColor: text18,
           tertiaryColor: bg,
-          tertiaryTextColor: text17,
+          tertiaryTextColor: text18,
           lineColor: muted,
-          textColor: text17,
+          textColor: text18,
           mainBkg: card,
           nodeBorder: border,
           clusterBkg: bg,
           clusterBorder: line,
-          titleColor: text17,
+          titleColor: text18,
           edgeLabelBackground: bg,
           labelBoxBkgColor: card,
           labelBoxBorderColor: border,
           actorBkg: card,
           actorBorder: border,
-          actorTextColor: text17,
+          actorTextColor: text18,
           signalColor: muted,
-          signalTextColor: text17,
+          signalTextColor: text18,
           noteBkgColor: hover,
           noteBorderColor: border,
-          noteTextColor: text17,
+          noteTextColor: text18,
           fontSize: "14px"
         }
       };
@@ -11296,10 +11571,10 @@ var PiDishBrowser = (() => {
         scale = Math.min(8, Math.max(0.1, scale * factor));
         apply();
       };
-      const button = (text17, title, onClick) => {
+      const button = (text18, title, onClick) => {
         const b = document2.createElement("button");
         b.className = "diagram-btn";
-        b.textContent = text17;
+        b.textContent = text18;
         b.title = title;
         b.addEventListener("click", () => {
           if (current()) onClick();
@@ -11356,13 +11631,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/clipboard.ts
-  function copyTextToClipboard(text17, document2 = globalThis.document, navigator = globalThis.navigator) {
+  function copyTextToClipboard(text18, document2 = globalThis.document, navigator = globalThis.navigator) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard.writeText(text17);
+      return navigator.clipboard.writeText(text18);
     }
     return new Promise((resolve, reject) => {
       const ta = document2.createElement("textarea");
-      ta.value = text17;
+      ta.value = text18;
       ta.setAttribute("readonly", "");
       ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;";
       document2.body.appendChild(ta);
@@ -11847,8 +12122,8 @@ var PiDishBrowser = (() => {
         widgets.set(key, entry);
       }
       entry.el.classList.remove("hidden");
-      const body = entry.el.querySelector(".ext-ui-widget-body"), text17 = lines.join("\n");
-      if (body.textContent !== text17) body.textContent = text17;
+      const body = entry.el.querySelector(".ext-ui-widget-body"), text18 = lines.join("\n");
+      if (body.textContent !== text18) body.textContent = text18;
     }
     function measure() {
       if (disposed) return;
@@ -11894,7 +12169,7 @@ var PiDishBrowser = (() => {
       sync();
     }
     document2.getElementById("extUiStatusToggle")?.addEventListener("click", toggleStatus, { signal: events.signal });
-    function status(key, text17) {
+    function status(key, text18) {
       if (disposed) return;
       const items = document2.getElementById("extUiStatusItems");
       if (!items) return;
@@ -11904,7 +12179,7 @@ var PiDishBrowser = (() => {
         statuses.delete(key);
         entry = void 0;
       }
-      if (!text17) {
+      if (!text18) {
         if (!entry) {
           sync();
           return;
@@ -11930,8 +12205,8 @@ var PiDishBrowser = (() => {
         entry = { el, timer: null };
         statuses.set(key, entry);
       }
-      if (entry.el.textContent !== text17) entry.el.textContent = text17;
-      const title = `${text17}
+      if (entry.el.textContent !== text18) entry.el.textContent = text18;
+      const title = `${text18}
 (status from ${key})`;
       if (entry.el.title !== title) entry.el.title = title;
       sync();
@@ -11972,33 +12247,33 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/extension-ui-data.ts
-  var text13 = (value) => typeof value === "string" ? stripAnsi(value) : "";
+  var text14 = (value) => typeof value === "string" ? stripAnsi(value) : "";
   function options(value) {
-    return Array.isArray(value) ? value.map((row) => typeof row === "string" ? { label: text13(row), description: "", preview: "" } : { label: record8(row) ? text13(row.label) : "", description: record8(row) ? text13(row.description) : "", preview: record8(row) ? text13(row.preview) : "" }) : [];
+    return Array.isArray(value) ? value.map((row) => typeof row === "string" ? { label: text14(row), description: "", preview: "" } : { label: record8(row) ? text14(row.label) : "", description: record8(row) ? text14(row.description) : "", preview: record8(row) ? text14(row.preview) : "" }) : [];
   }
   function decodeExtensionRequest(value) {
     if (!record8(value) || typeof value.method !== "string") return null;
     return {
       id: typeof value.id === "string" ? value.id : "",
       method: value.method,
-      title: text13(value.title),
-      message: text13(value.message),
-      text: text13(value.text),
-      prefill: text13(value.prefill),
-      placeholder: text13(value.placeholder),
+      title: text14(value.title),
+      message: text14(value.message),
+      text: text14(value.text),
+      prefill: text14(value.prefill),
+      placeholder: text14(value.placeholder),
       widgetKey: typeof value.widgetKey === "string" && value.widgetKey ? value.widgetKey : "default",
-      widgetLines: Array.isArray(value.widgetLines) ? value.widgetLines.map(text13) : [],
-      widgetPlacement: text13(value.widgetPlacement),
+      widgetLines: Array.isArray(value.widgetLines) ? value.widgetLines.map(text14) : [],
+      widgetPlacement: text14(value.widgetPlacement),
       statusKey: typeof value.statusKey === "string" && value.statusKey ? value.statusKey : "default",
-      statusText: text13(value.statusText),
+      statusText: text14(value.statusText),
       notifyType: value.notifyType === "warning" || value.notifyType === "error" ? value.notifyType : "info",
       options: options(value.options),
       questions: Array.isArray(value.questions) ? value.questions.flatMap((row) => {
         if (!record8(row) || typeof row.id !== "string") return [];
         return [{
           id: row.id,
-          question: text13(row.question),
-          header: text13(row.header),
+          question: text14(row.question),
+          header: text14(row.header),
           multi: row.multi === true,
           recommended: finite2(row.recommended) && Number.isInteger(row.recommended) ? row.recommended : null,
           options: options(row.options)
@@ -12070,37 +12345,37 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/file-view-data.ts
-  var text14 = (v) => typeof v === "string" ? v : "";
+  var text15 = (v) => typeof v === "string" ? v : "";
   var number7 = (v) => finite2(v) ? v : 0;
   function decodeFilePreview(v) {
     if (!record8(v) || typeof v.path !== "string" || !v.path) throw new Error("Invalid file preview");
     return {
       path: v.path,
-      relPath: text14(v.relPath),
-      content: text14(v.content),
+      relPath: text15(v.relPath),
+      content: text15(v.content),
       size: number7(v.size),
       mtime: number7(v.mtime),
       truncated: v.truncated === true,
-      image: record8(v.image) ? { url: text14(v.image.url), mimeType: text14(v.image.mimeType), data: text14(v.image.data) } : null
+      image: record8(v.image) ? { url: text15(v.image.url), mimeType: text15(v.image.mimeType), data: text15(v.image.data) } : null
     };
   }
   function decodeDiffView(v) {
     if (!record8(v) || !Array.isArray(v.repos)) throw new Error("Invalid diff response");
-    return { root: text14(v.root), gitAvailable: v.gitAvailable === true, snapshotId: text14(v.snapshotId), repos: v.repos.flatMap((r) => record8(r) && typeof r.path === "string" ? [{
+    return { root: text15(v.root), gitAvailable: v.gitAvailable === true, snapshotId: text15(v.snapshotId), repos: v.repos.flatMap((r) => record8(r) && typeof r.path === "string" ? [{
       path: r.path,
-      branch: text14(r.branch),
+      branch: text15(r.branch),
       ahead: number7(r.ahead),
       behind: number7(r.behind),
       additions: number7(r.additions),
       deletions: number7(r.deletions),
-      error: text14(r.error),
+      error: text15(r.error),
       moreUntracked: number7(r.moreUntracked),
-      files: Array.isArray(r.files) ? r.files.flatMap((f) => record8(f) && typeof f.path === "string" ? [{ path: f.path, oldPath: text14(f.oldPath), status: text14(f.status), additions: number7(f.additions), deletions: number7(f.deletions), binary: f.binary === true, truncated: f.truncated === true, patch: text14(f.patch), patchDeferred: f.patchDeferred === true }] : []) : []
+      files: Array.isArray(r.files) ? r.files.flatMap((f) => record8(f) && typeof f.path === "string" ? [{ path: f.path, oldPath: text15(f.oldPath), status: text15(f.status), additions: number7(f.additions), deletions: number7(f.deletions), binary: f.binary === true, truncated: f.truncated === true, patch: text15(f.patch), patchDeferred: f.patchDeferred === true }] : []) : []
     }] : []) };
   }
   function decodeDiffPatch(v) {
     const p = record8(v) ? v : {};
-    return { patch: text14(p.patch), stale: p.stale === true, truncated: p.truncated === true };
+    return { patch: text15(p.patch), stale: p.stale === true, truncated: p.truncated === true };
   }
 
   // src/browser/file-view-render.ts
@@ -12462,13 +12737,13 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/anchored-comment-data.ts
-  var text15 = (v) => typeof v === "string" ? v : "";
+  var text16 = (v) => typeof v === "string" ? v : "";
   function decodeCommentTarget(v) {
     if (!record8(v) || v.kind !== "file" && v.kind !== "diff" || typeof v.path !== "string") return null;
     const a = record8(v.anchor) ? v.anchor : {};
     const positions = {};
     for (const key of ["startLine", "endLine", "oldStart", "oldEnd", "newStart", "newEnd"]) if (typeof a[key] === "number" && Number.isInteger(a[key]) && a[key] > 0) positions[key] = a[key];
-    const anchor = { type: a.type === "lines" ? "lines" : "text", quote: text15(a.quote), prefix: text15(a.prefix), suffix: text15(a.suffix), ...positions };
+    const anchor = { type: a.type === "lines" ? "lines" : "text", quote: text16(a.quote), prefix: text16(a.prefix), suffix: text16(a.suffix), ...positions };
     return v.kind === "file" ? { kind: "file", path: v.path, relPath: typeof v.relPath === "string" ? v.relPath : null, anchor } : typeof v.repo === "string" ? { kind: "diff", repo: v.repo, path: v.path, oldPath: typeof v.oldPath === "string" ? v.oldPath : null, anchor } : null;
   }
   function decodeAnchoredComments(value) {
@@ -12515,13 +12790,13 @@ var PiDishBrowser = (() => {
       acceptNode: (node) => node.parentElement?.closest("script, style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
     });
     const runs = [];
-    let text17 = "";
+    let text18 = "";
     while (walker.nextNode()) {
       const node = walker.currentNode;
-      runs.push({ node, start: text17.length, end: text17.length + node.textContent.length });
-      text17 += node.textContent;
+      runs.push({ node, start: text18.length, end: text18.length + node.textContent.length });
+      text18 += node.textContent;
     }
-    return { runs, text: text17 };
+    return { runs, text: text18 };
   }
   function commonSuffixLength(a, b) {
     let n = 0;
@@ -12533,13 +12808,13 @@ var PiDishBrowser = (() => {
     while (n < a.length && n < b.length && a[n] === b[n]) n++;
     return n;
   }
-  function findQuoteOffset(text17, anchor) {
+  function findQuoteOffset(text18, anchor) {
     const quote = anchor?.quote;
     if (!quote) return -1;
     const hits = [];
     let from = 0;
     let at;
-    while ((at = text17.indexOf(quote, from)) !== -1) {
+    while ((at = text18.indexOf(quote, from)) !== -1) {
       hits.push(at);
       from = at + Math.max(1, quote.length);
     }
@@ -12549,8 +12824,8 @@ var PiDishBrowser = (() => {
     let best = hits[0];
     let bestScore = -1;
     for (const hit of hits) {
-      const before = text17.slice(Math.max(0, hit - prefix.length), hit);
-      const after = text17.slice(hit + quote.length, hit + quote.length + suffix.length);
+      const before = text18.slice(Math.max(0, hit - prefix.length), hit);
+      const after = text18.slice(hit + quote.length, hit + quote.length + suffix.length);
       const score = commonSuffixLength(before, prefix) + commonPrefixLength(after, suffix);
       if (score > bestScore) {
         bestScore = score;
@@ -12562,8 +12837,8 @@ var PiDishBrowser = (() => {
   function markCommentQuote(root, anchor, commentId) {
     const quote = anchor?.quote;
     if (!quote) return false;
-    const { runs, text: text17 } = collectTextRuns(root);
-    const start = findQuoteOffset(text17, anchor);
+    const { runs, text: text18 } = collectTextRuns(root);
+    const start = findQuoteOffset(text18, anchor);
     if (start < 0) return false;
     const end = start + quote.length;
     let marked = false;
@@ -12742,8 +13017,8 @@ var PiDishBrowser = (() => {
       if (!selection || selection.isCollapsed || !selection.rangeCount) return;
       const root = element("fileViewBody"), range = selection.getRangeAt(0);
       if (!root.contains(range.commonAncestorContainer)) return;
-      const text17 = range.toString();
-      if (!text17.trim() || text17.length > 12e3) return;
+      const text18 = range.toString();
+      if (!text18.trim() || text18.length > 12e3) return;
       const base = selectionTextAnchor(root, range), first = raw.indexOf(base.quote);
       const startLine = first >= 0 && raw.indexOf(base.quote, first + 1) < 0 ? raw.slice(0, first).split("\n").length : null;
       const anchor = startLine === null ? base : { ...base, startLine, endLine: startLine + base.quote.split("\n").length - 1 };
@@ -13476,7 +13751,7 @@ var PiDishBrowser = (() => {
         element.textContent = "";
       }
     }
-    function show(text17) {
+    function show(text18) {
       if (disposed) return;
       const element = document2.getElementById("composerNote");
       if (!element) return;
@@ -13485,7 +13760,7 @@ var PiDishBrowser = (() => {
       const owned = events;
       const message3 = document2.createElement("span");
       message3.className = "composer-note-text";
-      message3.textContent = text17;
+      message3.textContent = text18;
       const dismiss = document2.createElement("button");
       dismiss.type = "button";
       dismiss.className = "composer-note-dismiss";
@@ -13714,12 +13989,12 @@ var PiDishBrowser = (() => {
         const value = await response.json().catch(() => null);
         if (!current()) return;
         if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `Transcription failed (HTTP ${response.status})`);
-        const text17 = record8(value) && typeof value.text === "string" ? value.text.trim() : "";
-        if (!text17) {
+        const text18 = record8(value) && typeof value.text === "string" ? value.text.trim() : "";
+        if (!text18) {
           options2.showNote("No speech detected.");
           return;
         }
-        insert(text17);
+        insert(text18);
       } catch (error) {
         if (current()) options2.showNote(error instanceof Error ? error.message : "Transcription failed");
       } finally {
@@ -13730,11 +14005,11 @@ var PiDishBrowser = (() => {
         }
       }
     }
-    function insert(text17) {
+    function insert(text18) {
       if (disposed) return;
       const input = document2.getElementById("promptInput");
       if (!input) return;
-      const result = insertAtCaret(input.value, input.selectionStart, input.selectionEnd, text17);
+      const result = insertAtCaret(input.value, input.selectionStart, input.selectionEnd, text18);
       input.value = result.value;
       try {
         input.setSelectionRange(result.caret, result.caret);
@@ -14297,12 +14572,12 @@ ${restored}`;
   }
 
   // src/browser/composer-autocomplete-data.ts
-  var text16 = (v) => typeof v === "string" ? v : "";
+  var text17 = (v) => typeof v === "string" ? v : "";
   function decodeSlashCommands(value) {
-    return Array.isArray(value) ? value.flatMap((v) => record8(v) && typeof v.name === "string" && v.name ? [{ name: v.name, description: text16(v.description), source: text16(v.source), args: text16(v.args) }] : []) : [];
+    return Array.isArray(value) ? value.flatMap((v) => record8(v) && typeof v.name === "string" && v.name ? [{ name: v.name, description: text17(v.description), source: text17(v.source), args: text17(v.args) }] : []) : [];
   }
   function decodeFileCompletions(value) {
-    return Array.isArray(value) ? value.flatMap((v) => record8(v) && typeof v.path === "string" ? [{ path: v.path, isDir: v.isDir === true, gitStatus: text16(v.gitStatus) }] : []) : [];
+    return Array.isArray(value) ? value.flatMap((v) => record8(v) && typeof v.path === "string" ? [{ path: v.path, isDir: v.isDir === true, gitStatus: text17(v.gitStatus) }] : []) : [];
   }
 
   // src/browser/composer-autocomplete.ts
@@ -14484,31 +14759,31 @@ ${restored}`;
         });
       }, 120);
     }
-    function handle(text17) {
+    function handle(text18) {
       if (disposed || options2.provisional()) {
         hide();
         return;
       }
-      const caret = input().selectionStart, at = text17.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
+      const caret = input().selectionStart, at = text18.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
       if (at && sessionState.currentSession) {
         queueFile(at[1]);
         return;
       }
-      const hash = text17.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/);
+      const hash = text18.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/);
       if (hash && sessionState.currentSession) {
         showRefs(hash[1]);
         return;
       }
-      const model = text17.slice(0, caret).match(/(?:^|\s)\^([^\s^]*)$/);
+      const model = text18.slice(0, caret).match(/(?:^|\s)\^([^\s^]*)$/);
       if (model && sessionState.currentSession?.harnessId === "omp") {
         queueModels(model[1]);
         return;
       }
-      if (!text17.startsWith("/") || text17.includes(" ") || !ownsRequest(commandOwner)) {
+      if (!text18.startsWith("/") || text18.includes(" ") || !ownsRequest(commandOwner)) {
         hide();
         return;
       }
-      const query = text17.slice(1), matches = commands.filter((command) => command.name.toLowerCase().startsWith(query.toLowerCase()));
+      const query = text18.slice(1), matches = commands.filter((command) => command.name.toLowerCase().startsWith(query.toLowerCase()));
       if (!matches.length || matches.length === 1 && matches[0].name === query) {
         hide();
         return;
@@ -15289,7 +15564,7 @@ ${restored}`;
       menuTimers.clear();
       if (menu) menu.style.display = "none";
     }
-    function openMenu(session, x, y) {
+    function openMenu(session, x2, y) {
       if (disposed) return;
       closeMenu();
       if (!menu) {
@@ -15308,7 +15583,7 @@ ${restored}`;
       el.style.display = "block";
       el.style.left = "0px";
       el.style.top = "0px";
-      el.style.left = `${Math.max(8, Math.min(x, window.innerWidth - el.offsetWidth - 8))}px`;
+      el.style.left = `${Math.max(8, Math.min(x2, window.innerWidth - el.offsetWidth - 8))}px`;
       el.style.top = `${Math.max(8, Math.min(y, window.innerHeight - el.offsetHeight - 8))}px`;
       for (const item of Array.from(el.querySelectorAll(".context-menu-item"))) {
         const value = item.dataset.copy || "";
@@ -15886,9 +16161,9 @@ ${row.id}`;
     function updateRenderedResponseMetadata() {
       if (disposed) return;
       document2.querySelectorAll(".message-metadata-btn").forEach((btn) => {
-        const text17 = formatResponseMetadata(responseDetails.get(btn.dataset.detailId || ""), options2.mode());
-        btn.textContent = text17 || "";
-        btn.style.display = text17 ? "" : "none";
+        const text18 = formatResponseMetadata(responseDetails.get(btn.dataset.detailId || ""), options2.mode());
+        btn.textContent = text18 || "";
+        btn.style.display = text18 ? "" : "none";
       });
     }
     function responsePricingKnown(msg) {
@@ -16269,7 +16544,7 @@ ${row.id}`;
           blockEl = null;
         }
         if (block.type === "thinking") {
-          const text17 = block.thinking || "";
+          const text18 = block.thinking || "";
           if (!blockEl) {
             el.insertAdjacentHTML(
               "beforeend",
@@ -16281,13 +16556,13 @@ ${row.id}`;
             blockEl = el.querySelector(`[data-block-index="${i}"]`);
           }
           if (!blockEl) return;
-          if (sources.get(blockEl) !== text17) {
-            sources.set(blockEl, text17);
-            blockEl.querySelector(".thinking-preview").textContent = text17.substring(0, 80).replace(/\n/g, " ") + "\u2026";
-            blockEl.querySelector(".thinking-text").textContent = text17;
+          if (sources.get(blockEl) !== text18) {
+            sources.set(blockEl, text18);
+            blockEl.querySelector(".thinking-preview").textContent = text18.substring(0, 80).replace(/\n/g, " ") + "\u2026";
+            blockEl.querySelector(".thinking-text").textContent = text18;
           }
         } else if (block.type === "text") {
-          const text17 = block.text || "";
+          const text18 = block.text || "";
           if (!blockEl) {
             el.insertAdjacentHTML(
               "beforeend",
@@ -16296,9 +16571,9 @@ ${row.id}`;
             blockEl = el.querySelector(`[data-block-index="${i}"]`);
           }
           if (!blockEl) return;
-          if (sources.get(blockEl) !== text17) {
-            sources.set(blockEl, text17);
-            blockEl.querySelector(".markdown-body").innerHTML = options2.markdown(text17);
+          if (sources.get(blockEl) !== text18) {
+            sources.set(blockEl, text18);
+            blockEl.querySelector(".markdown-body").innerHTML = options2.markdown(text18);
           }
         } else if (block.type === "toolCall") {
           const args = block.arguments || {};
@@ -16827,11 +17102,11 @@ ${row.id}`;
       }, { signal });
       return owner;
     }
-    function resolve(text17, owner) {
+    function resolve(text18, owner) {
       if (!owns(owner)) return;
-      answer = text17;
+      answer = text18;
       panel.className = "btw-panel";
-      panel.querySelector(".btw-panel-answer").innerHTML = `<div class="markdown-body">${options2.markdown(text17)}</div>`;
+      panel.querySelector(".btw-panel-answer").innerHTML = `<div class="markdown-body">${options2.markdown(text18)}</div>`;
       panel.querySelector(".btw-copy").style.display = "";
     }
     function fail(error, owner) {
@@ -16895,9 +17170,9 @@ ${row.id}`;
       entry.element?.remove();
     }
     function consume(key, content) {
-      const text17 = splitSessionRefContext(extractTextBlocks(content)).text;
+      const text18 = splitSessionRefContext(extractTextBlocks(content)).text;
       for (const [id, entry] of pending) {
-        if (entry.key === key && entry.message === text17) {
+        if (entry.key === key && entry.message === text18) {
           pending.delete(id);
           return true;
         }
@@ -16923,8 +17198,8 @@ ${row.id}`;
       if (!owner) return;
       const endpoint = Object.freeze({ ...options2.endpoint(owner.host) }), key = sessionRefKey(owner), associated = /* @__PURE__ */ new Set();
       const canCancel = canCancelQueue();
-      for (const kind of ["steering", "followUp"]) data[kind].forEach((text17, index) => {
-        const stripped = splitSessionRefContext(text17).text;
+      for (const kind of ["steering", "followUp"]) data[kind].forEach((text18, index) => {
+        const stripped = splitSessionRefContext(text18).text;
         let clientId = null;
         for (const [id, entry] of pending) {
           if (!associated.has(id) && entry.key === key && entry.status === "queued" && entry.message === stripped) {
@@ -16939,7 +17214,7 @@ ${row.id}`;
         element.dataset.index = String(index);
         if (clientId) element.dataset.clientPromptId = clientId;
         element.innerHTML = `<span class="queue-item-kind">${kind === "steering" ? "steer" : "follow-up"}</span><span class="queue-item-text" title="Click to expand">${escapeHtml(stripped)}</span>${canCancel ? '<button class="queue-item-edit" title="Remove from queue and edit">\u21A9 Edit</button>' : ""}`;
-        const row = Object.freeze({ owner, endpoint, generation, kind, index, text: text17, clientId });
+        const row = Object.freeze({ owner, endpoint, generation, kind, index, text: text18, clientId });
         rows.set(element, row);
         const label = element.querySelector(".queue-item-text");
         label.addEventListener("click", () => {
@@ -17199,8 +17474,8 @@ ${row.id}`;
   }
 
   // src/browser/message-stream.ts
-  function parseRecord(text17) {
-    const value = JSON.parse(text17);
+  function parseRecord(text18) {
+    const value = JSON.parse(text18);
     return record8(value) ? value : {};
   }
   function createMessageStream(options2) {

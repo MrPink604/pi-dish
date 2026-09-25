@@ -2600,6 +2600,55 @@ test('usage limits come from the harness CLI, sanitized and failure-tolerant', a
     // The capability is how a client knows to fan the route out at all.
     assert.equal((0, test_types_js_1.record)((await get('/api/host')).body.capabilities).usageLimits, true);
 });
+test('cache lifetimes report the learner window with precedence and gates', async () => {
+    const storeFile = path.join(tmpHome, '.pi', 'dish', 'cache-lifetime.json');
+    const now = Date.now();
+    const obs = [[now - 60_000, 30_000, 1, 'aaaa0001'], [now - 30_000, 3_600_000, 0, 'aaaa0001']];
+    fs.mkdirSync(path.dirname(storeFile), { recursive: true });
+    fs.writeFileSync(storeFile, JSON.stringify({ version: 1, identities: {
+            ['openai-responses\u0000openai\u0000gpt-report']: { obs },
+            ['acme-api\u0000acme\u0000mystery']: { obs },
+        } }) + '\n');
+    try {
+        const { status, body } = await get('/api/cache-lifetimes');
+        assert.equal(status, 200);
+        assert.ok(Number.isFinite(body.generatedAt));
+        const rows = (0, test_types_js_1.records)(body.identities);
+        const openai = (0, test_types_js_1.present)(rows.find(row => row.model === 'gpt-report'));
+        assert.equal(openai.source, 'builtin', 'two probes learn nothing; the ~10m estimate stands');
+        assert.equal((0, test_types_js_1.record)(openai.effective).retention, '~10m');
+        assert.equal((0, test_types_js_1.record)((0, test_types_js_1.present)((0, test_types_js_1.records)(openai.gates)[0])).id, 'support');
+        assert.deepEqual((0, test_types_js_1.record)(openai.probes).total, 2);
+        assert.ok(Array.isArray(openai.points) && openai.points.length === 2, 'probes plotted as [gapMs, hit] pairs');
+        const mystery = (0, test_types_js_1.present)(rows.find(row => row.model === 'mystery'));
+        assert.equal(mystery.source, 'none');
+        assert.equal(mystery.effective, null);
+        assert.equal((0, test_types_js_1.record)((await get('/api/host')).body.capabilities).cacheLifetimes, true);
+    }
+    finally {
+        fs.rmSync(storeFile, { force: true });
+    }
+});
+test('an unknown-provider cache anchor never reaches a client projection', async () => {
+    // Cache activity from a provider with no built-in window is stored as an
+    // internal 'unknown' anchor; clients reject that basis, and the transcript
+    // route once served it raw inside `session`, breaking the whole load.
+    const id = 'cacheanchor-dddd4444';
+    const at = Date.now() - 60_000;
+    fs.writeFileSync(path.join(sessionDir, `${id}.jsonl`), [
+        { type: 'session', cwd: '/home/user/proj', timestamp: new Date(at).toISOString() },
+        { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'anchor fixture' }], timestamp: at } },
+        { type: 'message', timestamp: new Date(at + 1000).toISOString(), message: { role: 'assistant', api: 'mystery-api', provider: 'mystery',
+                model: 'model-x', content: [{ type: 'text', text: 'ok' }], timestamp: at + 500, usage: { input: 5, output: 2, cacheRead: 0, cacheWrite: 50 } } },
+    ].map(e => JSON.stringify(e)).join('\n') + '\n');
+    await waitForSessions([id]);
+    const { status, body } = await get(`/api/sessions/${id}/messages?limit=10`);
+    assert.equal(status, 200);
+    assert.equal((0, test_types_js_1.record)(body.session).cacheExpiry, null, 'no learned window, no projection');
+    const listed = [...(0, test_types_js_1.records)((await get('/api/sessions')).body.previous)].find(session => session.id === id);
+    assert.equal((0, test_types_js_1.present)(listed).cacheExpiry, null);
+    assert.ok((0, test_types_js_1.records)(body.messages).every(message => message.cacheExpiry === undefined), 'per-message projection omitted too');
+});
 test('usage limits degrade to an error entry when the harness command fails', async () => {
     const previous = process.env.PI_DISH_OMP_COMMAND;
     process.env.PI_DISH_OMP_COMMAND = path.join(os.tmpdir(), 'pi-dish-missing-omp');

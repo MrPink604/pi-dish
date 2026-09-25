@@ -16,8 +16,14 @@ export interface CacheTarget {
 }
 /** Normalize a message's cache ownership: explicit fields, model slug, then API. */
 export declare function resolveCacheTarget(message: Record<string, unknown>): CacheTarget;
-/** Anthropic's extended retention tier, reported as cacheWrite1h dominating cacheWrite. */
-export declare function cacheTier1h(usage: Record<string, unknown>): boolean;
+/**
+ * Anthropic's extended retention tier. Pi reports it as cacheWrite1h
+ * dominating cacheWrite. OMP omits that split but still prices the write, and
+ * Anthropic bills 1h-tier writes at 2× base input against 1.25× for the 5m
+ * tier, so for Anthropic targets the priced write/input rate ratio decides
+ * when the split is absent. Other providers' write premiums mean nothing here.
+ */
+export declare function cacheTier1h(usage: Record<string, unknown>, anthropic?: boolean): boolean;
 /**
  * Documented fixed/minimum windows and conservative provider estimates. This
  * ladder is the learner's Bayesian prior and the fallback when no learned

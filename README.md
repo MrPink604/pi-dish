@@ -369,15 +369,31 @@ Beyond the built-in defaults, pi-dish measures real provider cache behavior
 from your session history. Every cache-active response is treated as a probe
 of whether the provider's cache survived the idle gap before it; per
 provider/model (and per Anthropic cache tier) a logistic warmth curve is fit
-over a sliding window (200 probes or 45 days, recent probes weighted
-higher). Once enough probes with both hits and misses bracket the crossing,
-projections switch to the learned TTL (shown as `~` with a `learned` basis).
-Documented `fixed` retentions and your `cacheTtlOverrides` always win; the
-learner only replaces built-in guesses. The fitted curve's slope doubles as
+over a 45-day sliding window, recent probes weighted higher. The window keeps
+at most 24 probes per doubling of the idle gap, so seconds-apart tool-loop
+turns cannot crowd out the rare long-idle returns that show where a cache
+actually expires. Once enough probes with both hits and misses bracket the
+crossing, projections switch to the learned TTL (shown as `~` with a
+`learned` basis) — including providers with no built-in window at all, which
+otherwise show no countdown. Documented `fixed` retentions and your
+`cacheTtlOverrides` always win; the learner only replaces built-in guesses.
+Anthropic's published 5m/1h windows apply to Anthropic itself, not to other
+providers speaking its message API; the 1h tier is recognized from
+`cacheWrite1h` or, when a harness omits that split, from the write being
+billed at 2× base input. The fitted curve's slope doubles as
 a reliability signal: a deterministic provider TTL produces a steep cliff,
 while best-effort eviction (gateways, capacity pressure) produces a shallow
 slope and a warm-window hit rate below 100%. Learned state lives in
 `~/.pi/dish/cache-lifetime.json`; delete it to re-learn from scratch.
+
+The Usage view's **Cache lifetimes** section shows each model's served window
+and where it comes from (override, documented, learned, estimate or unknown),
+a strip of its warm and cold probes on a log idle-gap scale, and — for models
+still learning — the first activation check that has not passed, most often
+"never seen cold": sessions that never sit idle past the cache window give the
+learner nothing to bracket. Tap a row for the fitted curve and every check.
+It reads `GET /api/cache-lifetimes` from each host advertising the
+`cacheLifetimes` capability; each host learns from its own sessions.
 
 ### Speech to text (bring your own endpoint)
 

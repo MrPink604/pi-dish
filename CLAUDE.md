@@ -465,6 +465,20 @@ in/out and show the cached share (`usageTokensDetail` in app.js) — the rate's
 denominator is the whole prompt side, matching `formatCacheStat` in the
 stats modal; keep the two consistent.
 
+The Cache lifetimes section above it (`src/browser/cache-lifetimes.ts`,
+`GET /api/cache-lifetimes`, capability `cacheLifetimes`) explains the learned
+provider cache TTLs (`src/core/cache-lifetime.ts`): per identity the served
+policy with the same precedence as `applyLearnedCacheExpiry`, the fit, each
+activation gate and the window's probes. Rows lead with the first failing
+gate, because "why isn't it learned" is the question the view exists for. It
+is per host, never merged (each host learns from its own sessions), with a
+host picker when several answer. The curve SVG stretches to its column, so it
+holds only non-scaling strokes; its labels are percentage-positioned HTML.
+The window is stratified by idle-gap bucket (never by outcome, which would
+bias P(hit | gap)); a plain FIFO filled with tool-loop chatter and evicted
+every miss. Cache activity with no built-in window keeps an internal
+`'unknown'` expiry anchor that only the learner overlay may serve.
+
 The Subscription limits section at the bottom of the view is a different kind
 of data — provider-account quota (5h/7d windows, percent used, reset
 countdowns), not spend — and deliberately reuses the harness's own reporter

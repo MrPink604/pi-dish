@@ -37,6 +37,7 @@ export interface FeatureHandlers {
     settings: FeatureHandler;
     updateSettings: FeatureHandler;
     usageLimits: FeatureHandler;
+    cacheLifetimes: FeatureHandler;
     usageSummary: FeatureHandler;
     skills: FeatureHandler;
     skillActivations: FeatureHandler;

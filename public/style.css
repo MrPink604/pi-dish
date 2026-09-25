@@ -56,6 +56,10 @@
   --cost-cached: var(--chart-3);
   --cost-output: var(--chart-2);
   --cost-write: var(--chart-4);
+  /* Cache lifetime probes (usage view): warm returns wear the warm hue, cold
+     returns the cool one — the blue/orange pair stays distinct under CVD. */
+  --cache-warm: var(--orange);
+  --cache-cold: var(--accent);
 }
 
 /* Alternate theme: a neutral dark for people who don't share the solarized
@@ -5953,6 +5957,63 @@ body.standalone-file-page {
 
 .usage-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
 
+/* Cache lifetimes: one row per model — served window, probe strip, and the
+   first reason it isn't learned yet; a row expands into the fitted curve and
+   the learner's activation gates. Hairline rows, no boxes. */
+.cl-hosts { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; }
+.cl-row { display: grid; grid-template-columns: minmax(0, 1.3fr) 76px minmax(120px, 2fr) minmax(0, 1.4fr); gap: 4px 14px; align-items: center;
+  padding: 8px 4px; border-top: 1px solid var(--line); cursor: pointer; }
+.cl-row:hover, .cl-row.open { background: var(--bg-hover); }
+.cl-row:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.cl-model, .cl-ttl-cell, .cl-status { display: flex; flex-direction: column; min-width: 0; }
+.cl-model span { font-size: 12px; color: var(--text-bright); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cl-model small, .cl-ttl-cell small, .cl-status small { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cl-model span small { color: var(--text-muted); font-weight: 400; }
+.cl-ttl-cell strong { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--text-bright); }
+.cl-source.learned { color: var(--success-bright); }
+.cl-status span { font-size: 12px; color: var(--text); }
+.cl-status.learned span { color: var(--success-bright); }
+.cl-strip { display: block; overflow: visible; }
+.cl-strip line { stroke-width: 1.5; }
+.cl-curve { position: relative; }
+.cl-curve svg { display: block; overflow: visible; }
+.cl-curve line, .cl-curve path { vector-effect: non-scaling-stroke; }
+.cl-curve line.cl-dot { stroke-width: 4.5; stroke-linecap: round; }
+.cl-axis { position: relative; height: 14px; margin-top: 2px; }
+.cl-axis span, .cl-ttl-label { position: absolute; font-family: var(--font-mono); font-size: 10px; color: var(--text-muted); white-space: nowrap; }
+.cl-axis span { transform: translateX(-50%); }
+.cl-axis span:first-child { transform: none; }
+.cl-axis span:last-child { transform: translateX(-100%); }
+.cl-ttl-label { top: 34px; margin-left: 4px; color: var(--text-bright); }
+.cl-ttl-label.left { transform: translateX(-100%); margin-left: -4px; }
+.cl-rule, .cl-grid { stroke: var(--line); }
+.cl-grid { stroke-dasharray: 2 3; stroke-width: 1; }
+line.cl-warm { stroke: color-mix(in srgb, var(--cache-warm) 70%, transparent); }
+line.cl-cold { stroke: var(--cache-cold); }
+line.cl-dot.cl-warm { stroke: color-mix(in srgb, var(--cache-warm) 60%, transparent); }
+.cl-ttl { stroke: var(--text-bright); stroke-width: 1; }
+.cl-ttl.guess { stroke-dasharray: 2 2; stroke: var(--text-muted); }
+.cl-fit, .cl-prior { fill: none; }
+.cl-fit { stroke: var(--text-bright); stroke-width: 1.5; }
+.cl-fit.provisional { stroke-dasharray: 5 3; }
+.cl-prior { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.cl-detail { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 16px; padding: 8px 4px 14px; }
+.cl-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.cl-key { display: inline-block; width: 12px; height: 0; border-top: 2px solid; margin-right: 4px; vertical-align: middle; }
+.cl-key.warm { border-color: var(--cache-warm); }
+.cl-key.cold { border-color: var(--cache-cold); }
+.cl-key.fit { border-color: var(--text-bright); }
+.cl-key.prior { border-top-style: dotted; border-color: var(--text-muted); }
+.cl-gates { list-style: none; margin: 0 0 8px; padding: 0; font-size: 12px; }
+.cl-gates li { display: grid; grid-template-columns: 14px 1fr auto; gap: 6px; padding: 1px 0; }
+.cl-gates li.pass > span:first-child { color: var(--success-bright); }
+.cl-gates li.fail > span:first-child { color: var(--error); }
+.cl-gates small { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+.cl-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; font-size: 11px; }
+.cl-facts dt { color: var(--text-muted); }
+.cl-facts dd { margin: 0; color: var(--text); text-align: right; }
+.cl-note { margin: 8px 0 0; font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+
 /* Usage view on phones: these live after the base rules above — an earlier
    media block would lose the same-specificity cascade. */
 @media (max-width: 768px) {
@@ -5967,6 +6028,15 @@ body.standalone-file-page {
   .usage-row .usage-row-meta { white-space: normal; flex-basis: 100%; }
   .usage-row.model-toggle .usage-row-meta { padding-left: 17px; }
   .search-view-body { padding: 12px 12px 32px; }
+  /* Cache lifetimes: name and window, then the strip, then the status on
+     its own line — the reason is the point of the row, never truncate it. */
+  .cl-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "model ttl" "strip strip" "status status"; }
+  .cl-model { grid-area: model; }
+  .cl-ttl-cell { grid-area: ttl; text-align: right; }
+  .cl-strip-cell { grid-area: strip; }
+  .cl-status { grid-area: status; flex-direction: row; flex-wrap: wrap; gap: 0 6px; align-items: baseline; }
+  .cl-status small { white-space: normal; }
+  .cl-detail { grid-template-columns: 1fr; }
 }
 
 .diff-repo { margin-bottom: 22px; }

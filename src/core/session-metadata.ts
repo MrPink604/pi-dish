@@ -1,6 +1,6 @@
 import { configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
-import type { CacheExpiry, CacheExpiryBasis, SessionEntries, SessionInfo } from './session-metadata-contracts';
+import type { CacheExpiry, CacheExpiryBasis, SessionEntries, SessionInfo, StoredCacheExpiryBasis } from './session-metadata-contracts';
 
 import { extractTextContent } from './helper-content';
 import { truncate } from './helper-format';
@@ -24,9 +24,9 @@ function decodeCacheExpiry(value: unknown): CacheExpiry | null {
   const basis = value.basis;
   if (refreshedAt === null || expiresAt === null || retentionMs === null ||
       typeof value.retention !== 'string' || typeof value.identity !== 'string' ||
-      !['fixed', 'minimum', 'estimate', 'learned'].includes(String(basis))) return null;
+      !['fixed', 'minimum', 'estimate', 'learned', 'unknown'].includes(String(basis))) return null;
   return { refreshedAt, expiresAt, retentionMs, retention: value.retention,
-    basis: basis as CacheExpiryBasis, identity: value.identity,
+    basis: basis as StoredCacheExpiryBasis, identity: value.identity,
     ...(value.tier === '1h' ? { tier: '1h' as const } : {}) };
 }
 
@@ -71,10 +71,21 @@ export function resolveCacheTarget(message: Record<string, unknown>): CacheTarge
   return { api, provider, model };
 }
 
-/** Anthropic's extended retention tier, reported as cacheWrite1h dominating cacheWrite. */
-export function cacheTier1h(usage: Record<string, unknown>): boolean {
+/**
+ * Anthropic's extended retention tier. Pi reports it as cacheWrite1h
+ * dominating cacheWrite. OMP omits that split but still prices the write, and
+ * Anthropic bills 1h-tier writes at 2× base input against 1.25× for the 5m
+ * tier, so for Anthropic targets the priced write/input rate ratio decides
+ * when the split is absent. Other providers' write premiums mean nothing here.
+ */
+export function cacheTier1h(usage: Record<string, unknown>, anthropic = false): boolean {
   const write = cacheTokens(usage, 'cacheWrite');
-  return write > 0 && cacheTokens(usage, 'cacheWrite1h') >= write;
+  if (write <= 0) return false;
+  if (usage.cacheWrite1h !== undefined || !anthropic) return cacheTokens(usage, 'cacheWrite1h') >= write;
+  const cost = isRecord(usage.cost) ? usage.cost : null;
+  const input = finiteNumber(usage.input), writeCost = finiteNumber(cost?.cacheWrite), inputCost = finiteNumber(cost?.input);
+  if (!input || input <= 0 || !writeCost || !inputCost || inputCost <= 0) return false;
+  return (writeCost / write) / (inputCost / input) >= 1.6;
 }
 
 /**
@@ -87,7 +98,10 @@ export function builtinCacheRetention(target: CacheTarget, long1h: boolean): { r
   if (provider === 'opencode-go' && /^deepseek-/i.test(model)) {
     return { retentionMs: 24 * 60 * 60_000, retention: '24h', basis: 'minimum' };
   }
-  if (api === 'anthropic-messages' || provider === 'anthropic') {
+  // Anthropic's published windows belong to Anthropic itself. Third parties
+  // speaking its wire format (Kimi, GLM, …) run their own caches and were
+  // observed warm after hours; the learner, not this ladder, answers for them.
+  if (provider === 'anthropic') {
     return long1h
       ? { retentionMs: 60 * 60_000, retention: '1h', basis: 'fixed' }
       : { retentionMs: 5 * 60_000, retention: '5m', basis: 'fixed' };
@@ -115,20 +129,22 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
   const usage = message.usage;
   const identity = cacheIdentity(message);
   const read = cacheTokens(usage, 'cacheRead');
-  const long = cacheTier1h(usage);
+  const long = cacheTier1h(usage, resolveCacheTarget(message).provider === 'anthropic');
   const startedAt = new Date((message.timestamp ?? fallbackTimestamp) as string | number | Date).getTime();
   if (!Number.isFinite(startedAt)) return null;
 
   let retentionMs: number | null = null;
   let retention = '';
-  let basis: CacheExpiryBasis = 'estimate';
+  let basis: StoredCacheExpiryBasis = 'estimate';
   if (read > 0 && previous?.identity === identity) {
     ({ retentionMs, retention, basis } = previous);
   } else {
     const target = resolveCacheTarget(message);
     const configured = configuredCacheRetention(config, target.provider, target.model);
     const derived = configured ?? builtinCacheRetention(target, long);
-    if (derived) ({ retentionMs, retention, basis } = derived);
+    // No known window: keep an 'unknown' anchor (refresh time + identity) so
+    // a learned TTL can still project an expiry at serve time.
+    ({ retentionMs, retention, basis } = derived ?? { retentionMs: 0, retention: '', basis: 'unknown' });
   }
   if (retentionMs === null) return null;
   return { refreshedAt: startedAt, expiresAt: startedAt + retentionMs, retentionMs, retention, basis, identity,

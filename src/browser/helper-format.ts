@@ -67,7 +67,7 @@ export function cacheExpiryPresentation(expiry?: CacheExpiryProjection | null, n
   if (expiry.basis === 'minimum') {
     return { compact: `≥${duration}`, detail: `At least ${duration} remaining · ${expiry.retention} minimum retention`, severity };
   }
-  const qualifier = expiry.basis === 'estimate' ? 'provider estimate' : 'retention';
+  const qualifier = expiry.basis === 'estimate' ? 'provider estimate' : expiry.basis === 'learned' ? 'learned retention' : 'retention';
   return { compact: `~${duration}`, detail: `About ${duration} remaining · ${expiry.retention} ${qualifier}`, severity };
 }
 

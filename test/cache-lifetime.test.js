@@ -19,6 +19,7 @@ const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-cl-'));
 process.env.HOME = tmpHome;
 const CL = require('../lib/cache-lifetime.js');
 const index = require('../lib/session-index.js');
+const SM = require('../lib/session-metadata.js');
 const { sourceForIdentity } = require('../lib/session-source.js');
 const dishDir = path.join(tmpHome, '.pi', 'dish');
 const dishSettingsFile = path.join(dishDir, 'settings.json');
@@ -129,6 +130,73 @@ test('extended cache tier learns separately from the default tier', () => {
     assert.deepEqual(snapshot.map(entry => entry.tier).sort(), ['1h', null]);
     assert.equal((0, test_types_js_1.present)(snapshot.find(entry => entry.tier === '1h')).rawObservations, 2);
     assert.equal((0, test_types_js_1.present)(snapshot.find(entry => entry.tier === null)).rawObservations, 1);
+});
+test('long-idle probes survive a window flooded by tool-loop chatter', () => {
+    // Early in the window: long idles bracketing a 20m cliff. Then far more
+    // seconds-apart tool-loop hits than the window holds; a FIFO would keep
+    // only the chatter and never see a cold return again. Chatter is not
+    // support either: it is capped to its own gap bucket.
+    const ttl = 20 * MIN;
+    const start = Date.now() - 7 * 24 * 60 * MIN;
+    const { entries, lastT } = cliffEntries(start, ttl, 40, 'chatty', 'model-d', 'chatty-api');
+    let t = lastT;
+    for (let i = 0; i < 600; i++) {
+        t += 4_000 + (i % 7) * 1_000;
+        entries.push(cacheMsg(t, { read: 95, write: 1 }, 'chatty', 'model-d', 'chatty-api'));
+    }
+    observe(entries);
+    const identity = ['chatty-api', 'chatty', 'model-d'].join(SEP);
+    const report = (0, test_types_js_1.present)(CL.cacheLifetimeReport().find(entry => entry.model === 'model-d'));
+    assert.ok(report.probes.total <= 240, `window bounded, got ${report.probes.total}`);
+    assert.equal(report.probes.misses, 20, 'every cold return kept');
+    assert.ok(report.points.filter(([gap]) => gap < 15_000).length <= 24, 'chatter capped to its gap bucket');
+    const entry = (0, test_types_js_1.present)(snapshotFor(identity));
+    assert.equal(entry.active, true, 'cliff still learnable after the flood');
+    assert.ok(entry.ttlMs > ttl * 0.7 && entry.ttlMs < ttl * 1.4, `learned ${entry.ttlMs} near ${ttl}`);
+});
+test('a learned TTL serves providers with no built-in window, and only once active', () => {
+    const identity = ['mystery-api', 'mystery', 'model-e'].join(SEP);
+    const refreshedAt = Date.now() - 5 * MIN;
+    const anchor = SM.cacheExpiryForMessage({ api: 'mystery-api', provider: 'mystery', model: 'model-e', timestamp: refreshedAt,
+        usage: { input: 5, cacheRead: 0, cacheWrite: 100 } });
+    const unknown = (0, test_types_js_1.present)(anchor);
+    assert.equal(unknown.basis, 'unknown', 'no built-in window keeps an anchor');
+    assert.equal(CL.applyLearnedCacheExpiry(unknown), null, 'an unlearned anchor is never served');
+    const ttl = 8 * MIN;
+    observe(cliffEntries(cliffStart(ttl, 40), ttl, 40, 'mystery', 'model-e', 'mystery-api').entries);
+    assert.equal((0, test_types_js_1.present)(snapshotFor(identity)).active, true);
+    const served = (0, test_types_js_1.present)(CL.applyLearnedCacheExpiry(unknown));
+    assert.equal(served.basis, 'learned');
+    assert.equal(served.expiresAt, refreshedAt + served.retentionMs);
+    const report = (0, test_types_js_1.present)(CL.cacheLifetimeReport().find(entry => entry.model === 'model-e'));
+    assert.equal(report.source, 'learned');
+    assert.equal(report.builtin, null);
+    assert.ok(report.gates.every(gate => gate.pass));
+});
+test('the report explains precedence and the first failing gate', () => {
+    const byModel = (model) => (0, test_types_js_1.present)(CL.cacheLifetimeReport().find(entry => entry.model === model && entry.tier === null));
+    const hitsOnly = byModel('model-b');
+    assert.equal(hitsOnly.source, 'none', 'unknown provider, nothing learned');
+    assert.equal(hitsOnly.effective, null);
+    assert.equal(hitsOnly.probes.misses, 0);
+    assert.equal((0, test_types_js_1.present)(hitsOnly.gates.find(gate => !gate.pass)).id, 'cold');
+    const estimated = byModel('gpt-4o');
+    assert.equal(estimated.source, 'learned', 'a learned fit replaces the ~10m estimate');
+    assert.equal((0, test_types_js_1.present)(estimated.builtin).basis, 'estimate');
+    assert.equal((0, test_types_js_1.present)(estimated.effective).basis, 'learned');
+    const documented = byModel('claude-opus-4');
+    assert.equal(documented.source, 'documented', 'Anthropic 5m is published, never replaced');
+    assert.equal((0, test_types_js_1.present)(documented.effective).retention, '5m');
+    fs.mkdirSync(dishDir, { recursive: true });
+    fs.writeFileSync(dishSettingsFile, JSON.stringify({ cacheTtlOverrides: [{ provider: 'openai', ttl: '2h' }] }) + '\n');
+    try {
+        const overridden = byModel('gpt-4o');
+        assert.equal(overridden.source, 'override');
+        assert.equal((0, test_types_js_1.present)(overridden.effective).retention, '2h');
+    }
+    finally {
+        fs.rmSync(dishSettingsFile, { force: true });
+    }
 });
 test('store survives a flush and reload', () => {
     CL.flushCacheLifetime();

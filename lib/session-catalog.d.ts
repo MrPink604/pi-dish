@@ -1,4 +1,5 @@
 // Generated from src/core/session-catalog.ts; edit that source and run npm run build:core.
+import type { ServedCacheExpiry } from './cache-lifetime';
 import type { HarnessId, NativeSessionId, SessionId } from './contracts';
 import type { SessionInfo } from './session-metadata-contracts';
 import type { SessionSource } from './session-source-contracts';
@@ -22,10 +23,16 @@ declare function rpcSessionObservation(value: unknown, context: ObservationConte
  * those stores. Invalid records are ignored individually. */
 declare function decodeLaunchParents(value: unknown): ReadonlyMap<SessionId, SessionId>;
 declare function decodeRoutineAnnotations(value: unknown): ReadonlyMap<SessionId, CatalogRoutineAnnotation>;
-/** Model catalogs can warm after indexing, so context derivation stays read-time. */
+/**
+ * Model catalogs can warm after indexing, so context derivation stays
+ * read-time. So does the learned cache-TTL overlay: every path that serves
+ * indexed session info goes through here, and the stored projection may be
+ * an internal 'unknown' anchor that must never reach a client.
+ */
 declare function withSessionContext<T extends Readonly<SessionInfo>>(info: T, contextWindowForModel: SessionCatalogOptions['contextWindowForModel']): T & {
     contextWindow: number;
     contextPercent: number;
+    cacheExpiry: ServedCacheExpiry | null;
 };
 declare function subsessionLabel(source: SessionSource | null): string | null;
 declare function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalogOptions): CatalogSession;
