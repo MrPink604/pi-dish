@@ -239,6 +239,7 @@ var PiDishBrowser = (() => {
     messageCount: optionalNumber,
     lastActivity: (value) => value === null || typeof value === "string" || finite(value) ? value : void 0,
     turnInProgress: optionalBoolean,
+    askPending: optionalBoolean,
     compacting: optionalBoolean,
     cwd: nullableString,
     subagentLive: optionalBoolean,
@@ -296,7 +297,7 @@ var PiDishBrowser = (() => {
     return decodePatch(value, ["name", "model", "thinkingLevel"]);
   }
   function decodeSessionActivityPatch(value) {
-    return decodePatch(value, ["turnInProgress", "compacting"]);
+    return decodePatch(value, ["turnInProgress", "askPending", "compacting"]);
   }
   function decodeSessionTranscriptPatch(value) {
     return decodePatch(value, ["name", "model", "cwd", "messageCount", "contextTokens", "contextWindow", "contextPercent", "cacheExpiry", "lastActivity", "isActive"]);
@@ -12050,6 +12051,7 @@ var PiDishBrowser = (() => {
     }
     return {
       handle,
+      toast: display.toast,
       clear() {
         if (!disposed) {
           display.clear();
@@ -14771,7 +14773,9 @@ ${restored}`;
       const familyExpanded = hasChildren && options2.expanded.has(sessionRefKey(session));
       const statusSessions = hasChildren && !familyExpanded ? flattenSessionFamilies(familyNode ? [familyNode] : []) : [session];
       let liveDot = "";
-      if (statusSessions.some((s) => s.compacting || s.turnInProgress)) {
+      if (statusSessions.some((s) => s.askPending)) {
+        liveDot = '<span class="session-item-status asking" title="Waiting for an answer to a question">?</span>';
+      } else if (statusSessions.some((s) => s.compacting || s.turnInProgress)) {
         liveDot = '<span class="session-item-status working" title="Session family working"></span>';
       } else if (statusSessions.some(options2.unread)) {
         liveDot = '<span class="session-item-status unread" title="New activity in session family"></span>';
@@ -15511,6 +15515,22 @@ ${restored}`;
         if (!disposed && host.self) console.error("Failed to load sessions:", error);
       }
     });
+    let askPendingSeen = /* @__PURE__ */ new Set();
+    function noteAskBlocked(parts) {
+      const now = /* @__PURE__ */ new Set();
+      const selected = sessionState.currentSession;
+      for (const part of parts) {
+        const hostId = part.hostId || null;
+        for (const row of part.active || []) {
+          if (!row.askPending) continue;
+          const key = `${hostId || ""}
+${row.id}`;
+          now.add(key);
+          if (!askPendingSeen.has(key) && !(selected && selected.id === row.id && (selected.host || null) === hostId)) options2.askBlocked?.(row);
+        }
+      }
+      askPendingSeen = now;
+    }
     function publish() {
       if (disposed) return;
       indexing = loader.isIndexing();
@@ -15524,6 +15544,7 @@ ${restored}`;
       }
       const published = sessionState.setSessionLists(parts.length ? parts : [{ hostId: options2.selfId(), active: [], previous: [] }]);
       hosts.forEach((host, index) => loader.retainPublished(host, published[index]));
+      noteAskBlocked(parts);
     }
     async function load(query, { withPrevious = options2.all() } = {}) {
       if (disposed) return;

@@ -1253,6 +1253,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   // Keep the original request payload for replay to late-joining clients.
   const dialogRequests = new Map<string, UIRequest>();
+  function hasPendingAskDialog() {
+    for (const req of dialogRequests.values()) if (req.method === "ask") return true;
+    return false;
+  }
 
   function wrapExtensionUI(ctx?: HostObject | null) {
     const ui = ctx?.ui;
@@ -1318,6 +1322,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         dismiss.abort();
         pendingDialogs.delete(req.id);
         dialogRequests.delete(req.id);
+        writeRegistry();
         broadcast({ type: "event", event: "extension_ui_resolved", data: { id: req.id, source } });
       };
       const remote = new Promise<unknown>((resolve) => {
@@ -1327,7 +1332,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
         });
       });
       dialogRequests.set(req.id, req);
-      try { emitExtensionUIRequest(req); } catch {}
+      // The catalog reads askPending from this registry entry, so a session
+      // blocked on the native ask tool is visible without a socket client.
+      writeRegistry();
       let local: unknown;
       try {
         local = Reflect.apply(originalAskDialog, this, [questions, withDismissSignal(options, dismiss)]);
@@ -1524,7 +1531,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       contextUsage,
       thinkingLevel: getThinkingLevel(),
       turnInProgress,
-      compacting,
+      askPending: hasPendingAskDialog(),
       spawnToken: effectiveSpawnToken,
       tmux: TMUX_LOCATION,
       treeServiceShortcut,

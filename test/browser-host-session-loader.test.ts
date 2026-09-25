@@ -301,4 +301,60 @@ test('acknowledged metadata survives failed fan-out and partial child replay thr
   }
 });
 
+test('ask-blocked toast fires once per transition and skips the selected session', async () => {
+  const calls: Array<{ resolve: (wire: unknown) => void }> = [];
+  const blocked: string[] = [];
+  const state = createSessionState({
+    getSelfHostId: () => 'self', getHostLabel: hostId => hostId,
+    onListsChanged() {}, onCurrentChanged() {},
+  });
+  const fixtureDocument = new DOMParser().parseFromString('<html><body/></html>', 'text/html');
+  Object.defineProperties(fixtureDocument, {
+    hidden: { value: false },
+    querySelector: { value: () => null },
+  });
+  const hosts = [{ hostId: 'self', base: '', self: true }];
+  const lists = createSidebarLists({
+    document: fixtureDocument,
+    sessionState: state,
+    activity: { reload() {}, mark() {}, unread() { return false; }, title() {}, prune() {}, migrate() {} },
+    hosts: () => hosts, pollable: () => hosts, selfId: () => 'self', query: () => '', all: () => true,
+    refreshFleet() {}, connection() {}, askBlocked: session => blocked.push(session.id),
+    request: () => new Promise<Response>(resolve => calls.push({
+      resolve: (wire: unknown) => resolve(new Response(JSON.stringify(wire))),
+    })),
+  });
+  try {
+    let pending = lists.load();
+    at(calls, 0).resolve({ active: [{ id: 'one', askPending: true }, { id: 'two', askPending: true }], previous: [] });
+    await pending;
+    assert.deepEqual(blocked, ['one', 'two']);
+
+    pending = lists.load();
+    at(calls, 1).resolve({ active: [{ id: 'one', askPending: true }, { id: 'two', askPending: true }], previous: [] });
+    await pending;
+    assert.deepEqual(blocked, ['one', 'two'], 'a confirming poll does not re-toast');
+
+    state.setCurrentSession('one', 'self');
+    pending = lists.load();
+    at(calls, 2).resolve({ active: [{ id: 'one', askPending: false }, { id: 'two', askPending: true }], previous: [] });
+    await pending;
+    pending = lists.load();
+    at(calls, 3).resolve({ active: [{ id: 'one', askPending: true }, { id: 'two', askPending: true }], previous: [] });
+    await pending;
+    assert.deepEqual(blocked, ['one', 'two'], 'the selected session shows its own ask dialog instead of a toast');
+
+    state.setCurrentSession(null);
+    pending = lists.load();
+    at(calls, 4).resolve({ active: [{ id: 'one', askPending: true }, { id: 'two', askPending: false }], previous: [] });
+    await pending;
+    pending = lists.load();
+    at(calls, 5).resolve({ active: [{ id: 'one', askPending: true }, { id: 'two', askPending: true }], previous: [] });
+    await pending;
+    assert.deepEqual(blocked, ['one', 'two', 'two'], 'a session whose ask cleared and returned re-arms');
+  } finally {
+    lists.dispose();
+  }
+});
+
 export {};

@@ -101,6 +101,29 @@ test('pending-history claims and stable timestamps survive; mismatched source ob
     context(src, info(), { nativeSessionId: checkedNativeId('different') })), /does not match/);
 });
 
+test('registered catalog projection carries the bridge-reported ask block', () => {
+  const src = source('omp');
+  const blocked = buildActiveSession(registeredSessionObservation({ sessionFile: src.file, askPending: true },
+    context(src, null, { source: null })), options);
+  assert.equal(blocked.askPending, true);
+  const idle = buildActiveSession(registeredSessionObservation({ sessionFile: src.file, askPending: 'yes' },
+    context(src, null, { source: null })), options);
+  assert.equal(idle.askPending, false);
+});
+
+test('rpc catalog projection derives the ask block from pending extension dialogs', () => {
+  const src = source();
+  const dialogs = new Map([['one', { method: 'ask', id: 'one' }], ['two', { method: 'select', id: 'two' }]]);
+  const blocked = buildActiveSession(rpcSessionObservation({ sessionFile: src.file, extUIState: { dialogs } },
+    context(src, null)), options);
+  assert.equal(blocked.askPending, true);
+  const otherOnly = buildActiveSession(rpcSessionObservation({ sessionFile: src.file,
+    extUIState: { dialogs: new Map([['two', { method: 'select', id: 'two' }]]) } }, context(src, null)), options);
+  assert.equal(otherOnly.askPending, false);
+  const missing = buildActiveSession(rpcSessionObservation({ sessionFile: src.file }, context(src, null)), options);
+  assert.equal(missing.askPending, false);
+});
+
 test('RPC projection keeps state/model authority instead of inheriting historical name, usage or cwd', () => {
   const src = source();
   const captured = rpcSessionObservation({ state: { sessionFile: src.file, name: '', messageCount: 0,

@@ -50,12 +50,15 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const familyExpanded = hasChildren && options.expanded.has(sessionRefKey(session));
   const statusSessions = hasChildren && !familyExpanded
     ? flattenSessionFamilies(familyNode ? [familyNode] : []) : [session];
-  // One dot, best signal wins: working (pulsing) > unread (accent) >
-  // live-in-All > live subagent. A collapsed parent aggregates its
-  // descendants so hiding rows never hides the fact that a child is working,
-  // has unread activity, or is still running inside it.
+  // One dot, best signal wins: waiting on a question (bubble) > working
+  // (pulsing) > unread (accent) > live-in-All > live subagent. A collapsed
+  // parent aggregates its descendants so hiding rows never hides the fact
+  // that a child is blocked, working, has unread activity, or is still
+  // running inside it.
   let liveDot = '';
-  if (statusSessions.some(s => s.compacting || s.turnInProgress)) {
+  if (statusSessions.some(s => s.askPending)) {
+    liveDot = '<span class="session-item-status asking" title="Waiting for an answer to a question">?</span>';
+  } else if (statusSessions.some(s => s.compacting || s.turnInProgress)) {
     liveDot = '<span class="session-item-status working" title="Session family working"></span>';
   } else if (statusSessions.some(options.unread)) {
     liveDot = '<span class="session-item-status unread" title="New activity in session family"></span>';

@@ -1,6 +1,6 @@
 import type { ApiRequest } from './api-client';
 import { createSessionApi } from './api-client';
-import type { SessionState, HostSessionLists } from './session-state';
+import type { SessionState, HostSessionLists, SessionEntry } from './session-state';
 import { createHostSessionLoader } from './host-session-loader';
 import type { SessionHost } from './host-session-loader';
 import type { HostConnectionEvent } from './host-connections';
@@ -14,6 +14,7 @@ export function createSidebarLists(options: {
   document: Document; request: ApiRequest; sessionState: SessionState; activity: ReturnType<typeof createSidebarActivity>;
   hosts: () => readonly SidebarListHost[]; pollable: () => readonly SidebarListHost[]; selfId: () => string | null;
   query: () => string; all: () => boolean; refreshFleet: () => void; connection: (host: SessionHost, event: HostConnectionEvent) => void;
+  askBlocked?: (session: SessionEntry) => void;
 }) {
   const { document, sessionState } = options, api = createSessionApi(options.request);
   let disposed = false, sequence = 0, indexing = false, queriedFor = '';
@@ -31,6 +32,25 @@ export function createSidebarLists(options: {
     onPublish: query => { if (disposed) return; if (query !== undefined) queriedFor = query; publish(); },
     onError: (host, error) => { if (!disposed && host.self) console.error('Failed to load sessions:', error); },
   });
+  // Toast only on the false → true transition; a poll that merely confirms an
+  // already-reported ask must not re-toast, and a session that drops out of
+  // the list re-arms so a later ask is reported again.
+  let askPendingSeen = new Set<string>();
+  function noteAskBlocked(parts: readonly HostSessionLists[]) {
+    const now = new Set<string>();
+    const selected = sessionState.currentSession;
+    for (const part of parts) {
+      const hostId = part.hostId || null;
+      for (const row of part.active || []) {
+        if (!row.askPending) continue;
+        const key = `${hostId || ''}\n${row.id}`;
+        now.add(key);
+        // The selected session already shows the ask dialog itself.
+        if (!askPendingSeen.has(key) && !(selected && selected.id === row.id && (selected.host || null) === hostId)) options.askBlocked?.(row);
+      }
+    }
+    askPendingSeen = now;
+  }
   function publish() {
     if (disposed) return; indexing = loader.isIndexing(); const parts: HostSessionLists[] = [], hosts: SessionHost[] = [];
     for (const host of options.hosts()) {
@@ -39,6 +59,7 @@ export function createSidebarLists(options: {
     }
     const published = sessionState.setSessionLists(parts.length ? parts : [{ hostId: options.selfId(), active: [], previous: [] }]);
     hosts.forEach((host, index) => loader.retainPublished(host, published[index]));
+    noteAskBlocked(parts);
   }
   async function load(query?: string, { withPrevious = options.all() } = {}) {
     if (disposed) return; const current = ++sequence; busy(true);

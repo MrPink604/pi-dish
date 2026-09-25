@@ -26,6 +26,7 @@ export interface SessionFields<Timestamp = string | number> {
   messageCount?: number;
   lastActivity?: Timestamp | null;
   turnInProgress?: boolean;
+  askPending?: boolean;
   compacting?: boolean;
   cwd?: string | null;
   subagentLive?: boolean;
@@ -50,7 +51,7 @@ export interface SessionRow {
   readonly extras: Readonly<Record<string, unknown>>;
 }
 export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'thinkingLevel'>;
-export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'compacting'>;
+export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'askPending' | 'compacting'>;
 export type SessionTranscriptPatch = Pick<SessionFields,
   'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'cacheExpiry' | 'lastActivity' | 'isActive'>;
 export interface SessionList {
@@ -113,7 +114,7 @@ const fieldDecoders: FieldDecoders = {
   contextWindow: optionalNumber, cacheExpiry: optionalCacheExpiry,
   messageCount: optionalNumber,
   lastActivity: value => value === null || typeof value === 'string' || finite(value) ? value : undefined,
-  turnInProgress: optionalBoolean, compacting: optionalBoolean, cwd: nullableString,
+  turnInProgress: optionalBoolean, askPending: optionalBoolean, compacting: optionalBoolean, cwd: nullableString,
   subagentLive: optionalBoolean, parentId: nullableString, parentSource: nullableString,
   familyParentId: nullableString, routine: optionalString, routineId: optionalString,
   routineInvocationId: optionalString, searchSnippet: optionalString, searchScore: optionalNumber,
@@ -169,7 +170,7 @@ export function decodeSessionMutationPatch(value: unknown): SessionMutationPatch
   return decodePatch(value, ['name', 'model', 'thinkingLevel']);
 }
 export function decodeSessionActivityPatch(value: unknown): SessionActivityPatch {
-  return decodePatch(value, ['turnInProgress', 'compacting']);
+  return decodePatch(value, ['turnInProgress', 'askPending', 'compacting']);
 }
 export function decodeSessionTranscriptPatch(value: unknown): SessionTranscriptPatch {
   return decodePatch(value, ['name', 'model', 'cwd', 'messageCount', 'contextTokens', 'contextWindow', 'contextPercent', 'cacheExpiry', 'lastActivity', 'isActive']);

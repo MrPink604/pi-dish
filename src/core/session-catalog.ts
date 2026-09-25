@@ -1,5 +1,6 @@
 import path = require('path');
 import { applyLearnedCacheExpiry } from './cache-lifetime';
+import { hasPendingAskDialog } from './extension-ui-state';
 import { canonicalSessionId, encodeSessionKey } from './session-key';
 import { isRecord } from './wire-protocol';
 import type { HarnessId, NativeSessionId, SessionId } from './contracts';
@@ -55,7 +56,7 @@ function registeredSessionObservation(value: unknown, context: RegisteredContext
     name: string(value.name), model: string(value.model), thinkingLevel: string(value.thinkingLevel),
     contextTokens: number(usage.tokens), contextPercent: number(usage.percent),
     contextWindow: number(usage.contextWindow), lastActivity: timestamp(value.updatedAt),
-    turnInProgress: value.turnInProgress === true, compacting: value.compacting === true,
+    turnInProgress: value.turnInProgress === true, askPending: value.askPending === true, compacting: value.compacting === true,
     cwd: string(value.cwd),
   }, number(value.pid) ?? null, context);
 }
@@ -72,7 +73,7 @@ function rpcSessionObservation(value: unknown, context: ObservationContext): Cat
     contextTokens: number(usage.tokens), contextPercent: number(usage.percent),
     contextWindow: number(usage.contextWindow) || number(record(state.model).contextWindow),
     messageCount: number(state.messageCount), lastActivity: timestamp(value.lastActivityAt),
-    turnInProgress: value.turnInProgress === true, compacting: value.compacting === true,
+    turnInProgress: value.turnInProgress === true, askPending: hasPendingAskDialog(value.extUIState), compacting: value.compacting === true,
     cwd: string(value.cwd),
   }, number(record(value.proc).pid) ?? null, context);
 }
@@ -142,7 +143,7 @@ function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalo
     thinkingLevel: fields.thinkingLevel || null,
     messageCount: (registered ? info?.messageCount : fields.messageCount) || 0,
     lastActivity: registered ? info?.lastActivity || fields.lastActivity || new Date(0) : fields.lastActivity,
-    isActive: true, turnInProgress: fields.turnInProgress === true, compacting: fields.compacting === true,
+    isActive: true, turnInProgress: fields.turnInProgress === true, askPending: fields.askPending === true, compacting: fields.compacting === true,
     cwd: (registered ? fields.cwd || info?.cwd : fields.cwd) || null,
     sessionFile: live.claimedFile || null,
     parentSession,

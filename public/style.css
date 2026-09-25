@@ -885,6 +885,20 @@ body.sidebar-open {
   animation: pulse 1.5s infinite;
 }
 
+/* Blocked on the harness's ask-user question: a bubble, not a bare dot, so
+   it reads as "needs an answer" next to the working pulse. */
+.session-item-status.asking {
+  width: 13px;
+  height: 13px;
+  background: var(--warning);
+  color: var(--bg-dark);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  animation: pulse 1.5s infinite;
+}
+
 /* New activity since the session was last on screen */
 .session-item-status.unread {
   background: var(--accent);

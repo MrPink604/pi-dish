@@ -11,6 +11,16 @@ export function removeExtensionUIDialog(state: ExtensionUIState, id: unknown): v
   state.dialogs.delete(id);
 }
 
+/** Any pending dialog with the native ask method blocks the turn on an answer. */
+export function hasPendingAskDialog(value: unknown): boolean {
+  const dialogs = (value as ExtensionUIState | null | undefined)?.dialogs;
+  if (!(dialogs instanceof Map)) return false;
+  for (const data of dialogs.values()) {
+    if ((data as ProtocolRecord | null | undefined)?.method === 'ask') return true;
+  }
+  return false;
+}
+
 /** Reduce admitted transport events before listeners observe the live replay maps. */
 export function reduceExtensionUIState(state: ExtensionUIState, event: string, data: unknown): void {
   if (event === 'session_switch') {

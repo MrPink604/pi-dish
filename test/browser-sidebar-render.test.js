@@ -57,6 +57,21 @@ test('host-qualified workspace collapse and family status stay independent for i
     assert.match(html, /session-item active/);
     assert.doesNotMatch(html, /peer child/);
 });
+test('sidebar shows the asking bubble ahead of the working pulse', () => {
+    const active = [{ id: 'blocked', name: 'Blocked', cwd: '/repo', isActive: true, askPending: true, turnInProgress: true },
+        { id: 'busy', name: 'Busy', cwd: '/repo', isActive: true, turnInProgress: true }];
+    const { html } = render({ active });
+    assert.match(html, /data-id="blocked"[\s\S]*?session-item-status asking" title="Waiting for an answer to a question">\?</);
+    assert.doesNotMatch(html, /data-id="blocked"[\s\S]*?session-item-status working[\s\S]*?data-id="busy"/);
+    assert.match(html, /data-id="busy"[\s\S]*?session-item-status working/);
+});
+test('collapsed family aggregates a blocked child into the asking bubble', () => {
+    const active = [{ id: 'parent', name: 'Parent', cwd: '/repo', isActive: true },
+        { id: 'child', name: 'Child', cwd: '/repo', parentId: 'parent', isActive: true, askPending: true }];
+    const { html } = render({ active });
+    assert.doesNotMatch(html, />Child</);
+    assert.match(html, /session-item-status asking/);
+});
 test('server content search stays authoritative while scopes and automation remain visible in audit notes', () => {
     const previous = [{ id: 'match', name: '<b>content match</b>', cwd: '/repo', searchScore: 12, searchSnippet: 'needle <img>', routine: '' },
         { id: 'auto', name: 'robot', routine: 'daily' }];

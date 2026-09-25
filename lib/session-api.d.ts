@@ -26,6 +26,7 @@ export interface SessionFields<Timestamp = string | number> {
     messageCount?: number;
     lastActivity?: Timestamp | null;
     turnInProgress?: boolean;
+    askPending?: boolean;
     compacting?: boolean;
     cwd?: string | null;
     subagentLive?: boolean;
@@ -49,7 +50,7 @@ export interface SessionRow {
     readonly extras: Readonly<Record<string, unknown>>;
 }
 export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'thinkingLevel'>;
-export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'compacting'>;
+export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'askPending' | 'compacting'>;
 export type SessionTranscriptPatch = Pick<SessionFields, 'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'cacheExpiry' | 'lastActivity' | 'isActive'>;
 export interface SessionList {
     active: SessionRow[];

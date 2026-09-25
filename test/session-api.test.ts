@@ -55,7 +55,8 @@ test('wire and server timestamp boundaries preserve existing Date projection', (
 test('metadata patches preserve presence and permit only their assigned writers', () => {
   assert.deepEqual(decodeSessionMutationPatch({ id: 'new', host: 'new', name: '', model: null, thinkingLevel: undefined,
     capabilities: { close: true }, extras: { model: 99 }, modle: 'typo' }), { name: '', model: null });
-  assert.deepEqual(decodeSessionActivityPatch({ turnInProgress: false, compacting: true, isActive: false }), { turnInProgress: false, compacting: true });
+  assert.deepEqual(decodeSessionActivityPatch({ turnInProgress: false, askPending: true, compacting: true, isActive: false }), { turnInProgress: false, askPending: true, compacting: true });
+  assert.throws(() => decodeSessionActivityPatch({ askPending: 'yes' }), /Invalid session patch/);
   assert.deepEqual(decodeSessionTranscriptPatch({ id: 'new', harnessId: 'other', name: null, cwd: null,
     contextTokens: 0, lastActivity: 0, isActive: false, parentId: 'new', routine: 'new', capabilities: { close: true } }),
   { name: null, cwd: null, contextTokens: 0, lastActivity: 0, isActive: false });

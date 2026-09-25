@@ -28,7 +28,7 @@ export function createExtensionUI(options: {
       default: display.toast(`[${request.method}] ${JSON.stringify(request).slice(0, 200)}`, 'info');
     }
   }
-  return { handle, clear() { if (!disposed) { display.clear(); dialogs.detach(); } },
+  return { handle, toast: display.toast, clear() { if (!disposed) { display.clear(); dialogs.detach(); } },
     resolve: dialogs.resolved, reconcile: dialogs.reconcile, end: dialogs.removeSession,
     dispose() { disposed = true; display.dispose(); dialogs.dispose(); },
   };

@@ -514,6 +514,7 @@ const sidebarLists: ReturnType<typeof createSidebarLists> = createSidebarLists({
   hosts: effectiveHosts, pollable: pollableHosts, selfId: () => hostDirectory.self.hostId,
   query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: (...args) => hostDiscovery.refreshSoon(...args),
   connection: (host, event) => hostConnections.note(host, event),
+  askBlocked: session => extensionUI.toast(`${session.name || 'Unnamed'} is waiting for an answer`, 'warning'),
 });
 const hostSessionLoader = sidebarLists.loader;
 
