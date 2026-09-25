@@ -222,6 +222,14 @@ OMP's exported `AgentSession` getters drive bridge-owned `Todos`, `planmode`,
 and `prewalk` projections; they are capability-detected, so an older OMP keeps
 ordinary bridge behavior instead of failing extension load.
 
+To delegate to another model **inside the current OMP session**, type `^` in
+the pi-dish composer and select a model from that session's catalog. For
+example, `Ask ^opencode/deepseek-v4.1-flash to review this change` registers
+OMP's session-local, general-purpose model agent; the parent session keeps its
+own model. The agent can reuse that model agent on later tasks without another
+mention. OMP expands model mentions only on a new user turn, not on steers or
+queued follow-ups, so wait for the current turn to finish before sending one.
+
 Current alternative-harness support is capability-detected:
 
 | Feature | OMP | Prime Agent |

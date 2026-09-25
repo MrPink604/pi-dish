@@ -115,3 +115,35 @@ fixtures_js_1.test.use({ liveSessions: true });
     (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.composerAutocomplete.visible)).toBe(false);
     await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('@first');
 });
+(0, fixtures_js_1.test)('OMP model mention selects a child agent without changing the parent model', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    await page.route('**/api/models?sessionId=*', route => route.fulfill({ json: [
+            { provider: 'opencode', id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash', contextWindow: 128000, reasoning: true, free: false, pricing: null },
+            { provider: 'other', id: 'unrelated', name: 'Unrelated', contextWindow: 128000, reasoning: false, free: false, pricing: null },
+        ] }));
+    await page.evaluate(() => { window.fixtureSessionListPatch(fixtureCurrentSession().id, { harnessId: 'omp', model: 'openai-codex/gpt-6-sol' }); });
+    await page.locator('#promptInput').fill('Ask ^deepseek');
+    await (0, fixtures_js_1.expect)(page.locator('.autocomplete-item[data-model-selector="opencode/deepseek-v4.1-flash"]')).toBeVisible();
+    await page.locator('.autocomplete-item[data-model-selector="opencode/deepseek-v4.1-flash"]').click();
+    await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('Ask ^opencode/deepseek-v4.1-flash ');
+    const parentModel = await page.evaluate(() => fixtureCurrentSession().model);
+    const sent = [];
+    const modelChanges = [];
+    await page.route('**/api/sessions/*/model', route => { modelChanges.push(route.request().url()); return route.abort(); });
+    await page.route('**/api/sessions/*/prompt', route => {
+        const body = route.request().postDataJSON();
+        if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string')
+            sent.push(body.message);
+        return route.fulfill({ json: { success: true, result: {} } });
+    });
+    await page.locator('#promptInput').fill('Ask ^opencode/deepseek-v4.1-flash to review this change');
+    await page.locator('#promptInput').press('Enter');
+    await fixtures_js_1.expect.poll(() => sent).toEqual(['Ask ^opencode/deepseek-v4.1-flash to review this change']);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureCurrentSession().model)).toBe(parentModel);
+    (0, fixtures_js_1.expect)(modelChanges).toEqual([]);
+    await page.evaluate(() => fixtureApp.features.sessionActivity.setTurn(true));
+    await page.locator('#promptInput').fill('Ask ^opencode/deepseek-v4.1-flash again');
+    await page.locator('#promptInput').press('Enter');
+    await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('Ask ^opencode/deepseek-v4.1-flash again');
+    (0, fixtures_js_1.expect)(sent).toHaveLength(1);
+});

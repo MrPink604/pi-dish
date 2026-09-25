@@ -1,5 +1,8 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
+import { sameDirectoryHost } from './directory-catalog';
+import type { DirectoryHost } from './directory-catalog';
+import type { ModelCatalogView } from './model-catalog';
 import type { createSessionReferences } from './session-references';
 import { decodeSlashCommands, decodeFileCompletions } from './composer-autocomplete-data';
 import type { SlashCommand } from './composer-autocomplete-data';
@@ -9,16 +12,17 @@ import { highlightFuzzy } from '../core/helper-query';
 import { record } from '../core/helper-values';
 export function createComposerAutocomplete(options: {
   document: Document; sessionState: SessionState; composerKey: () => string | null; provisional: () => boolean;
-  request: ApiRequest; host: (id: string | null) => HostEndpoint | null; references: ReturnType<typeof createSessionReferences>;
+  request: ApiRequest; host: (id: string | null) => Readonly<DirectoryHost> | null; references: ReturnType<typeof createSessionReferences>;
   multiHost: () => boolean; hostLabel: (id: string | null) => string; failed: (error: unknown) => void;
+  models: ModelCatalogView; loadModels: (id: string, harnessId: string) => Promise<unknown>;
 }) {
   const { document, sessionState, references } = options;
   const input = () => document.getElementById('promptInput') as HTMLTextAreaElement;
   interface RequestOwner { selection: SelectionOwner; endpoint: Readonly<HostEndpoint> }
   interface ViewOwner extends RequestOwner { composer: string; text: string; caret: number }
-  type Choice = { kind: 'file'; path: string; directory: boolean } | { kind: 'ref'; ref: string } | { kind: 'command'; name: string };
-  let disposed = false, visible = false, index = 0, fileSequence = 0, commandSequence = 0;
-  let fileTimer: ReturnType<typeof setTimeout> | null = null, events = new AbortController(), view: ViewOwner | null = null, commandOwner: RequestOwner | null = null;
+  type Choice = { kind: 'file'; path: string; directory: boolean } | { kind: 'ref'; ref: string } | { kind: 'command'; name: string } | { kind: 'model'; selector: string };
+  let disposed = false, visible = false, index = 0, fileSequence = 0, modelSequence = 0, commandSequence = 0;
+  let fileTimer: ReturnType<typeof setTimeout> | null = null, modelTimer: ReturnType<typeof setTimeout> | undefined, events = new AbortController(), view: ViewOwner | null = null, commandOwner: RequestOwner | null = null;
   let commands: readonly SlashCommand[] = [];
   const lifetime = new AbortController(), blurTimers = new Set<ReturnType<typeof setTimeout>>();
   const choices = new WeakMap<HTMLElement, Choice>();
@@ -27,7 +31,7 @@ export function createComposerAutocomplete(options: {
   function capture(): ViewOwner | null { const owner = captureRequest(), composer = options.composerKey(); return owner && composer && !options.provisional() ? { ...owner, composer, text: input().value, caret: input().selectionStart } : null; }
   function owns(owner: ViewOwner | null): owner is ViewOwner { return ownsRequest(owner) && !!owner && !options.provisional() && owner.composer === options.composerKey() && owner.text === input().value && owner.caret === input().selectionStart; }
   function container() { let root = document.getElementById('autocomplete'); if (!root) { root = document.createElement('div'); root.id = 'autocomplete'; root.className = 'autocomplete-dropdown'; document.querySelector('.input-area')!.appendChild(root); } return root; }
-  function hide() { for (const timer of blurTimers) clearTimeout(timer); blurTimers.clear(); visible = false; view = null; fileSequence++; if (fileTimer !== null) clearTimeout(fileTimer); fileTimer = null; events.abort(); const root = document.getElementById('autocomplete'); if (root) { root.style.display = 'none'; root.innerHTML = ''; } }
+  function hide() { for (const timer of blurTimers) clearTimeout(timer); blurTimers.clear(); visible = false; view = null; fileSequence++; modelSequence++; if (fileTimer !== null) clearTimeout(fileTimer); fileTimer = null; clearTimeout(modelTimer); modelTimer = undefined; events.abort(); const root = document.getElementById('autocomplete'); if (root) { root.style.display = 'none'; root.innerHTML = ''; } }
   function render(rows: readonly { choice: Choice; icon: string; nameHtml: string; description: string; live?: boolean }[], owner = capture()) {
     hide(); if (!owns(owner) || !rows.length) return;
     view = owner; visible = true; index = 0; events = new AbortController(); const ownedEvents = events, root = container();
@@ -35,7 +39,9 @@ export function createComposerAutocomplete(options: {
       const element = document.createElement('div'); element.className = 'autocomplete-item' + (i === 0 ? ' active' : '');
       const { choice } = row; choices.set(element, choice);
       if (choice.kind === 'file') { element.dataset.file = choice.path; if (choice.directory) element.dataset.dir = '1'; }
-      else if (choice.kind === 'ref') element.dataset.sessionRef = choice.ref; else element.dataset.name = choice.name;
+      else if (choice.kind === 'ref') element.dataset.sessionRef = choice.ref;
+      else if (choice.kind === 'model') element.dataset.modelSelector = choice.selector;
+      else element.dataset.name = choice.name;
       element.innerHTML = `<span class="autocomplete-icon${choice.kind === 'ref' ? ' session-ref-dot' + (row.live ? ' live' : '') : ''}">${row.icon}</span><span class="autocomplete-name">${row.nameHtml}</span><span class="autocomplete-desc">${escapeHtml(row.description)}</span>`;
       element.addEventListener('click', () => { if (!ownedEvents.signal.aborted && view === owner && owns(owner)) accept(element); }, { signal: ownedEvents.signal }); root.append(element);
     }); root.style.display = 'block';
@@ -54,6 +60,19 @@ export function createComposerAutocomplete(options: {
       const ref = references.ref(session, current), name = session.name || session.id.slice(0, 8);
       return { choice: { kind: 'ref', ref }, icon: '●', nameHtml: indices ? highlightFuzzy(name, indices) : escapeHtml(name), description: [options.multiHost() ? options.hostLabel(session.host || null) : '', ref, shortCwd(session.cwd)].filter(Boolean).join(' · '), live: session.isActive };
     }));
+  }
+  function showModels(token: string, owner = capture()) {
+    if (!owns(owner)) return;
+    const { scope, rows } = options.models;
+    if (scope?.sessionId !== owner.selection.id || scope.harnessId !== 'omp'
+        || !sameDirectoryHost(scope.host, options.host(owner.selection.host))) { hide(); return; }
+    const query = token.toLowerCase();
+    render(rows().filter(model => model.enabled !== false && [model.provider, model.id, model.name, model.selector]
+      .some(value => value?.toLowerCase().includes(query))).slice(0, 40).map(model => {
+      const selector = model.selector || `${model.provider}/${model.id}`;
+      return { choice: { kind: 'model' as const, selector }, icon: '◇',
+        nameHtml: escapeHtml(model.name || model.id), description: selector };
+    }), owner);
   }
   async function loadCommands(id?: string) {
     const owner = captureRequest(), sequence = ++commandSequence; commands = []; commandOwner = null;
@@ -76,11 +95,29 @@ export function createComposerAutocomplete(options: {
       }).catch(() => { if (owns(owner) && sequence === fileSequence) hide(); });
     }, 120);
   }
+  function queueModels(token: string) {
+    const owner = capture();
+    if (!owner) { hide(); return; }
+    const { scope } = options.models;
+    if (scope?.sessionId === owner.selection.id && scope.harnessId === 'omp'
+        && sameDirectoryHost(scope.host, options.host(owner.selection.host))) { showModels(token, owner); return; }
+    hide();
+    const sequence = ++modelSequence;
+    modelTimer = setTimeout(() => {
+      modelTimer = undefined;
+      if (!owns(owner) || sequence !== modelSequence) return;
+      void options.loadModels(owner.selection.id, 'omp').then(() => {
+        if (owns(owner) && sequence === modelSequence && document.activeElement === input()) showModels(token, owner);
+      }).catch(() => { if (owns(owner) && sequence === modelSequence) hide(); });
+    }, 120);
+  }
   function handle(text: string) {
     if (disposed || options.provisional()) { hide(); return; }
     const caret = input().selectionStart, at = text.slice(0, caret).match(/(?:^|\s)@([^\s@]*)$/);
     if (at && sessionState.currentSession) { queueFile(at[1]!); return; }
     const hash = text.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/); if (hash && sessionState.currentSession) { showRefs(hash[1]!); return; }
+    const model = text.slice(0, caret).match(/(?:^|\s)\^([^\s^]*)$/);
+    if (model && sessionState.currentSession?.harnessId === 'omp') { queueModels(model[1]!); return; }
     if (!text.startsWith('/') || text.includes(' ') || !ownsRequest(commandOwner)) { hide(); return; }
     const query = text.slice(1), matches = commands.filter(command => command.name.toLowerCase().startsWith(query.toLowerCase()));
     if (!matches.length || (matches.length === 1 && matches[0]!.name === query)) { hide(); return; } showCommands(matches);
@@ -89,8 +126,12 @@ export function createComposerAutocomplete(options: {
     const owner = view; if (!owns(owner)) return;
     const target = input(), caret = target.selectionStart;
     if (choice.kind === 'command') { hide(); target.value = '/' + choice.name + ' '; target.focus(); target.dispatchEvent(new Event('input')); return; }
-    const token = choice.kind === 'file' ? '@' : '#', match = target.value.slice(0, caret).match(choice.kind === 'file' ? /(?:^|\s)@([^\s@]*)$/ : /(?:^|\s)#([^\s#]*)$/); hide(); if (!match) return;
-    const start = caret - match[1]!.length - 1, value = choice.kind === 'file' ? choice.path + (choice.directory ? '/' : ' ') : choice.ref + ' ';
+    const token = choice.kind === 'file' ? '@' : choice.kind === 'ref' ? '#' : '^';
+    const pattern = choice.kind === 'file' ? /(?:^|\s)@([^\s@]*)$/ : choice.kind === 'ref' ? /(?:^|\s)#([^\s#]*)$/ : /(?:^|\s)\^([^\s^]*)$/;
+    const match = target.value.slice(0, caret).match(pattern); hide(); if (!match) return;
+    const start = caret - match[1]!.length - 1;
+    const value = choice.kind === 'file' ? choice.path + (choice.directory ? '/' : ' ')
+      : choice.kind === 'ref' ? choice.ref + ' ' : choice.selector + ' ';
     target.value = target.value.slice(0, start) + token + value + target.value.slice(caret); const position = start + 1 + value.length; target.focus(); target.setSelectionRange(position, position);
     target.dispatchEvent(new Event('input')); // Every accepted mention also persists the draft.
   }
@@ -108,6 +149,7 @@ export function createComposerAutocomplete(options: {
   function retireCommands() { commandSequence++; commands = []; commandOwner = null; }
   return { retireCommands, loadCommands, handle, queueFile, showFiles, showRefs, showCommands, hide, move, accept,
     acceptFile: (path: string, directory: boolean) => insert({ kind: 'file', path, directory }), acceptRef: (ref: string) => insert({ kind: 'ref', ref }), acceptCommand: (name: string) => insert({ kind: 'command', name }),
+    acceptModel: (selector: string) => insert({ kind: 'model', selector }),
     get visible() { return visible && owns(view); }, get index() { return index; },
     dispose() { hide(); lifetime.abort(); commandSequence++; commands = []; commandOwner = null; disposed = true; },
   };

@@ -113,6 +113,17 @@ function readOperations(host: FakeTreeHost): Record<string, unknown>[] {
   });
 }
 
+test('OMP bridge rejects model mentions in queued sends rather than sending inert text', { skip: !bunAvailable }, async () => {
+  const host = await startHost('normal');
+  try {
+    await assert.rejects(host.session.steer('Ask ^opencode/deepseek-v4.1-flash to review'), /model mentions require an idle session/);
+    await assert.rejects(host.session.prompt('Ask ^opencode/deepseek-v4.1-flash to review', { deliverAs: 'followUp' }), /model mentions require an idle session/);
+    await assert.rejects(host.session.prompt('Ask ^opencode/deepseek-v4.1-flash to review'), /sendUserMessage does not dispatch extension commands/);
+  } finally {
+    await host.stop();
+  }
+});
+
 test('OMP bridge serializes tree reads and runs navigate/branch only in command context', { skip: !bunAvailable }, async () => {
   const host = await startHost('normal');
   try {

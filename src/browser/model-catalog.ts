@@ -13,6 +13,11 @@ export function modelsCacheKey(harnessId: string, hostId: string | null, selfId:
   return hostId && hostId !== selfId ? `${base}@${hostId}` : base;
 }
 
+/** Session-owned model inventory exposed to composer suggestions. */
+export interface ModelCatalogView {
+  readonly scope: ModelCatalogScope | null;
+  rows(): readonly Readonly<CatalogModel>[];
+}
 /** One shared catalog, with explicit request/view owners and model-edit writers. */
 export function createModelCatalog(options: {
   read: (scope: ModelCatalogScope) => Promise<unknown>;

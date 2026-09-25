@@ -10,6 +10,9 @@ import type { createSessionActivity } from './session-activity';
 import type { createBtwPanel } from './btw-panel';
 import type { MessageBlock, RenderMessage } from './message-data';
 import type { createSessionReferences } from './session-references';
+// OMP expands ^model only for a new user turn; steers and queued follow-ups
+// bypass that registration and would leave a misleading literal token.
+const OMP_MODEL_MENTION = /(?:^|\s)\^[^\s^]+(?=\s|$)/;
 export function createComposerSubmit(options: {
   document: Document; sessionState: SessionState; drafts: ReturnType<typeof createComposerDrafts>; delivery: ReturnType<typeof createPromptDelivery>;
   activity: ReturnType<typeof createSessionActivity>; btw: ReturnType<typeof createBtwPanel>; request: ApiRequest; endpoint: (host: string | null) => HostEndpoint;
@@ -48,6 +51,11 @@ async function sendPrompt() {
     return;
   }
 
+  if (sessionState.currentSession.harnessId === 'omp' && OMP_MODEL_MENTION.test(message)
+      && (sessionActivity.turn || sessionActivity.compacting)) {
+    options.status('Wait for the OMP turn to finish before mentioning a model', 'error');
+    return;
+  }
   if (message === '/tree') { input.value = ''; options.openTree(); return; }
   options.hideAutocomplete();
 
@@ -169,6 +177,10 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
   const ownerKey = sessionRefKey(owner);
   if (sessionActivity.isAborting(ownerKey)) {
     options.status('Wait for the current turn to finish stopping', 'working');
+    return;
+  }
+  if (sessionState.currentSession.harnessId === 'omp' && OMP_MODEL_MENTION.test(message)) {
+    options.status('OMP model mentions need a new turn; send after this turn finishes', 'error');
     return;
   }
 

@@ -493,6 +493,8 @@ const composerAutocomplete: ReturnType<typeof createComposerAutocomplete> = crea
   document, sessionState, composerKey: () => composerDrafts.key, provisional: () => !!sessionView.spawnId,
   request: (host, path, options) => apiTransport.request(host, path, options), host: hostEntryFor, references: sessionReferences,
   multiHost: isMultiHost, hostLabel: hostLabelFor, failed: error => console.error('Failed to load commands:', error),
+  models: { get scope() { return modelCatalog.scope; }, rows: () => modelCatalog.rows() },
+  loadModels: (id, harness) => appModels.load(id, harness),
 });
 
 // =========================================================================

@@ -1944,12 +1944,20 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // hand off to pi with the usual mid-turn steer default. Returns whether the
   // message was queued so callers can tell the client.
   async function deliverUserMessage(content: UserContent, deliverAs?: unknown): Promise<{ queued: boolean }> {
+    const delivery = deliverAsOptions(deliverAs);
+    // OMP expands ^model in prompt(), not in its steer/follow-up queues.
+    // Never acknowledge a mention that would arrive as inert literal text.
+    if (descriptor.harnessId === "omp" && (compacting || delivery?.deliverAs)
+        && (typeof content === "string" ? /(?:^|\s)\^[^\s^]+(?=\s|$)/.test(content)
+          : content.some(part => part.type === "text" && /(?:^|\s)\^[^\s^]+(?=\s|$)/.test(part.text)))) {
+      throw new Error("OMP model mentions require an idle session; send this prompt after the current turn finishes");
+    }
     if (compacting) {
       compactionQueue.push(content);
       broadcastQueue();
       return { queued: true };
     }
-    await callHost(pi, "sendUserMessage", content, deliverAsOptions(deliverAs));
+    await callHost(pi, "sendUserMessage", content, delivery);
     return { queued: false };
   }
 

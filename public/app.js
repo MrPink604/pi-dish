@@ -2051,8 +2051,8 @@
   function createComposerAutocomplete(options2) {
     const { document: document2, sessionState: sessionState2, references } = options2;
     const input = () => document2.getElementById("promptInput");
-    let disposed = false, visible = false, index = 0, fileSequence = 0, commandSequence = 0;
-    let fileTimer = null, events = new AbortController(), view = null, commandOwner = null;
+    let disposed = false, visible = false, index = 0, fileSequence = 0, modelSequence = 0, commandSequence = 0;
+    let fileTimer = null, modelTimer, events = new AbortController(), view = null, commandOwner = null;
     let commands = [];
     const lifetime = new AbortController(), blurTimers = /* @__PURE__ */ new Set();
     const choices = /* @__PURE__ */ new WeakMap();
@@ -2088,8 +2088,11 @@
       visible = false;
       view = null;
       fileSequence++;
+      modelSequence++;
       if (fileTimer !== null) clearTimeout(fileTimer);
       fileTimer = null;
+      clearTimeout(modelTimer);
+      modelTimer = void 0;
       events.abort();
       const root = document2.getElementById("autocomplete");
       if (root) {
@@ -2114,6 +2117,7 @@
           element.dataset.file = choice.path;
           if (choice.directory) element.dataset.dir = "1";
         } else if (choice.kind === "ref") element.dataset.sessionRef = choice.ref;
+        else if (choice.kind === "model") element.dataset.modelSelector = choice.selector;
         else element.dataset.name = choice.name;
         element.innerHTML = `<span class="autocomplete-icon${choice.kind === "ref" ? " session-ref-dot" + (row.live ? " live" : "") : ""}">${row.icon}</span><span class="autocomplete-name">${row.nameHtml}</span><span class="autocomplete-desc">${escapeHtml(row.description)}</span>`;
         element.addEventListener("click", () => {
@@ -2141,6 +2145,24 @@
         const ref = references.ref(session, current), name = session.name || session.id.slice(0, 8);
         return { choice: { kind: "ref", ref }, icon: "\u25CF", nameHtml: indices ? highlightFuzzy(name, indices) : escapeHtml(name), description: [options2.multiHost() ? options2.hostLabel(session.host || null) : "", ref, shortCwd(session.cwd)].filter(Boolean).join(" \xB7 "), live: session.isActive };
       }));
+    }
+    function showModels(token, owner = capture()) {
+      if (!owns(owner)) return;
+      const { scope, rows } = options2.models;
+      if (scope?.sessionId !== owner.selection.id || scope.harnessId !== "omp" || !sameDirectoryHost(scope.host, options2.host(owner.selection.host))) {
+        hide();
+        return;
+      }
+      const query = token.toLowerCase();
+      render(rows().filter((model) => model.enabled !== false && [model.provider, model.id, model.name, model.selector].some((value) => value?.toLowerCase().includes(query))).slice(0, 40).map((model) => {
+        const selector = model.selector || `${model.provider}/${model.id}`;
+        return {
+          choice: { kind: "model", selector },
+          icon: "\u25C7",
+          nameHtml: escapeHtml(model.name || model.id),
+          description: selector
+        };
+      }), owner);
     }
     async function loadCommands(id) {
       const owner = captureRequest(), sequence = ++commandSequence;
@@ -2181,6 +2203,29 @@
         });
       }, 120);
     }
+    function queueModels(token) {
+      const owner = capture();
+      if (!owner) {
+        hide();
+        return;
+      }
+      const { scope } = options2.models;
+      if (scope?.sessionId === owner.selection.id && scope.harnessId === "omp" && sameDirectoryHost(scope.host, options2.host(owner.selection.host))) {
+        showModels(token, owner);
+        return;
+      }
+      hide();
+      const sequence = ++modelSequence;
+      modelTimer = setTimeout(() => {
+        modelTimer = void 0;
+        if (!owns(owner) || sequence !== modelSequence) return;
+        void options2.loadModels(owner.selection.id, "omp").then(() => {
+          if (owns(owner) && sequence === modelSequence && document2.activeElement === input()) showModels(token, owner);
+        }).catch(() => {
+          if (owns(owner) && sequence === modelSequence) hide();
+        });
+      }, 120);
+    }
     function handle(text17) {
       if (disposed || options2.provisional()) {
         hide();
@@ -2194,6 +2239,11 @@
       const hash = text17.slice(0, caret).match(/(?:^|\s)#([^\s#]*)$/);
       if (hash && sessionState2.currentSession) {
         showRefs(hash[1]);
+        return;
+      }
+      const model = text17.slice(0, caret).match(/(?:^|\s)\^([^\s^]*)$/);
+      if (model && sessionState2.currentSession?.harnessId === "omp") {
+        queueModels(model[1]);
         return;
       }
       if (!text17.startsWith("/") || text17.includes(" ") || !ownsRequest(commandOwner)) {
@@ -2218,10 +2268,13 @@
         target.dispatchEvent(new Event("input"));
         return;
       }
-      const token = choice.kind === "file" ? "@" : "#", match = target.value.slice(0, caret).match(choice.kind === "file" ? /(?:^|\s)@([^\s@]*)$/ : /(?:^|\s)#([^\s#]*)$/);
+      const token = choice.kind === "file" ? "@" : choice.kind === "ref" ? "#" : "^";
+      const pattern = choice.kind === "file" ? /(?:^|\s)@([^\s@]*)$/ : choice.kind === "ref" ? /(?:^|\s)#([^\s#]*)$/ : /(?:^|\s)\^([^\s^]*)$/;
+      const match = target.value.slice(0, caret).match(pattern);
       hide();
       if (!match) return;
-      const start = caret - match[1].length - 1, value = choice.kind === "file" ? choice.path + (choice.directory ? "/" : " ") : choice.ref + " ";
+      const start = caret - match[1].length - 1;
+      const value = choice.kind === "file" ? choice.path + (choice.directory ? "/" : " ") : choice.kind === "ref" ? choice.ref + " " : choice.selector + " ";
       target.value = target.value.slice(0, start) + token + value + target.value.slice(caret);
       const position = start + 1 + value.length;
       target.focus();
@@ -2272,6 +2325,7 @@
       acceptFile: (path, directory) => insert({ kind: "file", path, directory }),
       acceptRef: (ref) => insert({ kind: "ref", ref }),
       acceptCommand: (name) => insert({ kind: "command", name }),
+      acceptModel: (selector) => insert({ kind: "model", selector }),
       get visible() {
         return visible && owns(view);
       },
@@ -12249,6 +12303,7 @@ ${restored}`;
   }
 
   // src/browser/composer-submit.ts
+  var OMP_MODEL_MENTION = /(?:^|\s)\^[^\s^]+(?=\s|$)/;
   function createComposerSubmit(options2) {
     const { document: document2, sessionState: sessionState2, delivery, drafts: composerDrafts2, activity: sessionActivity2, btw: btwPanel2 } = options2;
     let disposed = false, feedbackSequence = 0;
@@ -12276,6 +12331,10 @@ ${restored}`;
       const ownerKey = sessionRefKey(owner);
       if (sessionActivity2.isAborting(ownerKey)) {
         options2.status("Wait for the current turn to finish stopping", "working");
+        return;
+      }
+      if (sessionState2.currentSession.harnessId === "omp" && OMP_MODEL_MENTION.test(message3) && (sessionActivity2.turn || sessionActivity2.compacting)) {
+        options2.status("Wait for the OMP turn to finish before mentioning a model", "error");
         return;
       }
       if (message3 === "/tree") {
@@ -12387,6 +12446,10 @@ ${restored}`;
       const ownerKey = sessionRefKey(owner);
       if (sessionActivity2.isAborting(ownerKey)) {
         options2.status("Wait for the current turn to finish stopping", "working");
+        return;
+      }
+      if (sessionState2.currentSession.harnessId === "omp" && OMP_MODEL_MENTION.test(message3)) {
+        options2.status("OMP model mentions need a new turn; send after this turn finishes", "error");
         return;
       }
       input.value = "";
@@ -18239,7 +18302,11 @@ ${restored}`;
     references: sessionReferences,
     multiHost: isMultiHost,
     hostLabel: hostLabelFor,
-    failed: (error) => console.error("Failed to load commands:", error)
+    failed: (error) => console.error("Failed to load commands:", error),
+    models: { get scope() {
+      return modelCatalog.scope;
+    }, rows: () => modelCatalog.rows() },
+    loadModels: (id, harness) => appModels.load(id, harness)
   });
   var sidebarActivity = createSidebarActivity({ document, storage: localStorage, sessionState });
   var sidebarQuery = createSidebarQuery({
