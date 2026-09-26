@@ -36,6 +36,18 @@ export function mountModelSelector(root: HTMLElement, actions: ModelSelectorActi
   const results = element('div', 'model-results');
   const footer = element('div', 'model-dropdown-footer');
   root.replaceChildren(search, results, footer);
+  // Reading scrollTop back off a freshly rebuilt list forces a synchronous
+  // layout of every row, which dominated each keystroke. The offset is
+  // tracked from scroll events instead, so a filter update only writes it.
+  let scrollTop = 0;
+  function onScroll() { scrollTop = results.scrollTop; }
+  results.addEventListener('scroll', onScroll, { passive: true });
+  // Render inputs of the last build; an unchanged rebuild is pure churn and
+  // detaches rows the user may still be pointing at.
+  let rendered: {
+    models: readonly Readonly<CatalogModel>[]; editMode: boolean; hidden: number;
+    enabledCount: number; total: number; harnessId: string | null; currentModel: string | null;
+  } | null = null;
 
   function active(model: Readonly<CatalogModel>, current: string | null) {
     return model.id === current || `${model.provider}/${model.id}` === current;
@@ -62,6 +74,18 @@ export function mountModelSelector(root: HTMLElement, actions: ModelSelectorActi
     const visible = editMode ? filtered : filtered.filter(model => model.enabled !== false || active(model, currentModel));
     const hidden = filtered.length - visible.length;
     const groups = new Map<string, Readonly<CatalogModel>[]>();
+    let enabledCount = 0;
+    for (const model of models) if (model.enabled !== false) enabledCount++;
+    if (rendered && rendered.editMode === editMode && rendered.hidden === hidden
+        && rendered.enabledCount === enabledCount && rendered.total === models.length
+        && rendered.harnessId === harnessId && rendered.currentModel === currentModel
+        && rendered.models.length === visible.length && visible.every((model, index) => {
+          const old = rendered!.models[index];
+          return old.provider === model.provider && old.id === model.id
+            && old.enabled === model.enabled && old.contextWindow === model.contextWindow
+            && old.free === model.free && old.reasoning === model.reasoning;
+        })) return;
+    rendered = { models: visible, editMode, hidden, enabledCount, total: models.length, harnessId, currentModel };
     for (const model of visible) {
       const group = groups.get(model.provider) || [];
       group.push(model); groups.set(model.provider, group);
@@ -99,12 +123,13 @@ export function mountModelSelector(root: HTMLElement, actions: ModelSelectorActi
       empty.style.color = 'var(--text-muted)'; empty.style.cursor = 'default';
       fragment.append(empty);
     }
-    const scrollTop = results.scrollTop;
     results.replaceChildren(fragment);
-    results.scrollTop = scrollTop;
+    // Assigning scrollTop dirties the scroller even for the usual 0, and the
+    // browser already preserves an existing offset across the swap.
+    if (scrollTop) results.scrollTop = scrollTop;
     footer.replaceChildren();
     if (editMode) {
-      footer.append(element('span', 'model-footer-info', `${models.filter(model => model.enabled !== false).length} of ${models.length} enabled`),
+      footer.append(element('span', 'model-footer-info', `${enabledCount} of ${models.length} enabled`),
         button('All', 'all', 'true'), button('None', 'all', 'false'), button('Done', 'edit', 'false', true));
     } else {
       if (hidden) footer.append(element('span', 'model-footer-info', `${hidden} hidden`));
@@ -145,6 +170,7 @@ export function mountModelSelector(root: HTMLElement, actions: ModelSelectorActi
     dispose() {
       if (disposed) return;
       disposed = true; view = null;
+      results.removeEventListener('scroll', onScroll);
       root.removeEventListener('input', onInput);
       root.removeEventListener('keydown', onKeydown);
       root.removeEventListener('click', onClick);

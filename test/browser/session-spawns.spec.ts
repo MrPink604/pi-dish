@@ -83,4 +83,22 @@ test('workspace spawning keeps its original host when lazy harness discovery out
   expect(payload.target).toBeUndefined();
 });
 
+test('a ready spawn settles on its own host while another host list request never answers', async ({ page, fleet }) => {
+  let status: Route | undefined;
+  await page.route('**/api/sessions/new', route => route.fulfill({ json: { spawnId: 'slow-peer-operation' } }));
+  await page.route('**/api/session-spawns/slow-peer-operation', route => { status = route; });
+  await page.evaluate(host => fixtureApp.features.newSessionController.submit({ cwd: '/self', host, draft: 'slow peer draft' }), fleet.self.hostId);
+  await expect.poll(() => !!status).toBe(true);
+  // A fleet whose peer never answers must not hold the pane: the spawning
+  // host's row is already known, so readiness may only need that host.
+  // Held open, never fulfilled: the peer host is unreachable for this window.
+  await page.route(`${fleet.peer.base}/api/sessions*`, () => {});
+  await requiredRoute(status).fulfill({ json: { status: 'ready', sessionId: ROOT } });
+  await expect.poll(() => page.evaluate(() => fixtureApp.features.sessionView.spawnId)).toBeNull();
+  expect(await page.evaluate(() => fixtureApp.features.pendingSessionSpawns.entries().length)).toBe(0);
+  expect(await page.evaluate(() => fixtureApp.features.sessionState.currentSession?.id)).toBe(ROOT);
+  expect(await page.evaluate(() => fixtureApp.features.sessionState.currentSession?.host)).toBe(fleet.self.hostId);
+  await expect(page.locator('.session-item.starting')).toHaveCount(0);
+});
+
 export {};

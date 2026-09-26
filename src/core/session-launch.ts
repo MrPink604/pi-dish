@@ -127,6 +127,9 @@ class BridgeSocketConfigError extends LaunchError {
 }
 
 export const HEADLESS_TMUX_SERVER = 'pi-dish';
+/** Bounds for the spawn-registration poll; see the interval rule in performTmuxLaunch. */
+const REGISTRY_POLL_MIN_MS = 20;
+const REGISTRY_POLL_MAX_MS = 300;
 const MAX_BRIDGE_SOCKET_PATH_BYTES = 103;
 const BRIDGE_SOCKET_BASENAME = `${'0'.repeat(24)}.sock`;
 
@@ -434,6 +437,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       return { kind: 'ready', id: routeId };
     };
     while (Date.now() < deadline) {
+      const scanStartedAt = Date.now();
       const observation = findSessionBySpawnToken(token, descriptor.id);
       if (observation?.kind === 'conflict') {
         registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
@@ -445,7 +449,10 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
           break;
         }
       }
-      await delay(Math.min(300, Math.max(1, deadline - Date.now())));
+      // Detect cheap registrations promptly; pace larger registry scans toward
+      // the old 300ms cadence rather than repeatedly parsing every claim at 20ms.
+      const interval = Math.min(REGISTRY_POLL_MAX_MS, Math.max(REGISTRY_POLL_MIN_MS, (Date.now() - scanStartedAt) * 20));
+      await delay(Math.min(interval, Math.max(1, deadline - Date.now())));
     }
     // A registration arriving in the final sleep must win over timeout cleanup.
     const deadlineEntry = registrationError ? null : findSessionBySpawnToken(token, descriptor.id);

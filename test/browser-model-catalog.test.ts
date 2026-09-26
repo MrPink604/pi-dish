@@ -7,7 +7,7 @@ import assert = require('node:assert/strict');
 import fs = require('node:fs');
 import path = require('node:path');
 const vm: typeof import('node:vm') = require('node:vm')
-const context = { URL };
+const context = { URL, Date };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
 assertBrowserApiContext(context);
 const { createModelCatalog, modelsCacheKey, modelSelectOptionsHtml } = context.PiDishBrowser;
@@ -98,6 +98,31 @@ test('model option grouping supports literal prototype names and escapes labels'
   assert.match(result.html, /value="constructor\/one"/);
   assert.match(result.html, /value="__proto__\/two"/);
   assert.equal(result.html.includes('<hidden>'), false);
+});
+
+test('a catalog is reusable only for its recent scope and window', async (t) => {
+  const f = fixture(), load = f.catalog.load(scope('a'), () => true);
+  present(f.requests[0]).resolve([model('one')]); await load;
+  const target = { harnessId: 'pi', base: '/a' };
+  assert.equal(f.catalog.reusable(target), true);
+  assert.equal(f.catalog.reusable({ ...target, sessionId: 'other' }), false);
+  assert.equal(f.catalog.reusable({ ...target, harnessId: 'omp' }), false);
+  assert.equal(f.catalog.reusable({ ...target, base: '/b' }), false);
+  f.catalog.seed(scope('a'), [model('cached')], () => true);
+  assert.equal(f.catalog.reusable(target), false);
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  f.catalog.retire();
+  const reload = f.catalog.load(scope('a'), () => true);
+  present(f.requests[1]).resolve([model('fresh')]); await reload;
+  assert.equal(f.catalog.reusable(target), true);
+  now += 5 * 60_000; // well past any reuse window
+  assert.equal(f.catalog.reusable(target), false);
+  const refreshed = f.catalog.load(scope('a'), () => true);
+  present(f.requests[2]).resolve([model('latest')]); await refreshed;
+  assert.equal(f.catalog.reusable(target), true);
+  f.catalog.retire();
+  assert.equal(f.catalog.reusable(target), false);
 });
 
 test('malformed cached rows leave no catalog scope or owner', () => {

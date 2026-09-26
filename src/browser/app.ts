@@ -323,39 +323,6 @@ function autosizePromptInput(input: HTMLTextAreaElement) { input.style.height = 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   const startupSelection = sessionState.selectionGeneration;
-  // Who is serving us — and so which host stamps/keys the sessions below.
-  // Awaited before the first list load so client keys never straddle the
-  // bare/composite migration mid-render.
-  try {
-    await hostDiscovery.loadIdentity();
-    await hostDiscovery.loadFleet(); // peers this server knows about (404 on old servers)
-    await identifyHosts();  // and who the catalog's own entries actually are
-  } finally {
-    resolveHostFleetReady();
-    routinesController.updateButton(); // capability-gated sidebar icon
-    composerSpeech.updateButton();      // …and the capability-gated composer mic
-  }
-  loadConfig(); // feature flags (terminal) — fire-and-forget
-  themesController.load(); // theme picker options + refresh custom-theme tokens
-  sidebarQuery.updateView();
-  sidebarQuery.renderChips(); // cached definitions paint immediately…
-  sidebarQuery.loadFilters(); // …then the server copy replaces them
-  composerSpeech.mount();
-  terminalController.mountKeybar();
-  panelResize.terminal();
-  panelResize.sidebar();
-  anchoredCommentController.mount();
-  // The default Active view needs only live rows. Fetch history only when a
-  // saved inactive session must be restored; opening All fetches it on demand.
-  const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
-  await sidebarLists.load();
-  if (saved.sessionId && !sessionState.findSession(saved.sessionId, saved.hostId)) {
-    await sidebarLists.load(undefined, { withPrevious: true });
-  }
-  if (saved.sessionId && startupSelection === sessionState.selectionGeneration) {
-    const found = sessionState.findSession(saved.sessionId, saved.hostId);
-    if (found) sessionView.select(saved.sessionId, { host: found.host || null });
-  }
   
   const promptInput = (document.getElementById('promptInput') as HTMLTextAreaElement);
 
@@ -454,9 +421,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (btn) sessionInfo.copyMessage(btn);
   });
 
-  // Periodic refresh must preserve an in-flight server search, or the list
-  // resets to unfiltered mid-search.
-  sidebarLists.mount();
 
   sidebarControls.mount();
 
@@ -483,6 +447,45 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) sidebarLists.refresh();
   });
+
+  // Bind interactions before awaiting the fleet: one slow peer must not leave
+  // already-published local rows, the composer or transcript controls inert.
+  // Who is serving us — and so which host stamps/keys the sessions below.
+  // Awaited before the first list load so client keys never straddle the
+  // bare/composite migration mid-render.
+  try {
+    await hostDiscovery.loadIdentity();
+    await hostDiscovery.loadFleet(); // peers this server knows about (404 on old servers)
+    await identifyHosts();  // and who the catalog's own entries actually are
+  } finally {
+    resolveHostFleetReady();
+    routinesController.updateButton(); // capability-gated sidebar icon
+    composerSpeech.updateButton();      // …and the capability-gated composer mic
+  }
+  loadConfig(); // feature flags (terminal) — fire-and-forget
+  themesController.load(); // theme picker options + refresh custom-theme tokens
+  sidebarQuery.updateView();
+  sidebarQuery.renderChips(); // cached definitions paint immediately…
+  sidebarQuery.loadFilters(); // …then the server copy replaces them
+  composerSpeech.mount();
+  terminalController.mountKeybar();
+  panelResize.terminal();
+  panelResize.sidebar();
+  anchoredCommentController.mount();
+  // The default Active view needs only live rows. Fetch history only when a
+  // saved inactive session must be restored; opening All fetches it on demand.
+  const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
+  await sidebarLists.load();
+  if (saved.sessionId && !sessionState.findSession(saved.sessionId, saved.hostId)) {
+    await sidebarLists.load(undefined, { withPrevious: true });
+  }
+  if (saved.sessionId && startupSelection === sessionState.selectionGeneration) {
+    const found = sessionState.findSession(saved.sessionId, saved.hostId);
+    if (found) sessionView.select(saved.sessionId, { host: found.host || null });
+  }
+  // Periodic refresh must preserve an in-flight server search, or the list
+  // resets to unfiltered mid-search.
+  sidebarLists.mount();
 });
 
 // Reference syntax is relative to the server owning the composing session.
@@ -842,10 +845,10 @@ const composerSubmit: ReturnType<typeof createComposerSubmit> = createComposerSu
 });
 
 const pendingSessionSpawns: ReturnType<typeof createSessionSpawns> = createSessionSpawns({
-  request: (...args) => apiTransport.request(...args), delay: () => new Promise(resolve => setTimeout(resolve, 250)), harnessLabel: (...args) => newSessionController.harnessLabel(...args),
+  request: (...args) => apiTransport.request(...args), delay: attempt => new Promise(resolve => setTimeout(resolve, attempt < 50 ? 100 : 250)), harnessLabel: (...args) => newSessionController.harnessLabel(...args),
   current: () => sessionView.spawnId, changed: renderSessions,
   showPending: key => { sidebarQuery.switchTab('active'); sessionView.pending(key); if (window.innerWidth <= 768) sidebarQuery.close(); },
-  loadSessions: (...args) => sidebarLists.load(...args), hasSession: (id, host) => !!sessionState.findSession(id, host),
+  loadHost: host => sidebarLists.loadHost(host), hasSession: (id, host) => !!sessionState.findSession(id, host),
   selectSession: (id, host) => { void sessionView.select(id, { host }); },
   stashPrompt: (...args) => composerDrafts.stash(...args),
   saveDraft: (key, draft) => { try { localStorage.setItem(composerDrafts.draftKey(pendingComposerKey(key)), draft); } catch {} },

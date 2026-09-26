@@ -62,13 +62,38 @@ export interface IndexedSessionInfo extends SessionInfo {
   usage: IndexedUsage;
 }
 interface CacheStamp { mtimeMs: number; size: number; version: number; _bytes?: number }
+/**
+ * Freshness inputs resolved once per scan instead of once per file: the
+ * retention policy, and the per-harness pricing revision. `pricingRevision`
+ * re-hashes the harness's whole override catalog on every call, and a warm
+ * 341-session corpus (190 Pi + 151 OMP) spent 5-8ms of its 7-10ms scan there.
+ * Both values are re-read on every call, so an edited setting or refreshed
+ * catalog invalidates on the next scan; within one scan neither can change.
+ * A queued backlog item carries the scan's context, so a mid-drain catalog
+ * refresh can stamp an entry one revision behind — it re-indexes once later.
+ */
+interface ScanContext {
+  cacheConfig: CacheRetentionConfig;
+  harnessRevision: (harnessId: SessionSource['harnessId']) => string;
+}
+function scanContext(): ScanContext {
+  const revisions = new Map<string, string>();
+  return {
+    cacheConfig: loadCacheRetentionConfig(),
+    harnessRevision(harnessId) {
+      let revision = revisions.get(harnessId);
+      if (revision === undefined) { revision = pricingRevision(harnessId); revisions.set(harnessId, revision); }
+      return revision;
+    },
+  };
+}
 interface MetaEntry extends CacheStamp { info: IndexedSessionInfo; profileId: string; profileVersion: number; pricingRevision: string; cacheRetentionRevision: string }
 interface TextEntry extends CacheStamp { text: string; endsNl: boolean; tree: boolean; leafId: string | null }
 interface SkillsEntry extends CacheStamp { records: SkillActivation[]; state: SkillState | null }
 interface IndexState {
   metaLog: NdjsonLog; textLog: NdjsonLog; skillsLog: NdjsonLog;
   meta: Map<string, MetaEntry>; text: Map<string, TextEntry>; skills: Map<string, SkillsEntry>;
-  backlog: Map<string, { candidate: SessionSource; stats: fs.Stats; cacheConfig: CacheRetentionConfig }>;
+  backlog: Map<string, { candidate: SessionSource; stats: fs.Stats; ctx: ScanContext }>;
   building: boolean;
 }
 type LogRow = Record<string, unknown> & { f: string; _bytes: number };
@@ -287,15 +312,44 @@ function compactMeta(st: IndexState) { st.metaLog.compact(st.meta, encodeMeta); 
 function compactText(st: IndexState) { st.textLog.compact(st.text, encodeText); }
 function compactSkills(st: IndexState) { st.skillsLog.compact(st.skills, encodeSkills); }
 
+/**
+ * Route -> validated identity tuple. resolveSessionRoute, encodeSessionKey and
+ * canonicalSessionId are pure functions of the route string, and normalize()
+ * runs once per session per list search — thousands of base64 decodes and
+ * re-encodes per query. The harness registry is static, so a route that
+ * resolved never becomes invalid; a route that throws is never cached.
+ */
+interface RouteIdentity {
+  harnessId: SessionSource['harnessId'];
+  nativeSessionId: SessionSource['nativeSessionId'];
+  sessionKey: SessionSource['sessionKey'];
+  canonical: boolean;
+}
+const routeIdentities = new Map<string, RouteIdentity>();
+const ROUTE_IDENTITY_CACHE_MAX = 4096;
+function routeIdentity(routeId: string): RouteIdentity {
+  let entry = routeIdentities.get(routeId);
+  if (!entry) {
+    const identity = resolveSessionRoute(routeId);
+    entry = {
+      harnessId: identity.harnessId, nativeSessionId: identity.nativeSessionId,
+      sessionKey: encodeSessionKey(identity.harnessId, identity.nativeSessionId),
+      canonical: canonicalSessionId(routeId) === routeId,
+    };
+    if (routeIdentities.size >= ROUTE_IDENTITY_CACHE_MAX) routeIdentities.clear();
+    routeIdentities.set(routeId, entry);
+  }
+  return entry;
+}
+
 /** Validate explicit source identity; a path alone cannot establish a profile. */
 function normalize(input: SessionSource): SessionSource {
   if (!isRecord(input) || typeof input.file !== 'string' || !input.file ||
       typeof input.profileId !== 'string' || !finite(input.profileVersion) ||
       !(input.parentSession === null || typeof input.parentSession === 'string')) throw new TypeError('Expected explicit SessionSource');
-  const identity = resolveSessionRoute(input.routeId);
+  const identity = routeIdentity(input.routeId);
   if (identity.harnessId !== input.harnessId || identity.nativeSessionId !== input.nativeSessionId ||
-      encodeSessionKey(identity.harnessId, identity.nativeSessionId) !== input.sessionKey ||
-      canonicalSessionId(input.routeId) !== input.routeId) throw new TypeError('Invalid SessionSource identity');
+      identity.sessionKey !== input.sessionKey || !identity.canonical) throw new TypeError('Invalid SessionSource identity');
   return input;
 }
 function decodeIndexedInfo(value: unknown): IndexedSessionInfo | null {
@@ -313,7 +367,7 @@ function decodeIndexedInfo(value: unknown): IndexedSessionInfo | null {
 
 /** Parse one file once and update all index tables + their logs. */
 function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
-  cacheConfig: CacheRetentionConfig = loadCacheRetentionConfig()): IndexedSessionInfo {
+  ctx: ScanContext): IndexedSessionInfo {
   const file = candidate.file;
   const content = fs.readFileSync(file, 'utf-8');
   // One JSON pass feeds all four derivations (metadata, usage, search text,
@@ -323,7 +377,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
   observeCacheLifetimeFromEntries(entries, file, candidate.profileId);
   const { nativeSessionId, sessionKey } = candidate;
   const info: IndexedSessionInfo = {
-    ...sessionInfoFromEntries(entries, stats.mtime, candidate, cacheConfig),
+    ...sessionInfoFromEntries(entries, stats.mtime, candidate, ctx.cacheConfig),
     sessionKey, harnessId: candidate.harnessId, nativeSessionId,
     profileId: candidate.profileId, profileVersion: candidate.profileVersion,
     usage: buildIndexedUsageFromEntries(entries, candidate),
@@ -331,7 +385,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
   const search = buildSearchIndexFromEntries(entries);
   checkSearchLeaf(search);
   setEntry(st.meta, st.metaLog, file,
-    { mtimeMs: stats.mtimeMs, size: stats.size, version: META_SCHEMA_VERSION, profileId: candidate.profileId, profileVersion: candidate.profileVersion, pricingRevision: pricingRevision(candidate.harnessId), cacheRetentionRevision: cacheConfig.revision, info }, encodeMeta);
+    { mtimeMs: stats.mtimeMs, size: stats.size, version: META_SCHEMA_VERSION, profileId: candidate.profileId, profileVersion: candidate.profileVersion, pricingRevision: ctx.harnessRevision(candidate.harnessId), cacheRetentionRevision: ctx.cacheConfig.revision, info }, encodeMeta);
   setEntry(st.text, st.textLog, file,
     {
       mtimeMs: stats.mtimeMs,
@@ -357,7 +411,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
 
 /** The all-tables freshness test scanSessions and getSessionInfo share. */
 function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, stats: fs.Stats,
-  cacheConfig: CacheRetentionConfig): boolean {
+  ctx: ScanContext): boolean {
   const cached = st.meta.get(file);
   const cachedText = st.text.get(file);
   const cachedSkills = st.skills.get(file);
@@ -368,8 +422,8 @@ function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, st
   return !!(cached && cached.version === META_SCHEMA_VERSION &&
     cached.info.sessionKey === candidate.sessionKey && cached.info.nativeSessionId === candidate.nativeSessionId &&
     cached.profileId === candidate.profileId && cached.profileVersion === candidate.profileVersion &&
-    cached.pricingRevision === pricingRevision(candidate.harnessId) &&
-    cached.cacheRetentionRevision === cacheConfig.revision &&
+    cached.pricingRevision === ctx.harnessRevision(candidate.harnessId) &&
+    cached.cacheRetentionRevision === ctx.cacheConfig.revision &&
     cachedText && cachedText.version === TEXT_SCHEMA_VERSION &&
     cachedSkills && cachedSkills.version === SKILLS_SCHEMA_VERSION &&
     cached.mtimeMs === stats.mtimeMs && cached.size === stats.size &&
@@ -390,7 +444,7 @@ function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, st
  * them once (the same contract getSearchText has always had).
  */
 function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs.Stats,
-  cacheConfig: CacheRetentionConfig): IndexedSessionInfo | null {
+  ctx: ScanContext): IndexedSessionInfo | null {
   const file = candidate.file;
   const meta = st.meta.get(file), text = st.text.get(file), skills = st.skills.get(file);
   if (!meta || !text || !skills) return null;
@@ -398,8 +452,8 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
       skills.version !== SKILLS_SCHEMA_VERSION) return null;
   if (meta.info.sessionKey !== candidate.sessionKey || meta.info.nativeSessionId !== candidate.nativeSessionId) return null;
   if (meta.profileId !== candidate.profileId || meta.profileVersion !== candidate.profileVersion) return null;
-  if (meta.pricingRevision !== pricingRevision(candidate.harnessId)) return null;
-  if (meta.cacheRetentionRevision !== cacheConfig.revision) return null;
+  if (meta.pricingRevision !== ctx.harnessRevision(candidate.harnessId)) return null;
+  if (meta.cacheRetentionRevision !== ctx.cacheConfig.revision) return null;
   // The three tables are written together; extend only from a coherent base.
   if (meta.mtimeMs !== text.mtimeMs || meta.size !== text.size ||
       meta.mtimeMs !== skills.mtimeMs || meta.size !== skills.size) return null;
@@ -416,7 +470,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
   } catch { return null; }
   if (!extension) return null;
   try {
-    extendSessionInfoFromEntries(meta.info, entries, stats.mtime, candidate, cacheConfig);
+    extendSessionInfoFromEntries(meta.info, entries, stats.mtime, candidate, ctx.cacheConfig);
     extendCacheLifetimeFromEntries(entries, file, candidate.profileId);
     extendIndexedUsageFromEntries(meta.info.usage, entries, candidate);
     const mined = mineSkillsFromEntries(entries, {
@@ -486,7 +540,7 @@ function kickBuilder(st: IndexState) {
     if (next.done) { st.building = false; flushCacheLifetime(); return; }
     const [file, work] = next.value;
     st.backlog.delete(file);
-    try { indexFile(st, work.candidate, work.stats, work.cacheConfig); } catch {} // vanished/unreadable: skip
+    try { indexFile(st, work.candidate, work.stats, work.ctx); } catch {} // vanished/unreadable: skip
     setImmediate(step);
   };
   setImmediate(step);
@@ -505,7 +559,7 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
   const infos = new Map<string, IndexedSessionInfo>();
   const seen = new Set<string>();
   let budget = syncBudget();
-  const cacheConfig = loadCacheRetentionConfig();
+  const ctx = scanContext();
 
   for (const input of files) {
     const candidate = normalize(input);
@@ -513,14 +567,14 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
     seen.add(file);
     let stats;
     try { stats = fs.statSync(file); } catch { dropEntry(st, file); continue; }
-    if (isEntryFresh(st, file, candidate, stats, cacheConfig)) {
+    if (isEntryFresh(st, file, candidate, stats, ctx)) {
       st.backlog.delete(file); // a stale queue entry for a file we just served
       infos.set(file, st.meta.get(file)!.info);
       continue;
     }
     // A file that merely grew (the streaming active session) extends in
     // O(delta) instead of consuming sync budget on a whole-file re-parse.
-    const extended = tryExtendIndexEntry(st, candidate, stats, cacheConfig);
+    const extended = tryExtendIndexEntry(st, candidate, stats, ctx);
     if (extended) {
       st.backlog.delete(file);
       infos.set(file, extended);
@@ -528,9 +582,9 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
     }
     if (budget > 0) {
       budget--;
-      try { infos.set(file, indexFile(st, candidate, stats, cacheConfig)); } catch {}
+      try { infos.set(file, indexFile(st, candidate, stats, ctx)); } catch {}
     } else {
-      st.backlog.set(file, { candidate, stats, cacheConfig });
+      st.backlog.set(file, { candidate, stats, ctx });
     }
   }
 
@@ -559,7 +613,6 @@ export function getSearchText(input: SessionSource): string {
   const candidate = normalize(input);
   const file = candidate.file;
   const st = getState();
-  const cacheConfig = loadCacheRetentionConfig();
   const cached = st.text.get(file);
   let stats;
   try { stats = fs.statSync(file); } catch { return ''; }
@@ -567,11 +620,16 @@ export function getSearchText(input: SessionSource): string {
       cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
     return cached.text;
   }
+  // Only the rebuild paths below read the freshness inputs, and only once per
+  // call: loading them before the check statted settings.json (and re-hashed
+  // the pricing catalog) once per session of every list search, which a fresh
+  // index entry never consults.
+  const ctx = scanContext();
   // The shared O(delta) extension keeps all three tables coherent — a
   // text-only extension here used to leave meta/skills behind, which would
   // now force the scan's extension path into a full re-index.
-  if (tryExtendIndexEntry(st, candidate, stats, cacheConfig)) return st.text.get(file)!.text;
-  try { indexFile(st, candidate, stats, cacheConfig); } catch { return cached ? cached.text : ''; }
+  if (tryExtendIndexEntry(st, candidate, stats, ctx)) return st.text.get(file)!.text;
+  try { indexFile(st, candidate, stats, ctx); } catch { return cached ? cached.text : ''; }
   return st.text.get(file)!.text;
 }
 
@@ -586,13 +644,13 @@ export function getSearchText(input: SessionSource): string {
 export function getSessionInfo(input: SessionSource): SessionInfo {
   const candidate = normalize(input);
   const st = getState();
-  const cacheConfig = loadCacheRetentionConfig();
+  const ctx = scanContext();
   const stats = fs.statSync(candidate.file);
   let info;
-  if (isEntryFresh(st, candidate.file, candidate, stats, cacheConfig)) {
+  if (isEntryFresh(st, candidate.file, candidate, stats, ctx)) {
     info = st.meta.get(candidate.file)!.info;
   } else {
-    info = tryExtendIndexEntry(st, candidate, stats, cacheConfig) || indexFile(st, candidate, stats, cacheConfig);
+    info = tryExtendIndexEntry(st, candidate, stats, ctx) || indexFile(st, candidate, stats, ctx);
   }
   st.backlog.delete(candidate.file); // just indexed/served; a queued rebuild is stale
   // Strip index-internal fields (identity resolution, usage with its

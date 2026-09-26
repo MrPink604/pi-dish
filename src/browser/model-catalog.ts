@@ -18,6 +18,9 @@ export interface ModelCatalogView {
   readonly scope: ModelCatalogScope | null;
   rows(): readonly Readonly<CatalogModel>[];
 }
+/** How long a recently read catalog may serve a menu without re-reading it. */
+const CATALOG_REUSE_MS = 60_000;
+
 /** One shared catalog, with explicit request/view owners and model-edit writers. */
 export function createModelCatalog(options: {
   read: (scope: ModelCatalogScope) => Promise<unknown>;
@@ -29,12 +32,23 @@ export function createModelCatalog(options: {
   let models: CatalogModel[] = [];
   let scope: ModelCatalogScope | null = null;
   let currentOwner: (() => boolean) | null = null;
+  let loadedAt: number | null = null;
   const current = () => !currentOwner || currentOwner();
   function rows(): readonly Readonly<CatalogModel>[] { return current() ? models : []; }
-  function retire(): void { sequence++; }
+  function retire(): void { sequence++; loadedAt = null; }
   function clear(): void { retire(); models = []; scope = null; currentOwner = null; }
   function snapshot(target: ModelCatalogScope): ModelCatalogScope {
     return Object.freeze({ ...target, host: Object.freeze({ ...target.host }) });
+  }
+  // A menu that already shows these rows may reopen from them instead of
+  // paying another round trip, for as long as a re-read would have been
+  // reused server-side. Seeded (cache-restored) rows are not a server read and
+  // never qualify.
+  function reusable(target: { sessionId?: string; harnessId: string; base: string }): boolean {
+    const active = current() ? scope : null;
+    return !!active && loadedAt !== null && Date.now() - loadedAt < CATALOG_REUSE_MS
+      && active.sessionId === target.sessionId && active.harnessId === target.harnessId
+      && active.host.base === target.base;
   }
   function seed(target: ModelCatalogScope, data: unknown, owns: () => boolean): void {
     clear();
@@ -54,6 +68,7 @@ export function createModelCatalog(options: {
       models = decodeModelCatalog(data);
       scope = owner;
       currentOwner = ownsRows;
+      loadedAt = Date.now();
       if (models.length) {
         try { options.persist(owner, models); } catch {} // Runtime catalog survives storage quota failures.
       }
@@ -88,7 +103,7 @@ export function createModelCatalog(options: {
     const list = rows(), enabled = list.filter(model => model.enabled !== false);
     return enabled.length === list.length ? null : enabled.map(model => `${model.provider}/${model.id}`);
   }
-  return { rows, get scope() { return current() ? scope : null; }, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
+  return { rows, get scope() { return current() ? scope : null; }, reusable, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
 }
 
 export function modelSelectOptionsHtml(models: readonly Readonly<CatalogModel>[], escapeHtml: (value: string) => string) {

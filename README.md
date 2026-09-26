@@ -714,6 +714,14 @@ pi has no API to dismiss it programmatically.
 - **Historical sessions** are scanned from the harness session stores
   (`~/.pi/agent/sessions/`, `~/.omp/agent/sessions/`, …), with mtime/size-keyed
   caches so the 10s sidebar poll never re-parses unchanged files.
+  Warm searches reuse indexed text and parsed-message search projections;
+  file changes invalidate them. Full-search snippets are built only for the
+  highest-ranked 100 sessions.
+- **Model and effort menus** open immediately. A successful model catalog read
+  is reusable for 60 seconds within the same session, harness and host endpoint;
+  restored disk caches do not count as fresh reads. Cold catalogs show a
+  dismissible loading menu. OMP effort choices still come from its model's
+  native catalog; other harnesses' fixed effort choices need no model request.
 - **Streaming** is SSE end to end: bridge socket → server (which coalesces
   `message_update` deltas, ~50ms window, each carries the full message so
   far) → an incremental block-level renderer that only touches changed
@@ -733,6 +741,11 @@ pi has no API to dismiss it programmatically.
   server, detaching/reattaching like any tmux window. pi-dish drives spawned
   sessions over the bridge once its extension registers (windows are
   correlated to their registration by a one-shot `PI_DISH_SPAWN_TOKEN`).
+  New-session requests using `async: true` return a provisional operation before
+  OMP model validation; validation failures appear in the operation's error
+  state without launching a process. Registration retains launch-token,
+  process and socket ownership checks. Readiness refreshes only the owning
+  host's active list, so an unrelated slow peer cannot delay the pane.
 
 Writing a pi extension whose UI should show up in pi-dish? See
 [extensions/pi-dish-bridge/README.md](extensions/pi-dish-bridge/README.md)

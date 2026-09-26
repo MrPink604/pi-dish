@@ -14,7 +14,8 @@ fixtures_js_1.test.use({ liveSessions: true });
         if (id === null)
             throw new Error(`Missing queued prompt id for ${host.label}`);
         ids[host.label] = id;
-        await page.evaluate(() => fixtureApp.features.promptDelivery.render({ followUp: ['identical queued message'] }));
+        await page.waitForFunction(() => fixtureApp.features.messageStreamController.source?.readyState === 1);
+        host.emit('queue_update', { followUp: ['identical queued message'] });
         await (0, fixtures_js_1.expect)(page.locator('.queue-item')).toHaveAttribute('data-client-prompt-id', id);
     }
     let receive;

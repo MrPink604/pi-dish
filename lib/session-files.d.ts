@@ -72,6 +72,21 @@ export declare function sanitizeUsage(usage: unknown): SanitizedUsage | undefine
 export declare function readSessionMessages(filePath: string | SessionFileSource): readonly SessionMessage[];
 export declare function readSessionMessagesAtLeaf(filePath: string | SessionFileSource, leafId: unknown): readonly SessionMessage[];
 export declare function readSessionMessageById(filePath: string | SessionFileSource, entryId: unknown): SessionMessage | null;
+/**
+ * Lowercased per-message text for whole-transcript search, index-aligned with
+ * readSessionMessages' array ('' for a message with no text). Extracting and
+ * lowercasing every message is O(transcript text) — ~7M chars on a large
+ * session — and the in-session search handler used to pay it on every
+ * request. The result is memoized on the shared message cache entry, so a
+ * repeated search over an unchanged file is a plain string scan; a changed
+ * file re-parses (and the memo is rebuilt with its messages, staying aligned).
+ * Return both from one revalidation: the harness can append or branch between
+ * separate synchronous filesystem calls in this process.
+ */
+export declare function readSessionSearchText(filePath: string | SessionFileSource): {
+    readonly messages: readonly SessionMessage[];
+    readonly texts: readonly string[];
+};
 export declare const SEARCH_TEXT_SESSION_CAP = 4000000;
 /** Search text plus enough tree state to validate a future append cheaply. */
 export declare function buildSearchIndexFromContent(content: string): SessionSearchProjection;

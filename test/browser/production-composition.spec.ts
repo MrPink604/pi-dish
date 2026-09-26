@@ -37,4 +37,34 @@ for (const width of [1280, 390]) test(`production bundle starts and restores a p
   await expect(page.locator('#messages')).toContainText('peer root transcript');
 });
 
+test.describe('startup interactivity', () => {
+  test.use({ liveSessions: true });
+
+  test('local session selection and keyboard submission do not wait for a peer list', async ({ page, fleet }) => {
+    let release!: () => void;
+    let arrived!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const pending = new Promise<void>(resolve => { arrived = resolve; });
+    await page.route(`${fleet.peer.base}/api/sessions?*`, async route => {
+      arrived();
+      await gate;
+      await route.continue();
+    });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await pending;
+    try {
+      await fleet.row(fleet.self).click();
+      await expect(page.locator('#messages')).toContainText('self root transcript');
+      await expect(page.locator('#promptInput')).toBeEnabled();
+      await page.locator('#promptInput').fill('Ready before the peer');
+      const submitted = page.waitForRequest(`${fleet.self.base}/api/sessions/${ROOT}/prompt`);
+      await page.locator('#promptInput').press('Enter');
+      await submitted;
+      await expect.poll(() => fleet.self.commands.some(command => command.command === 'prompt')).toBe(true);
+    } finally {
+      release();
+    }
+  });
+});
+
 export {};

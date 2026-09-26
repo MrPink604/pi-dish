@@ -59,7 +59,8 @@ for (const menu of menus) {
     await page.evaluate(menu => {
       const owner = fixtureApp.features.sessionState.captureSelection();
       if (owner === null) throw new Error('Missing owner');
-      window.fixtureSessionListPatch(owner.id, { isActive: true,
+      fixtureApp.features.modelCatalog.retire();
+      window.fixtureSessionListPatch(owner.id, { isActive: true, harnessId: menu === 'Thinking' ? 'omp' : 'pi',
         capabilities: { ...fixtureCurrentSession().capabilities, ['set' + menu]: true } });
       const load = fixtureApp.features.appModels.load;
       fixtureApp.features.appModels.load = () => {

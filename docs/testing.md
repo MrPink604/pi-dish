@@ -240,9 +240,57 @@ imports and rejection of runtime imports outside `src/`. The static action inven
 HTML handlers and unregistered or unused action names.
 
 `production-composition.spec.js` loads the unmodified production bundle on desktop
-and mobile. It checks peer selection/restoration, static actions and the absence
+and mobile. It checks peer selection/restoration, static actions, local selection
+and keyboard submission while a peer list is held, and the absence
 of app globals or factory/helper script requests. Other browser and UI fixtures
 use `test/fixtures/browser-app.js` to observe actual controller construction and
 the supplied ports in a test-only bundle. Tests call those controllers, replace
 specific ports, or delay routes; they never depend on global forwarding functions.
 The fixture contains no private-binding evaluator or app-function export list.
+
+## Interactivity performance audit
+
+Measure production `public/app.js`, not only controller fixtures. Use sanitized
+temporary homes and synthetic sessions; hold peer lists or model responses to
+distinguish request latency from browser work. Do not benchmark alongside the
+parallel test suites: CPU contention materially distorts these timings.
+
+The search/readiness/selector audit measured these local before/after probes
+(not CI timing thresholds or production latency guarantees):
+
+| Probe | Before | After |
+| --- | --- | --- |
+| Warm index scan, 341 Pi/OMP sessions | 9.2 ms | 1.8 ms |
+| Fully indexed warm catalog, existing 257-file / 14 MB baseline | 50.7 ms | 33.6 ms |
+| Warm in-session search, 72 MB / 7,406 messages | 12.6 ms | 3.8 ms |
+| Model filter, 250 rows, median narrowing render | 9.4 ms | 0.7 ms |
+| Warm model/effort menu, injected 800 ms model response | ~815 ms each open | ~16 ms to next frame; no menu-triggered request |
+| Retention-settings stats per 1,200-row catalog | 1,200 | 1 |
+| Real OMP registration appearance to proved readiness, four launches | 114–511 ms | 53–77 ms |
+
+The catalog row is reproducible with `node scripts/session-catalog-baseline.js`
+on Node 22.22.1/Linux. Cold initial-list time stayed essentially unchanged
+(130.4 → 131.3 ms); ordinary append inspection still read only the appended
+130 bytes, not the full transcript.
+
+API response comparisons retained search ranking, scope, snippets and match
+counts. `session-files.test.js` covers memo invalidation and message/text snapshot
+alignment; `session-index.test.js` preserves identity rejection despite memoization.
+`session-controls.spec.js` and `menu-ownership.spec.js` cover warm reuse, cold-menu
+cancellation and stale owners. `browser-model-catalog.test.js` checks scope,
+retirement, seeded-cache and expiry boundaries. `session-spawns.spec.js` holds a
+peer while the owning host becomes ready; `tmux.test.js` checks asynchronous
+validation failure without a launch and uses a controlled clock for final-scan
+deadline acceptance. `transcript.spec.js` checks that concurrent
+older-page consumers join the same pending page instead of outrunning it.
+
+Remaining costs are explicit: cold `omp models --json` took about 1.65 seconds,
+and native OMP registration took 1.5–1.9 seconds. Process/socket proofs remain
+mandatory. Cold large-file parsing, synchronous historical discovery/indexing,
+full sidebar projection and sequential deep-search pagination still cost work;
+the audit did not replace them with virtualization or a new storage engine.
+In the 1,200-row production-browser fixture, warm sidebar search still took
+633–664 ms including its existing 300 ms debounce, with 25–26 ms synchronous
+input work. Faster backend scans do not eliminate large-list DOM/render costs.
+Whole-transcript rich-text finalization measured 2/7/16 ms at 200/1,000/2,000
+nodes and is not invoked for every streaming delta, so it was left unchanged.

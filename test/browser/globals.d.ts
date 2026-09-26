@@ -111,6 +111,7 @@ declare global {
     finalCatchup: Promise<unknown>;
     firstCommand: ReturnType<FixtureFeatures['composerSubmit']['sendPrompt']>;
     firstModel: ReturnType<FixtureFeatures['sessionControls']['selectModel']>;
+    firstPage: Promise<unknown>;
     firstQueueEdit: ReturnType<FixtureFeatures['promptDelivery']['edit']>;
     firstStreamStart: Promise<unknown>;
     fleetBodiesDecoded: number;
@@ -119,6 +120,8 @@ declare global {
     frameTexts: unknown[];
     hostBodyWaiting: boolean;
     infoCopies: string[];
+    joinedPage: Promise<unknown>;
+    joinedSettled: boolean;
     lateExport: ReturnType<FixtureFeatures['sessionControls']['export']>;
     limitReads: number;
     listCalls: number;

@@ -135,6 +135,30 @@ test('readSessionMessages returns the displayable stream in order', () => {
     // Plain messages don't grow spurious tool fields.
     assert.equal(all[1].toolName, undefined, 'non-toolResult messages have no toolName');
 });
+test('readSessionSearchText memoizes lowercased per-message text aligned with the stream', () => {
+    const file = writeSession([
+        { type: 'session', cwd: '/x' },
+        userMsg('Alpha Needle'),
+        assistantMsg('second ALPHA'),
+        { type: 'message', message: { role: 'user', content: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }] } },
+    ]);
+    const { messages, texts: text } = SF.readSessionSearchText(file);
+    assert.equal(text.length, messages.length, 'index-aligned with readSessionMessages');
+    assert.equal(text[0], 'alpha needle');
+    assert.equal(text[1], 'second alpha');
+    assert.equal(text[2], '', 'a message without text searches as empty');
+    assert.equal(SF.readSessionSearchText(file).texts, text, 'a repeat read reuses the memoized array');
+    // A grown file re-parses, and the memo is rebuilt with its new messages —
+    // a search after an append must not match against the old stream.
+    fs.appendFileSync(file, JSON.stringify(userMsg('third alpha')) + '\n');
+    const { messages: grown, texts: grownText } = SF.readSessionSearchText(file);
+    assert.equal(grown.length, 4);
+    assert.equal(grownText.length, 4);
+    assert.equal(grownText[3], 'third alpha');
+    assert.notEqual(grownText, text, 'the stale memo does not survive revalidation');
+    assert.deepEqual(messages.map(message => message.role), ['user', 'assistant', 'user']);
+    assert.deepEqual(text, ['alpha needle', 'second alpha', '']);
+});
 test('OMP entry tolerance renders async/interruption/unknown custom rows without leaking hidden state', () => {
     const file = path.join(__dirname, 'fixtures', 'omp-entry-tolerance.jsonl');
     const source = { file, profileId: 'omp-v1', profileVersion: 1, harnessId: 'omp' };

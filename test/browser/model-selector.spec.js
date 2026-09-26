@@ -71,11 +71,11 @@ const fixtures_js_1 = require("./fixtures.js");
 fixtures_js_1.test.describe('live selector', () => {
     fixtures_js_1.test.use({ liveSessions: true });
     (0, fixtures_js_1.test)('search and model actions use the extracted selector', async ({ page, fleet }) => {
-        await fleet.select(fleet.self);
         await page.route(`${fleet.self.base}/api/models?sessionId=${fixtures_js_1.ROOT}`, route => route.fulfill({ json: [
                 { id: 'quote-model', provider: "quoted'provider", contextWindow: 1000000 },
                 { id: 'other-model', provider: 'other', contextWindow: 200000 },
             ] }));
+        await fleet.select(fleet.self);
         let receive;
         const received = new Promise(resolve => { receive = resolve; });
         await page.route(`${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/model`, (route) => {
@@ -100,10 +100,10 @@ fixtures_js_1.test.describe('live selector', () => {
         (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.sessionControls.modelSelector)).toBeNull();
     });
     (0, fixtures_js_1.test)('model selector baseline measurements', async ({ page, fleet, browser }) => {
-        await fleet.select(fleet.self);
         const catalog = Array.from({ length: 250 }, (_, i) => ({ id: `model-${i}`, provider: `provider-${i % 5}`,
             contextWindow: 200000, reasoning: i % 2 === 0, enabled: i % 4 !== 0 }));
         await page.route(`${fleet.self.base}/api/models?sessionId=${fixtures_js_1.ROOT}`, route => route.fulfill({ json: catalog }));
+        await fleet.select(fleet.self);
         const measurements = await page.evaluate(async () => {
             const open = [], filter = [];
             for (let i = 0; i < 21; i++) {

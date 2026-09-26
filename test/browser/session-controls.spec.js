@@ -8,20 +8,85 @@ for (const kind of menuKinds) {
     (0, fixtures_js_1.test)(`closing a pending ${kind.toLowerCase()} menu retires its catalog completion on the same session`, async ({ page, fleet }) => {
         await fleet.select(fleet.self);
         await page.evaluate(kind => {
+            fixtureApp.features.modelCatalog.retire();
+            // Only OMP's effort menu reads the catalog; the other harnesses use a
+            // fixed ladder, so this case runs as the harness whose menu does fetch.
+            if (kind === 'Thinking')
+                window.fixtureSessionListPatch(fixtureCurrentSession().id, { harnessId: 'omp' });
             const load = fixtureApp.features.appModels.load;
             fixtureApp.features.appModels.load = () => { fixtureApp.features.appModels.load = load; return new Promise(resolve => { window.finishHeaderCatalog = resolve; }); };
             window.headerMenu = kind === 'Model' ? fixtureApp.features.sessionControls.toggleModels() : fixtureApp.features.sessionControls.toggleThinking();
-            if (kind === 'Model')
-                fixtureApp.features.sessionControls.closeModels();
-            else
-                fixtureApp.features.sessionControls.closeThinking();
         }, kind);
+        await (0, fixtures_js_1.expect)(page.locator('#' + kind.toLowerCase() + 'Dropdown [role="status"]')).toBeVisible();
+        await page.locator('#session' + kind).click();
         await page.evaluate(async () => { window.finishHeaderCatalog(); await window.headerMenu; });
         await (0, fixtures_js_1.expect)(page.locator('#' + kind.toLowerCase() + 'Dropdown')).toBeHidden();
         await page.evaluate(kind => kind === 'Model' ? fixtureApp.features.sessionControls.toggleModels() : fixtureApp.features.sessionControls.toggleThinking(), kind);
         await (0, fixtures_js_1.expect)(page.locator('#' + kind.toLowerCase() + 'Dropdown')).toBeVisible();
     });
 }
+(0, fixtures_js_1.test)('reopening a session model menu reuses the warm catalog without another request', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    let requests = 0;
+    await page.route('**/api/models*', route => { requests++; return route.fulfill({ json: [{ provider: 'test', id: 'warm-model', name: 'Warm', contextWindow: 200000 }] }); });
+    await page.evaluate(() => fixtureApp.features.modelCatalog.clear());
+    await page.evaluate(() => fixtureApp.features.sessionControls.toggleModels());
+    await (0, fixtures_js_1.expect)(page.locator('#modelDropdown .model-option')).toHaveAttribute('title', 'test/warm-model');
+    await page.evaluate(() => fixtureApp.features.sessionControls.closeModels());
+    const warm = requests;
+    await page.evaluate(() => fixtureApp.features.sessionControls.toggleModels());
+    await (0, fixtures_js_1.expect)(page.locator('#modelDropdown .model-option')).toHaveAttribute('title', 'test/warm-model');
+    (0, fixtures_js_1.expect)(requests).toBe(warm);
+});
+(0, fixtures_js_1.test)('a fixed-vocabulary session opens its effort menu while a model request is pending', async ({ page, fleet }) => {
+    const held = [];
+    await page.route('**/api/models*', route => { held.push(route); });
+    await fleet.select(fleet.self);
+    await fixtures_js_1.expect.poll(() => held.length).toBeGreaterThan(0);
+    await page.evaluate(() => window.fixtureSessionListPatch(fixtureCurrentSession().id, { thinkingLevel: 'high' }));
+    await page.evaluate(() => fixtureApp.features.sessionControls.toggleThinking());
+    await (0, fixtures_js_1.expect)(page.locator('#thinkingDropdown')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('#thinkingDropdown button')).toHaveText(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+    for (const route of held)
+        await route.abort();
+});
+(0, fixtures_js_1.test)('a warm OMP catalog feeds the effort ladder without another request', async ({ page, fleet }) => {
+    let requests = 0;
+    await page.route('**/api/models*', route => {
+        requests++;
+        return route.fulfill({ json: [
+                { provider: 'test', id: 'ladder-model', name: 'Ladder', contextWindow: 200000, thinking: ['low', 'high'] },
+            ] });
+    });
+    // Keep authoritative list refreshes OMP-shaped too; a one-off client patch
+    // would be overwritten by the fixture's real Pi registry on the next poll.
+    await page.route(url => url.origin === fleet.self.base && url.pathname === '/api/sessions', async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        for (const row of [...body.active, ...body.previous]) {
+            if (row.id === fixtures_js_1.ROOT)
+                Object.assign(row, { harnessId: 'omp', model: 'test/ladder-model', thinkingLevel: 'high' });
+        }
+        await route.fulfill({ response, json: body });
+    });
+    await page.route(`${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/messages?*`, async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.session.model = 'test/ladder-model';
+        await route.fulfill({ response, json: body });
+    });
+    await page.evaluate(() => fixtureApp.features.sidebarLists.refresh());
+    await fleet.select(fleet.self);
+    await page.evaluate(() => fixtureApp.features.modelCatalog.clear());
+    await page.evaluate(() => fixtureApp.features.sessionControls.toggleModels());
+    await (0, fixtures_js_1.expect)(page.locator('#modelDropdown .model-option')).toHaveAttribute('title', 'test/ladder-model');
+    await page.evaluate(() => fixtureApp.features.sessionControls.closeModels());
+    const warm = requests;
+    await page.evaluate(() => fixtureApp.features.sessionControls.toggleThinking());
+    await (0, fixtures_js_1.expect)(page.locator('#thinkingDropdown')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('#thinkingDropdown button')).toHaveText(['off', 'low', 'high', 'auto']);
+    (0, fixtures_js_1.expect)(requests).toBe(warm);
+});
 (0, fixtures_js_1.test)('a rename editor cannot commit its old text after selecting the same session id on another host', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
     let writes = 0;
@@ -103,10 +168,10 @@ for (const kind of menuKinds) {
     await (0, fixtures_js_1.expect)(page.locator('#sessionThinking')).toHaveText(before ?? '');
 });
 (0, fixtures_js_1.test)('enabled-model debounce retains the serving host preference after menu close and selection change', async ({ page, fleet }) => {
-    await fleet.select(fleet.self);
     let write;
     await page.route(`${fleet.self.base}/api/models?sessionId=${fixtures_js_1.ROOT}`, route => route.fulfill({ json: [{ id: 'a', provider: 'p', enabled: true }, { id: 'b', provider: 'p', enabled: false }] }));
     await page.route('**/api/models/enabled', route => { write = { origin: new URL(route.request().url()).origin, body: route.request().postDataJSON() }; return route.fulfill({ json: { success: true } }); });
+    await fleet.select(fleet.self);
     await page.evaluate(async () => { await fixtureApp.features.sessionControls.toggleModels(); (() => fixtureApp.features.sessionControls.setEditMode(true))(); fixtureApp.features.sessionControls.toggleModel('p/a'); fixtureApp.features.sessionControls.closeModels(); });
     await fleet.select(fleet.peer);
     await fixtures_js_1.expect.poll(() => !!write).toBe(true);

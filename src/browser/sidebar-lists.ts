@@ -66,9 +66,15 @@ export function createSidebarLists(options: {
     await Promise.allSettled(queryHosts(options.pollable(), query || '').map(host => loader.load(host, query, withPrevious, current)));
     if (!disposed && current === sequence) busy(false);
   }
+  /** Readiness is host-local; a slow peer or history scan must not hold a spawn. */
+  async function loadHost(hostId: string | null) {
+    if (disposed) return;
+    const host = options.pollable().find(host => (host.hostId || null) === hostId);
+    if (host) await loader.load(host, undefined, false, sequence);
+  }
   function invalidate() { sequence++; loader.retireRequests(); }
   function refresh() { if (disposed) return Promise.resolve(); options.refreshFleet(); return load(options.query() || undefined); }
   function mount() { if (!disposed && !pollTimer) pollTimer = setInterval(() => { void refresh(); }, 10000); }
   function dispose() { if (disposed) return; busy(false); disposed = true; sequence++; if (pollTimer) clearInterval(pollTimer); if (indexingTimer) clearTimeout(indexingTimer); pollTimer = indexingTimer = null; loader.prune(new Set()); }
-  return { loader, load, refresh, publish, busy, invalidate, mount, dispose, get indexing() { return indexing; }, get queriedFor() { return queriedFor; } };
+  return { loader, load, loadHost, refresh, publish, busy, invalidate, mount, dispose, get indexing() { return indexing; }, get queriedFor() { return queriedFor; } };
 }

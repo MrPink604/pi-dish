@@ -10,7 +10,7 @@
  * Run with: npm test
  */
 import test = require('node:test');
-import { nativeId, present, record, records, type TestRecord } from './test-types.js';
+import { nativeId, present, record, records, routeId, harnessId, type TestRecord } from './test-types.js';
 import assert = require('node:assert');
 import fs = require('node:fs');
 import os = require('node:os');
@@ -563,6 +563,27 @@ test('index APIs require explicit sources and never infer generic-file identity'
   const info = present(index.scanSessions([source]).infos.get(file));
   assert.equal(info.nativeSessionId, 'resolved-identity');
   assert.equal(info.sessionId, 'header-id', 'header provenance never replaces resolved identity');
+});
+
+test('memoized route identity still rejects a mismatched source', () => {
+  const file = writeSession([userMsg('identity guard needle')]);
+  const source = sourceForFile(file);
+  index.scanSessions([source]);
+  assert.ok(index.getSearchText(source).includes('identity guard needle'), 'valid source served');
+
+  // The route -> identity resolution is cached (one list search resolves the
+  // same route once per session); the per-call field validation must survive
+  // that cache: a source whose declared identity disagrees with its route is
+  // still rejected, and the valid route stays served afterwards.
+  for (const [label, mutated] of [
+    ['sessionKey', { ...source, sessionKey: routeId('pi:other') }],
+    ['nativeSessionId', { ...source, nativeSessionId: nativeId('other') }],
+    ['harnessId', { ...source, harnessId: harnessId('omp') }],
+    ['routeId', { ...source, routeId: routeId('pi:other') }],
+  ] as const) {
+    assert.throws(() => Reflect.apply(index.getSearchText, index, [mutated]), /Invalid SessionSource identity/, `${label} mismatch rejected`);
+  }
+  assert.ok(index.getSearchText(source).includes('identity guard needle'), 'cache is not poisoned by the rejected probes');
 });
 
 test('invalid current-schema metadata is stale and rebuilt through the bounded backlog', async () => {

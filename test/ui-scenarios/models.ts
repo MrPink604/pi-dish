@@ -25,7 +25,7 @@ const models: UiScenario = async ({ path, tmpHome, desktop, check, fs }) => {
   check(await desktop.locator('.model-option').count() === 2, 'scoped view hides disabled models');
   const footerInfo = await desktop.locator('.model-footer-info').textContent();
   check(footerInfo === '1 hidden', `footer reports hidden count (got ${JSON.stringify(footerInfo)})`);
-  // Reopen: the scope survives a fresh /api/models fetch (server-side resolve)
+  // Reopening the warm catalog retains the acknowledged local scope.
   await desktop.click('.messages');
   await desktop.waitForTimeout(200);
   await desktop.click('#sessionModel');

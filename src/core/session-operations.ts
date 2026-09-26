@@ -234,7 +234,17 @@ export function createSessionOperations(observations: SessionOperationObservatio
     let operation: SessionSpawnOperation = { status: 'starting', createdAt };
     sessionSpawnOperations.set(spawnId, operation);
     Promise.resolve()
-      .then(() => createSession(options))
+      .then(async () => {
+        // Model/thinking discovery shells out to the harness CLI (OMP:
+        // `omp models --json`, seconds cold). The HTTP handler answers 202
+        // before this runs, so the browser can show the pending pane at once
+        // and a bad pilot selection arrives as a spawn error it already renders.
+        const descriptor = getHarness(options.harness || 'pi');
+        if (!descriptor) throw new SessionOperationError(400, `Unknown harness: ${options.harness}`);
+        try { await launch.validateHarnessPilotSelection(descriptor, { model: options.model, thinking: options.thinking, cwd: options.cwd }); }
+        catch (error) { throw new SessionOperationError(errorStatus(error), errorMessage(error)); }
+        return createSession(options);
+      })
       .then(sessionId => {
         operation = { status: 'ready', createdAt, sessionId };
         sessionSpawnOperations.set(spawnId, operation);

@@ -38,3 +38,32 @@ for (const width of [1280, 390])
         await page.locator('[data-app-click="closeNewSessionView"]').click();
         await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('peer root transcript');
     });
+fixtures_js_1.test.describe('startup interactivity', () => {
+    fixtures_js_1.test.use({ liveSessions: true });
+    (0, fixtures_js_1.test)('local session selection and keyboard submission do not wait for a peer list', async ({ page, fleet }) => {
+        let release;
+        let arrived;
+        const gate = new Promise(resolve => { release = resolve; });
+        const pending = new Promise(resolve => { arrived = resolve; });
+        await page.route(`${fleet.peer.base}/api/sessions?*`, async (route) => {
+            arrived();
+            await gate;
+            await route.continue();
+        });
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await pending;
+        try {
+            await fleet.row(fleet.self).click();
+            await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self root transcript');
+            await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toBeEnabled();
+            await page.locator('#promptInput').fill('Ready before the peer');
+            const submitted = page.waitForRequest(`${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/prompt`);
+            await page.locator('#promptInput').press('Enter');
+            await submitted;
+            await fixtures_js_1.expect.poll(() => fleet.self.commands.some(command => command.command === 'prompt')).toBe(true);
+        }
+        finally {
+            release();
+        }
+    });
+});

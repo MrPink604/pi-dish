@@ -72,7 +72,12 @@ export interface SessionStats {
 export interface SessionSearchProjection { text: string; tree: boolean; leafId: unknown }
 interface Cached<T> { mtimeMs: number; size: number; value: T }
 interface ActiveTree { ids: Set<unknown>; leafId: unknown }
-interface MessageData { messages: SessionMessage[]; byId: Map<unknown, SessionMessage> }
+interface MessageData {
+  messages: SessionMessage[];
+  byId: Map<unknown, SessionMessage>;
+  /** Lazy lowercased per-message text, index-aligned with `messages` (see readSessionSearchText). */
+  searchText?: string[];
+}
 interface ModelContinuity { provider: unknown; model: unknown }
 const EMPTY_FIELDS: Readonly<Record<string, unknown>> = Object.freeze({});
 /** Match JS property access on JSON values, including null throwing and boxing. */
@@ -478,6 +483,29 @@ export function readSessionMessageById(filePath: string | SessionFileSource, ent
   return statCached(messagesCache, filePath, 8,
     (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate),
     `cache:${cacheRetentionRevision()}`).byId.get(entryId) || null;
+}
+
+/**
+ * Lowercased per-message text for whole-transcript search, index-aligned with
+ * readSessionMessages' array ('' for a message with no text). Extracting and
+ * lowercasing every message is O(transcript text) — ~7M chars on a large
+ * session — and the in-session search handler used to pay it on every
+ * request. The result is memoized on the shared message cache entry, so a
+ * repeated search over an unchanged file is a plain string scan; a changed
+ * file re-parses (and the memo is rebuilt with its messages, staying aligned).
+ * Return both from one revalidation: the harness can append or branch between
+ * separate synchronous filesystem calls in this process.
+ */
+export function readSessionSearchText(filePath: string | SessionFileSource): {
+  readonly messages: readonly SessionMessage[]; readonly texts: readonly string[];
+} {
+  const data = statCached(messagesCache, filePath, 8,
+    (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate),
+    `cache:${cacheRetentionRevision()}`);
+  if (!data.searchText) {
+    data.searchText = data.messages.map(message => extractTextContent(message.content).toLowerCase());
+  }
+  return { messages: data.messages, texts: data.searchText };
 }
 
 /**

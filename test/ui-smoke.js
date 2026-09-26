@@ -662,10 +662,8 @@ let remoteHost = null;
             check(await desktop.locator('.message.custom-message.async-result').count() === 1 &&
                 (await desktop.locator('.message.custom-message.async-result').textContent() ?? '').includes('Background job finished'), 'historical async-result renders a background-job-finished row');
             check((await desktop.locator('.message.custom-message.generic').textContent() ?? '').includes('future notice'), 'unknown visible custom_message renders a generic row');
-            // The thinking badge opens its dropdown after an await on /api/models —
-            // which outlives the click's event dispatch, so the handler must anchor
-            // off the element, not off event.currentTarget (that regressed to a
-            // TypeError and a dropdown that never appeared on desktop).
+            // The effort dropdown remains anchored to its badge on desktop, whether
+            // its harness uses a fixed vocabulary or a model-specific catalog.
             console.log('thinking dropdown:');
             await desktop.click('#sessionThinking');
             await desktop.waitForSelector('#thinkingDropdown .thinking-option');

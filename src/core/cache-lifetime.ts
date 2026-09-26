@@ -500,12 +500,12 @@ function splitIdentity(identity: string): { api: string; provider: string; model
  * replaces guesses.
  */
 export function applyLearnedCacheExpiry(expiry: CacheExpiry | null,
-  config: CacheRetentionConfig = loadCacheRetentionConfig()): ServedCacheExpiry | null {
+  config?: CacheRetentionConfig): ServedCacheExpiry | null {
   if (!expiry) return null;
   const known = isServedCacheExpiry(expiry) ? expiry : null;
   if (known?.basis === 'fixed') return known;
   const target = resolveCacheTarget(splitIdentity(expiry.identity));
-  if (configuredCacheRetention(config, target.provider, target.model)) return known;
+  if (configuredCacheRetention(config ?? loadCacheRetentionConfig(), target.provider, target.model)) return known;
   const learned = learnedPolicyFor(expiry.identity, expiry.tier);
   if (!learned) return known;
   return { ...expiry, retentionMs: learned.retentionMs, retention: learned.retention,

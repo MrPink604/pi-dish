@@ -916,7 +916,12 @@ export function startServer(rootDirectory: string): Server {
     const hideAutomation = req.query.hideAutomation === '1'
       && !queryAsksForAutomation(parsed) && !(hasScope && queryAsksForAutomation(scopeParsed));
     const contentTokens = positiveQueryTokens(parsed);
-    const results: Array<CatalogSession & { snippets: string[]; matchCount: number; searchScore: number }> = [];
+    // Ranked rows carry the text they were scored against, so snippets and the
+    // occurrence count are built only for the rows the cap keeps. A query
+    // matching hundreds of sessions used to build up to four snippets for
+    // every one of them and then discard all but the top 100; scoring and the
+    // sort are untouched, so the response is identical.
+    const ranked: Array<{ session: CatalogSession; text: string | null; searchScore: number }> = [];
     let hiddenByScopes = 0;
     let hiddenByAutomation = 0;
     for (const session of [...active, ...previous]) {
@@ -935,19 +940,22 @@ export function startServer(rootDirectory: string): Server {
         hiddenByScopes++;
         continue;
       }
-      let snippets: string[] = [], matchCount = 0;
       if (contentTokens.length && session.sessionFile) {
         text ??= sessionIndex.getSearchText(sourceForIdentity(
           session.harnessId, session.nativeSessionId, session.sessionFile));
-        ({ snippets, count: matchCount } = buildSnippets(text, contentTokens));
       }
-      results.push({ ...session, snippets, matchCount, searchScore: scoreSessionMatch(parsed, session, text) });
+      ranked.push({ session, text, searchScore: scoreSessionMatch(parsed, session, text) });
     }
-    results.sort((a, b) => b.searchScore - a.searchScore
-      || new Date(b.lastActivity || 0).getTime() - new Date(a.lastActivity || 0).getTime());
+    ranked.sort((a, b) => b.searchScore - a.searchScore
+      || new Date(b.session.lastActivity || 0).getTime() - new Date(a.session.lastActivity || 0).getTime());
+    const results = ranked.slice(0, SEARCH_RESULT_CAP).map(({ session, text, searchScore }) => {
+      let snippets: string[] = [], matchCount = 0;
+      if (text) ({ snippets, count: matchCount } = buildSnippets(text, contentTokens));
+      return { ...session, snippets, matchCount, searchScore };
+    });
     res.json({
-      results: results.slice(0, SEARCH_RESULT_CAP),
-      total: results.length,
+      results,
+      total: ranked.length,
       hiddenByScopes,
       hiddenByAutomation,
       indexing,
@@ -2069,11 +2077,6 @@ export function startServer(rootDirectory: string): Server {
         && !findSessionFile(sourceSessionId, { exact: true })) {
       return res.status(400).json({ error: 'requestedBySessionId must identify an existing session' });
     }
-    try {
-      await sessionLaunch.validateHarnessPilotSelection(descriptor, { model, thinking, cwd });
-    } catch (e) {
-      return res.status((property(e, 'status') || 500) as number).json({ error: property(e, 'message') });
-    }
     if (optionalProperty(req.body, 'async') === true) {
       const spawnId = sessionOperations.startSessionSpawn({
         harness, name, model, thinking, cwd,
@@ -2081,6 +2084,11 @@ export function startServer(rootDirectory: string): Server {
         sourceSessionId: sourceSessionId as string | null,
       });
       return res.status(202).json({ success: true, pending: true, spawnId });
+    }
+    try {
+      await sessionLaunch.validateHarnessPilotSelection(descriptor, { model, thinking, cwd });
+    } catch (e) {
+      return res.status((property(e, 'status') || 500) as number).json({ error: property(e, 'message') });
     }
     try {
       const id = await sessionOperations.createSession({

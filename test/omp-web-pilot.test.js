@@ -215,9 +215,9 @@ test('OMP agents PUT validates the patch and is unsupported for pi', async () =>
     assert.equal((await put('/api/harnesses/pi/agents', { agents: { scout: { disabled: true } } })).status, 501);
     assert.equal((await get('/api/harnesses/pi/agents')).status, 501);
 });
-test('OMP launch rejects a thinking level outside the selected model catalog entry', async () => {
+test('synchronous OMP launch rejects a thinking level outside the selected model catalog entry', async () => {
     const invalid = await post('/api/sessions/new', {
-        harness: 'omp', cwd, model: 'zai/glm-5.2', thinking: 'minimal', async: true,
+        harness: 'omp', cwd, model: 'zai/glm-5.2', thinking: 'minimal',
     });
     assert.equal(invalid.status, 400);
     assert.match(String((0, test_types_js_1.record)(invalid.body).error), /valid levels: high, max/i);

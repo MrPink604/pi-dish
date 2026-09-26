@@ -29,7 +29,7 @@ declare function decodeRoutineAnnotations(value: unknown): ReadonlyMap<SessionId
  * indexed session info goes through here, and the stored projection may be
  * an internal 'unknown' anchor that must never reach a client.
  */
-declare function withSessionContext<T extends Readonly<SessionInfo>>(info: T, contextWindowForModel: SessionCatalogOptions['contextWindowForModel']): T & {
+declare function withSessionContext<T extends Readonly<SessionInfo>>(info: T, contextWindowForModel: SessionCatalogOptions['contextWindowForModel'], cacheRetention?: SessionCatalogOptions['cacheRetention']): T & {
     contextWindow: number;
     contextPercent: number;
     cacheExpiry: ServedCacheExpiry | null;

@@ -27,6 +27,24 @@ async function initial(page) { await page.evaluate(() => { window.transcriptLoad
     await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('new tail');
     await (0, fixtures_js_1.expect)(page.locator('#messages')).not.toContainText('old tail');
 });
+(0, fixtures_js_1.test)('a second older-page request joins the page already loading', async ({ page, fleet }) => {
+    await setup(page, fleet);
+    await initial(page);
+    await page.evaluate(() => {
+        window.firstPage = window.ownedTranscript.loadOlder();
+        window.joinedPage = window.ownedTranscript.loadOlder();
+        window.joinedSettled = false;
+        void window.joinedPage.then(() => { window.joinedSettled = true; });
+    });
+    // The join must not issue a second page request, and must not report a
+    // completed page while that request is still open.
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.transcriptReplies.length)).toBe(2);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.joinedSettled)).toBe(false);
+    await reply(page, 1, { messages: [{ role: 'user', index: 5, content: 'joined older page' }], firstIndex: 5, hasMore: false });
+    await page.evaluate(() => Promise.all([window.firstPage, window.joinedPage]));
+    (0, fixtures_js_1.expect)(await page.evaluate(() => ({ settled: window.joinedSettled, oldest: window.ownedTranscript.oldestIndex, loading: window.ownedTranscript.loadingOlder }))).toEqual({ settled: true, oldest: 5, loading: false });
+    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('joined older page');
+});
 (0, fixtures_js_1.test)('an old older-page finalizer cannot release the replacement transcript paging request', async ({ page, fleet }) => {
     await setup(page, fleet);
     await initial(page);

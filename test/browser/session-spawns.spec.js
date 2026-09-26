@@ -81,3 +81,20 @@ const fixtures_js_1 = require("./fixtures.js");
     (0, fixtures_js_1.expect)(payload).toMatchObject({ cwd: '/old-workspace', harness: 'pi', async: true });
     (0, fixtures_js_1.expect)(payload.target).toBeUndefined();
 });
+(0, fixtures_js_1.test)('a ready spawn settles on its own host while another host list request never answers', async ({ page, fleet }) => {
+    let status;
+    await page.route('**/api/sessions/new', route => route.fulfill({ json: { spawnId: 'slow-peer-operation' } }));
+    await page.route('**/api/session-spawns/slow-peer-operation', route => { status = route; });
+    await page.evaluate(host => fixtureApp.features.newSessionController.submit({ cwd: '/self', host, draft: 'slow peer draft' }), fleet.self.hostId);
+    await fixtures_js_1.expect.poll(() => !!status).toBe(true);
+    // A fleet whose peer never answers must not hold the pane: the spawning
+    // host's row is already known, so readiness may only need that host.
+    // Held open, never fulfilled: the peer host is unreachable for this window.
+    await page.route(`${fleet.peer.base}/api/sessions*`, () => { });
+    await (0, fixtures_js_1.requiredRoute)(status).fulfill({ json: { status: 'ready', sessionId: fixtures_js_1.ROOT } });
+    await fixtures_js_1.expect.poll(() => page.evaluate(() => fixtureApp.features.sessionView.spawnId)).toBeNull();
+    (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.pendingSessionSpawns.entries().length)).toBe(0);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.sessionState.currentSession?.id)).toBe(fixtures_js_1.ROOT);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.sessionState.currentSession?.host)).toBe(fleet.self.hostId);
+    await (0, fixtures_js_1.expect)(page.locator('.session-item.starting')).toHaveCount(0);
+});

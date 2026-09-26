@@ -17,7 +17,7 @@ export function createTranscript(options: {
 }) {
   const { document, sessionState } = options, container = document.getElementById('messages')!;
   const cache = createTranscriptCache(document), requests = new Set<AbortController>();
-  let disposed = false, generation = 0, catchupSequence = 0, older: symbol | null = null, barEvents = new AbortController();
+  let disposed = false, generation = 0, catchupSequence = 0, older: symbol | null = null, olderFlight: Promise<void> | null = null, barEvents = new AbortController();
   let cursors: TranscriptCursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 };
   let loaded: { key: string; base: string } | null = null;
   interface Owner { selection: SelectionOwner; endpoint: Readonly<HostEndpoint>; generation: number }
@@ -26,7 +26,7 @@ export function createTranscript(options: {
     const endpoint = options.host(selection.host); return endpoint ? { selection, endpoint: Object.freeze({ ...endpoint }), generation } : null;
   }
   const owns = (owner: Owner) => !disposed && owner.generation === generation && sessionState.ownsSelection(owner.selection) && options.host(owner.selection.host)?.base === owner.endpoint.base;
-  function retire() { generation++; catchupSequence++; older = null; barEvents.abort(); for (const request of requests) request.abort(); requests.clear(); }
+  function retire() { generation++; catchupSequence++; older = null; olderFlight = null; barEvents.abort(); for (const request of requests) request.abort(); requests.clear(); }
   function reset() { retire(); loaded = null; cursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 }; }
   async function page(owner: Owner, suffix: string) {
     const endpoint = options.host(owner.selection.host); if (!owns(owner) || !endpoint) throw new Error('Transcript ownership changed');
@@ -69,8 +69,23 @@ export function createTranscript(options: {
     } catch (error) { if (owns(owner)) container.innerHTML = `<div class="error">Failed to load messages: ${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`; }
   }
   async function loadOlder() {
-    if (older || !cursors.hasOlder || cursors.oldestIndex == null) return; const owner = capture(); if (!owner) return;
+    // A second caller must wait for the page already loading rather than
+    // resolving at once: a search jump that pages backwards would otherwise
+    // conclude the older match is unreachable while the fetch is still open.
+    // The joined caller only waits — the in-flight operation keeps its own
+    // selection owner and applies the page under its own guards.
+    const owner = capture(); if (!owner) return;
+    if (olderFlight) return olderFlight;
+    if (!cursors.hasOlder || cursors.oldestIndex == null) return;
     const operation = Symbol('older'), before = cursors.oldestIndex; older = operation;
+    const flight: Promise<void> = fetchOlderPage(owner, operation, before).finally(() => {
+      if (older === operation) older = null;
+      if (olderFlight === flight) olderFlight = null;
+    });
+    olderFlight = flight;
+    return flight;
+  }
+  async function fetchOlderPage(owner: Owner, operation: symbol, before: number) {
     const bar = container.querySelector<HTMLElement>('#loadOlderBar'), button = bar?.querySelector<HTMLElement>('.load-older-btn'); if (button) button.textContent = 'Loading...';
     const anchor = container.querySelector<HTMLElement>(':scope > .message, :scope > details.tool-group'), offset = anchor?.getBoundingClientRect().top || 0;
     try {
@@ -83,7 +98,6 @@ export function createTranscript(options: {
         if (anchor?.isConnected && container.contains(anchor)) container.scrollTop += anchor.getBoundingClientRect().top - offset;
       } else { cursors.hasOlder = false; container.querySelector('#loadOlderBar')?.remove(); barEvents.abort(); }
     } catch (error) { if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${error instanceof Error ? error.message : String(error)} — retry`; }
-    finally { if (older === operation) older = null; }
   }
   async function catchup(selection = sessionState.captureSelection()): Promise<void> {
     const owner = capture(selection); if (!owner) return; if (cursors.lastIndex == null) return load(selection);

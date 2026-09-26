@@ -1,6 +1,7 @@
 import path = require('path');
 import { applyLearnedCacheExpiry } from './cache-lifetime';
 import type { ServedCacheExpiry } from './cache-lifetime';
+import { loadCacheRetentionConfig } from './cache-retention';
 import { hasPendingAskDialog } from './extension-ui-state';
 import { canonicalSessionId, encodeSessionKey } from './session-key';
 import { isRecord } from './wire-protocol';
@@ -112,10 +113,11 @@ function decodeRoutineAnnotations(value: unknown): ReadonlyMap<SessionId, Catalo
  * an internal 'unknown' anchor that must never reach a client.
  */
 function withSessionContext<T extends Readonly<SessionInfo>>(info: T,
-  contextWindowForModel: SessionCatalogOptions['contextWindowForModel']): T & { contextWindow: number; contextPercent: number; cacheExpiry: ServedCacheExpiry | null } {
+  contextWindowForModel: SessionCatalogOptions['contextWindowForModel'],
+  cacheRetention?: SessionCatalogOptions['cacheRetention']): T & { contextWindow: number; contextPercent: number; cacheExpiry: ServedCacheExpiry | null } {
   const contextWindow = contextWindowForModel(info.model);
   const contextPercent = info.contextTokens > 0 ? Math.min(100, Math.floor(info.contextTokens / contextWindow * 100)) : 0;
-  return { ...info, contextWindow, contextPercent, cacheExpiry: applyLearnedCacheExpiry(info.cacheExpiry) };
+  return { ...info, contextWindow, contextPercent, cacheExpiry: applyLearnedCacheExpiry(info.cacheExpiry, cacheRetention) };
 }
 
 function subsessionLabel(source: SessionSource | null): string | null {
@@ -133,7 +135,7 @@ function identityFields(harnessId: HarnessId, nativeSessionId: NativeSessionId, 
 function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalogOptions): CatalogSession {
   const fields = live.fields;
   const registered = live.kind === 'registered';
-  const info = live.info ? withSessionContext(live.info, options.contextWindowForModel) : null;
+  const info = live.info ? withSessionContext(live.info, options.contextWindowForModel, options.cacheRetention) : null;
   const model = registered ? fields.model || info?.model : fields.model;
   const percent = registered ? fields.contextPercent ?? info?.contextPercent : fields.contextPercent;
   const parentSession = live.info?.parentSession || (registered ? live.source?.parentSession : null) || null;
@@ -160,7 +162,7 @@ function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalo
 
 function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advice: CatalogAdvice,
   options: SessionCatalogOptions, liveChild: boolean, dirName?: string): CatalogSession {
-  const info = withSessionContext(raw, options.contextWindowForModel);
+  const info = withSessionContext(raw, options.contextWindowForModel, options.cacheRetention);
   let cwd = info.cwd;
   if (!cwd && dirName !== undefined && source.harnessId === 'pi' && options.harnesses.get('pi')?.layout === 'nested') {
     const decoded = '/' + dirName.replace(/^--/, '').replace(/--$/, '').replace(/-/g, '/');
@@ -194,6 +196,7 @@ function activityTime(session: CatalogSession): number {
 }
 
 function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatalogOptions): SessionCatalog {
+  options = { ...options, cacheRetention: options.cacheRetention ?? loadCacheRetentionConfig() };
   const active: CatalogSession[] = [], previous: CatalogSession[] = [], children: CatalogSession[] = [];
   const seen = new Set<SessionId>();
   // A registered row owns the logical session even when the RPC snapshot was

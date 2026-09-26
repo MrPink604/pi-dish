@@ -221,11 +221,8 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
 
   // Seed from the new session without clearing a still-active turn's timing.
   resetSelectionActivity(current);
-  options.artifacts(owner);
-
   options.render();
   options.header();
-  options.relations(owner); // summary-only; don't stall transcript hydration
   if (current.isActive) {
     // Fire-and-forget: nothing below needs the results, and both can ask the
     // live session over its socket — don't stall the transcript on them.
@@ -236,6 +233,11 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   if (!owns()) return;
   await options.transcript.load(owner);
   if (!owns()) return;
+  // Lineage and artifact counts are ancillary chrome, and the lineage handler
+  // scans the whole session catalog synchronously — server-side it would delay
+  // the transcript page request dispatched with it. Hydrate first.
+  options.artifacts(owner);
+  options.relations(owner);
   
   if (sessionState.currentSession?.isActive) {
     options.stream.start(owner);

@@ -5,13 +5,12 @@ import type { RequestHandler } from 'express';
 import { BridgeSession } from './bridge-session';
 import type { BridgeRegistryEntry } from './contracts';
 import { getHarness } from './harnesses';
-import { extractTextContent } from './helper-content';
 import { record as isRecord } from './helper-values';
 import { refreshHarnessPricing } from './harness-pricing';
 import * as piSDK from './pi-sdk';
 import { subsessionLabel, withSessionContext } from './session-catalog';
 import {
-  getSessionStats, readSessionMessageById, readSessionMessages, readSessionMessagesAtLeaf,
+  getSessionStats, readSessionMessageById, readSessionMessages, readSessionMessagesAtLeaf, readSessionSearchText,
 } from './session-files';
 import type { SessionMessage } from './session-files';
 import { getSessionInfo } from './session-index';
@@ -209,10 +208,13 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
     const source = findSessionSource(req.params.id);
     if (!source) { res.status(404).json({ error: 'Session not found' }); return; }
     const tokens = query.split(/\s+/).filter(Boolean);
-    const all = readSessionMessages(source);
+    // Per-message lowercased text is memoized with the parsed messages, so a
+    // repeat search over an unchanged session scans strings instead of
+    // re-extracting and re-lowercasing the whole transcript every request.
+    const { messages: all, texts } = readSessionSearchText(source);
     const matches = [];
     for (let i = 0; i < all.length; i++) {
-      const text = extractTextContent(all[i].content).toLowerCase();
+      const text = texts[i] || '';
       const matched = mode === 'any' ? tokens.some(t => text.includes(t)) : tokens.every(t => text.includes(t));
       if (text && matched) matches.push({ index: i, role: all[i].role });
     }

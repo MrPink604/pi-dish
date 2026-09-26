@@ -52,17 +52,31 @@ export function createSessionControls(options: {
   function closeThinking() { thinkingOwner = null; thinkingOpen = false; thinkingEvents.abort(); thinkingSelector?.dispose(); thinkingSelector = null; element('thinkingDropdown').style.display = 'none'; }
   const ownsModels = (owner: Owner | null = modelOwner): owner is Owner => !!owner && owner === modelOwner && owns(owner) && modelOpen;
   const ownsThinking = (owner: Owner | null = thinkingOwner): owner is Owner => !!owner && owner === thinkingOwner && owns(owner) && thinkingOpen;
+  function showCatalogLoading(dropdown: HTMLElement) {
+    const loading = document.createElement('div');
+    loading.className = 'model-option';
+    loading.style.cursor = 'default';
+    loading.setAttribute('role', 'status');
+    loading.textContent = 'Loading models…';
+    dropdown.replaceChildren(loading);
+  }
   async function toggleModels() {
     if (modelOwner) { closeModels(); return; }
     const session = header(), owner = capture();
     if (!owner || !session?.isActive || !sessionSupports(session, 'setModel')) return;
-    modelOwner = owner;
-    try { await options.loadModels(owner.selection.id, session.harnessId); } catch { if (modelOwner === owner) closeModels(); return; }
-    if (!owns(owner) || modelOwner !== owner) return;
-    modelOpen = true; editMode = false; query = ''; modelEvents = new AbortController();
+    modelOwner = owner; modelOpen = true; editMode = false; query = ''; modelEvents = new AbortController();
     const dropdown = element('modelDropdown'); place(dropdown, element('sessionModel'));
-    renderModels(''); dropdown.style.display = 'flex'; modelSelector?.focusSearch();
+    dropdown.style.display = 'flex';
     outside(['modelSelector', 'modelDropdown'], modelEvents, () => ownsModels(owner), closeModels);
+    // Warm menus are immediately usable. A cold native catalog can take
+    // seconds; show a dismissible loading surface rather than an inert click.
+    const scope = { sessionId: owner.selection.id, harnessId: session.harnessId || 'pi', base: owner.endpoint.base };
+    if (!catalog.reusable(scope)) {
+      showCatalogLoading(dropdown);
+      try { await options.loadModels(owner.selection.id, session.harnessId); } catch { if (modelOwner === owner) closeModels(); return; }
+      if (!ownsModels(owner)) return;
+    }
+    renderModels(''); modelSelector?.focusSearch();
   }
   function renderModels(nextQuery: string) {
     const owner = modelOwner, session = header(); if (!ownsModels(owner) || !session) return; query = nextQuery;
@@ -108,10 +122,20 @@ export function createSessionControls(options: {
   async function toggleThinking() {
     if (thinkingOwner) { closeThinking(); return; }
     const session = header(), owner = capture(); if (!owner || !session?.isActive || !sessionSupports(session, 'setThinking')) return;
-    thinkingOwner = owner;
-    try { await options.loadModels(owner.selection.id, session.harnessId); } catch { if (thinkingOwner === owner) closeThinking(); return; }
-    if (!owns(owner) || thinkingOwner !== owner) return;
-    thinkingOpen = true; thinkingEvents = new AbortController(); const dropdown = element('thinkingDropdown');
+    thinkingOwner = owner; thinkingOpen = true; thinkingEvents = new AbortController();
+    const dropdown = element('thinkingDropdown');
+    place(dropdown, element('sessionThinking')); dropdown.style.display = 'block';
+    outside(['sessionThinking', 'thinkingDropdown'], thinkingEvents, () => ownsThinking(owner), closeThinking);
+    // Only OMP derives its ladder from the current model's catalog entry; the
+    // other harnesses expose a fixed vocabulary, so their menu must not wait on
+    // — or be blocked by — a model request. A warm OMP catalog already has the
+    // entry, and any other OMP scope still fetches it.
+    if (session.harnessId === 'omp'
+        && !catalog.reusable({ sessionId: owner.selection.id, harnessId: 'omp', base: owner.endpoint.base })) {
+      showCatalogLoading(dropdown);
+      try { await options.loadModels(owner.selection.id, session.harnessId); } catch { if (thinkingOwner === owner) closeThinking(); return; }
+      if (!ownsThinking(owner)) return;
+    }
     const current = header()!, ref = current.model || '';
     const model = catalog.rows().find(row => row.selector === ref || row.id === ref || `${row.provider}/${row.id}` === ref);
     thinkingSelector = mountThinkingSelector(dropdown, {
@@ -119,7 +143,6 @@ export function createSessionControls(options: {
       requestClose: target => { if (ownsThinking(owner) && target === owner.selection) closeThinking(); },
     });
     thinkingSelector.update({ owner: owner.selection, levels: thinkingLevelsFor(current.harnessId, model), currentLevel: current.thinkingLevel || null });
-    place(dropdown, element('sessionThinking')); dropdown.style.display = 'block'; outside(['sessionThinking', 'thinkingDropdown'], thinkingEvents, () => ownsThinking(owner), closeThinking);
   }
   async function selectThinking(level: string) {
     const session = header(), owner = capture(); closeThinking();

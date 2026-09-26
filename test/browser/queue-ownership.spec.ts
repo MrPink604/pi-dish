@@ -12,7 +12,8 @@ test('identical queued prompts retain their own bubbles and cancellation owner',
     const id = await page.locator('#messages [data-client-prompt-id]').last().getAttribute('data-client-prompt-id');
     if (id === null) throw new Error(`Missing queued prompt id for ${host.label}`);
     ids[host.label] = id;
-    await page.evaluate(() => fixtureApp.features.promptDelivery.render({ followUp: ['identical queued message'] }));
+    await page.waitForFunction(() => fixtureApp.features.messageStreamController.source?.readyState === 1);
+    host.emit('queue_update', { followUp: ['identical queued message'] });
     await expect(page.locator('.queue-item')).toHaveAttribute('data-client-prompt-id', id);
   }
   let receive: ((route: Route) => void) | undefined;

@@ -30,7 +30,7 @@ function fixture() {
         delay: async () => { }, harnessLabel: harness => harness.toUpperCase(),
         current: () => current, changed: () => { events.push(['changed']); },
         showPending: key => { current = key; events.push(['show', key]); },
-        loadSessions: async () => { }, hasSession: () => available,
+        loadHost: async () => { }, hasSession: () => available,
         selectSession: (id, host) => { events.push(['select', id, host]); }, stashPrompt: () => { events.push(['stash']); },
         saveDraft: (key, draft) => drafts.set(key, draft), migratePrompt: (...args) => { events.push(['migrate', ...args]); },
         discardPrompt: key => { events.push(['discard', key]); },

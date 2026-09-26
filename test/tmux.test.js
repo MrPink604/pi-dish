@@ -978,6 +978,30 @@ test('async tmux spawn returns a provisional operation before bridge registratio
         process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
     }
 });
+test('async OMP spawn reports validation failure through its operation without launching', { skip: !tmuxOk }, async () => {
+    const options = {
+        harness: 'omp', model: 'missing/not-available',
+        cwd: fs.mkdtempSync(path.join(tmpHome, 'pilot-validation-')),
+        target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+    };
+    const panesBefore = tmuxCmd(['list-panes', '-a', '-F', '#{pane_id}']);
+    const accepted = await post('/api/sessions/new', { ...options, async: true });
+    assert.equal(accepted.status, 202, JSON.stringify(accepted.body));
+    let result = await get(`/api/session-spawns/${accepted.body.spawnId}`);
+    // The real CLI subprocess completes independently of the parent's clock.
+    // Poll its HTTP operation rather than assuming how long discovery takes.
+    for (let i = 0; i < 50 && result.body.status === 'starting'; i++) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        result = await get(`/api/session-spawns/${accepted.body.spawnId}`);
+    }
+    assert.equal(result.body.status, 'error', JSON.stringify(result.body));
+    assert.match(text(result.body.error), /not available from Oh My Pi/);
+    assert.equal(result.body.sessionId, undefined);
+    assert.equal(tmuxCmd(['list-panes', '-a', '-F', '#{pane_id}']), panesBefore, 'invalid selection never creates a pane');
+    const synchronous = await post('/api/sessions/new', options);
+    assert.equal(synchronous.status, 400, JSON.stringify(synchronous.body));
+    assert.match(text(synchronous.body.error), /not available from Oh My Pi/);
+});
 test('/reload falls back to send-keys into the owning tmux pane when the bridge cannot run it', { skip: !tmuxOk }, async () => {
     const { status, body } = await post('/api/sessions/new', {
         target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
@@ -1357,19 +1381,35 @@ test('explicit tmux resume timeout quarantines its pane until the writer is gone
             process.env.PI_DISH_HEADLESS = savedHeadless;
     }
 });
-test('a registration landing during the final timeout sleep is accepted', { skip: !tmuxOk }, async () => {
+test('a registration visible at the deadline is accepted by the final scan', { skip: !tmuxOk }, async (t) => {
+    const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+    const existing = new Set(fs.readdirSync(registryDir));
+    const readFile = fs.readFileSync, now = Date.now();
+    let reachedDeadline = false;
+    t.mock.timers.enable({ apis: ['Date'], now });
+    t.mock.method(fs, 'readFileSync', (file, ...args) => {
+        const value = Reflect.apply(readFile, fs, [file, ...args]);
+        if (!reachedDeadline && typeof file === 'string' && path.dirname(file) === registryDir
+            && !existing.has(path.basename(file)) && (0, test_types_js_1.record)(JSON.parse(String(value))).spawnToken) {
+            // Simulate a claim becoming readable during the last wait, without
+            // guessing the CLI's startup time or depending on the poll interval.
+            reachedDeadline = true;
+            t.mock.timers.setTime(now + 901);
+            throw new Error('Registration is not readable until the final scan');
+        }
+        return value;
+    });
     process.env.PI_DISH_SPAWN_TIMEOUT_MS = '900';
-    process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_REGISTER_DELAY_MS=700 ${process.execPath} ${FIXTURE}`;
     try {
         const { status, body } = await post('/api/sessions/new', {
             target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
         });
+        assert.equal(reachedDeadline, true);
         assert.equal(status, 200, JSON.stringify(body));
-        assert.ok(body.id, 'deadline registration returned its session id');
+        assert.ok(tmux.getSpawn(text(body.id)), 'deadline registration retains its real tmux ownership');
     }
     finally {
         delete process.env.PI_DISH_SPAWN_TIMEOUT_MS;
-        process.env.PI_DISH_PI_COMMAND = `${process.execPath} ${FIXTURE}`;
     }
 });
 // --- Durable headless sessions: no target → hidden tmux session -------------

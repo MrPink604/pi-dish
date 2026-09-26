@@ -2,6 +2,7 @@ import type { SessionCapabilities, HarnessDescriptor, SessionId, SessionIdentity
 import type { SessionFields } from './session-api';
 import type { SessionInfo } from './session-metadata-contracts';
 import type { SessionSource, DiscoveryCandidate } from './session-source-contracts';
+import type { CacheRetentionConfig } from './cache-retention';
 
 /** Already computed by lifecycle policy; presentation advice is never an ownership proof. */
 export interface CatalogAdvice {
@@ -53,6 +54,8 @@ export interface SessionCatalogOptions {
   /** Read-only probes keep path derivation in the catalog, without duplicating it in adapters. */
   readonly canonicalPath: (file: string | null) => string | null;
   readonly directoryExists: (directory: string) => boolean;
+  /** One settings snapshot per catalog; individual projections may load on demand. */
+  readonly cacheRetention?: CacheRetentionConfig;
 }
 /** Before JSON serialization; default API fields omitted by view=client remain explicit. */
 export interface CatalogSession extends SessionFields<Date | string | number> {

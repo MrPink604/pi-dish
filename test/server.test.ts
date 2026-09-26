@@ -1238,6 +1238,17 @@ test('GET /api/search applies saved scope before the 100-result cap', async (t) 
   assert.equal(records(unscoped.body.results).length, 100);
   assert.ok(!records(unscoped.body.results).some((s) => s.id === targetId),
     'the older target is beyond the unscoped cap');
+  // Snippets and occurrence counts are built only for the rows the cap keeps
+  // (a query matching hundreds of sessions used to build them for every match
+  // and then discard most): the kept rows must still carry both, and the
+  // slice must still be relevance/recency-ordered.
+  const kept = records(unscoped.body.results);
+  assert.ok(kept.every((s) => Number(s.matchCount) === 1
+      && Array.isArray(s.snippets) && s.snippets.map(text).some((snippet) => snippet.includes('scope-cap-boundary'))),
+    'kept rows keep their occurrence count and snippet');
+  const keptTimes = kept.map((s) => new Date(text(s.lastActivity) || 0).getTime());
+  assert.ok(keptTimes.every((timestamp, index) => index === 0 || timestamp <= present(keptTimes[index - 1])),
+    'recency order survives the capped slice');
 
   const scoped = await get(`/api/search?q=scope-cap-boundary&scope=${encodeURIComponent('cwd:scope-target')}`);
   assert.equal(scoped.body.total, 1, 'total describes the scoped result set');

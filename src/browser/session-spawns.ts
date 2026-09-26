@@ -47,12 +47,14 @@ export function sessionSpawnKey(host: string | null, spawnId: string): string { 
 /** Submitted operations own their endpoint and draft independently of the visible pane. */
 export function createSessionSpawns(options: {
   request: ApiRequest;
-  delay: () => Promise<void>;
+  /** Waits before the next poll; `attempt` counts polls already spent on this phase. */
+  delay: (attempt: number) => Promise<void>;
   harnessLabel: (id: string) => string;
   current: () => string | null;
   changed: () => void;
   showPending: (key: string) => void;
-  loadSessions: () => Promise<unknown>;
+  /** Refresh one host's unfiltered rows; a fleet fan-out would await unrelated peers. */
+  loadHost: (host: string | null) => Promise<unknown>;
   hasSession: (id: string, host: string | null) => boolean;
   selectSession: (id: string, host: string | null) => void;
   stashPrompt: () => void;
@@ -66,22 +68,25 @@ export function createSessionSpawns(options: {
   async function monitor(key: string, spawn: PendingSessionSpawn): Promise<void> {
     try {
       let sessionId: string;
-      for (;;) {
+      for (let attempt = 0; ; attempt++) {
         let response: Response;
         try { response = await options.request(spawn.endpoint, `/api/session-spawns/${encodeURIComponent(spawn.spawnId)}`); }
-        catch { await options.delay(); continue; }
+        catch { await options.delay(attempt); continue; }
         const data: unknown = await response.json().catch(() => null);
         if (!response.ok && response.status !== 202) throw new Error(record(data) && typeof data.error === 'string' && data.error ? data.error : `spawn status failed (${response.status})`);
         const status = decodeSpawnStatus(data);
-        if (status.status === 'starting') { await options.delay(); continue; }
+        if (status.status === 'starting') { await options.delay(attempt); continue; }
         if (status.status === 'error') throw new Error(status.error);
         sessionId = status.sessionId;
         break;
       }
       // Registration may finish during an older list request. Wait for the
       // authoritative host-qualified row before transferring composer state.
-      for (;;) {
-        await options.loadSessions();
+      // Only the spawning host is refreshed: a fleet fan-out also awaits
+      // unrelated peers, and one slow peer would hold this pane unready for
+      // that request's whole timeout.
+      for (let attempt = 0; ; attempt++) {
+        await options.loadHost(spawn.host);
         if (options.hasSession(sessionId, spawn.host)) {
           pending.delete(key);
           options.changed();
@@ -92,7 +97,7 @@ export function createSessionSpawns(options: {
           return;
         }
         if (options.current() === key) options.status('Session created — connecting the UI…', 'working');
-        await options.delay();
+        await options.delay(attempt);
       }
     } catch (error) {
       pending.delete(key);

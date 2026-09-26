@@ -487,6 +487,12 @@ var PiDishBrowser = (() => {
     const results = element("div", "model-results");
     const footer = element("div", "model-dropdown-footer");
     root.replaceChildren(search, results, footer);
+    let scrollTop = 0;
+    function onScroll() {
+      scrollTop = results.scrollTop;
+    }
+    results.addEventListener("scroll", onScroll, { passive: true });
+    let rendered = null;
     function active(model, current) {
       return model.id === current || `${model.provider}/${model.id}` === current;
     }
@@ -510,6 +516,13 @@ var PiDishBrowser = (() => {
       const visible = editMode ? filtered : filtered.filter((model) => model.enabled !== false || active(model, currentModel));
       const hidden = filtered.length - visible.length;
       const groups = /* @__PURE__ */ new Map();
+      let enabledCount = 0;
+      for (const model of models) if (model.enabled !== false) enabledCount++;
+      if (rendered && rendered.editMode === editMode && rendered.hidden === hidden && rendered.enabledCount === enabledCount && rendered.total === models.length && rendered.harnessId === harnessId && rendered.currentModel === currentModel && rendered.models.length === visible.length && visible.every((model, index) => {
+        const old = rendered.models[index];
+        return old.provider === model.provider && old.id === model.id && old.enabled === model.enabled && old.contextWindow === model.contextWindow && old.free === model.free && old.reasoning === model.reasoning;
+      })) return;
+      rendered = { models: visible, editMode, hidden, enabledCount, total: models.length, harnessId, currentModel };
       for (const model of visible) {
         const group = groups.get(model.provider) || [];
         group.push(model);
@@ -554,13 +567,12 @@ var PiDishBrowser = (() => {
         empty.style.cursor = "default";
         fragment.append(empty);
       }
-      const scrollTop = results.scrollTop;
       results.replaceChildren(fragment);
-      results.scrollTop = scrollTop;
+      if (scrollTop) results.scrollTop = scrollTop;
       footer.replaceChildren();
       if (editMode) {
         footer.append(
-          element("span", "model-footer-info", `${models.filter((model) => model.enabled !== false).length} of ${models.length} enabled`),
+          element("span", "model-footer-info", `${enabledCount} of ${models.length} enabled`),
           button("All", "all", "true"),
           button("None", "all", "false"),
           button("Done", "edit", "false", true)
@@ -617,6 +629,7 @@ var PiDishBrowser = (() => {
         if (disposed) return;
         disposed = true;
         view = null;
+        results.removeEventListener("scroll", onScroll);
         root.removeEventListener("input", onInput);
         root.removeEventListener("keydown", onKeydown);
         root.removeEventListener("click", onClick);
@@ -2227,17 +2240,20 @@ var PiDishBrowser = (() => {
     const base = harnessId === "pi" ? "pi-dish-models-cache" : `pi-dish-models-cache:${harnessId}`;
     return hostId && hostId !== selfId ? `${base}@${hostId}` : base;
   }
+  var CATALOG_REUSE_MS = 6e4;
   function createModelCatalog(options2) {
     let sequence = 0;
     let models = [];
     let scope = null;
     let currentOwner = null;
+    let loadedAt = null;
     const current = () => !currentOwner || currentOwner();
     function rows() {
       return current() ? models : [];
     }
     function retire() {
       sequence++;
+      loadedAt = null;
     }
     function clear() {
       retire();
@@ -2247,6 +2263,10 @@ var PiDishBrowser = (() => {
     }
     function snapshot(target) {
       return Object.freeze({ ...target, host: Object.freeze({ ...target.host }) });
+    }
+    function reusable(target) {
+      const active = current() ? scope : null;
+      return !!active && loadedAt !== null && Date.now() - loadedAt < CATALOG_REUSE_MS && active.sessionId === target.sessionId && active.harnessId === target.harnessId && active.host.base === target.base;
     }
     function seed(target, data, owns) {
       clear();
@@ -2266,6 +2286,7 @@ var PiDishBrowser = (() => {
         models = decodeModelCatalog(data);
         scope = owner;
         currentOwner = ownsRows;
+        loadedAt = Date.now();
         if (models.length) {
           try {
             options2.persist(owner, models);
@@ -2308,7 +2329,7 @@ var PiDishBrowser = (() => {
     }
     return { rows, get scope() {
       return current() ? scope : null;
-    }, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
+    }, reusable, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
   }
   function modelSelectOptionsHtml(models, escapeHtml2) {
     const enabled = models.filter((model) => model.enabled !== false);
@@ -2873,27 +2894,27 @@ var PiDishBrowser = (() => {
     async function monitor(key, spawn) {
       try {
         let sessionId;
-        for (; ; ) {
+        for (let attempt = 0; ; attempt++) {
           let response;
           try {
             response = await options2.request(spawn.endpoint, `/api/session-spawns/${encodeURIComponent(spawn.spawnId)}`);
           } catch {
-            await options2.delay();
+            await options2.delay(attempt);
             continue;
           }
           const data = await response.json().catch(() => null);
           if (!response.ok && response.status !== 202) throw new Error(record7(data) && typeof data.error === "string" && data.error ? data.error : `spawn status failed (${response.status})`);
           const status = decodeSpawnStatus(data);
           if (status.status === "starting") {
-            await options2.delay();
+            await options2.delay(attempt);
             continue;
           }
           if (status.status === "error") throw new Error(status.error);
           sessionId = status.sessionId;
           break;
         }
-        for (; ; ) {
-          await options2.loadSessions();
+        for (let attempt = 0; ; attempt++) {
+          await options2.loadHost(spawn.host);
           if (options2.hasSession(sessionId, spawn.host)) {
             pending.delete(key);
             options2.changed();
@@ -2907,7 +2928,7 @@ var PiDishBrowser = (() => {
             return;
           }
           if (options2.current() === key) options2.status("Session created \u2014 connecting the UI\u2026", "working");
-          await options2.delay();
+          await options2.delay(attempt);
         }
       } catch (error) {
         pending.delete(key);
@@ -13433,6 +13454,14 @@ var PiDishBrowser = (() => {
     }
     const ownsModels = (owner = modelOwner) => !!owner && owner === modelOwner && owns(owner) && modelOpen;
     const ownsThinking = (owner = thinkingOwner) => !!owner && owner === thinkingOwner && owns(owner) && thinkingOpen;
+    function showCatalogLoading(dropdown) {
+      const loading = document2.createElement("div");
+      loading.className = "model-option";
+      loading.style.cursor = "default";
+      loading.setAttribute("role", "status");
+      loading.textContent = "Loading models\u2026";
+      dropdown.replaceChildren(loading);
+    }
     async function toggleModels() {
       if (modelOwner) {
         closeModels();
@@ -13441,23 +13470,27 @@ var PiDishBrowser = (() => {
       const session = header(), owner = capture();
       if (!owner || !session?.isActive || !sessionSupports2(session, "setModel")) return;
       modelOwner = owner;
-      try {
-        await options2.loadModels(owner.selection.id, session.harnessId);
-      } catch {
-        if (modelOwner === owner) closeModels();
-        return;
-      }
-      if (!owns(owner) || modelOwner !== owner) return;
       modelOpen = true;
       editMode = false;
       query = "";
       modelEvents = new AbortController();
       const dropdown = element("modelDropdown");
       place(dropdown, element("sessionModel"));
-      renderModels("");
       dropdown.style.display = "flex";
-      modelSelector?.focusSearch();
       outside(["modelSelector", "modelDropdown"], modelEvents, () => ownsModels(owner), closeModels);
+      const scope = { sessionId: owner.selection.id, harnessId: session.harnessId || "pi", base: owner.endpoint.base };
+      if (!catalog.reusable(scope)) {
+        showCatalogLoading(dropdown);
+        try {
+          await options2.loadModels(owner.selection.id, session.harnessId);
+        } catch {
+          if (modelOwner === owner) closeModels();
+          return;
+        }
+        if (!ownsModels(owner)) return;
+      }
+      renderModels("");
+      modelSelector?.focusSearch();
     }
     function renderModels(nextQuery) {
       const owner = modelOwner, session = header();
@@ -13557,16 +13590,22 @@ var PiDishBrowser = (() => {
       const session = header(), owner = capture();
       if (!owner || !session?.isActive || !sessionSupports2(session, "setThinking")) return;
       thinkingOwner = owner;
-      try {
-        await options2.loadModels(owner.selection.id, session.harnessId);
-      } catch {
-        if (thinkingOwner === owner) closeThinking();
-        return;
-      }
-      if (!owns(owner) || thinkingOwner !== owner) return;
       thinkingOpen = true;
       thinkingEvents = new AbortController();
       const dropdown = element("thinkingDropdown");
+      place(dropdown, element("sessionThinking"));
+      dropdown.style.display = "block";
+      outside(["sessionThinking", "thinkingDropdown"], thinkingEvents, () => ownsThinking(owner), closeThinking);
+      if (session.harnessId === "omp" && !catalog.reusable({ sessionId: owner.selection.id, harnessId: "omp", base: owner.endpoint.base })) {
+        showCatalogLoading(dropdown);
+        try {
+          await options2.loadModels(owner.selection.id, session.harnessId);
+        } catch {
+          if (thinkingOwner === owner) closeThinking();
+          return;
+        }
+        if (!ownsThinking(owner)) return;
+      }
       const current = header(), ref = current.model || "";
       const model = catalog.rows().find((row) => row.selector === ref || row.id === ref || `${row.provider}/${row.id}` === ref);
       thinkingSelector = mountThinkingSelector(dropdown, {
@@ -13578,9 +13617,6 @@ var PiDishBrowser = (() => {
         }
       });
       thinkingSelector.update({ owner: owner.selection, levels: thinkingLevelsFor(current.harnessId, model), currentLevel: current.thinkingLevel || null });
-      place(dropdown, element("sessionThinking"));
-      dropdown.style.display = "block";
-      outside(["sessionThinking", "thinkingDropdown"], thinkingEvents, () => ownsThinking(owner), closeThinking);
     }
     async function selectThinking(level) {
       const session = header(), owner = capture();
@@ -15882,6 +15918,11 @@ ${row.id}`;
       await Promise.allSettled(queryHosts(options2.pollable(), query || "").map((host) => loader.load(host, query, withPrevious, current)));
       if (!disposed && current === sequence) busy(false);
     }
+    async function loadHost(hostId) {
+      if (disposed) return;
+      const host = options2.pollable().find((host2) => (host2.hostId || null) === hostId);
+      if (host) await loader.load(host, void 0, false, sequence);
+    }
     function invalidate() {
       sequence++;
       loader.retireRequests();
@@ -15906,7 +15947,7 @@ ${row.id}`;
       pollTimer = indexingTimer = null;
       loader.prune(/* @__PURE__ */ new Set());
     }
-    return { loader, load, refresh, publish, busy, invalidate, mount, dispose, get indexing() {
+    return { loader, load, loadHost, refresh, publish, busy, invalidate, mount, dispose, get indexing() {
       return indexing;
     }, get queriedFor() {
       return queriedFor;
@@ -16716,7 +16757,7 @@ ${row.id}`;
   function createTranscript(options2) {
     const { document: document2, sessionState } = options2, container = document2.getElementById("messages");
     const cache = createTranscriptCache(document2), requests = /* @__PURE__ */ new Set();
-    let disposed = false, generation = 0, catchupSequence = 0, older = null, barEvents = new AbortController();
+    let disposed = false, generation = 0, catchupSequence = 0, older = null, olderFlight = null, barEvents = new AbortController();
     let cursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 };
     let loaded = null;
     function capture(selection = sessionState.captureSelection()) {
@@ -16729,6 +16770,7 @@ ${row.id}`;
       generation++;
       catchupSequence++;
       older = null;
+      olderFlight = null;
       barEvents.abort();
       for (const request of requests) request.abort();
       requests.clear();
@@ -16820,11 +16862,20 @@ ${row.id}`;
       }
     }
     async function loadOlder() {
-      if (older || !cursors.hasOlder || cursors.oldestIndex == null) return;
       const owner = capture();
       if (!owner) return;
+      if (olderFlight) return olderFlight;
+      if (!cursors.hasOlder || cursors.oldestIndex == null) return;
       const operation = /* @__PURE__ */ Symbol("older"), before = cursors.oldestIndex;
       older = operation;
+      const flight = fetchOlderPage(owner, operation, before).finally(() => {
+        if (older === operation) older = null;
+        if (olderFlight === flight) olderFlight = null;
+      });
+      olderFlight = flight;
+      return flight;
+    }
+    async function fetchOlderPage(owner, operation, before) {
       const bar = container.querySelector("#loadOlderBar"), button = bar?.querySelector(".load-older-btn");
       if (button) button.textContent = "Loading...";
       const anchor = container.querySelector(":scope > .message, :scope > details.tool-group"), offset = anchor?.getBoundingClientRect().top || 0;
@@ -16848,8 +16899,6 @@ ${row.id}`;
         }
       } catch (error) {
         if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${error instanceof Error ? error.message : String(error)} \u2014 retry`;
-      } finally {
-        if (older === operation) older = null;
       }
     }
     async function catchup(selection = sessionState.captureSelection()) {
@@ -17924,10 +17973,8 @@ ${row.id}`;
       }
       if (sessionActions) sessionActions.style.display = current.isActive ? "" : "none";
       resetSelectionActivity(current);
-      options2.artifacts(owner);
       options2.render();
       options2.header();
-      options2.relations(owner);
       if (current.isActive) {
         options2.models(id, current.harnessId);
         options2.commands(id);
@@ -17936,6 +17983,8 @@ ${row.id}`;
       if (!owns()) return;
       await options2.transcript.load(owner);
       if (!owns()) return;
+      options2.artifacts(owner);
+      options2.relations(owner);
       if (sessionState.currentSession?.isActive) {
         options2.stream.start(owner);
       } else {
