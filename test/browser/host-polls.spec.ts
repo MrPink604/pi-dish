@@ -68,13 +68,43 @@ test('healthy search results finish locally while the pending peer stays identif
     await expect(fleet.row(fleet.self)).toBeVisible();
     await expect(page.locator('.sidebar-filter')).not.toHaveClass(/\bsearching\b/);
     await expect(page.locator('.sidebar-host-progress')).toContainText('peer');
-    await expect(page.locator('.sidebar-host-progress')).not.toContainText('self —');
+    const listTop = await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top);
+    // A periodic refresh joins the pending search without retiring its progress.
+    await page.evaluate(() => { void fixtureApp.features.sidebarLists.refresh(); });
+    await expect(page.locator('.sidebar-host-progress')).toContainText('peer');
     await peerRequest.fulfill({ json: { active: [], previous: [{ id: ROOT, name: 'late peer root', harnessId: 'pi' }] } });
     await expect(fleet.row(fleet.peer)).toContainText('late peer root');
     await expect(page.locator('.sidebar-host-progress')).toBeHidden();
+    expect(await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top)).toBe(listTop);
   } finally {
     await page.unroute(`${fleet.peer.base}/api/sessions?**`);
     await peerRequest.abort().catch(() => {});
+  }
+});
+
+test('background polling leaves cached rows and sidebar geometry undisturbed', async ({ page, fleet }) => {
+  await expect(page.locator('.sidebar-host-progress')).toBeHidden();
+  const listTop = await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top);
+  const selfRow = await fleet.row(fleet.self).elementHandle();
+  let release: ((route: Route) => void) | undefined;
+  const held = new Promise<Route>(resolve => { release = resolve; });
+  await page.route(`${fleet.peer.base}/api/sessions?**`, route => { release?.(route); });
+  await page.evaluate(() => { void fixtureApp.features.sidebarLists.refresh(); });
+  const peerRequest = await held;
+  try {
+    await expect(page.locator('.sidebar-host-progress')).toBeHidden();
+    await expect(fleet.row(fleet.self)).toBeVisible();
+    await expect(fleet.row(fleet.peer)).toBeVisible();
+    expect(await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top)).toBe(listTop);
+    await peerRequest.fulfill({ json: { active: [], previous: [{ id: ROOT, name: 'refreshed peer root', harnessId: 'pi' }] } });
+    await expect(fleet.row(fleet.peer)).toContainText('refreshed peer root');
+    await expect(page.locator('.sidebar-host-progress')).toBeHidden();
+    expect(await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top)).toBe(listTop);
+    expect(await selfRow?.evaluate(node => node.isConnected)).toBe(true);
+  } finally {
+    await page.unroute(`${fleet.peer.base}/api/sessions?**`);
+    await peerRequest.abort().catch(() => {});
+    await selfRow?.dispose();
   }
 });
 

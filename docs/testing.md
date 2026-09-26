@@ -399,13 +399,24 @@ Hosts without an identity cannot publish rows under the local host.
 Sidebar searches name each pending host instead of keeping the global filter
 spinner active until the slowest response. Healthy-host results remain usable,
 late responses still publish, and retired query completions cannot clear current
-progress. Existing request deadlines and cached-row fallback remain unchanged.
+progress. Progress occupies one reserved, single-line region; background polls
+and indexing refreshes remain silent and do not retire a pending foreground
+search. Existing request deadlines and cached-row fallback remain unchanged.
 
 `test/browser/host-polls.spec.js` covers local restoration with peer identity and
-lists held, peer restoration with local lists held, and progressive search while
-a peer remains pending. `test/browser/app-shell.spec.js` releases a delayed startup
+lists held, peer restoration with local lists held, progressive search while
+a peer remains pending, and unchanged list geometry as foreground requests settle
+or background polls run. A background refresh joining a pending search must not
+erase its progress. `test/browser/app-shell.spec.js` releases a delayed startup
 list and observes its published row before proving the user's newer transcript
 selection survived; polling mount timing is not a restoration-completion signal.
 A production-asset browser smoke also displayed and
 searched the local transcript with peer requests deliberately unresolved, no
 global busy indicator and no page errors.
+
+The first progress implementation caused a live regression: each 10-second poll
+inserted and removed host loading rows, shifting the list by 29–57 px even when
+session order stayed unchanged. A browser-only override of the corrected assets
+against the same live APIs kept the list top constant across repeated polls,
+with no background progress or sidebar layout shifts after startup. No server
+restart was needed for this comparison.

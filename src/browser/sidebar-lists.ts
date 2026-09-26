@@ -32,13 +32,11 @@ export function createSidebarLists(options: {
       progress.setAttribute('role', 'status');
       filter.after(progress);
     }
-    progress.replaceChildren(...[...pendingHosts.values()].map(host => {
-      const row = document.createElement('div');
-      row.className = 'host-offline-note';
-      row.textContent = `${hostDisplayLabel(host)} — loading sessions…`;
-      return row;
-    }));
-    progress.hidden = pendingHosts.size === 0;
+    const names = [...pendingHosts.values()].map(hostDisplayLabel);
+    const text = names.length ? `Loading: ${names.join(', ')}` : '';
+    if (progress.textContent !== text) progress.textContent = text;
+    progress.title = text;
+    progress.style.visibility = names.length ? 'visible' : 'hidden';
   }
   function busy(value: boolean) { if (!disposed) document.querySelector('.sidebar-filter')?.classList.toggle('searching', value); }
   const loader = createHostSessionLoader({
@@ -82,24 +80,27 @@ export function createSidebarLists(options: {
     hosts.forEach((host, index) => loader.retainPublished(host, published[index]));
     noteAskBlocked(parts);
   }
-  async function loadOne(host: SidebarListHost, query: string | undefined, withPrevious: boolean, current: number) {
+  async function loadOne(host: SidebarListHost, query: string | undefined, withPrevious: boolean, current: number, background = false) {
     const key = hostKeyOf(host);
-    pendingHosts.set(key, host);
-    renderProgress();
+    if (!background) {
+      pendingHosts.set(key, host);
+      renderProgress();
+    }
     try { await loader.load(host, query, withPrevious, current); }
     finally {
-      if (!disposed && current === sequence && pendingHosts.get(key) === host) {
+      if (!background && !disposed && current === sequence && pendingHosts.get(key) === host) {
         pendingHosts.delete(key);
         renderProgress();
       }
     }
   }
-  async function load(query?: string, { withPrevious = options.all() } = {}) {
-    if (disposed) return; const current = ++sequence; busy(false);
-    pendingHosts.clear();
+  async function load(query?: string, { withPrevious = options.all(), background = false } = {}) {
+    if (disposed) return;
+    const current = background ? sequence : ++sequence;
+    if (!background) { busy(false); pendingHosts.clear(); }
     const hosts = queryHosts(options.pollable(), query || '').filter(host => host.self || host.hostId);
     renderProgress();
-    await Promise.allSettled(hosts.map(host => loadOne(host, query, withPrevious, current)));
+    await Promise.allSettled(hosts.map(host => loadOne(host, query, withPrevious, current, background)));
   }
   /** Readiness is host-local; a slow peer or history scan must not hold a spawn. */
   async function loadHost(hostId: string | null, withPrevious = false, query?: string) {
@@ -108,8 +109,9 @@ export function createSidebarLists(options: {
     if (host) await loadOne(host, query, withPrevious, sequence);
   }
   function invalidate() { sequence++; loader.retireRequests(); pendingHosts.clear(); renderProgress(); }
-  function refresh() { if (disposed) return Promise.resolve(); options.refreshFleet(); return load(options.query() || undefined); }
+  function refresh() { if (disposed) return Promise.resolve(); options.refreshFleet(); return load(options.query() || undefined, { background: true }); }
   function mount() { if (!disposed && !pollTimer) pollTimer = setInterval(() => { void refresh(); }, 10000); }
   function dispose() { if (disposed) return; busy(false); disposed = true; sequence++; clearInterval(pollTimer ?? undefined); clearTimeout(indexingTimer ?? undefined); pollTimer = indexingTimer = null; loader.prune(new Set()); pendingHosts.clear(); progress?.remove(); progress = null; }
+  renderProgress();
   return { loader, load, loadHost, refresh, publish, busy, invalidate, mount, dispose, get indexing() { return indexing; }, get queriedFor() { return queriedFor; } };
 }

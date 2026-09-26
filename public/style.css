@@ -267,6 +267,20 @@ body.sidebar-open {
   padding: 8px;
 }
 
+/* Foreground host progress reserves one line; settling hosts must not move rows.
+   Background polling stays silent. Long host lists remain available in the title. */
+.sidebar-host-progress {
+  flex: 0 0 18px;
+  height: 18px;
+  line-height: 18px;
+  padding: 0 12px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .filter-input {
   width: 100%;
   padding: 6px 10px;

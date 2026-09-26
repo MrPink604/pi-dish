@@ -74,13 +74,43 @@ const fixtures_js_1 = require("./fixtures.js");
         await (0, fixtures_js_1.expect)(fleet.row(fleet.self)).toBeVisible();
         await (0, fixtures_js_1.expect)(page.locator('.sidebar-filter')).not.toHaveClass(/\bsearching\b/);
         await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).toContainText('peer');
-        await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).not.toContainText('self —');
+        const listTop = await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top);
+        // A periodic refresh joins the pending search without retiring its progress.
+        await page.evaluate(() => { void fixtureApp.features.sidebarLists.refresh(); });
+        await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).toContainText('peer');
         await peerRequest.fulfill({ json: { active: [], previous: [{ id: fixtures_js_1.ROOT, name: 'late peer root', harnessId: 'pi' }] } });
         await (0, fixtures_js_1.expect)(fleet.row(fleet.peer)).toContainText('late peer root');
         await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).toBeHidden();
+        (0, fixtures_js_1.expect)(await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top)).toBe(listTop);
     }
     finally {
         await page.unroute(`${fleet.peer.base}/api/sessions?**`);
         await peerRequest.abort().catch(() => { });
+    }
+});
+(0, fixtures_js_1.test)('background polling leaves cached rows and sidebar geometry undisturbed', async ({ page, fleet }) => {
+    await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).toBeHidden();
+    const listTop = await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top);
+    const selfRow = await fleet.row(fleet.self).elementHandle();
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    await page.route(`${fleet.peer.base}/api/sessions?**`, route => { release?.(route); });
+    await page.evaluate(() => { void fixtureApp.features.sidebarLists.refresh(); });
+    const peerRequest = await held;
+    try {
+        await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).toBeHidden();
+        await (0, fixtures_js_1.expect)(fleet.row(fleet.self)).toBeVisible();
+        await (0, fixtures_js_1.expect)(fleet.row(fleet.peer)).toBeVisible();
+        (0, fixtures_js_1.expect)(await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top)).toBe(listTop);
+        await peerRequest.fulfill({ json: { active: [], previous: [{ id: fixtures_js_1.ROOT, name: 'refreshed peer root', harnessId: 'pi' }] } });
+        await (0, fixtures_js_1.expect)(fleet.row(fleet.peer)).toContainText('refreshed peer root');
+        await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).toBeHidden();
+        (0, fixtures_js_1.expect)(await page.locator('#sessionList').evaluate(node => node.getBoundingClientRect().top)).toBe(listTop);
+        (0, fixtures_js_1.expect)(await selfRow?.evaluate(node => node.isConnected)).toBe(true);
+    }
+    finally {
+        await page.unroute(`${fleet.peer.base}/api/sessions?**`);
+        await peerRequest.abort().catch(() => { });
+        await selfRow?.dispose();
     }
 });

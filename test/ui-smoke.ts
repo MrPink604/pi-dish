@@ -700,6 +700,13 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       'new route renders only its own history, not the old transcript cache');
     check(await desktop.evaluate(() => parseSessionKey(localStorage.getItem('pi-dish-session')).sessionId) === SWITCH_ID,
       'client follows session_switch to the new route');
+    // History can paint before the replacement SSE connection opens. Do not
+    // emit the next one-shot switch into that reconnect gap.
+    await desktop.waitForFunction((id: string) => {
+      const source = fixtureApp.features.messageStreamController.source;
+      return source?.readyState === EventSource.OPEN
+        && new URL(source.url).pathname === `/api/sessions/${encodeURIComponent(id)}/stream`;
+    }, SWITCH_ID, { timeout: 5000 });
 
     writeRegistry({
       sessionId: SESSION_ID,
