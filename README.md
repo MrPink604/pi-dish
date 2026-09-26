@@ -84,7 +84,13 @@ Rules of thumb:
   branching — with optional branch summaries (pi's `/tree` summarize flow):
   jump back to an earlier point and inject an LLM summary of the branch you're
   abandoning, so explored dead-ends still inform the conversation.
-- **Bounce agents** — Settings → Bounce agents queues Reload or Restart for
+- **Fleet view** — the boat button in the sidebar header opens one card per
+  host: live, working and waiting session counts plus coarse CPU, memory and
+  home-disk use, refreshed every 10s only while the view is open. It also
+  holds the fleet-wide controls: adding hosts, Bounce agents and session
+  recovery. Agents read the same numbers with the sessions CLI's `load`
+  command (`load --all-hosts`) before starting heavy work.
+- **Bounce agents** — Fleet → Bounce agents queues Reload or Restart for
   selected pi-dish-owned runtimes across capable hosts. Busy agents wait;
   OMP parents also wait for every child to exit, including idle children.
   Preview eligibility, inspect per-agent blockers, and cancel waiting work.
@@ -448,10 +454,10 @@ how much you'll enjoy them:
 
 ### Session recovery
 
-Settings → **Session recovery** configures the selected host, for all devices.
+Fleet → **Session recovery** configures the selected host, for all devices.
 Use the **Host** picker at your main entrypoint to configure any connected
 pi-dish, including fleet-proxied and browser-added hosts; saves and reports
-go to that host, not the entrypoint. Opening Settings refreshes the fleet,
+go to that host, not the entrypoint. Opening the Fleet view refreshes the fleet,
 and newly discovered/upgraded hosts join the picker without discarding an
 unsaved mode selection. Hosts without recovery support are named below the
 controls with availability or upgrade guidance.
@@ -510,7 +516,7 @@ ln -s "$PWD/extensions/mood.ts" ~/.pi/agent/extensions/mood.ts
 ### Upgrading
 
 After pulling changes, run `./install.sh` and restart the server. Use
-**Settings → Bounce agents** to select owned runtimes and queue **Reload**
+**Fleet → Bounce agents** to select owned runtimes and queue **Reload**
 for Pi extension changes or **Restart** for runtime upgrades and OMP bridge
 changes. OMP's `/reload` does not re-import bridge extensions. A tmux-managed
 server can be reconciled with `scripts/pi-dish-tmux.sh restart`; it uses the

@@ -32,6 +32,7 @@ export { createNewSession, NEW_SESSION_HARNESS_KEY } from './new-session';
 export { createRecovery, decodeRecoveryMode, decodeRecoveryReport } from './recovery';
 
 export { createBounce } from './bounce';
+export { createFleetView, decodeFleetHealth, formatBytes, formatUptime, meterLevel, fleetSessionsHtml, fleetHealthHtml } from './fleet-view';
 export { decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } from './bounce-data';
 
 export { createSessionRelations, decodeSessionLineage } from './session-relations';

@@ -2948,6 +2948,7 @@ let remoteHost = null;
             await scenarios.skills(scenarioContext());
             await scenarios.routines(scenarioContext());
             await scenarios.bounce(scenarioContext());
+            await scenarios.fleet(scenarioContext());
             await scenarios.mobile(scenarioContext());
             // 12b. Row-level close: live rows carry a quiet hover-reveal ✕ with a
             // two-tap inline confirm. The POST is intercepted (deterministic — the
@@ -3171,7 +3172,13 @@ let remoteHost = null;
             await multi.goto(base, { waitUntil: 'networkidle' });
             // A normal reload retains the host id, not its capabilities. Recovery
             // must still be configurable on the peer, never accidentally on self.
-            await multi.evaluate(() => fixtureApp.features.displayPreferences.open());
+            await multi.evaluate(() => fixtureApp.features.fleetController.open());
+            // Each host answers for its own capacity, peer included (client-side fan-out).
+            await multi.waitForFunction(() => {
+                const cards = [...document.querySelectorAll('#fleetHosts .fleet-host')];
+                return cards.length === 2 && cards.every(card => card.querySelector('.fleet-meter[role="meter"]'));
+            }, null, { timeout: 10000 });
+            check(remoteRequests.some(url => url.endsWith('/api/host/health')), 'the Fleet view reads the peer\'s capacity from the peer itself');
             await multi.waitForSelector(`#recoverySettingsHost option[value="${remoteDescriptor.hostId}"]`, { state: 'attached' });
             await multi.selectOption('#recoverySettingsHost', remoteDescriptor.hostId);
             await multi.waitForFunction(() => {
@@ -3192,7 +3199,7 @@ let remoteHost = null;
             check(await multi.inputValue('#recoveryReportHost') === remoteDescriptor.hostId &&
                 !!(await multi.textContent('#recoveryViewBody'))?.includes('Restore open sessions'), 'the recovery report follows the selected remote host');
             await multi.keyboard.press('Escape');
-            // A peer upgraded/discovered after the modal opened joins the picker
+            // A peer upgraded/discovered after the Fleet view opened joins the picker
             // without wiping a mode the user is still editing on another host.
             let advertisesRecovery = false;
             const descriptorRoute = async (route) => route.fulfill({
@@ -3200,7 +3207,7 @@ let remoteHost = null;
             });
             await multi.route(remoteHost.base + '/api/host', descriptorRoute);
             await multi.evaluate(() => fixtureApp.features.hostDiscovery.loadFleet());
-            await multi.evaluate(() => fixtureApp.features.displayPreferences.open());
+            await multi.evaluate(() => fixtureApp.features.fleetController.open());
             await multi.waitForFunction(() => {
                 const button = document.getElementById('saveRecoveryMode');
                 return button instanceof HTMLButtonElement && !button.disabled;
@@ -3306,9 +3313,9 @@ let remoteHost = null;
             check(await multi.evaluate(() => document.querySelectorAll('.host-section').length) === 0, 'the Recent view stays interleaved — no host sections');
             await multi.evaluate(() => fixtureApp.features.sidebarQuery.toggleView());
             await multi.waitForSelector('#sessionList > .host-section');
-            // The color picker in the settings Hosts section overrides the automatic
+            // The color picker in the Fleet view's Hosts section overrides the automatic
             // color and repaints the sidebar without a reload.
-            await multi.evaluate(() => fixtureApp.features.displayPreferences.open());
+            await multi.evaluate(() => fixtureApp.features.fleetController.open());
             await multi.waitForSelector('#hostsList .host-color-input', { timeout: 5000 });
             const beforeColors = await multi.evaluate(() => {
                 const inputs = [...document.querySelectorAll('#hostsList .host-color-input')];

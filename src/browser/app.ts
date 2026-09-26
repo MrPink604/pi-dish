@@ -33,7 +33,8 @@ import { createSessionControls } from './session-controls';
 import { createSessionSearch } from './session-search';
 import { createDisplayPreferences } from './display-preferences';
 import { createRecovery } from './recovery';
-import { createHostSettings } from './host-settings';
+import { createHostSettings, hostSettingsHtml } from './host-settings';
+import { createFleetView } from './fleet-view';
 import { createSearchView } from './search-view';
 import { createSkills } from './skills';
 import { createUsageView } from './usage-view';
@@ -676,16 +677,15 @@ function searchNext() { return sessionSearch.move(1); }
 // Display preferences own modal requests, rendered controls and device readouts.
 const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDisplayPreferences({
   document, storage: localStorage, request: (host, url, options) => apiTransport.request(host, url, options), host: () => hostEntryFor(null)!,
-  beforeOpen: () => { sidebarQuery.close(); bounceController.close(); },
-  unmountSections: () => { recoveryController.unmountPreferences(); hostSettings.unmount(); },
-  mountSections: body => { hostSettings.mount(body); recoveryController.refreshHosts(); recoveryController.mountPreferences(); },
+  beforeOpen: () => { sidebarQuery.close(); },
+  openFleet: () => { closeSettingsModal(); fleetController.open(); },
   themes: { render: select => themesController.render(select), apply: id => themesController.apply(id) },
   filters: () => sidebarQuery.filters, setFilters: value => sidebarQuery.setFilters(value),
   persistFilters: (value, host) => persistSavedFilters([...value], host),
   metadataChanged: () => responseDetailsController.update(), contextChanged: () => renderSessions(), alert: message => alert(message),
 });
 
-function closeSettingsModal() { bounceController.close(); displayPreferences.close(); }
+function closeSettingsModal() { displayPreferences.close(); }
 
 // Recovery owns its preferences/report views and captured host endpoints.
 const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
@@ -693,13 +693,13 @@ const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
   supports: host => hostSupportsCapability(host, 'recovery', appConfig), down: (...args) => hostConnections.isDown(...args),
   fleetReady: () => hostFleetReady, refreshFleet: (...args) => hostDiscovery.loadFleet(...args),
   selectedHost: () => sessionState.currentSession?.host || null,
-  settingsOpen: () => (document.getElementById('settingsModal') as HTMLElement).style.display !== 'none',
+  preferencesOpen: () => fleetController.isOpen(),
   closeOtherViews: () => mainPane.beforeTakeover('recovery'),
   confirm: message => confirm(message),
 });
 
-// --- Hosts (settings section, not a takeover: it is a short list plus one
-// add form). The catalog is device-local by design — a browser's own list of
+// --- Hosts (a section of the Fleet takeover: a short list plus one add
+// form). The catalog is device-local by design — a browser's own list of
 // machines it can reach, tokens included; fleet entries come from the
 // server's config and are shown read-only. ---------------------------------
 
@@ -722,7 +722,32 @@ const hostSettings: ReturnType<typeof createHostSettings> = createHostSettings({
 function renderHostsSection() {
   recoveryController.refreshHosts();
   hostSettings.render();
+  fleetController.render();
 }
+
+// Fleet owns per-host capacity polling while open, and hosts the fleet-wide
+// controls (connections, bounce, recovery preferences) that it mounts.
+const fleetController: ReturnType<typeof createFleetView> = createFleetView({
+  root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), hosts: effectiveHosts,
+  connection: host => hostConnections.stateOf(host), supports: host => hostSupportsCapability(host, 'hostHealth', appConfig),
+  clientSessions: hostId => {
+    const self = selfHostEntry();
+    const rows = sessionState.sessions.active.filter(session => (session.host || null) === hostId || (!session.host && self?.hostId === hostId));
+    return { live: rows.length, working: rows.filter(session => session.turnInProgress).length };
+  },
+  dot: hostId => hostPresentation.dotHtml(hostId, 'fleet-host-dot'),
+  noteConnection: (host, event) => hostConnections.note(host, event),
+  closeOtherViews: () => mainPane.beforeTakeover('fleet'),
+  mountSections: () => {
+    const connections = document.getElementById('fleetConnections')!;
+    connections.innerHTML = hostSettingsHtml;
+    hostSettings.mount(connections);
+    recoveryController.refreshHosts();
+    void recoveryController.mountPreferences();
+  },
+  unmountSections: () => { recoveryController.unmountPreferences(); hostSettings.unmount(); },
+  closeBounce: () => bounceController.close(),
+});
 
 // Advanced search owns fleet query results, facet controls and click-through.
 const searchViewController: ReturnType<typeof createSearchView> = createSearchView({
@@ -1072,6 +1097,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); sessionInfo.closeArtifacts();
   } else if (recoveryController.isOpen()) {
     e.preventDefault(); recoveryController.close();
+  } else if (fleetController.isOpen()) {
+    e.preventDefault(); fleetController.close();
   } else if (routinesController.isOpen()) {
     e.preventDefault(); routinesController.escape();
   } else if (skillsController.isOpen()) {
@@ -1172,6 +1199,7 @@ const mainPane = createMainPane({
     skills: { close: () => skillsController.close() },
     routines: { close: () => routinesController.close() },
     recovery: { close: () => recoveryController.close(), clearsSessionSurfaces: true },
+    fleet: { close: () => fleetController.close(), hostsBounce: true },
   },
   sessionSurfaces: {
     search: { close: () => sessionSearch.close() },
@@ -1197,6 +1225,9 @@ createAppBindings({ document, actions: {
   openSkillsView: () => skillsController.open(),
   openRoutinesView: () => routinesController.open(),
   openSettingsModal: () => displayPreferences.open(),
+  openFleetView: () => fleetController.open(),
+  refreshFleetView: () => fleetController.refresh(),
+  closeFleetView: () => fleetController.close(),
   refreshSessions: () => sidebarLists.refresh(),
   openNewSessionView: () => newSessionController.open(),
   openSessionHarnessSettings: () => openSessionHarnessSettings(),

@@ -7,6 +7,7 @@ const usage = require("./usage.js");
 const skills = require("./skills.js");
 const routines = require("./routines.js");
 const bounce = require("./bounce.js");
+const fleet = require("./fleet.js");
 const mobile = require("./mobile.js");
 const scenarios = {
     models,
@@ -16,6 +17,7 @@ const scenarios = {
     skills,
     routines,
     bounce,
+    fleet,
     mobile,
 };
 module.exports = scenarios;

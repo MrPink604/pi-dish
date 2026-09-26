@@ -2567,8 +2567,8 @@
       return isUnreadSession(session, seen, sessionState2.currentSession ? sessionRefKey(sessionState2.currentSession) : null, !document2.hidden);
     }
     function title() {
-      const count2 = sessionState2.sessions.active.filter(unread).length;
-      document2.title = count2 ? `(${count2}) pi-dish` : "pi-dish";
+      const count3 = sessionState2.sessions.active.filter(unread).length;
+      document2.title = count3 ? `(${count3}) pi-dish` : "pi-dish";
     }
     function prune(host, active) {
       const live = new Set(active.map((row) => sessionKey(row.host || host, row.id)));
@@ -2582,203 +2582,6 @@
     }
     reload();
     return { reload, mark, unread, title, prune, migrate };
-  }
-
-  // src/browser/host-settings.ts
-  var hostSettingsHtml = `<div class="preference-row"><label><strong>Hosts</strong><small>Added hosts are stored on this device (with their token). Entries this server publishes \u2014 and this host itself \u2014 are read-only.</small></label>
-      <div class="hosts-list" id="hostsList"></div>
-      <div class="host-add">
-        <input id="addHostBase" class="cwd-input" type="text" placeholder="http://tycho:3333" spellcheck="false" autocomplete="off">
-        <input id="addHostLabel" class="cwd-input" type="text" placeholder="Label (optional)" autocomplete="off">
-        <input id="addHostToken" class="cwd-input" type="password" placeholder="Token (optional)" autocomplete="off">
-        <button class="btn-small" id="addHostBtn">Add host</button>
-      </div>
-      <small class="host-add-status" id="addHostStatus"></small>
-    </div>`;
-  var STATE_TITLES = {
-    reachable: "Reachable",
-    connecting: "Not contacted yet",
-    backoff: "Unreachable \u2014 retrying",
-    blocked: "Needs a token"
-  };
-  function createHostSettings(options2) {
-    let view = null;
-    let sequence = 0;
-    let checking = false;
-    const { directory, connections, escapeHtml: escapeHtml2, displayLabel } = options2;
-    function status(owner, message3, error = false) {
-      if (view !== owner) return;
-      owner.status.textContent = message3;
-      owner.status.classList.toggle("error", error);
-    }
-    function unmount() {
-      sequence++;
-      checking = false;
-      view?.events.abort();
-      view?.rowEvents.abort();
-      view = null;
-    }
-    function mount(root) {
-      unmount();
-      const list = root.querySelector("#hostsList");
-      const base = root.querySelector("#addHostBase");
-      const label = root.querySelector("#addHostLabel");
-      const token = root.querySelector("#addHostToken");
-      const statusElement = root.querySelector("#addHostStatus");
-      const button = root.querySelector("#addHostBtn");
-      if (!list || !base || !label || !token || !statusElement || !button) return;
-      const events = new AbortController();
-      view = { root, list, base, label, token, status: statusElement, events, rowEvents: new AbortController() };
-      const owner = view;
-      const listener = { signal: events.signal };
-      button.addEventListener("click", () => {
-        void addFromForm();
-      }, listener);
-      base.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") void addFromForm();
-      }, listener);
-      for (const input of [base, label, token]) input.addEventListener("input", () => {
-        sequence++;
-        if (checking) {
-          checking = false;
-          status(owner, "");
-        }
-      }, listener);
-      render();
-    }
-    function save() {
-      directory.saveCatalog();
-      options2.onCatalogSaved();
-    }
-    function promptToken(key) {
-      const owner = view;
-      if (!owner) return;
-      const entry = directory.catalog.find((item) => (item.hostId || item.base) === key);
-      if (!entry) {
-        status(owner, "That host comes from this server\u2019s config \u2014 set its token there.");
-        return;
-      }
-      const token = options2.promptToken(displayLabel(entry));
-      if (token === null || view !== owner) return;
-      directory.setToken(key, token.trim() || void 0);
-      connections.reset(key);
-      save();
-      options2.refreshSessions();
-    }
-    async function addFromForm() {
-      const owner = view;
-      if (!owner) return;
-      const requestSequence = ++sequence;
-      checking = false;
-      const raw = owner.base.value.trim();
-      if (!raw) {
-        status(owner, "Enter the host URL.", true);
-        return;
-      }
-      const base = normalizeHostBase(raw);
-      if (!base) {
-        status(owner, "That is not a usable host URL.", true);
-        return;
-      }
-      if (options2.protocol() === "https:" && base.startsWith("http://")) {
-        status(owner, "This page is https, so the browser will block plain-http hosts. Serve that host over https (tailscale serve) or open pi-dish over http.", true);
-        return;
-      }
-      const token = owner.token.value.trim();
-      const label = owner.label.value.trim();
-      const owns = () => view === owner && owner.root.isConnected && sequence === requestSequence;
-      status(owner, "Checking\u2026");
-      checking = true;
-      let descriptor;
-      try {
-        const response = await options2.request(Object.freeze({ base, token: token || null }), "/api/host");
-        if (!owns()) return;
-        if (response.status === 401) throw new Error("that host needs a token");
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        if (!owns()) return;
-        descriptor = decodeHostDescriptor(data);
-        if (!descriptor) throw new Error("no host descriptor");
-      } catch (error) {
-        if (owns()) status(owner, `Could not reach that host: ${error instanceof Error ? error.message : String(error)}. A host on another origin must allowlist this one (allowedOrigins in its settings).`, true);
-        return;
-      } finally {
-        if (owns()) checking = false;
-      }
-      if (descriptor.hostId === directory.self.hostId) {
-        status(owner, "That is this host.", true);
-        return;
-      }
-      options2.discovery.rememberDescriptor(descriptor);
-      directory.add({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
-      connections.reset(descriptor.hostId);
-      save();
-      owner.base.value = "";
-      owner.label.value = "";
-      owner.token.value = "";
-      status(owner, `Added ${displayLabel({ label, base })}.`);
-      options2.refreshSessions();
-      options2.renderNewSessionHosts();
-    }
-    function render() {
-      const owner = view;
-      if (!owner) return;
-      const { list } = owner;
-      owner.rowEvents.abort();
-      owner.rowEvents = new AbortController();
-      const listener = { signal: owner.rowEvents.signal };
-      const hosts = directory.effectiveHosts();
-      list.innerHTML = hosts.map((host) => {
-        const state = connections.stateOf(host);
-        const version = host.version ? `v${host.version}` : "";
-        const detail = [host.self ? "this server" : host.base, version].filter(Boolean).join(" \xB7 ");
-        const actions = [];
-        if (state === "blocked") actions.push(`<button class="btn-small host-token-btn" data-key="${escapeHtml2(host.key)}">token?</button>`);
-        if (host.source === "user") actions.push(`<button class="btn-icon host-remove-btn" data-key="${escapeHtml2(host.key)}" title="Remove host">\u2715</button>`);
-        const hostId = host.hostId || null;
-        const custom = options2.customColor(hostId);
-        const hex = options2.resolveColor(options2.color(hostId)) || "#888888";
-        const colorControls = hosts.length > 1 ? `
-        <input type="color" class="host-color-input" data-host="${escapeHtml2(hostId || "")}"
-          value="${escapeHtml2(hex)}" style="background:${escapeHtml2(hex)}"
-          title="${custom ? "Custom color for this host" : "Automatic color \u2014 pick one to override it"}">
-        <button class="btn-icon host-color-reset${custom ? "" : " hidden"}" data-host="${escapeHtml2(hostId || "")}" title="Back to the automatic color">\u21BA</button>` : "";
-        return `<div class="host-row">
-        <span class="host-dot ${escapeHtml2(state)}" title="${escapeHtml2(STATE_TITLES[state] || state)}"></span>
-        <span class="host-row-name">${escapeHtml2(displayLabel(host))}</span>
-        <span class="host-row-detail" title="${escapeHtml2(host.base || "")}">${escapeHtml2(detail)}</span>
-        <span class="host-row-actions">${colorControls}${actions.join("")}</span>
-      </div>`;
-      }).join("");
-      for (const input of Array.from(list.querySelectorAll(".host-color-input"))) {
-        input.addEventListener("input", () => {
-          if (view !== owner || !list.contains(input)) return;
-          input.style.background = input.value;
-          options2.setColor(input.dataset.host || null, input.value, { rows: false });
-        }, listener);
-        input.addEventListener("change", () => {
-          if (view === owner && list.contains(input)) options2.setColor(input.dataset.host || null, input.value);
-        }, listener);
-      }
-      for (const btn of Array.from(list.querySelectorAll(".host-color-reset"))) {
-        btn.addEventListener("click", () => {
-          if (view === owner && list.contains(btn)) options2.setColor(btn.dataset.host || null, null);
-        }, listener);
-      }
-      for (const btn of Array.from(list.querySelectorAll(".host-remove-btn"))) {
-        btn.addEventListener("click", () => {
-          if (view !== owner || !list.contains(btn)) return;
-          directory.remove(btn.dataset.key || "");
-          save();
-        }, listener);
-      }
-      for (const btn of Array.from(list.querySelectorAll(".host-token-btn"))) {
-        btn.addEventListener("click", () => {
-          if (view === owner && list.contains(btn)) promptToken(btn.dataset.key || "");
-        }, listener);
-      }
-    }
-    return { mount, unmount, render, save, addFromForm };
   }
 
   // src/browser/display-preferences.ts
@@ -2804,7 +2607,6 @@
       sequence++;
       events.abort();
       filterEvents.abort();
-      options2.unmountSections();
     }
     function close() {
       if (disposed) return;
@@ -2833,8 +2635,7 @@
     <div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. \u201CEffective speed\u201D includes time to first token and JSONL append.</small></label>
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
-    <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
-    ${hostSettingsHtml}
+    <div class="preference-row"><label><strong>Hosts, bounce and recovery</strong><small>Fleet-wide controls live in the Fleet view, beside each host's load.</small></label><button class="btn-small" id="settingsOpenFleet">Open Fleet</button></div>
     <div class="preference-row"><label><strong>Saved sidebar filters</strong><small>Server-global. Chips under the sidebar filter toggle these per device; type a query there and hit \u201C+ save filter\u201D to add one.</small></label><div id="savedFiltersList" class="saved-filters-list"></div></div>`;
       const modeSelect = body.querySelector("#responseMetadataMode");
       modeSelect.value = mode;
@@ -2882,7 +2683,9 @@
         }
       }
       renderFilters();
-      options2.mountSections(body);
+      body.querySelector("#settingsOpenFleet").addEventListener("click", () => {
+        if (owns()) options2.openFleet();
+      }, listener);
       const input = body.querySelector("#monthlyBudget"), status = body.querySelector("#budgetStatus"), save = body.querySelector("#saveBudget");
       save.disabled = true;
       try {
@@ -4781,7 +4584,7 @@ ${row.id}`;
         if (entering.clearsSessionSurfaces) overlays.settings();
         overlays.sidebar();
         for (const takeover of takeovers) if (takeover !== entering) takeover.close();
-        overlays.bounce();
+        if (!entering.hostsBounce) overlays.bounce();
         if (entering.clearsSessionSurfaces) {
           for (const surface of surfaces) if (surface.closeOnTakeover) surface.close();
         }
@@ -4789,7 +4592,7 @@ ${row.id}`;
       beforeSelection(keepBounce) {
         for (const surface of surfaces) surface.close();
         for (const close of sessionOverlays) close();
-        for (const takeover of takeovers) takeover.close();
+        for (const takeover of takeovers) if (!keepBounce || !takeover.hostsBounce) takeover.close();
         if (!keepBounce) overlays.bounce();
       }
     };
@@ -5023,7 +4826,7 @@ ${row.id}`;
   }
   function countLineageMembers(node) {
     if (!node) return 0;
-    return 1 + node.children.reduce((count2, child) => count2 + countLineageMembers(child), 0);
+    return 1 + node.children.reduce((count3, child) => count3 + countLineageMembers(child), 0);
   }
   function decodeSessionLineage(value) {
     if (!record2(value)) return EMPTY_LINEAGE;
@@ -7048,7 +6851,7 @@ ${row.id}`;
       const section = doc.getElementById("recoveryPreferences");
       if (!section || disposed) return;
       await options2.fleetReady();
-      if (disposed || mountSeq !== preferencesSeq || !section.isConnected || !options2.settingsOpen()) return;
+      if (disposed || mountSeq !== preferencesSeq || !section.isConnected || !options2.preferencesOpen()) return;
       const events = preferenceEvents = new AbortController();
       const listener = { signal: events.signal };
       section.hidden = false;
@@ -7069,7 +6872,7 @@ ${row.id}`;
       hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), options2.selectedHost())?.hostId || "";
       let seq = 0;
       const selectedHost = () => recoveryCapableHosts().find((host) => (host.hostId || "") === hostSelect.value);
-      const ownsView = () => !disposed && mountSeq === preferencesSeq && section.isConnected && options2.settingsOpen();
+      const ownsView = () => !disposed && mountSeq === preferencesSeq && section.isConnected && options2.preferencesOpen();
       const owns = (request, host) => ownsView() && seq === request && sameHost(host, selectedHost());
       const load = async () => {
         if (!ownsView()) return;
@@ -7251,6 +7054,418 @@ ${row.id}`;
       isOpen: isRecoveryViewOpen,
       load: loadRecoveryView,
       dispose
+    };
+  }
+
+  // src/browser/host-settings.ts
+  var hostSettingsHtml = `<div class="preference-row"><label><strong>Hosts</strong><small>Added hosts are stored on this device (with their token). Entries this server publishes \u2014 and this host itself \u2014 are read-only.</small></label>
+      <div class="hosts-list" id="hostsList"></div>
+      <div class="host-add">
+        <input id="addHostBase" class="cwd-input" type="text" placeholder="http://tycho:3333" spellcheck="false" autocomplete="off">
+        <input id="addHostLabel" class="cwd-input" type="text" placeholder="Label (optional)" autocomplete="off">
+        <input id="addHostToken" class="cwd-input" type="password" placeholder="Token (optional)" autocomplete="off">
+        <button class="btn-small" id="addHostBtn">Add host</button>
+      </div>
+      <small class="host-add-status" id="addHostStatus"></small>
+    </div>`;
+  var STATE_TITLES = {
+    reachable: "Reachable",
+    connecting: "Not contacted yet",
+    backoff: "Unreachable \u2014 retrying",
+    blocked: "Needs a token"
+  };
+  function createHostSettings(options2) {
+    let view = null;
+    let sequence = 0;
+    let checking = false;
+    const { directory, connections, escapeHtml: escapeHtml2, displayLabel } = options2;
+    function status(owner, message3, error = false) {
+      if (view !== owner) return;
+      owner.status.textContent = message3;
+      owner.status.classList.toggle("error", error);
+    }
+    function unmount() {
+      sequence++;
+      checking = false;
+      view?.events.abort();
+      view?.rowEvents.abort();
+      view = null;
+    }
+    function mount(root) {
+      unmount();
+      const list = root.querySelector("#hostsList");
+      const base = root.querySelector("#addHostBase");
+      const label = root.querySelector("#addHostLabel");
+      const token = root.querySelector("#addHostToken");
+      const statusElement = root.querySelector("#addHostStatus");
+      const button = root.querySelector("#addHostBtn");
+      if (!list || !base || !label || !token || !statusElement || !button) return;
+      const events = new AbortController();
+      view = { root, list, base, label, token, status: statusElement, events, rowEvents: new AbortController() };
+      const owner = view;
+      const listener = { signal: events.signal };
+      button.addEventListener("click", () => {
+        void addFromForm();
+      }, listener);
+      base.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") void addFromForm();
+      }, listener);
+      for (const input of [base, label, token]) input.addEventListener("input", () => {
+        sequence++;
+        if (checking) {
+          checking = false;
+          status(owner, "");
+        }
+      }, listener);
+      render();
+    }
+    function save() {
+      directory.saveCatalog();
+      options2.onCatalogSaved();
+    }
+    function promptToken(key) {
+      const owner = view;
+      if (!owner) return;
+      const entry = directory.catalog.find((item) => (item.hostId || item.base) === key);
+      if (!entry) {
+        status(owner, "That host comes from this server\u2019s config \u2014 set its token there.");
+        return;
+      }
+      const token = options2.promptToken(displayLabel(entry));
+      if (token === null || view !== owner) return;
+      directory.setToken(key, token.trim() || void 0);
+      connections.reset(key);
+      save();
+      options2.refreshSessions();
+    }
+    async function addFromForm() {
+      const owner = view;
+      if (!owner) return;
+      const requestSequence = ++sequence;
+      checking = false;
+      const raw = owner.base.value.trim();
+      if (!raw) {
+        status(owner, "Enter the host URL.", true);
+        return;
+      }
+      const base = normalizeHostBase(raw);
+      if (!base) {
+        status(owner, "That is not a usable host URL.", true);
+        return;
+      }
+      if (options2.protocol() === "https:" && base.startsWith("http://")) {
+        status(owner, "This page is https, so the browser will block plain-http hosts. Serve that host over https (tailscale serve) or open pi-dish over http.", true);
+        return;
+      }
+      const token = owner.token.value.trim();
+      const label = owner.label.value.trim();
+      const owns = () => view === owner && owner.root.isConnected && sequence === requestSequence;
+      status(owner, "Checking\u2026");
+      checking = true;
+      let descriptor;
+      try {
+        const response = await options2.request(Object.freeze({ base, token: token || null }), "/api/host");
+        if (!owns()) return;
+        if (response.status === 401) throw new Error("that host needs a token");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        if (!owns()) return;
+        descriptor = decodeHostDescriptor(data);
+        if (!descriptor) throw new Error("no host descriptor");
+      } catch (error) {
+        if (owns()) status(owner, `Could not reach that host: ${error instanceof Error ? error.message : String(error)}. A host on another origin must allowlist this one (allowedOrigins in its settings).`, true);
+        return;
+      } finally {
+        if (owns()) checking = false;
+      }
+      if (descriptor.hostId === directory.self.hostId) {
+        status(owner, "That is this host.", true);
+        return;
+      }
+      options2.discovery.rememberDescriptor(descriptor);
+      directory.add({ base, hostId: descriptor.hostId, label: label || descriptor.label || null, token: token || null });
+      connections.reset(descriptor.hostId);
+      save();
+      owner.base.value = "";
+      owner.label.value = "";
+      owner.token.value = "";
+      status(owner, `Added ${displayLabel({ label, base })}.`);
+      options2.refreshSessions();
+      options2.renderNewSessionHosts();
+    }
+    function render() {
+      const owner = view;
+      if (!owner) return;
+      const { list } = owner;
+      owner.rowEvents.abort();
+      owner.rowEvents = new AbortController();
+      const listener = { signal: owner.rowEvents.signal };
+      const hosts = directory.effectiveHosts();
+      list.innerHTML = hosts.map((host) => {
+        const state = connections.stateOf(host);
+        const version = host.version ? `v${host.version}` : "";
+        const detail = [host.self ? "this server" : host.base, version].filter(Boolean).join(" \xB7 ");
+        const actions = [];
+        if (state === "blocked") actions.push(`<button class="btn-small host-token-btn" data-key="${escapeHtml2(host.key)}">token?</button>`);
+        if (host.source === "user") actions.push(`<button class="btn-icon host-remove-btn" data-key="${escapeHtml2(host.key)}" title="Remove host">\u2715</button>`);
+        const hostId = host.hostId || null;
+        const custom = options2.customColor(hostId);
+        const hex = options2.resolveColor(options2.color(hostId)) || "#888888";
+        const colorControls = hosts.length > 1 ? `
+        <input type="color" class="host-color-input" data-host="${escapeHtml2(hostId || "")}"
+          value="${escapeHtml2(hex)}" style="background:${escapeHtml2(hex)}"
+          title="${custom ? "Custom color for this host" : "Automatic color \u2014 pick one to override it"}">
+        <button class="btn-icon host-color-reset${custom ? "" : " hidden"}" data-host="${escapeHtml2(hostId || "")}" title="Back to the automatic color">\u21BA</button>` : "";
+        return `<div class="host-row">
+        <span class="host-dot ${escapeHtml2(state)}" title="${escapeHtml2(STATE_TITLES[state] || state)}"></span>
+        <span class="host-row-name">${escapeHtml2(displayLabel(host))}</span>
+        <span class="host-row-detail" title="${escapeHtml2(host.base || "")}">${escapeHtml2(detail)}</span>
+        <span class="host-row-actions">${colorControls}${actions.join("")}</span>
+      </div>`;
+      }).join("");
+      for (const input of Array.from(list.querySelectorAll(".host-color-input"))) {
+        input.addEventListener("input", () => {
+          if (view !== owner || !list.contains(input)) return;
+          input.style.background = input.value;
+          options2.setColor(input.dataset.host || null, input.value, { rows: false });
+        }, listener);
+        input.addEventListener("change", () => {
+          if (view === owner && list.contains(input)) options2.setColor(input.dataset.host || null, input.value);
+        }, listener);
+      }
+      for (const btn of Array.from(list.querySelectorAll(".host-color-reset"))) {
+        btn.addEventListener("click", () => {
+          if (view === owner && list.contains(btn)) options2.setColor(btn.dataset.host || null, null);
+        }, listener);
+      }
+      for (const btn of Array.from(list.querySelectorAll(".host-remove-btn"))) {
+        btn.addEventListener("click", () => {
+          if (view !== owner || !list.contains(btn)) return;
+          directory.remove(btn.dataset.key || "");
+          save();
+        }, listener);
+      }
+      for (const btn of Array.from(list.querySelectorAll(".host-token-btn"))) {
+        btn.addEventListener("click", () => {
+          if (view === owner && list.contains(btn)) promptToken(btn.dataset.key || "");
+        }, listener);
+      }
+    }
+    return { mount, unmount, render, save, addFromForm };
+  }
+
+  // src/browser/fleet-view.ts
+  var count = (value) => finite(value) && value >= 0 ? Math.round(value) : 0;
+  function bytes(value) {
+    if (!record2(value) || !finite(value.totalBytes) || !finite(value.availableBytes) || value.totalBytes <= 0) return null;
+    return { totalBytes: value.totalBytes, availableBytes: Math.min(value.totalBytes, Math.max(0, value.availableBytes)) };
+  }
+  function decodeFleetHealth(value) {
+    if (!record2(value)) throw new Error("Invalid host health");
+    const cpu = record2(value.cpu) ? value.cpu : {};
+    const load = Array.isArray(cpu.load) && cpu.load.length === 3 && cpu.load.every(finite) ? cpu.load : null;
+    const sessions = record2(value.sessions) ? value.sessions : null;
+    return {
+      uptimeSec: finite(value.uptimeSec) ? value.uptimeSec : null,
+      platform: typeof value.platform === "string" ? value.platform : "",
+      arch: typeof value.arch === "string" ? value.arch : "",
+      cpu: {
+        cores: count(cpu.cores),
+        utilization: finite(cpu.utilization) ? Math.min(1, Math.max(0, cpu.utilization)) : null,
+        load
+      },
+      memory: bytes(value.memory),
+      disk: bytes(value.disk),
+      sessions: sessions ? { live: count(sessions.live), working: count(sessions.working), waiting: count(sessions.waiting), subagents: count(sessions.subagents) } : null
+    };
+  }
+  function formatBytes(value) {
+    const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+    let n = value, unit = 0;
+    while (n >= 1024 && unit < units.length - 1) {
+      n /= 1024;
+      unit++;
+    }
+    return (n >= 100 || unit === 0 ? Math.round(n) : n.toFixed(1).replace(/\.0$/, "")) + " " + units[unit];
+  }
+  function formatUptime(seconds) {
+    const days = Math.floor(seconds / 86400), hours = Math.floor(seconds % 86400 / 3600);
+    if (days) return `${days}d ${hours}h`;
+    const minutes = Math.floor(seconds % 3600 / 60);
+    return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+  }
+  function meterLevel(fraction) {
+    return fraction >= 0.9 ? "crit" : fraction >= 0.75 ? "warn" : "ok";
+  }
+  function meterHtml(label, fraction, value, title = "") {
+    if (fraction === null) {
+      return `<div class="fleet-meter unknown"><span class="fleet-meter-label">${label}</span><span class="fleet-meter-bar"></span><span class="fleet-meter-value">${escapeHtml(value)}</span></div>`;
+    }
+    const pct2 = Math.round(fraction * 100);
+    return `<div class="fleet-meter" data-level="${meterLevel(fraction)}" role="meter" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct2}"${title ? ` title="${escapeHtml(title)}"` : ""}><span class="fleet-meter-label">${label}</span><span class="fleet-meter-bar"><i style="width:${pct2}%"></i></span><span class="fleet-meter-value">${escapeHtml(value)}</span></div>`;
+  }
+  function usedMeter(label, value) {
+    if (!value) return meterHtml(label, null, "unavailable");
+    const used = value.totalBytes - value.availableBytes;
+    return meterHtml(
+      label,
+      used / value.totalBytes,
+      `${formatBytes(used)} / ${formatBytes(value.totalBytes)}`,
+      `${formatBytes(value.availableBytes)} available`
+    );
+  }
+  function fleetSessionsHtml(sessions, fallback2) {
+    const s = sessions || (fallback2 ? { ...fallback2, waiting: 0, subagents: 0 } : null);
+    if (!s) return '<div class="fleet-sessions muted">Sessions unknown</div>';
+    const parts = [`<strong>${s.live}</strong> live`];
+    if (s.working) parts.push(`<span class="fleet-working">${s.working} working</span>`);
+    if (s.waiting) parts.push(`${s.waiting} waiting on you`);
+    if (s.subagents) parts.push(`${s.subagents} subagent${s.subagents === 1 ? "" : "s"}`);
+    return `<div class="fleet-sessions">${parts.join(" \xB7 ")}</div>`;
+  }
+  function fleetHealthHtml(health) {
+    const cpu = health.cpu;
+    const load = cpu.load ? `load ${cpu.load[0].toFixed(2)}` : "";
+    const cpuValue = cpu.utilization === null ? "unavailable" : [`${Math.round(cpu.utilization * 100)}%`, load, cpu.cores ? `${cpu.cores} cores` : ""].filter(Boolean).join(" \xB7 ");
+    const cpuTitle = cpu.load ? `Load average ${cpu.load.map((n) => n.toFixed(2)).join(" / ")} (1/5/15 min)` : "";
+    return `<div class="fleet-meters">${meterHtml("CPU", cpu.utilization, cpuValue, cpuTitle)}${usedMeter("Memory", health.memory)}${usedMeter("Disk ~", health.disk)}</div>`;
+  }
+  var STALE_MS = 3e4;
+  var STATE_NOTES = { reachable: "", connecting: "connecting", backoff: "unreachable", blocked: "needs a token" };
+  function createFleetView(options2) {
+    const doc = options2.root.ownerDocument;
+    const now = options2.now || (() => Date.now());
+    const pollMs = options2.pollMs ?? 1e4;
+    const states = /* @__PURE__ */ new Map();
+    let disposed = false, generation = 0, timer = null;
+    const keyOf = (host) => `${host.hostId || ""}\0${host.base}\0${host.token || ""}`;
+    const isOpen = () => !disposed && options2.root.classList.contains("fleet-open");
+    const list = () => doc.getElementById("fleetHosts");
+    function schedule() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (!isOpen()) return;
+      timer = setTimeout(() => {
+        timer = null;
+        if (isOpen() && !doc.hidden) void load();
+        else schedule();
+      }, pollMs);
+    }
+    function hostHtml(host) {
+      const state = states.get(keyOf(host));
+      const connection = options2.connection(host);
+      const offline = connection === "backoff" || connection === "blocked";
+      const note = STATE_NOTES[connection];
+      const health = state?.health;
+      const stale = !!state?.receivedAt && now() - state.receivedAt > STALE_MS;
+      const version = typeof host.version === "string" && host.version ? "v" + host.version : "";
+      const meta = [
+        version,
+        health ? [health.platform, health.arch].filter(Boolean).join(" ") : "",
+        health?.uptimeSec ? "up " + formatUptime(health.uptimeSec) : ""
+      ].filter(Boolean).join(" \xB7 ");
+      let body;
+      if (health) body = fleetHealthHtml(health);
+      else if (offline) body = "";
+      else if (!options2.supports(host)) body = `<div class="fleet-host-note">Update pi-dish on this host to report capacity.</div>`;
+      else if (state?.error) body = `<div class="fleet-host-note error">${escapeHtml(state.error)}</div>`;
+      else body = '<div class="fleet-host-note">Loading\u2026</div>';
+      const flags = [
+        note && `<span class="fleet-host-state ${connection}">${escapeHtml(note)}</span>`,
+        stale && '<span class="fleet-host-state stale" title="No fresh reading in the last 30s">stale</span>',
+        state?.error && health ? `<span class="fleet-host-state error" title="${escapeHtml(state.error)}">last refresh failed</span>` : ""
+      ].filter(Boolean).join("");
+      return `<section class="fleet-host${offline ? " offline" : ""}"><header class="fleet-host-head">${options2.dot(host.hostId)}<strong class="fleet-host-name">${escapeHtml(hostDisplayLabel(host))}</strong>${host.self ? '<span class="fleet-host-self">this server</span>' : ""}${flags}${meta ? `<span class="fleet-host-meta">${escapeHtml(meta)}</span>` : ""}</header>` + (offline && !health ? "" : fleetSessionsHtml(health?.sessions || null, options2.clientSessions(host.hostId))) + body + "</section>";
+    }
+    function render() {
+      const element = list();
+      if (!element || !isOpen()) return;
+      const hosts = options2.hosts();
+      const keys = new Set(hosts.map(keyOf));
+      for (const key of states.keys()) if (!keys.has(key)) states.delete(key);
+      for (const host of hosts) if (!states.has(keyOf(host))) void loadHost(host, generation);
+      const html = hosts.map(hostHtml).join("");
+      if (element.innerHTML !== html) element.innerHTML = html;
+    }
+    async function loadHost(host, owner) {
+      const key = keyOf(host), endpoint = Object.freeze({ ...host });
+      const state = states.get(key) || { key };
+      states.set(key, state);
+      const connection = options2.connection(host);
+      if (!options2.supports(host) || connection === "blocked") return;
+      state.pending = true;
+      const owns = () => owner === generation && isOpen() && states.get(key) === state;
+      try {
+        const response = await options2.request(endpoint, "/api/host/health", { timeoutMs: 8e3 });
+        if (response.status === 401) {
+          options2.noteConnection(host, "blocked");
+          throw new Error("Needs a token");
+        }
+        const data = await response.json();
+        if (!response.ok) throw new Error(record2(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+        const health = decodeFleetHealth(data);
+        options2.noteConnection(host, "success");
+        if (!owns()) return;
+        state.health = health;
+        state.error = void 0;
+        state.receivedAt = now();
+      } catch (error) {
+        if (!(error instanceof Error && error.message === "Needs a token")) options2.noteConnection(host, { type: "failure", error });
+        if (!owns()) return;
+        state.error = error instanceof Error ? error.message : String(error);
+      } finally {
+        if (owns()) {
+          state.pending = false;
+          render();
+        }
+      }
+    }
+    async function load() {
+      if (!isOpen()) return;
+      const owner = ++generation;
+      const pending = options2.hosts().map((host) => loadHost(host, owner));
+      render();
+      await Promise.allSettled(pending);
+      if (owner === generation) {
+        render();
+        schedule();
+      }
+    }
+    function open() {
+      if (disposed) return;
+      options2.closeOtherViews();
+      if (isOpen()) {
+        void load();
+        return;
+      }
+      options2.root.classList.add("fleet-open");
+      options2.mountSections();
+      const body = doc.getElementById("fleetViewBody");
+      if (body) body.scrollTop = 0;
+      void load();
+    }
+    function close() {
+      if (disposed || !isOpen()) return;
+      ++generation;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      options2.closeBounce();
+      options2.unmountSections();
+      options2.root.classList.remove("fleet-open");
+    }
+    return {
+      open,
+      close,
+      isOpen,
+      render,
+      refresh: () => {
+        void load();
+      },
+      dispose() {
+        close();
+        disposed = true;
+        states.clear();
+      }
     };
   }
 
@@ -7458,12 +7673,12 @@ ${row.id}`;
         let dot = "";
         if (s.turnInProgress || s.compacting) dot = '<span class="session-item-status working"></span>';
         else if (s.isActive) dot = '<span class="live-dot"></span>';
-        const count2 = s.matchCount ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? "match" : "matches"}</span>` : "";
+        const count3 = s.matchCount ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? "match" : "matches"}</span>` : "";
         const snippets = (s.snippets || []).map((sn) => `<div class="search-result-snippet">${highlightTokens(sn, tokens2)}</div>`).join("");
         return `<div class="search-result" data-id="${escapeHtml(s.id)}"${s.host ? ` data-host="${escapeHtml(s.host)}"` : ""} data-content-matches="${s.matchCount > 0 ? "1" : "0"}">
         <div class="search-result-header">
           ${dot}<span class="search-result-name">${highlightTokens(s.name || "Unnamed", tokens2)}</span>
-          ${count2}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
+          ${count3}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
         </div>
         <div class="search-result-meta">${hostChipHtml(s.host)}${escapeHtml(shortCwd(s.cwd || "~"))} \xB7 ${escapeHtml(s.model)}</div>
         ${snippets}
@@ -7779,7 +7994,7 @@ ${row.id}`;
       };
       return list.sort(Object.hasOwn(comparisons, skillsSort) ? comparisons[skillsSort] : byRecent);
     }
-    const STALE_MS = 60 * 864e5;
+    const STALE_MS2 = 60 * 864e5;
     function renderSkillsDirectory(d) {
       if (!owns() || skillsDetailPath) return;
       retireBody();
@@ -7792,7 +8007,7 @@ ${row.id}`;
       const rows = sortedSkills(d).map((sk) => {
         const u = sk.usage;
         const last = u.lastUsedTs ? formatRelativeTime(u.lastUsedTs) : "\u2014";
-        const stale = u.lastUsedTs == null || now - u.lastUsedTs > STALE_MS;
+        const stale = u.lastUsedTs == null || now - u.lastUsedTs > STALE_MS2;
         const manual = sk.advertised ? "" : '<span class="manual">manual</span>';
         return `<div class="sk-row" data-skill="${escapeHtml(sk.skill)}">
         <div><div class="sk-name">${escapeHtml(sk.name)}${manual}</div><div class="sk-desc">${escapeHtml(sk.description || "")}</div></div>
@@ -16080,7 +16295,7 @@ ${restored}`;
 
   // src/browser/transcript-tree-data.ts
   var text15 = (value) => typeof value === "string" ? value : "";
-  var count = (value) => finite(value) ? Math.max(0, Math.floor(value)) : 0;
+  var count2 = (value) => finite(value) ? Math.max(0, Math.floor(value)) : 0;
   function decodeTranscriptTree(value) {
     if (!record2(value) || !Array.isArray(value.nodes)) throw new Error("Invalid session tree");
     const maxDepth = value.nodes.length;
@@ -16094,8 +16309,8 @@ ${restored}`;
           parentId: typeof node.parentId === "string" ? node.parentId : null,
           type: text15(node.type),
           role: text15(node.role),
-          depth: Math.min(count(node.depth), maxDepth),
-          childCount: count(node.childCount),
+          depth: Math.min(count2(node.depth), maxDepth),
+          childCount: count2(node.childCount),
           isLeaf: node.isLeaf === true,
           text: text15(node.text),
           label: text15(node.label),
@@ -16106,7 +16321,7 @@ ${restored}`;
           stopReason: text15(node.stopReason),
           errorMessage: text15(node.errorMessage),
           isError: node.isError === true,
-          tokensBefore: count(node.tokensBefore),
+          tokensBefore: count2(node.tokensBefore),
           toolCalls: Array.isArray(node.toolCalls) ? node.toolCalls.flatMap((tool) => record2(tool) && typeof tool.id === "string" ? [{ id: tool.id, name: text15(tool.name), args: text15(tool.args) }] : []) : []
         }];
       })
@@ -17203,7 +17418,7 @@ ${restored}`;
         const last = r.stats?.lastInvocation || null;
         const dot = `<span class="rt-dot ${last ? routineStatusClass(last.status) : "none"}" title="${escapeHtml(last ? last.status : "never run")}"></span>`;
         const lastLine = last ? `${dot}${escapeHtml(last.status)} \xB7 ${escapeHtml(formatRelativeTime(last.startedAt))}` : `${dot}never run`;
-        const count2 = r.stats?.invocations || 0;
+        const count3 = r.stats?.invocations || 0;
         return `<div class="rt-row${routineSelKey === key ? " selected" : ""}" data-routine="${escapeHtml(r.id)}" data-host="${escapeHtml(r.host || "")}">
         <div class="rt-row-top">
           <span class="rt-name">${escapeHtml(r.name || r.id)}</span>
@@ -17211,7 +17426,7 @@ ${restored}`;
         </div>
         <div class="rt-row-sched">${routineScheduleLine(r)}</div>
         <div class="rt-row-meta">${escapeHtml(r.mode === "continue" ? "continue" : "one-shot")} \xB7 on busy ${escapeHtml(r.onBusy || "skip")}</div>
-        <div class="rt-row-last">${lastLine}<span class="rt-count">${count2} run${count2 === 1 ? "" : "s"}</span></div>
+        <div class="rt-row-last">${lastLine}<span class="rt-count">${count3} run${count3 === 1 ? "" : "s"}</span></div>
       </div>`;
       }).join("");
       el.innerHTML = `
@@ -18276,11 +18491,11 @@ ${restored}`;
     }
     function updateBounceSelection() {
       if (disposed) return;
-      const count2 = bounceHosts.reduce((sum, state) => sum + (bounceHostElement(state) ? state.selected.size : 0), 0);
+      const count3 = bounceHosts.reduce((sum, state) => sum + (bounceHostElement(state) ? state.selected.size : 0), 0);
       const mode = element("bounceMode").value === "restart" ? "Restart" : "Reload";
       const submit = element("bounceSubmit");
-      submit.disabled = !count2 || bounceSubmitting;
-      submit.textContent = bounceSubmitting ? "Queueing\u2026" : `Queue ${mode} (${count2})`;
+      submit.disabled = !count3 || bounceSubmitting;
+      submit.textContent = bounceSubmitting ? "Queueing\u2026" : `Queue ${mode} (${count3})`;
       for (const id of ["bounceMode", "bounceRefresh", "bounceSelectEligible", "bounceClearSelection"]) {
         element(id).disabled = bounceSubmitting;
       }
@@ -18435,6 +18650,9 @@ ${restored}`;
     "openSkillsView",
     "openRoutinesView",
     "openSettingsModal",
+    "openFleetView",
+    "refreshFleetView",
+    "closeFleetView",
     "refreshSessions",
     "openNewSessionView",
     "openSessionHarnessSettings",
@@ -19155,16 +19373,10 @@ ${restored}`;
     host: () => hostEntryFor(null),
     beforeOpen: () => {
       sidebarQuery.close();
-      bounceController.close();
     },
-    unmountSections: () => {
-      recoveryController.unmountPreferences();
-      hostSettings.unmount();
-    },
-    mountSections: (body) => {
-      hostSettings.mount(body);
-      recoveryController.refreshHosts();
-      recoveryController.mountPreferences();
+    openFleet: () => {
+      closeSettingsModal();
+      fleetController.open();
     },
     themes: { render: (select) => themesController.render(select), apply: (id) => themesController.apply(id) },
     filters: () => sidebarQuery.filters,
@@ -19175,7 +19387,6 @@ ${restored}`;
     alert: (message3) => alert(message3)
   });
   function closeSettingsModal() {
-    bounceController.close();
     displayPreferences.close();
   }
   var recoveryController = createRecovery({
@@ -19187,7 +19398,7 @@ ${restored}`;
     fleetReady: () => hostFleetReady,
     refreshFleet: (...args) => hostDiscovery.loadFleet(...args),
     selectedHost: () => sessionState.currentSession?.host || null,
-    settingsOpen: () => document.getElementById("settingsModal").style.display !== "none",
+    preferencesOpen: () => fleetController.isOpen(),
     closeOtherViews: () => mainPane.beforeTakeover("recovery"),
     confirm: (message3) => confirm(message3)
   });
@@ -19216,7 +19427,35 @@ ${restored}`;
   function renderHostsSection() {
     recoveryController.refreshHosts();
     hostSettings.render();
+    fleetController.render();
   }
+  var fleetController = createFleetView({
+    root: document.querySelector(".main"),
+    request: (...args) => apiTransport.request(...args),
+    hosts: effectiveHosts,
+    connection: (host) => hostConnections.stateOf(host),
+    supports: (host) => hostSupportsCapability(host, "hostHealth", appConfig),
+    clientSessions: (hostId) => {
+      const self = selfHostEntry();
+      const rows = sessionState.sessions.active.filter((session) => (session.host || null) === hostId || !session.host && self?.hostId === hostId);
+      return { live: rows.length, working: rows.filter((session) => session.turnInProgress).length };
+    },
+    dot: (hostId) => hostPresentation.dotHtml(hostId, "fleet-host-dot"),
+    noteConnection: (host, event) => hostConnections.note(host, event),
+    closeOtherViews: () => mainPane.beforeTakeover("fleet"),
+    mountSections: () => {
+      const connections = document.getElementById("fleetConnections");
+      connections.innerHTML = hostSettingsHtml;
+      hostSettings.mount(connections);
+      recoveryController.refreshHosts();
+      void recoveryController.mountPreferences();
+    },
+    unmountSections: () => {
+      recoveryController.unmountPreferences();
+      hostSettings.unmount();
+    },
+    closeBounce: () => bounceController.close()
+  });
   var searchViewController = createSearchView({
     root: document.querySelector(".main"),
     request: (...args) => apiTransport.request(...args),
@@ -19692,6 +19931,9 @@ ${restored}`;
     } else if (recoveryController.isOpen()) {
       e.preventDefault();
       recoveryController.close();
+    } else if (fleetController.isOpen()) {
+      e.preventDefault();
+      fleetController.close();
     } else if (routinesController.isOpen()) {
       e.preventDefault();
       routinesController.escape();
@@ -19811,7 +20053,8 @@ ${restored}`;
       newSession: { close: () => newSessionController.close() },
       skills: { close: () => skillsController.close() },
       routines: { close: () => routinesController.close() },
-      recovery: { close: () => recoveryController.close(), clearsSessionSurfaces: true }
+      recovery: { close: () => recoveryController.close(), clearsSessionSurfaces: true },
+      fleet: { close: () => fleetController.close(), hostsBounce: true }
     },
     sessionSurfaces: {
       search: { close: () => sessionSearch.close() },
@@ -19836,6 +20079,9 @@ ${restored}`;
     openSkillsView: () => skillsController.open(),
     openRoutinesView: () => routinesController.open(),
     openSettingsModal: () => displayPreferences.open(),
+    openFleetView: () => fleetController.open(),
+    refreshFleetView: () => fleetController.refresh(),
+    closeFleetView: () => fleetController.close(),
     refreshSessions: () => sidebarLists.refresh(),
     openNewSessionView: () => newSessionController.open(),
     openSessionHarnessSettings: () => openSessionHarnessSettings(),

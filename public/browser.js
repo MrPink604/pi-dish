@@ -54,6 +54,7 @@ var PiDishBrowser = (() => {
     createDisplayPreferences: () => createDisplayPreferences,
     createExtensionUI: () => createExtensionUI,
     createFileViews: () => createFileViews,
+    createFleetView: () => createFleetView,
     createHarnessDiscovery: () => createHarnessDiscovery,
     createHarnessSettings: () => createHarnessSettings,
     createHostConnections: () => createHostConnections,
@@ -120,6 +121,7 @@ var PiDishBrowser = (() => {
     decodeExtensionRequest: () => decodeExtensionRequest,
     decodeFileCompletions: () => decodeFileCompletions,
     decodeFilePreview: () => decodeFilePreview,
+    decodeFleetHealth: () => decodeFleetHealth,
     decodeHarnessAgents: () => decodeHarnessAgents,
     decodeHarnessConfig: () => decodeHarnessConfig,
     decodeHarnessConfigPreview: () => decodeHarnessConfigPreview,
@@ -156,7 +158,11 @@ var PiDishBrowser = (() => {
     decodeUsageLimits: () => decodeUsageLimits,
     decodeUsageSummary: () => decodeUsageSummary,
     findQuoteOffset: () => findQuoteOffset,
+    fleetHealthHtml: () => fleetHealthHtml,
+    fleetSessionsHtml: () => fleetSessionsHtml,
+    formatBytes: () => formatBytes,
     formatGap: () => formatGap,
+    formatUptime: () => formatUptime,
     groupToolActivity: () => groupToolActivity,
     harnessBadgeInnerHtml: () => harnessBadgeInnerHtml,
     hostConnReduce: () => hostConnReduce,
@@ -166,6 +172,7 @@ var PiDishBrowser = (() => {
     mergeComposerText: () => mergeComposerText,
     mergeHostEntries: () => mergeHostEntries,
     mergeSearchPayloads: () => mergeSearchPayloads,
+    meterLevel: () => meterLevel,
     modelCatalogUrl: () => modelCatalogUrl,
     modelHiddenNote: () => modelHiddenNote,
     modelSelectOptionsHtml: () => modelSelectOptionsHtml,
@@ -4000,7 +4007,7 @@ var PiDishBrowser = (() => {
       const section = doc.getElementById("recoveryPreferences");
       if (!section || disposed) return;
       await options2.fleetReady();
-      if (disposed || mountSeq !== preferencesSeq || !section.isConnected || !options2.settingsOpen()) return;
+      if (disposed || mountSeq !== preferencesSeq || !section.isConnected || !options2.preferencesOpen()) return;
       const events = preferenceEvents = new AbortController();
       const listener = { signal: events.signal };
       section.hidden = false;
@@ -4021,7 +4028,7 @@ var PiDishBrowser = (() => {
       hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), options2.selectedHost())?.hostId || "";
       let seq = 0;
       const selectedHost = () => recoveryCapableHosts().find((host) => (host.hostId || "") === hostSelect.value);
-      const ownsView = () => !disposed && mountSeq === preferencesSeq && section.isConnected && options2.settingsOpen();
+      const ownsView = () => !disposed && mountSeq === preferencesSeq && section.isConnected && options2.preferencesOpen();
       const owns = (request, host) => ownsView() && seq === request && sameHost(host, selectedHost());
       const load = async () => {
         if (!ownsView()) return;
@@ -4370,11 +4377,11 @@ var PiDishBrowser = (() => {
     }
     function updateBounceSelection() {
       if (disposed) return;
-      const count2 = bounceHosts.reduce((sum, state) => sum + (bounceHostElement(state) ? state.selected.size : 0), 0);
+      const count3 = bounceHosts.reduce((sum, state) => sum + (bounceHostElement(state) ? state.selected.size : 0), 0);
       const mode = element("bounceMode").value === "restart" ? "Restart" : "Reload";
       const submit = element("bounceSubmit");
-      submit.disabled = !count2 || bounceSubmitting;
-      submit.textContent = bounceSubmitting ? "Queueing\u2026" : `Queue ${mode} (${count2})`;
+      submit.disabled = !count3 || bounceSubmitting;
+      submit.textContent = bounceSubmitting ? "Queueing\u2026" : `Queue ${mode} (${count3})`;
       for (const id of ["bounceMode", "bounceRefresh", "bounceSelectEligible", "bounceClearSelection"]) {
         element(id).disabled = bounceSubmitting;
       }
@@ -4523,6 +4530,221 @@ var PiDishBrowser = (() => {
     };
   }
 
+  // src/browser/fleet-view.ts
+  var count = (value) => finite2(value) && value >= 0 ? Math.round(value) : 0;
+  function bytes(value) {
+    if (!record8(value) || !finite2(value.totalBytes) || !finite2(value.availableBytes) || value.totalBytes <= 0) return null;
+    return { totalBytes: value.totalBytes, availableBytes: Math.min(value.totalBytes, Math.max(0, value.availableBytes)) };
+  }
+  function decodeFleetHealth(value) {
+    if (!record8(value)) throw new Error("Invalid host health");
+    const cpu = record8(value.cpu) ? value.cpu : {};
+    const load = Array.isArray(cpu.load) && cpu.load.length === 3 && cpu.load.every(finite2) ? cpu.load : null;
+    const sessions = record8(value.sessions) ? value.sessions : null;
+    return {
+      uptimeSec: finite2(value.uptimeSec) ? value.uptimeSec : null,
+      platform: typeof value.platform === "string" ? value.platform : "",
+      arch: typeof value.arch === "string" ? value.arch : "",
+      cpu: {
+        cores: count(cpu.cores),
+        utilization: finite2(cpu.utilization) ? Math.min(1, Math.max(0, cpu.utilization)) : null,
+        load
+      },
+      memory: bytes(value.memory),
+      disk: bytes(value.disk),
+      sessions: sessions ? { live: count(sessions.live), working: count(sessions.working), waiting: count(sessions.waiting), subagents: count(sessions.subagents) } : null
+    };
+  }
+  function formatBytes(value) {
+    const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+    let n = value, unit = 0;
+    while (n >= 1024 && unit < units.length - 1) {
+      n /= 1024;
+      unit++;
+    }
+    return (n >= 100 || unit === 0 ? Math.round(n) : n.toFixed(1).replace(/\.0$/, "")) + " " + units[unit];
+  }
+  function formatUptime(seconds) {
+    const days = Math.floor(seconds / 86400), hours = Math.floor(seconds % 86400 / 3600);
+    if (days) return `${days}d ${hours}h`;
+    const minutes = Math.floor(seconds % 3600 / 60);
+    return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+  }
+  function meterLevel(fraction) {
+    return fraction >= 0.9 ? "crit" : fraction >= 0.75 ? "warn" : "ok";
+  }
+  function meterHtml(label, fraction, value, title = "") {
+    if (fraction === null) {
+      return `<div class="fleet-meter unknown"><span class="fleet-meter-label">${label}</span><span class="fleet-meter-bar"></span><span class="fleet-meter-value">${escapeHtml(value)}</span></div>`;
+    }
+    const pct2 = Math.round(fraction * 100);
+    return `<div class="fleet-meter" data-level="${meterLevel(fraction)}" role="meter" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct2}"${title ? ` title="${escapeHtml(title)}"` : ""}><span class="fleet-meter-label">${label}</span><span class="fleet-meter-bar"><i style="width:${pct2}%"></i></span><span class="fleet-meter-value">${escapeHtml(value)}</span></div>`;
+  }
+  function usedMeter(label, value) {
+    if (!value) return meterHtml(label, null, "unavailable");
+    const used = value.totalBytes - value.availableBytes;
+    return meterHtml(
+      label,
+      used / value.totalBytes,
+      `${formatBytes(used)} / ${formatBytes(value.totalBytes)}`,
+      `${formatBytes(value.availableBytes)} available`
+    );
+  }
+  function fleetSessionsHtml(sessions, fallback2) {
+    const s = sessions || (fallback2 ? { ...fallback2, waiting: 0, subagents: 0 } : null);
+    if (!s) return '<div class="fleet-sessions muted">Sessions unknown</div>';
+    const parts = [`<strong>${s.live}</strong> live`];
+    if (s.working) parts.push(`<span class="fleet-working">${s.working} working</span>`);
+    if (s.waiting) parts.push(`${s.waiting} waiting on you`);
+    if (s.subagents) parts.push(`${s.subagents} subagent${s.subagents === 1 ? "" : "s"}`);
+    return `<div class="fleet-sessions">${parts.join(" \xB7 ")}</div>`;
+  }
+  function fleetHealthHtml(health) {
+    const cpu = health.cpu;
+    const load = cpu.load ? `load ${cpu.load[0].toFixed(2)}` : "";
+    const cpuValue = cpu.utilization === null ? "unavailable" : [`${Math.round(cpu.utilization * 100)}%`, load, cpu.cores ? `${cpu.cores} cores` : ""].filter(Boolean).join(" \xB7 ");
+    const cpuTitle = cpu.load ? `Load average ${cpu.load.map((n) => n.toFixed(2)).join(" / ")} (1/5/15 min)` : "";
+    return `<div class="fleet-meters">${meterHtml("CPU", cpu.utilization, cpuValue, cpuTitle)}${usedMeter("Memory", health.memory)}${usedMeter("Disk ~", health.disk)}</div>`;
+  }
+  var STALE_MS = 3e4;
+  var STATE_NOTES = { reachable: "", connecting: "connecting", backoff: "unreachable", blocked: "needs a token" };
+  function createFleetView(options2) {
+    const doc = options2.root.ownerDocument;
+    const now = options2.now || (() => Date.now());
+    const pollMs = options2.pollMs ?? 1e4;
+    const states = /* @__PURE__ */ new Map();
+    let disposed = false, generation = 0, timer = null;
+    const keyOf = (host) => `${host.hostId || ""}\0${host.base}\0${host.token || ""}`;
+    const isOpen = () => !disposed && options2.root.classList.contains("fleet-open");
+    const list = () => doc.getElementById("fleetHosts");
+    function schedule() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (!isOpen()) return;
+      timer = setTimeout(() => {
+        timer = null;
+        if (isOpen() && !doc.hidden) void load();
+        else schedule();
+      }, pollMs);
+    }
+    function hostHtml(host) {
+      const state = states.get(keyOf(host));
+      const connection = options2.connection(host);
+      const offline = connection === "backoff" || connection === "blocked";
+      const note = STATE_NOTES[connection];
+      const health = state?.health;
+      const stale = !!state?.receivedAt && now() - state.receivedAt > STALE_MS;
+      const version = typeof host.version === "string" && host.version ? "v" + host.version : "";
+      const meta = [
+        version,
+        health ? [health.platform, health.arch].filter(Boolean).join(" ") : "",
+        health?.uptimeSec ? "up " + formatUptime(health.uptimeSec) : ""
+      ].filter(Boolean).join(" \xB7 ");
+      let body;
+      if (health) body = fleetHealthHtml(health);
+      else if (offline) body = "";
+      else if (!options2.supports(host)) body = `<div class="fleet-host-note">Update pi-dish on this host to report capacity.</div>`;
+      else if (state?.error) body = `<div class="fleet-host-note error">${escapeHtml(state.error)}</div>`;
+      else body = '<div class="fleet-host-note">Loading\u2026</div>';
+      const flags = [
+        note && `<span class="fleet-host-state ${connection}">${escapeHtml(note)}</span>`,
+        stale && '<span class="fleet-host-state stale" title="No fresh reading in the last 30s">stale</span>',
+        state?.error && health ? `<span class="fleet-host-state error" title="${escapeHtml(state.error)}">last refresh failed</span>` : ""
+      ].filter(Boolean).join("");
+      return `<section class="fleet-host${offline ? " offline" : ""}"><header class="fleet-host-head">${options2.dot(host.hostId)}<strong class="fleet-host-name">${escapeHtml(hostDisplayLabel(host))}</strong>${host.self ? '<span class="fleet-host-self">this server</span>' : ""}${flags}${meta ? `<span class="fleet-host-meta">${escapeHtml(meta)}</span>` : ""}</header>` + (offline && !health ? "" : fleetSessionsHtml(health?.sessions || null, options2.clientSessions(host.hostId))) + body + "</section>";
+    }
+    function render() {
+      const element = list();
+      if (!element || !isOpen()) return;
+      const hosts = options2.hosts();
+      const keys = new Set(hosts.map(keyOf));
+      for (const key of states.keys()) if (!keys.has(key)) states.delete(key);
+      for (const host of hosts) if (!states.has(keyOf(host))) void loadHost(host, generation);
+      const html = hosts.map(hostHtml).join("");
+      if (element.innerHTML !== html) element.innerHTML = html;
+    }
+    async function loadHost(host, owner) {
+      const key = keyOf(host), endpoint = Object.freeze({ ...host });
+      const state = states.get(key) || { key };
+      states.set(key, state);
+      const connection = options2.connection(host);
+      if (!options2.supports(host) || connection === "blocked") return;
+      state.pending = true;
+      const owns = () => owner === generation && isOpen() && states.get(key) === state;
+      try {
+        const response = await options2.request(endpoint, "/api/host/health", { timeoutMs: 8e3 });
+        if (response.status === 401) {
+          options2.noteConnection(host, "blocked");
+          throw new Error("Needs a token");
+        }
+        const data = await response.json();
+        if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+        const health = decodeFleetHealth(data);
+        options2.noteConnection(host, "success");
+        if (!owns()) return;
+        state.health = health;
+        state.error = void 0;
+        state.receivedAt = now();
+      } catch (error) {
+        if (!(error instanceof Error && error.message === "Needs a token")) options2.noteConnection(host, { type: "failure", error });
+        if (!owns()) return;
+        state.error = error instanceof Error ? error.message : String(error);
+      } finally {
+        if (owns()) {
+          state.pending = false;
+          render();
+        }
+      }
+    }
+    async function load() {
+      if (!isOpen()) return;
+      const owner = ++generation;
+      const pending = options2.hosts().map((host) => loadHost(host, owner));
+      render();
+      await Promise.allSettled(pending);
+      if (owner === generation) {
+        render();
+        schedule();
+      }
+    }
+    function open() {
+      if (disposed) return;
+      options2.closeOtherViews();
+      if (isOpen()) {
+        void load();
+        return;
+      }
+      options2.root.classList.add("fleet-open");
+      options2.mountSections();
+      const body = doc.getElementById("fleetViewBody");
+      if (body) body.scrollTop = 0;
+      void load();
+    }
+    function close() {
+      if (disposed || !isOpen()) return;
+      ++generation;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      options2.closeBounce();
+      options2.unmountSections();
+      options2.root.classList.remove("fleet-open");
+    }
+    return {
+      open,
+      close,
+      isOpen,
+      render,
+      refresh: () => {
+        void load();
+      },
+      dispose() {
+        close();
+        disposed = true;
+        states.clear();
+      }
+    };
+  }
+
   // src/browser/session-relations.ts
   var EMPTY_LINEAGE = { session: null, tree: null, members: 0, truncated: false };
   var text6 = (value) => typeof value === "string" ? value : "";
@@ -4560,7 +4782,7 @@ var PiDishBrowser = (() => {
   }
   function countLineageMembers(node) {
     if (!node) return 0;
-    return 1 + node.children.reduce((count2, child) => count2 + countLineageMembers(child), 0);
+    return 1 + node.children.reduce((count3, child) => count3 + countLineageMembers(child), 0);
   }
   function decodeSessionLineage(value) {
     if (!record8(value)) return EMPTY_LINEAGE;
@@ -5150,7 +5372,7 @@ var PiDishBrowser = (() => {
       };
       return list.sort(Object.hasOwn(comparisons, skillsSort) ? comparisons[skillsSort] : byRecent);
     }
-    const STALE_MS = 60 * 864e5;
+    const STALE_MS2 = 60 * 864e5;
     function renderSkillsDirectory(d) {
       if (!owns() || skillsDetailPath) return;
       retireBody();
@@ -5163,7 +5385,7 @@ var PiDishBrowser = (() => {
       const rows = sortedSkills(d).map((sk) => {
         const u = sk.usage;
         const last = u.lastUsedTs ? formatRelativeTime(u.lastUsedTs) : "\u2014";
-        const stale = u.lastUsedTs == null || now - u.lastUsedTs > STALE_MS;
+        const stale = u.lastUsedTs == null || now - u.lastUsedTs > STALE_MS2;
         const manual = sk.advertised ? "" : '<span class="manual">manual</span>';
         return `<div class="sk-row" data-skill="${escapeHtml(sk.skill)}">
         <div><div class="sk-name">${escapeHtml(sk.name)}${manual}</div><div class="sk-desc">${escapeHtml(sk.description || "")}</div></div>
@@ -5687,12 +5909,12 @@ var PiDishBrowser = (() => {
         let dot = "";
         if (s.turnInProgress || s.compacting) dot = '<span class="session-item-status working"></span>';
         else if (s.isActive) dot = '<span class="live-dot"></span>';
-        const count2 = s.matchCount ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? "match" : "matches"}</span>` : "";
+        const count3 = s.matchCount ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? "match" : "matches"}</span>` : "";
         const snippets = (s.snippets || []).map((sn) => `<div class="search-result-snippet">${highlightTokens(sn, tokens2)}</div>`).join("");
         return `<div class="search-result" data-id="${escapeHtml(s.id)}"${s.host ? ` data-host="${escapeHtml(s.host)}"` : ""} data-content-matches="${s.matchCount > 0 ? "1" : "0"}">
         <div class="search-result-header">
           ${dot}<span class="search-result-name">${highlightTokens(s.name || "Unnamed", tokens2)}</span>
-          ${count2}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
+          ${count3}<span class="search-result-time">${formatRelativeTime(s.lastActivity)}</span>
         </div>
         <div class="search-result-meta">${hostChipHtml(s.host)}${escapeHtml(shortCwd(s.cwd || "~"))} \xB7 ${escapeHtml(s.model)}</div>
         ${snippets}
@@ -8383,7 +8605,6 @@ var PiDishBrowser = (() => {
       sequence++;
       events.abort();
       filterEvents.abort();
-      options2.unmountSections();
     }
     function close() {
       if (disposed) return;
@@ -8412,8 +8633,7 @@ var PiDishBrowser = (() => {
     <div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. \u201CEffective speed\u201D includes time to first token and JSONL append.</small></label>
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
-    <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
-    ${hostSettingsHtml}
+    <div class="preference-row"><label><strong>Hosts, bounce and recovery</strong><small>Fleet-wide controls live in the Fleet view, beside each host's load.</small></label><button class="btn-small" id="settingsOpenFleet">Open Fleet</button></div>
     <div class="preference-row"><label><strong>Saved sidebar filters</strong><small>Server-global. Chips under the sidebar filter toggle these per device; type a query there and hit \u201C+ save filter\u201D to add one.</small></label><div id="savedFiltersList" class="saved-filters-list"></div></div>`;
       const modeSelect = body.querySelector("#responseMetadataMode");
       modeSelect.value = mode;
@@ -8461,7 +8681,9 @@ var PiDishBrowser = (() => {
         }
       }
       renderFilters();
-      options2.mountSections(body);
+      body.querySelector("#settingsOpenFleet").addEventListener("click", () => {
+        if (owns()) options2.openFleet();
+      }, listener);
       const input = body.querySelector("#monthlyBudget"), status = body.querySelector("#budgetStatus"), save = body.querySelector("#saveBudget");
       save.disabled = true;
       try {
@@ -9168,7 +9390,7 @@ var PiDishBrowser = (() => {
         const last = r.stats?.lastInvocation || null;
         const dot = `<span class="rt-dot ${last ? routineStatusClass(last.status) : "none"}" title="${escapeHtml(last ? last.status : "never run")}"></span>`;
         const lastLine = last ? `${dot}${escapeHtml(last.status)} \xB7 ${escapeHtml(formatRelativeTime(last.startedAt))}` : `${dot}never run`;
-        const count2 = r.stats?.invocations || 0;
+        const count3 = r.stats?.invocations || 0;
         return `<div class="rt-row${routineSelKey === key ? " selected" : ""}" data-routine="${escapeHtml(r.id)}" data-host="${escapeHtml(r.host || "")}">
         <div class="rt-row-top">
           <span class="rt-name">${escapeHtml(r.name || r.id)}</span>
@@ -9176,7 +9398,7 @@ var PiDishBrowser = (() => {
         </div>
         <div class="rt-row-sched">${routineScheduleLine(r)}</div>
         <div class="rt-row-meta">${escapeHtml(r.mode === "continue" ? "continue" : "one-shot")} \xB7 on busy ${escapeHtml(r.onBusy || "skip")}</div>
-        <div class="rt-row-last">${lastLine}<span class="rt-count">${count2} run${count2 === 1 ? "" : "s"}</span></div>
+        <div class="rt-row-last">${lastLine}<span class="rt-count">${count3} run${count3 === 1 ? "" : "s"}</span></div>
       </div>`;
       }).join("");
       el.innerHTML = `
@@ -10623,7 +10845,7 @@ var PiDishBrowser = (() => {
 
   // src/browser/transcript-tree-data.ts
   var text13 = (value) => typeof value === "string" ? value : "";
-  var count = (value) => finite2(value) ? Math.max(0, Math.floor(value)) : 0;
+  var count2 = (value) => finite2(value) ? Math.max(0, Math.floor(value)) : 0;
   function decodeTranscriptTree(value) {
     if (!record8(value) || !Array.isArray(value.nodes)) throw new Error("Invalid session tree");
     const maxDepth = value.nodes.length;
@@ -10637,8 +10859,8 @@ var PiDishBrowser = (() => {
           parentId: typeof node.parentId === "string" ? node.parentId : null,
           type: text13(node.type),
           role: text13(node.role),
-          depth: Math.min(count(node.depth), maxDepth),
-          childCount: count(node.childCount),
+          depth: Math.min(count2(node.depth), maxDepth),
+          childCount: count2(node.childCount),
           isLeaf: node.isLeaf === true,
           text: text13(node.text),
           label: text13(node.label),
@@ -10649,7 +10871,7 @@ var PiDishBrowser = (() => {
           stopReason: text13(node.stopReason),
           errorMessage: text13(node.errorMessage),
           isError: node.isError === true,
-          tokensBefore: count(node.tokensBefore),
+          tokensBefore: count2(node.tokensBefore),
           toolCalls: Array.isArray(node.toolCalls) ? node.toolCalls.flatMap((tool) => record8(tool) && typeof tool.id === "string" ? [{ id: tool.id, name: text13(tool.name), args: text13(tool.args) }] : []) : []
         }];
       })
@@ -15926,8 +16148,8 @@ ${restored}`;
       return isUnreadSession(session, seen, sessionState.currentSession ? sessionRefKey(sessionState.currentSession) : null, !document2.hidden);
     }
     function title() {
-      const count2 = sessionState.sessions.active.filter(unread).length;
-      document2.title = count2 ? `(${count2}) pi-dish` : "pi-dish";
+      const count3 = sessionState.sessions.active.filter(unread).length;
+      document2.title = count3 ? `(${count3}) pi-dish` : "pi-dish";
     }
     function prune(host, active) {
       const live = new Set(active.map((row) => sessionKey(row.host || host, row.id)));
@@ -18560,6 +18782,9 @@ ${row.id}`;
     "openSkillsView",
     "openRoutinesView",
     "openSettingsModal",
+    "openFleetView",
+    "refreshFleetView",
+    "closeFleetView",
     "refreshSessions",
     "openNewSessionView",
     "openSessionHarnessSettings",

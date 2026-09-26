@@ -63,7 +63,8 @@ session; `read` reads it.
 
 Also available: `show` (raw JSON window), `related`, `interrupt`, `close`
 (graceful, no force-kill), `hosts` (the fleet; `--host <name>` puts any
-command on that host), `attach` (join a live session's tmux pane from this
+command on that host), `load` (how busy this host is; `--all-hosts` for the
+fleet — check before heavy builds or fanning out peers), `attach` (join a live session's tmux pane from this
 terminal — local only), `resolve`, `session`.
 
 ## Going deeper

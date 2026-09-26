@@ -478,6 +478,78 @@ test('live subagent sessions surface under their live parent on the Active tab',
         await get('/api/sessions');
     }
 });
+test('GET /api/host/health reports capacity plus live sessions and subagents from the catalog', async () => {
+    const numeric = (value) => typeof value === 'number' && Number.isFinite(value);
+    const before = await get('/api/host/health');
+    assert.equal(before.status, 200, JSON.stringify(before.body));
+    const body = before.body;
+    assert.equal(typeof body.sampledAt, 'string');
+    assert.ok(!Number.isNaN(Date.parse(String(body.sampledAt))));
+    assert.ok(numeric(body.uptimeSec));
+    assert.equal(body.platform, process.platform);
+    assert.equal(body.arch, process.arch);
+    const cpu = (0, test_types_js_1.record)(body.cpu);
+    assert.ok(numeric(cpu.cores) && Number(cpu.cores) > 0);
+    assert.ok(cpu.utilization === null || (numeric(cpu.utilization) && Number(cpu.utilization) >= 0 && Number(cpu.utilization) <= 1));
+    assert.ok(cpu.windowMs === null || numeric(cpu.windowMs));
+    assert.ok(cpu.load === null || (Array.isArray(cpu.load) && cpu.load.length === 3 && cpu.load.every(numeric)));
+    const memory = (0, test_types_js_1.record)(body.memory);
+    assert.ok(numeric(memory.totalBytes) && Number(memory.totalBytes) > 0);
+    assert.ok(numeric(memory.availableBytes) && Number(memory.availableBytes) <= Number(memory.totalBytes));
+    if (body.disk !== null) {
+        const disk = (0, test_types_js_1.record)(body.disk);
+        assert.equal(disk.path, '~', 'the disk path never discloses the home directory');
+        assert.ok(numeric(disk.totalBytes) && numeric(disk.availableBytes));
+    }
+    const baseline = (0, test_types_js_1.record)(body.sessions);
+    for (const key of ['live', 'working', 'waiting', 'subagents'])
+        assert.ok(numeric(baseline[key]), key);
+    assert.equal(typeof baseline.byHarness, 'object');
+    // A registered live OMP session with one working subagent is counted from
+    // the same active-only catalog the sidebar's Active poll uses.
+    const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+    fs.mkdirSync(registryDir, { recursive: true });
+    const socket = path.join(tmpHome, 'omp-host-health.sock');
+    fs.writeFileSync(socket, 'stub');
+    const identity = (0, test_types_js_1.present)(processIdentity(process.pid));
+    const registryPath = path.join(registryDir, 'omp-host-health.json');
+    const childDir = ompSessionFile.slice(0, -'.jsonl'.length);
+    const subagentFile = path.join(childDir, 'HealthProbe.jsonl');
+    fs.mkdirSync(childDir, { recursive: true });
+    fs.writeFileSync(subagentFile, [
+        { type: 'session', version: 3, id: 'omp-host-health-subagent', cwd: ompCwd },
+        { type: 'message', id: 'hh-u1', parentId: null, message: { role: 'user', content: [{ type: 'text', text: 'probe' }] } },
+    ].map(value => JSON.stringify(value)).join('\n') + '\n');
+    fs.writeFileSync(registryPath, JSON.stringify({
+        protocolVersion: 2,
+        wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+        harnessId: 'omp', nativeSessionId: OMP_SESSION_ID, sessionId: OMP_SESSION_ID,
+        bridgeInstanceId: 'omp-host-health', instanceId: 'omp-host-health',
+        socketPath: socket, cwd: ompCwd, sessionFile: ompSessionFile,
+        pid: identity.pid, startTime: identity.startTime,
+        capabilities: {}, spawnToken: null,
+    }));
+    invalidateRegistryCache();
+    try {
+        const during = await get('/api/host/health');
+        assert.equal(during.status, 200);
+        const sessions = (0, test_types_js_1.record)(during.body.sessions);
+        const active = await get('/api/sessions?active=1');
+        assert.equal(sessions.live, (0, test_types_js_1.records)(active.body.active).length, 'live matches the Active tab');
+        assert.equal(sessions.live, Number(baseline.live) + 1);
+        assert.equal(sessions.subagents, (0, test_types_js_1.records)(active.body.children).length);
+        assert.ok(Number(sessions.subagents) >= 1, 'the running subagent is counted');
+        assert.ok(Number((0, test_types_js_1.record)(sessions.byHarness).omp) >= 1, 'live sessions are grouped by harness');
+    }
+    finally {
+        fs.rmSync(registryPath, { force: true });
+        fs.rmSync(subagentFile, { force: true });
+        invalidateRegistryCache();
+        await get('/api/sessions');
+    }
+    const after = await get('/api/host/health');
+    assert.equal((0, test_types_js_1.record)(after.body.sessions).live, baseline.live, 'an unregistered session stops counting');
+});
 test('fresh live routes distinguish missing history, then use the session file before indexing', async () => {
     const nativeId = 'fresh-live-unindexed';
     const routeId = encodeSessionKey('omp', (0, test_types_js_1.nativeId)(nativeId));

@@ -245,14 +245,16 @@ drops its provider slug (`shortModelName`) before it ellipsizes —
 ## Main-pane takeovers are the norm; modals are the exception
 
 Content-rich or exploratory surfaces swap into the main viewing pane and get
-the full width/height: the session-scoped diff view and file viewer, and seven
+the full width/height: the session-scoped diff view and file viewer, and eight
 `<main>`-level takeovers — usage, advanced search, new session, skills, routines,
-subagents and recovery. `src/browser/main-pane.ts` owns their exclusion policy,
+subagents, recovery and fleet. `src/browser/main-pane.ts` owns their exclusion policy,
 registered once in `app.ts`; controllers retain their own close, disposal and
 request-generation behavior. Opening one takeover closes its peers, not itself.
 Recovery and subagents also retire file/diff/settings surfaces; ordinary
 takeovers preserve those surfaces. Session selection retires the registered
-surfaces and overlays, retaining Bounce only when `keepBounceView` requests it.
+surfaces and overlays, retaining Bounce only when `keepBounceView` requests it;
+the fleet takeover is registered `hostsBounce`, so that reconciling reselection
+keeps it open while any ordinary selection closes it.
 Each takeover has a header row (title, ⟳ where refresh makes sense, ✕),
 closes on Escape and on session switch, and hides the panes beneath via CSS
 `!important` (several carry JS-managed inline display). New surfaces of this
@@ -651,14 +653,14 @@ idle session can restore across repeated losses without sending any prompt.
 Routine reconciliation runs after recovery and preserves the invocation rather
 than spawning a second run or treating restored-idle work as completed.
 
-Settings exposes host-scoped controls and a separate `.main.recovery-open`
-report takeover. `src/browser/recovery.ts` owns settings/report requests, selected endpoint
+The Fleet view exposes host-scoped controls and a separate `.main.recovery-open`
+report takeover. `src/browser/recovery.ts` owns preference/report requests, selected endpoint
 snapshots and view listeners, including fleet proxies and browser-added peers.
-Settings close/re-render unmounts its preferences; report close/refresh retires
+Fleet close unmounts its preferences; report close/refresh retires
 its row actions. Captured mutations cannot write a newer view.
 `identifyHosts` must fetch capabilities even for a saved direct host with a
 known id: the browser persists identity but not its descriptor. Opening
-Settings refreshes the fleet; `refreshRecoveryHosts` updates only the pickers
+the Fleet view refreshes the fleet; `refreshRecoveryHosts` updates only the pickers
 and unavailable-host guidance, not unsaved mode edits. `/api/recovery`
 reports outcomes and truncation;
 `PUT /api/sessions/:id/recovery` sets exclusion, and `/api/recovery/retry`
@@ -1222,7 +1224,7 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   Connection state and poll eligibility live in
   `src/browser/host-connections.ts`, including the pure `hostConnReduce`:
   the `[3,4,8,16]s` ladder, `blocked` sticky
-  (401 ⇒ `blocked`, never retried — re-enter the token in the settings Hosts
+  (401 ⇒ `blocked`, never retried — re-enter the token in the Fleet view's Hosts
   section), and a 30s reset hysteresis, so a *flapping* host keeps climbing
   the ladder instead of resetting it every cycle. The typed controller owns
   observations, seeding, token resets and pruning; its callback re-renders the
@@ -1240,9 +1242,9 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   host requests cannot hold restoration or prevent polling from starting.
   Sidebar request progress names pending hosts; the global filter spinner covers
   only debounce, not the slowest remote. Query retirement clears old progress.
-  `src/browser/host-settings.ts` owns the settings rows/form, token/removal actions and add-host validation.
+  `src/browser/host-settings.ts` owns the Hosts rows/form (mounted by the Fleet view), token/removal actions and add-host validation.
   Validation captures a view and attempt; form edits, resubmission and closing
-  settings retire pending responses and body reads before they can publish.
+  the Fleet view retire pending responses and body reads before they can publish.
   Mount/unmount and row replacement dispose their listeners. Peer requests capture the originating
   catalog object and endpoint, so a removed/re-added host, changed token or newer
   request retires the old success/failure. Fleet/self request sequences also
@@ -1280,6 +1282,40 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   fetch plain-http hosts — either enter over http, put `tailscale serve`
   /cloudflared in front of each host, or use the `/hosts` proxy (same
   origin). See TASKS/multi-host.md for topology rationale.
+
+## Fleet view and host health (src/browser/fleet-view.ts, GET /api/host/health)
+
+The Fleet takeover (`.main.fleet-open`, boat icon in the sidebar header)
+shows one card per effective host — live/working/waiting session and
+subagent counts over three meters: CPU, memory, home-directory disk — above
+the fleet-wide controls that used to crowd the Settings modal (the Hosts
+list/add form, Bounce agents, session recovery preferences). Settings keeps
+device/display preferences and an "Open Fleet" pointer.
+
+Capacity is deliberately **coarse and on demand, not monitoring**: no
+history, no background sampler, no per-process accounting, no native
+collector, no alerting. `src/core/host-health.ts` reads one snapshot per
+request (shared for 2s across concurrent callers): CPU utilization is the
+busy share of aggregate `os.cpus()` time since the previous snapshot when that
+is 1s–5min old, otherwise a 250ms sample — so a viewer polling every 10s sees
+a 10s window, not one noisy instant; memory prefers Linux `MemAvailable`
+(`os.freemem()` counts page cache as used); disk is `statfs` of `$HOME`,
+where sessions, workspaces and harness stores live; load average is null on
+Windows. The route adds this host's counts from the same active-only catalog
+composition the sidebar's Active poll uses, and is advertised as the
+`hostHealth` capability. The client fans out per capable host (client is the
+aggregator) only while the view is open and the page visible, judges
+staleness by its own receipt time rather than the host's clock, and never
+shows guessed counts for an unreachable host.
+
+The same numbers reach agents through `pi-dish-sessions load`
+(`--all-hosts`, `--host`), because agents otherwise have no idea how loaded
+their host is. This is groundwork for placing work on a less-loaded host; no
+placement policy exists yet. If one is added, keep it advisory and in the
+client/CLI (never hub-side fan-out), filter candidates by harness/project
+availability before scoring, and include live-session load, not just CPU
+and memory. The fleet's Prometheus stack is not a dependency: pi-dish hosts
+include machines outside it, and each host must be able to describe itself.
 
 ## Fleet artifacts (lib/fleet-artifacts.js, /api/fleet-artifacts)
 
@@ -1745,7 +1781,8 @@ gone: the card is scanned, not read. The host chip and cwd keep their existing
 gating (pinned/Recent/search rows only — inside the workspace tree the group and
 host-section headers already carry both).
 
-The sidebar header is down to four icons — usage, skills, settings, refresh.
+The sidebar header carries usage, skills, routines (capability-gated), fleet
+(the boat), settings and refresh.
 The theme picker moved into the settings modal and the all-sessions search
 moved into the filter row next to the input it extends (the `.searching`
 spinner's `right` offset has to clear both trailing buttons). The right edge is
@@ -2255,7 +2292,8 @@ Lineage repoll and trace catch-up timers belong to the takeover controller;
 close/dispose retires them, and session switches close the takeover through
 the shared closeViews path before the next session view.
 
-Bulk Bounce UI is owned by `src/browser/bounce.ts`, with wire contracts in
+Bulk Bounce UI is owned by `src/browser/bounce.ts` and rendered inside the
+Fleet view, with wire contracts in
 `bounce-data.ts`. Each selected snapshot freezes its host route/token and mode;
 view refresh/close retires row listeners and status timers. The operation read
 sequence prevents an older poll from erasing accepted mutations. Completed

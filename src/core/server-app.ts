@@ -26,6 +26,7 @@ import { createTerminalHandlers } from './terminal-handlers';
 import { createPublicationHandlers } from './publication-handlers';
 import pages = require('./pages');
 import stt = require('./stt');
+import { createHostHealth } from './host-health';
 import {
   readSessionMessages,
   readSessionCwd,
@@ -618,6 +619,32 @@ export function startServer(rootDirectory: string): Server {
       response.children = clientSessionRows(children);
     }
     res.json(response);
+  });
+
+  // Coarse capacity for the fleet view and for agents choosing a host: one
+  // shared on-demand snapshot plus this host's live-session counts, from the
+  // same active-only composition the sidebar's Active poll uses. No history is
+  // kept; a viewer that wants a trend polls while it is open.
+  const hostHealth = createHostHealth();
+  app.get('/api/host/health', async (_req: ApplicationRequest, res: ApplicationResponse) => {
+    try {
+      const health = await hostHealth.read();
+      const { active, children } = buildSessionCatalog({ activeOnly: true });
+      const byHarness: Record<string, number> = {};
+      for (const session of active) byHarness[session.harnessId] = (byHarness[session.harnessId] || 0) + 1;
+      res.json({
+        ...health,
+        sessions: {
+          live: active.length,
+          working: active.filter(session => session.turnInProgress).length,
+          waiting: active.filter(session => session.askPending).length,
+          subagents: children.length,
+          byHarness,
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   // Refs resolve through the shared rule in lib/helper-refs.js (route id and

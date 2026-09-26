@@ -21,6 +21,24 @@ hosts
   server attaches each peer's own credential when proxying. The CLI never
   holds per-host tokens.
 
+## Host load
+
+`load` reports how busy a host is: live and working sessions, CPU
+utilization and load average, memory and home-disk use. `load --all-hosts`
+gives one line per reachable host that advertises `hostHealth`.
+
+```bash
+load --all-hosts
+# (self)  3 live, 1 working   cpu 12% load 2.10/32   mem 34% of 125G   disk 41% of 1.8T
+# tycho   0 live, 0 working   cpu 1% load 0.05/16    mem 12% of 64G    disk 20% of 931G
+```
+
+Check it before starting heavy work — a full build or test suite, or
+spawning several peers — and prefer an idler host with the same project
+checkout when the work can run there. It is a coarse snapshot, not
+monitoring: CPU is the busy share since the previous reading (or a short
+sample), so don't poll it in a loop.
+
 ## Capability skew
 
 Fleets run mixed versions as the steady state. `hosts` shows each host's

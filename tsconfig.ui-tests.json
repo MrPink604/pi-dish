@@ -26,6 +26,7 @@
     "test/ui-scenarios/models.ts",
     "test/ui-scenarios/drafts.ts",
     "test/ui-scenarios/bounce.ts",
+    "test/ui-scenarios/fleet.ts",
     "test/ui-scenarios/sidebar.ts",
     "test/ui-scenarios/skills.ts",
     "test/ui-scenarios/usage.ts",

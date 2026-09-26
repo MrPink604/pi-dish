@@ -282,6 +282,37 @@ test('search --all-hosts works on a fleet of one', async () => {
   assert.ok(records(parsed.results).some(result => result.id === UNIQUE_ID && result.host === '(self)'));
 });
 
+test('load reports this host\'s sessions, CPU, memory and disk', async () => {
+  const { stdout } = await run(['load']);
+  assert.match(stdout, /^\(self\)\t\d+ live, \d+ working\tcpu (\d+%|\?) load [\d.?]+\/\d+\tmem \d+% of [\d.]+G\tdisk (\d+% of [\d.]+G|\?)\n$/);
+
+  const parsed = record(JSON.parse((await run(['load', '--json'])).stdout));
+  assert.equal(typeof parsed.sampledAt, 'string');
+  assert.equal(typeof parsed.uptimeSec, 'number');
+  assert.ok(typeof record(parsed.cpu).cores === 'number' && Number(record(parsed.cpu).cores) > 0);
+  assert.ok(Number(record(parsed.memory).totalBytes) > 0);
+  assert.equal(typeof record(parsed.sessions).live, 'number');
+});
+
+test('load --all-hosts works on a fleet of one and rejects --host', async () => {
+  const { stdout } = await run(['load', '--all-hosts']);
+  assert.match(stdout, /^\(self\)\t\d+ live, \d+ working\tcpu /m);
+  const parsed = record(JSON.parse((await run(['load', '--all-hosts', '--json'])).stdout));
+  const self = record(record(parsed.hosts)['(self)']);
+  assert.equal(self.status, 'ok');
+  assert.equal(typeof record(self.sessions).live, 'number');
+  assert.ok(Number(record(self.memory).totalBytes) > 0);
+  await assert.rejects(run(['load', '--all-hosts', '--host', 'nope']), (error: unknown) => {
+    assert.match(errorMessage(error), /mutually exclusive/);
+    return true;
+  });
+});
+
+test('hosts lists the hostHealth capability', async () => {
+  const { stdout } = await run(['hosts']);
+  assert.match(stdout, /hostHealth/);
+});
+
 test('docs lists the topics this server actually ships', async () => {
   const { stdout } = await run(['docs']);
   for (const topic of ['refs', 'sessions', 'search', 'fleet', 'routines']) {

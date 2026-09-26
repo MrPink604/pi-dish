@@ -3,19 +3,20 @@ import { isRecord } from '../../lib/wire-protocol.js';
 import { test, expect, requiredRoute } from './fixtures.js';
 
 async function openForm(page: Page, base: string, label = '') {
-  await page.evaluate(() => fixtureApp.features.displayPreferences.open());
+  await page.evaluate(() => fixtureApp.features.fleetController.open());
+  await expect(page.locator('#fleetConnections #addHostBase')).toBeVisible();
   await page.locator('#addHostBase').fill(base);
   await page.locator('#addHostLabel').fill(label);
 }
 
 for (const outcome of ['success', '401']) {
-  test(`closing settings retires a pending add-host ${outcome}`, async ({ page, fleet }) => {
+  test(`closing the fleet view retires a pending add-host ${outcome}`, async ({ page, fleet }) => {
     let held: Route | null | undefined;
     await page.route(`${fleet.self.base}/hosts/retired/api/host`, route => { held = route; });
     await openForm(page, '/hosts/retired');
     await page.evaluate(() => { window.pendingAdd = fixtureApp.features.hostSettings.addFromForm(); });
     await expect.poll(() => !!held).toBe(true);
-    await page.evaluate(() => { fixtureApp.ports.appBindings.actions.closeSettingsModal(new Event('click'), document.body); fixtureApp.features.displayPreferences.open(); });
+    await page.evaluate(() => { fixtureApp.ports.appBindings.actions.closeFleetView(new Event('click'), document.body); fixtureApp.features.fleetController.open(); });
     await page.locator('#addHostBase').fill('/hosts/new-form');
     await requiredRoute(held).fulfill(outcome === '401' ? { status: 401, json: {} }
       : { json: { hostId: 'retired-host', label: 'Retired' } });

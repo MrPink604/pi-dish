@@ -294,3 +294,74 @@ test('peer-session CLI resolves a short ref client-side on a host without ref al
         return true;
     });
 });
+// `load --all-hosts` fans out through the entry server's /hosts proxy, only to
+// reachable hosts advertising hostHealth, and names the ones it skipped.
+test('peer-session CLI load reports each capable host and names skipped ones', async (t) => {
+    const GB = 1024 ** 3;
+    const health = (live, utilization) => ({
+        sampledAt: '2026-09-26T00:00:00.000Z', uptimeSec: 60, platform: 'linux', arch: 'x64',
+        cpu: { cores: 8, model: 'fixture', utilization, windowMs: 10000, load: [2.5, 2, 1] },
+        memory: { totalBytes: 16 * GB, availableBytes: 4 * GB },
+        disk: { path: '~', totalBytes: 200 * GB, availableBytes: 50 * GB },
+        sessions: { live, working: 1, waiting: 0, subagents: 0, byHarness: {} },
+    });
+    const requests = [];
+    const server = http.createServer((req, res) => {
+        requests.push(req.url ?? '');
+        res.setHeader('Content-Type', 'application/json');
+        if (req.url === '/api/hosts') {
+            res.end(JSON.stringify({ hosts: [
+                    { self: true, hostId: 'self-id', label: 'self', reachable: true, capabilities: { sessions: true, hostHealth: true } },
+                    { name: 'tycho', hostId: 'tycho-id', label: 'tycho', reachable: true, capabilities: { sessions: true, hostHealth: true } },
+                    { name: 'oldie', hostId: 'oldie-id', label: 'oldie', reachable: true, capabilities: { sessions: true } },
+                    { name: 'down', reachable: false, error: 'refused' },
+                    { name: 'broken', hostId: 'broken-id', label: 'broken', reachable: true, capabilities: { hostHealth: true } },
+                ] }));
+            return;
+        }
+        if (req.url === '/api/host/health') {
+            res.end(JSON.stringify(health(3, 0.25)));
+            return;
+        }
+        if (req.url === '/hosts/tycho/api/host/health') {
+            res.end(JSON.stringify(health(5, 0.9)));
+            return;
+        }
+        if (req.url === '/hosts/broken/api/host/health') {
+            res.statusCode = 502;
+            res.end(JSON.stringify({ error: 'peer unreachable', reason: 'refused' }));
+            return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: 'not found' }));
+    });
+    const base = await listenServer(server);
+    t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+    const single = await run(['load'], base);
+    assert.equal(single.stdout, '(self)\t3 live, 1 working\tcpu 25% load 2.50/8\tmem 75% of 16.0G\tdisk 75% of 200G\n');
+    const peer = await run(['load', '--host', 'tycho'], base);
+    assert.match(peer.stdout, /^tycho\t5 live, 1 working\tcpu 90% load 2\.50\/8\t/);
+    await assert.rejects(run(['load', '--host', 'oldie'], base), (error) => {
+        assert.match(String((0, test_types_js_1.record)(error).stderr ?? ''), /does not report load/);
+        return true;
+    });
+    assert.ok(!requests.includes('/hosts/oldie/api/host/health'), 'an unadvertised capability is never probed');
+    const fleet = await run(['load', '--all-hosts'], base);
+    assert.deepEqual(fleet.stdout.trim().split('\n'), [
+        '(self)\t3 live, 1 working\tcpu 25% load 2.50/8\tmem 75% of 16.0G\tdisk 75% of 200G',
+        'tycho\t5 live, 1 working\tcpu 90% load 2.50/8\tmem 75% of 16.0G\tdisk 75% of 200G',
+        '# oldie: does not report load',
+        '# down: refused',
+        '# broken: peer unreachable',
+    ]);
+    const parsed = (0, test_types_js_1.record)((0, test_types_js_1.record)(JSON.parse((await run(['load', '--all-hosts', '--json'], base)).stdout)).hosts);
+    assert.deepEqual(Object.keys(parsed), ['(self)', 'tycho', 'oldie', 'down', 'broken']);
+    assert.equal((0, test_types_js_1.record)(parsed['(self)']).status, 'ok');
+    assert.equal((0, test_types_js_1.record)((0, test_types_js_1.record)(parsed.tycho).sessions).live, 5);
+    assert.deepEqual(parsed.oldie, { status: 'skipped', error: 'does not report load' });
+    assert.deepEqual(parsed.down, { status: 'skipped', error: 'refused' });
+    assert.equal((0, test_types_js_1.record)(parsed.broken).status, 'error');
+    assert.ok(!requests.includes('/hosts/down/api/host/health'), 'an unreachable host is not dialled');
+    const hosts = await run(['hosts'], base);
+    assert.match(hosts.stdout, /^\(self\)\treachable\tself\tsessions,hostHealth$/m);
+});

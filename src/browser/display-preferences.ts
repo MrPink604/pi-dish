@@ -1,7 +1,6 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import { record, finite } from '../core/helper-values';
 import { escapeHtml } from '../core/helper-format';
-import { hostSettingsHtml } from './host-settings';
 export interface SavedFilter { readonly name: string; readonly query: string }
 export function decodeSavedFilters(value: unknown): SavedFilter[] {
   return Array.isArray(value) ? value.flatMap((row: unknown) => record(row) && typeof row.name === 'string' && typeof row.query === 'string' ? [{ name: row.name, query: row.query }] : []) : [];
@@ -13,7 +12,7 @@ export function responseMode(value: unknown): ResponseMode {
 const RESPONSE_MODE_KEY = 'pi-dish-response-metadata', CONTEXT_METRIC_KEY = 'pi-dish-sidebar-context-metric';
 export function createDisplayPreferences(options: {
   document: Document; storage: Pick<Storage, 'getItem' | 'setItem'>; request: ApiRequest; host: () => HostEndpoint;
-  beforeOpen: () => void; mountSections: (body: HTMLElement) => void; unmountSections: () => void;
+  beforeOpen: () => void; openFleet: () => void;
   themes: { render: (select: HTMLSelectElement) => void; apply: (id: string) => void };
   filters: () => readonly SavedFilter[]; setFilters: (filters: readonly SavedFilter[]) => void;
   persistFilters: (filters: readonly SavedFilter[], host: Readonly<HostEndpoint>) => Promise<unknown>;
@@ -26,7 +25,7 @@ export function createDisplayPreferences(options: {
   let mode = responseMode(storage.getItem(RESPONSE_MODE_KEY));
   let context: 'tokens' | 'percent' = storage.getItem(CONTEXT_METRIC_KEY) === 'tokens' ? 'tokens' : 'percent';
   function isOpen() { return !disposed && modal.style.display === 'flex'; }
-  function retire() { sequence++; events.abort(); filterEvents.abort(); options.unmountSections(); }
+  function retire() { sequence++; events.abort(); filterEvents.abort(); }
   function close() { if (disposed) return; retire(); modal.style.display = 'none'; }
   function open() {
     if (disposed) return; options.beforeOpen(); modal.style.display = 'flex'; void render();
@@ -45,8 +44,7 @@ export function createDisplayPreferences(options: {
     <div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. “Effective speed” includes time to first token and JSONL append.</small></label>
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
-    <div id="recoveryPreferences" class="preference-row recovery-preferences" hidden></div>
-    ${hostSettingsHtml}
+    <div class="preference-row"><label><strong>Hosts, bounce and recovery</strong><small>Fleet-wide controls live in the Fleet view, beside each host's load.</small></label><button class="btn-small" id="settingsOpenFleet">Open Fleet</button></div>
     <div class="preference-row"><label><strong>Saved sidebar filters</strong><small>Server-global. Chips under the sidebar filter toggle these per device; type a query there and hit “+ save filter” to add one.</small></label><div id="savedFiltersList" class="saved-filters-list"></div></div>`;
 
     const modeSelect = body.querySelector<HTMLSelectElement>('#responseMetadataMode')!; modeSelect.value = mode;
@@ -73,7 +71,8 @@ export function createDisplayPreferences(options: {
         }, { signal: filterEvents.signal });
       }
     }
-    renderFilters(); options.mountSections(body);
+    renderFilters();
+    body.querySelector('#settingsOpenFleet')!.addEventListener('click', () => { if (owns()) options.openFleet(); }, listener);
     const input = body.querySelector<HTMLInputElement>('#monthlyBudget')!, status = body.querySelector<HTMLElement>('#budgetStatus')!, save = body.querySelector<HTMLButtonElement>('#saveBudget')!;
     save.disabled = true;
     try {

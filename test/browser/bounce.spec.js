@@ -9,7 +9,7 @@ async function routes(page) {
     await page.route('**/api/session-bounces', (route) => route.fulfill({ json: { operations: [] } }));
 }
 async function open(page) {
-    await page.evaluate(() => fixtureApp.features.displayPreferences.open());
+    await page.evaluate(() => fixtureApp.features.fleetController.open());
     await page.locator('#openBounceAgents').click();
     await (0, fixtures_js_1.expect)(page.locator('.bounce-host')).toHaveCount(2);
 }
@@ -41,7 +41,7 @@ async function open(page) {
     await page.evaluate(() => { const button = fixtureElement(document.querySelector('[data-bounce-cancel]'), 'bounce cancel'); fixtureApp.features.bounceController.close(); button.click(); });
     (0, fixtures_js_1.expect)(deletes).toHaveLength(0);
 });
-(0, fixtures_js_1.test)('a submitted host snapshot survives close and its lost response cannot alter a new settings view', async ({ page, fleet }) => {
+(0, fixtures_js_1.test)('a submitted host snapshot survives close and its lost response cannot alter a new fleet view', async ({ page, fleet }) => {
     await routes(page);
     let held;
     await page.route(`${fleet.peer.base}/api/session-bounces`, route => route.request().method() === 'POST' ? held = route : route.fulfill({ json: { operations: [] } }));
@@ -51,12 +51,14 @@ async function open(page) {
     await page.locator('.bounce-host').filter({ hasText: 'peer' }).locator('[data-bounce-target]').check();
     await page.evaluate(() => { window.bounceSubmission = fixtureApp.features.bounceController.submit(); });
     await fixtures_js_1.expect.poll(() => !!held).toBe(true);
-    await page.evaluate(() => { fixtureApp.ports.appBindings.actions.closeSettingsModal(new Event('click'), document.body); fixtureApp.features.recoveryController.open(); });
+    await page.evaluate(() => { fixtureApp.ports.appBindings.actions.closeFleetView(new Event('click'), document.body); fixtureApp.features.recoveryController.open(); });
     const submissionRoute = (0, fixtures_js_1.requiredRoute)(held);
     await submissionRoute.fulfill({ status: 500, json: { error: 'old-queue-error' } });
     await page.evaluate(() => window.bounceSubmission);
     await (0, fixtures_js_1.expect)(page.locator('.main')).toHaveClass(/recovery-open/);
-    await (0, fixtures_js_1.expect)(page.locator('#settingsModal')).toBeHidden();
+    await (0, fixtures_js_1.expect)(page.locator('.main')).not.toHaveClass(/fleet-open/);
+    await (0, fixtures_js_1.expect)(page.locator('#bounceView')).not.toHaveAttribute('open', '');
+    await (0, fixtures_js_1.expect)(page.locator('#fleetView')).not.toContainText('old-queue-error');
     (0, fixtures_js_1.expect)(submissionRoute.request().postDataJSON()).toEqual({ mode: 'restart', sessionIds: ['same-id'] });
     (0, fixtures_js_1.expect)(submissionRoute.request().headers().authorization).toBe(`Bearer ${fleet.peer.token}`);
 });

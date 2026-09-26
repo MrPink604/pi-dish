@@ -3,7 +3,7 @@ import type { UiScenario } from './contracts.js';
 import { record, records } from '../test-types.js';
 
 const bounce: UiScenario = async ({ base, CWD, desktop, check }) => {
-  // Bulk restart stays inside Settings rather than replacing the session.
+  // Bulk restart lives in the Fleet takeover beside each host's load.
   console.log('bounce agents:');
   const bounceSpawn = await fetch(base + '/api/sessions/new', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -15,16 +15,20 @@ const bounce: UiScenario = async ({ base, CWD, desktop, check }) => {
   });
   let bouncedId = bounceSpawn.id;
   try {
-    await desktop.evaluate(() => fixtureApp.features.displayPreferences.open());
+    await desktop.click('#btnFleet');
+    await desktop.waitForSelector('.main.fleet-open #fleetView', { state: 'visible' });
     await desktop.click('#openBounceAgents');
-    check(await desktop.locator('#settingsModal').isVisible() &&
-      await desktop.locator('#settingsModal #bounceMode').isVisible(),
-    'bounce controls expand inside Settings');
+    check(await desktop.locator('.main.fleet-open #bounceView #bounceMode').isVisible() &&
+      !(await desktop.locator('#settingsModal').isVisible()),
+    'bounce controls expand inside the Fleet view, not Settings');
     const bouncePosition = await desktop.locator('#openBounceAgents').boundingBox();
     if (bouncePosition === null) throw new Error('Missing bouncePosition');
-    const themePosition = await desktop.locator('#settingsTheme').boundingBox();
-    if (themePosition === null) throw new Error('Missing themePosition');
-    check(bouncePosition.y < themePosition.y, 'Bounce agents is at the top of Settings');
+    const connectionsPosition = await desktop.locator('#fleetConnections').boundingBox();
+    if (connectionsPosition === null) throw new Error('Missing connectionsPosition');
+    const hostsPosition = await desktop.locator('#fleetHosts').boundingBox();
+    if (hostsPosition === null) throw new Error('Missing hostsPosition');
+    check(hostsPosition.y < connectionsPosition.y && connectionsPosition.y < bouncePosition.y,
+      'Bounce agents sits below the host cards and connections in the Fleet view');
     await desktop.click('#openBounceAgents');
     check(!(await desktop.locator('#bounceMode').isVisible()), 'second click collapses bounce controls');
     await desktop.click('#openBounceAgents');
@@ -40,18 +44,22 @@ const bounce: UiScenario = async ({ base, CWD, desktop, check }) => {
     check(bounced?.status === 'completed', 'Bounce agents completes the selected owned RPC restart');
     if (!bounced) throw new Error('Bounce operation did not include the requested session');
     bouncedId = bounced.replacementId || bouncedId;
-    await desktop.evaluate(() => fixtureApp.features.displayPreferences.open());
+    await desktop.evaluate(() => fixtureApp.features.fleetController.open());
+    await desktop.waitForSelector('#openRecoveryReport', { state: 'visible' });
     await desktop.click('#openRecoveryReport');
-    check(!(await desktop.locator('#settingsModal').isVisible()) &&
+    await desktop.waitForSelector('.main.recovery-open');
+    check(!(await desktop.locator('.main').evaluate(main => main.classList.contains('fleet-open'))) &&
       !(await desktop.locator('#bounceMode').isVisible()),
-    'opening recovery closes Settings and its bounce controls');
-    await desktop.evaluate(() => fixtureApp.features.displayPreferences.open());
+    'opening the recovery report closes the Fleet view and its bounce controls');
+    await desktop.click('#btnFleet');
     await desktop.click('#openBounceAgents');
-    check(await desktop.locator('#settingsModal #bounceMode').isVisible(),
-      'bounce controls reopen in Settings over the current view');
+    check(await desktop.locator('.main.fleet-open #bounceMode').isVisible() &&
+      !(await desktop.locator('.main').evaluate(main => main.classList.contains('recovery-open'))),
+    'Fleet replaces the recovery report and its bounce controls reopen');
     await desktop.keyboard.press('Escape');
-    check(!(await desktop.locator('#settingsModal').isVisible()),
-      'Escape closes Settings and its bounce controls');
+    check(!(await desktop.locator('.main').evaluate(main => main.classList.contains('fleet-open'))) &&
+      !(await desktop.locator('#bounceMode').isVisible()),
+    'Escape closes the Fleet view and its bounce controls');
   } finally {
     await fetch(`${base}/api/sessions/${encodeURIComponent(bouncedId)}/close`, { method: 'POST' });
   }

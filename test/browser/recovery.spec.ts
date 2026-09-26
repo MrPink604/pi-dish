@@ -2,14 +2,14 @@ import type { Page, Route } from '@playwright/test';
 import type { BrowserHost } from './fixtures.js';
 import { test, expect, requiredRoute } from './fixtures.js';
 const report = (name: string, mode = 'restore') => ({ mode, sessions: [{ id: 'same-id', name, status: 'needs-review', excluded: false }] });
-async function settings(page: Page, host: BrowserHost & { hostId: string }) {
-  await page.evaluate(() => fixtureApp.features.displayPreferences.open());
+async function preferences(page: Page, host: BrowserHost & { hostId: string }) {
+  await page.evaluate(() => fixtureApp.features.fleetController.open());
   await page.selectOption('#recoverySettingsHost', host.hostId);
   await expect(page.locator('#saveRecoveryMode')).toBeEnabled();
 }
 
-test('a settings body from an old host cannot replace a new host mode or an unsaved mode during fleet refresh', async ({ page, fleet }) => {
-  await settings(page, fleet.peer);
+test('a preferences body from an old host cannot replace a new host mode or an unsaved mode during fleet refresh', async ({ page, fleet }) => {
+  await preferences(page, fleet.peer);
   await page.evaluate(host => {
     const nativeFetch = window.fetch;
     window.fetch = async (...args) => {
@@ -30,15 +30,16 @@ test('a settings body from an old host cannot replace a new host mode or an unsa
   await expect(page.locator('#recoveryMode')).toHaveValue('restore');
 });
 
-test('old preference save failures and retained buttons cannot act on a replacement settings view', async ({ page, fleet }) => {
-  await settings(page, fleet.self);
+test('old preference save failures and retained buttons cannot act on a replacement fleet view', async ({ page, fleet }) => {
+  await preferences(page, fleet.self);
   const writes: Route[] = [];
   await page.route('**/api/settings', route => route.request().method() === 'PUT' ? writes.push(route) : route.continue());
   await page.selectOption('#recoveryMode', 'restore');
   await page.evaluate(() => { window.oldRecoverySave = document.querySelector<HTMLButtonElement>('#saveRecoveryMode'); fixtureElement(window.oldRecoverySave, 'old recovery save').click(); });
   await expect.poll(() => writes.length).toBe(1);
-  await page.evaluate(() => fixtureApp.ports.appBindings.actions.closeSettingsModal(new Event('click'), document.body));
-  await settings(page, fleet.peer);
+  await page.evaluate(() => fixtureApp.ports.appBindings.actions.closeFleetView(new Event('click'), document.body));
+  await expect(page.locator('#recoveryPreferences')).toBeHidden();
+  await preferences(page, fleet.peer);
   const write = requiredRoute(writes[0]);
   await write.fulfill({ status: 500, json: { error: 'previous-save-error' } });
   await page.evaluate(() => { const button = fixtureElement(window.oldRecoverySave, 'old recovery save'); button.disabled = false; button.click(); });

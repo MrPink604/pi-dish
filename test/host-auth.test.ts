@@ -141,6 +141,8 @@ test('GET /api/host describes the host and its capabilities', async () => {
   assert.deepEqual(Object.values(body.capabilities).filter((v) => v !== true), []);
   // The terminal is opt-in and this child ran without the flag.
   assert.equal('terminal' in body.capabilities, false);
+  // Coarse host capacity for the fleet view and `load`.
+  assert.equal(body.capabilities.hostHealth, true);
 });
 
 test('hostId is generated once and survives a restart', async () => {
@@ -219,6 +221,15 @@ test('a configured token gates /api and leaves public surfaces open', async () =
   const unauthorizedBody: unknown = await unauthorized.json();
   assertRecord(unauthorizedBody);
   assert.equal(typeof unauthorizedBody.error, 'string');
+
+  // Host capacity is fleet data, not identity: it stays behind the token.
+  assert.equal((await fetch(`${base}/api/host/health`)).status, 401);
+  const health = await fetch(`${base}/api/host/health`, authed(TOKEN));
+  assert.equal(health.status, 200);
+  const healthBody: unknown = await health.json();
+  assertRecord(healthBody);
+  assertRecord(healthBody.sessions);
+  assert.equal(typeof healthBody.sessions.live, 'number');
 
   const ok = await fetch(`${base}/api/sessions`, authed(TOKEN));
   assert.equal(ok.status, 200);

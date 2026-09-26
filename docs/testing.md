@@ -157,6 +157,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Related-session controls and in-session query/paging ownership | `test/browser-session-navigation.test.js`, `test/browser/session-navigation.spec.js`, `test/browser/feature-ownership.spec.js`, `test/types/browser-session-navigation.ts` |
 | Bounce wire data, queued snapshots, polling and retired controls | `test/browser-bounce.test.js`, `test/browser/bounce.spec.js`, `test/types/browser-bounce.ts`, `test/ui-scenarios/bounce.js` |
 | Recovery wire data, settings/report owners and retired actions | `test/browser-recovery.test.js`, `test/browser/recovery.spec.js`, `test/types/browser-recovery.ts` |
+| Fleet view: host capacity snapshot, health route/auth, `load` CLI, per-host cards, polling and retired responses | `test/host-health.test.js`, `test/server.test.js`, `test/host-auth.test.js`, `test/session-control-cli.test.js`, `test/skills-cli.test.js`, `test/browser-fleet-view.test.js`, `test/browser/fleet-view.spec.js`, `test/ui-scenarios/fleet.js` |
 | New-session form lifecycle, workspace action owners and disposal | `test/browser/new-session-shell.spec.js`, `test/types/browser-new-session.ts` |
 | Shared helper CommonJS/browser delivery, generic row types and narrowed content | `test/helpers.test.js`, `test/browser-shared-helpers.test.js`, `test/types/browser-shared-helpers.ts`, `test/browser-build.test.js` |
 | Spawn acceptance/status decoding, provisional keys and retained launch owners | `test/browser-session-spawns.test.js`, `test/browser/session-spawns.spec.js`, `test/types/browser-session-spawns.ts`, async-spawn UI smoke |
@@ -189,7 +190,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Listener startup, bind retry, delayed/failed aliases, advertised URLs, signal release | `test/listener-lifecycle.test.js` |
 | Bridge, lifecycle, capabilities and API behavior | `npm test` (`test/*.test.js`) |
 | Extracted selector DOM/actions/disposal and repeatable timing baseline | `test/browser/model-selector.spec.js` |
-| Models, drafts, sidebar, usage, skills, routines, bounce, mobile | `test/ui-scenarios/` |
+| Models, drafts, sidebar, usage, skills, routines, bounce, fleet, mobile | `test/ui-scenarios/` |
 | Streaming, retained transcripts, terminal and desktop/mobile integration | `test/ui-smoke.js` |
 
 `test/terminal.test.ts` intentionally passes a short `node -e` expression as

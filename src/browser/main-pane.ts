@@ -1,6 +1,8 @@
 interface TakeoverPolicy {
   close: () => void;
   clearsSessionSurfaces?: true;
+  /** Hosts the Bounce surface: its reconciling reselection keeps it open. */
+  hostsBounce?: true;
 }
 interface SessionSurfacePolicy {
   close: () => void;
@@ -30,7 +32,7 @@ export function createMainPane<Takeover extends string>(policies: {
       if (entering.clearsSessionSurfaces) overlays.settings();
       overlays.sidebar();
       for (const takeover of takeovers) if (takeover !== entering) takeover.close();
-      overlays.bounce();
+      if (!entering.hostsBounce) overlays.bounce();
       if (entering.clearsSessionSurfaces) {
         for (const surface of surfaces) if (surface.closeOnTakeover) surface.close();
       }
@@ -38,7 +40,7 @@ export function createMainPane<Takeover extends string>(policies: {
     beforeSelection(keepBounce: boolean): void {
       for (const surface of surfaces) surface.close();
       for (const close of sessionOverlays) close();
-      for (const takeover of takeovers) takeover.close();
+      for (const takeover of takeovers) if (!keepBounce || !takeover.hostsBounce) takeover.close();
       if (!keepBounce) overlays.bounce();
     },
   };

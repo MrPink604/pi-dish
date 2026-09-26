@@ -39,7 +39,7 @@ export interface RecoveryOptions {
   root: HTMLElement; request: ApiRequest; hosts: () => readonly RecoveryHost[];
   supports: (host: RecoveryHost) => boolean; down: (host: RecoveryHost) => boolean;
   fleetReady: () => Promise<unknown>; refreshFleet: () => Promise<unknown>;
-  selectedHost: () => string | null; settingsOpen: () => boolean;
+  selectedHost: () => string | null; preferencesOpen: () => boolean;
   closeOtherViews: () => void; confirm: (message: string) => boolean;
 }
 export function createRecovery(options: RecoveryOptions) {
@@ -119,7 +119,7 @@ export function createRecovery(options: RecoveryOptions) {
     const section = doc.getElementById('recoveryPreferences');
     if (!section || disposed) return;
     await options.fleetReady();
-    if (disposed || mountSeq !== preferencesSeq || !section.isConnected || !options.settingsOpen()) return;
+    if (disposed || mountSeq !== preferencesSeq || !section.isConnected || !options.preferencesOpen()) return;
     const events = preferenceEvents = new AbortController();
     const listener = { signal: events.signal };
     section.hidden = false;
@@ -140,7 +140,7 @@ export function createRecovery(options: RecoveryOptions) {
     hostSelect.value = selectRecoveryHost(recoveryCapableHosts(), options.selectedHost())?.hostId || '';
     let seq = 0;
     const selectedHost = () => recoveryCapableHosts().find(host => (host.hostId || '') === hostSelect.value);
-    const ownsView = () => !disposed && mountSeq === preferencesSeq && section.isConnected && options.settingsOpen();
+    const ownsView = () => !disposed && mountSeq === preferencesSeq && section.isConnected && options.preferencesOpen();
     const owns = (request: number, host: RecoveryHost) => ownsView() && seq === request && sameHost(host, selectedHost());
     const load = async () => {
       if (!ownsView()) return;
@@ -190,7 +190,7 @@ export function createRecovery(options: RecoveryOptions) {
     }, listener);
     void load();
     refreshRecoveryHosts();
-    // Opening settings re-reads the fleet, including upgrades since page load.
+    // Opening the preferences re-reads the fleet, including upgrades since page load.
     void options.refreshFleet();
   }
 

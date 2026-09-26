@@ -118,7 +118,7 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
       sessions: true, search: true, usage: true, spawns: true,
       shares: true, pages: true, comments: true, skills: true, harnesses: true,
       resolve: true, docs: true, routines: true, recovery: true, sessionBounces: true,
-      refAliases: true, cacheLifetimes: true,
+      refAliases: true, cacheLifetimes: true, hostHealth: true,
     };
     if (terminal.isTerminalEnabled()) capabilities.terminal = true;
     if (tmux.isTmuxAvailable()) capabilities.tmux = true;

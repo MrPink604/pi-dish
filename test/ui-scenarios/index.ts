@@ -5,6 +5,7 @@ import usage = require('./usage.js');
 import skills = require('./skills.js');
 import routines = require('./routines.js');
 import bounce = require('./bounce.js');
+import fleet = require('./fleet.js');
 import mobile = require('./mobile.js');
 import type { UiScenario } from './contracts.js';
 
@@ -16,6 +17,7 @@ const scenarios = {
   skills,
   routines,
   bounce,
+  fleet,
   mobile,
 } satisfies Record<string, UiScenario>;
 

@@ -116,6 +116,8 @@
     "test/browser/main-pane.spec.ts",
     "test/browser/session-controls.spec.ts",
     "test/browser/session-view.spec.ts",
-    "test/fixtures/browser-app.ts"
+    "test/fixtures/browser-app.ts",
+    "test/browser-fleet-view.test.ts",
+    "test/browser/fleet-view.spec.ts"
   ]
 }

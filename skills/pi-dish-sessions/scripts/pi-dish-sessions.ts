@@ -236,6 +236,19 @@ const COMMANDS: CommandSpec[] = [
     notes: ['Absent capability means unsupported — never assume a peer serves what this host serves.'],
   },
   {
+    name: 'load',
+    usage: 'load [--all-hosts | --host NAME] [--json]',
+    summary: "How busy a host is: live/working sessions, CPU, memory and disk.",
+    flags: [
+      ['--all-hosts', 'every reachable host advertising `hostHealth`, one line each'],
+    ],
+    example: 'load --all-hosts',
+    notes: [
+      'A coarse snapshot, not monitoring: CPU is the busy share since the previous reading (or a short sample).',
+      'Before starting heavy work (builds, test suites, spawning several peers), check whether another host is idler.',
+    ],
+  },
+  {
     name: 'docs',
     usage: 'docs [topic] [--host NAME] [--json]',
     summary: "Read the running server's own agent docs (refs, search, sessions, fleet).",
@@ -367,7 +380,7 @@ function intArg(value: string | undefined, fallback: number, max = 100) {
 
 // Absent means unsupported (mixed-version fleets are the steady state); only
 // the capabilities an agent can act on are worth a column.
-const AGENT_CAPABILITIES = ['sessions', 'search', 'spawns', 'comments', 'pages', 'terminal', 'resolve', 'docs'];
+const AGENT_CAPABILITIES = ['sessions', 'search', 'spawns', 'comments', 'pages', 'terminal', 'resolve', 'docs', 'hostHealth'];
 
 function hostLine(value: unknown) {
   const host: FleetHost = core.fleetHost(value);
@@ -616,6 +629,63 @@ async function fleetSearch(base: string, query: string, limit: number, json?: bo
 }
 
 // =========================================================================
+// load
+// =========================================================================
+
+const LOAD_UNSUPPORTED = 'this host does not report load (GET /api/host/health); update pi-dish there';
+
+function percent(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value * 100)}%` : '?';
+}
+function gib(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? `${(value / 1024 ** 3).toFixed(value >= 100 * 1024 ** 3 ? 0 : 1)}G` : '?';
+}
+function usedShare(value: unknown) {
+  const bytes = core.record(value ?? {});
+  const total = Number(bytes.totalBytes), available = Number(bytes.availableBytes);
+  if (!(total > 0) || !Number.isFinite(available)) return '?';
+  return `${percent((total - available) / total)} of ${gib(total)}`;
+}
+function loadLine(data: unknown) {
+  const health = core.record(data ?? {});
+  const cpu = core.record(health.cpu ?? {}), sessions = core.record(health.sessions ?? {});
+  const load = Array.isArray(cpu.load) ? Number(cpu.load[0]).toFixed(2) : '?';
+  const live = `${Number(sessions.live) || 0} live, ${Number(sessions.working) || 0} working`;
+  return `${live}\tcpu ${percent(cpu.utilization)} load ${load}/${Number(cpu.cores) || '?'}` +
+    `\tmem ${usedShare(health.memory)}\tdisk ${usedShare(health.disk)}`;
+}
+
+async function fleetLoad(base: string, json?: boolean) {
+  const hosts = await fleetHosts(base);
+  if (!hosts) throw new Error('--all-hosts needs GET /api/hosts; this server did not answer it');
+  const status: Record<string, unknown> = {};
+  const targets: { label: string; host: string | null }[] = [];
+  for (const value of hosts) {
+    const entry = core.fleetHost(value);
+    const label = entry.self ? '(self)' : String(entry.name);
+    if (!entry.self && !entry.reachable) { status[label] = { status: 'skipped', error: entry.error || 'unreachable' }; continue; }
+    if (!hostSupports(entry, 'hostHealth')) { status[label] = { status: 'skipped', error: 'does not report load' }; continue; }
+    // A placeholder keeps the printed order the fleet's order.
+    status[label] = { status: 'pending' };
+    targets.push({ label, host: entry.self ? null : String(entry.name) });
+  }
+  const settled = await Promise.allSettled(targets.map(target => api(base, target.host, '/api/host/health', abortInit())));
+  settled.forEach((outcome, i) => {
+    const label = targets[i].label;
+    if (outcome.status === 'fulfilled') status[label] = { status: 'ok', ...core.record(outcome.value.data ?? {}) };
+    else {
+      const reason = core.record(outcome.reason ?? {});
+      status[label] = { status: 'error', error: reason?.name === 'TimeoutError' ? 'timed out' : (reason?.message || 'request failed') };
+    }
+  });
+  if (json) return print({ hosts: status }, true);
+  for (const [label, value] of Object.entries(status)) {
+    const row = core.record(value);
+    process.stdout.write(row.status === 'ok' ? `${label}\t${loadLine(row)}\n` : `# ${label}: ${row.error}\n`);
+  }
+}
+
+// =========================================================================
 // main
 // =========================================================================
 
@@ -808,6 +878,19 @@ async function main() {
       const remotes = hosts.filter(entry => !core.fleetHost(entry).self);
       if (remotes.length) process.stdout.write('# Add --host <name> to any command to act on that host.\n');
       else process.stdout.write('# No remotes configured; this host is the whole fleet.\n');
+      return;
+    }
+
+    if (spec.name === 'load') {
+      if (args.all_hosts && hostFlag) throw new Error('--all-hosts and --host are mutually exclusive');
+      if (args.all_hosts) return await fleetLoad(base, args.json);
+      const entry = await entryForHostName(base, hostFlag);
+      if (entry && !hostSupports(entry, 'hostHealth')) throw new Error(LOAD_UNSUPPORTED);
+      let data: unknown;
+      try { ({ data } = await api(base, hostFlag, '/api/host/health')); }
+      catch (error) { if (core.record(error ?? {}).status === 404) throw new Error(LOAD_UNSUPPORTED); throw error; }
+      if (args.json) return print(data, true);
+      process.stdout.write(`${hostFlag || '(self)'}\t${loadLine(data)}\n`);
       return;
     }
 

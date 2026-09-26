@@ -62,6 +62,7 @@
     "test/fixtures/idle-child.ts",
     "test/fixtures/tmux-survivor-host.ts",
     "test/fixtures/server-url-host.ts",
-    "test/fixtures/service-marker-server.ts"
+    "test/fixtures/service-marker-server.ts",
+    "test/host-health.test.ts"
   ]
 }

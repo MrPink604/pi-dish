@@ -1,8 +1,8 @@
 import type { Page, Route } from '@playwright/test';
 import { test, expect, ROOT, requiredRoute } from './fixtures.js';
 
-type TakeoverName = 'usage' | 'search' | 'subagents' | 'newSession' | 'skills' | 'routines' | 'recovery';
-const takeoverNames: readonly TakeoverName[] = ['usage', 'search', 'subagents', 'newSession', 'skills', 'routines', 'recovery'];
+type TakeoverName = 'usage' | 'search' | 'subagents' | 'newSession' | 'skills' | 'routines' | 'recovery' | 'fleet';
+const takeoverNames: readonly TakeoverName[] = ['usage', 'search', 'subagents', 'newSession', 'skills', 'routines', 'recovery', 'fleet'];
 const clearingTakeovers: readonly TakeoverName[] = ['recovery', 'subagents'];
 
 async function openTakeover(page: Page, name: TakeoverName) {
@@ -14,14 +14,14 @@ async function openTakeover(page: Page, name: TakeoverName) {
     } else {
       const controllers = { usage: features.usageController, search: features.searchViewController,
         newSession: features.newSessionController, skills: features.skillsController,
-        routines: features.routinesController, recovery: features.recoveryController };
+        routines: features.routinesController, recovery: features.recoveryController, fleet: features.fleetController };
       controllers[name].open();
     }
   }, name);
 }
 
 const takeovers = { usage: 'usage-open', search: 'search-open', subagents: 'subagents-open',
-  newSession: 'new-session-open', skills: 'skills-open', routines: 'routines-open', recovery: 'recovery-open' };
+  newSession: 'new-session-open', skills: 'skills-open', routines: 'routines-open', recovery: 'recovery-open', fleet: 'fleet-open' };
 
 test('every takeover excludes each other takeover without retiring its own opened surface', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
@@ -56,19 +56,42 @@ test('ordinary takeovers retain file and settings while recovery and subagents r
   }
 });
 
-test('Bounce can retain settings across owned selection while ordinary selection collapses only Bounce', async ({ page, fleet }) => {
+test('Bounce retains the Fleet takeover across owned selection while ordinary selection closes Fleet and Bounce', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.route('**/api/session-bounces/preview?*', route => route.fulfill({ json: { targets: [] } }));
   await page.route('**/api/session-bounces', route => route.fulfill({ json: { operations: [] } }));
-  await page.evaluate(() => fixtureApp.features.displayPreferences.open());
+  await page.evaluate(() => fixtureApp.features.fleetController.open());
   await page.locator('#openBounceAgents').click();
+  await expect(page.locator('#bounceMode')).toBeVisible();
+  // Settings is a modal over the Fleet view; opening it leaves Bounce alone.
+  await page.evaluate(() => fixtureApp.features.displayPreferences.open());
+  await expect(page.locator('#settingsModal')).toBeVisible();
+  await page.evaluate(() => fixtureApp.ports.appBindings.actions.closeSettingsModal(new Event('click'), document.body));
   await expect(page.locator('#bounceMode')).toBeVisible();
   await page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host, keepBounceView: true }), { id: ROOT, host: fleet.peer.hostId });
   await expect(page.locator('#messages')).toContainText('peer root transcript');
+  await expect(page.locator('.main')).toHaveClass(/fleet-open/);
   await expect(page.locator('#bounceMode')).toBeVisible();
   await fleet.select(fleet.self);
   await expect(page.locator('#messages')).toContainText('self root transcript');
-  await expect(page.locator('#settingsModal')).toBeVisible();
+  await expect(page.locator('.main')).not.toHaveClass(/fleet-open/);
+  await expect(page.locator('#bounceView')).not.toHaveAttribute('open', '');
+  await expect(page.locator('#bounceMode')).toBeHidden();
+});
+
+test('another takeover closes Fleet together with its Bounce surface', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  await page.route('**/api/session-bounces/preview?*', route => route.fulfill({ json: { targets: [] } }));
+  await page.route('**/api/session-bounces', route => route.fulfill({ json: { operations: [] } }));
+  await page.evaluate(() => fixtureApp.features.fleetController.open());
+  await page.locator('#openBounceAgents').click();
+  await expect(page.locator('#bounceMode')).toBeVisible();
+  await openTakeover(page, 'usage');
+  await expect(page.locator('.main')).not.toHaveClass(/fleet-open/);
+  await expect(page.locator('#bounceView')).not.toHaveAttribute('open', '');
+  await page.evaluate(() => fixtureApp.features.fleetController.open());
+  await expect(page.locator('.main')).toHaveClass(/fleet-open/);
+  await expect(page.locator('.main')).not.toHaveClass(/usage-open/);
   await expect(page.locator('#bounceMode')).toBeHidden();
 });
 
