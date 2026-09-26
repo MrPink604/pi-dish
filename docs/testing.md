@@ -403,6 +403,9 @@ progress. Existing request deadlines and cached-row fallback remain unchanged.
 
 `test/browser/host-polls.spec.js` covers local restoration with peer identity and
 lists held, peer restoration with local lists held, and progressive search while
-a peer remains pending. A production-asset browser smoke also displayed and
+a peer remains pending. `test/browser/app-shell.spec.js` releases a delayed startup
+list and observes its published row before proving the user's newer transcript
+selection survived; polling mount timing is not a restoration-completion signal.
+A production-asset browser smoke also displayed and
 searched the local transcript with peer requests deliberately unresolved, no
 global busy indicator and no page errors.

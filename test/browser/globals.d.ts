@@ -244,7 +244,6 @@ declare global {
     shareCopy: ReturnType<FixtureFeatures['sessionInfo']['copyMessage']>;
     sideQuestion: ReturnType<typeof BrowserApi.createBtwPanel>;
     staleSelection: ReturnType<FixtureFeatures['sessionState']['captureSelection']>;
-    startupMounted: boolean;
     streamEndpoint: import('../../src/browser/api-client.js').HostEndpoint;
     streamLoads: Array<() => void>;
     streamSelections: Array<Parameters<MessageStreamOptions['select']>>;

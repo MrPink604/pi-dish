@@ -12,12 +12,12 @@ test('startup restoration cannot replace a selection made while initial lists ar
   await page.goto(fleet.self.base, { waitUntil: 'domcontentloaded' });
   const route = await received;
   await page.evaluate(async ({ root, child, host }) => {
-    const mount = fixtureApp.features.sidebarLists.mount; fixtureApp.features.sidebarLists.mount = () => { window.startupMounted = true; mount(); };
     fixtureApp.features.sessionState.setSessionLists({ previous: [{ id: root, name: 'saved' }, { id: child, name: 'selected' }] }, host);
     await fixtureApp.features.sessionView.select(child, { host });
   }, { root: ROOT, child: CHILD, host: fleet.self.hostId });
-  await route.fulfill({ json: { active: [], previous: [{ id: ROOT, name: 'saved' }, { id: CHILD, name: 'selected' }] } });
-  await page.waitForFunction(() => window.startupMounted);
+  await route.fulfill({ json: { active: [{ id: ROOT, name: 'released startup result' }], previous: [] } });
+  await expect(fleet.row(fleet.self)).toContainText('released startup result');
+  await expect(page.locator('#messages')).toContainText('self child transcript');
   expect(await page.evaluate(() => fixtureCurrentSession().id)).toBe(CHILD);
 });
 test('old mobile-panel outside-click handlers cannot close a reopened panel', async ({ page, fleet }) => {

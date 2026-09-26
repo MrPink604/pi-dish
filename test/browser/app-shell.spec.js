@@ -18,13 +18,12 @@ const fixtures_js_1 = require("./fixtures.js");
     await page.goto(fleet.self.base, { waitUntil: 'domcontentloaded' });
     const route = await received;
     await page.evaluate(async ({ root, child, host }) => {
-        const mount = fixtureApp.features.sidebarLists.mount;
-        fixtureApp.features.sidebarLists.mount = () => { window.startupMounted = true; mount(); };
         fixtureApp.features.sessionState.setSessionLists({ previous: [{ id: root, name: 'saved' }, { id: child, name: 'selected' }] }, host);
         await fixtureApp.features.sessionView.select(child, { host });
     }, { root: fixtures_js_1.ROOT, child: fixtures_js_1.CHILD, host: fleet.self.hostId });
-    await route.fulfill({ json: { active: [], previous: [{ id: fixtures_js_1.ROOT, name: 'saved' }, { id: fixtures_js_1.CHILD, name: 'selected' }] } });
-    await page.waitForFunction(() => window.startupMounted);
+    await route.fulfill({ json: { active: [{ id: fixtures_js_1.ROOT, name: 'released startup result' }], previous: [] } });
+    await (0, fixtures_js_1.expect)(fleet.row(fleet.self)).toContainText('released startup result');
+    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self child transcript');
     (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureCurrentSession().id)).toBe(fixtures_js_1.CHILD);
 });
 (0, fixtures_js_1.test)('old mobile-panel outside-click handlers cannot close a reopened panel', async ({ page, fleet }) => {
