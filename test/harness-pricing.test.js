@@ -285,3 +285,63 @@ test('OMP models.yml rate card prices dead ids and beats catalog rows', () => {
         fs.rmSync(cardHome, { recursive: true, force: true });
     }
 });
+test('operation estimators preserve rate precedence and reprice cached transcripts after a rate-card replacement', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-operation-'));
+    process.env.HOME = home;
+    pricing.resetForTests();
+    try {
+        const catalog = path.join(home, '.pi', 'dish', 'pricing');
+        const modelFile = path.join(home, '.omp', 'agent', 'models.yml');
+        fs.mkdirSync(catalog, { recursive: true });
+        fs.mkdirSync(path.dirname(modelFile), { recursive: true });
+        const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+        const providers = ['zai', 'zai-coding-cn', 'kimi-code', 'google-antigravity', 'openai-codex', 'opencode-zen'];
+        const models = [
+            { provider: 'fixture', id: 'priced', cost: { input: 1, output: 3 } },
+            { provider: 'fixture', id: 'priced', cost: { input: 99, output: 99 } },
+            { provider: 'fixture', id: 'partial', cost: { input: 4, output: 6 } },
+            ...providers.map(provider => ({ provider, id: 'zero', cost: zero })),
+        ];
+        for (const harness of ['pi', 'omp'])
+            fs.writeFileSync(path.join(catalog, `${harness}.json`), JSON.stringify({ updatedAt: 1, models }));
+        const override = 'providers:\n  fixture:\n    modelOverrides:\n      priced:\n        cost: { input: 2, output: 3 }\n';
+        fs.writeFileSync(modelFile, override);
+        const stamp = new Date('2026-01-01T00:00:00Z');
+        fs.utimesSync(modelFile, stamp, stamp);
+        const omp = pricing.createUsageCostEstimator('omp');
+        const pi = pricing.createUsageCostEstimator('pi');
+        assert.equal(omp('ignored', 'fixture/priced', { input: 1_000_000 })?.total, 2);
+        assert.equal(pi('fixture', 'priced', { input: 1_000_000 })?.total, 1, 'first duplicate catalog selector wins');
+        assert.equal(omp('fixture', 'partial', { input: 1_000_000, cacheRead: 1 }), undefined);
+        assert.equal(omp('fixture', 'partial', { input: 1_000_000 })?.total, 4);
+        assert.equal(omp('fixture', 'missing', { input: 1 }), undefined);
+        assert.equal(pricing.createUsageCostEstimator('prime')('fixture', 'priced', { input: 1 }), undefined);
+        for (const provider of providers) {
+            assert.equal(omp(provider, 'zero', { input: 1 })?.total, provider === 'opencode-zen' ? 0 : undefined);
+            assert.equal(pi(provider, 'zero', { input: 1 })?.total, provider.startsWith('zai') ? undefined : 0);
+        }
+        const file = path.join(home, 'pricing.jsonl');
+        fs.writeFileSync(file, JSON.stringify({ type: 'message', message: {
+                role: 'assistant', provider: 'fixture', model: 'priced', content: [],
+                usage: { input: 1_000_000, cost: { total: 91 } },
+            } }) + '\n');
+        const source = { file, harnessId: 'omp', profileId: 'omp-v1' };
+        assert.equal(sessionFiles.readSessionMessages(source)[0].usage?.cost?.total, 2);
+        const revision = pricing.pricingRevision('omp');
+        fs.writeFileSync(modelFile + '.new', override.replace('input: 2', 'input: 7'));
+        fs.utimesSync(modelFile + '.new', stamp, stamp);
+        fs.renameSync(modelFile + '.new', modelFile);
+        assert.notEqual(pricing.pricingRevision('omp'), revision);
+        assert.equal(pricing.createUsageCostEstimator('omp')('fixture', 'priced', { input: 1_000_000 })?.total, 7);
+        assert.equal(sessionFiles.getSessionStats(source).cost, 7);
+        assert.equal(sessionFiles.readSessionMessages(source)[0].usage?.cost?.total, 7);
+        fs.unlinkSync(modelFile);
+        assert.equal(sessionFiles.getSessionStats(source).cost, 1, 'removing the override restores the catalog');
+    }
+    finally {
+        process.env.HOME = tmp;
+        pricing.resetForTests();
+        sessionFiles.resetCaches();
+        fs.rmSync(home, { recursive: true, force: true });
+    }
+});

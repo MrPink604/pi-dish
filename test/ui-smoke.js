@@ -2962,6 +2962,7 @@ let remoteHost = null;
             // First tap arms the confirm state; the tap must not select the row.
             const selectedBefore = await desktop.evaluate(() => document.querySelector('.session-item.active')?.dataset.id || null);
             await desktop.click(`${closeRowSel} .session-close-btn`);
+            await desktop.waitForSelector(`${closeRowSel} .session-close-btn.confirm`);
             check(await desktop.locator(`${closeRowSel} .session-close-btn.confirm`).count() === 1, 'first tap arms the danger confirm state');
             check(await desktop.evaluate(() => document.querySelector('.session-item.active')?.dataset.id || null) === selectedBefore, 'confirm tap does not select the row');
             // A poll re-render must restore (not clear) the armed state.
@@ -3269,6 +3270,7 @@ let remoteHost = null;
             if (!remoteKey)
                 throw new Error('Remote host section key is unavailable');
             await multi.evaluate(() => fixtureElement(document.querySelectorAll('.host-section-header')[1], 'remote host heading').click());
+            await multi.waitForFunction(() => document.querySelectorAll('#sessionList > .host-section')[1]?.classList.contains('collapsed'));
             const collapsed = await multi.evaluate(() => {
                 const section = fixtureElement(document.querySelectorAll('#sessionList > .host-section')[1], 'remote host section');
                 return {
@@ -3279,10 +3281,12 @@ let remoteHost = null;
             });
             check(collapsed.klass && collapsed.body === 0 && collapsed.stored.includes(remoteKey), `collapsing a host section hides its tree and persists as ${remoteKey} (got ${JSON.stringify(collapsed)})`);
             await multi.evaluate(() => fixtureElement(document.querySelectorAll('.host-section-header')[1], 'remote host heading').click());
+            await multi.waitForFunction(() => document.querySelectorAll('#sessionList > .host-section')[1]?.querySelector('.session-item'));
             check(await multi.evaluate(() => fixtureElement(document.querySelectorAll('#sessionList > .host-section')[1], 'remote host section').querySelectorAll('.session-item').length > 0), 'expanding the host section brings its tree back');
             // Recent view is a timeline, so it stays interleaved — the host is the
             // row's colored chip there.
             await multi.evaluate(() => fixtureApp.features.sidebarQuery.toggleView());
+            await multi.waitForSelector('#sessionList .host-chip');
             const recentChips = await multi.evaluate(() => [...document.querySelectorAll('.session-item .host-chip')]
                 .map((chip) => ({
                 text: chip.textContent.trim(),
@@ -3293,16 +3297,22 @@ let remoteHost = null;
             check(recentChips.length > 0 && recentChips.every((c) => c.dot && c.color) && chipColors.length === 2, `Recent rows carry a color-dotted host chip per host (got ${JSON.stringify(chipColors)})`);
             check(await multi.evaluate(() => document.querySelectorAll('.host-section').length) === 0, 'the Recent view stays interleaved — no host sections');
             await multi.evaluate(() => fixtureApp.features.sidebarQuery.toggleView());
+            await multi.waitForSelector('#sessionList > .host-section');
             // The color picker in the settings Hosts section overrides the automatic
             // color and repaints the sidebar without a reload.
             await multi.evaluate(() => fixtureApp.features.displayPreferences.open());
             await multi.waitForSelector('#hostsList .host-color-input', { timeout: 5000 });
-            const picked = await multi.evaluate(() => {
+            const beforeColors = await multi.evaluate(() => {
                 const inputs = [...document.querySelectorAll('#hostsList .host-color-input')];
                 const before = inputs.map((i) => i.value);
                 const remote = fixtureElement(inputs[1], 'remote host color input');
                 remote.value = '#d33682';
                 remote.dispatchEvent(new Event('change', { bubbles: true }));
+                return before;
+            });
+            await multi.waitForFunction(() => [...document.querySelectorAll('#sessionList > .host-section')]
+                .find(section => section.querySelector('.host-section-name')?.textContent === 'tycho')?.style.getPropertyValue('--host-color') === '#d33682');
+            const picked = await multi.evaluate((before) => {
                 const section = [...document.querySelectorAll('#sessionList > .host-section')]
                     .find((candidate) => candidate.querySelector('.host-section-name')?.textContent === 'tycho');
                 return {
@@ -3311,11 +3321,13 @@ let remoteHost = null;
                     sectionColor: fixtureElement(section, 'remote host section').style.getPropertyValue('--host-color'),
                     reset: !fixtureElement(document.querySelectorAll('#hostsList .host-color-reset')[1], 'remote color reset').classList.contains('hidden'),
                 };
-            });
+            }, beforeColors);
             check(picked.before.every((v) => /^#[0-9a-f]{6}$/.test(v)), `auto colors resolve to concrete hex for the picker (got ${JSON.stringify(picked.before)})`);
             check(picked.sectionColor === '#d33682' && Object.values(picked.stored).includes('#d33682') && picked.reset, `a picked color overrides that host everywhere and offers a reset (got ${JSON.stringify(picked)})`);
+            await multi.evaluate(() => fixtureElement(document.querySelectorAll('#hostsList .host-color-reset')[1], 'remote color reset').click());
+            await multi.waitForFunction(() => /^var\(--chart-\d\)$/.test([...document.querySelectorAll('#sessionList > .host-section')]
+                .find(section => section.querySelector('.host-section-name')?.textContent === 'tycho')?.style.getPropertyValue('--host-color') || ''));
             const afterReset = await multi.evaluate(() => {
-                fixtureElement(document.querySelectorAll('#hostsList .host-color-reset')[1], 'remote color reset').click();
                 const section = [...document.querySelectorAll('#sessionList > .host-section')]
                     .find((candidate) => candidate.querySelector('.host-section-name')?.textContent === 'tycho');
                 return { color: fixtureElement(section, 'remote host section').style.getPropertyValue('--host-color'),
@@ -3524,9 +3536,11 @@ let remoteHost = null;
             const selfClose = multi.locator(`.session-item[data-id="${collisionId}"][data-host="${selfId}"] .session-close-btn`);
             const remoteClose = multi.locator(`.session-item[data-id="${collisionId}"][data-host="${remoteId}"] .session-close-btn`);
             await selfClose.click();
-            check((await selfClose.textContent() ?? '').includes('close?') && !(await remoteClose.textContent() ?? '').includes('close?'), 'the close confirmation is scoped to its host');
+            await selfClose.and(multi.locator('.confirm')).waitFor();
+            check(await selfClose.evaluate(el => el.classList.contains('confirm')) && !await remoteClose.evaluate(el => el.classList.contains('confirm')), 'the close confirmation is scoped to its host');
             await remoteClose.click();
-            check((await remoteClose.textContent() ?? '').includes('close?') && !(await selfClose.textContent() ?? '').includes('close?'), 'the first click on another host arms a new confirmation');
+            await remoteClose.and(multi.locator('.confirm')).waitFor();
+            check(await remoteClose.evaluate(el => el.classList.contains('confirm')) && !await selfClose.evaluate(el => el.classList.contains('confirm')), 'the first click on another host arms a new confirmation');
             const closeEndpoint = `${remoteProcess.base}/api/sessions/${collisionId}/close`;
             await multi.route(closeEndpoint, (route) => route.fulfill({ json: { success: true } }));
             const [closeResponse] = await Promise.all([

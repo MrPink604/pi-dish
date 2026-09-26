@@ -33,7 +33,7 @@ const DEFAULT_ARTIFACTS_DEPTH = 16;
 
 const HEADER_BYTES = 16 * 1024;
 const HEADER_CACHE_MAX = DEFAULT_MAX_FILES;
-const headerCache = new Map<string, { mtimeMs: number; size: number; header: SessionHeader | null }>(); // file -> { mtimeMs, size, header|null }
+const headerCache = new Map<string, { stat: fs.Stats; header: SessionHeader | null }>();
 const warnedInvalidCandidates = new Set<string>();
 
 function positiveInt(value: unknown, fallback: number) {
@@ -43,7 +43,7 @@ function positiveInt(value: unknown, fallback: number) {
 
 function cacheHeader(filePath: string, stat: fs.Stats, header: SessionHeader | null, profileId = 'pi-v3') {
   if (headerCache.size >= HEADER_CACHE_MAX) headerCache.delete(headerCache.keys().next().value!);
-  headerCache.set(`${profileId}\0${filePath}`, { mtimeMs: stat.mtimeMs, size: stat.size, header });
+  headerCache.set(`${profileId}\0${filePath}`, { stat, header });
 }
 
 function readSessionHeader(filePath: string, profileId = 'pi-v3'): SessionHeader | null {
@@ -52,18 +52,24 @@ function readSessionHeader(filePath: string, profileId = 'pi-v3'): SessionHeader
   try {
     stat = fs.statSync(filePath);
     const cached = headerCache.get(`${profileId}\0${filePath}`);
-    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.header;
+    if (cached && cached.stat.mtimeMs === stat.mtimeMs && cached.stat.size === stat.size &&
+        cached.stat.ctimeMs === stat.ctimeMs && cached.stat.dev === stat.dev && cached.stat.ino === stat.ino) return cached.header;
     fd = fs.openSync(filePath, 'r');
-    const buf = Buffer.alloc(HEADER_BYTES);
+    const buf = Buffer.allocUnsafe(HEADER_BYTES);
     const n = fs.readSync(fd, buf, 0, buf.length, 0);
-    const newline = buf.indexOf(10, 0);
+    const bytes = buf.subarray(0, n);
+    const newline = bytes.indexOf(10, 0);
     if (newline < 0 && n === buf.length) {
       cacheHeader(filePath, stat, null, profileId);
       return null;
     }
-    const text = buf.toString('utf8', 0, n);
     let header: Record<string, unknown> | null = null;
-    for (const line of text.split('\n')) {
+    // Decode only through the header, not the following 16KB of transcript.
+    for (let start = 0; start < n;) {
+      const newlineAt = bytes.indexOf(10, start);
+      const end = newlineAt < 0 ? n : newlineAt;
+      const line = bytes.toString('utf8', start, end);
+      start = end + 1;
       let entry: unknown; try { entry = JSON.parse(line); } catch { continue; }
       if (isRecord(entry) && entry.type === 'session') { header = entry; break; }
       if (profileId !== 'omp-v1') break;
@@ -86,6 +92,18 @@ function readSessionHeader(filePath: string, profileId = 'pi-v3'): SessionHeader
   } finally {
     if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
   }
+}
+
+/** A fan-out shares parent headers only within this synchronous discovery. */
+function scopedHeaders(): typeof readSessionHeader {
+  const headers = new Map<string, SessionHeader | null>();
+  return (file, profileId = 'pi-v3') => {
+    const key = `${profileId}\0${file}`;
+    if (headers.has(key)) return headers.get(key)!;
+    const header = readSessionHeader(file, profileId);
+    headers.set(key, header);
+    return header;
+  };
 }
 
 function safeHeaderSessionId(value: unknown): NativeSessionId | null {
@@ -111,7 +129,7 @@ function decorateCandidate(candidate: CandidateHint, descriptor: HarnessDescript
   };
 }
 
-function candidateForFile(file: string, workspaceDirName: string, depth: number, descriptor: HarnessDescriptor): CandidateHint | null {
+function candidateForFile(file: string, workspaceDirName: string, depth: number, descriptor: HarnessDescriptor, readHeader = readSessionHeader): CandidateHint | null {
   const basename = path.basename(file, '.jsonl');
   if (descriptor.layout === 'flat') {
     return { file, id: basename, dirName: workspaceDirName, depth, identitySource: 'basename' };
@@ -130,14 +148,14 @@ function candidateForFile(file: string, workspaceDirName: string, depth: number,
     // Keep this descriptor-owned so Pi launcher artifacts remain excluded.
     if (!descriptor.nestedSubsessions) return null;
     const parentSession = `${path.dirname(file)}.jsonl`;
-    if (!fs.existsSync(parentSession) || !readSessionHeader(parentSession, descriptor.profileId)) return null;
-    const header = readSessionHeader(file, descriptor.profileId);
+    if (!readHeader(parentSession, descriptor.profileId)) return null;
+    const header = readHeader(file, descriptor.profileId);
     const id = safeHeaderSessionId(header?.id);
     return id
       ? { file, id, dirName: workspaceDirName, depth, identitySource: 'header', parentSession }
       : null;
   }
-  const header = readSessionHeader(file, descriptor.profileId);
+  const header = readHeader(file, descriptor.profileId);
   const id = safeHeaderSessionId(header?.id);
   return id ? { file, id, dirName: workspaceDirName, depth, identitySource: 'header' } : null;
 }
@@ -149,8 +167,8 @@ function candidateForFile(file: string, workspaceDirName: string, depth: number,
  * (`session-artifacts/<id>/sub-*` one generation down). Non-session JSONLs
  * (semantic-edges.jsonl, registries) have no session header and drop out.
  */
-function artifactCandidateForFile(file: string, dirName: string, depth: number, descriptor: HarnessDescriptor, parentFallback: string | null): CandidateHint | null {
-  const header = readSessionHeader(file, descriptor.profileId);
+function artifactCandidateForFile(file: string, dirName: string, depth: number, descriptor: HarnessDescriptor, parentFallback: string | null, readHeader = readSessionHeader): CandidateHint | null {
+  const header = readHeader(file, descriptor.profileId);
   const id = safeHeaderSessionId(header?.id);
   if (!id) return null;
   const parentSession = header?.parentSession || parentFallback || undefined;
@@ -187,6 +205,7 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
   let skipped = 0;
   let filesSeen = 0;
   let entriesSeen = 0;
+  const readHeader = scopedHeaders();
 
   const add = (hint: CandidateHint | null) => {
     if (!hint) return;
@@ -264,7 +283,7 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
       if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         if (filesSeen >= maxFiles) { truncated = true; return; }
         filesSeen += 1;
-        add(candidateForFile(full, workspaceDirName, depth, descriptor));
+        add(candidateForFile(full, workspaceDirName, depth, descriptor, readHeader));
       } else if (entry.isDirectory() && !entry.isSymbolicLink() && depth < maxDepth) {
         walk(full, workspaceDirName, depth + 1);
       }
@@ -276,7 +295,7 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) return;
       if (filesSeen >= maxFiles) { truncated = true; return; }
       filesSeen += 1;
-      add(candidateForFile(path.join(rootDir, entry.name), path.basename(rootDir), 0, descriptor));
+      add(candidateForFile(path.join(rootDir, entry.name), path.basename(rootDir), 0, descriptor, readHeader));
     });
   } else eachEntry(rootDir, (workspace) => {
     if (!workspace.isDirectory() || workspace.isSymbolicLink()) return;
@@ -303,8 +322,8 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
             artifactParentFallback(artifactsRoot, dirPath, (topId) => {
               if (topId === null) return null;
               const parentFile = path.join(rootDir, `${topId}.jsonl`);
-              return fs.existsSync(parentFile) && readSessionHeader(parentFile, descriptor.profileId) ? parentFile : null;
-            })));
+              return readHeader(parentFile, descriptor.profileId) ? parentFile : null;
+            }), readHeader));
         } else if (entry.isDirectory() && !entry.isSymbolicLink()) {
           walkArtifacts(full, depth + 1);
         }
@@ -369,6 +388,7 @@ function discoverSubsessionCandidates(parentFile: string, options: DiscoveryOpti
   const byId = new Map<string, Candidate>();
   const ambiguous = new Set<string>();
   let files = 0;
+  const readHeader = scopedHeaders();
   const walk = (dirPath: string, depth: number): void => {
     if (depth > maxDepth || files >= maxFiles) return;
     // Same refusal as the corpus walk: a symlinked agent directory would
@@ -382,7 +402,7 @@ function discoverSubsessionCandidates(parentFile: string, options: DiscoveryOpti
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) continue;
       files += 1;
       const file = path.join(dirPath, entry.name);
-      const candidate = candidateForFile(file, workspaceDirName, depth, descriptor);
+      const candidate = candidateForFile(file, workspaceDirName, depth, descriptor, readHeader);
       if (!candidate || !validSessionId(candidate.id)) continue;
       // A copied/restored session tree yields two files claiming one header
       // id; neither is safe to route, so the identity is omitted entirely.

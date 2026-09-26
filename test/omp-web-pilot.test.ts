@@ -4,6 +4,9 @@ import assert = require('node:assert/strict');
 import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
+import type * as HarnessCommands from '../lib/harness-feature-commands';
+import type * as HarnessRegistry from '../lib/harnesses';
+import { once } from 'node:events';
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-pilot-'));
 const cwd = path.join(home, 'project');
@@ -253,6 +256,113 @@ test('synchronous OMP launch rejects a thinking level outside the selected model
   assert.match(String(record(invalid.body).error), /valid levels: high, max/i);
   assert.equal(fs.readFileSync(modelEventsFile, 'utf8').trim().split('\n').length, 1,
     'launch validation reuses the catalog loaded by the new-session view');
+});
+
+test('shared catalogs preserve cwd, environment, config and credential freshness during discovery', async () => {
+  const commands: typeof HarnessCommands = require('../lib/harness-feature-commands');
+  const harnesses: typeof HarnessRegistry = require('../lib/harnesses');
+  const descriptor = present(harnesses.getHarness('omp'));
+  const root = fs.mkdtempSync(path.join(home, 'catalog-cache-'));
+  const agentDir = path.join(root, 'agent');
+  const project = path.join(root, 'project');
+  const otherProject = path.join(root, 'other');
+  const script = path.join(root, 'catalog.cjs');
+  const events = path.join(root, 'events');
+  const externalRate = path.join(root, 'external-rate');
+  fs.writeFileSync(externalRate, '1');
+  for (const dir of [agentDir, path.join(project, '.omp'), path.join(otherProject, '.omp')]) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(agentDir, 'auth.json'), JSON.stringify({ provider: 'first' }));
+  const config = path.join(project, '.omp', 'config.yml');
+  fs.writeFileSync(config, JSON.stringify({ id: 'original' }));
+  fs.writeFileSync(path.join(otherProject, '.omp', 'config.yml'), JSON.stringify({ id: 'other' }));
+  const database = path.join(agentDir, 'agent.db');
+  const databaseBytes = Buffer.alloc(4096);
+  databaseBytes.write('SQLite format 3\0');
+  databaseBytes[100] = 1;
+  fs.writeFileSync(database, databaseBytes);
+  fs.writeFileSync(script, `
+    const fs = require('node:fs'), path = require('node:path');
+    const config = JSON.parse(fs.readFileSync(path.join(process.cwd(), '.omp', 'config.yml'), 'utf8'));
+    const auth = JSON.parse(fs.readFileSync(path.join(process.env.OMP_AGENT_DIR, 'auth.json'), 'utf8'));
+    const revision = fs.readFileSync(${JSON.stringify(database)})[100];
+    const rate = Number(fs.readFileSync(${JSON.stringify(externalRate)}, 'utf8'));
+    fs.appendFileSync(${JSON.stringify(events)}, config.id + '\\n');
+    const publish = () => {
+      process.stdout.write(JSON.stringify({ models: [{ provider: auth.provider, id: config.id, name: config.id + ':' + revision,
+        reasoning: true, thinking: [process.env.CATALOG_EFFORT || 'high'],
+        cost: { input: rate, output: 2 } }] }) + '\\n');
+      // Exercise the real child-exit grace; a parent fake clock cannot drive
+      // timers in this separate CLI process.
+      setTimeout(() => process.exit(0), 2000);
+    };
+    if (config.hold) {
+      const release = path.join(${JSON.stringify(root)}, 'release');
+      const watcher = fs.watch(${JSON.stringify(root)}, () => {
+        if (fs.existsSync(release)) { watcher.close(); publish(); }
+      });
+      if (fs.existsSync(release)) { watcher.close(); publish(); }
+    } else publish();
+  `);
+  const saved = { command: process.env.PI_DISH_OMP_COMMAND, agent: process.env.OMP_AGENT_DIR, effort: process.env.CATALOG_EFFORT };
+  process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${script}`;
+  process.env.OMP_AGENT_DIR = agentDir;
+  delete process.env.CATALOG_EFFORT;
+  try {
+    const [raw, models] = await Promise.all([
+      commands.runHarnessModelCatalog(descriptor, { cwd: project }),
+      commands.runHarnessModelCommand(descriptor, { cwd: project }),
+    ]);
+    assert.equal(records(record(raw).models)[0].id, 'original');
+    assert.equal(models[0].selector, 'first/original');
+    assert.deepEqual(models[0].pricing, { input: 1, output: 2 });
+    assert.equal(fs.readFileSync(events, 'utf8'), 'original\n', 'pricing and interactive views share one lingering CLI');
+    databaseBytes.writeUInt32BE(12, 24);
+    databaseBytes.writeUInt32BE(12, 92);
+    fs.writeFileSync(database, databaseBytes);
+    assert.equal((await commands.runHarnessModelCommand(descriptor, { cwd: project }))[0].name, 'original:1');
+    assert.equal(fs.readFileSync(events, 'utf8'), 'original\n', 'a checkpoint alone does not re-run discovery');
+    databaseBytes[100] = 2;
+    fs.writeFileSync(database, databaseBytes);
+    assert.equal((await commands.runHarnessModelCommand(descriptor, { cwd: project }))[0].name, 'original:2',
+      'changed database payload invalidates even when the header counters do not change');
+    // A remote provider can change without editing any local input. An
+    // explicit pricing refresh bypasses a settled entry but shares a flight.
+    fs.writeFileSync(externalRate, '7');
+    assert.equal((await commands.runHarnessModelCommand(descriptor, { cwd: project }))[0].pricing?.input, 1);
+    const forced = await Promise.all([
+      commands.runHarnessModelCatalog(descriptor, { cwd: project, force: true }),
+      commands.runHarnessModelCatalog(descriptor, { cwd: project, force: true }),
+    ]);
+    assert.equal(record(records(record(forced[0]).models)[0].cost).input, 7);
+    assert.equal(record(records(record(forced[1]).models)[0].cost).input, 7);
+    assert.equal(fs.readFileSync(events, 'utf8'), 'original\noriginal\noriginal\n',
+      'two forced pricing requests share one additional discovery');
+    assert.equal((await commands.runHarnessModelCommand(descriptor, { cwd: otherProject }))[0].selector, 'first/other');
+    process.env.CATALOG_EFFORT = 'max';
+    assert.deepEqual((await commands.runHarnessModelCommand(descriptor, { cwd: project }))[0].thinking, ['max']);
+    fs.writeFileSync(path.join(agentDir, 'auth.json'), JSON.stringify({ provider: 'second' }));
+    assert.equal((await commands.runHarnessModelCommand(descriptor, { cwd: project }))[0].selector, 'second/original');
+
+    // The old child captures its inputs before the edit. It may answer its
+    // original caller, but cannot become the cache for the new configuration.
+    fs.writeFileSync(config, JSON.stringify({ id: 'old-flight', hold: true }));
+    const watcher = fs.watch(events);
+    const started = once(watcher, 'change');
+    const old = commands.runHarnessModelCommand(descriptor, { cwd: project });
+    try { await started; } finally { watcher.close(); }
+    assert.match(fs.readFileSync(events, 'utf8'), /old-flight/);
+    fs.writeFileSync(config, JSON.stringify({ id: 'new-flight' }));
+    assert.equal((await commands.runHarnessModelCommand(descriptor, { cwd: project }))[0].selector, 'second/new-flight');
+    fs.writeFileSync(path.join(root, 'release'), '');
+    assert.equal((await old)[0].selector, 'second/old-flight');
+    assert.equal((await commands.runHarnessModelCommand(descriptor, { cwd: project }))[0].selector, 'second/new-flight');
+  } finally {
+    for (const [key, value] of Object.entries({
+      PI_DISH_OMP_COMMAND: saved.command, OMP_AGENT_DIR: saved.agent, CATALOG_EFFORT: saved.effort,
+    })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
 });
 
 export {};

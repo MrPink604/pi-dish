@@ -17,6 +17,7 @@ import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
 import { pathToFileURL } from 'node:url';
+import { getPiLaunchSpec } from '../lib/harness-launch-spec';
 
 const { sseReader }: typeof import('./sse-reader') = require('./sse-reader')
 
@@ -34,8 +35,10 @@ const STATE_LOG = path.join(tmpHome, 'rpc-state-requests.txt');
 process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} ${process.execPath} ${FIXTURE}`;
 process.env.PI_FIXTURE_START_LOG = START_LOG;
 
-const server: import('node:http').Server = require('../server.js');
+// Exercise the low-level-first import order: pricing must not capture a partial
+// RPC export object through launch/control dependencies.
 const { getAllRPCSessions, getRPCSession }: typeof import('../lib/rpc-session') = require('../lib/rpc-session')
+const server: import('node:http').Server = require('../server.js');
 const { invalidateRegistryCache }: typeof import('../lib/bridge-session') = require('../lib/bridge-session')
 const { processIdentity }: typeof import('../lib/process-identity') = require('../lib/process-identity')
 
@@ -91,7 +94,6 @@ let sessionId = '';
 test('getPiLaunchSpec resolves a bare `pi` past node_modules/.bin shims', () => {
   // Under npm-run PATHs, pi-dish's own dependency shim would shadow the host
   // pi — the spec must skip node_modules dirs when resolving the bare word.
-  const { getPiLaunchSpec }: typeof import('../lib/rpc-session') = require('../lib/rpc-session')
   const saved = { cmd: process.env.PI_DISH_PI_COMMAND, path: process.env.PATH };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-path-'));
   const shimDir = path.join(dir, 'node_modules', '.bin');

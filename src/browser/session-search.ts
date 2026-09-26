@@ -11,7 +11,7 @@ export function decodeSessionSearch(value: unknown): readonly SessionSearchMatch
 export function createSessionSearch(options: {
   document: Document; sessionState: SessionState; request: ApiRequest;
   endpoint: (host: string | null) => HostEndpoint | null; focusMode: () => boolean;
-  oldestIndex: () => number | null; hasOlder: () => boolean; loadOlder: () => Promise<unknown>;
+  ensureMessage: (index: number, owns: () => boolean) => Promise<unknown>;
   stopFollowing: () => void; updateJumpButton: (container: HTMLElement) => void;
 }) {
   const { document, sessionState } = options;
@@ -20,7 +20,7 @@ export function createSessionSearch(options: {
   };
   let query = '', matches: readonly SessionSearchMatch[] = [], pos = -1;
   let sequence = 0, disposed = false;
-  let navigation: { owner: SelectionOwner; done: Promise<void> } | null = null;
+  let navigation: { owner: SelectionOwner; sequence: number; done: Promise<void> } | null = null;
   function updateCount(message?: string): void {
     if (disposed) return;
     element('searchCount').textContent = message !== undefined ? message : matches.length ? `${pos + 1}/${matches.length}` : query ? 'no matches' : '';
@@ -44,8 +44,9 @@ export function createSessionSearch(options: {
     element('searchBar').style.display = 'none';
     query = ''; matches = []; pos = -1;
     clearMarks(); updateCount();
-    // A page load already in progress is shared until it settles. Closing the
-    // bar retires the highlight owner without starting a second page request.
+    // A pending window may finish fetching, but its query guard must prevent
+    // committing DOM after the bar closes or another query takes ownership.
+    navigation = null;
   }
   function reset(): void { close(); navigation = null; }
   function toggle(): void { if (element('searchBar').style.display === 'none') open(); else close(); }
@@ -82,25 +83,26 @@ export function createSessionSearch(options: {
     if (disposed || !owner || !match || !resolved) return;
     const endpoint = Object.freeze({ ...resolved });
     const owns = () => !disposed && seq === sequence && sessionState.ownsSelection(owner) && sameEndpoint(owner, endpoint);
-    if (navigation) {
+    if (navigation?.sequence === seq) {
       const pending = navigation;
       await pending.done;
       if (owns()) await jump();
       return;
     }
     let finish!: () => void;
-    const active = { owner, done: new Promise<void>(resolve => { finish = resolve; }) };
+    const active = { owner, sequence: seq, done: new Promise<void>(resolve => { finish = resolve; }) };
     navigation = active;
     try {
       const container = element('messages');
-      let guard = 0;
-      while (owns() && options.oldestIndex() !== null && match.index < options.oldestIndex()! && options.hasOlder() && guard++ < 200) await options.loadOlder();
+      if (!container.querySelector(`[data-msg-index="${match.index}"]`)) await options.ensureMessage(match.index, owns);
       if (!owns()) return;
       const el = container.querySelector<HTMLElement>(`[data-msg-index="${match.index}"]`);
       if (!el) { updateCount('not loaded'); return; }
       const group = el.closest<HTMLDetailsElement>('details.tool-group'); if (group) group.open = true;
       clearMarks(); el.classList.add('search-current'); markSearchTokens(el, tokens);
       options.stopFollowing(); el.scrollIntoView({ block: 'center' }); options.updateJumpButton(container); updateCount();
+    } catch (error) {
+      if (owns()) { updateCount('load failed'); console.error('Search navigation failed:', error); }
     } finally { if (navigation === active) navigation = null; finish(); }
   }
   async function move(delta: number): Promise<void> {

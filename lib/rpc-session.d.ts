@@ -75,10 +75,6 @@ declare class RPCSession {
     respondExtensionUI(requestId: string, response: ProtocolRecord): void;
     kill(): void;
 }
-declare function getPiLaunchSpec(): {
-    env: Record<string, string>;
-    argv: string[];
-};
 declare function createRPCSession(opts?: RPCLaunchOptions): Promise<RPCSession>;
 declare function resumeRPCSession(sessionPath: string, cwd?: string): Promise<RPCSession>;
 declare function getRPCSession(id: NativeSessionId): RPCSession | undefined;
@@ -89,7 +85,6 @@ declare const _default: {
     resumeRPCSession: typeof resumeRPCSession;
     getRPCSession: typeof getRPCSession;
     getAllRPCSessions: typeof getAllRPCSessions;
-    getPiLaunchSpec: typeof getPiLaunchSpec;
     rpcSessions: Map<NativeSessionId, RPCSession>;
 };
 export = _default;

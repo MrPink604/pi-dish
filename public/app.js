@@ -270,13 +270,6 @@
     }
     return Math.round(total);
   }
-  function applyLocalFilter(list, query) {
-    if (!query) return list;
-    const parsed = parseSessionQuery(query);
-    const out = list.filter((s) => evaluateSessionQuery(parsed, s));
-    if (!positiveQueryTokens(parsed).length) return out;
-    return out.map((s) => [s, scoreSessionMatch(parsed, s)]).sort((a, b) => b[1] - a[1] || new Date(b[0].lastActivity || 0).getTime() - new Date(a[0].lastActivity || 0).getTime()).map(([s]) => s);
-  }
   function applyHostTerms(list, query) {
     if (!query) return list;
     const terms = parseSessionQuery(query).terms.filter((t) => t.field === "host");
@@ -1196,6 +1189,7 @@
       const id = item.id || item.modelId;
       if (!text2(id) || !text2(item.provider)) return [];
       const cost = pricing(item.pricing || item.cost);
+      const thinking = record3(item.thinking) ? item.thinking.efforts : item.thinking;
       return [{
         id,
         provider: item.provider,
@@ -1203,7 +1197,7 @@
         selector: text2(item.selector) ? item.selector : `${item.provider}/${id}`,
         contextWindow: finite2(item.contextWindow) ? item.contextWindow : 0,
         reasoning: !!item.reasoning,
-        thinking: Array.isArray(item.thinking) ? item.thinking.filter((level) => typeof level === "string" && THINKING_LEVELS.has(level)) : null,
+        thinking: Array.isArray(thinking) ? thinking.filter((level) => typeof level === "string" && THINKING_LEVELS.has(level)) : null,
         pricing: cost,
         free: !!cost && cost.input === 0 && cost.output === 0
       }];
@@ -3447,6 +3441,66 @@ ${row.id}`;
     const render = () => {
       if (!disposed) options2.render();
     };
+    let layout = "", renderedRows = /* @__PURE__ */ new Map();
+    function updateList(projection) {
+      if (disposed || drag) return false;
+      const structureChanged = layout !== projection.layout;
+      const changed = projection.rows.filter((row) => renderedRows.get(row.key)?.html !== row.html);
+      if (!structureChanged && !changed.length) return false;
+      closeMenu();
+      const focused = document2.activeElement instanceof HTMLElement && list.contains(document2.activeElement) ? document2.activeElement : null;
+      let focusKey = null;
+      if (focused) {
+        for (const [key, row] of renderedRows) if (row.element.contains(focused)) {
+          focusKey = key;
+          break;
+        }
+      }
+      const focusSelector = focused && [".session-pin-btn", ".session-close-btn", ".session-family-toggle"].find((selector) => focused.matches(selector));
+      const template = document2.createElement("template");
+      template.innerHTML = changed.map((row) => row.html).join("");
+      const elements = Array.from(template.content.children);
+      const replacements = new Map(changed.map((row, index) => [row.key, { html: row.html, element: elements[index] }]));
+      const next = /* @__PURE__ */ new Map();
+      for (const row of projection.rows) next.set(row.key, replacements.get(row.key) || renderedRows.get(row.key));
+      const slotPattern = /<template data-sidebar-row="[^"]*"><\/template>/g;
+      const ranked = structureChanged && projection.layout.replace(slotPattern, "") === layout.replace(slotPattern, "") ? list.querySelector(".ranked-segment") : null;
+      if (ranked) {
+        for (const [key, row] of renderedRows) if (!next.has(key)) row.element.remove();
+        for (const [key, row] of replacements) renderedRows.get(key)?.element.replaceWith(row.element);
+        let cursor2 = ranked.firstElementChild;
+        for (const row of next.values()) {
+          if (cursor2 && cursor2 !== row.element && cursor2.nextElementSibling === row.element) {
+            const displaced = cursor2;
+            cursor2 = row.element;
+            ranked.append(displaced);
+          }
+          if (row.element === cursor2) cursor2 = cursor2.nextElementSibling;
+          else ranked.insertBefore(row.element, cursor2);
+        }
+        while (cursor2) {
+          const following = cursor2.nextElementSibling;
+          cursor2.remove();
+          cursor2 = following;
+        }
+      } else if (structureChanged) {
+        template.innerHTML = projection.layout;
+        for (const slot of Array.from(template.content.querySelectorAll("[data-sidebar-row]"))) {
+          slot.replaceWith(next.get(slot.dataset.sidebarRow).element);
+        }
+        list.replaceChildren(template.content);
+      } else {
+        for (const [key, row] of replacements) renderedRows.get(key).element.replaceWith(row.element);
+      }
+      layout = projection.layout;
+      renderedRows = next;
+      if (focusKey && focusSelector && document2.activeElement !== focused) {
+        renderedRows.get(focusKey)?.element.querySelector(focusSelector)?.focus({ preventScroll: true });
+      } else if (focused?.matches(".workspace-new-btn") && document2.activeElement !== focused) {
+        Array.from(list.querySelectorAll(".workspace-new-btn")).find((button) => button.dataset.path === focused.dataset.path && button.dataset.host === focused.dataset.host)?.focus({ preventScroll: true });
+      }
+      return true;
+    }
     function savePins() {
       write("pi-dish-pinned-sessions", pinned);
     }
@@ -3487,7 +3541,9 @@ ${row.id}`;
       render();
     }
     const sessions = () => [...sessionState2.sessions.active, ...sessionState2.sessions.previous];
+    let rootLists = null, rootMap = /* @__PURE__ */ new Map();
     function familyRoots() {
+      if (rootLists === sessionState2.sessions) return rootMap;
       const rows = sessions(), roots = buildSessionFamilies(rows), map = /* @__PURE__ */ new Map();
       const visit = (node, root) => {
         map.set(sessionRefKey(node.session), root);
@@ -3507,6 +3563,8 @@ ${row.id}`;
         }
         map.set(member, canonical);
       }
+      rootLists = sessionState2.sessions;
+      rootMap = map;
       return map;
     }
     function reveal(id, host = sessionState2.sessionHostId(id)) {
@@ -3778,10 +3836,14 @@ ${row.id}`;
       menu?.remove();
       menu = null;
       if (drag) finishDrag(drag, false);
+      renderedRows.clear();
+      rootMap.clear();
+      rootLists = null;
     }
     return {
       mount,
       dispose,
+      updateList,
       migrate,
       reloadPreferences,
       toggleGroup,
@@ -4181,14 +4243,21 @@ ${row.id}`;
   function renderSidebar(options2) {
     const canonical = (key) => options2.roots.get(key) || key;
     const hostIsDown = (host) => host.state === "blocked" || host.state === "backoff";
+    const selectedKey = options2.selected ? sessionRefKey(options2.selected) : null;
+    const parsedQuery = parseSessionQuery(options2.query), queryTokens = positiveQueryTokens(parsedQuery);
+    const pinnedRoots = new Set(options2.pinned.map(canonical));
+    const downHosts = new Set(options2.hosts.filter(hostIsDown).map((host) => host.hostId || null));
+    const badges = /* @__PURE__ */ new Map(), hostChips = /* @__PURE__ */ new Map();
+    const rows = [], occurrences = /* @__PURE__ */ new Map();
     function renderSessionItem(session, opts = {}) {
       const contextPercent = session.contextPercent ?? 0;
       const ctxClass = contextClass(contextPercent);
-      const activeClass = options2.selected && sessionRefKey(options2.selected) === sessionRefKey(session) ? "active" : "";
+      const key = sessionRefKey(session);
+      const activeClass = selectedKey === key ? "active" : "";
       const inactiveClass = session.isActive || session.subagentLive ? "" : "inactive";
       const familyNode = opts.familyNode || null;
       const hasChildren = !!familyNode?.children?.length;
-      const familyExpanded = hasChildren && options2.expanded.has(sessionRefKey(session));
+      const familyExpanded = hasChildren && options2.expanded.has(key);
       const statusSessions = hasChildren && !familyExpanded ? flattenSessionFamilies(familyNode ? [familyNode] : []) : [session];
       let liveDot = "";
       if (statusSessions.some((s) => s.askPending)) {
@@ -4208,27 +4277,34 @@ ${row.id}`;
       const cache = cacheExpiryPresentation(session.cacheExpiry);
       const cacheHtml = cache ? `<span class="session-item-cache${cache.severity ? ` ${cache.severity}` : ""}" title="${escapeHtml(cache.detail)}" aria-label="${escapeHtml(cache.detail)}">${escapeHtml(cache.compact)}</span>` : "";
       const timeAgo = formatRelativeTime(hasChildren ? familyNode.activity : session.lastActivity);
-      const canonicalRootKey = canonical(opts.familyRootKey || sessionRefKey(session));
-      const isPinned = opts.familyPinned ?? options2.pinned.some((pin) => canonical(pin) === canonicalRootKey);
+      const canonicalRootKey = canonical(opts.familyRootKey || key);
+      const isPinned = opts.familyPinned ?? pinnedRoots.has(canonicalRootKey);
       const pinBtn = `<button class="session-pin-btn${isPinned ? " pinned" : ""}" title="${isPinned ? "Unpin family" : "Pin family to top"}">\u{1F4CC}</button>`;
       const familyToggle = hasChildren ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? "Collapse" : "Show"} ${familyNode.size - 1} child session${familyNode.size === 2 ? "" : "s"}" title="${familyExpanded ? "Collapse" : "Show"} ${familyNode.size - 1} child session${familyNode.size === 2 ? "" : "s"}"><span>${familyExpanded ? "\u25BE" : "\u25B8"}</span><small>${familyNode.size - 1}</small></button>` : (opts.familyDepth || 0) > 0 ? '<span class="session-family-leaf" aria-hidden="true">\u21B3</span>' : "";
-      const closeArmed = options2.closeConfirm === sessionRefKey(session);
-      const closeBusy = options2.closeBusy === sessionRefKey(session);
+      const closeArmed = options2.closeConfirm === key;
+      const closeBusy = options2.closeBusy === key;
       const detachClient = session.closeMode === "client-only";
       const closeTitle = detachClient ? "Detach client" : session.closeMode === "owned-agent" ? "Stop this agent and its children (transcript stays resumable)" : "Close session (transcript stays resumable)";
       const closeBtn = session.isActive && sessionSupports(session, "close") ? `<button class="session-close-btn${closeArmed ? " confirm" : ""}" title="${closeArmed ? "Tap again: " : ""}${closeTitle}">${closeBusy ? "\u2026" : closeArmed ? detachClient ? "detach?" : "close?" : "\u2715"}</button>` : "";
-      const harnessBadge = renderHarnessBadge(session.harnessId, session.harnessLabel);
+      const badgeKey = JSON.stringify([session.harnessId, session.harnessLabel]);
+      let harnessBadge = badges.get(badgeKey);
+      if (harnessBadge === void 0) {
+        harnessBadge = renderHarnessBadge(session.harnessId, session.harnessLabel);
+        badges.set(badgeKey, harnessBadge);
+      }
       const routineChip = session.routine ? `<span class="routine-chip" title="Started by the &quot;${escapeHtml(session.routine)}&quot; routine">\u23F1 ${escapeHtml(session.routine)}</span>` : "";
       const dragHandle = opts.pinnedRow ? '<span class="session-drag-handle" title="Drag to reorder">\u283F</span>' : "";
       const cwdHint = opts.pinnedRow || opts.showCwd ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || "~"))}</span>` : "";
-      const hostChip = opts.pinnedRow || opts.showCwd ? options2.hostChip(session.host) : "";
-      const staleHost = options2.hosts.some((host) => (host.hostId || null) === (session.host || null) && hostIsDown(host)) ? " stale-host" : "";
-      const snippetLine = session.searchSnippet ? `<div class="session-item-snippet">${highlightTokens(
-        session.searchSnippet,
-        positiveQueryTokens(parseSessionQuery(options2.query))
-      )}</div>` : "";
+      let hostChip = "";
+      if (opts.pinnedRow || opts.showCwd) {
+        const host = session.host || null;
+        if (!hostChips.has(host)) hostChips.set(host, options2.hostChip(host));
+        hostChip = hostChips.get(host);
+      }
+      const staleHost = downHosts.has(session.host || null) ? " stale-host" : "";
+      const snippetLine = session.searchSnippet ? `<div class="session-item-snippet">${highlightTokens(session.searchSnippet, queryTokens)}</div>` : "";
       const thinkingChip = session.thinkingLevel ? `<span class="session-item-thinking" title="Thinking level: ${escapeHtml(session.thinkingLevel)}">${escapeHtml(session.thinkingLevel)}</span>` : "";
-      return `
+      const html = `
     <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? " closing" : ""}${staleHost}" data-id="${escapeHtml(session.id)}"${session.host ? ` data-host="${escapeHtml(session.host)}"` : ""}>
       <div class="session-item-header">
         ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
@@ -4246,6 +4322,11 @@ ${row.id}`;
       ${snippetLine}
     </div>
   `;
+      const occurrence = occurrences.get(key) || 0;
+      occurrences.set(key, occurrence + 1);
+      const rowKey = JSON.stringify([key, occurrence]);
+      rows.push({ key: rowKey, html });
+      return `<template data-sidebar-row="${escapeHtml(rowKey)}"></template>`;
     }
     function renderSessionFamily(node, opts = {}, depth = 0, rootId = node.session.id, rootKey = sessionRefKey(node.session)) {
       const expanded = node.children.length > 0 && options2.expanded.has(sessionRefKey(node.session));
@@ -4289,7 +4370,7 @@ ${row.id}`;
       const pending = options2.pending;
       const sq = options2.scope;
       const scopeParsed = sq ? parseSessionQuery(sq) : null;
-      const asksAutomation = queryAsksForAutomation(parseSessionQuery(options2.query)) || (scopeParsed ? queryAsksForAutomation(scopeParsed) : false);
+      const asksAutomation = queryAsksForAutomation(parsedQuery) || (scopeParsed ? queryAsksForAutomation(scopeParsed) : false);
       let visible = showing, automationHidden = 0;
       if (!asksAutomation) {
         visible = showing.filter((session) => {
@@ -4298,7 +4379,8 @@ ${row.id}`;
           return false;
         });
       }
-      const queried = options2.query && options2.queriedFor === options2.query ? applyHostTerms(visible, options2.query) : applyLocalFilter(visible, options2.query);
+      const authoritative = !!options2.query && options2.queriedFor === options2.query;
+      const queried = authoritative ? applyHostTerms(visible, options2.query) : options2.query ? visible.filter((session) => evaluateSessionQuery(parsedQuery, session)) : visible;
       const filtered = scopeParsed ? queried.filter((s) => evaluateSessionQuery(scopeParsed, s)) : queried;
       const scopesHidden = queried.length - filtered.length;
       let html = "";
@@ -4318,10 +4400,17 @@ ${row.id}`;
         const msg = options2.tab === "active" ? active.length === 0 && !options2.query ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : "No matches" : visible.length === 0 && !options2.query ? "No sessions found" : "No matches";
         html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
       } else if (options2.query) {
-        const parsed = parseSessionQuery(options2.query);
-        const ranked = filtered.map((s) => [s, s.searchScore ?? scoreSessionMatch(parsed, s)]).sort((a, b) => b[1] - a[1] || new Date(b[0].lastActivity || 0).getTime() - new Date(a[0].lastActivity || 0).getTime());
+        const ranked = filtered.map((session) => {
+          const localScore = authoritative ? 0 : scoreSessionMatch(parsedQuery, session);
+          return {
+            session,
+            localScore,
+            score: session.searchScore ?? (authoritative ? scoreSessionMatch(parsedQuery, session) : localScore),
+            activity: new Date(session.lastActivity || 0).getTime()
+          };
+        }).sort((a, b) => b.score - a.score || b.activity - a.activity || b.localScore - a.localScore);
         html += `<div class="session-segment ranked-segment">
-      ${ranked.map(([s]) => renderSessionItem(s, { showCwd: true })).join("")}
+      ${ranked.map(({ session }) => renderSessionItem(session, { showCwd: true })).join("")}
     </div>`;
       } else {
         const families = buildSessionFamilies(filtered);
@@ -4348,7 +4437,17 @@ ${row.id}`;
       if (scopesHidden > 0) {
         html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;
       }
-      return { html, count: active.length + pending.length };
+      return {
+        layout: html,
+        rows,
+        count: active.length + pending.length,
+        // String consumers (including the pure projection fixtures) retain the
+        // complete markup; the DOM controller only parses changed rows.
+        get html() {
+          let index = 0;
+          return html.replace(/<template data-sidebar-row="[^"]*"><\/template>/g, () => rows[index++].html);
+        }
+      };
     }
     function workspaceGroupKey(hostId, path) {
       return options2.multiHost && hostId ? sessionKey(hostId, path) : path;
@@ -6639,6 +6738,7 @@ ${row.id}`;
       pos = -1;
       clearMarks();
       updateCount();
+      navigation = null;
     }
     function reset() {
       close();
@@ -6689,21 +6789,20 @@ ${row.id}`;
       if (disposed || !owner || !match || !resolved) return;
       const endpoint = Object.freeze({ ...resolved });
       const owns = () => !disposed && seq === sequence && sessionState2.ownsSelection(owner) && sameEndpoint(owner, endpoint);
-      if (navigation) {
+      if (navigation?.sequence === seq) {
         const pending = navigation;
         await pending.done;
         if (owns()) await jump();
         return;
       }
       let finish;
-      const active = { owner, done: new Promise((resolve) => {
+      const active = { owner, sequence: seq, done: new Promise((resolve) => {
         finish = resolve;
       }) };
       navigation = active;
       try {
         const container = element("messages");
-        let guard = 0;
-        while (owns() && options2.oldestIndex() !== null && match.index < options2.oldestIndex() && options2.hasOlder() && guard++ < 200) await options2.loadOlder();
+        if (!container.querySelector(`[data-msg-index="${match.index}"]`)) await options2.ensureMessage(match.index, owns);
         if (!owns()) return;
         const el = container.querySelector(`[data-msg-index="${match.index}"]`);
         if (!el) {
@@ -6719,6 +6818,11 @@ ${row.id}`;
         el.scrollIntoView({ block: "center" });
         options2.updateJumpButton(container);
         updateCount();
+      } catch (error) {
+        if (owns()) {
+          updateCount("load failed");
+          console.error("Search navigation failed:", error);
+        }
       } finally {
         if (navigation === active) navigation = null;
         finish();
@@ -10789,20 +10893,25 @@ ${row.id}`;
   function createTranscript(options2) {
     const { document: document2, sessionState: sessionState2 } = options2, container = document2.getElementById("messages");
     const cache = createTranscriptCache(document2), requests = /* @__PURE__ */ new Set();
-    let disposed = false, generation = 0, catchupSequence = 0, older = null, olderFlight = null, barEvents = new AbortController();
+    let disposed = false, generation = 0, catchupSequence = 0, seekSequence = 0, older = null, olderFlight = null, barEvents = new AbortController();
     let cursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 };
     let loaded = null;
+    const windowFlights = /* @__PURE__ */ new Map();
     function capture(selection = sessionState2.captureSelection()) {
       if (disposed || !selection || !sessionState2.ownsSelection(selection)) return null;
       const endpoint = options2.host(selection.host);
       return endpoint ? { selection, endpoint: Object.freeze({ ...endpoint }), generation } : null;
     }
-    const owns = (owner) => !disposed && owner.generation === generation && sessionState2.ownsSelection(owner.selection) && options2.host(owner.selection.host)?.base === owner.endpoint.base;
+    const owns = (owner) => {
+      const endpoint = options2.host(owner.selection.host);
+      return !disposed && owner.generation === generation && sessionState2.ownsSelection(owner.selection) && endpoint?.base === owner.endpoint.base && (endpoint.token || "") === (owner.endpoint.token || "");
+    };
     function retire() {
       generation++;
       catchupSequence++;
       older = null;
       olderFlight = null;
+      windowFlights.clear();
       barEvents.abort();
       for (const request of requests) request.abort();
       requests.clear();
@@ -10832,10 +10941,104 @@ ${row.id}`;
     function bindBar() {
       barEvents.abort();
       barEvents = new AbortController();
-      const owner = capture(), button = container.querySelector(".load-older-btn");
-      if (owner && button) button.addEventListener("click", () => {
+      const owner = capture(), button = container.querySelector("#loadOlderBar .load-older-btn");
+      if (!owner) return;
+      if (button) button.addEventListener("click", () => {
         if (owns(owner) && button.isConnected && container.contains(button)) void loadOlder();
       }, { signal: barEvents.signal });
+      for (const gap of container.querySelectorAll(".transcript-gap")) {
+        for (const control of gap.querySelectorAll("[data-before]")) control.addEventListener("click", () => {
+          if (owns(owner) && container.contains(gap)) void loadGap(owner, gap, Number(control.dataset.before), control.dataset.direction === "newer");
+        }, { signal: barEvents.signal });
+      }
+    }
+    function topLevel(node) {
+      while (node.parentElement && node.parentElement !== container) node = node.parentElement;
+      return node;
+    }
+    function refreshPaging() {
+      container.querySelectorAll("#loadOlderBar, .transcript-gap").forEach((node) => node.remove());
+      container.insertAdjacentHTML("afterbegin", barHtml());
+      let previous = null;
+      for (const node of container.querySelectorAll("[data-msg-index]")) {
+        const index = Number(node.dataset.msgIndex);
+        if (previous != null && index > previous + 1) {
+          const start = previous + 1, end = index, gap = document2.createElement("div");
+          gap.className = "load-older-bar transcript-gap";
+          gap.innerHTML = `<span>${end - start} messages not loaded</span> <button class="load-older-btn" data-direction="newer" data-before="${Math.min(start + 50, end)}">Load newer messages</button> <button class="load-older-btn" data-direction="older" data-before="${end}">Load older messages</button>`;
+          topLevel(node).before(gap);
+        }
+        previous = index;
+      }
+      bindBar();
+    }
+    function insertWindow(messages, stripLive = false) {
+      const indexed = Array.from(container.querySelectorAll("[data-msg-index]"));
+      const existing = new Set(indexed.map((node) => Number(node.dataset.msgIndex)));
+      const fresh = messages.filter((message3) => message3.index == null || !existing.has(message3.index));
+      let next = 0, anchor = null, html = "";
+      const flush = () => {
+        if (!html) return;
+        if (anchor) anchor.insertAdjacentHTML("beforebegin", html);
+        else container.insertAdjacentHTML("beforeend", html);
+        html = "";
+      };
+      for (const message3 of fresh) {
+        const index = message3.index;
+        while (index != null && next < indexed.length && Number(indexed[next].dataset.msgIndex) < index) next++;
+        const target = index != null && next < indexed.length ? topLevel(indexed[next]) : null;
+        if (target !== anchor) {
+          flush();
+          anchor = target;
+        }
+        html += options2.renderMessage(message3);
+        if (index != null) cursors.oldestIndex = Math.min(cursors.oldestIndex ?? index, index);
+      }
+      flush();
+      cursors.hasOlder = cursors.oldestIndex != null && cursors.oldestIndex > 0;
+      refreshPaging();
+      options2.finalize(container, { stripLive });
+    }
+    async function loadGap(owner, gap, before, newer) {
+      if (gap.dataset.loading) return;
+      gap.dataset.loading = "true";
+      gap.querySelectorAll("button").forEach((button) => {
+        button.disabled = true;
+      });
+      const anchor = newer ? gap.previousElementSibling : gap.nextElementSibling, offset = anchor?.getBoundingClientRect().top ?? 0;
+      const retained = anchor instanceof HTMLElement && anchor.matches("[data-msg-index]") ? anchor : anchor?.querySelector("[data-msg-index]");
+      try {
+        const data = await page(owner, "limit=50&before=" + before);
+        if (!owns(owner) || !container.contains(gap)) return;
+        insertWindow(data.messages);
+        if (retained?.isConnected && container.contains(retained)) container.scrollTop += topLevel(retained).getBoundingClientRect().top - offset;
+      } catch (error) {
+        if (owns(owner) && container.contains(gap)) {
+          const label = gap.querySelector("span");
+          if (label) label.textContent = `Failed: ${error instanceof Error ? error.message : String(error)} \u2014 retry`;
+        }
+      } finally {
+        delete gap.dataset.loading;
+        gap.querySelectorAll("button").forEach((button) => {
+          button.disabled = false;
+        });
+      }
+    }
+    async function ensureMessage(index, isCurrent) {
+      const sequence = ++seekSequence, owner = capture();
+      if (!owner || !loaded || loaded.key !== sessionRefKey(owner.selection) || loaded.base !== owner.endpoint.base || !isCurrent() || !Number.isSafeInteger(index) || index < 0 || container.querySelector(`[data-msg-index="${index}"]`)) return;
+      const before = Math.min(Math.max(cursors.total, index + 1), Math.max(50, index + 26));
+      let flight = windowFlights.get(before);
+      if (!flight || !owns(flight.owner)) {
+        const done = page(owner, "limit=50&before=" + before).finally(() => {
+          if (windowFlights.get(before)?.done === done) windowFlights.delete(before);
+        });
+        flight = { owner, done };
+        windowFlights.set(before, flight);
+      }
+      const data = await flight.done;
+      if (!owns(owner) || sequence !== seekSequence || !isCurrent() || !data.messages.some((message3) => message3.index === index)) return;
+      insertWindow(data.messages);
     }
     function stash() {
       const selected = sessionState2.currentSession;
@@ -10850,8 +11053,8 @@ ${row.id}`;
       cursors = { oldestIndex: entry.oldestIndex, lastIndex: entry.lastIndex, hasOlder: entry.hasOlder, total: entry.total };
       loaded = { key, base: owner.endpoint.base };
       options2.mood(entry.moodDescription, entry.moodFace);
+      refreshPaging();
       options2.jump(container);
-      bindBar();
       return true;
     }
     function render(messages) {
@@ -10915,19 +11118,13 @@ ${row.id}`;
         const data = await page(owner, "limit=50&before=" + before);
         if (!owns(owner) || older !== operation) return;
         if (data.messages.length) {
-          const html = data.messages.map(options2.renderMessage).join("");
-          container.querySelector("#loadOlderBar")?.remove();
-          cursors.oldestIndex = data.firstIndex ?? cursors.oldestIndex;
-          cursors.hasOlder = data.hasMore;
-          container.insertAdjacentHTML("afterbegin", barHtml() + html);
-          bindBar();
-          options2.finalize(container, { stripLive: false });
+          insertWindow(data.messages);
           if (!document2.getElementById("moodIndicator")) options2.updateMood(data.messages);
           if (anchor?.isConnected && container.contains(anchor)) container.scrollTop += anchor.getBoundingClientRect().top - offset;
-        } else {
+        } else if (cursors.oldestIndex === before) {
           cursors.hasOlder = false;
           container.querySelector("#loadOlderBar")?.remove();
-          barEvents.abort();
+          bindBar();
         }
       } catch (error) {
         if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${error instanceof Error ? error.message : String(error)} \u2014 retry`;
@@ -10944,7 +11141,8 @@ ${row.id}`;
         sessionState2.mergeCurrentSession(owner.selection, data.session);
         if (data.totalMessages != null) cursors.total = data.totalMessages;
         if (!data.messages.length) return;
-        const existing = new Set(Array.from(container.querySelectorAll("[data-msg-index]")).map((el) => Number.parseInt(el.dataset.msgIndex || "", 10)));
+        const indexed = container.querySelectorAll("[data-msg-index]");
+        const existing = new Set(Array.from(indexed, (el) => Number.parseInt(el.dataset.msgIndex || "", 10)));
         const fresh = data.messages.filter((message3) => message3.index == null || !existing.has(message3.index));
         for (const message3 of fresh) if (message3.role === "user") options2.consumeEcho(owner.selection.id, message3.content);
         options2.updateMood(fresh);
@@ -10957,9 +11155,12 @@ ${row.id}`;
           if (el.classList.contains("assistant") && !assistant) return;
           el.remove();
         });
-        container.insertAdjacentHTML("beforeend", fresh.map(options2.renderMessage).join(""));
+        if (Number(indexed[indexed.length - 1]?.dataset.msgIndex) > after) insertWindow(fresh, true);
+        else {
+          container.insertAdjacentHTML("beforeend", fresh.map(options2.renderMessage).join(""));
+          options2.finalize(container);
+        }
         if (data.lastIndex != null) cursors.lastIndex = Math.max(cursors.lastIndex ?? 0, data.lastIndex);
-        options2.finalize(container);
         if (pinned) options2.scroll(container);
         else options2.jump(container);
       } catch (error) {
@@ -10969,6 +11170,7 @@ ${row.id}`;
     return {
       load,
       loadOlder,
+      ensureMessage,
       catchup,
       render,
       stash,
@@ -18691,51 +18893,51 @@ ${restored}`;
   function isSessionMenuOpen() {
     return sidebarControls.menuOpen;
   }
-  var lastSessionListHtml = "";
+  var sessionListFrame = null;
   function renderSessions() {
-    if (sidebarControls.dragging) return;
-    const sidebarFamilyRootMap = sidebarControls.familyRoots();
-    const { html, count: count2 } = renderSidebar({
-      ...sessionState.sessions,
-      selected: sessionState.currentSession,
-      tab: sidebarQuery.tab,
-      view: sidebarQuery.view,
-      query: sidebarQuery.query,
-      queriedFor: sidebarLists.queriedFor,
-      scope: sidebarQuery.scope(),
-      indexing: sidebarLists.indexing,
-      contextMetric: displayPreferences.contextMetric,
-      pending: [...pendingSessionSpawns.entries()],
-      selectedSpawn: sessionView.spawnId,
-      expanded: sidebarControls.expanded,
-      collapsed: sidebarControls.collapsed,
-      pinned: sidebarControls.pinned,
-      roots: sidebarFamilyRootMap,
-      closeConfirm: sidebarControls.closeConfirm,
-      closeBusy: sidebarControls.closeBusy,
-      multiHost: isMultiHost(),
-      unread: (...args) => sidebarActivity.unread(...args),
-      hostChip: (...args) => hostPresentation.chipHtml(...args),
-      hosts: effectiveHosts().map((host) => {
-        const cache = hostSessionLoader.getCache(host);
-        return {
-          ...host,
-          state: hostConnections.stateOf(host),
-          key: hostKeyOf(host),
-          color: hostPresentation.colorFor(host.hostId || null),
-          dot: hostPresentation.dotHtml(host.hostId || null, "host-section-dot"),
-          hasCache: !!cache && !!(cache.active.length || cache.previous.length)
-        };
-      })
-    });
-    const countEl = document.getElementById("countActive");
-    if (countEl) countEl.textContent = count2 ? String(count2) : "";
-    if (html !== lastSessionListHtml) {
-      sidebarControls.closeMenu();
-      document.getElementById("sessionList").innerHTML = html;
-      lastSessionListHtml = html;
-    }
     sidebarActivity.title();
+    if (sessionListFrame !== null) return;
+    sessionListFrame = requestAnimationFrame(() => {
+      sessionListFrame = null;
+      if (sidebarControls.dragging) return;
+      const sidebarFamilyRootMap = sidebarControls.familyRoots();
+      const projection = renderSidebar({
+        ...sessionState.sessions,
+        selected: sessionState.currentSession,
+        tab: sidebarQuery.tab,
+        view: sidebarQuery.view,
+        query: sidebarQuery.query,
+        queriedFor: sidebarLists.queriedFor,
+        scope: sidebarQuery.scope(),
+        indexing: sidebarLists.indexing,
+        contextMetric: displayPreferences.contextMetric,
+        pending: [...pendingSessionSpawns.entries()],
+        selectedSpawn: sessionView.spawnId,
+        expanded: sidebarControls.expanded,
+        collapsed: sidebarControls.collapsed,
+        pinned: sidebarControls.pinned,
+        roots: sidebarFamilyRootMap,
+        closeConfirm: sidebarControls.closeConfirm,
+        closeBusy: sidebarControls.closeBusy,
+        multiHost: isMultiHost(),
+        unread: (...args) => sidebarActivity.unread(...args),
+        hostChip: (...args) => hostPresentation.chipHtml(...args),
+        hosts: effectiveHosts().map((host) => {
+          const cache = hostSessionLoader.getCache(host);
+          return {
+            ...host,
+            state: hostConnections.stateOf(host),
+            key: hostKeyOf(host),
+            color: hostPresentation.colorFor(host.hostId || null),
+            dot: hostPresentation.dotHtml(host.hostId || null, "host-section-dot"),
+            hasCache: !!cache && !!(cache.active.length || cache.previous.length)
+          };
+        })
+      });
+      const countEl = document.getElementById("countActive");
+      if (countEl) countEl.textContent = projection.count ? String(projection.count) : "";
+      sidebarControls.updateList(projection);
+    });
   }
   function pendingComposerKey(id) {
     return `spawn:${id}`;
@@ -18857,9 +19059,7 @@ ${restored}`;
     request: (host, path, init) => apiTransport.request(host, path, init),
     endpoint: hostEntryFor,
     focusMode: () => appChrome.focus,
-    oldestIndex: () => transcriptController.oldestIndex,
-    hasOlder: () => transcriptController.hasOlder,
-    loadOlder: () => transcriptController.loadOlder(),
+    ensureMessage: (index, owns) => transcriptController.ensureMessage(index, owns),
     stopFollowing: () => {
       appChrome.stopFollowing();
     },

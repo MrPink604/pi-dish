@@ -84,11 +84,11 @@ fs.writeFileSync(path.join(registry, 'live.json'), JSON.stringify({
 }));
 }
 
-// Instrument only this temporary corpus, and the real parser export before the
-// index captures it. Exclude index-log bytes and module-loading reads.
+// Instrument real IO against only this temporary corpus. Parser-export hooks
+// miss the readers' shared internal parse path, so do not report parse counts.
 interface Counts {
   directoryOpens: number; directoryReads: number; stats: number; fullReads: number;
-  rangeReads: number; bytes: number; parseCalls: number; parseBytes: number;
+  rangeReads: number; bytes: number;
 }
 let counts: Counts | null = null;
 type FsMethodName = 'opendirSync' | 'readdirSync' | 'statSync' | 'readFileSync' | 'openSync' | 'readSync' | 'closeSync';
@@ -144,12 +144,6 @@ wrap('closeSync', (original, receiver, args) => {
   if (typeof args[0] === 'number') fds.delete(args[0]);
   return Reflect.apply(original, receiver, args);
 });
-const readers: typeof import('../lib/session-files') = require('../lib/session-files')
-const parse = readers.parseSessionEntries;
-readers.parseSessionEntries = function (content: string) {
-  if (counts) { counts.parseCalls++; counts.parseBytes += Buffer.byteLength(content); }
-  return parse(content);
-};
 // Model enumeration is unrelated to catalog source/index work. Keep it offline
 // and stable; the real catalog's fallback context-window policy still executes.
 const piSdk: typeof import('../lib/pi-sdk') = require('../lib/pi-sdk');
@@ -159,7 +153,7 @@ const { encodeSessionKey }: typeof import('../lib/session-key') = require('../li
 let server: Server | null = null;
 const results: TestRecord[] = [];
 async function measure(name: string, action: () => TestRecord | Promise<TestRecord>): Promise<void> {
-  counts = { directoryOpens: 0, directoryReads: 0, stats: 0, fullReads: 0, rangeReads: 0, bytes: 0, parseCalls: 0, parseBytes: 0 };
+  counts = { directoryOpens: 0, directoryReads: 0, stats: 0, fullReads: 0, rangeReads: 0, bytes: 0 };
   const observed = counts;
   const start = performance.now();
   const detail = await action();
@@ -229,7 +223,6 @@ main().catch(error => { console.error(error); process.exitCode = 1; }).finally(a
     await new Promise<void>((resolve, reject) => server?.close(error => error ? reject(error) : resolve()));
   }
   index.resetForTests();
-  readers.parseSessionEntries = parse;
   for (const [name, original] of originals) Object.defineProperty(fs, name, { configurable: true, value: original });
   fs.rmSync(home, { recursive: true, force: true });
 });

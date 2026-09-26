@@ -77,4 +77,18 @@ test('server content search stays authoritative while scopes and automation rema
   assert.match(scoped.html, /1 hidden by scopes/);
 });
 
+test('debounced ranking preserves metadata tie order under equal stale server scores', () => {
+  const previous = [
+    { id: 'metadata', name: 'Other', cwd: '/work', searchScore: 10, lastActivity: 1000 },
+    { id: 'named', name: 'Work', cwd: '/repo', searchScore: 10, lastActivity: 1000 },
+    { id: 'content', name: 'Content only', cwd: '/repo', searchScore: 20, lastActivity: 1000 },
+  ];
+  const interim = render({ previous, query: 'work', queriedFor: 'old' }).html;
+  assert.ok(interim.indexOf('data-id="named"') < interim.indexOf('data-id="metadata"'));
+  assert.doesNotMatch(interim, /data-id="content"/);
+  const authoritative = render({ previous, query: 'work', queriedFor: 'work' }).html;
+  assert.ok(authoritative.indexOf('data-id="content"') < authoritative.indexOf('data-id="metadata"'));
+  assert.ok(authoritative.indexOf('data-id="metadata"') < authoritative.indexOf('data-id="named"'));
+});
+
 export {};

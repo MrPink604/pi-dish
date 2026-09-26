@@ -22,6 +22,7 @@ const sidebar: UiScenario = async ({ desktop, registryState, check, SKILL_SESSIO
   await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
   await desktop.waitForFunction((id) => !document.querySelector(`.session-item[data-id="${id}"]`), SKILL_SESSION_ID);
   await desktop.evaluate((id) => fixtureApp.features.sessionState.patchSessionActivity(id, { turnInProgress: true }), SKILL_SESSION_ID);
+  await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-status.working`);
   check(await desktop.locator(`.session-item[data-id="${registryState.sessionId}"] .session-item-status.working`).count() === 1,
     'collapsed parent surfaces a working child status');
   await desktop.evaluate((id) => fixtureApp.features.sessionState.patchSessionActivity(id, { turnInProgress: false }), SKILL_SESSION_ID);

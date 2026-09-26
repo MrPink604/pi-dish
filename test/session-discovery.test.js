@@ -57,6 +57,24 @@ test('discovers OMP sibling-directory subsessions without loosening Pi discovery
     const pi = discoverSessionCandidates(sessions, { descriptor: registry.pi });
     assert.deepEqual(pi.candidates.map((candidate) => candidate.nativeSessionId), ['root-session'], 'arbitrarily named nested JSONLs remain excluded from Pi');
 });
+test('discovery revalidates shared parent headers and same-size replaced child identities', () => {
+    const sessions = path.join(root, 'sessions-parent-revalidation');
+    const parent = path.join(sessions, 'workspace', 'parent.jsonl');
+    const child = path.join(sessions, 'workspace', 'parent', 'agent.jsonl');
+    write(parent, { type: 'session', id: 'parent' });
+    write(child, { type: 'session', id: 'child-a' });
+    const stamp = new Date('2026-01-01T00:00:00Z');
+    fs.utimesSync(child, stamp, stamp);
+    const scan = () => discoverSessionCandidates(sessions, { descriptor: registry.omp }).candidates.map(candidate => candidate.nativeSessionId);
+    assert.ok(scan().includes((0, test_types_js_1.nativeId)('child-a')));
+    write(child + '.new', { type: 'session', id: 'child-b' });
+    fs.utimesSync(child + '.new', stamp, stamp);
+    fs.renameSync(child + '.new', child);
+    assert.ok(scan().includes((0, test_types_js_1.nativeId)('child-b')));
+    assert.ok(!scan().includes((0, test_types_js_1.nativeId)('child-a')));
+    write(parent, { type: 'message', id: 'parent' });
+    assert.deepEqual(scan(), ['parent'], 'a no-longer-valid parent cannot keep children discoverable');
+});
 test('discovers Prime RLM subagents under session-artifacts, recursively', () => {
     const agentDir = path.join(root, 'prime-agent');
     const sessions = path.join(agentDir, 'sessions');

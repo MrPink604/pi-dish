@@ -275,6 +275,34 @@ test('zero sync budget queues a backlog that the background build drains', async
   assert.equal(infos.size, 2, 'background build indexed the backlog');
 });
 
+test('a queued file appended before its build is indexed once at its current size', async () => {
+  const file = writeSession([userMsg('queued first')]);
+  const source = sourceForFile(file);
+  assert.equal(withBudget(0, () => index.scanSessions([source])).indexing, true);
+  fs.appendFileSync(file, JSON.stringify(userMsg('queued second')) + '\n');
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const result = withBudget(0, () => index.scanSessions([source]));
+  assert.equal(result.indexing, false);
+  assert.equal(present(result.infos.get(file)).messageCount, 2, 'the append must not be counted again from a stale queued size');
+});
+
+test('replacing an indexed file cannot reuse or extend the previous inode', () => {
+  const file = writeSession([userMsg('old text')]);
+  const stamp = new Date('2026-01-01T00:00:00Z');
+  fs.utimesSync(file, stamp, stamp);
+  const source = sourceForFile(file);
+  assert.ok(index.getSearchText(source).includes('old text'));
+  fs.writeFileSync(file + '.new', JSON.stringify(userMsg('new text')) + '\n');
+  fs.utimesSync(file + '.new', stamp, stamp);
+  fs.renameSync(file + '.new', file);
+  assert.ok(index.getSearchText(source).includes('new text'));
+  assert.ok(!index.getSearchText(source).includes('old text'));
+  fs.writeFileSync(file + '.new', [userMsg('replacement with larger content'), userMsg('another turn')].map(entry => JSON.stringify(entry)).join('\n') + '\n');
+  fs.renameSync(file + '.new', file);
+  assert.equal(index.getSessionInfo(source).messageCount, 2);
+  assert.ok(!index.getSearchText(source).includes('new text'));
+});
+
 test('sync budget bounds per-scan parsing; the rest lands via the builder', async () => {
   const files = Array.from({ length: 5 }, (_, i) => writeSession([userMsg(`msg ${i}`)]));
   const first = withBudget(2, () => index.scanSessions(files.map(sourceForFile)));

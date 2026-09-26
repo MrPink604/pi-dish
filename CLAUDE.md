@@ -78,6 +78,11 @@ the coordinator remains the only launch/resume/close authority. The
 [lifecycle record](docs/session-lifecycle-migration.md) retains the asymmetric
 arrival-order matrix, compatibility limits and runtime evidence.
 
+`src/core/harness-launch-spec.ts` resolves command/env/alias/PATH policy without
+importing RPC, discovery or lifecycle owners. Catalog/pricing readers and launch
+execution share it; importing RPC first must not leave consumers holding a
+partial CommonJS export object through a pricing → launch → RPC cycle.
+
 Publication/file stores and HTTP production now live in checked
 `pages`, `shares`, `comments`, `fleet-artifacts`, `file-*`, `git-diff` and
 `publication-handlers` core modules. Root mounts consume the actual bound read
@@ -264,7 +269,7 @@ module: `getSessionInfo` (single-file list metadata), `readSessionMessages`
 (the paginated message stream), `getSessionStats` (token/cost aggregates for
 `/stats`), and `readSessionCwd` (bounded first-line read — never load a whole
 file just for its header). The readers share one `statCached` implementation
-keyed on (mtimeMs, size). Messages carry their JSONL entry `id` (share deep
+keyed on (mtimeMs, size, ctimeMs, device, inode). Messages carry their JSONL entry `id` (share deep
 links key on it) and sanitized assistant usage/provider/model metadata plus
 `durationMs`/`outputTokens`:
 `message.timestamp` (ms epoch) is stamped when the API call starts, the
@@ -287,6 +292,12 @@ not control authority, and pi-dish never appends custom relationship entries
 to Pi JSONL. Context window/percent are derived in
 `src/core/session-catalog.ts` (`withSessionContext`) at read time, not inside the cache — the models
 cache warms asynchronously and would bake in stale windows.
+
+`readSessionFileEntries` weakly retains only the last raw parse for metadata,
+messages, stats and indexing to share; GC may discard it between operations.
+This is profile-independent raw data, not a substitute for each projection's
+profile, pricing or settings key. Pricing loops capture one rate-card estimator
+per synchronous operation, with configuration revalidated between operations.
 
 `GET /api/sessions/:id/messages` projects historical `{type:'image', data}`
 blocks to resource URLs; the indexed image route reads the authoritative cached
@@ -377,7 +388,7 @@ repolls every few seconds.
 
 ## Session index (lib/session-index.js)
 
-Persistent (mtimeMs, size)-keyed index of list metadata, compact usage
+Persistent file-stamp-keyed index (mtime, size, ctime, device and inode) of list metadata, compact usage
 summaries, and lowercased search text for **every** session JSONL, backing the
 historical scan (`getPreviousSessions`), global `/api/usage-summary`, and list
 search — built because the user's work
@@ -409,6 +420,10 @@ carry a `searchSnippet` (`buildSnippet`/`highlightTokens` in helpers.js) so
 the client can show *why* a row matched. Tests prove persistence structurally:
 scans with `PI_DISH_INDEX_SYNC_BUDGET=0` can't parse, so whatever they serve
 came from disk.
+Queued builds revalidate the current file and settings before reading; demand
+reads remove obsolete queued work. This prevents counting an append twice when
+it lands between enqueueing and the background read. Older persisted entries
+without the complete file stamp rebuild through the same bounded backlog.
 
 ## Performance and usage telemetry (public/app.js, /api/usage-summary)
 
@@ -1595,7 +1610,7 @@ The suites (`test/*.test.js`):
   Helpers are plain script globals in the browser and CommonJS exports in
   node; anything DOM-free that app.js needs belongs there, with a test.
 - `test/session-files.test.js` — unit tests for the JSONL parsers and their
-  mtime/size caches in `lib/session-files.js`.
+  file-stamp caches and replacement/append/truncation freshness in `lib/session-files.js`.
 - `test/file-mention.test.js` — unit tests for `lib/file-mention.js`
   (mention → path resolution through tool calls, containment, viewer reads).
 - `test/stt.test.js` — unit tests for `lib/stt.js` (config resolution and its
@@ -2117,24 +2132,31 @@ recognition errors are the user's to fix before the agent sees them.
   check; a LAN client must not read arbitrary files).
 - **In-session search**: 🔍 header button / Ctrl+F; owned by
   `src/browser/session-search.ts`. Query sequences retire old results and marks;
-  close/reopen shares any page load already in flight. `GET
-  /api/sessions/:id/search?q=` returns `{ matches: [{index, role}] }` over the
-  whole session; the client walks matches (Enter = backwards, Shift+Enter =
-  forwards), auto-paging older messages in via `loadOlderMessages()` until the
-  match index is in the DOM, then marks hits (`mark.search-mark`) and outlines
-  the message (`.search-current`). In focus mode, `toolResult` matches are
-  skipped.
+  close/reopen can share an identical hit-window request, but each query owns
+  its DOM commit. `GET /api/sessions/:id/search?q=` returns
+  `{ matches: [{index, role}] }` over the whole session; the client walks matches
+  (Enter = backwards, Shift+Enter = forwards). An unloaded hit uses
+  `transcript.ensureMessage()` to fetch one bounded 50-message window through
+  `messages?limit=50&before=N`, not sequential older-page traversal. It then
+  marks hits (`mark.search-mark`) and outlines the message (`.search-current`).
+  In focus mode, `toolResult` matches are skipped. Query, transcript, selection
+  and endpoint owners must all remain current before a window is inserted.
 - **History retention and implicit paging**: the newest 50 messages still form
   the cold-load baseline, but scrolling within 200px of the top implicitly
   calls `loadOlderMessages()` (the explicit button remains as a fallback).
   Pages a reader intentionally loaded are moved, not cloned, into a bounded
   per-session `DocumentFragment` cache on navigation: five recent transcripts
   for 15 minutes, including their scroll position, open DOM state, cursors,
-  and mood. Restoring a warm transcript immediately performs an `after=`
-  catch-up, so retention saves rendering/bandwidth without hiding new output.
-  Branch navigation must pass `forceTranscriptReload` because it can change
-  authoritative history. Older-page responses are session-scoped so a fast
-  switch cannot prepend one session's history into another.
+  and mood. Sparse hit windows retain explicit gap controls to load newer or
+  older context without treating omitted history as contiguous; tool groups
+  cannot merge across a gap. Restoring a warm transcript rebinds these controls
+  and immediately performs an `after=` catch-up against the actual tail cursor,
+  which search windows never advance. Catch-up inserts chronologically if a
+  search hit arrived ahead of that cursor. Retention therefore saves rendering
+  and bandwidth without hiding new output. Branch navigation must pass
+  `forceTranscriptReload` because it can change authoritative history.
+  Older-page responses are session-scoped so a fast switch cannot prepend one
+  session's history into another.
 
 ## Tree navigation / branch summaries (tree modal, POST /branch)
 

@@ -539,32 +539,32 @@ function keyForSessionId(id: string) { return sessionKey(sessionState.sessionHos
 function sessionRefFor(session: Pick<SessionEntry, 'id' | 'host'> | null) { return session?.id ? sessionRef(session, hostEntryFor(session.host || null), sessionReferences.prefix(session)) : ''; }
 function isSessionMenuOpen() { return sidebarControls.menuOpen; }
 
-// Render one metadata snapshot through the typed sidebar projection.
-let lastSessionListHtml = '';
+// State publications stay immediate; paint the latest snapshot once per frame.
+let sessionListFrame: number | null = null;
 function renderSessions() {
-  if (sidebarControls.dragging) return;
-  const sidebarFamilyRootMap = sidebarControls.familyRoots();
-  const { html, count } = renderSidebar({
-    ...sessionState.sessions, selected: sessionState.currentSession,
-    tab: sidebarQuery.tab, view: sidebarQuery.view, query: sidebarQuery.query, queriedFor: sidebarLists.queriedFor, scope: sidebarQuery.scope(), indexing: sidebarLists.indexing,
-    contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: sessionView.spawnId,
-    expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
-    closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
-    unread: (...args) => sidebarActivity.unread(...args), hostChip: (...args) => hostPresentation.chipHtml(...args),
-    hosts: effectiveHosts().map(host => {
-      const cache = hostSessionLoader.getCache(host);
-      return { ...host, state: hostConnections.stateOf(host), key: hostKeyOf(host), color: hostPresentation.colorFor(host.hostId || null),
-        dot: hostPresentation.dotHtml(host.hostId || null, 'host-section-dot'), hasCache: !!cache && !!(cache.active.length || cache.previous.length) };
-    }),
+  sidebarActivity.title(); // Hidden tabs still need their unread indicator.
+  if (sessionListFrame !== null) return;
+  sessionListFrame = requestAnimationFrame(() => {
+    sessionListFrame = null;
+    if (sidebarControls.dragging) return;
+    const sidebarFamilyRootMap = sidebarControls.familyRoots();
+    const projection = renderSidebar({
+      ...sessionState.sessions, selected: sessionState.currentSession,
+      tab: sidebarQuery.tab, view: sidebarQuery.view, query: sidebarQuery.query, queriedFor: sidebarLists.queriedFor, scope: sidebarQuery.scope(), indexing: sidebarLists.indexing,
+      contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: sessionView.spawnId,
+      expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
+      closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
+      unread: (...args) => sidebarActivity.unread(...args), hostChip: (...args) => hostPresentation.chipHtml(...args),
+      hosts: effectiveHosts().map(host => {
+        const cache = hostSessionLoader.getCache(host);
+        return { ...host, state: hostConnections.stateOf(host), key: hostKeyOf(host), color: hostPresentation.colorFor(host.hostId || null),
+          dot: hostPresentation.dotHtml(host.hostId || null, 'host-section-dot'), hasCache: !!cache && !!(cache.active.length || cache.previous.length) };
+      }),
+    });
+    const countEl = (document.getElementById('countActive') as HTMLElement);
+    if (countEl) countEl.textContent = projection.count ? String(projection.count) : '';
+    sidebarControls.updateList(projection);
   });
-  const countEl = (document.getElementById('countActive') as HTMLElement);
-  if (countEl) countEl.textContent = count ? String(count) : '';
-  if (html !== lastSessionListHtml) {
-    sidebarControls.closeMenu();
-    (document.getElementById('sessionList') as HTMLElement).innerHTML = html;
-    lastSessionListHtml = html;
-  }
-  sidebarActivity.title();
 }
 
 // =========================================================================
@@ -632,11 +632,11 @@ const sessionControls: ReturnType<typeof createSessionControls> = createSessionC
   loadModels: (id, harness) => appModels.load(id, harness), status: (message, type) => setStatus(message, type),
 });
 
-// Whole-transcript search owns query requests, marks and serialized paging jumps.
+// Whole-transcript search owns query requests, marks and bounded hit-window jumps.
 const sessionSearch: ReturnType<typeof createSessionSearch> = createSessionSearch({
   document, sessionState, request: (host, path, init) => apiTransport.request(host, path, init), endpoint: hostEntryFor,
-  focusMode: () => appChrome.focus, oldestIndex: () => transcriptController.oldestIndex, hasOlder: () => transcriptController.hasOlder,
-  loadOlder: () => transcriptController.loadOlder(), stopFollowing: () => { appChrome.stopFollowing(); }, updateJumpButton: (...args) => appChrome.jump(...args),
+  focusMode: () => appChrome.focus, ensureMessage: (index, owns) => transcriptController.ensureMessage(index, owns),
+  stopFollowing: () => { appChrome.stopFollowing(); }, updateJumpButton: (...args) => appChrome.jump(...args),
 });
 
 function searchPrev() { return sessionSearch.move(-1); }

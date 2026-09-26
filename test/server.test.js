@@ -3160,6 +3160,9 @@ test('OMP transcript loading does not wait for the optional pricing catalog', as
         catalogStartedResolve();
         return {};
     });
+    // Force a pending refresh even when earlier routes warmed the shared native
+    // catalog cache; the transcript must remain available while it is unresolved.
+    const refresh = harnessPricing.refreshHarnessPricing('omp', { force: true });
     const request = get(`/api/sessions/${encodeURIComponent(OMP_ROUTE_ID)}/messages`);
     await catalogStarted;
     let timeout;
@@ -3173,7 +3176,7 @@ test('OMP transcript loading does not wait for the optional pricing catalog', as
     catalogCallback(null, JSON.stringify({ models: [{
                 provider: 'zai', id: 'glm-test', cost: { input: 1, output: 2 },
             }] }), '');
-    await harnessPricing.refreshHarnessPricing('omp');
+    await refresh;
     const result = 'result' in raced ? raced.result : await request;
     assert.equal('timedOut' in raced ? raced.timedOut : undefined, undefined, 'transcript response was held behind catalog refresh');
     assert.equal(result.status, 200);

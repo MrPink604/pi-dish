@@ -24,8 +24,15 @@ export interface PricingRefreshOptions {
     now?: number;
 }
 type HarnessInput = string | null | undefined;
+export type UsageCostEstimator = (provider: unknown, model: unknown, usage: unknown) => UsageCost | undefined;
 export declare function refreshHarnessPricing(harnessId?: string, { force, now }?: PricingRefreshOptions): Promise<PricingSnapshot | null>;
 export declare function pricingRevision(harnessId?: HarnessInput): string;
+/**
+ * Capture rates once for a synchronous parse/scan. Never retain the estimator
+ * across operations: each new operation must revalidate models.yml and use
+ * the latest catalog snapshot. Message loops then do no filesystem work.
+ */
+export declare function createUsageCostEstimator(harnessId: HarnessInput): UsageCostEstimator;
 export declare function estimateUsageCost(harnessId: HarnessInput, provider: unknown, model: unknown, usage: unknown): UsageCost | undefined;
 export declare function isPlanProvider(harnessId: HarnessInput, provider: unknown): boolean;
 export declare function resetForTests(): void;

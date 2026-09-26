@@ -106,8 +106,9 @@ Rules of thumb:
   with Subscription limits: each provider account's quota windows (5-hour,
   weekly, …), percent used, and reset countdown — no running session needed,
   and account identifiers never leave the server.
-- **Reading tools** — in-session search (Ctrl+F, auto-pages older messages
-  in), focus mode that hides tool noise, per-message copy buttons.
+- **Reading tools** — in-session search (Ctrl+F) jumps directly to a bounded
+  window around the match, with explicit controls for unloaded history gaps;
+  focus mode hides tool noise, and messages have copy buttons.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control
   panel, touch-sized everything.
 - **Themes** — solarized dark by default, a neutral "graphite" built in, and

@@ -74,7 +74,7 @@ export interface CatalogModel extends Record<string, unknown> {
   name: string;
   selector?: string | null;
   contextWindow: number;
-  reasoning: boolean;
+  reasoning?: boolean;
   thinking?: string[] | null;
   pricing: ModelPricing | null;
   free: boolean;
@@ -230,17 +230,20 @@ export function normalizeModels(value: unknown): CatalogModel[] {
       if (slash <= 0 || slash === item.length - 1) return [];
       const provider = item.slice(0, slash), id = item.slice(slash + 1);
       return [{ id, provider, name: id, selector: item, contextWindow: 0,
-        reasoning: false, thinking: null, pricing: null, free: false }];
+        thinking: null, pricing: null, free: false }];
     }
     if (!record(item)) return [];
     const id = item.id || item.modelId;
     if (!text(id) || !text(item.provider)) return [];
     const cost = pricing(item.pricing || item.cost);
+    // OMP's live registry carries the same ladder as `models --json`, nested
+    // under thinking.efforts (effort, budget and adaptive modes alike).
+    const thinking = record(item.thinking) ? item.thinking.efforts : item.thinking;
     return [{ id, provider: item.provider, name: text(item.name) ? item.name : id,
       selector: text(item.selector) ? item.selector : `${item.provider}/${id}`,
       contextWindow: finite(item.contextWindow) ? item.contextWindow : 0,
-      reasoning: !!item.reasoning,
-      thinking: Array.isArray(item.thinking) ? item.thinking.filter((level): level is string =>
+      reasoning: typeof item.reasoning === 'boolean' ? item.reasoning : undefined,
+      thinking: Array.isArray(thinking) ? thinking.filter((level): level is string =>
         typeof level === 'string' && THINKING_LEVELS.has(level)) : null,
       pricing: cost, free: !!cost && cost.input === 0 && cost.output === 0 }];
   });

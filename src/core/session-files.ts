@@ -4,7 +4,7 @@
  * Everything here is keyed off the on-disk session files under
  * ~/.pi/agent/sessions. The sidebar polls /api/sessions every 10s and a
  * session file can be tens of MB, so each reader caches its result keyed by
- * (mtimeMs, size) and only re-parses files that actually changed.
+ * (mtimeMs, size, ctimeMs, device, inode), parsing only files that changed.
  *
  * getSessionInfo returns a fresh shallow copy per call (callers overlay live
  * usage onto it); readSessionMessages returns the cached array itself —
@@ -17,7 +17,8 @@ import { applyLearnedCacheExpiry } from './cache-lifetime.js';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata-contracts.js';
 import type { IndexedUsage, UsageBucket, UsageCosts, UsageTokens } from './session-index-data.js';
 import { extractTextContent } from './helper-content.js';
-import { estimateUsageCost, isPlanProvider, pricingRevision } from './harness-pricing.js';
+import { createUsageCostEstimator, isPlanProvider, pricingRevision } from './harness-pricing.js';
+import type { UsageCostEstimator } from './harness-pricing.js';
 
 export interface SessionFileProfile {
   readonly profileId?: string;
@@ -70,7 +71,7 @@ export interface SessionStats {
 }
 /** Direct parser output retains malformed JSON tree ids; the index validates its leaf. */
 export interface SessionSearchProjection { text: string; tree: boolean; leafId: unknown }
-interface Cached<T> { mtimeMs: number; size: number; value: T }
+interface Cached<T> { stats: fs.Stats; value: T }
 interface ActiveTree { ids: Set<unknown>; leafId: unknown }
 interface MessageData {
   messages: SessionMessage[];
@@ -108,7 +109,7 @@ const TOLERATED_NON_MESSAGE_ENTRY_TYPES = new Set([
 ]);
 
 /**
- * The one implementation of the (mtimeMs, size) revalidating cache all
+ * The one implementation of the file-stamp revalidating cache all
  * readers share. A hit refreshes the entry's recency; when the cache is full
  * the least-recently-used entry is evicted. (Clearing the whole cache instead
  * defeats the point once distinct files exceed `max`: every request past the
@@ -120,13 +121,37 @@ function source(candidate: string | SessionFileSource): SessionFileSource {
   return candidate;
 }
 
+function sameFile(left: fs.Stats, right: fs.Stats): boolean {
+  return left.mtimeMs === right.mtimeMs && left.size === right.size &&
+    left.ctimeMs === right.ctimeMs && left.dev === right.dev && left.ino === right.ino;
+}
+
+// One opportunistic raw parse, shared by metadata/messages/stats/the corpus
+// index. Weak ownership avoids retaining a second large transcript solely for
+// a possible next reader. GC may discard it at any time between operations;
+// that changes work, never freshness. Profiles/pricing apply after this cache.
+let parsedFile: { file: string; stats: fs.Stats; entries: WeakRef<SessionEntries>; endsNl: boolean } | undefined;
+export function readSessionFileEntries(file: string, stats: fs.Stats = fs.statSync(file)): {
+  entries: SessionEntries; endsNl: boolean;
+} {
+  if (parsedFile?.file === file && sameFile(parsedFile.stats, stats)) {
+    const entries = parsedFile.entries.deref();
+    if (entries) return { entries, endsNl: parsedFile.endsNl };
+  }
+  const content = fs.readFileSync(file, 'utf-8');
+  const entries = parseSessionEntries(content);
+  const endsNl = content.endsWith('\n');
+  parsedFile = { file, stats, entries: new WeakRef(entries), endsNl };
+  return { entries, endsNl };
+}
+
 function statCached<T>(cache: Map<string, Cached<T>>, input: string | SessionFileSource, max: number, parse: (file: string, stats: fs.Stats, candidate: SessionFileSource) => T, extraKey = ''): T {
   const candidate = source(input);
   const filePath = candidate.file;
   const cacheKey = `${filePath}\0${candidate.profileId || 'pi-v3'}\0${candidate.profileVersion ?? 1}\0${pricingRevision(candidate.harnessId)}${extraKey ? '\0' + extraKey : ''}`;
   const stats = fs.statSync(filePath);
   const cached = cache.get(cacheKey);
-  if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
+  if (cached && sameFile(cached.stats, stats)) {
     cache.delete(cacheKey); cache.set(cacheKey, cached); // refresh recency
     return cached.value;
   }
@@ -136,7 +161,7 @@ function statCached<T>(cache: Map<string, Cached<T>>, input: string | SessionFil
     const oldest = cache.keys().next();
     if (!oldest.done) cache.delete(oldest.value); // evict oldest
   }
-  cache.set(cacheKey, { mtimeMs: stats.mtimeMs, size: stats.size, value });
+  cache.set(cacheKey, { stats, value });
   return value;
 }
 
@@ -149,10 +174,6 @@ function statCached<T>(cache: Map<string, Cached<T>>, input: string | SessionFil
  * The content-based core is exported so lib/session-index.js can derive
  * info and search text from a single read of the file.
  */
-function parseSessionFile(filePath: string, mtime?: Date, candidate?: SessionFileProfile): SessionInfo {
-  return parseSessionContent(fs.readFileSync(filePath, 'utf-8'),
-    mtime || fs.statSync(filePath).mtime, candidate);
-}
 
 export function parseSessionContent(content: string, mtime?: Date, candidate: SessionFileProfile = {}): SessionInfo {
   return sessionInfoFromEntries(parseSessionEntries(content), mtime, candidate);
@@ -162,7 +183,7 @@ const infoCache = new Map<string, Cached<SessionInfo>>(); // filePath -> { mtime
 
 export function getSessionInfo(filePath: string | SessionFileSource): SessionInfo {
   return { ...statCached(infoCache, filePath, 1000,
-    (fp, stats, candidate) => parseSessionFile(fp, stats.mtime, candidate), `cache:${cacheRetentionRevision()}`) };
+    (fp, stats, candidate) => sessionInfoFromEntries(readSessionFileEntries(fp, stats).entries, stats.mtime, candidate), `cache:${cacheRetentionRevision()}`) };
 }
 
 /**
@@ -275,7 +296,7 @@ function advanceModelChange(entry: Record<string, unknown>, state: ModelContinui
 }
 
 function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFileProfile | undefined,
-  fallbackModel: { provider?: unknown; model?: unknown } = {}, cacheExpiry?: CacheExpiry | null): SessionMessage | null {
+  estimateCost: UsageCostEstimator, fallbackModel: { provider?: unknown; model?: unknown } = {}, cacheExpiry?: CacheExpiry | null): SessionMessage | null {
   if (entry.type === 'message' && entry.message) {
     const message = fields(entry.message);
     // Hidden custom messages are model continuity/state, not transcript UI.
@@ -283,8 +304,8 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
     // so the interruption is visible without exposing its hidden reasoning.
     if (message.role === 'custom' && message.display === false) return null;
     const usage = sanitizeUsage(message.usage);
-    const estimated = messageUsageCost(candidate, message, fallbackModel);
     if (usage) {
+      const estimated = messageUsageCost(candidate, message, fallbackModel, estimateCost);
       if (estimated) usage.cost = estimated;
       else delete usage.cost;
     }
@@ -374,9 +395,9 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
  * the abandoned messages stay in the file but are no longer the session's
  * history (the tree modal is where they remain reachable).
  */
-function parseMessageData(content: string, candidate?: SessionFileProfile, leafOverride?: unknown): MessageData {
+function parseMessageData(entries: SessionEntries, candidate?: SessionFileProfile, leafOverride?: unknown): MessageData {
   const cacheConfig = loadCacheRetentionConfig();
-  const entries = parseSessionEntries(content);
+  const estimateCost = createUsageCostEstimator(candidate?.harnessId);
   const active = leafOverride === undefined
     ? activeEntryIds(entries)
     : activeTree(entries, leafOverride)?.ids || null;
@@ -403,7 +424,7 @@ function parseMessageData(content: string, candidate?: SessionFileProfile, leafO
         responseCacheExpiry = cacheExpiryForMessage(cacheMessage, cacheExpiry, entry.timestamp, cacheConfig);
         cacheExpiry = responseCacheExpiry;
       }
-      const message = messageFromEntry(entry, candidate, model, applyLearnedCacheExpiry(responseCacheExpiry, cacheConfig));
+      const message = messageFromEntry(entry, candidate, estimateCost, model, applyLearnedCacheExpiry(responseCacheExpiry, cacheConfig));
       if (!message) continue;
       // Resource lookup is by stable JSONL id across the whole tree. Keep
       // abandoned entries addressable so an already-rendered lazy image URL
@@ -463,7 +484,7 @@ export function readSessionMessages(filePath: string | SessionFileSource): reado
   // cache, and a smaller LRU turns each off-screen image fetch into a full
   // JSONL re-parse.
   return statCached(messagesCache, filePath, 8,
-    (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate),
+    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate),
     `cache:${cacheRetentionRevision()}`).messages;
 }
 
@@ -475,13 +496,13 @@ export function readSessionMessages(filePath: string | SessionFileSource): reado
 // of MB per request made large live OMP sessions painfully slow to open.
 export function readSessionMessagesAtLeaf(filePath: string | SessionFileSource, leafId: unknown): readonly SessionMessage[] {
   return statCached(messagesCache, filePath, 8,
-    (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate, leafId),
+    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate, leafId),
     `leaf:${leafId ?? ''}\0cache:${cacheRetentionRevision()}`).messages;
 }
 
 export function readSessionMessageById(filePath: string | SessionFileSource, entryId: unknown): SessionMessage | null {
   return statCached(messagesCache, filePath, 8,
-    (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate),
+    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate),
     `cache:${cacheRetentionRevision()}`).byId.get(entryId) || null;
 }
 
@@ -500,7 +521,7 @@ export function readSessionSearchText(filePath: string | SessionFileSource): {
   readonly messages: readonly SessionMessage[]; readonly texts: readonly string[];
 } {
   const data = statCached(messagesCache, filePath, 8,
-    (fp, _stats, candidate) => parseMessageData(fs.readFileSync(fp, 'utf-8'), candidate),
+    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate),
     `cache:${cacheRetentionRevision()}`);
   if (!data.searchText) {
     data.searchText = data.messages.map(message => extractTextContent(message.content).toLowerCase());
@@ -679,15 +700,15 @@ function reportedCost(harnessId: string | undefined, provider: unknown, usage: u
   return Object.keys(sanitized).length ? sanitized : undefined;
 }
 
-function usageCost(candidate: SessionFileProfile | undefined, provider: unknown, model: unknown, usage: unknown): Partial<UsageCosts> | undefined {
-  const estimated = estimateUsageCost(candidate?.harnessId, provider, model, usage);
+function usageCost(candidate: SessionFileProfile | undefined, provider: unknown, model: unknown, usage: unknown, estimateCost: UsageCostEstimator): Partial<UsageCosts> | undefined {
+  const estimated = estimateCost(provider, model, usage);
   return estimated || reportedCost(candidate?.harnessId, provider, usage);
 }
 
 /** Display/stats price the raw selected/response identity without rewriting it. */
-function messageUsageCost(candidate: SessionFileProfile | undefined, message: Record<string, unknown>, fallback: { provider?: unknown; model?: unknown }): Partial<UsageCosts> | undefined {
+function messageUsageCost(candidate: SessionFileProfile | undefined, message: Record<string, unknown>, fallback: { provider?: unknown; model?: unknown }, estimateCost: UsageCostEstimator): Partial<UsageCosts> | undefined {
   return usageCost(candidate, message.provider || fallback.provider,
-    message.responseModel || message.model || fallback.model, message.usage);
+    message.responseModel || message.model || fallback.model, message.usage, estimateCost);
 }
 
 function isEmptyFailedUsage(message: Record<string, unknown>): boolean {
@@ -721,7 +742,8 @@ function addReportedCosts(bucket: UsageBucket, cost: Partial<UsageCosts> | undef
   }
 }
 
-function computeSessionStats(filePath: string, _stats: fs.Stats, candidate: SessionFileProfile = {}): SessionStats {
+function computeSessionStats(filePath: string, stats: fs.Stats, candidate: SessionFileProfile = {}): SessionStats {
+  const estimateCost = createUsageCostEstimator(candidate.harnessId);
   const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const costBucket = { costs: emptyCosts(), costUnavailable: emptyCostUnavailable() };
   let reasoningTokens = 0, hardCacheMisses = 0;
@@ -732,11 +754,8 @@ function computeSessionStats(filePath: string, _stats: fs.Stats, candidate: Sess
   let genMs = 0, genOutput = 0;
   const responseDurations: number[] = [];
   const model: ModelContinuity = { provider: null, model: null };
-  for (const line of fs.readFileSync(filePath, 'utf-8').split('\n')) {
-    if (!line.trim()) continue;
-    let parsed: unknown;
-    try { parsed = parseEntry(line); } catch { continue; }
-    const entry = fields(parsed);
+  for (const raw of readSessionFileEntries(filePath, stats).entries) {
+    const entry = fields(raw);
     if (entry.type === 'model_change') advanceModelChange(entry, model, candidate.profileId, 'display');
     // Both Pi and OMP (snapcompact included) record a `compaction` entry per
     // compaction; abandoned-branch entries are counted here like every other
@@ -758,7 +777,7 @@ function computeSessionStats(filePath: string, _stats: fs.Stats, candidate: Sess
         reasoningTokens += tokenAmount(u.reasoning);
         if (isHardCacheMiss(u)) hardCacheMisses++;
       }
-      addReportedCosts(costBucket, messageUsageCost(candidate, m, model));
+      addReportedCosts(costBucket, messageUsageCost(candidate, m, model, estimateCost));
       const gen = assistantGenStats(entry);
       if (gen.durationMs && gen.outputTokens) {
         genMs += gen.durationMs;
@@ -783,7 +802,8 @@ export function buildIndexedUsageFromContent(content: string, candidate: Session
   return buildIndexedUsageFromEntries(parseSessionEntries(content), candidate);
 }
 
-export function buildIndexedUsageFromEntries(entries: SessionEntries, candidate: SessionFileProfile = {}): IndexedUsage {
+export function buildIndexedUsageFromEntries(entries: SessionEntries, candidate: SessionFileProfile = {},
+  estimateCost: UsageCostEstimator = createUsageCostEstimator(candidate.harnessId)): IndexedUsage {
   const usage: IndexedUsage = {
     total: { tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }, costs: emptyCosts(), costUnavailable: emptyCostUnavailable(), calls: 0, measured: 0, durationMs: 0, slowestMs: 0 },
     days: {}, models: {}, cwd: null,
@@ -792,7 +812,7 @@ export function buildIndexedUsageFromEntries(entries: SessionEntries, candidate:
     // before it (extendIndexedUsageFromEntries).
     state: { provider: null, model: 'unknown' },
   };
-  return accumulateIndexedUsage(usage, entries, candidate);
+  return accumulateIndexedUsage(usage, entries, candidate, estimateCost);
 }
 
 /**
@@ -800,11 +820,12 @@ export function buildIndexedUsageFromEntries(entries: SessionEntries, candidate:
  * usage objects that carry `state` (built by this schema); mutates and
  * returns `usage`.
  */
-export function extendIndexedUsageFromEntries(usage: IndexedUsage, entries: SessionEntries, candidate: SessionFileProfile = {}): IndexedUsage {
-  return accumulateIndexedUsage(usage, entries, candidate);
+export function extendIndexedUsageFromEntries(usage: IndexedUsage, entries: SessionEntries, candidate: SessionFileProfile = {},
+  estimateCost: UsageCostEstimator = createUsageCostEstimator(candidate.harnessId)): IndexedUsage {
+  return accumulateIndexedUsage(usage, entries, candidate, estimateCost);
 }
 
-function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, candidate: SessionFileProfile): IndexedUsage {
+function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, candidate: SessionFileProfile, estimateCost: UsageCostEstimator): IndexedUsage {
   const profileId = candidate.profileId || 'pi-v3';
   const { total, days, models } = usage;
   const model = { provider: usage.state?.provider ?? null, model: usage.state?.model ?? 'unknown' };
@@ -837,7 +858,7 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
     const ts = entryDate(e.timestamp || m.timestamp);
     const day = Number.isFinite(ts.getTime()) ? `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')}` : 'unknown';
     const duration = assistantGenStats(e).durationMs || 0;
-    const u = { ...fields(m.usage ?? EMPTY_FIELDS), cost: usageCost(candidate, p, mid, m.usage) };
+    const u = { ...fields(m.usage ?? EMPTY_FIELDS), cost: usageCost(candidate, p, mid, m.usage, estimateCost) };
     add(total, u, duration); add(days[day] ||= {}, u, duration);
     const modelBucket = models[ref] ||= { provider: p, model: mid, days: {} };
     add(modelBucket, u, duration); add(modelBucket.days[day] ||= {}, u, duration);
@@ -926,5 +947,6 @@ export function resetCaches(): void {
   messagesCache.clear();
   statsCache.clear();
   tailCache.clear();
+  parsedFile = undefined;
 }
 

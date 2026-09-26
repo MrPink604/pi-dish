@@ -30,6 +30,7 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
+const harness_launch_spec_js_1 = require("../lib/harness-launch-spec.js");
 const { sseReader } = require('./sse-reader');
 const { splitSessionRefContext } = require('../lib/helper-refs');
 // Deliberately long HOME: the default bridge socket path exceeds the
@@ -57,8 +58,7 @@ const QUEUE_IMAGE_B = {
 // Resolve the HOST pi like the server does. A bare `pi` here would hit
 // node_modules/.bin first (npm prepends it under `npm test`), silently
 // canary-ing the bundled — usually older — copy instead of the host.
-const { getPiLaunchSpec } = require('../lib/rpc-session.js');
-const piSpec = getPiLaunchSpec();
+const piSpec = (0, harness_launch_spec_js_1.getPiLaunchSpec)();
 // TMUX/TMUX_PANE are dropped: the bridge stamps them into its registry entry
 // and renames that window after the session, which would rename the pane
 // running the test suite.

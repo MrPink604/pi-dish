@@ -160,15 +160,6 @@ wrap('closeSync', (original, receiver, args) => {
         fds.delete(args[0]);
     return Reflect.apply(original, receiver, args);
 });
-const readers = require('../lib/session-files');
-const parse = readers.parseSessionEntries;
-readers.parseSessionEntries = function (content) {
-    if (counts) {
-        counts.parseCalls++;
-        counts.parseBytes += Buffer.byteLength(content);
-    }
-    return parse(content);
-};
 // Model enumeration is unrelated to catalog source/index work. Keep it offline
 // and stable; the real catalog's fallback context-window policy still executes.
 const piSdk = require('../lib/pi-sdk');
@@ -178,7 +169,7 @@ const { encodeSessionKey } = require('../lib/session-key');
 let server = null;
 const results = [];
 async function measure(name, action) {
-    counts = { directoryOpens: 0, directoryReads: 0, stats: 0, fullReads: 0, rangeReads: 0, bytes: 0, parseCalls: 0, parseBytes: 0 };
+    counts = { directoryOpens: 0, directoryReads: 0, stats: 0, fullReads: 0, rangeReads: 0, bytes: 0 };
     const observed = counts;
     const start = node_perf_hooks_1.performance.now();
     const detail = await action();
@@ -252,7 +243,6 @@ main().catch(error => { console.error(error); process.exitCode = 1; }).finally(a
         await new Promise((resolve, reject) => server?.close(error => error ? reject(error) : resolve()));
     }
     index.resetForTests();
-    readers.parseSessionEntries = parse;
     for (const [name, original] of originals)
         Object.defineProperty(fs, name, { configurable: true, value: original });
     fs.rmSync(home, { recursive: true, force: true });

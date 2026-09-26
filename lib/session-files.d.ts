@@ -1,6 +1,20 @@
 // Generated from src/core/session-files.ts; edit that source and run npm run build:core.
+/**
+ * Session JSONL readers for server.js.
+ *
+ * Everything here is keyed off the on-disk session files under
+ * ~/.pi/agent/sessions. The sidebar polls /api/sessions every 10s and a
+ * session file can be tens of MB, so each reader caches its result keyed by
+ * (mtimeMs, size, ctimeMs, device, inode), parsing only files that changed.
+ *
+ * getSessionInfo returns a fresh shallow copy per call (callers overlay live
+ * usage onto it); readSessionMessages returns the cached array itself —
+ * treat it as immutable.
+ */
+import fs from 'node:fs';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata-contracts.js';
 import type { IndexedUsage, UsageCosts, UsageTokens } from './session-index-data.js';
+import type { UsageCostEstimator } from './harness-pricing.js';
 export interface SessionFileProfile {
     readonly profileId?: string;
     readonly profileVersion?: number;
@@ -65,6 +79,19 @@ export interface SessionSearchProjection {
     tree: boolean;
     leafId: unknown;
 }
+export declare function readSessionFileEntries(file: string, stats?: fs.Stats): {
+    entries: SessionEntries;
+    endsNl: boolean;
+};
+/**
+ * One pass over a session JSONL: model, display name, user-message count,
+ * current context tokens (compactions reset), last activity, cwd. Context
+ * window/percent are derived by the caller — they depend on the live models
+ * cache, which may warm up after this parse got cached.
+ *
+ * The content-based core is exported so lib/session-index.js can derive
+ * info and search text from a single read of the file.
+ */
 export declare function parseSessionContent(content: string, mtime?: Date, candidate?: SessionFileProfile): SessionInfo;
 export declare function getSessionInfo(filePath: string | SessionFileSource): SessionInfo;
 export declare function parseSessionEntries(content: string): SessionEntries;
@@ -102,13 +129,13 @@ export declare function extendSearchIndexFromEntries(entries: SessionEntries, tr
 export declare function buildSearchTextFromContent(content: string): string;
 /** Compact corpus-index usage, derived during the same read as metadata/text. */
 export declare function buildIndexedUsageFromContent(content: string, candidate?: SessionFileProfile): IndexedUsage;
-export declare function buildIndexedUsageFromEntries(entries: SessionEntries, candidate?: SessionFileProfile): IndexedUsage;
+export declare function buildIndexedUsageFromEntries(entries: SessionEntries, candidate?: SessionFileProfile, estimateCost?: UsageCostEstimator): IndexedUsage;
 /**
  * O(delta) usage extension for an append-only session file. Only valid for
  * usage objects that carry `state` (built by this schema); mutates and
  * returns `usage`.
  */
-export declare function extendIndexedUsageFromEntries(usage: IndexedUsage, entries: SessionEntries, candidate?: SessionFileProfile): IndexedUsage;
+export declare function extendIndexedUsageFromEntries(usage: IndexedUsage, entries: SessionEntries, candidate?: SessionFileProfile, estimateCost?: UsageCostEstimator): IndexedUsage;
 export declare function getSessionStats(filePath: string | SessionFileSource): Readonly<SessionStats>;
 /**
  * cwd from a session file's first line (the session header entry) via a

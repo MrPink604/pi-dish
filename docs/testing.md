@@ -284,13 +284,104 @@ validation failure without a launch and uses a controlled clock for final-scan
 deadline acceptance. `transcript.spec.js` checks that concurrent
 older-page consumers join the same pending page instead of outrunning it.
 
-Remaining costs are explicit: cold `omp models --json` took about 1.65 seconds,
-and native OMP registration took 1.5–1.9 seconds. Process/socket proofs remain
-mandatory. Cold large-file parsing, synchronous historical discovery/indexing,
-full sidebar projection and sequential deep-search pagination still cost work;
-the audit did not replace them with virtualization or a new storage engine.
-In the 1,200-row production-browser fixture, warm sidebar search still took
-633–664 ms including its existing 300 ms debounce, with 25–26 ms synchronous
-input work. Faster backend scans do not eliminate large-list DOM/render costs.
-Whole-transcript rich-text finalization measured 2/7/16 ms at 200/1,000/2,000
-nodes and is not invoked for every streaming delta, so it was left unchanged.
+### Follow-up: retained rows, direct search windows and cold readers
+
+The follow-up used separate isolated before/after probes. The 257-file cold-index
+fixture below contains 13.75 MB and forces the complete index build; it is not
+the bounded initial-list fixture above. Timings are local observations, not CI
+thresholds.
+
+| Probe | Before | After |
+| --- | --- | --- |
+| One changed card in 1,200 ranked sidebar rows, median including layout | 388.1 ms | 19.45 ms |
+| Markup parsed for that card update | 1,317,320 characters | 1,096 characters |
+| Warm 1,200-row sidebar projection, median | 19.65 ms | 12.60 ms |
+| Search hit at index 10 in 6,000 messages | 119 requests / 15.59 s | 1 request / 50.9 ms |
+| Mounted messages after that search | 6,000 | 100 |
+| Full cold 257-file / 13.75 MB index | 290.5 ms | 198.3 ms |
+| Cold 72.6 MB / 19,000-message search projection | 1,242.4 ms | 465.7 ms |
+| Pricing/config stats during that projection | 19,004 | 5 |
+| Stats immediately after that message read | 811.4 ms | 15.6 ms |
+| Index metadata immediately after that message read | 834.9 ms | 115.3 ms |
+| Redundant OMP thinking-ladder discovery | ~1.5–1.65 s CLI | ~0.6–1.1 ms native normalization; no CLI |
+| Two concurrent SDK command-discovery calls, after import | 105.0 ms / 2 model runtimes | 34.6 ms / no model runtime |
+
+The sidebar retains host-qualified card nodes, reconciles ranked membership and
+order, and parses only changed cards when the structure is stable. Composition
+coalesces paints once per animation frame; session-state publications and unread
+title updates remain immediate. All matching rows remain in the DOM: there is
+no virtualization, row cap or CSS containment. Keyboard focus, family expansion,
+pinning, drag order and same-ID cross-host ownership remain intact.
+
+An integrated production-asset probe with 1,200 historical sessions measured
+warm broad-query input dispatch at 28.7 → 0.5 ms and completion at
+565.6 → 508.9 ms, including debounce. First broad-query completion was
+1,009.5 → 699.2 ms, but the new first layout still produced a 453 ms long task:
+moving projection out of the input handler is not proof of a good INP score.
+
+Search loads one bounded hit window through the existing messages endpoint,
+without paging through intervening history or imposing the old 200-page limit.
+Explicit gap controls load omitted history in either direction. Retained tail
+nodes and the live cursor remain independent of the search window; stale query,
+selection and endpoint owners cannot commit a late window.
+Final deep-search samples were 33.7/35.6/46.8 ms, with one 975.9 ms outlier;
+all retained the one-window work bound. This is not a fixed latency guarantee.
+
+The integrated 12,000-message JSONL fixture reached index 10 in 71 ms with one
+window request and 100 mounted messages. The previous build was still searching
+after two minutes with 9,300 messages mounted; that run was stopped, not reported
+as a completed latency. Actual gap-button paging, session switch/return and a
+JSONL append preserved the original hit/tail nodes and caught up with
+`after=11999`, leaving the historical gap intact.
+
+Pricing captures one rate-card snapshot per synchronous operation, rather than
+statting configuration and scanning the model catalog per message. Metadata,
+messages, stats and indexing opportunistically share the last raw parse through
+a weak reference; garbage collection can discard it without changing results.
+File freshness includes mtime, size, ctime, device and inode. Profile, pricing and
+settings projections remain separate. Stamp-less persisted index entries take
+the normal bounded rebuild once.
+
+Queued indexing now restats before reading, avoiding both duplicate demand work
+and double-counting an append that arrived after enqueueing. Index logs serialize
+each payload once. Discovery shares parent-header observations within one scan,
+not across scans. `session-catalog-baseline.js` reports actual corpus IO; its old
+exported-parser hook was removed because it cannot observe the shared internal
+parse path reliably.
+
+The unchanged 257-file / 14 MB production baseline command measured initial
+bounded lists at 137.7 → 114.8 ms and fully indexed warm lists at
+35.3 → 29.0 ms. Cold route+transcript IO fell from two full reads to one;
+ordinary append inspection still read exactly the appended 130 bytes.
+
+OMP live catalogs now preserve native `thinking.efforts`; all 83 OpenAI/Anthropic
+fixture rows matched the official CLI ladders. Interactive discovery and pricing
+share one genuine on-demand CLI for the same cwd/config/environment scope.
+The final shared native run took 1,423 ms; unchanged subsequent calls took
+12.1 ms and 2.0 ms without another subprocess. Input fingerprints are captured
+before the run; changed configuration cannot relabel an older flight as fresh.
+Native DB fingerprints ignore only SQLite checkpoint counters, not credential
+or model payloads. Explicit force bypasses settled reuse but joins an in-flight
+discovery. Arbitrary extension-owned inputs and remote provider state retain the
+existing 60-second freshness bound. A real native DB payload refresh can cause a
+conservative subsequent cache miss.
+Legacy live registries that omit both reasoning and ladder metadata still use
+catalog enrichment in the session's cwd. Unknown reasoning metadata remains
+absent instead of becoming `false`; explicit non-reasoning rows need no ladder.
+
+SDK command discovery now loads extension/skill/prompt resources directly,
+joining concurrent loads without creating undisposed AgentSessions/model
+runtimes. Later requests observe resource edits rather than retaining a permanent
+server-side list. Cold SDK import still measured 1.4–1.8 seconds. Pi's eager model
+warm remains because it supplies context-window data before a picker is opened.
+
+Remaining costs are explicit. Initial creation and large structural transitions
+of a 1,200-row sidebar still incur substantial native parsing/layout work; the
+isolated controller probe did not improve first-broad-query completion. The
+300 ms search debounce remains. The first 72.6 MB parse is still synchronous:
+the follow-up attributed about 220 ms to read/UTF-8 decoding and 132 ms to native
+JSON parsing. Weak sharing removes subsequent duplicate work, not this first
+read or a hard event-loop stall bound. Native cold OMP startup/catalog work and
+mandatory process/socket ownership proofs remain. Whole-transcript rich-text
+finalization previously measured 2/7/16 ms at 200/1,000/2,000 nodes and is not
+invoked for every streaming delta, so it was left unchanged.

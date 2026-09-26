@@ -20,6 +20,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const node_url_1 = require("node:url");
+const harness_launch_spec_1 = require("../lib/harness-launch-spec");
 const { sseReader } = require('./sse-reader');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-rpc-test-'));
 process.env.HOME = tmpHome;
@@ -33,8 +34,10 @@ const START_LOG = path.join(tmpHome, 'rpc-starts.jsonl');
 const STATE_LOG = path.join(tmpHome, 'rpc-state-requests.txt');
 process.env.PI_DISH_PI_COMMAND = `env PI_FIXTURE_LOG=${CMD_LOG} ${process.execPath} ${FIXTURE}`;
 process.env.PI_FIXTURE_START_LOG = START_LOG;
-const server = require('../server.js');
+// Exercise the low-level-first import order: pricing must not capture a partial
+// RPC export object through launch/control dependencies.
 const { getAllRPCSessions, getRPCSession } = require('../lib/rpc-session');
+const server = require('../server.js');
 const { invalidateRegistryCache } = require('../lib/bridge-session');
 const { processIdentity } = require('../lib/process-identity');
 let base = '';
@@ -92,7 +95,6 @@ let sessionId = '';
 test('getPiLaunchSpec resolves a bare `pi` past node_modules/.bin shims', () => {
     // Under npm-run PATHs, pi-dish's own dependency shim would shadow the host
     // pi — the spec must skip node_modules dirs when resolving the bare word.
-    const { getPiLaunchSpec } = require('../lib/rpc-session');
     const saved = { cmd: process.env.PI_DISH_PI_COMMAND, path: process.env.PATH };
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-path-'));
     const shimDir = path.join(dir, 'node_modules', '.bin');
@@ -104,10 +106,10 @@ test('getPiLaunchSpec resolves a bare `pi` past node_modules/.bin shims', () => 
     try {
         delete process.env.PI_DISH_PI_COMMAND;
         process.env.PATH = `${shimDir}${path.delimiter}${binDir}`;
-        assert.equal(getPiLaunchSpec().argv[0], path.join(binDir, 'pi'), 'shim dir is skipped, host pi wins');
+        assert.equal((0, harness_launch_spec_1.getPiLaunchSpec)().argv[0], path.join(binDir, 'pi'), 'shim dir is skipped, host pi wins');
         // With nothing but shims on PATH, degrade to the bare word.
         process.env.PATH = shimDir;
-        assert.equal(getPiLaunchSpec().argv[0], 'pi');
+        assert.equal((0, harness_launch_spec_1.getPiLaunchSpec)().argv[0], 'pi');
     }
     finally {
         process.env.PI_DISH_PI_COMMAND = saved.cmd;

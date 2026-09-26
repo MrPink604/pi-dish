@@ -2,8 +2,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-import * as childProcess from 'node:child_process';
-import { getHarness, resolveLaunchSpec } from './harnesses';
+import { getHarness } from './harnesses';
+import { runHarnessModelCatalog } from './harness-feature-commands';
 import * as YAML from 'yaml';
 import { getPricingModels } from './pi-sdk';
 import { finite, record } from './helper-values';
@@ -40,7 +40,7 @@ interface PricingState {
   inFlight: Promise<PricingSnapshot | null> | null;
   lastAttemptAt: number;
 }
-interface OverridesCacheEntry { mtimeMs: number; size: number; entries: CatalogModel[] }
+interface OverridesCacheEntry { stats: fs.Stats; entries: CatalogModel[] }
 type HarnessInput = string | null | undefined;
 const PRICED_HARNESSES: Readonly<Record<string, true>> = { pi: true, omp: true };
 // Subscription-backed providers whose catalogs deliberately carry zero rates
@@ -60,9 +60,29 @@ const states = new Map<string, PricingState>();
 // subscription-backed providers. OMP itself merges them into its catalog but
 // drops override-only ids (renamed or dead models), so pi-dish reads the file
 // directly: user entries win over catalog rows and revive ids the catalog no
-// longer carries. Cached on (mtimeMs, size) like the other session readers.
+// longer carries. Revalidated by mtime, size, ctime, device and inode.
 const MODEL_OVERRIDES_FILE: Readonly<Record<string, string | undefined>> = { omp: path.join('.omp', 'agent', 'models.yml') };
 const overridesCache = new Map<string, OverridesCacheEntry>();
+
+type Rates = CatalogModel['cost'];
+export type UsageCostEstimator = (provider: unknown, model: unknown, usage: unknown) => UsageCost | undefined;
+// Catalog/override arrays are replaced, not mutated, on refresh. Index each
+// snapshot once; repeated models in a catalog retain Array.find's first win.
+const rateIndexes = new WeakMap<CatalogModel[], ReadonlyMap<string, Rates>>();
+function indexRates(models: CatalogModel[] | undefined): ReadonlyMap<string, Rates> | undefined {
+  if (!models?.length) return undefined;
+  let index = rateIndexes.get(models);
+  if (!index) {
+    const rates = new Map<string, Rates>();
+    for (const model of models) {
+      const selector = `${model.provider}/${model.id}`;
+      if (!rates.has(selector)) rates.set(selector, model.cost);
+    }
+    index = rates;
+    rateIndexes.set(models, index);
+  }
+  return index;
+}
 
 function loadModelOverrides(harnessId: string): CatalogModel[] {
   const rel = MODEL_OVERRIDES_FILE[harnessId];
@@ -71,7 +91,8 @@ function loadModelOverrides(harnessId: string): CatalogModel[] {
   let stats: fs.Stats;
   try { stats = fs.statSync(file); } catch { return []; }
   const cached = overridesCache.get(file);
-  if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) return cached.entries;
+  if (cached && cached.stats.mtimeMs === stats.mtimeMs && cached.stats.size === stats.size &&
+      cached.stats.ctimeMs === stats.ctimeMs && cached.stats.dev === stats.dev && cached.stats.ino === stats.ino) return cached.entries;
   let entries: CatalogModel[] = [];
   try {
     const doc: unknown = YAML.parse(fs.readFileSync(file, 'utf8'));
@@ -87,7 +108,7 @@ function loadModelOverrides(harnessId: string): CatalogModel[] {
       }
     }
   } catch { entries = []; } // a broken config must not break pricing
-  overridesCache.set(file, { mtimeMs: stats.mtimeMs, size: stats.size, entries });
+  overridesCache.set(file, { stats, entries });
   return entries;
 }
 
@@ -141,29 +162,15 @@ function persist(harnessId: string, snapshot: PricingSnapshot): void {
   fs.renameSync(tmp, file);
 }
 
-function runCatalogCommand(harnessId: string): Promise<CatalogModel[]> {
+async function runCatalogCommand(harnessId: string, force: boolean): Promise<CatalogModel[]> {
   const descriptor = getHarness(harnessId);
-  if (!descriptor?.argv?.models?.length) return Promise.reject(new Error(`Harness ${harnessId} has no model catalog command`));
-  const spec = resolveLaunchSpec(descriptor);
-  return new Promise((resolve, reject) => {
-    childProcess.execFile(spec.argv[0], [...spec.argv.slice(1), ...descriptor.argv.models], {
-      env: { ...process.env, ...spec.env }, timeout: 15_000, maxBuffer: 10 * 1024 * 1024,
-    }, (error, stdout, stderr) => {
-      // Some OMP versions print the complete catalog but keep an event-loop
-      // handle open. execFile then kills the process at the timeout; that is
-      // still a successful catalog response when stdout is complete.
-      if (error && !error.killed) return reject(new Error(String(stderr || error.message).trim()));
-      let raw: unknown;
-      try { raw = JSON.parse(stdout.trim() || 'null'); }
-      catch (e) { return reject(new Error(`Could not parse ${descriptor.label} model catalog: ${e instanceof Error ? e.message : String(e)}`)); }
-      const models = normalizeCatalog(raw);
-      if (!models) return reject(new Error(`${descriptor.label} model catalog contained no priced models`));
-      resolve(models);
-    });
-  });
+  if (!descriptor?.argv?.models?.length) throw new Error(`Harness ${harnessId} has no model catalog command`);
+  const models = normalizeCatalog(await runHarnessModelCatalog(descriptor, { force }));
+  if (!models) throw new Error(`${descriptor.label} model catalog contained no priced models`);
+  return models;
 }
 
-function loadCatalogModels(harnessId: string): Promise<CatalogModel[]> {
+function loadCatalogModels(harnessId: string, force: boolean): Promise<CatalogModel[]> {
   if (harnessId === 'pi') {
     return getPricingModels().then((raw: unknown) => {
       const models = normalizeCatalog(raw);
@@ -171,7 +178,7 @@ function loadCatalogModels(harnessId: string): Promise<CatalogModel[]> {
       return models;
     });
   }
-  return runCatalogCommand(harnessId);
+  return runCatalogCommand(harnessId, force);
 }
 
 export async function refreshHarnessPricing(harnessId = 'omp', { force = false, now = Date.now() }: PricingRefreshOptions = {}): Promise<PricingSnapshot | null> {
@@ -181,7 +188,7 @@ export async function refreshHarnessPricing(harnessId = 'omp', { force = false, 
   if (!force && now - state.lastAttemptAt < FAILED_REFRESH_RETRY_MS) return state.snapshot;
   if (!state.inFlight) {
     state.lastAttemptAt = now;
-    state.inFlight = loadCatalogModels(harnessId).then(models => {
+    state.inFlight = loadCatalogModels(harnessId, force).then(models => {
       const snapshot = { updatedAt: now, models, revision: revisionFor(models) };
       persist(harnessId, snapshot);
       state.snapshot = snapshot;
@@ -200,19 +207,27 @@ export function pricingRevision(harnessId?: HarnessInput): string {
   return overrides.length ? `${base}+${revisionFor(overrides)}` : base;
 }
 
-function catalogCost(harnessId: HarnessInput, provider: unknown, model: unknown): CatalogModel['cost'] | null {
-  if (typeof harnessId !== 'string' || !Object.hasOwn(PRICED_HARNESSES, harnessId)) return null;
-  const selector = typeof model === 'string' && model.includes('/') ? model : `${provider}/${model}`;
-  const match = (item: CatalogModel): boolean => `${item.provider}/${item.id}` === selector;
-  const override = loadModelOverrides(harnessId).find(match);
-  if (override) return override.cost;
-  const row = loadState(harnessId).snapshot?.models.find(match);
-  return row?.cost || null;
+/**
+ * Capture rates once for a synchronous parse/scan. Never retain the estimator
+ * across operations: each new operation must revalidate models.yml and use
+ * the latest catalog snapshot. Message loops then do no filesystem work.
+ */
+export function createUsageCostEstimator(harnessId: HarnessInput): UsageCostEstimator {
+  if (typeof harnessId !== 'string' || !Object.hasOwn(PRICED_HARNESSES, harnessId)) return () => undefined;
+  const overrides = indexRates(loadModelOverrides(harnessId));
+  const catalog = indexRates(loadState(harnessId).snapshot?.models);
+  return (provider, model, usage) => {
+    const selector = typeof model === 'string' && model.includes('/') ? model : `${provider}/${model}`;
+    const rates = overrides?.get(selector) || catalog?.get(selector);
+    return rates ? costAtRates(harnessId, provider, model, usage, rates) : undefined;
+  };
 }
 
 export function estimateUsageCost(harnessId: HarnessInput, provider: unknown, model: unknown, usage: unknown): UsageCost | undefined {
-  const rates = catalogCost(harnessId, provider, model);
-  if (!rates) return undefined;
+  return createUsageCostEstimator(harnessId)(provider, model, usage);
+}
+
+function costAtRates(harnessId: HarnessInput, provider: unknown, model: unknown, usage: unknown, rates: Rates): UsageCost | undefined {
   // Plan-provider entries deliberately use zero rates for subscription
   // access. They are not evidence that a request was free.
   const rateProvider = typeof model === 'string' && model.includes('/') ? model.split('/', 1)[0] : provider;

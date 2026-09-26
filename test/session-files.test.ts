@@ -177,6 +177,32 @@ test('readSessionSearchText memoizes lowercased per-message text aligned with th
   assert.deepEqual(text, ['alpha needle', 'second alpha', '']);
 });
 
+test('shared raw parses retain profile and branch semantics and revalidate replaced or truncated files', () => {
+  const header = { type: 'session', id: 'shared-parse', cwd: '/fixture' };
+  const a = { type: 'message', id: 'a', parentId: null, message: { role: 'user', content: 'alpha' } };
+  const b = { type: 'message', id: 'b', parentId: 'a', message: { role: 'user', content: 'bravo' } };
+  const file = writeSession([{ type: 'title', title: 'OMP title' }, header, a, b]);
+  const stamp = new Date('2026-01-01T00:00:00Z');
+  fs.utimesSync(file, stamp, stamp);
+  const omp = { file, profileId: 'omp-v1', harnessId: 'omp' };
+  assert.equal(SF.getSessionInfo(omp).name, 'OMP title');
+  assert.equal(SF.getSessionInfo(file).name, 'alpha', 'raw reuse must not reuse a different profile projection');
+  assert.deepEqual(SF.readSessionMessages(omp).map(message => message.content), ['alpha', 'bravo']);
+  assert.deepEqual(SF.readSessionMessagesAtLeaf(omp, 'a').map(message => message.content), ['alpha']);
+  assert.equal(SF.getSessionStats(omp).userMessages, 2, 'whole-file stats include every branch');
+  fs.writeFileSync(file + '.new', fs.readFileSync(file, 'utf8').replace('alpha', 'delta'));
+  fs.utimesSync(file + '.new', stamp, stamp);
+  fs.renameSync(file + '.new', file);
+  assert.deepEqual(SF.readSessionSearchText(omp).texts, ['delta', 'bravo'], 'same-size/mtime replacement invalidates raw and display caches');
+  const c = { type: 'message', id: 'c', parentId: 'a', message: { role: 'user', content: 'charlie' } };
+  fs.appendFileSync(file, JSON.stringify(c) + '\n');
+  assert.deepEqual(SF.readSessionSearchText(omp).texts, ['delta', 'charlie']);
+  assert.equal(SF.getSessionStats(omp).userMessages, 3);
+  fs.writeFileSync(file, JSON.stringify(header) + '\n' + JSON.stringify(a) + '\n');
+  assert.deepEqual(SF.readSessionSearchText(omp).texts, ['alpha']);
+  assert.equal(SF.getSessionStats(omp).userMessages, 1);
+});
+
 test('OMP entry tolerance renders async/interruption/unknown custom rows without leaking hidden state', () => {
   const file = path.join(__dirname, 'fixtures', 'omp-entry-tolerance.jsonl');
   const source = { file, profileId: 'omp-v1', profileVersion: 1, harnessId: 'omp' };

@@ -146,3 +146,183 @@ async function initial(page) { await page.evaluate(() => { window.transcriptLoad
     await (0, fixtures_js_1.expect)(page.locator('#messages img')).toHaveCount(0);
     (0, fixtures_js_1.expect)(await page.evaluate(() => window.ownedTranscript.hasOlder)).toBe(false);
 });
+(0, fixtures_js_1.test)('deep windows preserve gaps, grouped nodes and the live cursor across host-qualified restoration', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const result = await page.evaluate(async ({ id, self, peer }) => {
+        const requests = [], root = fixtureElement(document.getElementById('messages'), 'messages');
+        const waitForMessage = (index) => new Promise(resolve => {
+            const observer = new MutationObserver(() => {
+                if (root.querySelector(`[data-msg-index="${index}"]`)) {
+                    observer.disconnect();
+                    resolve();
+                }
+            });
+            observer.observe(root, { childList: true, subtree: true });
+        });
+        let live = false;
+        const transcript = PiDishBrowser.createTranscript({ ...fixtureApp.ports.transcriptController, scroll() { }, jump() { },
+            request: async (_host, path) => {
+                requests.push(path);
+                const query = new URL(path, location.origin).searchParams, after = query.get('after');
+                const end = after == null ? Number(query.get('before') || 20000) : 20001;
+                const start = after == null ? Math.max(0, end - 50) : Number(after) + 1;
+                return new Response(JSON.stringify({
+                    messages: Array.from({ length: Math.max(0, end - start) }, (_, offset) => ({ index: start + offset,
+                        role: start + offset === 10 || start + offset === 19950 ? 'toolResult' : 'user', content: `message ${start + offset}` })),
+                    firstIndex: start, lastIndex: end - 1, totalMessages: live ? 20001 : 20000, hasMore: start > 0,
+                }));
+            },
+        });
+        try {
+            await transcript.load();
+            const tail = fixtureElement(root.querySelector('[data-msg-index="19999"]'), 'retained tail');
+            await transcript.ensureMessage(10, () => true);
+            const hit = fixtureElement(root.querySelector('[data-msg-index="10"]'), 'deep hit');
+            const group = fixtureDetails(hit.closest('details.tool-group'), 'hit group');
+            group.open = true;
+            const deep = { requests: requests.length - 1, mounted: root.querySelectorAll('[data-msg-index]').length,
+                oldest: transcript.oldestIndex, last: transcript.lastIndex, gap: root.querySelector('.transcript-gap span')?.textContent };
+            transcript.retire();
+            transcript.stash();
+            fixtureApp.features.sessionState.advanceSelection();
+            fixtureApp.features.sessionState.setCurrentSession(id, peer);
+            const wrongHost = transcript.restore(id);
+            fixtureApp.features.sessionState.advanceSelection();
+            fixtureApp.features.sessionState.setCurrentSession(id, self);
+            const restored = transcript.restore(id);
+            live = true;
+            await transcript.catchup();
+            const retained = { wrongHost, restored, hit: root.querySelector('[data-msg-index="10"]') === hit,
+                group: root.querySelector('[data-msg-index="10"]')?.closest('details.tool-group') === group, open: group.open,
+                tail: root.querySelector('[data-msg-index="19999"]') === tail, last: transcript.lastIndex, catchup: requests.at(-1) };
+            const newerLoaded = waitForMessage(99);
+            fixtureElement(root.querySelector('.transcript-gap [data-direction="newer"]'), 'newer gap control').click();
+            await newerLoaded;
+            const newer = { first: !!root.querySelector('[data-msg-index="50"]'), last: !!root.querySelector('[data-msg-index="99"]') };
+            const olderLoaded = waitForMessage(19900);
+            fixtureElement(root.querySelector('.transcript-gap [data-direction="older"]'), 'older gap control').click();
+            await olderLoaded;
+            const indices = Array.from(root.querySelectorAll('[data-msg-index]'), node => Number(node.dataset.msgIndex));
+            return { deep, retained, newer, older: !!root.querySelector('[data-msg-index="19900"]'),
+                sortedUnique: indices.every((index, i) => i === 0 || index > indices[i - 1]), last: transcript.lastIndex };
+        }
+        finally {
+            transcript.dispose();
+        }
+    }, { id: fixtures_js_1.ROOT, self: fleet.self.hostId, peer: fleet.peer.hostId });
+    (0, fixtures_js_1.expect)(result.deep).toEqual({ requests: 1, mounted: 100, oldest: 0, last: 19999, gap: '19900 messages not loaded' });
+    (0, fixtures_js_1.expect)(result.retained).toEqual({ wrongHost: false, restored: true, hit: true, group: true, open: true, tail: true, last: 20000,
+        catchup: `/api/sessions/${fixtures_js_1.ROOT}/messages?after=19999` });
+    (0, fixtures_js_1.expect)(result.newer).toEqual({ first: true, last: true });
+    (0, fixtures_js_1.expect)(result.older).toBe(true);
+    (0, fixtures_js_1.expect)(result.sortedUnique).toBe(true);
+    (0, fixtures_js_1.expect)(result.last).toBe(20000);
+});
+(0, fixtures_js_1.test)('an older page racing a targeted window remains chronological and deduplicates overlap', async ({ page, fleet }) => {
+    await setup(page, fleet);
+    await page.evaluate(() => { window.transcriptLoad = window.ownedTranscript.load(); });
+    await reply(page, 0, { messages: [{ index: 100, role: 'user', content: 'tail' }], firstIndex: 100, lastIndex: 100, totalMessages: 101, hasMore: true });
+    await page.evaluate(() => window.transcriptLoad);
+    await page.evaluate(() => { window.oldPage = window.ownedTranscript.loadOlder(); window.newPage = window.ownedTranscript.ensureMessage(10, () => true); });
+    await reply(page, 2, { messages: Array.from({ length: 50 }, (_, index) => ({ index, role: 'user', content: `hit context ${index}` })), firstIndex: 0, lastIndex: 49 });
+    await page.evaluate(() => window.newPage);
+    await page.evaluate(() => { window.newPage = window.ownedTranscript.ensureMessage(75, () => true); });
+    await reply(page, 3, { messages: Array.from({ length: 50 }, (_, offset) => ({ index: offset + 51, role: 'user', content: `overlap ${offset + 51}` })), firstIndex: 51, lastIndex: 100 });
+    await page.evaluate(() => window.newPage);
+    await reply(page, 1, { messages: Array.from({ length: 50 }, (_, offset) => ({ index: offset + 50, role: 'user', content: `older ${offset + 50}` })), firstIndex: 50, lastIndex: 99, hasMore: true });
+    await page.evaluate(() => window.oldPage);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => ({
+        indices: Array.from(document.querySelectorAll('#messages [data-msg-index]'), node => Number(node.dataset.msgIndex)),
+        oldest: window.ownedTranscript.oldestIndex, last: window.ownedTranscript.lastIndex,
+    }))).toEqual({ indices: Array.from({ length: 101 }, (_, index) => index), oldest: 0, last: 100 });
+});
+(0, fixtures_js_1.test)('live catchup fills a search window ahead of the live cursor without reordering or duplicating messages', async ({ page, fleet }) => {
+    await setup(page, fleet);
+    await page.evaluate(() => { window.transcriptLoad = window.ownedTranscript.load(); });
+    await reply(page, 0, { messages: [{ index: 100, role: 'user', content: 'tail' }], firstIndex: 100, lastIndex: 100, totalMessages: 101, hasMore: true });
+    await page.evaluate(() => window.transcriptLoad);
+    await page.evaluate(() => { window.newPage = window.ownedTranscript.ensureMessage(200, () => true); });
+    await reply(page, 1, { messages: Array.from({ length: 50 }, (_, offset) => ({ index: offset + 151, role: 'user', content: `new hit context ${offset + 151}` })), firstIndex: 151, lastIndex: 200, totalMessages: 211 });
+    await page.evaluate(() => window.newPage);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.ownedTranscript.lastIndex)).toBe(100);
+    await page.evaluate(() => { window.newCatchup = window.ownedTranscript.catchup(); });
+    (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureElement(window.transcriptReplies[2], 'live catchup').path)).toBe(`/api/sessions/${fixtures_js_1.ROOT}/messages?after=100`);
+    await reply(page, 2, { messages: Array.from({ length: 110 }, (_, offset) => ({ index: offset + 101, role: 'user', content: `live output ${offset + 101}` })), firstIndex: 101, lastIndex: 210, totalMessages: 211 });
+    await page.evaluate(() => window.newCatchup);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => ({
+        indices: Array.from(document.querySelectorAll('#messages [data-msg-index]'), node => Number(node.dataset.msgIndex)),
+        last: window.ownedTranscript.lastIndex, gaps: document.querySelectorAll('#messages .transcript-gap').length,
+    }))).toEqual({ indices: Array.from({ length: 111 }, (_, index) => index + 100), last: 210, gaps: 0 });
+});
+(0, fixtures_js_1.test)('filling a sparse tool gap merges groups without replacing retained details or their open state', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const result = await page.evaluate(async () => {
+        const root = fixtureElement(document.getElementById('messages'), 'messages');
+        const transcript = PiDishBrowser.createTranscript({ ...fixtureApp.ports.transcriptController, scroll() { }, jump() { },
+            request: async (_host, path) => {
+                const end = Number(new URL(path, location.origin).searchParams.get('before') || 120), start = Math.max(0, end - 50);
+                return new Response(JSON.stringify({ messages: Array.from({ length: end - start }, (_, offset) => ({
+                        index: start + offset, role: 'toolResult', toolName: 'read', content: `tool result ${start + offset}`,
+                    })), firstIndex: start, lastIndex: end - 1, totalMessages: 120, hasMore: start > 0 }));
+            },
+        });
+        try {
+            await transcript.load();
+            const tail = fixtureDetails(root.querySelector('details.tool-group'), 'tail group');
+            await transcript.ensureMessage(10, () => true);
+            const hit = fixtureElement(root.querySelector('[data-msg-index="10"]'), 'tool hit');
+            fixtureDetails(hit.closest('details.tool-group'), 'hit group').open = true;
+            const before = root.querySelectorAll(':scope > details.tool-group').length;
+            const filled = new Promise(resolve => {
+                const observer = new MutationObserver(() => {
+                    if (!root.querySelector('.transcript-gap')) {
+                        observer.disconnect();
+                        resolve();
+                    }
+                });
+                observer.observe(root, { childList: true, subtree: true });
+            });
+            fixtureElement(root.querySelector('.transcript-gap [data-direction="newer"]'), 'gap control').click();
+            await filled;
+            return { before, groups: root.querySelectorAll(':scope > details.tool-group').length, gaps: root.querySelectorAll('.transcript-gap').length,
+                sameTail: root.querySelector('details.tool-group') === tail, sameHit: root.querySelector('[data-msg-index="10"]') === hit,
+                open: tail.open, indices: Array.from(root.querySelectorAll('[data-msg-index]'), node => Number(node.dataset.msgIndex)) };
+        }
+        finally {
+            transcript.dispose();
+        }
+    });
+    (0, fixtures_js_1.expect)(result).toEqual({ before: 2, groups: 1, gaps: 0, sameTail: true, sameHit: true, open: true,
+        indices: Array.from({ length: 120 }, (_, index) => index) });
+});
+for (const change of ['query', 'host', 'selection', 'endpoint', 'token']) {
+    (0, fixtures_js_1.test)(`a deep window cannot commit after its ${change} owner changes`, async ({ page, fleet }) => {
+        await setup(page, fleet);
+        await initial(page);
+        const result = await page.evaluate(async ({ change, id, peer }) => {
+            let current = true;
+            const flight = window.ownedTranscript.ensureMessage(0, () => current);
+            if (change === 'query')
+                current = false;
+            else if (change === 'host') {
+                fixtureApp.features.sessionState.advanceSelection();
+                fixtureApp.features.sessionState.setCurrentSession(id, peer);
+            }
+            else if (change === 'selection')
+                fixtureApp.features.sessionState.advanceSelection();
+            else {
+                const host = fixtureElement(window.transcriptHosts[fixtureCurrentSession().host || ''], 'endpoint');
+                if (change === 'endpoint')
+                    host.base += '/changed';
+                else
+                    Object.assign(host, { token: 'changed-token' });
+            }
+            fixtureElement(window.transcriptReplies[1], 'deep request').resolve(new Response(JSON.stringify({
+                messages: [{ index: 0, role: 'user', content: 'stale deep result' }], firstIndex: 0, lastIndex: 0, totalMessages: 11,
+            })));
+            await flight;
+            return { stale: !!document.querySelector('#messages [data-msg-index="0"]'), oldest: window.ownedTranscript.oldestIndex, last: window.ownedTranscript.lastIndex };
+        }, { change, id: fixtures_js_1.ROOT, peer: fleet.peer.hostId });
+        (0, fixtures_js_1.expect)(result).toEqual({ stale: false, oldest: 10, last: 10 });
+    });
+}

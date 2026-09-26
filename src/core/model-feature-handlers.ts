@@ -99,7 +99,12 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
         const sessionModels = await ports.getSessionModels(sessionId as string);
         if (sessionModels) {
           if (identity.harnessId === 'pi') return res.json(annotateEnabled(sessionModels));
-          return res.json(await withCatalogThinkingLevels(sessionModels, getHarness(identity.harnessId)));
+          if (!sessionModels.some(model => model.reasoning !== false && !Array.isArray(model.thinking))) return res.json(sessionModels);
+          // Legacy bridges need catalog enrichment, but project model overrides
+          // belong to this session's cwd, never the server's working directory.
+          const live = await ports.getLiveSession(sessionId as string);
+          if (typeof live?.cwd !== 'string' || !live.cwd) return res.json(sessionModels);
+          return res.json(await withCatalogThinkingLevels(sessionModels, getHarness(identity.harnessId), { cwd: live.cwd }));
         }
         if (identity.harnessId !== 'pi') {
           return res.status(409).json({ error: `Model discovery is unavailable for this ${getHarness(identity.harnessId)!.label} session.` });

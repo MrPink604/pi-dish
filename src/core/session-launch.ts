@@ -4,8 +4,8 @@ import path = require('path');
 import crypto = require('crypto');
 import { setTimeout as delay } from 'timers/promises';
 import type { BridgeRegistryEntry, HarnessDescriptor, HarnessEnvironment, HarnessId, ProcessIdentity, ProcessIdentityInput, SessionIdentity } from './contracts';
-import { resolveLaunchSpec } from './harnesses';
-import { createRPCSession, getPiLaunchSpec, resumeRPCSession } from './rpc-session';
+import { harnessLaunchSpec } from './harness-launch-spec';
+import { createRPCSession, resumeRPCSession } from './rpc-session';
 import { REGISTRY_DIR, getRegisteredSessionByNativeId, invalidateRegistryCache, pruneRegisteredSession, sameRegistryClaim, validRegistryClaimShape } from './bridge-session';
 import { primeWorkerTarget } from './prime-lifecycle';
 import { LifecycleInterruption, proveBridgeRegistryClaim, registryIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
@@ -14,11 +14,6 @@ import { formatModelRef, parseModelId } from './helper-models';
 import type { ModelRef } from './helper-types';
 import { record } from './helper-values';
 import * as tmux from './tmux';
-
-export interface HarnessLaunchSpec {
-  env: HarnessEnvironment;
-  argv: string[];
-}
 
 export interface HarnessLaunchTarget {
   type?: string;
@@ -132,10 +127,6 @@ const REGISTRY_POLL_MIN_MS = 20;
 const REGISTRY_POLL_MAX_MS = 300;
 const MAX_BRIDGE_SOCKET_PATH_BYTES = 103;
 const BRIDGE_SOCKET_BASENAME = `${'0'.repeat(24)}.sock`;
-
-export function harnessLaunchSpec(descriptor: HarnessDescriptor): HarnessLaunchSpec {
-  return descriptor.id === 'pi' ? getPiLaunchSpec() : resolveLaunchSpec(descriptor);
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : record(error) && typeof error.message === 'string' ? error.message : String(error);

@@ -22,7 +22,7 @@
  * Scan contract (`scanSessions`): stat everything, serve fresh entries from
  * the index, synchronously re-index at most `PI_DISH_INDEX_SYNC_BUDGET`
  * (default 20) stale files, and queue the rest for a background build that
- * yields between files (setImmediate) so it never blocks the event loop.
+ * yields between files (setImmediate). Each individual parse is synchronous.
  * `indexing: true` in the result means a backlog remains and the caller is
  * seeing a partial list. Search text for a file mid-churn (a streaming active
  * session) is extended from the appended byte range only — a search keystroke
@@ -44,11 +44,12 @@ import type { IndexedUsage, SkillActivation, SkillState } from './session-index-
 import { encodeSessionKey, canonicalSessionId, resolveSessionRoute } from './session-key';
 
 import {
-  parseSessionEntries, buildSearchIndexFromEntries, extendSearchIndexFromEntries,
+  parseSessionEntries, readSessionFileEntries, buildSearchIndexFromEntries, extendSearchIndexFromEntries,
   buildIndexedUsageFromEntries, extendIndexedUsageFromEntries, SEARCH_TEXT_SESSION_CAP,
 } from './session-files.js';
 import { mineSkillsFromEntries } from './skill-mining.js';
-import { pricingRevision } from './harness-pricing.js';
+import { createUsageCostEstimator, pricingRevision } from './harness-pricing.js';
+import type { UsageCostEstimator } from './harness-pricing.js';
 import {
   extendCacheLifetimeFromEntries, flushCacheLifetime, forgetCacheLifetimeFile, observeCacheLifetimeFromEntries,
 } from './cache-lifetime.js';
@@ -69,17 +70,23 @@ interface CacheStamp { mtimeMs: number; size: number; version: number; _bytes?: 
  * 341-session corpus (190 Pi + 151 OMP) spent 5-8ms of its 7-10ms scan there.
  * Both values are re-read on every call, so an edited setting or refreshed
  * catalog invalidates on the next scan; within one scan neither can change.
- * A queued backlog item carries the scan's context, so a mid-drain catalog
- * refresh can stamp an entry one revision behind — it re-indexes once later.
+ * A queued backlog item resolves its own fresh context when drained.
  */
 interface ScanContext {
   cacheConfig: CacheRetentionConfig;
   harnessRevision: (harnessId: SessionSource['harnessId']) => string;
+  estimateCost: (harnessId: SessionSource['harnessId']) => UsageCostEstimator;
 }
 function scanContext(): ScanContext {
   const revisions = new Map<string, string>();
+  const estimators = new Map<string, UsageCostEstimator>();
   return {
     cacheConfig: loadCacheRetentionConfig(),
+    estimateCost(harnessId) {
+      let estimate = estimators.get(harnessId);
+      if (!estimate) { estimate = createUsageCostEstimator(harnessId); estimators.set(harnessId, estimate); }
+      return estimate;
+    },
     harnessRevision(harnessId) {
       let revision = revisions.get(harnessId);
       if (revision === undefined) { revision = pricingRevision(harnessId); revisions.set(harnessId, revision); }
@@ -87,13 +94,16 @@ function scanContext(): ScanContext {
     },
   };
 }
-interface MetaEntry extends CacheStamp { info: IndexedSessionInfo; profileId: string; profileVersion: number; pricingRevision: string; cacheRetentionRevision: string }
+interface MetaEntry extends CacheStamp {
+  info: IndexedSessionInfo; profileId: string; profileVersion: number; pricingRevision: string; cacheRetentionRevision: string;
+  ctimeMs?: number; dev?: number; ino?: number;
+}
 interface TextEntry extends CacheStamp { text: string; endsNl: boolean; tree: boolean; leafId: string | null }
 interface SkillsEntry extends CacheStamp { records: SkillActivation[]; state: SkillState | null }
 interface IndexState {
   metaLog: NdjsonLog; textLog: NdjsonLog; skillsLog: NdjsonLog;
   meta: Map<string, MetaEntry>; text: Map<string, TextEntry>; skills: Map<string, SkillsEntry>;
-  backlog: Map<string, { candidate: SessionSource; stats: fs.Stats; ctx: ScanContext }>;
+  backlog: Map<string, SessionSource>;
   building: boolean;
 }
 type LogRow = Record<string, unknown> & { f: string; _bytes: number };
@@ -186,7 +196,7 @@ class NdjsonLog {
     return entries;
   }
 
-  append(obj: unknown): void {
+  append(obj: unknown): number {
     const line = JSON.stringify(obj);
     this.buffer.push(line);
     this.liveBytes += line.length;
@@ -194,6 +204,7 @@ class NdjsonLog {
       this.flushTimer = setTimeout(() => this.flush(), FLUSH_MS);
       this.flushTimer.unref?.();
     }
+    return line.length;
   }
 
   flush() {
@@ -255,7 +266,7 @@ function getState(): IndexState {
       meta: new Map(), // file -> { mtimeMs, size, info }
       text: new Map(), // file -> { mtimeMs, size, text, indexedAt }
       skills: new Map(), // file -> { mtimeMs, size, records, salt }
-      backlog: new Map(), // file -> { candidate, stats } (pending background indexing)
+      backlog: new Map(), // file -> candidate (pending background indexing)
       building: false,
     };
     for (const [f, e] of st.metaLog.load()) {
@@ -267,6 +278,7 @@ function getState(): IndexState {
           !(e.cr === undefined || typeof e.cr === 'string')) { st.metaLog.markDead(e._bytes); continue; }
       st.meta.set(f, {
         mtimeMs: e.m, size: e.s, info,
+        ctimeMs: finite(e.c) ? e.c : undefined, dev: finite(e.d) ? e.d : undefined, ino: finite(e.i) ? e.i : undefined,
         version: finite(e.ver) ? e.ver : 0,
         profileId: typeof e.p === 'string' ? e.p : 'pi-v3', profileVersion: finite(e.pv) ? e.pv : 1,
         pricingRevision: typeof e.pr === 'string' ? e.pr : 'native',
@@ -301,7 +313,7 @@ function getState(): IndexState {
   return st;
 }
 
-const encodeMeta = (f: string, e: MetaEntry) => ({ f, m: e.mtimeMs, s: e.size, ver: META_SCHEMA_VERSION, p: e.profileId, pv: e.profileVersion, pr: e.pricingRevision, cr: e.cacheRetentionRevision, v: e.info });
+const encodeMeta = (f: string, e: MetaEntry) => ({ f, m: e.mtimeMs, s: e.size, c: e.ctimeMs, d: e.dev, i: e.ino, ver: META_SCHEMA_VERSION, p: e.profileId, pv: e.profileVersion, pr: e.pricingRevision, cr: e.cacheRetentionRevision, v: e.info });
 const encodeText = (f: string, e: TextEntry) => ({
   f, m: e.mtimeMs, s: e.size, ver: TEXT_SCHEMA_VERSION,
   nl: e.endsNl ? 1 : 0, tr: e.tree ? 1 : 0, l: e.leafId || undefined, t: e.text,
@@ -369,23 +381,20 @@ function decodeIndexedInfo(value: unknown): IndexedSessionInfo | null {
 function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
   ctx: ScanContext): IndexedSessionInfo {
   const file = candidate.file;
-  const content = fs.readFileSync(file, 'utf-8');
-  // One JSON pass feeds all four derivations (metadata, usage, search text,
-  // skills) — this used to be four separate full parses of the same file,
-  // which dominated the cost of re-indexing a large changed session.
-  const entries = parseSessionEntries(content);
+  // Reuse the last raw parse if another reader just opened this file.
+  const { entries, endsNl } = readSessionFileEntries(file, stats);
   observeCacheLifetimeFromEntries(entries, file, candidate.profileId);
   const { nativeSessionId, sessionKey } = candidate;
   const info: IndexedSessionInfo = {
     ...sessionInfoFromEntries(entries, stats.mtime, candidate, ctx.cacheConfig),
     sessionKey, harnessId: candidate.harnessId, nativeSessionId,
     profileId: candidate.profileId, profileVersion: candidate.profileVersion,
-    usage: buildIndexedUsageFromEntries(entries, candidate),
+    usage: buildIndexedUsageFromEntries(entries, candidate, ctx.estimateCost(candidate.harnessId)),
   };
   const search = buildSearchIndexFromEntries(entries);
   checkSearchLeaf(search);
   setEntry(st.meta, st.metaLog, file,
-    { mtimeMs: stats.mtimeMs, size: stats.size, version: META_SCHEMA_VERSION, profileId: candidate.profileId, profileVersion: candidate.profileVersion, pricingRevision: ctx.harnessRevision(candidate.harnessId), cacheRetentionRevision: ctx.cacheConfig.revision, info }, encodeMeta);
+    { mtimeMs: stats.mtimeMs, size: stats.size, ctimeMs: stats.ctimeMs, dev: stats.dev, ino: stats.ino, version: META_SCHEMA_VERSION, profileId: candidate.profileId, profileVersion: candidate.profileVersion, pricingRevision: ctx.harnessRevision(candidate.harnessId), cacheRetentionRevision: ctx.cacheConfig.revision, info }, encodeMeta);
   setEntry(st.text, st.textLog, file,
     {
       mtimeMs: stats.mtimeMs,
@@ -394,7 +403,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
       text: search.text,
       tree: search.tree,
       leafId: search.leafId,
-      endsNl: content.endsWith('\n'),
+      endsNl,
     }, encodeText);
   const mined = mineSkillsFromEntries(entries, {
     // Generic nested session.jsonl children carry their authoritative identity
@@ -427,6 +436,7 @@ function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, st
     cachedText && cachedText.version === TEXT_SCHEMA_VERSION &&
     cachedSkills && cachedSkills.version === SKILLS_SCHEMA_VERSION &&
     cached.mtimeMs === stats.mtimeMs && cached.size === stats.size &&
+    cached.ctimeMs === stats.ctimeMs && cached.dev === stats.dev && cached.ino === stats.ino &&
     cachedText.mtimeMs === stats.mtimeMs && cachedText.size === stats.size &&
     cachedSkills.mtimeMs === stats.mtimeMs && cachedSkills.size === stats.size);
 }
@@ -458,6 +468,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
   if (meta.mtimeMs !== text.mtimeMs || meta.size !== text.size ||
       meta.mtimeMs !== skills.mtimeMs || meta.size !== skills.size) return null;
   if (!(stats.size > meta.size) || !text.endsNl) return null;
+  if (meta.dev !== stats.dev || meta.ino !== stats.ino) return null; // replaced, not appended
   // Continuity state (running provider/model/cwd) is required to accumulate
   // a delta; entries persisted before it existed re-index fully once.
   if (!meta.info?.usage?.state || !skills.state) return null;
@@ -472,7 +483,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
   try {
     extendSessionInfoFromEntries(meta.info, entries, stats.mtime, candidate, ctx.cacheConfig);
     extendCacheLifetimeFromEntries(entries, file, candidate.profileId);
-    extendIndexedUsageFromEntries(meta.info.usage, entries, candidate);
+    extendIndexedUsageFromEntries(meta.info.usage, entries, candidate, ctx.estimateCost(candidate.harnessId));
     const mined = mineSkillsFromEntries(entries, {
       sessionId: candidate.harnessId === 'pi' ? meta.info.nativeSessionId : meta.info.sessionKey,
       skillCtx,
@@ -498,6 +509,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
   text.endsNl = delta.endsWith('\n');
   text.tree = extension.tree;
   text.leafId = extension.leafId;
+  meta.ctimeMs = stats.ctimeMs;
   for (const entry of [meta, text, skills]) {
     entry.mtimeMs = stats.mtimeMs;
     entry.size = stats.size;
@@ -508,9 +520,8 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
 function setEntry<T extends CacheStamp>(map: Map<string, T>, log: NdjsonLog, file: string, entry: T, encode: Encoder<T>): void {
   const prev = map.get(file);
   if (prev) log.markDead(prev._bytes || 0);
-  entry._bytes = JSON.stringify(encode(file, entry)).length;
+  entry._bytes = log.append(encode(file, entry));
   map.set(file, entry);
-  log.append(encode(file, entry));
   if (log.needsCompaction()) log.compact(map, encode);
 }
 
@@ -538,9 +549,14 @@ function kickBuilder(st: IndexState) {
   const step = () => {
     const next = st.backlog.entries().next();
     if (next.done) { st.building = false; flushCacheLifetime(); return; }
-    const [file, work] = next.value;
+    const [file, candidate] = next.value;
     st.backlog.delete(file);
-    try { indexFile(st, work.candidate, work.stats, work.ctx); } catch {} // vanished/unreadable: skip
+    try {
+      const stats = fs.statSync(file);
+      const ctx = scanContext();
+      if (!isEntryFresh(st, file, candidate, stats, ctx) &&
+          !tryExtendIndexEntry(st, candidate, stats, ctx)) indexFile(st, candidate, stats, ctx);
+    } catch {} // vanished/unreadable: skip
     setImmediate(step);
   };
   setImmediate(step);
@@ -582,9 +598,10 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
     }
     if (budget > 0) {
       budget--;
+      st.backlog.delete(file);
       try { infos.set(file, indexFile(st, candidate, stats, ctx)); } catch {}
     } else {
-      st.backlog.set(file, { candidate, stats, ctx });
+      st.backlog.set(file, candidate);
     }
   }
 
@@ -614,9 +631,14 @@ export function getSearchText(input: SessionSource): string {
   const file = candidate.file;
   const st = getState();
   const cached = st.text.get(file);
+  const meta = st.meta.get(file);
   let stats;
+  st.backlog.delete(file); // demand read owns this refresh; do not reparse next tick
   try { stats = fs.statSync(file); } catch { return ''; }
-  if (cached && cached.version === TEXT_SCHEMA_VERSION &&
+  if (cached && cached.version === TEXT_SCHEMA_VERSION && meta &&
+      meta.info.sessionKey === candidate.sessionKey && meta.info.nativeSessionId === candidate.nativeSessionId &&
+      meta.profileId === candidate.profileId && meta.profileVersion === candidate.profileVersion &&
+      meta.ctimeMs === stats.ctimeMs && meta.dev === stats.dev && meta.ino === stats.ino &&
       cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
     return cached.text;
   }
@@ -629,7 +651,7 @@ export function getSearchText(input: SessionSource): string {
   // text-only extension here used to leave meta/skills behind, which would
   // now force the scan's extension path into a full re-index.
   if (tryExtendIndexEntry(st, candidate, stats, ctx)) return st.text.get(file)!.text;
-  try { indexFile(st, candidate, stats, ctx); } catch { return cached ? cached.text : ''; }
+  try { indexFile(st, candidate, stats, ctx); } catch { return ''; }
   return st.text.get(file)!.text;
 }
 
@@ -697,6 +719,9 @@ export function getSkillActivations(filter: { skill?: string; sinceMs?: number; 
 
 /** Test hook: flush pending appends and forget in-memory state. */
 export function resetForTests(): void {
-  for (const st of states.values()) { st.metaLog.flush(); st.textLog.flush(); st.skillsLog.flush(); }
+  for (const st of states.values()) {
+    st.backlog.clear();
+    st.metaLog.flush(); st.textLog.flush(); st.skillsLog.flush();
+  }
   states.clear();
 }

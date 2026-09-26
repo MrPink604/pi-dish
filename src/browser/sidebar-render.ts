@@ -7,7 +7,7 @@ import { cacheExpiryPresentation, contextClass, formatTokens, formatRelativeTime
 import { shortModelName } from './helper-usage';
 import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDisplayLabel, sortHostSections, hostSectionKey } from './helper-identity';
 import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
-import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, applyLocalFilter, evaluateSessionQuery, scoreSessionMatch } from '../core/helper-query';
+import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, evaluateSessionQuery, scoreSessionMatch } from '../core/helper-query';
 export interface SidebarHost extends HelperHost { state: string; key: string; color: string; dot: string; hasCache: boolean }
 export interface SidebarRenderOptions {
   active: readonly SessionEntry[]; previous: readonly SessionEntry[]; selected: SessionEntry | null;
@@ -16,6 +16,12 @@ export interface SidebarRenderOptions {
   expanded: ReadonlySet<string>; collapsed: ReadonlySet<string>; pinned: readonly string[]; roots: ReadonlyMap<string, string>;
   closeConfirm: string | null; closeBusy: string | null; multiHost: boolean; hosts: readonly SidebarHost[];
   unread: (row: SessionEntry) => boolean; hostChip: (id?: string | null) => string;
+}
+export interface SidebarProjection {
+  readonly layout: string;
+  readonly rows: readonly { key: string; html: string }[];
+  readonly count: number;
+  readonly html: string;
 }
 interface RowOptions { familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean; pinnedRow?: boolean; showCwd?: boolean }
 interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean }
@@ -34,20 +40,27 @@ export function renderHarnessBadge(harnessId?: string | null, harnessLabel?: str
 }
 
 /** Render established metadata; no DOM, requests, timers or retained row closures. */
-export function renderSidebar(options: SidebarRenderOptions) {
+export function renderSidebar(options: SidebarRenderOptions): SidebarProjection {
   const canonical = (key: string) => options.roots.get(key) || key;
   const hostIsDown = (host: SidebarHost) => host.state === 'blocked' || host.state === 'backoff';
+  const selectedKey = options.selected ? sessionRefKey(options.selected) : null;
+  const parsedQuery = parseSessionQuery(options.query), queryTokens = positiveQueryTokens(parsedQuery);
+  const pinnedRoots = new Set(options.pinned.map(canonical));
+  const downHosts = new Set(options.hosts.filter(hostIsDown).map(host => host.hostId || null));
+  const badges = new Map<string, string>(), hostChips = new Map<string | null, string>();
+  const rows: { key: string; html: string }[] = [], occurrences = new Map<string, number>();
 function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const contextPercent = session.contextPercent ?? 0;
   const ctxClass = contextClass(contextPercent);
-  const activeClass = options.selected && sessionRefKey(options.selected) === sessionRefKey(session) ? 'active' : '';
+  const key = sessionRefKey(session);
+  const activeClass = selectedKey === key ? 'active' : '';
   // A live subagent has no bridge of its own (its parent's process owns it),
   // so `isActive` is false — but it is a running session, not history, and
   // must not read as dimmed.
   const inactiveClass = session.isActive || session.subagentLive ? '' : 'inactive';
   const familyNode = opts.familyNode || null;
   const hasChildren = !!familyNode?.children?.length;
-  const familyExpanded = hasChildren && options.expanded.has(sessionRefKey(session));
+  const familyExpanded = hasChildren && options.expanded.has(key);
   const statusSessions = hasChildren && !familyExpanded
     ? flattenSessionFamilies(familyNode ? [familyNode] : []) : [session];
   // One dot, best signal wins: waiting on a question (bubble) > working
@@ -84,17 +97,16 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
     ? `<span class="session-item-cache${cache.severity ? ` ${cache.severity}` : ''}" title="${escapeHtml(cache.detail)}" aria-label="${escapeHtml(cache.detail)}">${escapeHtml(cache.compact)}</span>`
     : '';
   const timeAgo = formatRelativeTime(hasChildren ? familyNode!.activity : session.lastActivity);
-  const canonicalRootKey = canonical(opts.familyRootKey || sessionRefKey(session));
-  const isPinned = opts.familyPinned ?? options.pinned.some(pin =>
-    canonical(pin) === canonicalRootKey);
+  const canonicalRootKey = canonical(opts.familyRootKey || key);
+  const isPinned = opts.familyPinned ?? pinnedRoots.has(canonicalRootKey);
   const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin family' : 'Pin family to top'}">📌</button>`;
   const familyToggle = hasChildren
     ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}" title="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}"><span>${familyExpanded ? '▾' : '▸'}</span><small>${familyNode!.size - 1}</small></button>`
     : ((opts.familyDepth || 0) > 0 ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '');
   // Live rows only; the confirm/busy states read the module vars so a poll
   // re-render restores an armed confirm rather than silently clearing it.
-  const closeArmed = options.closeConfirm === sessionRefKey(session);
-  const closeBusy = options.closeBusy === sessionRefKey(session);
+  const closeArmed = options.closeConfirm === key;
+  const closeBusy = options.closeBusy === key;
   const detachClient = session.closeMode === 'client-only';
   const closeTitle = detachClient ? 'Detach client'
     : session.closeMode === 'owned-agent' ? 'Stop this agent and its children (transcript stays resumable)'
@@ -102,7 +114,9 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const closeBtn = session.isActive && sessionSupports(session, 'close')
     ? `<button class="session-close-btn${closeArmed ? ' confirm' : ''}" title="${closeArmed ? 'Tap again: ' : ''}${closeTitle}">${closeBusy ? '…' : closeArmed ? (detachClient ? 'detach?' : 'close?') : '✕'}</button>`
     : '';
-  const harnessBadge = renderHarnessBadge(session.harnessId, session.harnessLabel);
+  const badgeKey = JSON.stringify([session.harnessId, session.harnessLabel]);
+  let harnessBadge = badges.get(badgeKey);
+  if (harnessBadge === undefined) { harnessBadge = renderHarnessBadge(session.harnessId, session.harnessLabel); badges.set(badgeKey, harnessBadge); }
   // Provenance stamp from the routine ledger (server-side, presentation only,
   // like the parent hints): this session is one routine's run.
   const routineChip = session.routine
@@ -115,16 +129,20 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const cwdHint = (opts.pinnedRow || opts.showCwd) ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || '~'))}</span>` : '';
   // Rows that have left their workspace group (pinned, Recent, search) name
   // their host too — in the workspace tree the group header carries it.
-  const hostChip = (opts.pinnedRow || opts.showCwd) ? options.hostChip(session.host) : '';
+  let hostChip = '';
+  if (opts.pinnedRow || opts.showCwd) {
+    const host = session.host || null;
+    if (!hostChips.has(host)) hostChips.set(host, options.hostChip(host));
+    hostChip = hostChips.get(host)!;
+  }
   // Rows served from a host that stopped answering are last-known, not live.
-  const staleHost = options.hosts.some(host => (host.hostId || null) === (session.host || null) && hostIsDown(host)) ? ' stale-host' : '';
+  const staleHost = downHosts.has(session.host || null) ? ' stale-host' : '';
   // Server search attaches a snippet when a session matched on message
   // content the row's metadata doesn't show — render it so the match
   // doesn't look arbitrary. Only positive plain terms can cause a content
   // match, so only they get marked.
   const snippetLine = session.searchSnippet
-    ? `<div class="session-item-snippet">${highlightTokens(session.searchSnippet,
-        positiveQueryTokens(parseSessionQuery(options.query)))}</div>`
+    ? `<div class="session-item-snippet">${highlightTokens(session.searchSnippet, queryTokens)}</div>`
     : '';
   // Live sessions report their thinking level; historical rows have none to
   // show, so the chip simply doesn't render there.
@@ -132,7 +150,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
     ? `<span class="session-item-thinking" title="Thinking level: ${escapeHtml(session.thinkingLevel)}">${escapeHtml(session.thinkingLevel)}</span>`
     : '';
 
-  return `
+  const html = `
     <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}${staleHost}" data-id="${escapeHtml(session.id)}"${session.host ? ` data-host="${escapeHtml(session.host)}"` : ''}>
       <div class="session-item-header">
         ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
@@ -150,6 +168,11 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
       ${snippetLine}
     </div>
   `;
+  const occurrence = occurrences.get(key) || 0;
+  occurrences.set(key, occurrence + 1);
+  const rowKey = JSON.stringify([key, occurrence]);
+  rows.push({ key: rowKey, html });
+  return `<template data-sidebar-row="${escapeHtml(rowKey)}"></template>`;
 }
 
 function renderSessionFamily(node: SessionFamily<SessionEntry>, opts: FamilyOptions = {}, depth = 0, rootId = node.session.id,
@@ -213,7 +236,7 @@ function renderSessions() {
   // facets all keep working; only this render skips them.
   const sq = options.scope;
   const scopeParsed = sq ? parseSessionQuery(sq) : null;
-  const asksAutomation = queryAsksForAutomation(parseSessionQuery(options.query))
+  const asksAutomation = queryAsksForAutomation(parsedQuery)
     || (scopeParsed ? queryAsksForAutomation(scopeParsed) : false);
   let visible = showing, automationHidden = 0;
   if (!asksAutomation) {
@@ -229,10 +252,12 @@ function renderSessions() {
   // that response lands, narrow locally so typing feels instant.
   // `host:` is the exception: it never reached the server, so it is applied
   // here on top of what the server-filtered lists came back with (the
-  // debounce-window applyLocalFilter path evaluates it inline).
-  const queried = (options.query && options.queriedFor === options.query)
-    ? applyHostTerms(visible, options.query)
-    : applyLocalFilter(visible, options.query);
+  // debounce-window evaluation includes host terms).
+  const authoritative = !!options.query && options.queriedFor === options.query;
+  // Do not call applyLocalFilter: it scores/sorts, then this renderer must
+  // score/sort again after scopes and the server-score override.
+  const queried = authoritative ? applyHostTerms(visible, options.query)
+    : options.query ? visible.filter(session => evaluateSessionQuery(parsedQuery, session)) : visible;
   // Active scopes apply client-side on top of whatever the query kept —
   // metadata/date-only by design, so they behave identically on both tabs.
   const filtered = scopeParsed ? queried.filter(s => evaluateSessionQuery(scopeParsed, s)) : queried;
@@ -266,13 +291,17 @@ function renderSessions() {
     // the best matches across workspace/date buckets. The server's
     // searchScore counts transcript occurrences too, so it wins where present;
     // the interim local-filter pass scores metadata only. Recency breaks ties.
-    const parsed = parseSessionQuery(options.query);
     const ranked = filtered
-      .map(s => [s, s.searchScore ?? scoreSessionMatch(parsed, s)] as const)
-      .sort((a, b) => b[1] - a[1]
-        || new Date(b[0].lastActivity || 0).getTime() - new Date(a[0].lastActivity || 0).getTime());
+      .map(session => {
+        const localScore = authoritative ? 0 : scoreSessionMatch(parsedQuery, session);
+        return { session, localScore, score: session.searchScore ?? (authoritative ? scoreSessionMatch(parsedQuery, session) : localScore),
+          activity: new Date(session.lastActivity || 0).getTime() };
+      })
+      // Retain the local ordering of equal server scores/recencies during
+      // debounce, without running a separate metadata sort first.
+      .sort((a, b) => b.score - a.score || b.activity - a.activity || b.localScore - a.localScore);
     html += `<div class="session-segment ranked-segment">
-      ${ranked.map(([s]) => renderSessionItem(s, { showCwd: true })).join('')}
+      ${ranked.map(({ session }) => renderSessionItem(session, { showCwd: true })).join('')}
     </div>`;
   } else {
     const families = buildSessionFamilies(filtered);
@@ -306,7 +335,10 @@ function renderSessions() {
     html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;
   }
 
-  return { html, count: active.length + pending.length };
+  return { layout: html, rows, count: active.length + pending.length,
+    // String consumers (including the pure projection fixtures) retain the
+    // complete markup; the DOM controller only parses changed rows.
+    get html() { let index = 0; return html.replace(/<template data-sidebar-row="[^"]*"><\/template>/g, () => rows[index++].html); } };
 }
 
 /**

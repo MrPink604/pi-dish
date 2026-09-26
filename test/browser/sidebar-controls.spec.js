@@ -131,3 +131,75 @@ async function setup(page) {
     });
     (0, fixtures_js_1.expect)(result).toEqual({ closes: [], copied: [], selected: [], menu: false, confirm: null });
 });
+(0, fixtures_js_1.test)('sidebar updates retain keyboard focus and keep same-id peer cards independently actionable', async ({ page, fleet }) => {
+    await setup(page);
+    const result = await page.evaluate(() => {
+        const state = window.controlsState, controls = window.customSidebar;
+        state.setSessionLists([{ hostId: 'self', active: [{ id: 'same', name: 'Self work', cwd: '/repo', isActive: true }] },
+            { hostId: 'peer', active: [{ id: 'same', name: 'Peer work', cwd: '/repo', isActive: true }] }]);
+        const project = () => PiDishBrowser.renderSidebar({ ...state.sessions, selected: state.currentSession, tab: 'all', view: 'recent',
+            query: 'work', queriedFor: 'work', scope: '', indexing: false, contextMetric: 'percent', pending: [], selectedSpawn: null,
+            expanded: controls.expanded, collapsed: controls.collapsed, pinned: controls.pinned, roots: controls.familyRoots(),
+            closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], unread: () => false, hostChip: () => '' });
+        controls.mount();
+        controls.updateList(project());
+        const selfPin = fixtureElement(document.querySelector('[data-host="self"] .session-pin-btn'), 'self pin');
+        selfPin.focus();
+        state.patchSession('same', { name: 'Peer changed work' }, 'peer');
+        controls.updateList(project());
+        const focusAfterPeer = document.activeElement === selfPin;
+        state.patchSession('same', { name: 'Self changed work' }, 'self');
+        controls.updateList(project());
+        const focused = document.activeElement;
+        const focusAfterSelf = focused?.closest('.session-item')?.dataset.host === 'self'
+            && focused.classList.contains('session-pin-btn');
+        fixtureElement(document.querySelector('[data-host="peer"] .session-item-name'), 'peer card').click();
+        return { focusAfterPeer, focusAfterSelf, selected: window.controlsLog.selected,
+            names: Array.from(document.querySelectorAll('.session-item-name')).map(el => el.textContent) };
+    });
+    (0, fixtures_js_1.expect)(result).toEqual({ focusAfterPeer: true, focusAfterSelf: true, selected: [{ id: 'same', host: 'peer' }],
+        names: ['Self changed work', 'Peer changed work'] });
+    await page.keyboard.press('Enter');
+    (0, fixtures_js_1.expect)(await page.evaluate(() => [...window.customSidebar.pinned])).toEqual(['self same']);
+});
+(0, fixtures_js_1.test)('ranked sidebar updates reorder and remove rows without retiring an unaffected keyboard target', async ({ page, fleet }) => {
+    await setup(page);
+    const result = await page.evaluate(() => {
+        const state = window.controlsState, controls = window.customSidebar;
+        const rows = [{ id: 'a', name: 'work A', searchScore: 30 }, { id: 'b', name: 'work B', searchScore: 20 }, { id: 'c', name: 'work C', searchScore: 10 }];
+        const update = () => {
+            state.setSessionLists({ active: rows }, 'self');
+            controls.updateList(PiDishBrowser.renderSidebar({ ...state.sessions, selected: null, tab: 'all', view: 'recent', query: 'work',
+                queriedFor: 'work', scope: '', indexing: false, contextMetric: 'percent', pending: [], selectedSpawn: null,
+                expanded: controls.expanded, collapsed: controls.collapsed, pinned: controls.pinned, roots: controls.familyRoots(),
+                closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], unread: () => false, hostChip: () => '' }));
+        };
+        controls.mount();
+        update();
+        const pin = fixtureElement(document.querySelector('[data-id="b"] .session-pin-btn'), 'B pin');
+        pin.focus();
+        rows[2].searchScore = 40;
+        rows.shift();
+        update();
+        return { order: Array.from(document.querySelectorAll('.session-item')).map(el => el.dataset.id),
+            focusRetained: document.activeElement === pin };
+    });
+    (0, fixtures_js_1.expect)(result).toEqual({ order: ['c', 'b'], focusRetained: true });
+});
+(0, fixtures_js_1.test)('family roots follow replacement lineage without accepting lineage through metadata patches', async ({ page, fleet }) => {
+    await setup(page);
+    const result = await page.evaluate(() => {
+        const state = window.controlsState, controls = window.customSidebar;
+        state.setSessionLists({ active: [{ id: 'old', cwd: '/repo' }, { id: 'child', familyParentId: 'old', cwd: '/repo' }] }, 'self');
+        const before = controls.familyRoots().get('self child');
+        const patch = { name: 'Renamed', cwd: '/wrong', familyParentId: 'wrong' };
+        state.patchSession('child', patch, 'self');
+        const patched = controls.familyRoots().get('self child');
+        state.setSessionLists([{ hostId: 'self', active: [{ id: 'new', cwd: '/new' }, { id: 'child', familyParentId: 'new', cwd: '/new' }] },
+            { hostId: 'peer', active: [{ id: 'child', familyParentId: 'peer-parent', cwd: '/new' }] }]);
+        controls.togglePin('child', 'child', ['child'], 'self');
+        return { before, patched, after: controls.familyRoots().get('self child'), peer: controls.familyRoots().get('peer child'),
+            pinned: [...controls.pinned] };
+    });
+    (0, fixtures_js_1.expect)(result).toEqual({ before: 'self old', patched: 'self old', after: 'self new', peer: 'peer peer-parent', pinned: ['self new'] });
+});

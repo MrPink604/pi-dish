@@ -72,7 +72,7 @@ export interface CatalogModel extends Record<string, unknown> {
     name: string;
     selector?: string | null;
     contextWindow: number;
-    reasoning: boolean;
+    reasoning?: boolean;
     thinking?: string[] | null;
     pricing: ModelPricing | null;
     free: boolean;

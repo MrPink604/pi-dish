@@ -5,6 +5,7 @@ import { sessionKey, sessionRefKey, parseSessionKey } from './helper-identity';
 import { buildSessionFamilies } from './helper-sessions';
 import { escapeHtml } from '../core/helper-format';
 import type { SessionFamily } from './shared-helper-types';
+import type { SidebarProjection } from './sidebar-render';
 
 /** Sidebar preferences and row actions own their DOM, timers and captured host endpoints. */
 export function createSidebarControls(options: {
@@ -24,6 +25,59 @@ export function createSidebarControls(options: {
   const collapsed = new Set(read('pi-dish-collapsed-groups')), expanded = new Set(read('pi-dish-expanded-session-families'));
   let pinned = read('pi-dish-pinned-sessions');
   const render = () => { if (!disposed) options.render(); };
+  let layout = '', renderedRows = new Map<string, { html: string; element: HTMLElement }>();
+  /** Keep unchanged cards alive; parse only new/changed cards and small group headings. */
+  function updateList(projection: SidebarProjection) {
+    if (disposed || drag) return false;
+    const structureChanged = layout !== projection.layout;
+    const changed = projection.rows.filter(row => renderedRows.get(row.key)?.html !== row.html);
+    if (!structureChanged && !changed.length) return false;
+    closeMenu();
+    const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : null;
+    let focusKey: string | null = null;
+    if (focused) for (const [key, row] of renderedRows) if (row.element.contains(focused)) { focusKey = key; break; }
+    const focusSelector = focused && ['.session-pin-btn', '.session-close-btn', '.session-family-toggle'].find(selector => focused.matches(selector));
+    const template = document.createElement('template');
+    template.innerHTML = changed.map(row => row.html).join('');
+    const elements = Array.from(template.content.children) as HTMLElement[];
+    const replacements = new Map(changed.map((row, index) => [row.key, { html: row.html, element: elements[index] }]));
+    const next = new Map<string, { html: string; element: HTMLElement }>();
+    for (const row of projection.rows) next.set(row.key, replacements.get(row.key) || renderedRows.get(row.key)!);
+    const slotPattern = /<template data-sidebar-row="[^"]*"><\/template>/g;
+    const ranked = structureChanged && projection.layout.replace(slotPattern, '') === layout.replace(slotPattern, '')
+      ? list.querySelector<HTMLElement>('.ranked-segment') : null;
+    if (ranked) {
+      // Search ranking/filtering changes just this sequence, not its wrapper.
+      // Move the affected cards instead of detaching every matching result.
+      for (const [key, row] of renderedRows) if (!next.has(key)) row.element.remove();
+      for (const [key, row] of replacements) renderedRows.get(key)?.element.replaceWith(row.element);
+      let cursor = ranked.firstElementChild;
+      for (const row of next.values()) {
+        if (cursor && cursor !== row.element && cursor.nextElementSibling === row.element) {
+          const displaced = cursor; cursor = row.element; ranked.append(displaced);
+        }
+        if (row.element === cursor) cursor = cursor.nextElementSibling;
+        else ranked.insertBefore(row.element, cursor);
+      }
+      while (cursor) { const following = cursor.nextElementSibling; cursor.remove(); cursor = following; }
+    } else if (structureChanged) {
+      template.innerHTML = projection.layout;
+      for (const slot of Array.from(template.content.querySelectorAll<HTMLElement>('[data-sidebar-row]'))) {
+        slot.replaceWith(next.get(slot.dataset.sidebarRow!)!.element);
+      }
+      list.replaceChildren(template.content);
+    } else {
+      for (const [key, row] of replacements) renderedRows.get(key)!.element.replaceWith(row.element);
+    }
+    layout = projection.layout; renderedRows = next;
+    if (focusKey && focusSelector && document.activeElement !== focused) {
+      renderedRows.get(focusKey)?.element.querySelector<HTMLElement>(focusSelector)?.focus({ preventScroll: true });
+    } else if (focused?.matches('.workspace-new-btn') && document.activeElement !== focused) {
+      Array.from(list.querySelectorAll<HTMLElement>('.workspace-new-btn')).find(button =>
+        button.dataset.path === focused.dataset.path && button.dataset.host === focused.dataset.host)?.focus({ preventScroll: true });
+    }
+    return true;
+  }
   function savePins() { write('pi-dish-pinned-sessions', pinned); }
   function saveExpanded() { write('pi-dish-expanded-session-families', expanded); }
   function reloadPreferences() {
@@ -41,7 +95,11 @@ export function createSidebarControls(options: {
     if (disposed) return; const key = sessionKey(host, id); if (expanded.has(key)) expanded.delete(key); else expanded.add(key); saveExpanded(); render();
   }
   const sessions = () => [...sessionState.sessions.active, ...sessionState.sessions.previous];
+  let rootLists: SessionState['sessions'] | null = null, rootMap = new Map<string, string>();
   function familyRoots() {
+    // List replacement is the only writer of lineage/cwd. Activity and name
+    // patches retain the list object and cannot change family membership.
+    if (rootLists === sessionState.sessions) return rootMap;
     const rows = sessions(), roots = buildSessionFamilies(rows), map = new Map<string, string>();
     const visit = (node: SessionFamily<SessionEntry>, root: string) => { map.set(sessionRefKey(node.session), root); for (const child of node.children) visit(child, root); };
     for (const root of roots) visit(root, sessionRefKey(root.session));
@@ -54,6 +112,7 @@ export function createSidebarControls(options: {
       }
       map.set(member, canonical);
     }
+    rootLists = sessionState.sessions; rootMap = map;
     return map;
   }
   function reveal(id: string, host = sessionState.sessionHostId(id)) {
@@ -185,8 +244,8 @@ export function createSidebarControls(options: {
       event.preventDefault(); openMenu(session, event.clientX, event.clientY);
     }, { signal });
   }
-  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); }
-  return { mount, dispose, migrate, reloadPreferences, toggleGroup, toggleFamily, familyRoots, reveal, togglePin, closeClick, performClose, openMenu, closeMenu,
+  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); renderedRows.clear(); rootMap.clear(); rootLists = null; }
+  return { mount, dispose, updateList, migrate, reloadPreferences, toggleGroup, toggleFamily, familyRoots, reveal, togglePin, closeClick, performClose, openMenu, closeMenu,
     get menuOpen() { return !!menuOwner; }, get dragging() { return !!drag; }, get closeConfirm() { return confirm?.key || null; }, get closeBusy() { return busy?.key || null; },
     get collapsed(): ReadonlySet<string> { return collapsed; }, get expanded(): ReadonlySet<string> { return expanded; }, get pinned(): readonly string[] { return pinned; } };
 }

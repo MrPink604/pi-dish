@@ -5,6 +5,7 @@ import type * as PiSDK from '@earendil-works/pi-coding-agent' with { 'resolution
 import type * as PiHtmlExport from '../../node_modules/@earendil-works/pi-coding-agent/dist/core/export-html/index.js' with { 'resolution-mode': 'import' };
 import { extractTextContent, getToolSummary } from './helper-content';
 import { exportOmpSessionHtml } from './omp-export';
+import { getPiLaunchSpec } from './harness-launch-spec';
 
 export interface ModelPricing {
   input: number;
@@ -135,8 +136,6 @@ let _listModelsInFlight: Promise<string> | null = null;
 
 function runListModels(): Promise<string> {
   if (!_listModelsInFlight) {
-    // Lazy require: rpc-session is a sibling consumer of this module.
-    const { getPiLaunchSpec }: typeof import('./rpc-session') = require('./rpc-session.js');
     const run = (cmd: string, args: string[], env: NodeJS.ProcessEnv) => new Promise<string>((resolve, reject) => {
       execFile(cmd, args, { timeout: 10000, encoding: 'utf-8', env },
         (err, stdout, stderr) => (err ? reject(err) : resolve(stdout + (stderr || ''))));
@@ -283,8 +282,9 @@ export async function switchModel(sessionPath: string, provider: string, modelId
   return true;
 }
 
-// Cached commands list (extensions + skills + built-in)
-let _commandsCache: SessionCommand[] | null = null;
+// Only concurrent discovery is shared. Resource edits must be visible on the
+// next request; the browser owns its short-lived presentation cache.
+const commandsInFlight = new Map<string, Promise<SessionCommand[]>>();
 
 // Built-in interactive commands (handled by pi's interactive mode, not extensions)
 const BUILTIN_COMMANDS: SessionCommand[] = [
@@ -310,61 +310,34 @@ const BUILTIN_COMMANDS: SessionCommand[] = [
 
 // Get all slash commands: built-in + extension + skill
 export async function getCommands(): Promise<SessionCommand[]> {
-  if (_commandsCache) return _commandsCache;
-
   const sdk = await getSDK();
-
-  const { session } = await sdk.createAgentSession({
-    sessionManager: sdk.SessionManager.inMemory(),
-    modelRuntime: await getRuntime(),
-  });
-
-  const commands: SessionCommand[] = [];
-
-  // Built-in commands
-  commands.push(...BUILTIN_COMMANDS);
-
-  // Extension commands
-  try {
-    const runner = session.extensionRunner;
-    const extCmds = runner.getRegisteredCommands();
-    for (const cmd of extCmds) {
-      commands.push({
-        name: cmd.name,
-        description: cmd.description || '',
-        source: 'extension',
-      });
+  const cwd = process.cwd();
+  const agentDir = sdk.getAgentDir();
+  const key = JSON.stringify([cwd, agentDir, process.env]);
+  const pending = commandsInFlight.get(key);
+  if (pending) return pending;
+  const discovery = (async () => {
+    // Commands are resource metadata: constructing an AgentSession also
+    // resolves provider credentials/models, builds tools, and retains a live
+    // session that was never disposed. Use the same SDK loader without them.
+    const loader = new sdk.DefaultResourceLoader({ cwd, agentDir, noThemes: true, noContextFiles: true });
+    await loader.reload();
+    const commands: SessionCommand[] = [...BUILTIN_COMMANDS];
+    for (const extension of loader.getExtensions().extensions) {
+      for (const command of extension.commands.values()) {
+        commands.push({ name: command.name, description: command.description || '', source: 'extension' });
+      }
     }
-  } catch (e) {}
-
-  // Skills
-  try {
-    const rl = session.resourceLoader;
-    const skills = rl.getSkills();
-    for (const skill of skills.skills || []) {
-      commands.push({
-        name: 'skill:' + skill.name,
-        description: skill.description || '',
-        source: 'skill',
-      });
+    for (const skill of loader.getSkills().skills) {
+      commands.push({ name: 'skill:' + skill.name, description: skill.description || '', source: 'skill' });
     }
-  } catch (e) {}
-
-  // Prompt templates
-  try {
-    const rl = session.resourceLoader;
-    const prompts = rl.getPrompts();
-    for (const prompt of prompts.prompts || []) {
-      commands.push({
-        name: prompt.name,
-        description: prompt.description || '',
-        source: 'prompt',
-      });
+    for (const prompt of loader.getPrompts().prompts) {
+      commands.push({ name: prompt.name, description: prompt.description || '', source: 'prompt' });
     }
-  } catch (e) {}
-
-  _commandsCache = commands;
-  return commands;
+    return commands;
+  })().finally(() => { commandsInFlight.delete(key); });
+  commandsInFlight.set(key, discovery);
+  return discovery;
 }
 
 // Get session tree structure for /tree modal

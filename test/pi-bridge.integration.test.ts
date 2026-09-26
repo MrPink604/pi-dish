@@ -29,6 +29,7 @@ import net = require('node:net');
 import os = require('node:os');
 import path = require('node:path');
 import { spawn, execFileSync } from 'node:child_process';
+import { getPiLaunchSpec } from '../lib/harness-launch-spec.js';
 
 const { sseReader }: typeof import('./sse-reader') = require('./sse-reader')
 const { splitSessionRefContext }: typeof import('../lib/helper-refs') = require('../lib/helper-refs')
@@ -59,7 +60,6 @@ const QUEUE_IMAGE_B = {
 // Resolve the HOST pi like the server does. A bare `pi` here would hit
 // node_modules/.bin first (npm prepends it under `npm test`), silently
 // canary-ing the bundled — usually older — copy instead of the host.
-const { getPiLaunchSpec }: typeof import('../lib/rpc-session.js') = require('../lib/rpc-session.js')
 const piSpec = getPiLaunchSpec();
 // TMUX/TMUX_PANE are dropped: the bridge stamps them into its registry entry
 // and renames that window after the session, which would rename the pane

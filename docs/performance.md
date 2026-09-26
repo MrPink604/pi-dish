@@ -6,6 +6,10 @@ paths has a strict compatibility rule: rendered content, controls, streaming
 latency, scroll behavior, comments, publishing, and small-diff defaults must
 not regress.
 
+Later sidebar, deep-search, pricing and discovery measurements are recorded in
+the [interactivity performance audit](testing.md#interactivity-performance-audit).
+The dated baselines below describe their original implementations.
+
 ## Baseline and findings
 
 The functional baseline is green before optimization:

@@ -1,12 +1,8 @@
 // Generated from src/core/session-launch.ts; edit that source and run npm run build:core.
-import type { BridgeRegistryEntry, HarnessDescriptor, HarnessEnvironment, ProcessIdentity, ProcessIdentityInput } from './contracts';
+import type { BridgeRegistryEntry, HarnessDescriptor, ProcessIdentity, ProcessIdentityInput } from './contracts';
 import { LifecycleInterruption } from './session-ownership';
 import type { BeforeLifecycleAction } from './session-ownership';
 import * as tmux from './tmux';
-export interface HarnessLaunchSpec {
-    env: HarnessEnvironment;
-    argv: string[];
-}
 export interface HarnessLaunchTarget {
     type?: string;
     socket?: unknown;
@@ -109,6 +105,5 @@ export declare class LaunchError extends Error {
     constructor(message: string, status: number);
 }
 export declare const HEADLESS_TMUX_SERVER = "pi-dish";
-export declare function harnessLaunchSpec(descriptor: HarnessDescriptor): HarnessLaunchSpec;
 export declare function createSessionLaunch(observations: SessionLaunchObservations): SessionLaunch;
 export {};

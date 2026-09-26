@@ -103,6 +103,28 @@ test('harness models normalize native refs, thinking subsets and finite pricing'
   assert.equal(normalizeModels([{ id: 'bad', provider: 'p', contextWindow: {}, pricing: { input: '0', output: 0 } }])[0].pricing, null);
 });
 
+test('known non-reasoning models avoid enrichment while legacy missing ladders remain unknown', () => {
+  const models = normalizeModels([
+    { id: 'plain', provider: 'omp', reasoning: false },
+    { id: 'legacy', provider: 'omp' },
+    { id: 'reasoning', provider: 'omp', reasoning: true },
+  ]);
+  assert.deepEqual(models.map(model => model.reasoning), [false, undefined, true]);
+  assert.deepEqual(models.map(model => model.thinking), [null, null, null]);
+  assert.deepEqual(normalizeModels(models), models, 'normalization retains missing ladder metadata');
+});
+
+test('live native thinking efforts retain exact ladders without inventing unknown levels', () => {
+  const normalize = (thinking: unknown) => normalizeModels([{ id: 'm', provider: 'omp',
+    reasoning: true, thinking }])[0].thinking;
+  for (const mode of ['effort', 'budget', 'anthropic-adaptive', 'anthropic-budget-effort']) {
+    assert.deepEqual(normalize({ mode, efforts: ['low', 'high', 'max', 'off', 42] }), ['low', 'high', 'max']);
+  }
+  assert.deepEqual(normalize({ mode: 'effort', efforts: [] }), []);
+  assert.equal(normalize({ mode: 'effort', efforts: 'high' }), null);
+  assert.equal(normalize({ mode: 'future', budget: 1024 }), null);
+});
+
 test('catalog decoder preserves disabled models and rejects invalid row identities', () => {
   const input = [{ id: 'm', provider: 'p', enabled: false, extra: { opaque: true } }];
   const [model] = decodeModelCatalog(input);

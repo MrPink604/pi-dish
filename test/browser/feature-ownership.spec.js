@@ -95,7 +95,7 @@ const fixtures_js_1 = require("./fixtures.js");
                 if (!started)
                     throw new Error('Paging start resolver not initialized');
                 started();
-                return new Promise(resolve => { release = () => resolve(new Response(JSON.stringify({ messages: [], hasMore: false }))); });
+                return new Promise(resolve => { release = () => resolve(new Response(JSON.stringify({ messages: [{ role: 'user', index: 0, content: 'first second' }], firstIndex: 0, lastIndex: 0, hasMore: false }))); });
             }
             if (path.includes('/messages?limit=50'))
                 return Promise.resolve(new Response(JSON.stringify({ messages: [{ role: 'user', index: 10, content: 'baseline' }], firstIndex: 10, lastIndex: 10, hasMore: true, totalMessages: 11 })));
@@ -110,20 +110,72 @@ const fixtures_js_1 = require("./fixtures.js");
             fixtureApp.features.sessionSearch.close();
             fixtureApp.features.sessionSearch.open();
             const second = fixtureApp.features.sessionSearch.run('second');
-            await new Promise(resolve => setTimeout(resolve, 0));
+            while (fixtureApp.features.sessionSearch.state.query !== 'second' || !fixtureApp.features.sessionSearch.state.navigating) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
             const beforeRelease = { calls, navigating: fixtureApp.features.sessionSearch.state.navigating };
             if (!release)
                 throw new Error('Paging release resolver not initialized');
             release();
             await Promise.all([first, second]);
-            return { ...beforeRelease, settled: !fixtureApp.features.sessionSearch.state.navigating };
+            return { ...beforeRelease, settled: !fixtureApp.features.sessionSearch.state.navigating,
+                mark: document.querySelector('#messages mark.search-mark')?.textContent,
+                tail: !!document.querySelector('#messages [data-msg-index="10"]') };
         }
         finally {
             fixtureApp.features.apiTransport.request = fetch;
             fixtureApp.features.sessionSearch.close();
         }
     });
-    (0, fixtures_js_1.expect)(result).toEqual({ calls: 1, navigating: true, settled: true });
+    (0, fixtures_js_1.expect)(result).toEqual({ calls: 1, navigating: true, settled: true, mark: 'second', tail: true });
+});
+(0, fixtures_js_1.test)('a newer deep-search query paints before an older window returns and retires its DOM commit', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const result = await page.evaluate(async () => {
+        const fetch = fixtureApp.features.apiTransport.request;
+        let started, release;
+        const loading = new Promise(resolve => { started = resolve; });
+        fixtureApp.features.apiTransport.request = (host, path, init) => {
+            if (path.includes('/search?'))
+                return Promise.resolve(new Response(JSON.stringify({ matches: [{ index: path.includes('first') ? 0 : 70, role: 'user' }] })));
+            if (path.includes('/messages?limit=50&before=50')) {
+                started();
+                return new Promise(resolve => {
+                    release = () => resolve(new Response(JSON.stringify({
+                        messages: [{ role: 'user', index: 0, content: 'first stale result' }], firstIndex: 0, lastIndex: 0,
+                    })));
+                });
+            }
+            if (path.includes('/messages?limit=50&before='))
+                return Promise.resolve(new Response(JSON.stringify({
+                    messages: [{ role: 'user', index: 70, content: 'second current result' }], firstIndex: 70, lastIndex: 70,
+                })));
+            if (path.includes('/messages?limit=50'))
+                return Promise.resolve(new Response(JSON.stringify({
+                    messages: [{ role: 'user', index: 100, content: 'retained tail' }], firstIndex: 100, lastIndex: 100, hasMore: true, totalMessages: 101,
+                })));
+            return fetch(host, path, init);
+        };
+        try {
+            fixtureApp.features.transcriptController.deleteCached(fixtureApp.ports.composerDrafts.keyForSession(fixtureCurrentSession().id));
+            await fixtureApp.features.transcriptController.load();
+            fixtureApp.features.sessionSearch.open();
+            const first = fixtureApp.features.sessionSearch.run('first');
+            await loading;
+            await fixtureApp.features.sessionSearch.run('second');
+            const beforeRelease = document.querySelector('#messages .search-current')?.getAttribute('data-msg-index');
+            release();
+            await first;
+            return { beforeRelease, stale: !!document.querySelector('#messages [data-msg-index="0"]'),
+                mark: document.querySelector('#messages mark.search-mark')?.textContent,
+                last: fixtureApp.features.transcriptController.lastIndex };
+        }
+        finally {
+            fixtureApp.features.apiTransport.request = fetch;
+            fixtureApp.features.sessionSearch.close();
+        }
+    });
+    (0, fixtures_js_1.expect)(result).toEqual({ beforeRelease: '70', stale: false, mark: 'second', last: 100 });
 });
 (0, fixtures_js_1.test)('a search-result list reload cannot hijack a newer selection', async ({ page, fleet }) => {
     await fleet.select(fleet.peer, fixtures_js_1.CHILD);
