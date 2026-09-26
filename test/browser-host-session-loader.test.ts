@@ -12,7 +12,7 @@ import path = require('node:path');
 const vm: typeof import('node:vm') = require('node:vm')
 const { stripQueryField }: typeof import('../lib/helper-query') = require('../lib/helper-query')
 const { decodeSessionList }: typeof import('../lib/session-api') = require('../lib/session-api')
-const context = { URLSearchParams };
+const context = { URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
 assertBrowserApiContext(context);
 const { createHostSessionLoader, createSessionState, createSidebarLists, ApiHttpError } = context.PiDishBrowser;

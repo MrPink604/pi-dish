@@ -229,6 +229,7 @@ function fanoutHosts() {
 // self as the whole fleet and then remain permanently under-counted.
 let resolveHostFleetReady: () => void;
 const hostFleetReady = new Promise<void>(resolve => { resolveHostFleetReady = resolve; });
+let startDiscoveredHosts: (() => void) | null = null;
 const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscovery({
   request: (...args) => apiTransport.request(...args),
   requestSelf: () => fetch('/api/host'),
@@ -246,6 +247,12 @@ const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscover
   },
   onIdentified: (...args) => {
     if (hostDirectory.applyDescriptor(...args) && newSessionController.isOpen()) newSessionController.renderHosts();
+    pruneHostCaches();
+    renderHostsSection();
+    routinesController.updateButton();
+    composerSpeech.updateButton();
+    renderSessions();
+    startDiscoveredHosts?.();
   },
   onConnection: (host, event) => hostConnections.note(host, event),
   afterFleet: () => {
@@ -255,6 +262,7 @@ const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscover
     composerSpeech.updateButton();
     if (newSessionController.isOpen()) newSessionController.renderHosts();
     renderSessions();
+    startDiscoveredHosts?.();
   },
 });
 
@@ -448,20 +456,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!document.hidden) sidebarLists.refresh();
   });
 
-  // Bind interactions before awaiting the fleet: one slow peer must not leave
-  // already-published local rows, the composer or transcript controls inert.
-  // Who is serving us — and so which host stamps/keys the sessions below.
-  // Awaited before the first list load so client keys never straddle the
-  // bare/composite migration mid-render.
-  try {
-    await hostDiscovery.loadIdentity();
-    await hostDiscovery.loadFleet(); // peers this server knows about (404 on old servers)
-    await identifyHosts();  // and who the catalog's own entries actually are
-  } finally {
+  // Only self identity must precede list publication and client-key migration.
+  // Peer identification publishes independently; it is not a startup barrier.
+  await hostDiscovery.loadIdentity();
+  void hostDiscovery.loadFleet().finally(() => {
     resolveHostFleetReady();
-    routinesController.updateButton(); // capability-gated sidebar icon
-    composerSpeech.updateButton();      // …and the capability-gated composer mic
-  }
+    routinesController.updateButton();
+    composerSpeech.updateButton();
+  });
   loadConfig(); // feature flags (terminal) — fire-and-forget
   themesController.load(); // theme picker options + refresh custom-theme tokens
   sidebarQuery.updateView();
@@ -475,14 +477,43 @@ document.addEventListener('DOMContentLoaded', async () => {
   // The default Active view needs only live rows. Fetch history only when a
   // saved inactive session must be restored; opening All fetches it on demand.
   const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
-  await sidebarLists.load();
-  if (saved.sessionId && !sessionState.findSession(saved.sessionId, saved.hostId)) {
-    await sidebarLists.load(undefined, { withPrevious: true });
+  let restoring = false;
+  let restored = false;
+  async function restoreSavedSession() {
+    if (restoring || restored || !saved.sessionId || startupSelection !== sessionState.selectionGeneration) return;
+    const endpoint = hostEntryFor(saved.hostId);
+    if (!endpoint || (!endpoint.self && !endpoint.hostId)) return;
+    restoring = true;
+    try {
+      await sidebarLists.loadHost(saved.hostId);
+      if (startupSelection !== sessionState.selectionGeneration) return;
+      if (!sessionState.findSession(saved.sessionId, saved.hostId)) {
+        await sidebarLists.loadHost(saved.hostId, true);
+      }
+      if (startupSelection !== sessionState.selectionGeneration) return;
+      const found = sessionState.findSession(saved.sessionId, saved.hostId);
+      if (found) {
+        restored = true;
+        void sessionView.select(saved.sessionId, { host: found.host || null });
+      }
+    } finally { restoring = false; }
   }
-  if (saved.sessionId && startupSelection === sessionState.selectionGeneration) {
-    const found = sessionState.findSession(saved.sessionId, saved.hostId);
-    if (found) sessionView.select(saved.sessionId, { host: found.host || null });
-  }
+  const startedHosts = new Set<string>();
+  startDiscoveredHosts = () => {
+    const present = new Set<string>();
+    for (const host of pollableHosts()) {
+      if (!host.self && !host.hostId) continue;
+      const key = JSON.stringify([host.hostId, host.base, host.token]);
+      present.add(key);
+      if (startedHosts.has(key)) continue;
+      startedHosts.add(key);
+      void sidebarLists.loadHost(host.hostId || null, sidebarQuery.tab === 'all', sidebarQuery.query || undefined);
+    }
+    for (const key of startedHosts) if (!present.has(key)) startedHosts.delete(key);
+    void restoreSavedSession();
+  };
+  startDiscoveredHosts();
+  void identifyHosts();
   // Periodic refresh must preserve an in-flight server search, or the list
   // resets to unfiltered mid-search.
   sidebarLists.mount();

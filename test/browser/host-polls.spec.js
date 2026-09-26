@@ -29,3 +29,58 @@ const fixtures_js_1 = require("./fixtures.js");
     (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.sidebarLists.queriedFor)).toBe('new-poll');
     await (0, fixtures_js_1.expect)(fleet.row(fleet.peer)).toContainText('new peer result');
 });
+(0, fixtures_js_1.test)('saved peer restoration does not wait for a slow local list', async ({ page, fleet }) => {
+    await fleet.select(fleet.peer);
+    const held = [];
+    await page.route(`${fleet.self.base}/api/sessions?**`, route => { held.push(route); });
+    try {
+        await page.reload();
+        await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('peer root transcript');
+    }
+    finally {
+        await page.unroute(`${fleet.self.base}/api/sessions?**`);
+        await Promise.all(held.map(route => route.continue().catch(() => { })));
+    }
+});
+(0, fixtures_js_1.test)('startup restores the local saved transcript while peer identity and lists are held', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const held = [];
+    await page.route(`${fleet.peer.base}/api/host`, route => { held.push(route); });
+    await page.route(`${fleet.peer.base}/api/sessions?**`, route => { held.push(route); });
+    try {
+        await page.reload();
+        await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self root transcript');
+        (0, fixtures_js_1.expect)(held.length).toBeGreaterThan(0);
+    }
+    finally {
+        await page.unroute(`${fleet.peer.base}/api/host`);
+        await page.unroute(`${fleet.peer.base}/api/sessions?**`);
+        await Promise.all(held.map(route => route.continue().catch(() => { })));
+    }
+});
+(0, fixtures_js_1.test)('healthy search results finish locally while the pending peer stays identified', async ({ page, fleet }) => {
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    await page.route(`${fleet.peer.base}/api/sessions?**`, route => {
+        if (new URL(route.request().url()).searchParams.get('q') === 'root') {
+            release?.(route);
+            return;
+        }
+        return route.continue();
+    });
+    await page.locator('#filterInput').fill('root');
+    const peerRequest = await held;
+    try {
+        await (0, fixtures_js_1.expect)(fleet.row(fleet.self)).toBeVisible();
+        await (0, fixtures_js_1.expect)(page.locator('.sidebar-filter')).not.toHaveClass(/\bsearching\b/);
+        await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).toContainText('peer');
+        await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).not.toContainText('self —');
+        await peerRequest.fulfill({ json: { active: [], previous: [{ id: fixtures_js_1.ROOT, name: 'late peer root', harnessId: 'pi' }] } });
+        await (0, fixtures_js_1.expect)(fleet.row(fleet.peer)).toContainText('late peer root');
+        await (0, fixtures_js_1.expect)(page.locator('.sidebar-host-progress')).toBeHidden();
+    }
+    finally {
+        await page.unroute(`${fleet.peer.base}/api/sessions?**`);
+        await peerRequest.abort().catch(() => { });
+    }
+});

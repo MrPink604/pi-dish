@@ -26,4 +26,56 @@ test('a retired peer poll cannot mark the host blocked after a newer poll succee
   await expect(fleet.row(fleet.peer)).toContainText('new peer result');
 });
 
+test('saved peer restoration does not wait for a slow local list', async ({ page, fleet }) => {
+  await fleet.select(fleet.peer);
+  const held: Route[] = [];
+  await page.route(`${fleet.self.base}/api/sessions?**`, route => { held.push(route); });
+  try {
+    await page.reload();
+    await expect(page.locator('#messages')).toContainText('peer root transcript');
+  } finally {
+    await page.unroute(`${fleet.self.base}/api/sessions?**`);
+    await Promise.all(held.map(route => route.continue().catch(() => {})));
+  }
+});
+
+test('startup restores the local saved transcript while peer identity and lists are held', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const held: Route[] = [];
+  await page.route(`${fleet.peer.base}/api/host`, route => { held.push(route); });
+  await page.route(`${fleet.peer.base}/api/sessions?**`, route => { held.push(route); });
+  try {
+    await page.reload();
+    await expect(page.locator('#messages')).toContainText('self root transcript');
+    expect(held.length).toBeGreaterThan(0);
+  } finally {
+    await page.unroute(`${fleet.peer.base}/api/host`);
+    await page.unroute(`${fleet.peer.base}/api/sessions?**`);
+    await Promise.all(held.map(route => route.continue().catch(() => {})));
+  }
+});
+
+test('healthy search results finish locally while the pending peer stays identified', async ({ page, fleet }) => {
+  let release: ((route: Route) => void) | undefined;
+  const held = new Promise<Route>(resolve => { release = resolve; });
+  await page.route(`${fleet.peer.base}/api/sessions?**`, route => {
+    if (new URL(route.request().url()).searchParams.get('q') === 'root') { release?.(route); return; }
+    return route.continue();
+  });
+  await page.locator('#filterInput').fill('root');
+  const peerRequest = await held;
+  try {
+    await expect(fleet.row(fleet.self)).toBeVisible();
+    await expect(page.locator('.sidebar-filter')).not.toHaveClass(/\bsearching\b/);
+    await expect(page.locator('.sidebar-host-progress')).toContainText('peer');
+    await expect(page.locator('.sidebar-host-progress')).not.toContainText('self —');
+    await peerRequest.fulfill({ json: { active: [], previous: [{ id: ROOT, name: 'late peer root', harnessId: 'pi' }] } });
+    await expect(fleet.row(fleet.peer)).toContainText('late peer root');
+    await expect(page.locator('.sidebar-host-progress')).toBeHidden();
+  } finally {
+    await page.unroute(`${fleet.peer.base}/api/sessions?**`);
+    await peerRequest.abort().catch(() => {});
+  }
+});
+
 export {};

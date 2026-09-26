@@ -15948,6 +15948,25 @@ ${restored}`;
     const { document: document2, sessionState } = options2, api = createSessionApi(options2.request);
     let disposed = false, sequence = 0, indexing = false, queriedFor = "";
     let indexingTimer = null, pollTimer = null;
+    let progress = null;
+    const pendingHosts = /* @__PURE__ */ new Map();
+    function renderProgress() {
+      if (!progress) {
+        const filter = document2.querySelector(".sidebar-filter");
+        if (!filter) return;
+        progress = document2.createElement("div");
+        progress.className = "sidebar-host-progress";
+        progress.setAttribute("role", "status");
+        filter.after(progress);
+      }
+      progress.replaceChildren(...[...pendingHosts.values()].map((host) => {
+        const row = document2.createElement("div");
+        row.className = "host-offline-note";
+        row.textContent = `${hostDisplayLabel(host)} \u2014 loading sessions\u2026`;
+        return row;
+      }));
+      progress.hidden = pendingHosts.size === 0;
+    }
     function busy(value) {
       if (!disposed) document2.querySelector(".sidebar-filter")?.classList.toggle("searching", value);
     }
@@ -16014,21 +16033,38 @@ ${row.id}`;
       hosts.forEach((host, index) => loader.retainPublished(host, published[index]));
       noteAskBlocked(parts);
     }
+    async function loadOne(host, query, withPrevious, current) {
+      const key = hostKeyOf(host);
+      pendingHosts.set(key, host);
+      renderProgress();
+      try {
+        await loader.load(host, query, withPrevious, current);
+      } finally {
+        if (!disposed && current === sequence && pendingHosts.get(key) === host) {
+          pendingHosts.delete(key);
+          renderProgress();
+        }
+      }
+    }
     async function load(query, { withPrevious = options2.all() } = {}) {
       if (disposed) return;
       const current = ++sequence;
-      busy(true);
-      await Promise.allSettled(queryHosts(options2.pollable(), query || "").map((host) => loader.load(host, query, withPrevious, current)));
-      if (!disposed && current === sequence) busy(false);
+      busy(false);
+      pendingHosts.clear();
+      const hosts = queryHosts(options2.pollable(), query || "").filter((host) => host.self || host.hostId);
+      renderProgress();
+      await Promise.allSettled(hosts.map((host) => loadOne(host, query, withPrevious, current)));
     }
-    async function loadHost(hostId) {
+    async function loadHost(hostId, withPrevious = false, query) {
       if (disposed) return;
-      const host = options2.pollable().find((host2) => (host2.hostId || null) === hostId);
-      if (host) await loader.load(host, void 0, false, sequence);
+      const host = queryHosts(options2.pollable(), query || "").find((host2) => hostId ? host2.hostId === hostId : host2.self);
+      if (host) await loadOne(host, query, withPrevious, sequence);
     }
     function invalidate() {
       sequence++;
       loader.retireRequests();
+      pendingHosts.clear();
+      renderProgress();
     }
     function refresh() {
       if (disposed) return Promise.resolve();
@@ -16045,10 +16081,13 @@ ${row.id}`;
       busy(false);
       disposed = true;
       sequence++;
-      if (pollTimer) clearInterval(pollTimer);
-      if (indexingTimer) clearTimeout(indexingTimer);
+      clearInterval(pollTimer ?? void 0);
+      clearTimeout(indexingTimer ?? void 0);
       pollTimer = indexingTimer = null;
       loader.prune(/* @__PURE__ */ new Set());
+      pendingHosts.clear();
+      progress?.remove();
+      progress = null;
     }
     return { loader, load, loadHost, refresh, publish, busy, invalidate, mount, dispose, get indexing() {
       return indexing;

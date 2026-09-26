@@ -1231,8 +1231,16 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   self/catalog/fleet state and source mutations. Its public views are readonly;
   catalog saves preserve unchanged source objects and explicit replacements
   retire them. `src/browser/host-discovery.ts` owns descriptor/fleet request
-  lifetimes and refresh timing. The app supplies storage and rendering callbacks. `src/browser/host-settings.ts`
-  owns the settings rows/form, token/removal actions and add-host validation.
+  lifetimes and refresh timing. The app supplies storage and rendering callbacks.
+  Startup awaits only self identity before publishing sessions. Fleet publication
+  does not block startup; newly identified hosts load independently. Explicit fleet
+  refresh callers still await descriptor completion for capability-sensitive views.
+  Saved-session restoration reads only its owning host (active, then history if
+  needed) and checks the captured selection generation before selecting. Unrelated
+  host requests cannot hold restoration or prevent polling from starting.
+  Sidebar request progress names pending hosts; the global filter spinner covers
+  only debounce, not the slowest remote. Query retirement clears old progress.
+  `src/browser/host-settings.ts` owns the settings rows/form, token/removal actions and add-host validation.
   Validation captures a view and attempt; form edits, resubmission and closing
   settings retire pending responses and body reads before they can publish.
   Mount/unmount and row replacement dispose their listeners. Peer requests capture the originating

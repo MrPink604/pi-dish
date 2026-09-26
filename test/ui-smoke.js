@@ -2564,6 +2564,7 @@ let remoteHost = null;
                     select.dispatchEvent(new Event('change'));
                     fixtureApp.ports.appBindings.actions.closeSettingsModal(new Event('click'), document.body);
                 });
+                await desktop.waitForFunction(selector => /tok$/.test(document.querySelector(`${selector} .session-item-context`)?.textContent || ''), rowSel);
                 const tok = await desktop.locator(`${rowSel} .session-item-context`).textContent();
                 check(/tok$/.test(tok || ''), `the token metric replaces the percent (got ${tok})`);
                 await desktop.evaluate(() => {

@@ -385,3 +385,24 @@ read or a hard event-loop stall bound. Native cold OMP startup/catalog work and
 mandatory process/socket ownership proofs remain. Whole-transcript rich-text
 finalization previously measured 2/7/16 ms at 200/1,000/2,000 nodes and is not
 invoked for every streaming delta, so it was left unchanged.
+
+### Slow-host startup and sidebar isolation
+
+Startup no longer awaits every peer descriptor or the entire session-list batch.
+Self identity still precedes client-key migration and publication; remote discovery
+continues independently. Saved-session restoration fetches only the owning host,
+including history when necessary, without overriding a newer user selection.
+Explicit fleet refreshes retain their descriptor-completion contract for
+capability-sensitive settings and recovery views; startup does not await them.
+Hosts without an identity cannot publish rows under the local host.
+
+Sidebar searches name each pending host instead of keeping the global filter
+spinner active until the slowest response. Healthy-host results remain usable,
+late responses still publish, and retired query completions cannot clear current
+progress. Existing request deadlines and cached-row fallback remain unchanged.
+
+`test/browser/host-polls.spec.js` covers local restoration with peer identity and
+lists held, peer restoration with local lists held, and progressive search while
+a peer remains pending. A production-asset browser smoke also displayed and
+searched the local transcript with peer requests deliberately unresolved, no
+global busy indicator and no page errors.
