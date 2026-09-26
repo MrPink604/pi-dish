@@ -23,13 +23,14 @@ interface FakeHostOptions {
   nestedSubsession?: boolean;
   askDialog?: boolean;
   askThrow?: boolean;
+  askTrigger?: boolean;
   checkUiRestore?: boolean;
   nativeProjection?: unknown;
   lifecycle?: boolean;
 }
 async function startFakeHost(hasCompact: boolean, {
   swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false,
-  checkUiRestore = false, nativeProjection = null, lifecycle = false,
+  askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false,
 }: FakeHostOptions = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
   const home = path.join(root, 'home');
@@ -40,6 +41,7 @@ async function startFakeHost(hasCompact: boolean, {
     : path.join(root, 'fake-omp.jsonl');
   const callFile = path.join(root, 'compact-call.json');
   const askResultFile = path.join(root, 'ask-result.json');
+  const askTriggerFile = path.join(root, 'ask-trigger');
   const uiRestoreResultFile = path.join(root, 'ui-restore-result.json');
   const lifecycleFile = path.join(root, 'lifecycle.json');
   fs.writeFileSync(lifecycleFile, 'null');
@@ -64,6 +66,7 @@ async function startFakeHost(hasCompact: boolean, {
       FAKE_OMP_COMPACT_SWALLOW: swallowOutcome ? '1' : '0',
       FAKE_OMP_ASK_RESULT: askDialog ? askResultFile : '',
       FAKE_OMP_ASK_THROW: askThrow ? '1' : '0',
+      FAKE_OMP_ASK_TRIGGER_FILE: askDialog && askTrigger ? askTriggerFile : '',
       FAKE_OMP_UI_RESTORE_RESULT: checkUiRestore ? uiRestoreResultFile : '',
       FAKE_OMP_NATIVE_PROJECTION: nativeProjection ? JSON.stringify(nativeProjection) : '',
       FAKE_OMP_LIFECYCLE_FILE: lifecycle ? lifecycleFile : '',
@@ -93,7 +96,7 @@ async function startFakeHost(hasCompact: boolean, {
   const registryPath = path.join(registryDir, registryName);
   const claim = bridgeEntry(record(JSON.parse(fs.readFileSync(registryPath, 'utf8'))));
   return {
-    root, callFile, askResultFile, lifecycleFile, claim, child,
+    root, callFile, askResultFile, askTriggerFile, lifecycleFile, claim, child,
     async close() {
       child.kill('SIGTERM');
       await new Promise<void>(resolve => child.once('exit', () => resolve()));
@@ -163,6 +166,28 @@ test('OMP bridge projects the native ask tool through extension UI', async () =>
       try { return JSON.parse(fs.readFileSync(host.askResultFile, 'utf8')); } catch { return null; }
     });
     assert.deepEqual(received, answer);
+  } finally {
+    session.close();
+    await host.close();
+  }
+});
+
+test('OMP bridge delivers a native ask raised after connect to the live client', async () => {
+  // The ask fires only once a client is already connected, so the connect-time
+  // replay cannot deliver it — only the broadcast to live clients can. This
+  // guards the web dialog against regressing to registry-only visibility.
+  const host = await startFakeHost(false, { askDialog: true, askTrigger: true });
+  const session = new BridgeSession(host.claim);
+  const requests: Record<string, unknown>[] = [];
+  session.on('extension_ui_request', (request: unknown) => { if (request && typeof request === 'object' && !Array.isArray(request)) requests.push(record(request)); });
+  try {
+    await session.connect();
+    fs.writeFileSync(host.askTriggerFile, '1');
+    const request = await waitFor(() => requests.find(candidate => candidate.method === 'ask'));
+    const question = record(present(records(request.questions)[0]));
+    assert.equal(question.question, 'Deploy now?');
+    assert.equal(requests.filter(candidate => candidate.method === 'ask').length, 1,
+      'transient OMP handler proxies do not accumulate ask wrappers');
   } finally {
     session.close();
     await host.close();

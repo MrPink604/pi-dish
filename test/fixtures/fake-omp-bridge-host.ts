@@ -216,29 +216,44 @@ bridgeFactory(pi);
 await emit('session_start', {}, ctx);
 
 if (process.env.FAKE_OMP_ASK_RESULT) {
-  // Exercise several event-scoped UI proxies before the native tool reaches
-  // the shared UI. A bridge must not add another wrapper for each proxy.
-  for (let index = 0; index < 8; index++) {
-    await emit('tool_execution_update', { toolCallId: `warmup-${index}`, toolName: 'read' }, ctx);
+  const fireAsk = async (): Promise<void> => {
+    // Exercise several event-scoped UI proxies before the native tool reaches
+    // the shared UI. A bridge must not add another wrapper for each proxy.
+    for (let index = 0; index < 8; index++) {
+      await emit('tool_execution_update', { toolCallId: `warmup-${index}`, toolName: 'read' }, ctx);
+    }
+    void Promise.resolve().then(() => ctx.ui.askDialog([
+      {
+        id: 'deploy',
+        question: 'Deploy now?',
+        header: 'Release',
+        options: [
+          { label: 'Yes', description: 'Ship the current build.' },
+          { label: 'No', description: 'Keep it staged.' },
+        ],
+        recommended: 0,
+      },
+    ])).then((result: unknown) => {
+      fs.writeFileSync(process.env.FAKE_OMP_ASK_RESULT!, JSON.stringify(result) ?? 'null');
+    }, (error: unknown) => {
+      fs.writeFileSync(process.env.FAKE_OMP_ASK_RESULT!, JSON.stringify({
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    });
+  };
+  const askTrigger = process.env.FAKE_OMP_ASK_TRIGGER_FILE;
+  if (askTrigger) {
+    // Deferred ask: the driver writes the trigger only after its socket client
+    // is connected, so the request can only arrive through the live broadcast
+    // — the connect-time replay cannot satisfy it.
+    const poll = setInterval(() => {
+      if (!fs.existsSync(askTrigger)) return;
+      clearInterval(poll);
+      void fireAsk();
+    }, 20);
+  } else {
+    void fireAsk();
   }
-  void Promise.resolve().then(() => ctx.ui.askDialog([
-    {
-      id: 'deploy',
-      question: 'Deploy now?',
-      header: 'Release',
-      options: [
-        { label: 'Yes', description: 'Ship the current build.' },
-        { label: 'No', description: 'Keep it staged.' },
-      ],
-      recommended: 0,
-    },
-  ])).then((result: unknown) => {
-    fs.writeFileSync(process.env.FAKE_OMP_ASK_RESULT!, JSON.stringify(result) ?? 'null');
-  }, (error: unknown) => {
-    fs.writeFileSync(process.env.FAKE_OMP_ASK_RESULT!, JSON.stringify({
-      error: error instanceof Error ? error.message : String(error),
-    }));
-  });
 }
 
 for (let attempt = 0; attempt < 100; attempt++) {

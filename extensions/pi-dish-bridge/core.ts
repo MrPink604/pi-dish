@@ -1332,9 +1332,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
         });
       });
       dialogRequests.set(req.id, req);
-      // The catalog reads askPending from this registry entry, so a session
-      // blocked on the native ask tool is visible without a socket client.
+      // Both notifications are needed: the registry entry drives the catalog's
+      // askPending flag without a socket client, and the broadcast delivers
+      // the request to connected pi-dish clients so the ask dialog renders.
       writeRegistry();
+      try { emitExtensionUIRequest(req); } catch {}
       let local: unknown;
       try {
         local = Reflect.apply(originalAskDialog, this, [questions, withDismissSignal(options, dismiss)]);
