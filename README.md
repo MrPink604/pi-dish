@@ -627,10 +627,14 @@ In a multi-host fleet, one host can front the others' pages and share links:
 publishing or sharing through its `/hosts/<name>` proxy (which is what the UI
 does when you're viewing a peer's session) records the token and hands back
 that host's own link, and `/share` + `/page` there stream the content from
-whichever host owns it. Agents do the same with the pages skill's `--via
-<hub>` (or a `PI_DISH_PUBLIC_VIA` default), always through their own server.
-Revoking on the owning host kills the link everywhere; `DELETE
-/api/fleet-artifacts/<token>` on the front-door host only stops it fronting.
+whichever host owns it. A share or page created on a peer any other way (its
+own UI, OMP's `/share`, an agent's plain `publish`) is discovered on first
+request: the front door asks its configured remotes which one owns the token.
+Agents can still use the pages skill's `--via <hub>` (or a
+`PI_DISH_PUBLIC_VIA` default), always through their own server, to get the
+hub's link back immediately. Revoking on the owning host kills the link
+everywhere; `DELETE /api/fleet-artifacts/<token>` on the front-door host only
+stops it fronting (and keeps it from being rediscovered).
 
 ### Anchored comments
 

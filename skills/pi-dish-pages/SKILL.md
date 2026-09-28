@@ -50,7 +50,9 @@ refreshes; do not re-register.
 ## Publishing through a fleet hub
 
 In a multi-host fleet one host is the public front door (a hub). A page still
-lives on *this* host's disk; the hub only fronts it:
+lives on *this* host's disk; the hub only fronts it. Any hub that lists this
+host as a remote finds a published page on its own at `/page/<token>` — `--via`
+is not needed for reachability. Use it to get the hub's link back right away:
 
 ```bash
 node ~/.pi/agent/skills/pi-dish-pages/scripts/pi-dish-pages.js publish \
@@ -78,7 +80,8 @@ so and the local link still stands.
 - Unpublish with `curl -X DELETE "$PI_DISH_URL/api/pages/<token>"`. That kills
   the page everywhere, including through any hub. Removing only the hub's
   mapping (`DELETE /api/fleet-artifacts/<token>` on the hub) ends public
-  reachability while the page stays live on this host.
+  reachability through that hub — it is not rediscovered — while the page
+  stays live on this host.
 - Anyone who can reach the pi-dish server (and, if configured, its public
   share listener or a hub fronting it) can view the page. Don't publish
   secrets.

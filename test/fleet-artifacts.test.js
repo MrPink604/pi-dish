@@ -14,8 +14,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
  * to the *hub's* public base, not the peer's.
  *
  * A third "counter" remote is a plain http server that only answers
- * /api/host and tallies everything else — that is how "an unmapped token
- * never contacts a peer" is asserted directly rather than by timing alone.
+ * /api/host and tallies everything else (with its hop header) — that is how
+ * discovery's traffic (one probe per unknown token, none from the negative
+ * cache, tombstones or hop requests) is asserted directly rather than by
+ * timing alone.
  *
  * Run with: npm test
  */
@@ -176,7 +178,7 @@ test('boot a peer, a counting remote and two hubs that know about them', async (
             res.writeHead(200, { 'content-type': 'application/json' });
             return res.end(JSON.stringify({ hostId: '22222222-2222-4222-8222-222222222222', label: 'counter', version: '9.9.9', capabilities: {} }));
         }
-        counterHits.push(`${req.method} ${req.url}`);
+        counterHits.push(`${req.method} ${req.url} hop=${req.headers['x-pi-dish-artifact-hop'] ?? '-'}`);
         res.writeHead(404, { 'content-type': 'text/plain' });
         res.end('Not found');
     });
@@ -194,6 +196,36 @@ test('boot a peer, a counting remote and two hubs that know about them', async (
     const hubPubHome = makeHome();
     writeSettings(hubPubHome, { hostLabel: 'hubpub', remotes });
     hubPub = await boot(hubPubHome, { PI_DISH_SHARE_BASE_URL: HUB_BASE_URL });
+});
+// --- store: suppression tombstones --------------------------------------
+test('the store keeps explicit unmaps as tombstones only record() lifts', () => {
+    const store = require('../lib/fleet-artifacts');
+    const previousHome = process.env.HOME;
+    process.env.HOME = makeHome();
+    try {
+        assert.ok(store.record('tok-a', 'peer', 'page'));
+        assert.equal(store.suppress('tok-a'), true, 'a live mapping existed');
+        assert.equal(store.get('tok-a'), null);
+        assert.equal(store.isSuppressed('tok-a'), true);
+        assert.deepEqual(store.listByHost(), {}, 'tombstones are not listed');
+        assert.equal(store.remove('tok-a', 'peer'), false, 'an owner-revoke prune leaves the tombstone');
+        assert.equal(store.remove('tok-a'), false);
+        assert.equal(store.isSuppressed('tok-a'), true);
+        assert.equal(store.suppress('tok-a'), false, 'nothing live left to unmap');
+        assert.equal(store.suppress('tok-b'), false, 'suppressing an unknown token still sticks');
+        assert.equal(store.isSuppressed('tok-b'), true);
+        assert.equal(store.record('tok-a', 'peer', 'share')?.kind, 'share');
+        assert.equal(store.isSuppressed('tok-a'), false, 'an explicit record lifts the tombstone');
+        assert.equal(store.get('tok-a')?.host, 'peer');
+        assert.equal(store.remove('tok-a', 'other'), false);
+        assert.equal(store.remove('tok-a', 'peer'), true);
+        assert.equal(store.get('tok-a'), null);
+        assert.equal(store.isSuppressed('tok-a'), false);
+        assert.equal(store.suppress('not a token'), false);
+    }
+    finally {
+        process.env.HOME = previousHome;
+    }
 });
 // --- session export through the hub proxy --------------------------------
 test('a session export downloads through the proxy, and only through it', async () => {
@@ -382,21 +414,62 @@ test('the hub\'s main app makes a fleet page commentable; its public listener do
     assert.ok(publicHtml.includes('peer page body'));
     assert.equal(publicHtml.includes('artifact-comments.js'), false, 'the public listener serves raw page HTML');
 });
-test('an unmapped token is an instant bare 404 that contacts nobody', async () => {
+test('an unknown token is a bare 404 after one probe, then cached as absent', async () => {
     counterHits.length = 0;
-    const started = Date.now();
-    for (const url of [
+    const urls = [
         `${hub.base}/share/definitely-not-a-token`,
         `${hub.base}/page/definitely-not-a-token/`,
         `${hubShareBase}/share/definitely-not-a-token`,
         `${hubShareBase}/page/definitely-not-a-token/index.html`,
-    ]) {
+    ];
+    const started = Date.now();
+    for (const url of urls) {
         const res = await fetch(url);
         assert.equal(res.status, 404, url);
         assert.equal((await res.text()).trim(), 'Not found');
     }
-    assert.ok(Date.now() - started < 1000, 'unknown tokens must not wait on the fleet');
-    assert.deepEqual(counterHits, [], 'no remote was asked about an unmapped token');
+    assert.ok(Date.now() - started < 3000, 'unknown tokens answer as fast as the fleet does');
+    // One HEAD of each kind's own document, marked as a hop; the public
+    // listener shares the main app's negative cache.
+    assert.deepEqual(counterHits.sort(), [
+        'HEAD /page/definitely-not-a-token hop=1',
+        'HEAD /share/definitely-not-a-token hop=1',
+    ]);
+    counterHits.length = 0;
+    for (const url of urls) {
+        const res = await fetch(url);
+        assert.equal(res.status, 404, url);
+        await res.text();
+    }
+    assert.deepEqual(counterHits, [], 'a token nobody claimed is not re-probed within the negative-cache window');
+});
+test('a request carrying the hop header answers locally and contacts nobody', async () => {
+    // A page published straight on the peer — the hub has never heard of it.
+    const dir = writePageDir(peer.home, 'hopcheck', 'hop check body');
+    const page = await json(await fetch(`${peer.base}/api/pages`, authed(PEER_TOKEN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: dir, title: 'Hop check' }),
+    })));
+    const token = String(page.token);
+    counterHits.length = 0;
+    const hop = { headers: { 'x-pi-dish-artifact-hop': '1' } };
+    for (const url of [`${hub.base}/page/${token}/`, `${hubShareBase}/page/${token}/`]) {
+        const res = await fetch(url, hop);
+        assert.equal(res.status, 404, url);
+        assert.equal((await res.text()).trim(), 'Not found');
+    }
+    // …and a mapped token is not followed either.
+    const mappedRes = await fetch(`${hub.base}/share/${shareToken}`, hop);
+    assert.equal(mappedRes.status, 404);
+    await mappedRes.text();
+    assert.deepEqual(counterHits, [], 'a hop request triggers no discovery');
+    const artifactBody = await json(await fetch(`${hub.base}/api/fleet-artifacts`));
+    assert.equal((0, test_types_js_1.records)(artifactBody.artifacts).some(artifact => artifact.token === token), false, 'nothing was discovered');
+    // Without the header the same token is discovered normally.
+    const served = await fetch(`${hub.base}/page/${token}/`);
+    assert.equal(served.status, 200);
+    assert.ok((await served.text()).includes('hop check body'));
 });
 // --- comments on a fleet page --------------------------------------------
 test('a comment on a fleet page files on the peer, where its agent reads it', async () => {
@@ -480,11 +553,95 @@ test('the hub can unmap an artifact without touching the owner\'s copy', async (
     assert.equal((await fetch(`${hub.base}/page/${page.token}/`)).status, 200);
     const removed = await json(await fetch(`${hub.base}/api/fleet-artifacts/${page.token}`, { method: 'DELETE' }));
     assert.equal(removed.revoked, true);
-    assert.equal((await fetch(`${hub.base}/page/${page.token}/`)).status, 404, 'public reachability ended');
+    const artifactBody = await json(await fetch(`${hub.base}/api/fleet-artifacts`));
+    assert.equal((0, test_types_js_1.records)(artifactBody.artifacts).some(artifact => artifact.token === page.token), false, 'the tombstone is not listed');
+    // The unmap sticks: discovery must not bring it back.
+    counterHits.length = 0;
+    for (let i = 0; i < 2; i++) {
+        for (const url of [`${hub.base}/page/${page.token}/`, `${hub.base}/page/${page.token}`, `${hubShareBase}/page/${page.token}/`]) {
+            const res = await fetch(url, { redirect: 'manual' });
+            assert.equal(res.status, 404, `public reachability ended: ${url}`);
+            await res.text();
+        }
+    }
+    assert.deepEqual(counterHits, [], 'an unmapped token is never rediscovered');
+    const stillGone = await json(await fetch(`${hub.base}/api/fleet-artifacts`));
+    assert.equal((0, test_types_js_1.records)(stillGone.artifacts).some(artifact => artifact.token === page.token), false);
+    const again = await json(await fetch(`${hub.base}/api/fleet-artifacts/${page.token}`, { method: 'DELETE' }));
+    assert.equal(again.revoked, false, 'nothing live was left to unmap');
     // The page itself is untouched on the host that owns it.
     const onOwner = await fetch(`${peer.base}/page/${page.token}/`);
     assert.equal(onOwner.status, 200);
     assert.ok((await onOwner.text()).includes('peer page body'));
+    // Explicitly re-creating it through the proxy fronts it again.
+    const recreated = await json(await fetch(`${hub.base}/hosts/peer/api/pages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: pageDir, title: 'Peer plan again', sessionId: PEER_SESSION_ID }),
+    }));
+    assert.equal(recreated.token, page.token);
+    const refronted = await fetch(`${hub.base}/page/${page.token}/`);
+    assert.equal(refronted.status, 200);
+    assert.ok((await refronted.text()).includes('peer page body'));
+});
+// --- discovery: artifacts created on the peer by any route ---------------
+async function assertDiscovered(token, kind) {
+    const artifactBody = await json(await fetch(`${hub.base}/api/fleet-artifacts`));
+    const entry = (0, test_types_js_1.present)((0, test_types_js_1.records)(artifactBody.artifacts).find(artifact => artifact.token === token));
+    assert.equal(entry.host, 'peer');
+    assert.equal(entry.kind, kind);
+}
+test('a share created directly on the peer is discovered and served by the hub', async () => {
+    // The share from earlier was revoked above, so this mints a fresh token the
+    // hub has never seen — created on the peer, not through the hub.
+    const created = await json(await fetch(`${peer.base}/api/sessions/${PEER_SESSION_ID}/share`, authed(PEER_TOKEN, { method: 'POST' })));
+    const token = String(created.token);
+    assert.notEqual(token, shareToken);
+    for (const base of [hub.base, hubShareBase]) {
+        const res = await fetch(`${base}/share/${token}`);
+        assert.equal(res.status, 200, base);
+        const html = await res.text();
+        const payload = Buffer.from((0, test_types_js_1.present)((0, test_types_js_1.present)(html.match(/id="session-data"[^>]*>([^<]+)</))[1]), 'base64').toString('utf8');
+        assert.ok(payload.includes('peer fixture answer'), 'the peer\'s session came through');
+    }
+    await assertDiscovered(token, 'share');
+});
+test('a page published directly on the peer is discovered, with its assets and redirect', async () => {
+    const dir = writePageDir(peer.home, 'direct', 'direct peer page');
+    const page = await json(await fetch(`${peer.base}/api/pages`, authed(PEER_TOKEN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: dir, title: 'Direct' }),
+    })));
+    const token = String(page.token);
+    // The very first request is the bare form: discovery must accept the
+    // owner's redirect as a claim and relay it.
+    const bare = await fetch(`${hubShareBase}/page/${token}`, { redirect: 'manual' });
+    assert.equal(bare.status, 302);
+    assert.equal(bare.headers.get('location'), `/page/${token}/`);
+    await bare.text();
+    for (const base of [hub.base, hubShareBase]) {
+        const index = await fetch(`${base}/page/${token}/`);
+        assert.equal(index.status, 200, base);
+        assert.ok((await index.text()).includes('direct peer page'));
+        const asset = await fetch(`${base}/page/${token}/style.css`);
+        assert.equal(asset.status, 200);
+        assert.ok((await asset.text()).includes('peer-asset-color'));
+    }
+    await assertDiscovered(token, 'page');
+});
+test('an OMP-style share imported on the peer is discovered by the hub', async () => {
+    const html = `<html><script id='session-data'>${Buffer.from(JSON.stringify({ header: { id: 'omp-fleet-import' }, entries: [] })).toString('base64')}</script></html>`;
+    const imported = await fetch(`${peer.base}/api/shares/import`, authed(PEER_TOKEN, {
+        method: 'POST', headers: { 'Content-Type': 'text/html' }, body: html,
+    }));
+    const result = await json(imported);
+    assert.equal(imported.status, 200, JSON.stringify(result));
+    const token = String(result.token);
+    const res = await fetch(`${hubShareBase}/share/${token}`);
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), html, 'the imported snapshot is relayed verbatim');
+    await assertDiscovered(token, 'share');
 });
 // --- the pages skill's --via flow ----------------------------------------
 //

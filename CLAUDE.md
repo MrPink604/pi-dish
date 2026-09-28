@@ -1326,14 +1326,32 @@ createdAt } }`, `host` being a remote *name* from the fleet map — a mapping is
 reachability, never authority. `/share/:token` and `/page/:token(/*)` check
 the local registries first and fall back to a stream proxy from the owner
 (`PublicArtifactRelay.serve` in `src/core/relay-handlers.ts`), on the main app **and** the `PI_DISH_SHARE_PORT`
-listener; that listener still mounts no `/api` and no `/hosts`. An unmapped
-token stays a bare, instant 404 — the hub never probes peers for tokens it
-wasn't told about. The owner's 404 on the token's own document (not on a
-missing asset under a live page) prunes the mapping lazily; `DELETE
-/api/fleet-artifacts/:token` ends public reachability without touching the
-owner's copy.
+listener; that listener still mounts no `/api` and no `/hosts`. The owner's
+404 on the token's own document (not on a missing asset under a live page)
+prunes the mapping lazily.
 
-Mappings are created two ways. Through the proxy: a 2xx JSON `POST
+A share or page created on *any* host is reachable through every host that
+lists it as a remote, however it was minted (the peer's own UI, OMP's
+`/shares/import` hook, the pages skill without `--via`). An unmapped token is
+**discovered**: the host `HEAD`s the token's own document (`/share/<t>`, bare
+`/page/<t>`) on each configured remote in parallel — skipping ones
+`reachability()` holds down — and the first 2xx/3xx claim is recorded as a
+mapping, then relayed exactly like a mapped token. No new peer endpoint, so
+older peers answer. Every hub→peer public-artifact request (probe and relay)
+carries `x-pi-dish-artifact-hop: 1`, and a host receiving it answers from its
+local registry only — no mapping follow, no discovery — so hosts naming each
+other stay at one hop. Bounds: concurrent discoveries coalesce per
+`kind:token`; a token every probed peer definitely disowned is cached absent
+for 30s (≤1000 entries; not after a transport failure or a skipped down
+peer); at most 16 discoveries run at once (over that: 404, uncached); with no
+remotes nothing is contacted. Tokens are ≥128-bit capabilities and only
+fleet-map remotes are asked, so discovery reveals nothing serving doesn't.
+`DELETE /api/fleet-artifacts/:token` ends public reachability without
+touching the owner's copy by writing a `{ unmapped: true }` tombstone that
+discovery never overrides; only an explicit record (proxied creation or
+`POST /api/fleet-artifacts`) lifts it.
+
+Mappings are also created explicitly, two ways. Through the proxy: a 2xx JSON `POST
 /hosts/:name/api/sessions/:id/share` or `.../api/pages` is recorded and its
 `url` rewritten to *this* hub's public form (`PI_DISH_SHARE_BASE_URL` here,
 else null so the client builds from `location.origin` — the peer's own base
