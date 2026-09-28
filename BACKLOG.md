@@ -4,6 +4,15 @@ Updated 2026-09-19. **M0–M7, R1–R12, C1 and C2 are accepted and delivered on
 exact pushed main `1dc8bf8`. The parent acceptance receipt and its evidence are
 tracked in [the final acceptance record](docs/c2-final-acceptance.json).**
 
+**Post-refactor architecture proposal (2026-09-28):** the
+[detailed simplification proposal](docs/architecture-simplification-proposal.md)
+maps current ownership and hot paths, inventories specialization-driven
+duplication, and defines eight bounded stages with explicit non-goals and
+acceptance criteria. Its
+[Opus 5.5/high review receipt](docs/architecture-simplification-review-2026-09-28.md)
+records plan agreement separately from implementation approval. No stage in
+this proposal is implemented or reopened by the historical acceptance below.
+
 All first-party browser application logic is authored in `src/browser/`, including
 the application entrypoint and static control bindings. The five scripts shipped
 under `public/` are generated and checked against strict TypeScript source.
