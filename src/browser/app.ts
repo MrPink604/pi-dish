@@ -452,9 +452,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   appChrome.setFocus(localStorage.getItem('pi-dish-focus') === '1');
 
   // Coming back to the tab: refresh the list so unread dots resolve against
-  // what's now actually on screen.
+  // what's now actually on screen. A backgrounded phone (or a slept laptop)
+  // also kills the event stream without an error the browser acts on — the
+  // socket sits half-open, or the EventSource stalls in CONNECTING with its
+  // retry timer frozen — so reconnect for the selected session. The server
+  // replays init and running state on connect, and the init catch-up pulls
+  // whatever finished while we were away.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) sidebarLists.refresh();
+    if (document.hidden) return;
+    sidebarLists.refresh();
+    if (sessionState.currentSession?.isActive) void messageStreamController.start();
   });
 
   // Only self identity must precede list publication and client-key migration.

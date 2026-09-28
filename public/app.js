@@ -19042,7 +19042,9 @@ ${restored}`;
     }
     appChrome.setFocus(localStorage.getItem("pi-dish-focus") === "1");
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) sidebarLists.refresh();
+      if (document.hidden) return;
+      sidebarLists.refresh();
+      if (sessionState.currentSession?.isActive) void messageStreamController.start();
     });
     await hostDiscovery.loadIdentity();
     void hostDiscovery.loadFleet().finally(() => {

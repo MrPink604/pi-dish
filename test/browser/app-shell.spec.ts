@@ -70,4 +70,30 @@ test('static bindings retire detached controls and disposal removes listeners', 
   expect(await page.evaluate(() => window.appActionCalls)).toEqual(['openSkillsView']);
 });
 
+test.describe('backgrounded-tab revival', () => {
+  test.use({ liveSessions: true });
+
+  test('returning to the tab reconnects the live stream; going hidden alone does not', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    await expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.url ?? '')).toContain(`/api/sessions/${ROOT}/stream`);
+    await page.evaluate(() => { window.firstStream = fixtureApp.features.messageStreamController.source; });
+    // A backgrounded phone kills the socket without an error the browser acts
+    // on; the page only learns it is stale once it becomes visible again.
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await page.waitForTimeout(150);
+    expect(await page.evaluate(() => fixtureApp.features.messageStreamController.source === window.firstStream)).toBe(true);
+    await page.evaluate(() => {
+      Reflect.deleteProperty(document, 'hidden');
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect.poll(() => page.evaluate(() => {
+      const source = fixtureApp.features.messageStreamController.source;
+      return source && source !== window.firstStream ? source.url : '';
+    })).toContain(`/api/sessions/${ROOT}/stream`);
+  });
+});
+
 export {};

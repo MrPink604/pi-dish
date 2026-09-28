@@ -113,6 +113,7 @@ declare global {
     firstModel: ReturnType<FixtureFeatures['sessionControls']['selectModel']>;
     firstPage: Promise<unknown>;
     firstQueueEdit: ReturnType<FixtureFeatures['promptDelivery']['edit']>;
+    firstStream: EventSource | null;
     firstStreamStart: Promise<unknown>;
     fleetBodiesDecoded: number;
     fleetReadyObserved: boolean;
