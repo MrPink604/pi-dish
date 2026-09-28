@@ -94,3 +94,24 @@ async function setup(page) {
     await page.mouse.up();
     await fixtures_js_1.expect.poll(() => sent).toBe(true);
 });
+(0, fixtures_js_1.test)('the model filter narrows the select and keeps the chosen model pinned', async ({ page, fleet }) => {
+    await setup(page);
+    await page.route('**/api/models?*', (route) => route.fulfill({ json: [
+            { id: 'alpha', provider: 'fixture', name: 'Alpha', reasoning: true, thinking: ['high'] },
+            { id: 'beta', provider: 'other', name: 'Beta' },
+        ] }));
+    await page.evaluate(() => fixtureApp.features.newSessionController.refresh());
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Alpha');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Beta');
+    await page.fill('#nsModelFilter', 'beta');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).not.toContainText('Alpha');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Beta');
+    await page.selectOption('#nsModelSelect', 'other/beta');
+    await page.fill('#nsModelFilter', 'alpha');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Alpha');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Beta');
+    (0, fixtures_js_1.expect)(await page.locator('#nsModelSelect').inputValue()).toBe('other/beta');
+    await page.fill('#nsModelFilter', '');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Alpha');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Beta');
+});

@@ -1,5 +1,6 @@
 import type { CatalogModel } from '../core/session-api';
 import { decodeModelCatalog } from '../core/session-api';
+import { fuzzyMatch } from '../core/helper-query';
 import type { DirectoryHost } from './directory-catalog';
 
 export interface ModelCatalogScope {
@@ -106,10 +107,16 @@ export function createModelCatalog(options: {
   return { rows, get scope() { return current() ? scope : null; }, reusable, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
 }
 
-export function modelSelectOptionsHtml(models: readonly Readonly<CatalogModel>[], escapeHtml: (value: string) => string) {
+export function modelSelectOptionsHtml(models: readonly Readonly<CatalogModel>[], escapeHtml: (value: string) => string,
+  filter?: { query?: string; pinned?: string }) {
   const enabled = models.filter(model => model.enabled !== false);
+  const query = (filter?.query || '').trim(), pinned = filter?.pinned || '';
+  const listed = !query ? enabled : enabled.filter(model => {
+    const selector = model.selector || `${model.provider}/${model.id}`;
+    return selector === pinned || !!fuzzyMatch(query, `${model.provider}/${model.id}`) || !!fuzzyMatch(query, model.name || model.id);
+  });
   const byProvider = new Map<string, Readonly<CatalogModel>[]>();
-  for (const model of enabled) {
+  for (const model of listed) {
     const group = byProvider.get(model.provider) || [];
     group.push(model);
     byProvider.set(model.provider, group);

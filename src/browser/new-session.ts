@@ -68,6 +68,7 @@ export function createNewSession(options: {
   const cwdInput = input('newSessionCwd'), nameInput = input('newSessionName');
   const hostSelect = select('nsHostSelect'), harnessSelect = select('nsHarnessSelect');
   const modelSelect = select('nsModelSelect'), thinkingSelect = select('nsThinkingSelect');
+  const modelFilterInput = input('nsModelFilter');
   const spawnElement = element('nsSpawnBtn');
   if (!(spawnElement instanceof HTMLButtonElement)) throw new Error('Invalid spawn button');
   const spawnButton: HTMLButtonElement = spawnElement;
@@ -93,6 +94,7 @@ export function createNewSession(options: {
     model: modelSelect, thinking: thinkingSelect, hiddenNote: element('nsModelHidden'), thinkingNote: element('nsThinkingNote'),
     rows: () => models.rows(), read: key => storage.getItem(key), write: (key, value) => storage.setItem(key, value), escapeHtml,
   });
+  modelFilterInput.addEventListener('input', () => preferences.filterModels(modelFilterInput.value));
   const config = createNewSessionConfigPreview({
     wrap: element('nsHarnessConfig'), values: element('nsHarnessConfigValues'), roles: element('nsHarnessRoles'),
     buttons: [element('nsEditAgents'), element('nsEditRoles')],
@@ -211,7 +213,7 @@ export function createNewSession(options: {
     if (disposed) return;
     generation++; spawnButton.disabled = false; spawnButton.textContent = '+ New session';
     options.closeOtherViews(); root.classList.add('new-session-open'); draft = value.draft || null;
-    nameInput.value = ''; renderHosts();
+    nameInput.value = ''; modelFilterInput.value = ''; preferences.filterModels(''); renderHosts();
     void directories.load().then(() => { if (isOpen()) renderWorkspaces(); });
     void targets.load(); void harnesses.load();
     cwdInput.value = value.cwd || storage.getItem('pi-dish-cwd') || ''; error('');

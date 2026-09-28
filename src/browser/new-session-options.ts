@@ -21,7 +21,7 @@ export function createNewSessionPreferences(options: {
   write: (key: string, value: string) => void;
   escapeHtml: (text: string) => string;
 }) {
-  let harness = 'pi', model = '', thinking = '';
+  let harness = 'pi', model = '', thinking = '', query = '';
   function preference(kind: string): string {
     return options.read(`pi-dish-new-${kind}:${harness}`)
       || (harness === 'pi' ? options.read(`pi-dish-new-${kind}`) : '') || '';
@@ -55,7 +55,7 @@ export function createNewSessionPreferences(options: {
     if (options.thinkingNote) options.thinkingNote.textContent = note;
   }
   function render(): void {
-    const { html, enabled, hidden } = modelSelectOptionsHtml(options.rows(), options.escapeHtml);
+    const { html, enabled, hidden } = modelSelectOptionsHtml(options.rows(), options.escapeHtml, { query, pinned: model });
     options.model.innerHTML = html;
     // Preserve a saved model through interim catalogs. Submission reads the
     // select itself, so an unavailable model is never sent to the harness.
@@ -64,6 +64,7 @@ export function createNewSessionPreferences(options: {
     syncThinking();
   }
   return { restore, render, syncThinking,
+    filterModels(value: string) { query = value || ''; render(); },
     selectModel(value: string) { model = value || ''; persist('model', model); syncThinking(); },
     selectThinking(value: string) { thinking = value || ''; persist('thinking', thinking); },
   };

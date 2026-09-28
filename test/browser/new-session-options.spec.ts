@@ -94,4 +94,26 @@ test('cwd blur keeps the spawn button under the pointer until mouse-up', async (
   await expect.poll(() => sent).toBe(true);
 });
 
+test('the model filter narrows the select and keeps the chosen model pinned', async ({ page, fleet }) => {
+  await setup(page);
+  await page.route('**/api/models?*', (route: Route) => route.fulfill({ json: [
+    { id: 'alpha', provider: 'fixture', name: 'Alpha', reasoning: true, thinking: ['high'] },
+    { id: 'beta', provider: 'other', name: 'Beta' },
+  ] }));
+  await page.evaluate(() => fixtureApp.features.newSessionController.refresh());
+  await expect(page.locator('#nsModelSelect')).toContainText('Alpha');
+  await expect(page.locator('#nsModelSelect')).toContainText('Beta');
+  await page.fill('#nsModelFilter', 'beta');
+  await expect(page.locator('#nsModelSelect')).not.toContainText('Alpha');
+  await expect(page.locator('#nsModelSelect')).toContainText('Beta');
+  await page.selectOption('#nsModelSelect', 'other/beta');
+  await page.fill('#nsModelFilter', 'alpha');
+  await expect(page.locator('#nsModelSelect')).toContainText('Alpha');
+  await expect(page.locator('#nsModelSelect')).toContainText('Beta');
+  expect(await page.locator('#nsModelSelect').inputValue()).toBe('other/beta');
+  await page.fill('#nsModelFilter', '');
+  await expect(page.locator('#nsModelSelect')).toContainText('Alpha');
+  await expect(page.locator('#nsModelSelect')).toContainText('Beta');
+});
+
 export {};

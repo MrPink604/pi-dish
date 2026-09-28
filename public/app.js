@@ -4767,10 +4767,15 @@ ${row.id}`;
       return current() ? scope : null;
     }, reusable, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
   }
-  function modelSelectOptionsHtml(models, escapeHtml2) {
+  function modelSelectOptionsHtml(models, escapeHtml2, filter) {
     const enabled = models.filter((model) => model.enabled !== false);
+    const query = (filter?.query || "").trim(), pinned = filter?.pinned || "";
+    const listed = !query ? enabled : enabled.filter((model) => {
+      const selector = model.selector || `${model.provider}/${model.id}`;
+      return selector === pinned || !!fuzzyMatch(query, `${model.provider}/${model.id}`) || !!fuzzyMatch(query, model.name || model.id);
+    });
     const byProvider = /* @__PURE__ */ new Map();
-    for (const model of enabled) {
+    for (const model of listed) {
       const group = byProvider.get(model.provider) || [];
       group.push(model);
       byProvider.set(model.provider, group);
@@ -13919,7 +13924,7 @@ ${restored}`;
   });
   var thinkingLabel = (level) => Object.hasOwn(NS_THINKING_LABELS, level) ? NS_THINKING_LABELS[level] : level;
   function createNewSessionPreferences(options2) {
-    let harness = "pi", model = "", thinking = "";
+    let harness = "pi", model = "", thinking = "", query = "";
     function preference(kind) {
       return options2.read(`pi-dish-new-${kind}:${harness}`) || (harness === "pi" ? options2.read(`pi-dish-new-${kind}`) : "") || "";
     }
@@ -13954,7 +13959,7 @@ ${restored}`;
       if (options2.thinkingNote) options2.thinkingNote.textContent = note;
     }
     function render() {
-      const { html, enabled, hidden } = modelSelectOptionsHtml(options2.rows(), options2.escapeHtml);
+      const { html, enabled, hidden } = modelSelectOptionsHtml(options2.rows(), options2.escapeHtml, { query, pinned: model });
       options2.model.innerHTML = html;
       options2.model.value = model && enabled.some((row) => (row.selector || `${row.provider}/${row.id}`) === model) ? model : "";
       if (options2.hiddenNote) options2.hiddenNote.textContent = modelHiddenNote(hidden);
@@ -13964,6 +13969,10 @@ ${restored}`;
       restore,
       render,
       syncThinking,
+      filterModels(value) {
+        query = value || "";
+        render();
+      },
       selectModel(value) {
         model = value || "";
         persist("model", model);
@@ -14062,6 +14071,7 @@ ${restored}`;
     const cwdInput = input("newSessionCwd"), nameInput = input("newSessionName");
     const hostSelect = select("nsHostSelect"), harnessSelect = select("nsHarnessSelect");
     const modelSelect = select("nsModelSelect"), thinkingSelect = select("nsThinkingSelect");
+    const modelFilterInput = input("nsModelFilter");
     const spawnElement = element("nsSpawnBtn");
     if (!(spawnElement instanceof HTMLButtonElement)) throw new Error("Invalid spawn button");
     const spawnButton = spawnElement;
@@ -14095,6 +14105,7 @@ ${restored}`;
       write: (key, value) => storage.setItem(key, value),
       escapeHtml
     });
+    modelFilterInput.addEventListener("input", () => preferences.filterModels(modelFilterInput.value));
     const config = createNewSessionConfigPreview({
       wrap: element("nsHarnessConfig"),
       values: element("nsHarnessConfigValues"),
@@ -14285,6 +14296,8 @@ ${restored}`;
       root.classList.add("new-session-open");
       draft = value.draft || null;
       nameInput.value = "";
+      modelFilterInput.value = "";
+      preferences.filterModels("");
       renderHosts();
       void directories.load().then(() => {
         if (isOpen()) renderWorkspaces();
