@@ -5244,6 +5244,21 @@ ${row.id}`;
     </div>
   </div>`;
     }
+    function displayModelMentions(html) {
+      if (!html.includes("&lt;model agent=")) return html;
+      const template = document2.createElement("template");
+      template.innerHTML = html;
+      const walker = document2.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+      let node;
+      while (node = walker.nextNode()) {
+        if (node.parentElement?.closest("code, pre")) continue;
+        const text18 = node.nodeValue;
+        if (text18?.includes("<model agent=")) {
+          node.nodeValue = text18.replace(/<model agent="[a-zA-Z0-9_-]+" name="([^"<>\r\n]+)"\s*\/>/g, (_tag, name) => `^${name}`);
+        }
+      }
+      return template.innerHTML;
+    }
     function renderUserMessage(msg, time, attrs = "") {
       const rawText = extractTextContent(msg.content);
       const irc = parseIrcInterrupt(rawText);
@@ -5253,7 +5268,7 @@ ${row.id}`;
       const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
       return `<div${attrs} class="message user">
     <div class="message-header"><span class="message-role user">\u276F</span>${time ? `<span class="message-time">${time}</span>` : ""}${messageLinkBtnHtml(msg)}</div>
-    <div class="message-content user-content">${text18 ? `<div class="markdown-body">${options2.markdown(text18)}</div>` : ""}${imagesHtml}${chipsHtml}</div>
+    <div class="message-content user-content">${text18 ? `<div class="markdown-body">${displayModelMentions(options2.markdown(text18))}</div>` : ""}${imagesHtml}${chipsHtml}</div>
   </div>`;
     }
     function renderAssistantMessage(msg, time, opts = {}) {

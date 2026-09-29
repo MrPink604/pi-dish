@@ -236,6 +236,8 @@ OMP's session-local, general-purpose model agent; the parent session keeps its
 own model. The agent can reuse that model agent on later tasks without another
 mention. OMP expands model mentions only on a new user turn, not on steers or
 queued follow-ups, so wait for the current turn to finish before sending one.
+After OMP expands a mention, the transcript shows `^` plus the registered
+agent name in the user bubble instead of the internal `<model .../>` annotation.
 
 Current alternative-harness support is capability-detected:
 

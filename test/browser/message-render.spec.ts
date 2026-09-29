@@ -44,6 +44,22 @@ test('IRC peer messages render as cards from both OMP wire shapes', async ({ pag
   expect(result.fallbackBody?.trim()).toBe('Fallback body.');
 });
 
+test('OMP model annotations render as readable mentions in persisted user prompts', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const rendered = await page.evaluate(() => {
+    window.fixtureSessionListPatch(fixtureCurrentSession().id, { harnessId: 'omp' });
+    const root = fixtureElement(document.getElementById('messages'), '#messages');
+    root.innerHTML = fixtureApp.features.messageRenderer.message({
+      role: 'user', content: 'Use <model agent="m1" name="GPT-6-Astra"/> for this task.\n\n`<model agent="m1" name="Example"/>`',
+    });
+    return { prose: root.querySelector('.user-content p')?.textContent, code: root.querySelector('.user-content code')?.textContent,
+      tags: root.querySelectorAll('.user-content model').length };
+  });
+  expect(rendered.prose).toBe('Use ^GPT-6-Astra for this task.');
+  expect(rendered.code).toBe('<model agent="m1" name="Example"/>');
+  expect(rendered.tags).toBe(0);
+});
+
 test('transcript image resources and share controls use the selected owning host', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);
   const html = await page.evaluate(() => fixtureApp.features.messageRenderer.message({ role: 'user', id: 'entry', content: [{ type: 'image', url: '/api/image', mimeType: 'image/png' }] }));

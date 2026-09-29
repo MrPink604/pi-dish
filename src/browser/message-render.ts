@@ -128,6 +128,26 @@ function renderIrcMessage(msg: RenderMessage, time: string, attrs: string, times
   </div>`;
 }
 
+// OMP persists expanded ^model mentions as agent annotations in the user's
+// text. Keep the human-readable model name in prose, but leave examples in
+// code spans/fences untouched. Work on text nodes after markdown has escaped
+// raw HTML; inserting into nodeValue cannot turn a model name into markup.
+function displayModelMentions(html: string) {
+  if (!html.includes('&lt;model agent=')) return html;
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if (node.parentElement?.closest('code, pre')) continue;
+    const text = node.nodeValue;
+    if (text?.includes('<model agent=')) {
+      node.nodeValue = text.replace(/<model agent="[a-zA-Z0-9_-]+" name="([^"<>\r\n]+)"\s*\/>/g, (_tag, name: string) => `^${name}`);
+    }
+  }
+  return template.innerHTML;
+}
+
 function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
   const rawText = extractTextContent(msg.content);
   const irc = parseIrcInterrupt(rawText);
@@ -137,7 +157,7 @@ function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
   const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
   return `<div${attrs} class="message user">
     <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}${messageLinkBtnHtml(msg)}</div>
-    <div class="message-content user-content">${text ? `<div class="markdown-body">${options.markdown(text)}</div>` : ''}${imagesHtml}${chipsHtml}</div>
+    <div class="message-content user-content">${text ? `<div class="markdown-body">${displayModelMentions(options.markdown(text))}</div>` : ''}${imagesHtml}${chipsHtml}</div>
   </div>`;
 }
 
