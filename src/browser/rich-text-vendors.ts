@@ -6,7 +6,9 @@ export interface MarkedOptions {
   walkTokens(token: { type: string; href?: string }): void;
   extensions: MathExtension[];
 }
-export interface MarkedRuntime { use(options: MarkedOptions): void; parse(source: string): string }
+/** One top-level block token; only the boundary fields the streamer reasons about. */
+export interface MarkdownToken { type: string; raw: string }
+export interface MarkedRuntime { use(options: MarkedOptions): void; parse(source: string): string; lexer(source: string): readonly MarkdownToken[] }
 export interface HighlightRuntime { highlightElement(element: HTMLElement): void }
 export interface MermaidConfig {
   startOnLoad: false; securityLevel: 'strict'; suppressErrorRendering: true; theme: 'base'; fontFamily: string;

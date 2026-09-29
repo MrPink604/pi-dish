@@ -39,8 +39,115 @@ export function renderHarnessBadge(harnessId?: string | null, harnessLabel?: str
   return `<span class="harness-badge harness-badge-${escapeHtml(id)}" title="${escapeHtml(title)} harness" aria-label="${escapeHtml(title)} harness">${harnessBadgeInnerHtml(info)}</span>`;
 }
 
+/**
+ * Caller-owned memo for one sidebar instance. The fingerprint is an explicit
+ * list of the display-affecting inputs — row fields, the expanded/collapsed/
+ * pinned/roots sets, host health, and the minute/day clock buckets that move
+ * relative-time and cache labels. An unchanged fingerprint reuses the previous
+ * projection verbatim, so a poll that confirms the current list builds no card.
+ */
+export interface SidebarProjectionMemo {
+  fingerprint?: readonly unknown[] | null;
+  projection?: SidebarProjection | null;
+}
+
 /** Render established metadata; no DOM, requests, timers or retained row closures. */
-export function renderSidebar(options: SidebarRenderOptions): SidebarProjection {
+export function renderSidebar(options: SidebarRenderOptions, memo?: SidebarProjectionMemo): SidebarProjection {
+  if (!memo) return buildSidebar(options);
+  const fingerprint = sidebarFingerprint(options);
+  if (memo.projection && memo.fingerprint && sameFingerprint(memo.fingerprint, fingerprint)) return memo.projection;
+  const projection = buildSidebar(options);
+  memo.fingerprint = fingerprint;
+  memo.projection = projection;
+  return projection;
+}
+
+/**
+ * Every read `renderSidebar` makes, in a flat primitive list. Clocks are
+ * bucketed at the boundary each label switches on (a minute for "5m ago" and
+ * the cache countdown, local midnight for date sections and Today/Yesterday),
+ * so a poll inside a bucket is provably unchanged while the next bucket
+ * invalidates. Collections contribute size plus members in iteration order.
+ */
+function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
+  const now = Date.now();
+  const parts: unknown[] = [
+    options.tab, options.view, options.query, options.queriedFor, options.scope,
+    options.indexing ? 1 : 0, options.contextMetric, options.multiHost ? 1 : 0,
+    options.selected ? sessionRefKey(options.selected) : null,
+    options.selectedSpawn, options.closeConfirm, options.closeBusy,
+    new Date(now).setHours(0, 0, 0, 0),
+  ];
+  parts.push(options.pending.length);
+  for (const [id, spawn] of options.pending) parts.push(id, spawn.cwd, spawn.harness, spawn.harnessLabel, spawn.target ? 1 : 0, spawn.host);
+  parts.push(options.pinned.length);
+  for (const key of options.pinned) parts.push(key);
+  for (const set of [options.expanded, options.collapsed]) {
+    parts.push(set.size);
+    for (const key of set) parts.push(key);
+  }
+  parts.push(options.roots.size);
+  for (const [key, value] of options.roots) parts.push(key, value);
+  parts.push(options.hosts.length);
+  const chipHosts = new Set<string | null>();
+  for (const host of options.hosts) {
+    parts.push(host.key, host.hostId, host.self ? 1 : 0, host.label, host.name, host.base, host.state, host.color, host.dot, host.hasCache ? 1 : 0);
+    chipHosts.add(host.hostId || null);
+  }
+  for (const list of [options.active, options.previous]) for (const session of list) chipHosts.add(session.host || null);
+  for (const [, spawn] of options.pending) chipHosts.add(spawn.host || null);
+  // The chip is the presentation layer's own formatting of host identity and
+  // colour, so its output — not just the host rows — is part of the input.
+  for (const host of chipHosts) parts.push(host, options.hostChip(host));
+  for (const list of [options.active, options.previous]) {
+    parts.push(list.length);
+    for (const session of list) {
+      parts.push(
+        session.id, session.host, session.hostLabel, session.name, session.model,
+        session.harnessId, session.harnessLabel, session.thinkingLevel,
+        session.isActive ? 1 : 0, session.subagentLive ? 1 : 0, session.turnInProgress ? 1 : 0,
+        session.askPending ? 1 : 0, session.compacting ? 1 : 0,
+        sessionSupports(session, 'close') ? 1 : 0, session.closeMode,
+        session.contextPercent, session.contextTokens, session.cwd, session.routine, session.routineId,
+        session.parentId, session.parentSource, session.familyParentId, session.searchScore,
+        session.searchSnippet, session.lastActivity, relativeTimeFingerprint(session.lastActivity, now),
+        cacheExpiryFingerprint(session.cacheExpiry, now), options.unread(session) ? 1 : 0,
+      );
+    }
+  }
+  return parts;
+}
+
+function sameFingerprint(previous: readonly unknown[], next: readonly unknown[]): boolean {
+  if (previous.length !== next.length) return false;
+  for (let index = 0; index < previous.length; index++) if (!Object.is(previous[index], next[index])) return false;
+  return true;
+}
+
+/** The boundary `formatRelativeTime` switches its label on, never the second. */
+function relativeTimeFingerprint(ts: SessionEntry['lastActivity'], now: number): string {
+  if (!ts) return '';
+  const seconds = Math.floor(Math.max(0, now - new Date(ts).getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `m${minutes}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `h${hours}`;
+  const days = Math.floor(hours / 24);
+  // Past a week the label is the session's own calendar date — it stops moving
+  // with the clock, so one constant bucket is exact.
+  return days < 7 ? `d${days}` : 'dated';
+}
+
+/** The minute `cacheExpiryPresentation` rolls over on, plus the cold step. */
+function cacheExpiryFingerprint(expiry: SessionEntry['cacheExpiry'], now: number): string {
+  if (!expiry) return '';
+  const remaining = expiry.expiresAt - now;
+  if (remaining <= 0) return `cold|${expiry.retention}`;
+  return `${expiry.basis || ''}|${expiry.retention}|${Math.ceil(remaining / 60_000)}`;
+}
+
+function buildSidebar(options: SidebarRenderOptions): SidebarProjection {
   const canonical = (key: string) => options.roots.get(key) || key;
   const hostIsDown = (host: SidebarHost) => host.state === 'blocked' || host.state === 'backoff';
   const selectedKey = options.selected ? sessionRefKey(options.selected) : null;

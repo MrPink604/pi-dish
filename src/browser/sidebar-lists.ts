@@ -42,7 +42,10 @@ export function createSidebarLists(options: {
   const loader = createHostSessionLoader({
     requestList: (host, path, init) => api.list(host, path, init), currentSequence: () => sequence,
     stripHostQuery: query => stripQueryField(query, 'host'), onConnection: (host, event) => { if (!disposed) options.connection(host, event); },
-    onIndexing: () => { if (disposed || indexingTimer) return; indexingTimer = setTimeout(() => { indexingTimer = null; void refresh(); }, 1000); },
+    // Indexing follow-up is background work too: while the tab is hidden it
+    // would be a request nobody can read, and the app's visibility refresh
+    // re-reads the indexing bit when the list is next shown.
+    onIndexing: () => { if (disposed || indexingTimer) return; indexingTimer = setTimeout(() => { indexingTimer = null; if (document.hidden) return; void refresh(); }, 1000); },
     beforePublish: (host, next, wireQuery) => {
       if (disposed) return; const hostId = host.hostId || null, selected = sessionState.currentSession;
       if (selected && !document.hidden && (selected.host || null) === hostId) { const fresh = next.active.find(row => row.id === selected.id) || next.previous.find(row => row.id === selected.id); if (fresh) options.activity.mark(selected, fresh.lastActivity); }
@@ -110,7 +113,11 @@ export function createSidebarLists(options: {
   }
   function invalidate() { sequence++; loader.retireRequests(); pendingHosts.clear(); renderProgress(); }
   function refresh() { if (disposed) return Promise.resolve(); options.refreshFleet(); return load(options.query() || undefined, { background: true }); }
-  function mount() { if (!disposed && !pollTimer) pollTimer = setInterval(() => { void refresh(); }, 10000); }
+  // Background polling stops while the document is hidden: nothing can read
+  // the result, and a slept laptop should not wake to a burst of requests.
+  // Foreground loads and the app's visibility refresh are untouched, and the
+  // loader joins that resume poll to any request already in flight.
+  function mount() { if (!disposed && !pollTimer) pollTimer = setInterval(() => { if (document.hidden) return; void refresh(); }, 10000); }
   function dispose() { if (disposed) return; busy(false); disposed = true; sequence++; clearInterval(pollTimer ?? undefined); clearTimeout(indexingTimer ?? undefined); pollTimer = indexingTimer = null; loader.prune(new Set()); pendingHosts.clear(); progress?.remove(); progress = null; }
   renderProgress();
   return { loader, load, loadHost, refresh, publish, busy, invalidate, mount, dispose, get indexing() { return indexing; }, get queriedFor() { return queriedFor; } };

@@ -39,7 +39,7 @@ export function createSessionView(options: {
   closeTerminal: () => void; clearExtension: () => void; clearRelations: () => void; closeControls: () => void; hideAutocomplete: () => void;
   retireModels: () => void; retireCommands: () => void; queue: (value: null) => void; closeBtw: () => void; resetArtifacts: () => void;
   thinking: () => void; terminal: () => void; mic: () => void; mood: (description: string, face: string) => void; status: (message: string, type?: string) => void;
-  render: () => void; cancelRecording: () => void; hideNote: () => void; math: () => Promise<unknown>; reveal: (id: string, host?: string | null) => void;
+  render: () => void; cancelRecording: () => void; hideNote: () => void; reveal: (id: string, host?: string | null) => void;
   seen: (session: SessionEntry) => void; artifacts: (owner: SelectionOwner) => unknown; header: () => void; relations: (owner: SelectionOwner) => unknown;
   models: (id: string, harness?: string) => unknown; commands: (id: string) => unknown;
 }) {
@@ -169,9 +169,6 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   const endpoint = Object.freeze({ ...options.endpoint(owner.host) });
   const owns = () => !disposed && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === endpoint.base;
   if (forceTranscriptReload) options.transcript.deleteCached(sessionRefKey(current));
-  // Math rendering is transcript-only. Start its one-shot load while the
-  // synchronous session chrome is updated, then gate markdown hydration on it.
-  const mathAssetsReady = options.math().catch(() => {});
   options.reveal(id, current.host);
   // Retire the previous stream before awaiting new transcript hydration.
   retireSessionResources();
@@ -229,8 +226,6 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
     options.models(id, current.harnessId);
     options.commands(id); // refresh autocomplete with this session's commands
   }
-  await mathAssetsReady;
-  if (!owns()) return;
   await options.transcript.load(owner);
   if (!owns()) return;
   // Lineage and artifact counts are ancillary chrome, and the lineage handler

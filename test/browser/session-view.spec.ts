@@ -100,6 +100,18 @@ test('restored same-host tool panels retain their node and duration after a new 
   await expect(page.locator('[data-tool-call-id="cached-tool"] .duration')).toContainText(/./);
 });
 
+test('a transcript with math paints before the KaTeX bundle arrives', async ({ page, fleet }) => {
+  let script: Route | null = null, styles: Route | null = null;
+  await page.route('**/vendor/katex.min.js', route => { script = route; });
+  await page.route('**/vendor/katex.min.css', route => { styles = route; });
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({ json: { messages: [{ role: 'assistant', index: 0, content: 'answer $x$ here' }], session: {} } }));
+  await page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host, forceTranscriptReload: true }), { id: ROOT, host: fleet.self.hostId });
+  // Selecting must not gate the transcript on the math assets it requested.
+  await expect(page.locator('#messages')).toContainText('here');
+  await expect(page.locator('#messages .math-pending')).toHaveCount(1);
+  await expect.poll(() => !!script && !!styles).toBe(true);
+});
+
 test.describe('selection retirement', () => {
   test.use({ liveSessions: true });
 

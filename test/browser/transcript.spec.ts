@@ -234,6 +234,236 @@ test('filling a sparse tool gap merges groups without replacing retained details
     indices: Array.from({ length: 120 }, (_, index) => index) });
 });
 
+test('repeated older pages stay bounded and evicted messages remain reachable', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const result = await page.evaluate(async () => {
+    const root = fixtureElement(document.getElementById('messages'), 'messages');
+    const transcript = PiDishBrowser.createTranscript({ ...fixtureApp.ports.transcriptController, scroll() {}, jump() {},
+      request: async (_host, path) => {
+        const end = Number(new URL(path, location.origin).searchParams.get('before') || 900), start = Math.max(0, end - 50);
+        return new Response(JSON.stringify({ messages: Array.from({ length: Math.max(0, end - start) }, (_, offset) => ({
+          index: start + offset, role: 'user', content: `message ${start + offset}` })),
+          firstIndex: start, lastIndex: end - 1, totalMessages: 900, hasMore: start > 0 }));
+      },
+    });
+    const mounted = () => root.querySelectorAll('[data-msg-index]').length;
+    const indices = () => Array.from(root.querySelectorAll<HTMLElement>('[data-msg-index]'), node => Number(node.dataset.msgIndex));
+    try {
+      await transcript.load();
+      const initialMounted = mounted(), initialOldest = transcript.oldestIndex ?? -1;
+      let peak = initialMounted;
+      for (let i = 0; i < 9; i++) { await transcript.loadOlder(); peak = Math.max(peak, mounted()); }
+      const bounded = { mounted: mounted(), oldest: transcript.oldestIndex ?? -1, gaps: root.querySelectorAll('.transcript-gap').length,
+        sorted: indices().every((index, i, all) => i === 0 || index > all[i - 1]!) };
+      // A message bounded out of the middle is re-fetched by index, not lost.
+      await transcript.ensureMessage(700, () => true);
+      return { initialMounted, initialOldest, peak, bounded, reloaded: !!root.querySelector('[data-msg-index="700"]'), reloadMounted: mounted() };
+    } finally { transcript.dispose(); }
+  });
+  expect(result.initialMounted).toBe(50); expect(result.initialOldest).toBe(850);
+  expect(result.peak).toBeLessThanOrEqual(300);
+  expect(result.bounded.mounted).toBeLessThanOrEqual(300);
+  expect(result.bounded.oldest).toBeLessThan(result.initialOldest);
+  expect(result.bounded.sorted).toBe(true); expect(result.bounded.gaps).toBeGreaterThan(0);
+  expect(result.reloaded).toBe(true); expect(result.reloadMounted).toBeLessThanOrEqual(300);
+});
+
+test('a large live catch-up stays bounded and keeps the tail for a scrolled-away reader', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const result = await page.evaluate(async () => {
+    const root = fixtureElement(document.getElementById('messages'), 'messages');
+    let jumps = 0;
+    const transcript = PiDishBrowser.createTranscript({ ...fixtureApp.ports.transcriptController, scroll() {}, jump() { jumps++; }, pinned: () => false,
+      request: async (_host, path) => {
+        const params = new URL(path, location.origin).searchParams, after = params.get('after');
+        if (after != null) {
+          const start = Number(after) + 1;
+          return new Response(JSON.stringify({ messages: Array.from({ length: 200 }, (_, offset) => ({ index: start + offset, role: 'user', content: `live ${start + offset}` })),
+            firstIndex: start, lastIndex: start + 199, totalMessages: start + 200 }));
+        }
+        const end = Number(params.get('before') || 900), start = Math.max(0, end - 50);
+        return new Response(JSON.stringify({ messages: Array.from({ length: end - start }, (_, offset) => ({ index: start + offset, role: 'user', content: `message ${start + offset}` })),
+          firstIndex: start, lastIndex: end - 1, totalMessages: 900, hasMore: start > 0 }));
+      },
+    });
+    const mounted = () => root.querySelectorAll('[data-msg-index]').length;
+    const indices = () => Array.from(root.querySelectorAll<HTMLElement>('[data-msg-index]'), node => Number(node.dataset.msgIndex));
+    try {
+      await transcript.load();
+      for (let i = 0; i < 6; i++) await transcript.loadOlder();
+      root.scrollTop = 0; // the reader left the bottom before live output arrived
+      const beforeMounted = mounted();
+      await transcript.catchup();
+      const bounded = { mounted: mounted(), last: transcript.lastIndex ?? -1, jumps, tail: !!root.querySelector('[data-msg-index="1099"]'),
+        sorted: indices().every((index, i, all) => i === 0 || index > all[i - 1]!) };
+      await transcript.ensureMessage(725, () => true);
+      return { beforeMounted, bounded, reloaded: !!root.querySelector('[data-msg-index="725"]'), reloadMounted: mounted() };
+    } finally { transcript.dispose(); }
+  });
+  expect(result.beforeMounted).toBeLessThanOrEqual(300);
+  expect(result.bounded.mounted).toBeLessThanOrEqual(300);
+  expect(result.bounded.last).toBe(1099);
+  expect(result.bounded.tail).toBe(true);
+  expect(result.bounded.sorted).toBe(true);
+  expect(result.bounded.jumps).toBeGreaterThan(0);
+  expect(result.reloaded).toBe(true); expect(result.reloadMounted).toBeLessThanOrEqual(300);
+});
+
+test('a search hit bounded away reloads, stays protected, and keeps the viewport anchored', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const result = await page.evaluate(async () => {
+    const root = fixtureElement(document.getElementById('messages'), 'messages');
+    const transcript = PiDishBrowser.createTranscript({ ...fixtureApp.ports.transcriptController, scroll() {}, jump() {},
+      request: async (_host, path) => {
+        const end = Number(new URL(path, location.origin).searchParams.get('before') || 900), start = Math.max(0, end - 50);
+        return new Response(JSON.stringify({ messages: Array.from({ length: Math.max(0, end - start) }, (_, offset) => ({
+          index: start + offset, role: 'user', content: `message ${start + offset}` })),
+          firstIndex: start, lastIndex: end - 1, totalMessages: 900, hasMore: start > 0 }));
+      },
+    });
+    const mounted = () => root.querySelectorAll('[data-msg-index]').length;
+    const visible = () => Array.from(root.querySelectorAll<HTMLElement>('[data-msg-index]')).find(node => node.getBoundingClientRect().bottom > root.getBoundingClientRect().top) || null;
+    try {
+      await transcript.load();
+      for (let i = 0; i < 7; i++) await transcript.loadOlder();
+      await transcript.ensureMessage(700, () => true);
+      const hit = fixtureElement(root.querySelector<HTMLElement>('[data-msg-index="700"]'), 'search hit');
+      const anchor = fixtureElement(visible(), 'visible anchor'), offset = anchor.getBoundingClientRect().top;
+      await transcript.loadOlder();
+      return { present: root.querySelector('[data-msg-index="700"]') === hit,
+        anchored: anchor.isConnected && Math.abs(anchor.getBoundingClientRect().top - offset) < 2,
+        mounted: mounted(), oldest: transcript.oldestIndex ?? -1,
+        sorted: Array.from(root.querySelectorAll<HTMLElement>('[data-msg-index]'), node => Number(node.dataset.msgIndex)).every((index, i, all) => i === 0 || index > all[i - 1]!) };
+    } finally { transcript.dispose(); }
+  });
+  expect(result.present).toBe(true); expect(result.anchored).toBe(true);
+  expect(result.mounted).toBeLessThanOrEqual(300);
+  expect(result.sorted).toBe(true);
+});
+
+test('an oversize tool group cannot defeat the bound and is split at the gap', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const before = await page.evaluate(async () => {
+    const root = fixtureElement(document.getElementById('messages'), 'messages');
+    const transcript = PiDishBrowser.createTranscript({ ...fixtureApp.ports.transcriptController, scroll() {}, jump() {},
+      request: async (_host, path) => {
+        const end = Number(new URL(path, location.origin).searchParams.get('before') || 900), start = Math.max(0, end - 50);
+        return new Response(JSON.stringify({ messages: Array.from({ length: Math.max(0, end - start) }, (_, offset) => ({
+          index: start + offset, role: 'toolResult', toolName: 'read', content: `tool result ${start + offset}` })),
+          firstIndex: start, lastIndex: end - 1, totalMessages: 900, hasMore: start > 0 }));
+      },
+    });
+    await transcript.load();
+    for (let i = 0; i < 8; i++) await transcript.loadOlder();
+    Reflect.set(window, 'disposeBoundedTranscript', () => transcript.dispose());
+    const groups = Array.from(root.querySelectorAll<HTMLDetailsElement>(':scope > details.tool-group'));
+    const control = fixtureElement(root.querySelector<HTMLElement>('.transcript-gap [data-direction="newer"]'), 'gap control');
+    const target = Number(control.dataset.before) - 1;
+    control.click();
+    return { mounted: root.querySelectorAll('[data-msg-index]').length, groups: groups.length, gaps: root.querySelectorAll('.transcript-gap').length,
+      contiguous: groups.every(group => {
+        const ids = Array.from(group.querySelectorAll<HTMLElement>('[data-msg-index]'), node => Number(node.dataset.msgIndex));
+        return ids.every((id, i) => i === 0 || id === ids[i - 1]! + 1);
+      }), target };
+  });
+  const target = page.locator(`#messages [data-msg-index="${before.target}"]`);
+  await expect(target).toBeAttached();
+  await page.locator(`#messages > details.tool-group:has([data-msg-index="${before.target}"]) > summary`).click();
+  await expect(target).toBeVisible();
+  await expect(target).toContainText(`tool result ${before.target}`);
+  const after = await page.evaluate((target: number) => {
+    const root = fixtureElement(document.getElementById('messages'), 'messages');
+    const dispose = Reflect.get(window, 'disposeBoundedTranscript') as (() => void) | undefined;
+    const result = { loaded: !!root.querySelector(`[data-msg-index="${target}"]`), mounted: root.querySelectorAll('[data-msg-index]').length };
+    dispose?.(); Reflect.deleteProperty(window, 'disposeBoundedTranscript');
+    return result;
+  }, before.target);
+  expect(before.mounted).toBeLessThanOrEqual(300);
+  expect(before.groups).toBeGreaterThan(1);
+  expect(before.contiguous).toBe(true);
+  expect(before.gaps).toBeGreaterThan(0);
+  expect(after.loaded).toBe(true);
+  expect(after.mounted).toBeLessThanOrEqual(300);
+});
+
+test('retained cache enforces node, character and total budgets', async ({ page, fleet }) => {
+  void fleet;
+  const result = await page.evaluate(() => {
+    const cache = PiDishBrowser.createTranscriptCache(document), root = document.createElement('div');
+    const stash = (key: string, count: number, padding: string, nested: number) => {
+      root.innerHTML = Array.from({ length: count }, (_, index) =>
+        `<div data-msg-index="${index}">${padding}${nested ? `<span>${'<i></i>'.repeat(nested)}</span>` : ''}</div>`).join('');
+      cache.stash(key, '', { oldestIndex: 0, lastIndex: count - 1, hasOlder: false, total: count }, root);
+    };
+    stash('heavy characters', 120, 'x'.repeat(20000), 0);
+    const charactersEntry = cache.restore('heavy characters', '', root);
+    const characters = root.textContent?.length || 0;
+    stash('heavy nodes', 350, 'x', 8);
+    const nodesEntry = cache.restore('heavy nodes', '', root);
+    const nodes = root.querySelectorAll('*').length, oldest = nodesEntry?.oldestIndex ?? -1;
+    cache.clear();
+    for (let i = 0; i < 5; i++) stash(`entry ${i}`, 350, 'x', 8);
+    const size = cache.size, retainedRestores = cache.restore('entry 4', '', root) !== null;
+    return { characters, charactersOldest: charactersEntry?.oldestIndex ?? -1, nodes, oldest, size, retainedRestores };
+  });
+  expect(result.characters).toBeLessThanOrEqual(1_000_000);
+  expect(result.charactersOldest).toBeGreaterThan(0);
+  expect(result.nodes).toBeLessThanOrEqual(2000);
+  expect(result.oldest).toBeGreaterThan(0);
+  expect(result.size).toBeLessThanOrEqual(4);
+  expect(result.retainedRestores).toBe(true);
+});
+
+test('retained cache refuses oversized entries and counts inline attribute payload', async ({ page, fleet }) => {
+  void fleet;
+  const result = await page.evaluate(() => {
+    const cache = PiDishBrowser.createTranscriptCache(document), host = document.createElement('div');
+    host.innerHTML = `<div data-msg-index="0">m<span>${'<i></i>'.repeat(2500)}</span></div>`;
+    const original = host.children.length;
+    cache.stash('huge', '', { oldestIndex: 0, lastIndex: 0, hasOlder: false, total: 1 }, host);
+    const hugeSingle = { restored: cache.restore('huge', '', host) !== null, size: cache.size, children: host.children.length, original };
+    cache.clear();
+    const image = (size: number) => `data:image/png;base64,${'A'.repeat(size)}`;
+    host.innerHTML = `<div data-msg-index="0">tiny</div><div data-msg-index="1"><img src="${image(600000)}" alt="one"></div><div data-msg-index="2"><img src="${image(600000)}" alt="two"></div>`;
+    cache.stash('images', '', { oldestIndex: 0, lastIndex: 2, hasOlder: false, total: 3 }, host);
+    const entry = cache.restore('images', '', host);
+    const imagePayload = { oldest: entry?.oldestIndex ?? -1, children: host.children.length };
+    cache.clear();
+    const stash = (key: string) => {
+      host.innerHTML = Array.from({ length: 350 }, (_, index) => `<div data-msg-index="${index}">x<span>${'<i></i>'.repeat(8)}</span></div>`).join('');
+      cache.stash(key, '', { oldestIndex: 0, lastIndex: 349, hasOlder: false, total: 350 }, host);
+    };
+    for (const key of ['a', 'b', 'c', 'd']) stash(key);
+    const afterFour = cache.size;
+    cache.restore('a', '', host); stash('e');
+    return { hugeSingle, imagePayload, afterFour, afterFive: cache.size };
+  });
+  expect(result.hugeSingle).toEqual({ restored: false, size: 0, children: 1, original: 1 });
+  expect(result.imagePayload).toEqual({ oldest: 2, children: 1 });
+  expect(result.afterFour).toBe(4); expect(result.afterFive).toBe(5);
+});
+
+test('retained cache preserves the reader anchor across a leading trim', async ({ page, fleet }) => {
+  void fleet;
+  const result = await page.evaluate(() => {
+    const cache = PiDishBrowser.createTranscriptCache(document), host = document.createElement('div');
+    host.style.cssText = 'height:200px;overflow:auto'; document.body.append(host);
+    host.innerHTML = Array.from({ length: 300 }, (_, index) => `<div data-msg-index="${index}" style="height:10px;margin-bottom:7px">m${index}<span>${'<i></i>'.repeat(8)}</span></div>`).join('');
+    host.scrollTop = host.scrollHeight - host.clientHeight;
+    const top = host.getBoundingClientRect().top;
+    const anchor = Array.from(host.querySelectorAll<HTMLElement>('[data-msg-index]')).find(node => node.getBoundingClientRect().bottom > top) || null;
+    const offset = anchor ? anchor.getBoundingClientRect().top - top : 0, before = host.scrollTop;
+    cache.stash('scroll', '', { oldestIndex: 0, lastIndex: 299, hasOlder: false, total: 300 }, host);
+    const entry = cache.restore('scroll', '', host);
+    const after = { before, shifted: host.scrollTop !== before, anchor: !!anchor && anchor.isConnected,
+      stable: !!anchor && Math.abs(anchor.getBoundingClientRect().top - top - offset) < 2, oldest: entry?.oldestIndex ?? -1 };
+    host.remove();
+    return after;
+  });
+  expect(result.shifted).toBe(true); expect(result.anchor).toBe(true);
+  expect(result.stable).toBe(true); expect(result.oldest).toBeGreaterThan(0);
+});
+
 for (const change of ['query', 'host', 'selection', 'endpoint', 'token'] as const) {
   test(`a deep window cannot commit after its ${change} owner changes`, async ({ page, fleet }) => {
     await setup(page, fleet); await initial(page);

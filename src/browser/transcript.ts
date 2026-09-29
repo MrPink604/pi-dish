@@ -6,18 +6,22 @@ import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';
 import { createTranscriptCache } from './transcript-cache';
 import type { TranscriptCursors } from './transcript-cache';
+import { splitToolGroupRanges } from './message-groups';
 import { decodeTranscriptPage, type TranscriptPage } from './transcript-data';
 /** The selected transcript owns its paging cursors, endpoint, requests and retained DOM. */
 export function createTranscript(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
-  renderMessage: (message: RenderMessage) => string; finalize: (root: HTMLElement, options?: { stripLive?: boolean }) => void;
+  renderMessage: (message: RenderMessage) => string; finalize: (root: HTMLElement, options?: { stripLive?: boolean; inserted?: readonly HTMLElement[] }) => void;
   closeSearch: () => void; cancelStreaming: () => void; mood: (description: string, face: string) => void; updateMood: (messages: readonly RenderMessage[]) => void;
   pinned: (root: HTMLElement) => boolean; scroll: (root: HTMLElement) => void; jump: (root: HTMLElement) => void;
   consumeEcho: (id: string, content: unknown) => void;
 }) {
   const { document, sessionState } = options, container = document.getElementById('messages')!;
   const cache = createTranscriptCache(document), requests = new Set<AbortController>();
+  /** Retained indexed messages, and the context kept around the reader or a search hit. */
+  const MAX_ACTIVE = 300, ACTIVE_CONTEXT = 25;
   let disposed = false, generation = 0, catchupSequence = 0, seekSequence = 0, older: symbol | null = null, olderFlight: Promise<void> | null = null, barEvents = new AbortController();
+  let protectedRange: { start: number; end: number } | null = null;
   let cursors: TranscriptCursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 };
   let loaded: { key: string; base: string } | null = null;
   interface Owner { selection: SelectionOwner; endpoint: Readonly<HostEndpoint>; generation: number }
@@ -31,7 +35,7 @@ export function createTranscript(options: {
     return !disposed && owner.generation === generation && sessionState.ownsSelection(owner.selection)
       && endpoint?.base === owner.endpoint.base && (endpoint.token || '') === (owner.endpoint.token || '');
   };
-  function retire() { generation++; catchupSequence++; older = null; olderFlight = null; windowFlights.clear(); barEvents.abort(); for (const request of requests) request.abort(); requests.clear(); }
+  function retire() { generation++; catchupSequence++; older = null; olderFlight = null; protectedRange = null; windowFlights.clear(); barEvents.abort(); for (const request of requests) request.abort(); requests.clear(); }
   function reset() { retire(); loaded = null; cursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 }; }
   async function page(owner: Owner, suffix: string) {
     const endpoint = options.host(owner.selection.host); if (!owns(owner) || !endpoint) throw new Error('Transcript ownership changed');
@@ -57,6 +61,45 @@ export function createTranscript(options: {
     while (node.parentElement && node.parentElement !== container) node = node.parentElement;
     return node;
   }
+  /** Parse rendered HTML as one fragment so callers learn exactly which subtrees were inserted and can scope post-render work to them. */
+  function insertHtml(html: string, before: HTMLElement | null): HTMLElement[] {
+    const template = document.createElement('template'); template.innerHTML = html;
+    const nodes = Array.from(template.content.children) as HTMLElement[];
+    if (before) container.insertBefore(template.content, before); else container.appendChild(template.content);
+    return nodes;
+  }
+  /**
+   * Bound the active transcript to MAX_ACTIVE indexed messages while keeping
+   * the oldest retained pages (where paging arrives), the live tail, and the
+   * context around the reader or a search hit. Evicted messages become gaps
+   * the existing paging controls reload, so nothing is lost irretrievably.
+   */
+  function boundActive() {
+    const indexed = Array.from(container.querySelectorAll<HTMLElement>('[data-msg-index]'));
+    if (indexed.length <= MAX_ACTIVE) return false;
+    const top = container.getBoundingClientRect().top, anchor = indexed.find(node => node.getBoundingClientRect().bottom > top) || null;
+    const ranges: { start: number; end: number }[] = [], center = Number(anchor?.dataset.msgIndex);
+    if (Number.isFinite(center)) ranges.push({ start: center - ACTIVE_CONTEXT, end: center + ACTIVE_CONTEXT });
+    if (protectedRange) ranges.push(protectedRange);
+    const within = (node: HTMLElement) => { const index = Number(node.dataset.msgIndex); return ranges.some(range => index >= range.start && index <= range.end); };
+    const keep = new Set(indexed.filter(within)), budget = Math.max(0, MAX_ACTIVE - keep.size), headQuota = Math.ceil(budget / 2);
+    let head = 0;
+    for (const node of indexed) { if (head >= headQuota) break; if (!keep.has(node)) { keep.add(node); head++; } }
+    let tail = 0;
+    for (let i = indexed.length - 1; i >= 0 && tail < budget - headQuota; i--) { const node = indexed[i]!; if (!keep.has(node)) { keep.add(node); tail++; } }
+    const offset = anchor?.getBoundingClientRect().top ?? null;
+    for (const node of indexed) if (!keep.has(node)) node.remove();
+    container.querySelectorAll('details.tool-group').forEach(group => { if (!group.querySelector('[data-msg-index]')) group.remove(); });
+    splitToolGroupRanges(container);
+    if (anchor?.isConnected && offset != null) container.scrollTop += anchor.getBoundingClientRect().top - offset;
+    let oldest: number | null = null;
+    for (const node of container.querySelectorAll<HTMLElement>('[data-msg-index]')) {
+      const index = Number.parseInt(node.dataset.msgIndex || '', 10);
+      if (Number.isFinite(index) && (oldest == null || index < oldest)) oldest = index;
+    }
+    cursors.oldestIndex = oldest; cursors.hasOlder = oldest != null && oldest > 0;
+    return true;
+  }
   /** Gaps are real group boundaries, not invented contiguous transcript history. */
   function refreshPaging() {
     container.querySelectorAll('#loadOlderBar, .transcript-gap').forEach(node => node.remove());
@@ -79,10 +122,10 @@ export function createTranscript(options: {
     const indexed = Array.from(container.querySelectorAll<HTMLElement>('[data-msg-index]'));
     const existing = new Set(indexed.map(node => Number(node.dataset.msgIndex)));
     const fresh = messages.filter(message => message.index == null || !existing.has(message.index));
-    let next = 0, anchor: HTMLElement | null = null, html = '';
+    let next = 0, anchor: HTMLElement | null = null, html = '', inserted: HTMLElement[] = [];
     const flush = () => {
       if (!html) return;
-      if (anchor) anchor.insertAdjacentHTML('beforebegin', html); else container.insertAdjacentHTML('beforeend', html);
+      inserted.push(...insertHtml(html, anchor));
       html = '';
     };
     for (const message of fresh) {
@@ -95,7 +138,8 @@ export function createTranscript(options: {
     }
     flush();
     cursors.hasOlder = cursors.oldestIndex != null && cursors.oldestIndex > 0;
-    refreshPaging(); options.finalize(container, { stripLive });
+    boundActive();
+    refreshPaging(); options.finalize(container, { stripLive, inserted: inserted.filter(node => node.isConnected) });
   }
   async function loadGap(owner: Owner, gap: HTMLElement, before: number, newer: boolean) {
     if (gap.dataset.loading) return;
@@ -106,6 +150,8 @@ export function createTranscript(options: {
     try {
       const data = await page(owner, 'limit=50&before=' + before);
       if (!owns(owner) || !container.contains(gap)) return;
+      const indices = data.messages.map(message => message.index).filter((value): value is number => value != null);
+      if (indices.length) protectedRange = { start: Math.min(...indices) - ACTIVE_CONTEXT, end: Math.max(...indices) + ACTIVE_CONTEXT };
       insertWindow(data.messages);
       if (retained?.isConnected && container.contains(retained)) container.scrollTop += topLevel(retained).getBoundingClientRect().top - offset;
     } catch (error) {
@@ -136,6 +182,8 @@ export function createTranscript(options: {
     const data = await flight.done;
     if (!owns(owner) || sequence !== seekSequence || !isCurrent()
       || !data.messages.some(message => message.index === index)) return;
+    const indices = data.messages.map(message => message.index).filter((value): value is number => value != null);
+    if (indices.length) protectedRange = { start: Math.min(...indices) - ACTIVE_CONTEXT, end: Math.max(...indices) + ACTIVE_CONTEXT };
     insertWindow(data.messages);
   }
   function stash() {
@@ -208,7 +256,11 @@ export function createTranscript(options: {
       // A search can find output newer than the last SSE catch-up. Fill that
       // sparse window chronologically, but keep the normal live append cheap.
       if (Number(indexed[indexed.length - 1]?.dataset.msgIndex) > after) insertWindow(fresh, true);
-      else { container.insertAdjacentHTML('beforeend', fresh.map(options.renderMessage).join('')); options.finalize(container); }
+      else {
+        const inserted = insertHtml(fresh.map(options.renderMessage).join(''), null);
+        if (boundActive()) refreshPaging();
+        options.finalize(container, { inserted: inserted.filter(node => node.isConnected) });
+      }
       if (data.lastIndex != null) cursors.lastIndex = Math.max(cursors.lastIndex ?? 0, data.lastIndex);
       if (pinned) options.scroll(container); else options.jump(container);
     } catch (error) { if (owns(owner) && sequence === catchupSequence) console.error('fetchNewMessagesSince failed:', error); }

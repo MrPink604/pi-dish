@@ -11,10 +11,31 @@ const context = {};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
 (0, browser_vm_js_1.assertBrowserApiContext)(context);
 const { renderSidebar } = context.PiDishBrowser;
-function render(overrides = {}) {
-    return renderSidebar({ active: [], previous: [], selected: null, tab: 'all', view: 'workspace', query: '', queriedFor: '', scope: '', indexing: false,
+function options(overrides = {}) {
+    return { active: [], previous: [], selected: null, tab: 'all', view: 'workspace', query: '', queriedFor: '', scope: '', indexing: false,
         contextMetric: 'percent', pending: [], selectedSpawn: null, expanded: new Set(), collapsed: new Set(), pinned: [], roots: new Map(),
-        closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], unread: () => false, hostChip: () => '', ...overrides });
+        closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], unread: () => false, hostChip: () => '', ...overrides };
+}
+function render(overrides = {}) {
+    return renderSidebar(options(overrides));
+}
+/** Run `body` with the vm's clock frozen at `start`, movable by the callback. */
+function withClock(start, body) {
+    const previous = Reflect.get(context, 'Date');
+    let now = start;
+    Reflect.set(context, 'Date', class extends Date {
+        constructor(...args) { super(args.length ? args[0] : now); }
+        static now() { return now; }
+    });
+    try {
+        return body(ms => { now += ms; });
+    }
+    finally {
+        if (previous === undefined)
+            Reflect.deleteProperty(context, 'Date');
+        else
+            Reflect.set(context, 'Date', previous);
+    }
 }
 test('sidebar presents decoded optional fields and retains explicit null family boundaries', () => {
     const parent = { id: 'parent', name: '<parent>', cwd: '/repo' };
@@ -95,4 +116,68 @@ test('debounced ranking preserves metadata tie order under equal stale server sc
     const authoritative = render({ previous, query: 'work', queriedFor: 'work' }).html;
     assert.ok(authoritative.indexOf('data-id="content"') < authoritative.indexOf('data-id="metadata"'));
     assert.ok(authoritative.indexOf('data-id="metadata"') < authoritative.indexOf('data-id="named"'));
+});
+test('an unchanged poll reuses the sidebar projection while semantic changes rebuild it', () => {
+    const memo = {};
+    const first = renderSidebar(options(), memo);
+    assert.equal(renderSidebar(options(), memo), first, 'equal inputs reuse the built projection');
+    const renamed = renderSidebar(options({ previous: [{ id: 'a', name: 'Renamed', cwd: '/repo' }] }), memo);
+    assert.notEqual(renamed, first, 'a renamed session rebuilds');
+    assert.match(renamed.html, /Renamed/);
+    assert.equal(renderSidebar(options({ previous: [{ id: 'a', name: 'Renamed', cwd: '/repo' }] }), memo), renamed);
+});
+test('unread, selection, pins, host health and query state invalidate the reused projection', () => {
+    const memo = {};
+    const row = { id: 'a', name: 'Alpha', cwd: '/repo', isActive: false };
+    const idle = renderSidebar(options({ active: [row] }), memo);
+    const unread = renderSidebar(options({ active: [row], unread: () => true }), memo);
+    assert.notEqual(unread, idle);
+    assert.match(unread.html, /session-item-status unread/);
+    const selected = renderSidebar(options({ active: [row], selected: row }), memo);
+    assert.notEqual(selected, unread);
+    assert.match(selected.html, /session-item active/);
+    const pinned = renderSidebar(options({ active: [row], pinned: ['a'] }), memo);
+    assert.notEqual(pinned, selected);
+    assert.match(pinned.html, /pinned-header/);
+    const host = { hostId: 'peer', label: 'Peer', state: 'reachable', key: 'peer', color: '#abc', dot: '', hasCache: true };
+    const peer = { id: 'p', name: 'Peer root', cwd: '/repo', host: 'peer', isActive: true, lastActivity: 1 };
+    const online = renderSidebar(options({ active: [peer], multiHost: true, hosts: [host] }), memo);
+    const offline = renderSidebar(options({ active: [peer], multiHost: true, hosts: [{ ...host, state: 'backoff' }] }), memo);
+    assert.notEqual(offline, online);
+    assert.match(offline.html, /host-section offline/);
+    const searched = renderSidebar(options({ active: [peer], multiHost: true, hosts: [host], query: 'peer' }), memo);
+    assert.notEqual(searched, offline);
+    assert.match(searched.html, /ranked-segment/);
+});
+test('relative-time labels roll with the clock while a poll inside their bucket reuses the projection', () => {
+    withClock(1_700_000_000_000, advance => {
+        const memo = {};
+        const lastActivity = 1_700_000_000_000 - 90_000;
+        const at = () => options({ active: [{ id: 'a', name: 'Alpha', cwd: '/repo', isActive: true, lastActivity }] });
+        const first = renderSidebar(at(), memo);
+        assert.match(first.html, /1m ago/);
+        advance(5_000);
+        assert.equal(renderSidebar(at(), memo), first, 'an unchanged poll inside the minute reuses');
+        advance(55_000);
+        const rolled = renderSidebar(at(), memo);
+        assert.notEqual(rolled, first, 'the next minute rebuilds the label');
+        assert.match(rolled.html, /2m ago/);
+    });
+});
+test('the cache countdown rolls its minute while sub-minute polls reuse the projection', () => {
+    withClock(1_700_000_000_000, advance => {
+        const memo = {};
+        const cacheExpiry = { refreshedAt: 1_700_000_000_000, expiresAt: 1_700_000_000_000 + 4 * 60_000 + 20_000,
+            retentionMs: 5 * 60_000, retention: '5m', basis: 'fixed' };
+        const at = () => options({ active: [{ id: 'a', name: 'Alpha', cwd: '/repo', cacheExpiry: { ...cacheExpiry } }] });
+        const first = renderSidebar(at(), memo);
+        assert.match(first.html, /~5m/);
+        advance(10_000);
+        assert.equal(renderSidebar(at(), memo), first, 'a sub-minute countdown tick reuses');
+        advance(50_000);
+        assert.notEqual(renderSidebar(at(), memo), first, 'the countdown minute rolls');
+    });
+});
+test('the sidebar without a memo still builds an independent projection', () => {
+    assert.notEqual(render(), render());
 });

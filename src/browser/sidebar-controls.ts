@@ -26,9 +26,14 @@ export function createSidebarControls(options: {
   let pinned = read('pi-dish-pinned-sessions');
   const render = () => { if (!disposed) options.render(); };
   let layout = '', renderedRows = new Map<string, { html: string; element: HTMLElement }>();
+  let lastProjection: SidebarProjection | null = null;
   /** Keep unchanged cards alive; parse only new/changed cards and small group headings. */
   function updateList(projection: SidebarProjection) {
     if (disposed || drag) return false;
+    // An unchanged poll hands back the very projection it rendered last time
+    // (the renderer's memo), so there is nothing to compare row by row.
+    if (projection === lastProjection) return false;
+    lastProjection = projection;
     const structureChanged = layout !== projection.layout;
     const changed = projection.rows.filter(row => renderedRows.get(row.key)?.html !== row.html);
     if (!structureChanged && !changed.length) return false;
@@ -244,7 +249,7 @@ export function createSidebarControls(options: {
       event.preventDefault(); openMenu(session, event.clientX, event.clientY);
     }, { signal });
   }
-  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); renderedRows.clear(); rootMap.clear(); rootLists = null; }
+  function dispose() { if (disposed) return; disposed = true; lifetime.abort(); clearConfirm(); busy = null; closeMenu(); menu?.remove(); menu = null; if (drag) finishDrag(drag, false); renderedRows.clear(); lastProjection = null; rootMap.clear(); rootLists = null; }
   return { mount, dispose, updateList, migrate, reloadPreferences, toggleGroup, toggleFamily, familyRoots, reveal, togglePin, closeClick, performClose, openMenu, closeMenu,
     get menuOpen() { return !!menuOwner; }, get dragging() { return !!drag; }, get closeConfirm() { return confirm?.key || null; }, get closeBusy() { return busy?.key || null; },
     get collapsed(): ReadonlySet<string> { return collapsed; }, get expanded(): ReadonlySet<string> { return expanded; }, get pinned(): readonly string[] { return pinned; } };

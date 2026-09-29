@@ -122,13 +122,17 @@ All first-party browser application logic is authored under `src/browser/`.
 `app.ts` composes typed feature controllers; static HTML carries registered action
 names wired through `app-bindings.ts`. `app-chrome.ts` owns viewport, focus and
 mobile-panel state. Run `npm run build:browser` and commit all five generated
-scripts; `npm run check` rejects stale output. The app bundles ordinary imports
-from the feature modules and shared helpers into one private IIFE. It exposes
-no application globals. Browser fixtures observe feature construction and ports
+scripts; `npm run check` rejects stale output. All five outputs are minified.
+The app bundles ordinary imports from the feature modules and shared helpers
+into one private IIFE. It exposes no application globals. Browser fixtures observe feature construction and ports
 in a separate test-only build; the production page loads neither the factory
 test entrypoint nor a debug object. References to older app function names below
 describe the corresponding feature behavior, not global entrypoints or permission
 to edit generated `public/app.js`. See [the composition record](docs/browser-composition-cleanup.md).
+
+Timestamp helpers reuse locale-aware `Intl.DateTimeFormat` instances. They
+apply each timestamp's local offset before UTC formatting so DST and system
+time-zone changes do not leave a cached formatter showing stale local times.
 
 ## Frontend libraries (public/vendor/)
 
@@ -138,8 +142,11 @@ markdown to a crude regex fallback. The checked `scripts/build-vendor.ts`
 implementation runs through its generated `.js` command path: it copies marked's
 UMD build and uses the pinned esbuild to bundle highlight.js's CJS `lib/common`
 for the browser, preserving `window.hljs` without a handwritten module loader.
-Re-run it after bumping either dependency. KaTeX's bundle and stylesheet load only when a session is selected,
-before its transcript renders. The vendor build retains only KaTeX's WOFF2
+Re-run it after bumping either dependency. KaTeX's bundle and stylesheet load
+only when the markdown tokenizer encounters math, never as a session-selection
+barrier. Escaped TeX placeholders paint immediately and hydrate after the
+assets arrive, including inside retained transcript fragments. Math-free
+transcripts fetch no KaTeX assets. The vendor build retains only KaTeX's WOFF2
 fonts — supported clients are modern Chrome/Electron, and shipping the WOFF/TTF
 fallbacks triples packaged font bytes without changing what they request. Note
 marked v12 removed the
@@ -1227,6 +1234,11 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   including after a host is removed and re-added; an old 401 cannot overwrite a
   newer request's successful connection state. The app retains fan-out selection,
   indexing timers and unread bookkeeping before the state writer renders rows.
+  Periodic sidebar and indexing polls pause while the document is hidden;
+  the existing visibility-return refresh resumes them and joins any request
+  already in flight. Identical display inputs reuse a caller-owned sidebar
+  projection, including its card markup. Selection, unread state, host health,
+  query/pin changes and relative-time/cache-countdown boundaries invalidate it.
   Connection state and poll eligibility live in
   `src/browser/host-connections.ts`, including the pure `hostConnReduce`:
   the `[3,4,8,16]s` ladder, `blocked` sticky
@@ -1559,8 +1571,13 @@ far** — intermediates are droppable. The path is:
 3. `public/app.js` queues the latest message and renders through
    `renderStreamingMessage()` — a throttled (~80ms) **incremental block-level
    renderer**: one streaming DOM element, one child per content block
-   (`data-block-index`), and only changed blocks are touched. No
-   outerHTML swaps, so `<details>` open state survives and markdown renders
+   (`data-block-index`), and only changed blocks are touched. Completed markdown
+   blocks retain their DOM; append-only frames lex and render the unfinished
+   tail. Rewrites, late reference definitions and unsafe token boundaries
+   fall back to a full render rather than changing markdown semantics.
+   Scroll work coalesces into one selection-owned animation-frame callback;
+   manual scrolling or retiring the stream cannot be overridden by an old frame.
+   No outerHTML swaps, so `<details>` open state survives and markdown renders
    live mid-stream. `message_end` swaps the placeholder for the finalized
    render **in place and un-indexed**; the `turn_end` JSONL catch-up then
    replaces it with the indexed version (never gate that insert on other
@@ -2213,10 +2230,22 @@ recognition errors are the user's to fix before the agent sees them.
 - **History retention and implicit paging**: the newest 50 messages still form
   the cold-load baseline, but scrolling within 200px of the top implicitly
   calls `loadOlderMessages()` (the explicit button remains as a fallback).
+  The active transcript retains at most 300 indexed messages around the reader,
+  a search/gap window, the oldest loaded context and the live tail. Unindexed
+  in-flight content remains until authoritative catch-up. Evicted middle ranges
+  become reloadable gaps; tool groups split at those boundaries. Incremental
+  post-processing decorates only newly inserted subtrees, while grouping still
+  reconciles the root.
   Pages a reader intentionally loaded are moved, not cloned, into a bounded
   per-session `DocumentFragment` cache on navigation: five recent transcripts
-  for 15 minutes, including their scroll position, open DOM state, cursors,
-  and mood. Sparse hit windows retain explicit gap controls to load newer or
+  for 15 minutes. A stashed entry is limited to 300 indexed messages, 2,000
+  elements and one million text/attribute characters; the cache-wide limits
+  are 8,000 elements and four million characters. Inline image/source attributes
+  count toward the budget. Safe leading trims preserve the reader's actual
+  visual anchor; entries that cannot fit, or would discard that anchor, are
+  evicted and reload from JSONL. Restored nodes no longer charge the cache budget.
+  Retained entries preserve open DOM state, cursors and mood.
+  Sparse hit windows retain explicit gap controls to load newer or
   older context without treating omitted history as contiguous; tool groups
   cannot merge across a gap. Restoring a warm transcript rebinds these controls
   and immediately performs an `after=` catch-up against the actual tail cursor,

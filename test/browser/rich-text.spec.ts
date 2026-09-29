@@ -1,6 +1,11 @@
 import type { Page, Route } from '@playwright/test';
 import type { MermaidRuntime } from '../../src/browser/rich-text-vendors.js';
-import { test, expect, requiredRoute } from './fixtures.js';
+import fs = require('node:fs');
+import path = require('node:path');
+import { test, expect, ROOT, requiredRoute } from './fixtures.js';
+
+const katexScript = fs.readFileSync(path.resolve(__dirname, '../../public/vendor/katex.min.js'), 'utf8');
+const katexStyles = fs.readFileSync(path.resolve(__dirname, '../../public/vendor/katex.min.css'), 'utf8');
 
 test('Markdown keeps HTML and unsafe links inert, literal single tildes and explicit strike', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
@@ -119,6 +124,74 @@ test('diagram growth carries a still-pinned feed after measuring before SVG inse
   await fleet.select(fleet.self); await diagrams(page);
   await page.evaluate(() => { window.diagramRequireBeforeSvg = true; fixtureElement(window.diagramCalls[0], 'diagram render').resolve({ svg: '<svg><text>Taller diagram</text></svg>' }); });
   await expect.poll(() => page.evaluate(() => window.diagramScrolls)).toBe(1);
+});
+
+test('a math-free transcript never requests the KaTeX bundle', async ({ page, fleet }) => {
+  const vendor: string[] = [];
+  page.on('request', request => { if (/vendor\/katex\./.test(request.url())) vendor.push(request.url()); });
+  // Prose, inline code and a code fence that merely *mention* the placeholder
+  // markup must stay literal text and never pull the math bundle in.
+  const prose = 'Report: `data-math-source` and `<span class="math-pending" data-math-source="x">` are literal text.\n\n```html\n<span class="math-pending" data-math-source="y">z</span>\n```';
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({ json: { messages: [{ role: 'assistant', index: 0, content: prose }], session: {} } }));
+  await page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host, forceTranscriptReload: true }), { id: ROOT, host: fleet.self.hostId });
+  await expect(page.locator('#messages')).toContainText('are literal text');
+  await expect(page.locator('#messages .math-pending')).toHaveCount(0);
+  expect(vendor).toEqual([]);
+});
+
+test('math loads on first render and hydrates a retired fragment once KaTeX arrives', async ({ page, fleet }) => {
+  let script: Route | null = null, styles: Route | null = null;
+  await page.route('**/vendor/katex.min.js', route => { script = route; });
+  await page.route('**/vendor/katex.min.css', route => { styles = route; });
+  const markdown = 'Energy $E=mc^2$ here.\n\n$$\\int_0^1 x\\,dx$$\n\nUnsafe $\\text{<img src=x onerror=window.richInjected=1>}$';
+  const page1 = { messages: [{ role: 'assistant', index: 0, content: markdown }], session: {}, firstIndex: 0, lastIndex: 0, hasMore: false, totalMessages: 1 };
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({ json: page1 }));
+  await page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host, forceTranscriptReload: true }), { id: ROOT, host: fleet.self.hostId });
+  // KaTeX is absent, so math holds inert placeholders; nothing unsafe rendered.
+  await expect(page.locator('#messages .math-pending')).toHaveCount(3);
+  await expect(page.locator('#messages img')).toHaveCount(0);
+  await expect.poll(() => !!script && !!styles).toBe(true);
+  // Retire the session with the bundle still in flight: the stashed fragment
+  // keeps placeholders, and the completion pass must reach into the cache.
+  await page.evaluate(() => { const node = document.querySelector('#messages [data-msg-index]'); if (node instanceof HTMLElement) node.dataset.fixtureMark = 'kept'; });
+  await fleet.select(fleet.peer);
+  await requiredRoute(styles).fulfill({ contentType: 'text/css', body: katexStyles });
+  await requiredRoute(script).fulfill({ contentType: 'text/javascript', body: katexScript });
+  await expect.poll(() => page.evaluate(() => typeof Reflect.get(globalThis, 'katex'))).not.toBe('undefined');
+  await fleet.select(fleet.self);
+  // The marked node proves this is the retained fragment, not a fresh render.
+  await expect(page.locator('#messages [data-msg-index][data-fixture-mark="kept"]')).toHaveCount(1);
+  await expect(page.locator('#messages .math-pending')).toHaveCount(0);
+  await expect(page.locator('#messages .math-block .katex')).toHaveCount(1);
+  await expect(page.locator('#messages .katex')).toHaveCount(3);
+  await expect(page.locator('#messages img')).toHaveCount(0);
+  // Late hydration must land on exactly the markup a first-pass render produces.
+  expect(await page.evaluate(source => {
+    const live = document.querySelector('#messages .markdown-body');
+    const reference = document.createElement('div'); reference.innerHTML = fixtureApp.features.richText.format(source);
+    return !!live && live.innerHTML === reference.innerHTML;
+  }, markdown)).toBe(true);
+});
+
+test('streamed math keeps an inert placeholder until the bundle lands, then hydrates in place', async ({ page, fleet }) => {
+  let script: Route | null = null, styles: Route | null = null;
+  await page.route('**/vendor/katex.min.js', route => { script = route; });
+  await page.route('**/vendor/katex.min.css', route => { styles = route; });
+  await fleet.select(fleet.self);
+  await page.evaluate(() => {
+    fixtureElement(document.getElementById('messages'), '#messages').replaceChildren();
+    fixtureApp.features.streamingRenderer.render({ role: 'assistant', content: 'answer $x^2$' });
+  });
+  await expect(page.locator('#messages .math-pending')).toHaveCount(1);
+  await expect.poll(() => !!script && !!styles).toBe(true);
+  await requiredRoute(styles).fulfill({ contentType: 'text/css', body: katexStyles });
+  await requiredRoute(script).fulfill({ contentType: 'text/javascript', body: katexScript });
+  await expect(page.locator('#messages .math-pending')).toHaveCount(0);
+  await expect(page.locator('#messages .katex')).toHaveCount(1);
+  // Continuing the stream after hydration must not reintroduce placeholders.
+  await page.evaluate(() => fixtureApp.features.streamingRenderer.render({ role: 'assistant', content: 'answer $x^2$ plus more text' }));
+  await expect(page.locator('#messages .math-pending')).toHaveCount(0);
+  await expect(page.locator('#messages .katex')).toHaveCount(1);
 });
 
 export {};

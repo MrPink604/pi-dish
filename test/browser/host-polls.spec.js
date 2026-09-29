@@ -114,3 +114,52 @@ const fixtures_js_1 = require("./fixtures.js");
         await selfRow?.dispose();
     }
 });
+(0, fixtures_js_1.test)('an unchanged poll repaints nothing in the session list', async ({ page, fleet }) => {
+    await (0, fixtures_js_1.expect)(fleet.row(fleet.self)).toBeVisible();
+    const mutations = await page.evaluate(async () => {
+        const list = document.getElementById('sessionList');
+        if (!list)
+            throw new Error('Missing session list');
+        const refresh = async () => {
+            await fixtureApp.features.sidebarLists.refresh();
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+        };
+        await refresh(); // settle indexing and host health so the observed poll is a true repeat
+        let count = 0;
+        const observer = new MutationObserver(records => { count += records.length; });
+        observer.observe(list, { childList: true, subtree: true, characterData: true, attributes: true });
+        await refresh();
+        observer.disconnect();
+        return count;
+    });
+    (0, fixtures_js_1.expect)(mutations).toBe(0);
+});
+(0, fixtures_js_1.test)('background polling stops while the document is hidden and resumes on return', async ({ page, fleet }) => {
+    // Speed the 10s sidebar poll up so the pause/resume is observable without a
+    // real wait; no other timer in the app runs on that period.
+    await page.addInitScript(() => {
+        const realSetInterval = window.setInterval.bind(window);
+        window.setInterval = ((handler, timeout, ...args) => realSetInterval(handler, timeout === 10000 ? 200 : timeout, ...args));
+    });
+    await page.reload();
+    const polls = [];
+    await page.route(`${fleet.self.base}/api/sessions?**`, route => { polls.push(route.request().url()); return route.continue(); });
+    await fixtures_js_1.expect.poll(() => polls.length).toBeGreaterThan(1);
+    // The page-reported visibility is a DOM-backed flag so the app's own getter
+    // and listener stay the only code path exercised.
+    await page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', { configurable: true,
+            get: () => document.documentElement.hasAttribute('data-fixture-hidden') });
+    });
+    const setHidden = (value) => page.evaluate(visible => {
+        document.documentElement.toggleAttribute('data-fixture-hidden', visible);
+        document.dispatchEvent(new Event('visibilitychange'));
+    }, value);
+    await setHidden(true);
+    await page.waitForTimeout(200);
+    const paused = polls.length;
+    await page.waitForTimeout(800);
+    (0, fixtures_js_1.expect)(polls.length).toBe(paused);
+    await setHidden(false);
+    await fixtures_js_1.expect.poll(() => polls.length).toBeGreaterThan(paused);
+});

@@ -357,4 +357,93 @@ test('ask-blocked toast fires once per transition and skips the selected session
   }
 });
 
+/** A list whose only host answers `indexing` with an empty corpus. */
+function pollingFixture() {
+  const intervals: Array<{ fn: () => void; ms: number }> = [];
+  const timeouts: Array<{ fn: () => void; ms: number }> = [];
+  const cleared: unknown[] = [];
+  const previous: Record<string, unknown> = {
+    setInterval: Reflect.get(context, 'setInterval'), clearInterval: Reflect.get(context, 'clearInterval'),
+    setTimeout: Reflect.get(context, 'setTimeout'), clearTimeout: Reflect.get(context, 'clearTimeout'),
+  };
+  Reflect.set(context, 'setInterval', (fn: () => void, ms: number) => { const handle = { fn, ms }; intervals.push(handle); return handle; });
+  Reflect.set(context, 'clearInterval', (handle: unknown) => { cleared.push(handle); });
+  Reflect.set(context, 'setTimeout', (fn: () => void, ms: number) => { const handle = { fn, ms }; timeouts.push(handle); return handle; });
+  Reflect.set(context, 'clearTimeout', (handle: unknown) => { cleared.push(handle); });
+  const hidden = { value: false };
+  const fixtureDocument = new DOMParser().parseFromString('<html><body/></html>', 'text/html');
+  Object.defineProperties(fixtureDocument, { hidden: { get: () => hidden.value }, querySelector: { value: () => null } });
+  const state = createSessionState({ getSelfHostId: () => 'self', getHostLabel: hostId => hostId, onListsChanged() {}, onCurrentChanged() {} });
+  const hosts = [{ hostId: 'self', base: '', self: true }];
+  const counters = { calls: 0 };
+  const lists = createSidebarLists({
+    document: fixtureDocument, sessionState: state,
+    activity: { reload() {}, mark() {}, unread() { return false; }, title() {}, prune() {}, migrate() {} },
+    hosts: () => hosts, pollable: () => hosts, selfId: () => 'self', query: () => '', all: () => true,
+    refreshFleet() {}, connection() {},
+    request: async () => { counters.calls += 1; return new Response(JSON.stringify({ active: [], previous: [], indexing: true })); },
+  });
+  return {
+    lists, counters, hidden, intervals, timeouts, cleared,
+    restore() { for (const [name, value] of Object.entries(previous)) Reflect.set(context, name, value); },
+  };
+}
+
+test('background polling pauses while the document is hidden and resumes when it is visible', async () => {
+  const fixture = pollingFixture();
+  try {
+    fixture.lists.mount();
+    fixture.lists.mount();
+    assert.equal(fixture.intervals.filter(handle => handle.ms === 10000).length, 1, 'mount registers one background poll');
+    const poll = present(fixture.intervals.find(handle => handle.ms === 10000));
+
+    fixture.hidden.value = true;
+    poll.fn();
+    assert.equal(fixture.counters.calls, 0, 'a hidden document issues no background request');
+
+    fixture.hidden.value = false;
+    poll.fn();
+    assert.equal(fixture.counters.calls, 1, 'the poll resumes once visible');
+
+    // The answering response settles before `onIndexing` can schedule its follow-up.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const indexing = present(fixture.timeouts.find(handle => handle.ms === 1000));
+    fixture.hidden.value = true;
+    indexing.fn();
+    assert.equal(fixture.counters.calls, 1, 'the indexing follow-up is background work too');
+
+    await fixture.lists.load('explicit query');
+    assert.equal(fixture.counters.calls, 2, 'an explicit foreground load is untouched while hidden');
+  } finally {
+    fixture.lists.dispose();
+    fixture.restore();
+  }
+  assert.ok(fixture.cleared.length >= 1, 'disposal clears the background timers');
+});
+
+test('a resume refresh joins an in-flight poll instead of duplicating it', async () => {
+  const pending: Array<(wire: unknown) => void> = [];
+  let calls = 0;
+  const fixtureDocument = new DOMParser().parseFromString('<html><body/></html>', 'text/html');
+  Object.defineProperties(fixtureDocument, { hidden: { value: false }, querySelector: { value: () => null } });
+  const hosts = [{ hostId: 'self', base: '', self: true }];
+  const lists = createSidebarLists({
+    document: fixtureDocument,
+    sessionState: createSessionState({ getSelfHostId: () => 'self', getHostLabel: hostId => hostId, onListsChanged() {}, onCurrentChanged() {} }),
+    activity: { reload() {}, mark() {}, unread() { return false; }, title() {}, prune() {}, migrate() {} },
+    hosts: () => hosts, pollable: () => hosts, selfId: () => 'self', query: () => '', all: () => true,
+    refreshFleet() {}, connection() {},
+    request: () => { calls += 1; return new Promise<Response>(resolve => pending.push(wire => resolve(new Response(JSON.stringify(wire))))); },
+  });
+  try {
+    const first = lists.refresh(), second = lists.refresh();
+    assert.equal(calls, 1, 'the second refresh adopts the in-flight request');
+    at(pending, 0)({ active: [], previous: [] });
+    await Promise.all([first, second]);
+    assert.equal(calls, 1, 'the joined request is not repeated');
+  } finally {
+    lists.dispose();
+  }
+});
+
 export {};

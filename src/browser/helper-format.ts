@@ -148,6 +148,27 @@ export function formatResponseMetadata(msg?: ResponseMetadata | null, mode = 'co
 }
 
 
+const timeFormatOptions: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' };
+const dateFormatOptions: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+let formatterLocale: string | undefined;
+let timeFormatter: Intl.DateTimeFormat | undefined, dateFormatter: Intl.DateTimeFormat | undefined;
+function formatLocalDate(date: Date, time: boolean): string {
+  const locale = typeof navigator === 'undefined' ? '' : navigator.language;
+  if (locale !== formatterLocale) {
+    formatterLocale = locale; timeFormatter = dateFormatter = undefined;
+  }
+  // Apply the timestamp's current local offset before formatting in UTC. Cached
+  // formatters then remain correct across DST and system time-zone changes.
+  const local = date.getTime() - date.getTimezoneOffset() * 60_000;
+  if (!Number.isFinite(local) || Math.abs(local) > 8.64e15) {
+    return time ? date.toLocaleTimeString([], timeFormatOptions) : date.toLocaleDateString([], dateFormatOptions);
+  }
+  const formatter = time
+    ? timeFormatter ||= new Intl.DateTimeFormat([], { ...timeFormatOptions, timeZone: 'UTC' })
+    : dateFormatter ||= new Intl.DateTimeFormat([], { ...dateFormatOptions, timeZone: 'UTC' });
+  return formatter.format(local);
+}
+
 export function formatRelativeTime(ts?: Timestamp | null) {
   if (!ts) return '';
   const diff = Math.max(0, Date.now() - new Date(ts).getTime());
@@ -157,12 +178,12 @@ export function formatRelativeTime(ts?: Timestamp | null) {
   if (h < 24) return h + 'h ago';
   if (d === 1) return 'yesterday';
   if (d < 7) return d + 'd ago';
-  return new Date(ts).toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return formatLocalDate(new Date(ts), false);
 }
 
 
 export function formatTime(ts: Timestamp) {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return formatLocalDate(new Date(ts), true);
 }
 
 /** Compact elapsed time for the working indicator: 0:05, 4:32, 1:04:09. */

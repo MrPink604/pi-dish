@@ -20,7 +20,7 @@ import { createSidebarActivity } from './sidebar-activity';
 import { createSidebarQuery } from './sidebar-query';
 import { createSidebarLists } from './sidebar-lists';
 import { createSidebarControls } from './sidebar-controls';
-import { renderSidebar } from './sidebar-render';
+import { renderSidebar, type SidebarProjectionMemo } from './sidebar-render';
 import { createSessionView } from './session-view';
 import { createMainPane } from './main-pane';
 import { createSessionResume } from './session-resume';
@@ -580,6 +580,7 @@ function isSessionMenuOpen() { return sidebarControls.menuOpen; }
 
 // State publications stay immediate; paint the latest snapshot once per frame.
 let sessionListFrame: number | null = null;
+const sidebarProjectionMemo: SidebarProjectionMemo = {};
 function renderSessions() {
   sidebarActivity.title(); // Hidden tabs still need their unread indicator.
   if (sessionListFrame !== null) return;
@@ -599,7 +600,7 @@ function renderSessions() {
         return { ...host, state: hostConnections.stateOf(host), key: hostKeyOf(host), color: hostPresentation.colorFor(host.hostId || null),
           dot: hostPresentation.dotHtml(host.hostId || null, 'host-section-dot'), hasCache: !!cache && !!(cache.active.length || cache.previous.length) };
       }),
-    });
+    }, sidebarProjectionMemo);
     const countEl = (document.getElementById('countActive') as HTMLElement);
     if (countEl) countEl.textContent = projection.count ? String(projection.count) : '';
     sidebarControls.updateList(projection);
@@ -618,7 +619,7 @@ const sessionView: ReturnType<typeof createSessionView> = createSessionView({ do
   closeTerminal: () => terminalController.close(), clearExtension: () => extensionUI.clear(), clearRelations: () => sessionRelationsController.clear(), closeControls: () => appChrome.closePanel(), hideAutocomplete: () => composerAutocomplete.hide(),
   retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => promptDelivery.render(data), closeBtw: () => btwPanel.close(), resetArtifacts: () => sessionInfo.resetArtifacts(),
   thinking: () => sessionControls.updateThinking(), terminal: () => terminalController.updateButtons(), mic: () => composerSpeech.updateButton(), mood: (description, face) => moodController.set(description, face), status: (message, type) => setStatus(message, type),
-  render: () => renderSessions(), cancelRecording: () => composerSpeech.cancel(), hideNote: () => composerNotes.hide(), math: () => richText.loadMath(), reveal: (id, host) => sidebarControls.reveal(id, host),
+  render: () => renderSessions(), cancelRecording: () => composerSpeech.cancel(), hideNote: () => composerNotes.hide(), reveal: (id, host) => sidebarControls.reveal(id, host),
   seen: session => sidebarActivity.mark(session), artifacts: owner => sessionInfo.refreshArtifacts(owner), header: () => sessionHeader.update(), relations: owner => sessionRelationsController.load(owner), models: (id, harness) => appModels.load(id, harness), commands: id => composerAutocomplete.loadCommands(id),
 });
 
@@ -1006,10 +1007,12 @@ function readJSONPref(key: string, fallback: unknown): unknown {
  * prepending older pages — the live panels at the bottom belong to the
  * in-flight turn and must survive.
  */
-function finalizeRender(container: HTMLElement, { stripLive = true } = {}) {
+function finalizeRender(container: HTMLElement, { stripLive = true, inserted }: { stripLive?: boolean; inserted?: readonly HTMLElement[] } = {}) {
   if (stripLive) liveToolsController.clear(container);
   groupToolActivity(container);
-  richText.highlight(container);
+  if (inserted) {
+    for (const root of inserted) richText.highlight(root);
+  } else richText.highlight(container);
 }
 
 // =========================================================================
@@ -1023,6 +1026,7 @@ function finalizeRender(container: HTMLElement, { stripLive = true } = {}) {
 
 const streamingRenderer: ReturnType<typeof createStreamingRenderer> = createStreamingRenderer({
   document, sessionState, markdown: text => richText.format(text), pinned: (...args) => appChrome.pinned(...args), scroll: (...args) => appChrome.scroll(...args), jump: (...args) => appChrome.jump(...args),
+  stream: (previous, text) => richText.stream(previous, text),
 });
 
 function setStatus(message: string, type = '') {
@@ -1056,6 +1060,7 @@ const diagramRenderer: ReturnType<typeof createDiagrams> = createDiagrams({
 const richText: ReturnType<typeof createRichText> = createRichText({
   document, marked: typeof marked === 'undefined' ? null : marked, highlight: () => typeof hljs === 'undefined' ? null : hljs,
   assets: browserAssets, diagrams: diagramRenderer, sessionState, copy: text => copyTextToClipboard(text), status: (message, type) => setStatus(message, type),
+  retainedRoots: () => transcriptController.retainedRoots(),
 });
 
 function copyTextToClipboard(text: string) { return copyTextToClipboardBase(text, document, navigator); }

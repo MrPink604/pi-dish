@@ -1,12 +1,83 @@
-import type { MarkedRuntime, HighlightRuntime } from './rich-text-vendors';
+import type { MarkedRuntime, HighlightRuntime, MarkdownToken } from './rich-text-vendors';
+import type { KatexRenderer } from '../core/helper-types';
 import type { createBrowserAssets } from './browser-assets';
 import type { createDiagrams } from './diagrams';
 import { escapeHtml } from '../core/helper-format';
-import { sanitizeMarkdownUrl, createMathExtensions, diagramKindForFence, looksLikeFilePath, findPathTokens } from './helper-markdown';
+import { createMathExtensions } from '../core/helper-markdown';
+import { sanitizeMarkdownUrl, diagramKindForFence, looksLikeFilePath, findPathTokens } from './helper-markdown';
 import type { SessionState } from './session-state';
+import type { StreamingBlockState, StreamingFrame } from './streaming-render';
 import { record } from '../core/helper-values';
+
+declare const katex: KatexRenderer | undefined;
+const MATH_PENDING_CLASS = 'math-pending', MATH_SOURCE_ATTR = 'data-math-source';
+// Set by the placeholder renderer, so "this document needed KaTeX" comes from
+// the shared math tokenizer actually rendering a token — never from matching
+// text that merely mentions the attribute.
+let pendingMathRenders = 0;
+
+/**
+ * KaTeX stand-in used until the real bundle loads: it keeps the token's exact
+ * TeX (escaped) and the display mode the shared renderer chose, so hydration
+ * reproduces `katex.renderToString` exactly — and stays inert if it never loads.
+ */
+const pendingKatex: KatexRenderer = {
+  renderToString(source, options) {
+    pendingMathRenders++;
+    const display = Boolean(options.displayMode);
+    return `<span class="${MATH_PENDING_CLASS}" ${MATH_SOURCE_ATTR}="${escapeHtml(source)}" data-math-display="${display}">${escapeHtml(display ? `$$${source}$$` : `$${source}$`)}</span>`;
+  },
+};
+
+function mathRuntime(): KatexRenderer | null { return typeof katex === 'undefined' ? null : katex; }
+
+/**
+ * Top-level block types that may be finalized at all; an unknown/extension
+ * token type always stops the committed prefix.
+ */
+const STABLE_BLOCK_TYPES: Record<string, true> = {
+  heading: true, paragraph: true, space: true, code: true, blockquote: true, table: true, hr: true, html: true, blockMath: true, list: true,
+};
+/**
+ * Types that definitively end a list when they follow it across a blank line. A
+ * paragraph or another list can still become one of its items (an unfinished
+ * marker only needs a `.` to merge into the list above it), so those never let
+ * the list be finalized.
+ */
+const LIST_TERMINATORS: Record<string, true> = { heading: true, code: true, html: true, hr: true, table: true };
+
+/**
+ * Length of `source`'s finalized block prefix: the source every later line is
+ * powerless to change. Only a blank line closes a block — a paragraph, table,
+ * fence or setext underline otherwise still absorbs what follows — the block
+ * before that blank line must not be able to continue past it (a list takes
+ * another item, a blockquote another `>` line), the boundary must land on a
+ * line start (leading whitespace decides indented code versus paragraph), and
+ * every preceding token must be a type that can be finalized at all.
+ */
+function stablePrefixEnd(source: string, tokens: readonly MarkdownToken[]) {
+  const ends: number[] = [], nextContent: (string | null)[] = new Array(tokens.length).fill(null);
+  let total = 0, seen: string | null = null;
+  for (let i = tokens.length - 1; i >= 0; i--) { nextContent[i] = seen; if (tokens[i].type !== 'space') seen = tokens[i].type; }
+  for (const token of tokens) { total += token.raw.length; ends.push(total); }
+  let end = 0, previous: string | null = null;
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.type !== 'space') {
+      if (STABLE_BLOCK_TYPES[token.type] !== true) break;
+      previous = token.type;
+      continue;
+    }
+    const terminator = nextContent[i];
+    if (previous === 'list' && (terminator === null || LIST_TERMINATORS[terminator] !== true)) break;
+    if (previous === 'blockquote' && terminator === 'blockquote') break;
+    if (source[ends[i] - 1] === '\n') end = ends[i];
+  }
+  return end;
+}
 export function createRichText(options: { document: Document; marked: MarkedRuntime | null; highlight: () => HighlightRuntime | null;
   assets: ReturnType<typeof createBrowserAssets>; diagrams: ReturnType<typeof createDiagrams>; sessionState: SessionState;
+  retainedRoots?: () => readonly ParentNode[];
   copy: (text: string) => Promise<unknown>; status: (message: string, type?: string) => void;
 }) {
   const { document, sessionState } = options;
@@ -29,7 +100,7 @@ export function createRichText(options: { document: Document; marked: MarkedRunt
     if (event.target.closest('.diagram-source-btn')) options.diagrams.toggleSource(block);
     else if (event.target.closest('.diagram-zoom-btn')) options.diagrams.openLightbox(block);
   }, { signal: events.signal });
-  let disposed = false, mathAssetsPromise: Promise<void[]> | null = null, highlightAssetsPromise: Promise<HighlightRuntime> | null = null;
+  let disposed = false, mathAssetsPromise: Promise<void> | null = null, highlightAssetsPromise: Promise<HighlightRuntime> | null = null;
   options.marked?.use({
     breaks: true,
     gfm: true,
@@ -54,11 +125,25 @@ export function createRichText(options: { document: Document; marked: MarkedRunt
     walkTokens(token) {
       if (token.type === 'link' || token.type === 'image') token.href = sanitizeMarkdownUrl(token.href);
     },
-    extensions: createMathExtensions(),
+    // Math renders through the shared KaTeX tokenizer. While the bundle is
+    // absent its renderer emits an inert, source-carrying placeholder instead
+    // of guessed markup, so a transcript paints immediately and hydration
+    // swaps in the exact KaTeX output later (live DOM and cached fragments).
+    extensions: createMathExtensions(() => mathRuntime() || pendingKatex),
   });
 function formatMarkdown(text: string) {
   if (!text) return '';
-  if (options.marked) { try { return options.marked.parse(text); } catch(e) {} }
+  if (options.marked) {
+    try {
+      const renders = pendingMathRenders;
+      const html = options.marked.parse(text);
+      // The placeholder renderer is the only signal that a math token really
+      // was parsed while KaTeX is absent — no matching of text that merely
+      // mentions the attribute, so math-free markdown loads nothing.
+      if (pendingMathRenders !== renders && !mathRuntime()) void loadMathAssets().catch(() => {});
+      return html;
+    } catch(e) {}
+  }
   let html = escapeHtml(text);
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => `<pre><code class="language-${lang}">${code.trim()}</code></pre>`);
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
@@ -115,6 +200,9 @@ function applyHighlight(el?: ParentNode | null) {
       }
     }).catch(() => {});
   }
+  // A root can hold math parsed while the bundle was still in flight (a
+  // restored cached fragment, a final render racing the asset load).
+  hydrateMath(root);
   options.diagrams.render(root);
   linkifyFilePaths(root);
 }
@@ -160,7 +248,7 @@ function linkifyFilePaths(root: ParentNode) {
       acceptNode(n) {
         // .diagram-render holds an SVG: a <span> spliced into an SVG <text>
         // renders nothing, so a linkified label would silently vanish.
-        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .katex, .math-block, .diagram-render')
+        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .katex, .math-block, .math-pending, .diagram-render')
           ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });
@@ -187,12 +275,58 @@ function linkifyFilePaths(root: ParentNode) {
 }
 
 
+  /**
+   * Reparse only what streaming has not finalized. Only the uncommitted tail is
+   * lexed each frame (everything before the previous boundary is already
+   * verified committed source), and `'grow'` hands back just the newly-final
+   * source's HTML plus the still-changing tail. `'replace'` is the conservative
+   * full re-render: the first frame, a rewritten/non-prefix frame, a retreat
+   * (a boundary that stopped being final), or a scan whose token raws do not
+   * cover it — CRLF/tab normalization, or a reference definition, which can also
+   * retroactively resolve links in already-committed source.
+   */
+  function streamMarkdown(previous: StreamingBlockState | null, text: string): StreamingFrame | null {
+    if (!options.marked) return null;
+    const appendOnly = previous !== null && previous.stableEnd <= text.length && text.startsWith(previous.text);
+    const commitFrom = appendOnly && previous ? previous.stableEnd : 0;
+    const scan = text.slice(commitFrom);
+    let tokens: readonly MarkdownToken[];
+    try { tokens = options.marked.lexer(scan); } catch { return null; }
+    let covered = 0; for (const token of tokens) covered += token.raw.length;
+    const stableEnd = covered === scan.length ? commitFrom + stablePrefixEnd(scan, tokens) : 0;
+    if (appendOnly && previous && previous.stableEnd <= stableEnd) {
+      return { mode: 'grow', stableEnd, stableHtml: formatMarkdown(text.slice(previous.stableEnd, stableEnd)), tailHtml: formatMarkdown(text.slice(stableEnd)) };
+    }
+    return { mode: 'replace', stableEnd, stableHtml: formatMarkdown(text.slice(0, stableEnd)), tailHtml: formatMarkdown(text.slice(stableEnd)) };
+  }
+
+  /** Swap inert math placeholders for real KaTeX output; idempotent. */
+  function hydrateMath(root: ParentNode) {
+    const runtime = mathRuntime(); if (disposed || !runtime) return;
+    for (const el of root.querySelectorAll<HTMLElement>('.' + MATH_PENDING_CLASS)) {
+      const source = el.getAttribute(MATH_SOURCE_ATTR) || '';
+      let html: string; try { html = runtime.renderToString(source, { displayMode: el.getAttribute('data-math-display') === 'true', throwOnError: false }); } catch { continue; }
+      const template = document.createElement('template'); template.innerHTML = html;
+      el.replaceWith(template.content);
+    }
+  }
+
+  /** Retained transcript fragments are detached from the document, so the
+   *  asset-completion pass reaches them through their cache roots too. */
+  function hydrateMathRoots() {
+    hydrateMath(document);
+    for (const root of options.retainedRoots?.() || []) hydrateMath(root);
+  }
+
+  /** Load KaTeX on demand and hydrate every pending placeholder once it lands.
+   *  A transcript with no math never asks for it. */
   function loadMathAssets() {
     if (disposed) return Promise.reject(new Error('Rich text disposed'));
     return mathAssetsPromise ||= Promise.all([
       options.assets.load('link', { rel: 'stylesheet', href: 'vendor/katex.min.css' }),
       options.assets.load('script', { src: 'vendor/katex.min.js' }),
-    ]).catch(error => { mathAssetsPromise = null; throw error; });
+    ]).then(() => { if (!disposed) hydrateMathRoots(); })
+      .catch(error => { mathAssetsPromise = null; throw error; });
   }
   function loadHighlightAssets() {
     if (disposed) return Promise.reject(new Error('Rich text disposed'));
@@ -202,5 +336,5 @@ function linkifyFilePaths(root: ParentNode) {
     ]).then(() => { const runtime = options.highlight(); if (!runtime) throw new Error('Syntax highlighter did not load'); return runtime; })
       .catch(error => { highlightAssetsPromise = null; throw error; });
   }
-  return { format: formatMarkdown, highlight: applyHighlight, loadMath: loadMathAssets, dispose() { disposed = true; events.abort(); copies = new WeakMap(); for (const timer of copyTimers) clearTimeout(timer); copyTimers.clear(); } };
+  return { format: formatMarkdown, stream: streamMarkdown, highlight: applyHighlight, dispose() { disposed = true; events.abort(); copies = new WeakMap(); for (const timer of copyTimers) clearTimeout(timer); copyTimers.clear(); } };
 }

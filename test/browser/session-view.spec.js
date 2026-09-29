@@ -112,6 +112,17 @@ const fixtures_js_1 = require("./fixtures.js");
     await (0, fixtures_js_1.expect)(page.locator('[data-tool-call-id="cached-tool"]')).toHaveCount(1);
     await (0, fixtures_js_1.expect)(page.locator('[data-tool-call-id="cached-tool"] .duration')).toContainText(/./);
 });
+(0, fixtures_js_1.test)('a transcript with math paints before the KaTeX bundle arrives', async ({ page, fleet }) => {
+    let script = null, styles = null;
+    await page.route('**/vendor/katex.min.js', route => { script = route; });
+    await page.route('**/vendor/katex.min.css', route => { styles = route; });
+    await page.route(`${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/messages?**`, route => route.fulfill({ json: { messages: [{ role: 'assistant', index: 0, content: 'answer $x$ here' }], session: {} } }));
+    await page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host, forceTranscriptReload: true }), { id: fixtures_js_1.ROOT, host: fleet.self.hostId });
+    // Selecting must not gate the transcript on the math assets it requested.
+    await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('here');
+    await (0, fixtures_js_1.expect)(page.locator('#messages .math-pending')).toHaveCount(1);
+    await fixtures_js_1.expect.poll(() => !!script && !!styles).toBe(true);
+});
 fixtures_js_1.test.describe('selection retirement', () => {
     fixtures_js_1.test.use({ liveSessions: true });
     (0, fixtures_js_1.test)('unknown real and provisional targets preserve the selected view and its live ownership', async ({ page, fleet }) => {

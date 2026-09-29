@@ -61,4 +61,23 @@ test('prototype-like role and harness names remain literal values', () => {
   assert.deepEqual(H.harnessBadgeInfo('constructor'), { label: 'constructor', icon: null });
 });
 
+test('cached date formatting follows local time-zone changes, DST and invalid timestamps', () => {
+  const previousZone = process.env.TZ;
+  try {
+    for (const zone of ['America/New_York', 'UTC', 'Asia/Kathmandu', 'Europe/London']) {
+      process.env.TZ = zone;
+      for (const timestamp of ['2020-01-15T23:45:00Z', '2020-07-15T23:45:00Z', '2020-03-08T07:00:00Z']) {
+        const date = new Date(timestamp);
+        assert.equal(H.formatTime(timestamp), date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), `${zone}: ${timestamp}`);
+        assert.equal(H.formatRelativeTime(timestamp), date.toLocaleDateString([], { month: 'short', day: 'numeric' }), `${zone}: ${timestamp}`);
+      }
+      for (const timestamp of ['invalid', -8.64e15, 8.64e15]) {
+        assert.equal(H.formatTime(timestamp), new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      }
+    }
+  } finally {
+    if (previousZone === undefined) delete process.env.TZ; else process.env.TZ = previousZone;
+  }
+});
+
 export {};

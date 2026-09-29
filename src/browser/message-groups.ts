@@ -1,3 +1,11 @@
+/** The group skeleton (summary + body) is shared so eviction splitting and the grouping pass cannot drift apart. */
+function createToolGroup(document: Document) {
+  const group = document.createElement('details');
+  group.className = 'tool-group';
+  group.innerHTML = '<summary class="tool-group-header"><span class="tool-group-label"></span><span class="tool-group-preview"></span></summary><div class="tool-group-body"></div>';
+  return group;
+}
+
 export function groupToolActivity(container: HTMLElement | null) {
   if (!container) return; const document = container.ownerDocument;
   const isToolNoise = (el: Element) =>
@@ -7,9 +15,7 @@ export function groupToolActivity(container: HTMLElement | null) {
   let run: Element[] = [];
   const wrapRun = () => {
     if (!run.length) return;
-    const group = document.createElement('details');
-    group.className = 'tool-group';
-    group.innerHTML = '<summary class="tool-group-header"><span class="tool-group-label"></span><span class="tool-group-preview"></span></summary><div class="tool-group-body"></div>';
+    const group = createToolGroup(document);
     run[0].before(group);
     const body = group.querySelector('.tool-group-body')!;
     run.forEach(el => body.appendChild(el));
@@ -33,6 +39,30 @@ export function groupToolActivity(container: HTMLElement | null) {
   });
 
   container.querySelectorAll<HTMLDetailsElement>(':scope > details.tool-group').forEach(updateToolGroupSummary);
+}
+
+/**
+ * Re-wrap a tool group whose indexed children are no longer contiguous.
+ * Bounding the transcript evicts a middle range, and a gap that lands inside
+ * a group cannot be marked there (gaps are top-level siblings), so the
+ * surviving runs become separate groups and refreshPaging can place the gap
+ * between them.
+ */
+export function splitToolGroupRanges(container: HTMLElement | null) {
+  if (!container) return; const document = container.ownerDocument;
+  for (const group of Array.from(container.querySelectorAll<HTMLDetailsElement>(':scope > details.tool-group'))) {
+    const body = group.querySelector<HTMLElement>('.tool-group-body'); if (!body) continue;
+    let active = group, activeBody = body, previous: number | null = null;
+    for (const child of Array.from(body.children)) {
+      const index = Number.parseInt((child as HTMLElement).dataset.msgIndex || '', 10);
+      if (previous != null && Number.isFinite(index) && index > previous + 1) {
+        const next = createToolGroup(document); next.open = group.open;
+        active.after(next); active = next; activeBody = next.querySelector<HTMLElement>('.tool-group-body')!;
+      }
+      if (Number.isFinite(index)) previous = index;
+      if (child.parentElement !== activeBody) activeBody.append(child);
+    }
+  }
 }
 
 export function updateToolGroupSummary(group: HTMLElement) {

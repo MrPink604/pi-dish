@@ -1,28 +1,2 @@
 // Generated from src/browser/; edit sources and run npm run build:browser.
-(() => {
-  // src/core/helper-values.ts
-  function record(value) {
-    return !!value && typeof value === "object" && !Array.isArray(value);
-  }
-
-  // src/browser/themes.ts
-  function decodeThemeTokens(value) {
-    if (!record(value)) return {};
-    return Object.fromEntries(Object.entries(value).filter((entry) => /^--[a-z][a-z0-9-]*$/.test(entry[0]) && typeof entry[1] === "string"));
-  }
-  function applyCachedTheme(document2, storage) {
-    try {
-      const id = storage.getItem("pi-dish-theme");
-      if (id && id !== "solarized") document2.documentElement.dataset.theme = id;
-      const tokens = JSON.parse(storage.getItem("pi-dish-theme-tokens") || "null");
-      for (const [key, value] of Object.entries(decodeThemeTokens(tokens))) document2.documentElement.style.setProperty(key, value);
-    } catch {
-    }
-  }
-
-  // src/browser/theme-prepaint.ts
-  try {
-    applyCachedTheme(document, localStorage);
-  } catch {
-  }
-})();
+(()=>{function r(e){return!!e&&typeof e=="object"&&!Array.isArray(e)}function a(e){return r(e)?Object.fromEntries(Object.entries(e).filter(t=>/^--[a-z][a-z0-9-]*$/.test(t[0])&&typeof t[1]=="string")):{}}function i(e,t){try{let n=t.getItem("pi-dish-theme");n&&n!=="solarized"&&(e.documentElement.dataset.theme=n);let o=JSON.parse(t.getItem("pi-dish-theme-tokens")||"null");for(let[s,c]of Object.entries(a(o)))e.documentElement.style.setProperty(s,c)}catch{}}try{i(document,localStorage)}catch{}})();

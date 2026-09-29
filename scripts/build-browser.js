@@ -27,7 +27,7 @@ const outputs = entries.map(entry => {
     const result = esbuild.buildSync({
         absWorkingDir: root, entryPoints: [entry.source], bundle: true,
         platform: 'browser', format: 'iife', globalName: entry.globalName, target: 'es2022',
-        outfile: entry.target, write: false, metafile: true,
+        outfile: entry.target, write: false, metafile: true, minify: true,
         footer: entry.footer ? { js: entry.footer } : undefined,
         banner: { js: '// Generated from src/browser/; edit sources and run npm run build:browser.' },
     });
