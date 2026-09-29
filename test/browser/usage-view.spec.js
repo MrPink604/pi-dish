@@ -2,7 +2,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const fixtures_js_1 = require("./fixtures.js");
-const bucket = { calls: 2, tokens: { input: 20, output: 10 }, costs: { total: 0.5, input: 0.3, output: 0.2 } };
+const bucket = { calls: 2, measured: 2, durationMs: 6000, slowestMs: 4000, tokens: { input: 20, output: 10, cacheRead: 20, cacheWrite: 10 }, costs: { total: 0.5, input: 0.3, output: 0.2 } };
 const summary = (range = '30', indexing = false) => ({ range, indexing, totals: bucket, groups: {
         models: [{ ...bucket, key: 'fixture/model', provider: 'fixture', model: 'model' }],
         sessions: [{ ...bucket, id: fixtures_js_1.ROOT, name: 'Shared usage session', workspace: '/fixture/project' }], workspaces: [],
@@ -43,10 +43,60 @@ async function mockSummary(page, indexing = false) {
     });
     await (0, fixtures_js_1.expect)(page.locator('.usage-kpis')).toBeVisible();
     await page.locator('[data-range="7"]').click();
+    await (0, fixtures_js_1.expect)(page.locator('[data-range="7"]')).toHaveClass(/active/);
+    await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).not.toContainText('new-provider');
+    await page.locator('[data-usage-tab="limits"]').click();
     await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).toContainText('new-provider');
     await page.evaluate(payload => window.finishOldLimits(payload), limits('old-provider'));
     await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).not.toContainText('old-provider');
+    await page.locator('[data-usage-tab="usage"]').click();
     await (0, fixtures_js_1.expect)(page.locator('[data-range="7"]')).toHaveClass(/active/);
+});
+(0, fixtures_js_1.test)('limits responses leave the active usage chart mounted', async ({ page, fleet }) => {
+    await mockSummary(page);
+    const pending = [];
+    await page.route('**/api/usage-limits', route => { pending.push(route); });
+    await page.evaluate(() => fixtureApp.features.usageController.open());
+    await (0, fixtures_js_1.expect)(page.locator('#usageChart svg')).toBeVisible();
+    await fixtures_js_1.expect.poll(() => pending.length).toBeGreaterThan(0);
+    await page.evaluate(() => { window.oldUsageBar = document.querySelector('#usageChart svg'); });
+    for (const route of pending)
+        await route.fulfill({ json: limits('delayed-provider') });
+    await page.waitForLoadState('networkidle');
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.oldUsageBar === document.querySelector('#usageChart svg'))).toBe(true);
+    await page.locator('[data-usage-tab="limits"]').click();
+    await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).toContainText('delayed-provider');
+});
+(0, fixtures_js_1.test)('usage subtabs show scoped cache and response timings', async ({ page, fleet }) => {
+    await mockSummary(page);
+    await page.route('**/api/cache-lifetimes', route => route.fulfill({ json: { identities: [{
+                    api: 'fixture', provider: 'fixture', model: 'retained-model', source: 'builtin',
+                    effective: { retentionMs: 300000, retention: '5m', basis: 'estimate' },
+                    probes: { total: 2, hits: 1, misses: 1, maxHitGapMs: 60000, minMissGapMs: 600000, lastAt: 1 },
+                    gates: [{ id: 'support', pass: false, value: 2, need: 30 }],
+                    points: [[60000, 1], [600000, 0]],
+                }] } }));
+    await page.evaluate(() => fixtureApp.features.usageController.open());
+    await (0, fixtures_js_1.expect)(page.locator('#usageChart svg')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('.cache-lifetimes')).toHaveCount(0);
+    await page.locator('[data-usage-tab="cache"]').click();
+    await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).toContainText('40% prompt cache hit');
+    await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).toContainText('3.0s average · 4.0s slowest');
+    await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).toContainText('not just prompt-cache lookup');
+    await (0, fixtures_js_1.expect)(page.locator('.cache-lifetimes')).toContainText('retained-model');
+    await page.locator('.cl-row').first().click();
+    await (0, fixtures_js_1.expect)(page.locator('.cl-detail')).toContainText('Probes in window');
+    await (0, fixtures_js_1.expect)(page.locator('#usageChart')).toHaveCount(0);
+    await page.locator('[data-usage-tab="limits"]').click();
+    await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).toContainText('fakeprov');
+    await (0, fixtures_js_1.expect)(page.locator('.usage-kpis')).toHaveCount(0);
+    await page.locator('[data-usage-tab="usage"]').click();
+    await (0, fixtures_js_1.expect)(page.locator('#usageChart svg')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('.cache-lifetimes')).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(page.locator('[data-usage-tab="usage"]')).toHaveAttribute('aria-selected', 'true');
+    await page.locator('[data-usage-tab="usage"]').press('ArrowRight');
+    await (0, fixtures_js_1.expect)(page.locator('[data-usage-tab="cache"]')).toBeFocused();
+    await (0, fixtures_js_1.expect)(page.locator('[data-usage-tab="cache"]')).toHaveAttribute('aria-selected', 'true');
 });
 (0, fixtures_js_1.test)('usage partial rows navigate to the peer that answered despite a same-id self session', async ({ page, fleet }) => {
     let pending;

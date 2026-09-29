@@ -5912,6 +5912,10 @@ body.standalone-file-page {
 .usage-view-title { font-size: 13px; font-weight: 600; white-space: nowrap; }
 .usage-view-note { flex: 1; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-view-header .btn-icon:first-of-type { margin-left: auto; }
+.usage-tabs { display: flex; gap: 4px; padding: 0 max(24px, calc((100% - var(--content-max)) / 2)); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.usage-tab { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-muted); padding: 10px 12px; font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.usage-tab.active { border-bottom-color: var(--accent); color: var(--text-bright); }
+.usage-tab:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* Same centered reading column as .messages */
 .usage-view-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px max(24px, calc((100% - var(--content-max)) / 2)) 40px; }
@@ -6101,6 +6105,7 @@ line.cl-dot.cl-warm { stroke: color-mix(in srgb, var(--cache-warm) 60%, transpar
 @media (max-width: 768px) {
   .usage-view-note { display: none; }
   .usage-view-body { padding: 12px 12px 32px; }
+  .usage-tabs { padding: 0 12px; }
   .usage-kpis { grid-template-columns: repeat(2, 1fr); }
   .usage-kpi strong { font-size: 16px; }
   .usage-columns { grid-template-columns: 1fr; }

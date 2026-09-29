@@ -34,9 +34,10 @@ export function createUsageView(options: {
   let renderGeneration = 0;
   let renderQueue: ReturnType<typeof createFanoutRenderQueue> | null = null;
   let usageRange: UsageRange = '30', usageTimer: ReturnType<typeof setTimeout> | undefined;
+  let usageTab: 'usage' | 'cache' | 'limits' = 'usage';
   let usageData: UsageSummary | null = null, usageChart: UsageChart | null = null, usageSelectedDay: string | null = null;
-  let usageHostErrors: string[] = [], usageHostPending: string[] = [];
-  let usageLimitsEntries: UsageLimitEntry[] = [], usageFetchSeq = 0;
+  let usageHostErrors: string[] = [], usageHostPending: string[] = [], usageError: string | null = null;
+  let usageLimitsEntries: UsageLimitEntry[] = [], usageLimitsLoading = false, usageFetchSeq = 0;
   // Cache lifetimes: per-host learner reports, the host being shown, and the
   // expanded rows. The selection outlives refetches; it is view memory only.
   let cacheLifetimeHosts: CacheLifetimeHost[] = [], cacheLifetimeHostKey: string | null = null;
@@ -48,7 +49,7 @@ export function createUsageView(options: {
   function sameHost(host: UsageHost): boolean {
     return sameCapturedHost(options.host(host.hostId), host);
   }
-  function retireRender(): void { renderGeneration++; bodyEvents.abort(); chartEvents.abort(); detailEvents.abort(); hideUsageTooltip(); }
+  function retireRender(): void { renderGeneration++; bodyEvents.abort(); chartEvents.abort(); detailEvents.abort(); cacheLifetimeEvents.abort(); hideUsageTooltip(); }
   // --- Usage view (main-pane takeover) ---
   // Global usage/spend overview: KPI headlines, a stacked-by-model daily chart,
   // model share, and workspace/session breakdowns. Opened from the sidebar
@@ -64,6 +65,38 @@ export function createUsageView(options: {
   function isUsageViewOpen() {
     return !disposed && options.root.classList.contains('usage-open');
   }
+  function setUsageTab(tab: typeof usageTab) {
+    if (!isUsageViewOpen() || usageTab === tab) return;
+    usageTab = tab;
+    retireRender();
+    element('usageViewBody').scrollTop = 0;
+    options.root.querySelectorAll<HTMLButtonElement>('[data-usage-tab]').forEach(button => {
+      const active = button.dataset.usageTab === tab;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+    });
+    element('usageViewBody').setAttribute('aria-labelledby', `usageTab${tab === 'cache' ? 'Cache' : tab === 'limits' ? 'Limits' : 'Usage'}`);
+    renderActiveTab();
+  }
+  options.root.querySelectorAll<HTMLButtonElement>('[data-usage-tab]').forEach(button => {
+    button.tabIndex = button.dataset.usageTab === 'usage' ? 0 : -1;
+    button.addEventListener('click', () => {
+      const tab = button.dataset.usageTab;
+      if (tab === 'usage' || tab === 'cache' || tab === 'limits') setUsageTab(tab);
+    }, { signal: events.signal });
+    button.addEventListener('keydown', event => {
+      const tabs = ['usage', 'cache', 'limits'] as const;
+      const index = tabs.indexOf(usageTab);
+      const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+        : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+          : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+      if (next < 0) return;
+      event.preventDefault();
+      setUsageTab(tabs[next]);
+      options.root.querySelector<HTMLElement>(`[data-usage-tab="${tabs[next]}"]`)?.focus();
+    }, { signal: events.signal });
+  });
 
   function openUsageView() {
     if (disposed) return;
@@ -76,7 +109,6 @@ export function createUsageView(options: {
   function closeUsageView() {
     if (disposed) return;
     usageFetchSeq++; retireRender(); renderQueue?.dispose(); renderQueue = null;
-    cacheLifetimeEvents.abort();
     clearTimeout(usageResizeTimer);
     options.root.classList.remove('usage-open');
     clearTimeout(usageTimer); usageTimer = undefined;
@@ -127,14 +159,12 @@ export function createUsageView(options: {
     loadUsageView();
   }
 
-  // Subscription limits ride their own fan-out: hosts without the capability
-  // (older builds, no supporting harness) are skipped, a failed host just
-  // contributes nothing (quota is supplementary to the spend view), and each
-  // settle re-renders the view — renderUsageView is idempotent, so the section
-  // simply appears once data exists.
+  // Limits settle independently of summary data; only the active limits pane
+  // needs painting when a host answers.
   async function loadUsageLimits(fetchSeq: number): Promise<void> {
     const stale = () => fetchSeq !== usageFetchSeq || !isUsageViewOpen();
-    usageLimitsEntries = [];
+    usageLimitsEntries = []; usageLimitsLoading = true;
+    if (usageTab === 'limits') renderLimitsTab();
     await options.fleetReady();
     if (stale()) return;
     const hosts = options.hosts().filter(host => host.capabilities?.usageLimits).map(host => Object.freeze({ ...host }));
@@ -150,8 +180,9 @@ export function createUsageView(options: {
       } catch { /* Limits are supplementary; unavailable hosts add no rows. */ }
       if (stale()) return;
       usageLimitsEntries = [...entries].sort((a, b) => a.hostLabel.localeCompare(b.hostLabel));
-      if (usageData && dataSequence === fetchSeq) renderUsageView(usageData);
+      if (usageTab === 'limits') renderLimitsTab();
     }));
+    if (!stale()) { usageLimitsLoading = false; if (usageTab === 'limits') renderLimitsTab(); }
   }
   // Learned cache lifetimes are per host (each learns from its own sessions)
   // and range-independent, so they ride their own capability-gated fan-out
@@ -201,13 +232,16 @@ export function createUsageView(options: {
     if (!isUsageViewOpen()) return;
     const fetchSeq = ++usageFetchSeq;
     clearTimeout(usageTimer); renderQueue?.dispose(); renderQueue = null;
+    usageError = null;
     void loadUsageLimits(fetchSeq);
     void loadCacheLifetimes(fetchSeq);
     const range = usageRange, sort = usageSort, models = usageModelsKey();
     const stale = () => fetchSeq !== usageFetchSeq || range !== usageRange || sort !== usageSort || models !== usageModelsKey() || !isUsageViewOpen();
     const body = element('usageViewBody');
-    if (body.childElementCount) body.classList.add('usage-refreshing');
-    else body.innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
+    if (usageTab !== 'limits') {
+      if (body.childElementCount) body.classList.add('usage-refreshing');
+      else body.innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
+    }
     try {
       await options.fleetReady(); if (stale()) return;
       const url = '/api/usage-summary?days=' + range + '&sort=' + sort + (models ? '&models=' + encodeURIComponent(models) : '');
@@ -222,7 +256,7 @@ export function createUsageView(options: {
         usageHostErrors = hosts.filter((_, i) => status[i] === 'error').map(hostDisplayLabel);
         usageHostPending = hosts.filter((_, i) => status[i] === 'pending').map(hostDisplayLabel);
         usageData = data; dataSequence = fetchSeq; rendered = true; indexing = data.indexing === true;
-        renderUsageView(data);
+        if (usageTab !== 'limits') renderActiveTab();
       };
       const queueRender = renderQueue = createFanoutRenderQueue(status, render);
       await Promise.all(hosts.map(async (host, i) => {
@@ -242,8 +276,8 @@ export function createUsageView(options: {
       if (indexing) usageTimer = setTimeout(() => { if (!stale()) void loadUsageView(); }, 1000);
     } catch (error) {
       if (stale()) return;
-      retireRender(); body.classList.remove('usage-refreshing');
-      body.innerHTML = `<div class="usage-state">Could not load usage: ${escapeHtml(message(error))}</div>`;
+      usageError = message(error);
+      if (usageTab !== 'limits') renderActiveTab();
     }
   }
 
@@ -286,9 +320,70 @@ export function createUsageView(options: {
     return parts.join(' · ');
   }
 
+  function renderActiveTab() {
+    if (!isUsageViewOpen()) return;
+    if (usageTab === 'limits') { renderLimitsTab(); return; }
+    if (usageError) {
+      retireRender();
+      const body = element('usageViewBody');
+      body.classList.remove('usage-refreshing');
+      body.innerHTML = `<div class="usage-state">Could not load usage: ${escapeHtml(usageError)}</div>`;
+      return;
+    }
+    if (!usageData || dataSequence !== usageFetchSeq) {
+      element('usageViewBody').innerHTML = '<div class="usage-state">Loading estimated usage…</div>';
+      return;
+    }
+    if (usageTab === 'cache') { renderCacheTab(usageData); return; }
+    renderUsageView(usageData);
+  }
+
+  function renderLimitsTab() {
+    if (!isUsageViewOpen() || usageTab !== 'limits') return;
+    retireRender();
+    const body = element('usageViewBody');
+    body.classList.remove('usage-refreshing');
+    body.innerHTML = usageLimitsHtml(usageLimitsEntries) ||
+      `<div class="usage-state">${usageLimitsLoading ? 'Loading subscription limits…' : 'No subscription limits reported by connected hosts.'}</div>`;
+  }
+
+  function renderCacheTab(d: UsageSummary) {
+    if (!isUsageViewOpen() || usageTab !== 'cache') return;
+    retireRender(); bodyEvents = new AbortController();
+    const generation = renderGeneration;
+    const body = element('usageViewBody'), totals = d.totals || {};
+    body.classList.remove('usage-refreshing');
+    const ranges = USAGE_RANGES.map(([value, label]) =>
+      `<button class="usage-range-btn${usageRange === value ? ' active' : ''}" data-range="${value}">${label}</button>`).join('');
+    const prompt = (tokens?: Tokens) => (tokens?.input || 0) + (tokens?.cacheRead || 0) + (tokens?.cacheWrite || 0);
+    const timing = (bucket: UsageBucket) => bucket.measured
+      ? `${((bucket.durationMs || 0) / bucket.measured / 1000).toFixed(1)}s average · ${((bucket.slowestMs || 0) / 1000).toFixed(1)}s slowest · ${bucket.measured} measured`
+      : 'No response timings recorded';
+    const rows = (d.groups?.models || [])
+      .filter(model => !usageModelFilter.size || usageModelFilter.has(model.key || ''))
+      .map(model => `<div class="usage-row">
+        <span class="usage-row-name">${escapeHtml(shortModelName(model.model || model.key))}<small>${escapeHtml(model.provider || '')}</small></span>
+        <span class="usage-row-meta">${formatCacheStat(model.tokens?.cacheRead, model.tokens?.cacheWrite, model.tokens?.input)} · ${timing(model)}</span>
+      </div>`).join('');
+    body.innerHTML = `<div class="usage-ranges">${ranges}</div>
+      ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
+      ${usageHostErrors.length ? `<div class="usage-notice">Not counted: ${escapeHtml(usageHostErrors.join(', '))} did not answer.</div>` : ''}
+      ${usageHostPending.length ? `<div class="usage-notice">Still counting ${escapeHtml(usageHostPending.join(', '))}…</div>` : ''}
+      <div class="usage-total-line"><strong>${formatTokens(totals.tokens?.cacheRead)} cached read</strong> · ${formatTokens(totals.tokens?.cacheWrite)} cache write · ${prompt(totals.tokens) ? Math.round((totals.tokens?.cacheRead || 0) / prompt(totals.tokens) * 100) : 0}% prompt cache hit</div>
+      <div class="usage-token-line">${formatTokens(totals.tokens?.input)} uncached input · ${timing(totals)}</div>
+      <div class="usage-notice">Response timings include generation and overhead, not just prompt-cache lookup. The index does not record cache lookup latency separately.</div>
+      ${usageModelFilter.size ? '<div class="usage-filter-note">Model filter from Usage applies here.</div>' : ''}
+      <section class="usage-section"><h4>By model</h4>${rows || '<small class="usage-empty">No usage in this range.</small>'}</section>
+      <div id="usageCacheLifetimes"></div>`;
+    body.querySelectorAll<HTMLElement>('[data-range]').forEach(button => button.addEventListener('click', () => {
+      const range = button.dataset.range;
+      if (generation === renderGeneration && (range === '1' || range === '7' || range === '30' || range === 'all')) setUsageRange(range);
+    }, { signal: bodyEvents.signal }));
+    renderCacheLifetimes();
+  }
 
   function renderUsageView(d: UsageSummary) {
-    if (!isUsageViewOpen()) return;
+    if (!isUsageViewOpen() || usageTab !== 'usage') return;
     retireRender(); bodyEvents = new AbortController();
     const generation = renderGeneration;
     const owns = () => generation === renderGeneration && isUsageViewOpen();
@@ -373,8 +468,6 @@ export function createUsageView(options: {
         ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
       </div>
       ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? '' : 's'} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing and ${d.unpricedModelCalls === 1 ? 'is' : 'are'} omitted.</div>` : ''}
-      <div id="usageCacheLifetimes"></div>
-      ${usageLimitsHtml(usageLimitsEntries)}
     `;
     body.querySelectorAll<HTMLElement>('[data-range]').forEach(button => button.addEventListener('click', () => {
       const range = button.dataset.range;
@@ -403,7 +496,6 @@ export function createUsageView(options: {
     });
     if (showChart) drawUsageChart();
     renderUsageDayDetail();
-    renderCacheLifetimes();
   }
 
   // Chart geometry is computed against the holder's live width; redraw on

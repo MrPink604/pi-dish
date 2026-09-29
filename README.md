@@ -99,19 +99,22 @@ Rules of thumb:
   details. The composer shows the likely remaining provider-cache lifetime
   when response telemetry makes one inferable; response details show its
   retention basis, and session stats count provider-confirmed hard misses.
-  The global Settings → Usage view summarizes estimated spend by
-  day, model, workspace, and session, with an optional server-wide monthly
-  warning, and pivots every cost into read (uncached), cached read, output,
-  and cache-write buckets — a Spend-by-bucket section, a Models/Cost-buckets
-  chart stack toggle, and breakdown tooltips on the KPI tiles and rows. Known
-  legacy totals without a component split remain visible as Unattributed.
+  The global Settings → Usage view has Usage, Prompt cache timings, and Limits
+  subtabs. Usage summarizes estimated spend by day, model, workspace, and
+  session, with an optional server-wide monthly warning, and pivots every
+  cost into read (uncached), cached read, output, and cache-write buckets — a
+  Spend-by-bucket section, a Models/Cost-buckets chart stack toggle, and
+  breakdown tooltips on the KPI tiles and rows. Known legacy totals without
+  a component split remain visible as Unattributed. Prompt cache timings
+  shows cache token shares alongside overall response timings and per-host
+  learned cache lifetimes; cache lookup latency is not recorded separately.
   Spend is estimated from each session harness's cached model-catalog
   pricing, not provider billing; an asterisk marks the known subtotal when
   calls with unavailable pricing were omitted, and their count is shown.
-  Where a harness CLI can report them (OMP's `usage`), the same view leads
-  with Subscription limits: each provider account's quota windows (5-hour,
-  weekly, …), percent used, and reset countdown — no running session needed,
-  and account identifiers never leave the server.
+  Where a harness CLI can report them (OMP's `usage`), Limits shows each
+  provider account's quota windows (5-hour, weekly, …), percent used, and
+  reset countdown — no running session needed, and account identifiers
+  never leave the server.
 - **Reading tools** — in-session search (Ctrl+F) jumps directly to a bounded
   window around the match, with explicit controls for unloaded history gaps;
   focus mode hides tool noise, and messages have copy buttons.

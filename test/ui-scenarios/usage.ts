@@ -14,6 +14,20 @@ const usage: UiScenario = async ({ desktop, check, SESSION_ID }) => {
     'usage button opens the takeover pane');
   check(await desktop.evaluate(() => fixtureElement(document.getElementById('sessionView'), "document.getElementById('sessionView')").offsetParent === null),
     'session view hidden while usage is open');
+  await desktop.click('[data-usage-tab="cache"]');
+  await desktop.waitForSelector('.usage-total-line', { timeout: 5000 });
+  check(await desktop.evaluate(() =>
+    document.getElementById('usageViewBody')?.textContent?.includes('prompt cache hit') &&
+    !document.querySelector('#usageChart') &&
+    document.querySelector('[data-usage-tab="cache"]')?.getAttribute('aria-selected') === 'true'),
+    'cache tab isolates prompt cache statistics and measured response timings from the spend chart');
+  await desktop.click('[data-usage-tab="limits"]');
+  check(await desktop.evaluate(() =>
+    !document.querySelector('.usage-kpis') && !document.querySelector('#usageChart') &&
+    document.querySelector('[data-usage-tab="limits"]')?.getAttribute('aria-selected') === 'true'),
+    'limits tab does not render usage charts or KPI tiles');
+  await desktop.click('[data-usage-tab="usage"]');
+  await desktop.waitForSelector('.usage-kpis', { timeout: 5000 });
   await desktop.click('[data-range="all"]');
   await desktop.waitForFunction(() =>
     [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('smoke-model')),

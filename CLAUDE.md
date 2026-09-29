@@ -456,8 +456,10 @@ estimate from Pi's model catalog, and absent pricing must remain distinct from
 an explicitly free model.
 
 The usage view (bar-chart button in the sidebar header; a main-pane takeover,
-see the takeover section) aggregates the compact summaries stored in the
-session index by day, model, workspace, and session. Finite date ranges
+see the takeover section) has Usage, Prompt cache timings, and Limits subtabs.
+Only the active pane renders; limit responses never rebuild the spend chart.
+Usage aggregates the compact summaries stored in the session index by day,
+model, workspace, and session. Finite date ranges
 exclude timestamp-less `unknown` buckets; all-time totals include them. Do
 not replace this with a synchronous walk/reparse of the full JSONL corpus.
 The `/api/usage-summary` `daily` series spans the requested range ('all' from
@@ -495,7 +497,7 @@ in/out and show the cached share (`usageTokensDetail` in app.js) — the rate's
 denominator is the whole prompt side, matching `formatCacheStat` in the
 stats modal; keep the two consistent.
 
-The Cache lifetimes section above it (`src/browser/cache-lifetimes.ts`,
+The Cache lifetimes section in Prompt cache timings (`src/browser/cache-lifetimes.ts`,
 `GET /api/cache-lifetimes`, capability `cacheLifetimes`) explains the learned
 provider cache TTLs (`src/core/cache-lifetime.ts`): per identity the served
 policy with the same precedence as `applyLearnedCacheExpiry`, the fit, each
@@ -509,9 +511,10 @@ bias P(hit | gap)); a plain FIFO filled with tool-loop chatter and evicted
 every miss. Cache activity with no built-in window keeps an internal
 `'unknown'` expiry anchor that only the learner overlay may serve.
 
-The Subscription limits section at the bottom of the view is a different kind
-of data — provider-account quota (5h/7d windows, percent used, reset
-countdowns), not spend — and deliberately reuses the harness's own reporter
+The Limits subtab shows provider-account quota (5h/7d windows, percent used,
+reset countdowns), not spend. Prompt cache timings uses the summary's token
+shares and overall response duration; no separate cache lookup latency is
+recorded. Quota reporting deliberately reuses the harness's own reporter
 instead of reimplementing provider quota APIs: `GET /api/usage-limits` runs
 the descriptor's `argv.usage` command (OMP's `omp usage --json --redact`,
 which reads OMP's auth store and queries providers directly — no running
@@ -529,8 +532,8 @@ label+window, collapsing rows that agree within a tolerance (2 points of
 usedFraction, 15 minutes of resetsAt, same planType — fetch times and
 rolling windows shift values slightly, so exact equality would split every
 row) into one unqualified row, while rows that genuinely differ stay
-separate and carry their host label(s). `usageLimitsHtml` renders that
-merged view; the section vanishes when no host answers with reports.
+separate and carry their host label(s). `usageLimitsHtml` renders that merged
+view; the Limits subtab shows an empty state when no host answers with reports.
 
 Server-side session dispatch: `getLiveSession(id)` in `src/core/server-app.ts` is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected
@@ -2368,9 +2371,10 @@ indexing/debounce timers and navigation guarded through lazy session loading.
 
 The usage takeover is owned by `src/browser/usage-view.ts`, with payload narrowing
 in `usage-data.ts`. Summary and limit fan-outs retain their fetch sequence and
-frozen endpoints. Limit results cannot merge into another range, and a summary
-must belong to that fetch before limits may re-render it. Chart/render listeners,
-indexing/resize timers and fan-out coalescers retire on close or replacement.
+frozen endpoints. Limit results cannot merge into another range and update only
+the active Limits pane; summary results render only the active Usage or Prompt
+cache timings pane. Chart/render listeners, indexing/resize timers and fan-out
+coalescers retire on close or replacement.
 Even a single answering peer's workspace/session groups retain host identity.
 
 Display preference modal state/requests/listeners are owned by

@@ -417,7 +417,12 @@
           </button>
           <button class="btn-icon" data-app-click="closeUsageView" title="Close (Esc)">✕</button>
         </div>
-        <div class="usage-view-body" id="usageViewBody"></div>
+        <div class="usage-tabs" role="tablist" aria-label="Usage sections">
+          <button type="button" id="usageTabUsage" class="usage-tab active" role="tab" aria-selected="true" aria-controls="usageViewBody" data-usage-tab="usage">Usage</button>
+          <button type="button" id="usageTabCache" class="usage-tab" role="tab" aria-selected="false" aria-controls="usageViewBody" data-usage-tab="cache">Prompt cache timings</button>
+          <button type="button" id="usageTabLimits" class="usage-tab" role="tab" aria-selected="false" aria-controls="usageViewBody" data-usage-tab="limits">Limits</button>
+        </div>
+        <div class="usage-view-body" id="usageViewBody" role="tabpanel" aria-labelledby="usageTabUsage"></div>
       </div>
 
       <!-- Advanced search: a flat, full-width result surface over every

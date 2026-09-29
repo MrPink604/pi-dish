@@ -1,7 +1,7 @@
 import type { Page, Route } from '@playwright/test';
 import type { UsageHost } from '../../src/browser/usage-view.js';
 import { test, expect, ROOT, requiredRoute } from './fixtures.js';
-const bucket = { calls: 2, tokens: { input: 20, output: 10 }, costs: { total: 0.5, input: 0.3, output: 0.2 } };
+const bucket = { calls: 2, measured: 2, durationMs: 6000, slowestMs: 4000, tokens: { input: 20, output: 10, cacheRead: 20, cacheWrite: 10 }, costs: { total: 0.5, input: 0.3, output: 0.2 } };
 const summary = (range = '30', indexing = false) => ({ range, indexing, totals: bucket, groups: {
   models: [{ ...bucket, key: 'fixture/model', provider: 'fixture', model: 'model' }],
   sessions: [{ ...bucket, id: ROOT, name: 'Shared usage session', workspace: '/fixture/project' }], workspaces: [],
@@ -43,11 +43,62 @@ test('usage late limits cannot enter the new range after their response body set
   });
   await expect(page.locator('.usage-kpis')).toBeVisible();
   await page.locator('[data-range="7"]').click();
+  await expect(page.locator('[data-range="7"]')).toHaveClass(/active/);
+  await expect(page.locator('#usageViewBody')).not.toContainText('new-provider');
+  await page.locator('[data-usage-tab="limits"]').click();
   await expect(page.locator('#usageViewBody')).toContainText('new-provider');
   await page.evaluate(payload => window.finishOldLimits(payload), limits('old-provider'));
   await expect(page.locator('#usageViewBody')).not.toContainText('old-provider');
+  await page.locator('[data-usage-tab="usage"]').click();
   await expect(page.locator('[data-range="7"]')).toHaveClass(/active/);
 });
+test('limits responses leave the active usage chart mounted', async ({ page, fleet }) => {
+  await mockSummary(page);
+  const pending: Route[] = [];
+  await page.route('**/api/usage-limits', route => { pending.push(route); });
+  await page.evaluate(() => fixtureApp.features.usageController.open());
+  await expect(page.locator('#usageChart svg')).toBeVisible();
+  await expect.poll(() => pending.length).toBeGreaterThan(0);
+  await page.evaluate(() => { window.oldUsageBar = document.querySelector<HTMLElement>('#usageChart svg'); });
+  for (const route of pending) await route.fulfill({ json: limits('delayed-provider') });
+  await page.waitForLoadState('networkidle');
+  expect(await page.evaluate(() => window.oldUsageBar === document.querySelector('#usageChart svg'))).toBe(true);
+  await page.locator('[data-usage-tab="limits"]').click();
+  await expect(page.locator('#usageViewBody')).toContainText('delayed-provider');
+});
+
+test('usage subtabs show scoped cache and response timings', async ({ page, fleet }) => {
+  await mockSummary(page);
+  await page.route('**/api/cache-lifetimes', route => route.fulfill({ json: { identities: [{
+    api: 'fixture', provider: 'fixture', model: 'retained-model', source: 'builtin',
+    effective: { retentionMs: 300000, retention: '5m', basis: 'estimate' },
+    probes: { total: 2, hits: 1, misses: 1, maxHitGapMs: 60000, minMissGapMs: 600000, lastAt: 1 },
+    gates: [{ id: 'support', pass: false, value: 2, need: 30 }],
+    points: [[60000, 1], [600000, 0]],
+  }] } }));
+  await page.evaluate(() => fixtureApp.features.usageController.open());
+  await expect(page.locator('#usageChart svg')).toBeVisible();
+  await expect(page.locator('.cache-lifetimes')).toHaveCount(0);
+  await page.locator('[data-usage-tab="cache"]').click();
+  await expect(page.locator('#usageViewBody')).toContainText('40% prompt cache hit');
+  await expect(page.locator('#usageViewBody')).toContainText('3.0s average · 4.0s slowest');
+  await expect(page.locator('#usageViewBody')).toContainText('not just prompt-cache lookup');
+  await expect(page.locator('.cache-lifetimes')).toContainText('retained-model');
+  await page.locator('.cl-row').first().click();
+  await expect(page.locator('.cl-detail')).toContainText('Probes in window');
+  await expect(page.locator('#usageChart')).toHaveCount(0);
+  await page.locator('[data-usage-tab="limits"]').click();
+  await expect(page.locator('#usageViewBody')).toContainText('fakeprov');
+  await expect(page.locator('.usage-kpis')).toHaveCount(0);
+  await page.locator('[data-usage-tab="usage"]').click();
+  await expect(page.locator('#usageChart svg')).toBeVisible();
+  await expect(page.locator('.cache-lifetimes')).toHaveCount(0);
+  await expect(page.locator('[data-usage-tab="usage"]')).toHaveAttribute('aria-selected', 'true');
+  await page.locator('[data-usage-tab="usage"]').press('ArrowRight');
+  await expect(page.locator('[data-usage-tab="cache"]')).toBeFocused();
+  await expect(page.locator('[data-usage-tab="cache"]')).toHaveAttribute('aria-selected', 'true');
+});
+
 
 test('usage partial rows navigate to the peer that answered despite a same-id self session', async ({ page, fleet }) => {
   let pending: Route | undefined;
