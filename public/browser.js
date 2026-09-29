@@ -32,6 +32,7 @@ var PiDishBrowser = (() => {
     assignHostColor: () => assignHostColor,
     cacheLifetimeStatus: () => cacheLifetimeStatus,
     cacheLifetimesHtml: () => cacheLifetimesHtml,
+    catalogModelSelector: () => catalogModelSelector,
     clampSidebarWidth: () => clampSidebarWidth,
     clampTerminalHeight: () => clampTerminalHeight,
     copyTextToClipboard: () => copyTextToClipboard,
@@ -69,6 +70,7 @@ var PiDishBrowser = (() => {
     createMessageRenderer: () => createMessageRenderer,
     createMessageStream: () => createMessageStream,
     createModelCatalog: () => createModelCatalog,
+    createModelPicker: () => createModelPicker,
     createMood: () => createMood,
     createNewSession: () => createNewSession,
     createNewSessionConfigPreview: () => createNewSessionConfigPreview,
@@ -2242,216 +2244,6 @@ var PiDishBrowser = (() => {
     } };
   }
 
-  // src/core/helper-values.ts
-  function record5(value) {
-    return !!value && typeof value === "object" && !Array.isArray(value);
-  }
-  function finite2(value) {
-    return typeof value === "number" && Number.isFinite(value);
-  }
-  function timestampMillis(value) {
-    return new Date(value === void 0 ? NaN : value === null ? 0 : value).getTime();
-  }
-
-  // src/core/helper-identity.ts
-  function sessionMetaText(session) {
-    return [session.name, session.cwd, session.model, session.id].join(" ").toLowerCase();
-  }
-
-  // src/core/helper-format.ts
-  function escapeHtml(text18) {
-    if (text18 == null || text18 === "") return "";
-    return String(text18).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-  }
-  function truncate(text18, maxLen, suffix = " \u2026 (truncated)") {
-    if (!text18 || text18.length <= maxLen) return text18;
-    return text18.slice(0, maxLen) + suffix;
-  }
-
-  // src/core/helper-query.ts
-  var QUERY_FIELDS = /* @__PURE__ */ new Set(["name", "cwd", "model", "id", "is", "host", "routine"]);
-  function parseQueryDate(value, now) {
-    const rel = /^(\d+)([hdw])$/.exec(value);
-    if (rel) {
-      const ms = Number(rel[1]) * (rel[2] === "h" ? 36e5 : rel[2] === "d" ? 864e5 : 7 * 864e5);
-      return now - ms;
-    }
-    const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-    if (iso) {
-      const year = Number(iso[1]), month = Number(iso[2]), day = Number(iso[3]);
-      const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-      const maxDay = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
-      if (!maxDay || day < 1 || day > maxDay) return null;
-      const t = (/* @__PURE__ */ new Date(value + "T00:00:00")).getTime();
-      return finite2(t) ? t : null;
-    }
-    return null;
-  }
-  function queryTokenRe() {
-    return /(-?)([a-zA-Z]+:)?("([^"]*)"|\S+)/g;
-  }
-  function stripQueryField(query, field) {
-    if (!query) return "";
-    const want = String(field || "").toLowerCase();
-    const tokenRe = queryTokenRe();
-    const kept = [];
-    let m;
-    while ((m = tokenRe.exec(query)) !== null) {
-      const prefix = m[2] ? m[2].slice(0, -1).toLowerCase() : null;
-      if (prefix !== want) kept.push(m[0]);
-    }
-    return kept.join(" ");
-  }
-  function parseSessionQuery(query, now = Date.now()) {
-    const parsed = { terms: [], since: null, before: null };
-    if (!query) return parsed;
-    const tokenRe = queryTokenRe();
-    let m;
-    while ((m = tokenRe.exec(query)) !== null) {
-      const neg = m[1] === "-";
-      const rawPrefix = m[2] ? m[2].slice(0, -1).toLowerCase() : null;
-      const value = (m[4] !== void 0 ? m[4] : m[3]).toLowerCase();
-      if (!neg && (rawPrefix === "since" || rawPrefix === "before")) {
-        const t = parseQueryDate(value, now);
-        if (t !== null) {
-          if (rawPrefix === "since") parsed.since = Math.max(parsed.since ?? -Infinity, t);
-          else parsed.before = Math.min(parsed.before ?? Infinity, t);
-          continue;
-        }
-      }
-      if (rawPrefix && QUERY_FIELDS.has(rawPrefix)) {
-        if (value) parsed.terms.push({ neg, field: rawPrefix, value });
-        continue;
-      }
-      const literal = (rawPrefix ? rawPrefix + ":" : "") + value;
-      if (literal) parsed.terms.push({ neg, field: null, value: literal });
-    }
-    return parsed;
-  }
-  function positiveQueryTokens(parsed) {
-    return parsed.terms.filter((t) => !t.neg && !t.field).map((t) => t.value);
-  }
-  function isAutomationSession(session) {
-    return !!(session && (session.routine || session.routineId));
-  }
-  function queryAsksForAutomation(parsed) {
-    return (parsed?.terms || []).some((term) => !term.neg && (term.field === "routine" || term.field === "is" && term.value === "automation"));
-  }
-  function evaluateSessionQuery(parsed, session, contentText) {
-    if (parsed.since !== null || parsed.before !== null) {
-      const t = new Date(session.lastActivity || 0).getTime();
-      if (parsed.since !== null && !(t >= parsed.since)) return false;
-      if (parsed.before !== null && !(t < parsed.before)) return false;
-    }
-    const meta = sessionMetaText(session);
-    for (const term of parsed.terms) {
-      let hit;
-      if (term.field === "host") {
-        hit = (session.hostLabel || session.host || "").toLowerCase().includes(term.value);
-      } else if (term.field === "is") {
-        hit = term.value === "active" && !!session.isActive || term.value === "automation" && isAutomationSession(session);
-      } else {
-        const field = term.field;
-        const hay = field === null ? meta : field === "name" || field === "cwd" || field === "model" || field === "id" || field === "routine" ? (session[field] || "").toLowerCase() : "";
-        hit = hay.includes(term.value);
-        if (!hit && !term.neg && !term.field && contentText) hit = contentText.includes(term.value);
-      }
-      if (hit === term.neg) return false;
-    }
-    return true;
-  }
-  function countOccurrences(text18, token) {
-    if (!text18 || !token) return 0;
-    let n = 0, i = text18.indexOf(token);
-    while (i !== -1) {
-      n++;
-      i = text18.indexOf(token, i + token.length);
-    }
-    return n;
-  }
-  function scoreSessionMatch(parsed, session, contentText) {
-    const tokens2 = positiveQueryTokens(parsed);
-    if (!tokens2.length) return 0;
-    const name = (session.name || "").toLowerCase();
-    const other = [session.cwd, session.model, session.id].join(" ").toLowerCase();
-    let total = 0;
-    for (const token of tokens2) {
-      if (name.includes(token)) total += 100;
-      if (other.includes(token)) total += 30;
-      const n = countOccurrences(contentText, token);
-      if (n > 0) total += 20 + Math.min(30, Math.round(8 * Math.log2(n)));
-    }
-    return Math.round(total);
-  }
-  function applyHostTerms(list, query) {
-    if (!query) return list;
-    const terms = parseSessionQuery(query).terms.filter((t) => t.field === "host");
-    if (!terms.length) return list;
-    const parsed = { terms, since: null, before: null };
-    return list.filter((s) => evaluateSessionQuery(parsed, s));
-  }
-  function fuzzyMatch(query, str) {
-    query = query.toLowerCase();
-    str = str.toLowerCase();
-    let qi = 0;
-    const indices = [];
-    for (let si = 0; si < str.length && qi < query.length; si++) {
-      if (str[si] === query[qi]) {
-        indices.push(si);
-        qi++;
-      }
-    }
-    return qi === query.length ? indices : null;
-  }
-  function fuzzyScore(indices, str) {
-    if (!indices) return -Infinity;
-    let score = 0;
-    for (let i = 1; i < indices.length; i++) {
-      if (indices[i] === indices[i - 1] + 1) score += 10;
-    }
-    score -= indices[0];
-    score -= str.length * 0.1;
-    return score;
-  }
-  function highlightFuzzy(str, indices) {
-    if (!indices || !indices.length) return escapeHtml(str);
-    let result = "";
-    let last = 0;
-    for (const idx of indices) {
-      result += escapeHtml(str.slice(last, idx));
-      result += `<span class="cwd-match">${escapeHtml(str[idx])}</span>`;
-      last = idx + 1;
-    }
-    result += escapeHtml(str.slice(last));
-    return result;
-  }
-  function highlightTokens(text18, tokens2) {
-    const str = String(text18);
-    const lower = str.toLowerCase();
-    const ranges = [];
-    for (const t of tokens2) {
-      if (!t) continue;
-      const needle = String(t).toLowerCase();
-      for (let i = lower.indexOf(needle); i !== -1; i = lower.indexOf(needle, i + 1)) {
-        ranges.push([i, i + needle.length]);
-      }
-    }
-    if (!ranges.length) return escapeHtml(str);
-    ranges.sort((a, b) => a[0] - b[0]);
-    const merged = [ranges[0]];
-    for (const [s, e] of ranges.slice(1)) {
-      const last = merged[merged.length - 1];
-      if (s <= last[1]) last[1] = Math.max(last[1], e);
-      else merged.push([s, e]);
-    }
-    let out = "", pos = 0;
-    for (const [s, e] of merged) {
-      out += escapeHtml(str.slice(pos, s)) + "<mark>" + escapeHtml(str.slice(s, e)) + "</mark>";
-      pos = e;
-    }
-    return out + escapeHtml(str.slice(pos));
-  }
-
   // src/browser/model-catalog.ts
   function modelsCacheKey(harnessId, hostId, selfId) {
     const base = harnessId === "pi" ? "pi-dish-models-cache" : `pi-dish-models-cache:${harnessId}`;
@@ -2548,15 +2340,10 @@ var PiDishBrowser = (() => {
       return current() ? scope : null;
     }, reusable, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
   }
-  function modelSelectOptionsHtml(models, escapeHtml2, filter) {
+  function modelSelectOptionsHtml(models, escapeHtml2) {
     const enabled = models.filter((model) => model.enabled !== false);
-    const query = (filter?.query || "").trim(), pinned = filter?.pinned || "";
-    const listed = !query ? enabled : enabled.filter((model) => {
-      const selector = model.selector || `${model.provider}/${model.id}`;
-      return selector === pinned || !!fuzzyMatch(query, `${model.provider}/${model.id}`) || !!fuzzyMatch(query, model.name || model.id);
-    });
     const byProvider = /* @__PURE__ */ new Map();
-    for (const model of listed) {
+    for (const model of enabled) {
       const group = byProvider.get(model.provider) || [];
       group.push(model);
       byProvider.set(model.provider, group);
@@ -2574,6 +2361,123 @@ var PiDishBrowser = (() => {
   function modelHiddenNote(hidden) {
     return hidden > 0 ? `${hidden} model${hidden === 1 ? "" : "s"} hidden (not enabled)` : "";
   }
+  function catalogModelSelector(model) {
+    return model.selector || `${model.provider}/${model.id}`;
+  }
+  function catalogModelLabel(model) {
+    return model.name || model.id;
+  }
+  function createModelPicker(options2) {
+    const { input, dropdown } = options2;
+    const listeners = new AbortController();
+    let rowListeners = new AbortController();
+    let blurTimer = null;
+    let activeIndex = -1;
+    let open = false;
+    function currentLabel() {
+      const selected = options2.selected();
+      const row = options2.rows().find((model) => model.enabled !== false && catalogModelSelector(model) === selected);
+      return row ? catalogModelLabel(row) : "";
+    }
+    function clearBlur() {
+      if (blurTimer !== null) clearTimeout(blurTimer);
+      blurTimer = null;
+    }
+    function hide() {
+      rowListeners.abort();
+      open = false;
+      dropdown.style.display = "none";
+      activeIndex = -1;
+      clearBlur();
+    }
+    function sync() {
+      if (open) {
+        render(input.value);
+        return;
+      }
+      input.value = currentLabel();
+    }
+    function pick(selector) {
+      options2.onPick(selector);
+      hide();
+      input.value = currentLabel();
+    }
+    function render(query) {
+      rowListeners.abort();
+      open = true;
+      activeIndex = -1;
+      const q = query.trim();
+      let named = options2.rows().filter((model) => model.enabled !== false).flatMap((model) => {
+        const label = catalogModelLabel(model), ref = catalogModelSelector(model);
+        if (!q) return [{ model, label, ref, indices: [], score: 0 }];
+        const indices = options2.match(q, label) || options2.match(q, ref);
+        return indices ? [{ model, label, ref, indices, score: options2.score(indices, label) }] : [];
+      });
+      if (q) named = named.sort((a, b) => b.score - a.score);
+      const rows = [{ key: "", html: "(default)" }].concat(named.map(({ label, ref, indices }) => {
+        const matchedLabel = indices.length && options2.match(q, label) ? options2.highlight(label, indices) : options2.escapeHtml(label);
+        const suffix = ref === label ? "" : ` <span class="model-picker-ref">${options2.escapeHtml(ref)}</span>`;
+        return { key: ref, html: matchedLabel + suffix };
+      }));
+      dropdown.innerHTML = rows.map((row) => `<div class="cwd-option" data-key="${options2.escapeHtml(row.key)}">${row.html}</div>`).join("");
+      dropdown.style.display = "block";
+      rowListeners = new AbortController();
+      for (const row of Array.from(dropdown.querySelectorAll(".cwd-option"))) {
+        row.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          if (dropdown.contains(row)) pick(row.dataset.key || "");
+        }, { signal: rowListeners.signal });
+      }
+    }
+    const listener = { signal: listeners.signal };
+    input.addEventListener("focus", () => {
+      clearBlur();
+      input.select();
+      render("");
+    }, listener);
+    input.addEventListener("click", () => {
+      if (!open) {
+        clearBlur();
+        render("");
+      }
+    }, listener);
+    input.addEventListener("input", () => render(input.value), listener);
+    input.addEventListener("blur", () => {
+      clearBlur();
+      blurTimer = setTimeout(() => {
+        hide();
+        input.value = currentLabel();
+      }, 150);
+    }, listener);
+    input.addEventListener("keydown", (event) => {
+      if (!open) return;
+      const rows = Array.from(dropdown.querySelectorAll(".cwd-option"));
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (!rows.length) return;
+        activeIndex = Math.max(0, Math.min(activeIndex + (event.key === "ArrowDown" ? 1 : -1), rows.length - 1));
+        rows.forEach((row, index) => row.classList.toggle("active", index === activeIndex));
+        rows[activeIndex].scrollIntoView({ block: "nearest" });
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const row = rows[activeIndex];
+        if (row) pick(row.dataset.key || "");
+        else {
+          hide();
+          input.value = currentLabel();
+        }
+      } else if (event.key === "Escape") {
+        event.stopPropagation();
+        hide();
+        input.value = currentLabel();
+      }
+    }, listener);
+    const picker = { sync, hide, dispose() {
+      hide();
+      listeners.abort();
+    } };
+    return picker;
+  }
 
   // src/browser/new-session-options.ts
   var NS_THINKING_LABELS = Object.freeze({
@@ -2587,7 +2491,7 @@ var PiDishBrowser = (() => {
   });
   var thinkingLabel = (level) => Object.hasOwn(NS_THINKING_LABELS, level) ? NS_THINKING_LABELS[level] : level;
   function createNewSessionPreferences(options2) {
-    let harness = "pi", model = "", thinking = "", query = "";
+    let harness = "pi", model = "", thinking = "";
     function preference(kind) {
       return options2.read(`pi-dish-new-${kind}:${harness}`) || (harness === "pi" ? options2.read(`pi-dish-new-${kind}`) : "") || "";
     }
@@ -2601,7 +2505,7 @@ var PiDishBrowser = (() => {
       thinking = preference("thinking");
     }
     function syncThinking() {
-      const selected = options2.rows().find((row) => (row.selector || `${row.provider}/${row.id}`) === options2.model.value);
+      const selected = options2.rows().find((row) => catalogModelSelector(row) === model);
       let levels = Object.keys(NS_THINKING_LABELS);
       let disabled = selected?.reasoning === false;
       let note = disabled ? "The selected model does not support configurable thinking" : "";
@@ -2622,19 +2526,19 @@ var PiDishBrowser = (() => {
       if (options2.thinkingNote) options2.thinkingNote.textContent = note;
     }
     function render() {
-      const { html, enabled, hidden } = modelSelectOptionsHtml(options2.rows(), options2.escapeHtml, { query, pinned: model });
-      options2.model.innerHTML = html;
-      options2.model.value = model && enabled.some((row) => (row.selector || `${row.provider}/${row.id}`) === model) ? model : "";
-      if (options2.hiddenNote) options2.hiddenNote.textContent = modelHiddenNote(hidden);
+      const rows = options2.rows(), enabled = rows.filter((row) => row.enabled !== false);
+      if (options2.hiddenNote) options2.hiddenNote.textContent = modelHiddenNote(rows.length - enabled.length);
       syncThinking();
+      options2.rendered();
     }
     return {
       restore,
       render,
       syncThinking,
-      filterModels(value) {
-        query = value || "";
-        render();
+      // A saved model the catalog no longer lists stays persisted but is never
+      // submitted — submission reads selectedModel, not the raw preference.
+      selectedModel() {
+        return model && options2.rows().some((row) => row.enabled !== false && catalogModelSelector(row) === model) ? model : "";
       },
       selectModel(value) {
         model = value || "";
@@ -2647,12 +2551,12 @@ var PiDishBrowser = (() => {
       }
     };
   }
-  function record6(value) {
+  function record5(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
   }
   function decodeHarnessConfigPreview(value, cwd) {
-    if (!record6(value)) throw new Error("Invalid harness defaults");
-    const roles = record6(value.modelRoles) ? Object.fromEntries(Object.entries(value.modelRoles).filter((entry) => typeof entry[1] === "string")) : {};
+    if (!record5(value)) throw new Error("Invalid harness defaults");
+    const roles = record5(value.modelRoles) ? Object.fromEntries(Object.entries(value.modelRoles).filter((entry) => typeof entry[1] === "string")) : {};
     return {
       cwd,
       defaultModel: typeof value.defaultModel === "string" ? value.defaultModel : "",
@@ -2693,7 +2597,7 @@ var PiDishBrowser = (() => {
         if (!owns()) return;
         const data = await response.json();
         if (!owns()) return;
-        if (!response.ok) throw new Error(record6(data) && typeof data.error === "string" && data.error ? data.error : `HTTP ${response.status}`);
+        if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" && data.error ? data.error : `HTTP ${response.status}`);
         config = decodeHarnessConfigPreview(data, target.cwd);
         owner = target;
         options2.values.textContent = `Model: ${config.defaultModel || "auto-select"} \xB7 Thinking: ${config.defaultThinkingLevel || "host default"}`;
@@ -2712,22 +2616,22 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/harness-settings-data.ts
-  function record7(value) {
+  function record6(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
   }
   var text3 = (value) => typeof value === "string" ? value : "";
   function stringRecord(value) {
-    const result = Object.fromEntries(record7(value) ? Object.entries(value).filter((entry) => typeof entry[1] === "string") : []);
+    const result = Object.fromEntries(record6(value) ? Object.entries(value).filter((entry) => typeof entry[1] === "string") : []);
     Object.setPrototypeOf(result, null);
     return result;
   }
   function booleanRecord(value) {
-    const result = Object.fromEntries(record7(value) ? Object.entries(value).filter((entry) => typeof entry[1] === "boolean") : []);
+    const result = Object.fromEntries(record6(value) ? Object.entries(value).filter((entry) => typeof entry[1] === "boolean") : []);
     Object.setPrototypeOf(result, null);
     return result;
   }
   function decodeHarnessConfig(value) {
-    if (!record7(value)) throw new Error("Invalid harness configuration");
+    if (!record6(value)) throw new Error("Invalid harness configuration");
     return {
       defaultModel: text3(value.defaultModel),
       defaultThinkingLevel: text3(value.defaultThinkingLevel),
@@ -2736,7 +2640,7 @@ var PiDishBrowser = (() => {
     };
   }
   function settings(value) {
-    if (!record7(value)) return null;
+    if (!record6(value)) return null;
     return {
       disabled: Array.isArray(value.disabled) ? value.disabled.filter((name) => typeof name === "string") : [],
       modelOverrides: stringRecord(value.modelOverrides),
@@ -2745,10 +2649,10 @@ var PiDishBrowser = (() => {
     };
   }
   function decodeHarnessAgents(value) {
-    if (!record7(value)) throw new Error("Invalid harness agents");
+    if (!record6(value)) throw new Error("Invalid harness agents");
     const agents = Array.isArray(value.agents) ? value.agents : [];
     return {
-      agents: agents.flatMap((agent) => record7(agent) && typeof agent.name === "string" && agent.name ? [{ name: agent.name, description: text3(agent.description), source: text3(agent.source), model: text3(agent.model), thinkingLevel: text3(agent.thinkingLevel) }] : []),
+      agents: agents.flatMap((agent) => record6(agent) && typeof agent.name === "string" && agent.name ? [{ name: agent.name, description: text3(agent.description), source: text3(agent.source), model: text3(agent.model), thinkingLevel: text3(agent.thinkingLevel) }] : []),
       settings: settings(value.settings),
       globalSettings: settings(value.globalSettings)
     };
@@ -3097,15 +3001,15 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/session-spawns.ts
-  function record8(value) {
+  function record7(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
   }
   function decodeSpawnId(value) {
-    if (!record8(value) || typeof value.spawnId !== "string" || !value.spawnId) throw new Error("Failed to start session");
+    if (!record7(value) || typeof value.spawnId !== "string" || !value.spawnId) throw new Error("Failed to start session");
     return value.spawnId;
   }
   function decodeSpawnStatus(value) {
-    if (record8(value)) {
+    if (record7(value)) {
       if (value.status === "starting") return { status: "starting" };
       if (value.status === "error") return { status: "error", error: typeof value.error === "string" && value.error ? value.error : "Session failed to start" };
       if (value.status === "ready" && typeof value.sessionId === "string" && value.sessionId) return { status: "ready", sessionId: value.sessionId };
@@ -3129,7 +3033,7 @@ var PiDishBrowser = (() => {
             continue;
           }
           const data = await response.json().catch(() => null);
-          if (!response.ok && response.status !== 202) throw new Error(record8(data) && typeof data.error === "string" && data.error ? data.error : `spawn status failed (${response.status})`);
+          if (!response.ok && response.status !== 202) throw new Error(record7(data) && typeof data.error === "string" && data.error ? data.error : `spawn status failed (${response.status})`);
           const status = decodeSpawnStatus(data);
           if (status.status === "starting") {
             await options2.delay(attempt);
@@ -3206,6 +3110,27 @@ var PiDishBrowser = (() => {
       get: (key) => pending.get(key),
       entries: () => [...pending.entries()]
     };
+  }
+
+  // src/core/helper-format.ts
+  function escapeHtml(text18) {
+    if (text18 == null || text18 === "") return "";
+    return String(text18).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function truncate(text18, maxLen, suffix = " \u2026 (truncated)") {
+    if (!text18 || text18.length <= maxLen) return text18;
+    return text18.slice(0, maxLen) + suffix;
+  }
+
+  // src/core/helper-values.ts
+  function record8(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+  function finite2(value) {
+    return typeof value === "number" && Number.isFinite(value);
+  }
+  function timestampMillis(value) {
+    return new Date(value === void 0 ? NaN : value === null ? 0 : value).getTime();
   }
 
   // src/browser/helper-format.ts
@@ -3501,6 +3426,195 @@ var PiDishBrowser = (() => {
     return shown.join(" \xB7 ") + (rest > 0 ? ` \xB7 +${rest} more` : "");
   }
 
+  // src/core/helper-identity.ts
+  function sessionMetaText(session) {
+    return [session.name, session.cwd, session.model, session.id].join(" ").toLowerCase();
+  }
+
+  // src/core/helper-query.ts
+  var QUERY_FIELDS = /* @__PURE__ */ new Set(["name", "cwd", "model", "id", "is", "host", "routine"]);
+  function parseQueryDate(value, now) {
+    const rel = /^(\d+)([hdw])$/.exec(value);
+    if (rel) {
+      const ms = Number(rel[1]) * (rel[2] === "h" ? 36e5 : rel[2] === "d" ? 864e5 : 7 * 864e5);
+      return now - ms;
+    }
+    const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (iso) {
+      const year = Number(iso[1]), month = Number(iso[2]), day = Number(iso[3]);
+      const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+      const maxDay = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+      if (!maxDay || day < 1 || day > maxDay) return null;
+      const t = (/* @__PURE__ */ new Date(value + "T00:00:00")).getTime();
+      return finite2(t) ? t : null;
+    }
+    return null;
+  }
+  function queryTokenRe() {
+    return /(-?)([a-zA-Z]+:)?("([^"]*)"|\S+)/g;
+  }
+  function stripQueryField(query, field) {
+    if (!query) return "";
+    const want = String(field || "").toLowerCase();
+    const tokenRe = queryTokenRe();
+    const kept = [];
+    let m;
+    while ((m = tokenRe.exec(query)) !== null) {
+      const prefix = m[2] ? m[2].slice(0, -1).toLowerCase() : null;
+      if (prefix !== want) kept.push(m[0]);
+    }
+    return kept.join(" ");
+  }
+  function parseSessionQuery(query, now = Date.now()) {
+    const parsed = { terms: [], since: null, before: null };
+    if (!query) return parsed;
+    const tokenRe = queryTokenRe();
+    let m;
+    while ((m = tokenRe.exec(query)) !== null) {
+      const neg = m[1] === "-";
+      const rawPrefix = m[2] ? m[2].slice(0, -1).toLowerCase() : null;
+      const value = (m[4] !== void 0 ? m[4] : m[3]).toLowerCase();
+      if (!neg && (rawPrefix === "since" || rawPrefix === "before")) {
+        const t = parseQueryDate(value, now);
+        if (t !== null) {
+          if (rawPrefix === "since") parsed.since = Math.max(parsed.since ?? -Infinity, t);
+          else parsed.before = Math.min(parsed.before ?? Infinity, t);
+          continue;
+        }
+      }
+      if (rawPrefix && QUERY_FIELDS.has(rawPrefix)) {
+        if (value) parsed.terms.push({ neg, field: rawPrefix, value });
+        continue;
+      }
+      const literal = (rawPrefix ? rawPrefix + ":" : "") + value;
+      if (literal) parsed.terms.push({ neg, field: null, value: literal });
+    }
+    return parsed;
+  }
+  function positiveQueryTokens(parsed) {
+    return parsed.terms.filter((t) => !t.neg && !t.field).map((t) => t.value);
+  }
+  function isAutomationSession(session) {
+    return !!(session && (session.routine || session.routineId));
+  }
+  function queryAsksForAutomation(parsed) {
+    return (parsed?.terms || []).some((term) => !term.neg && (term.field === "routine" || term.field === "is" && term.value === "automation"));
+  }
+  function evaluateSessionQuery(parsed, session, contentText) {
+    if (parsed.since !== null || parsed.before !== null) {
+      const t = new Date(session.lastActivity || 0).getTime();
+      if (parsed.since !== null && !(t >= parsed.since)) return false;
+      if (parsed.before !== null && !(t < parsed.before)) return false;
+    }
+    const meta = sessionMetaText(session);
+    for (const term of parsed.terms) {
+      let hit;
+      if (term.field === "host") {
+        hit = (session.hostLabel || session.host || "").toLowerCase().includes(term.value);
+      } else if (term.field === "is") {
+        hit = term.value === "active" && !!session.isActive || term.value === "automation" && isAutomationSession(session);
+      } else {
+        const field = term.field;
+        const hay = field === null ? meta : field === "name" || field === "cwd" || field === "model" || field === "id" || field === "routine" ? (session[field] || "").toLowerCase() : "";
+        hit = hay.includes(term.value);
+        if (!hit && !term.neg && !term.field && contentText) hit = contentText.includes(term.value);
+      }
+      if (hit === term.neg) return false;
+    }
+    return true;
+  }
+  function countOccurrences(text18, token) {
+    if (!text18 || !token) return 0;
+    let n = 0, i = text18.indexOf(token);
+    while (i !== -1) {
+      n++;
+      i = text18.indexOf(token, i + token.length);
+    }
+    return n;
+  }
+  function scoreSessionMatch(parsed, session, contentText) {
+    const tokens2 = positiveQueryTokens(parsed);
+    if (!tokens2.length) return 0;
+    const name = (session.name || "").toLowerCase();
+    const other = [session.cwd, session.model, session.id].join(" ").toLowerCase();
+    let total = 0;
+    for (const token of tokens2) {
+      if (name.includes(token)) total += 100;
+      if (other.includes(token)) total += 30;
+      const n = countOccurrences(contentText, token);
+      if (n > 0) total += 20 + Math.min(30, Math.round(8 * Math.log2(n)));
+    }
+    return Math.round(total);
+  }
+  function applyHostTerms(list, query) {
+    if (!query) return list;
+    const terms = parseSessionQuery(query).terms.filter((t) => t.field === "host");
+    if (!terms.length) return list;
+    const parsed = { terms, since: null, before: null };
+    return list.filter((s) => evaluateSessionQuery(parsed, s));
+  }
+  function fuzzyMatch(query, str) {
+    query = query.toLowerCase();
+    str = str.toLowerCase();
+    let qi = 0;
+    const indices = [];
+    for (let si = 0; si < str.length && qi < query.length; si++) {
+      if (str[si] === query[qi]) {
+        indices.push(si);
+        qi++;
+      }
+    }
+    return qi === query.length ? indices : null;
+  }
+  function fuzzyScore(indices, str) {
+    if (!indices) return -Infinity;
+    let score = 0;
+    for (let i = 1; i < indices.length; i++) {
+      if (indices[i] === indices[i - 1] + 1) score += 10;
+    }
+    score -= indices[0];
+    score -= str.length * 0.1;
+    return score;
+  }
+  function highlightFuzzy(str, indices) {
+    if (!indices || !indices.length) return escapeHtml(str);
+    let result = "";
+    let last = 0;
+    for (const idx of indices) {
+      result += escapeHtml(str.slice(last, idx));
+      result += `<span class="cwd-match">${escapeHtml(str[idx])}</span>`;
+      last = idx + 1;
+    }
+    result += escapeHtml(str.slice(last));
+    return result;
+  }
+  function highlightTokens(text18, tokens2) {
+    const str = String(text18);
+    const lower = str.toLowerCase();
+    const ranges = [];
+    for (const t of tokens2) {
+      if (!t) continue;
+      const needle = String(t).toLowerCase();
+      for (let i = lower.indexOf(needle); i !== -1; i = lower.indexOf(needle, i + 1)) {
+        ranges.push([i, i + needle.length]);
+      }
+    }
+    if (!ranges.length) return escapeHtml(str);
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged = [ranges[0]];
+    for (const [s, e] of ranges.slice(1)) {
+      const last = merged[merged.length - 1];
+      if (s <= last[1]) last[1] = Math.max(last[1], e);
+      else merged.push([s, e]);
+    }
+    let out = "", pos = 0;
+    for (const [s, e] of merged) {
+      out += escapeHtml(str.slice(pos, s)) + "<mark>" + escapeHtml(str.slice(s, e)) + "</mark>";
+      pos = e;
+    }
+    return out + escapeHtml(str.slice(pos));
+  }
+
   // src/browser/new-session.ts
   var NEW_SESSION_HARNESS_KEY = "pi-dish-new-harness";
   var HOST_KEY = "pi-dish-new-host";
@@ -3523,8 +3637,8 @@ var PiDishBrowser = (() => {
     }
     const cwdInput = input("newSessionCwd"), nameInput = input("newSessionName");
     const hostSelect = select("nsHostSelect"), harnessSelect = select("nsHarnessSelect");
-    const modelSelect = select("nsModelSelect"), thinkingSelect = select("nsThinkingSelect");
-    const modelFilterInput = input("nsModelFilter");
+    const thinkingSelect = select("nsThinkingSelect");
+    const modelInput = input("nsModelInput"), modelDropdown = element("nsModelDropdown");
     const spawnElement = element("nsSpawnBtn");
     if (!(spawnElement instanceof HTMLButtonElement)) throw new Error("Invalid spawn button");
     const spawnButton = spawnElement;
@@ -3548,17 +3662,28 @@ var PiDishBrowser = (() => {
     const error = (value) => {
       if (!disposed) element("nsError").textContent = value;
     };
+    let modelPicker = null;
     const preferences = createNewSessionPreferences({
-      model: modelSelect,
       thinking: thinkingSelect,
       hiddenNote: element("nsModelHidden"),
       thinkingNote: element("nsThinkingNote"),
       rows: () => models.rows(),
       read: (key) => storage.getItem(key),
       write: (key, value) => storage.setItem(key, value),
+      escapeHtml,
+      rendered: () => modelPicker?.sync()
+    });
+    modelPicker = createModelPicker({
+      input: modelInput,
+      dropdown: modelDropdown,
+      rows: () => models.rows(),
+      selected: () => preferences.selectedModel(),
+      onPick: (value) => preferences.selectModel(value),
+      match: fuzzyMatch,
+      score: fuzzyScore,
+      highlight: highlightFuzzy,
       escapeHtml
     });
-    modelFilterInput.addEventListener("input", () => preferences.filterModels(modelFilterInput.value));
     const config = createNewSessionConfigPreview({
       wrap: element("nsHarnessConfig"),
       values: element("nsHarnessConfigValues"),
@@ -3749,8 +3874,6 @@ var PiDishBrowser = (() => {
       root.classList.add("new-session-open");
       draft = value.draft || null;
       nameInput.value = "";
-      modelFilterInput.value = "";
-      preferences.filterModels("");
       renderHosts();
       void directories.load().then(() => {
         if (isOpen()) renderWorkspaces();
@@ -3795,6 +3918,7 @@ var PiDishBrowser = (() => {
       clearTimeout(refreshTimer);
       config.retire();
       autocomplete.hide();
+      modelPicker?.hide();
     }
     function captureView() {
       const view = generation, open2 = isOpen(), selection = options2.sessionState.captureSelection(), pending = options2.currentSpawn();
@@ -3860,7 +3984,7 @@ var PiDishBrowser = (() => {
         await submit({
           name,
           cwd: directory,
-          model: modelSelect.value || void 0,
+          model: preferences.selectedModel() || void 0,
           thinking: thinkingSelect.value || void 0,
           target,
           harness: selectedHarness(),
@@ -3920,6 +4044,7 @@ var PiDishBrowser = (() => {
         disposed = true;
         autocomplete.dispose();
         targetPicker.dispose();
+        modelPicker?.dispose();
       }
     };
   }
@@ -3931,9 +4056,9 @@ var PiDishBrowser = (() => {
     return value === "restore" || value === "continue" ? value : "off";
   }
   function decodeRecoveryReport(value) {
-    if (!record5(value)) throw new Error("Invalid recovery report");
+    if (!record8(value)) throw new Error("Invalid recovery report");
     const rows = Array.isArray(value.sessions) ? value.sessions : [];
-    const sessions = rows.flatMap((row) => record5(row) && typeof row.id === "string" && row.id ? [{
+    const sessions = rows.flatMap((row) => record8(row) && typeof row.id === "string" && row.id ? [{
       id: row.id,
       name: text4(row.name),
       harnessId: text4(row.harnessId),
@@ -4058,9 +4183,9 @@ var PiDishBrowser = (() => {
         try {
           const res = await apiFetch(host, "/api/settings", { timeoutMs: 2e4 });
           const data = await res.json();
-          if (!res.ok) throw new Error(record5(data) && text4(data.error) || `HTTP ${res.status}`);
+          if (!res.ok) throw new Error(record8(data) && text4(data.error) || `HTTP ${res.status}`);
           if (!owns(request, host)) return;
-          mode.value = decodeRecoveryMode(record5(data) ? data.recoveryMode : null);
+          mode.value = decodeRecoveryMode(record8(data) ? data.recoveryMode : null);
           mode.disabled = save.disabled = false;
           status.textContent = "";
         } catch (error) {
@@ -4143,7 +4268,7 @@ var PiDishBrowser = (() => {
         const res = await apiFetch(host, "/api/recovery", { timeoutMs: 2e4 });
         const data = await res.json();
         if (!owns()) return;
-        if (!res.ok) throw new Error(record5(data) && text4(data.error) || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(record8(data) && text4(data.error) || `HTTP ${res.status}`);
         const report = decodeRecoveryReport(data);
         const modes = { off: "Off", restore: "Restore open sessions", continue: "Restore and continue interrupted work" };
         body.innerHTML = `<p class="recovery-note"><strong>${escapeHtml(Object.hasOwn(modes, report.mode) ? modes[report.mode] : report.mode)}</strong> on ${escapeHtml(hostDisplayLabel(host))}. Recovery runs when this host\u2019s server starts, not when this report opens.</p>
@@ -4230,8 +4355,8 @@ var PiDishBrowser = (() => {
   var text5 = (value) => typeof value === "string" ? value : "";
   var bounceMode = (value) => value === "restart" ? "restart" : "reload";
   function decodeBouncePreview(value) {
-    if (!record5(value) || !Array.isArray(value.targets)) throw new Error("Invalid preview response");
-    return value.targets.flatMap((target) => record5(target) && typeof target.sessionId === "string" && target.sessionId ? [{
+    if (!record8(value) || !Array.isArray(value.targets)) throw new Error("Invalid preview response");
+    return value.targets.flatMap((target) => record8(target) && typeof target.sessionId === "string" && target.sessionId ? [{
       sessionId: target.sessionId,
       name: text5(target.name),
       harnessId: text5(target.harnessId),
@@ -4241,12 +4366,12 @@ var PiDishBrowser = (() => {
     }] : []);
   }
   function decodeBounceOperation(value) {
-    if (!record5(value) || typeof value.id !== "string" || !value.id || !Array.isArray(value.targets) || value.mode !== "reload" && value.mode !== "restart") throw new Error("Invalid operation response");
+    if (!record8(value) || typeof value.id !== "string" || !value.id || !Array.isArray(value.targets) || value.mode !== "reload" && value.mode !== "restart") throw new Error("Invalid operation response");
     return {
       id: value.id,
       mode: value.mode,
       createdAt: typeof value.createdAt === "string" || typeof value.createdAt === "number" ? value.createdAt : "",
-      targets: value.targets.flatMap((target) => record5(target) && typeof target.sessionId === "string" && target.sessionId ? [{
+      targets: value.targets.flatMap((target) => record8(target) && typeof target.sessionId === "string" && target.sessionId ? [{
         sessionId: target.sessionId,
         name: text5(target.name),
         harnessId: text5(target.harnessId),
@@ -4257,7 +4382,7 @@ var PiDishBrowser = (() => {
     };
   }
   function decodeBounceOperations(value) {
-    if (!record5(value) || !Array.isArray(value.operations)) throw new Error("Invalid operations response");
+    if (!record8(value) || !Array.isArray(value.operations)) throw new Error("Invalid operations response");
     return value.operations.map(decodeBounceOperation);
   }
 
@@ -4344,7 +4469,7 @@ var PiDishBrowser = (() => {
       try {
         const res = await apiFetch(state.host, `/api/session-bounces/preview?mode=${state.mode}`, { timeoutMs: 2e4 });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(record5(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(record8(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
         if (!bounceHostElement(state)) return;
         state.targets = decodeBouncePreview(data);
       } catch (error) {
@@ -4419,8 +4544,8 @@ var PiDishBrowser = (() => {
             body: JSON.stringify({ mode: state.mode, sessionIds })
           });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(record5(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
-          const operation = decodeBounceOperation(record5(data) ? data.operation : null);
+          if (!res.ok) throw new Error(record8(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
+          const operation = decodeBounceOperation(record8(data) ? data.operation : null);
           ++state.readSeq;
           state.operations = [operation, ...state.operations.filter((op) => op.id !== operation.id)];
           state.actionNotice = "Snapshot queued on this host.";
@@ -4443,7 +4568,7 @@ var PiDishBrowser = (() => {
       try {
         const res = await apiFetch(state.host, "/api/session-bounces", { timeoutMs: 2e4 });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(record5(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(record8(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
         const operations = decodeBounceOperations(data);
         if (seq === state.readSeq && bounceHostElement(state)) {
           state.operations = operations;
@@ -4491,8 +4616,8 @@ var PiDishBrowser = (() => {
       try {
         const res = await apiFetch(state.host, `/api/session-bounces/${encodeURIComponent(operation.id)}`, { method: "DELETE", timeoutMs: 2e4 });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(record5(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
-        const updated = decodeBounceOperation(record5(data) ? data.operation : null);
+        if (!res.ok) throw new Error(record8(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
+        const updated = decodeBounceOperation(record8(data) ? data.operation : null);
         ++state.readSeq;
         state.operations = state.operations.map((op) => op.id === operation.id ? updated : op);
         state.actionNotice = "Waiting targets cancelled. Executing targets continue.";
@@ -4546,14 +4671,14 @@ var PiDishBrowser = (() => {
   // src/browser/fleet-view.ts
   var count = (value) => finite2(value) && value >= 0 ? Math.round(value) : 0;
   function bytes(value) {
-    if (!record5(value) || !finite2(value.totalBytes) || !finite2(value.availableBytes) || value.totalBytes <= 0) return null;
+    if (!record8(value) || !finite2(value.totalBytes) || !finite2(value.availableBytes) || value.totalBytes <= 0) return null;
     return { totalBytes: value.totalBytes, availableBytes: Math.min(value.totalBytes, Math.max(0, value.availableBytes)) };
   }
   function decodeFleetHealth(value) {
-    if (!record5(value)) throw new Error("Invalid host health");
-    const cpu = record5(value.cpu) ? value.cpu : {};
+    if (!record8(value)) throw new Error("Invalid host health");
+    const cpu = record8(value.cpu) ? value.cpu : {};
     const load = Array.isArray(cpu.load) && cpu.load.length === 3 && cpu.load.every(finite2) ? cpu.load : null;
-    const sessions = record5(value.sessions) ? value.sessions : null;
+    const sessions = record8(value.sessions) ? value.sessions : null;
     return {
       uptimeSec: finite2(value.uptimeSec) ? value.uptimeSec : null,
       platform: typeof value.platform === "string" ? value.platform : "",
@@ -4691,7 +4816,7 @@ var PiDishBrowser = (() => {
           throw new Error("Needs a token");
         }
         const data = await response.json();
-        if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+        if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
         const health = decodeFleetHealth(data);
         options2.noteConnection(host, "success");
         if (!owns()) return;
@@ -4762,7 +4887,7 @@ var PiDishBrowser = (() => {
   var EMPTY_LINEAGE = { session: null, tree: null, members: 0, truncated: false };
   var text6 = (value) => typeof value === "string" ? value : "";
   function decodeLineageSession(value) {
-    if (!record5(value) || typeof value.id !== "string" || !value.id) return null;
+    if (!record8(value) || typeof value.id !== "string" || !value.id) return null;
     return {
       id: value.id,
       name: text6(value.name),
@@ -4772,7 +4897,7 @@ var PiDishBrowser = (() => {
       isActive: value.isActive === true,
       subagentLive: value.subagentLive === true,
       turnInProgress: value.turnInProgress === true,
-      capabilities: record5(value.capabilities) ? {
+      capabilities: record8(value.capabilities) ? {
         prompt: value.capabilities.prompt === true,
         steer: value.capabilities.steer === true,
         followUp: value.capabilities.followUp === true
@@ -4782,11 +4907,11 @@ var PiDishBrowser = (() => {
   }
   var LINEAGE_DECODE_NODE_CAP = 5e3;
   function decodeLineageNode(value, budget) {
-    if (!record5(value) || budget.left <= 0) return null;
+    if (!record8(value) || budget.left <= 0) return null;
     const session = decodeLineageSession(value.session);
     if (!session) return null;
     budget.left -= 1;
-    const edge = record5(value.edge) ? { kind: text6(value.edge.kind), source: text6(value.edge.source) } : null;
+    const edge = record8(value.edge) ? { kind: text6(value.edge.kind), source: text6(value.edge.source) } : null;
     const children = Array.isArray(value.children) ? value.children.flatMap((child) => {
       const node = decodeLineageNode(child, budget);
       return node ? [node] : [];
@@ -4798,7 +4923,7 @@ var PiDishBrowser = (() => {
     return 1 + node.children.reduce((count3, child) => count3 + countLineageMembers(child), 0);
   }
   function decodeSessionLineage(value) {
-    if (!record5(value)) return EMPTY_LINEAGE;
+    if (!record8(value)) return EMPTY_LINEAGE;
     const tree = decodeLineageNode(value.tree, { left: LINEAGE_DECODE_NODE_CAP });
     const members = typeof value.members === "number" && Number.isFinite(value.members) && value.members >= 0 ? value.members : countLineageMembers(tree);
     return { session: decodeLineageSession(value.session), tree, members, truncated: value.truncated === true };
@@ -4889,8 +5014,8 @@ var PiDishBrowser = (() => {
         const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
         const data = await res.json();
         if (!current()) return;
-        if (!res.ok) throw new Error(record5(data) && text6(data.error) || `HTTP ${res.status}`);
-        const indexing = record5(data) && data.indexing === true;
+        if (!res.ok) throw new Error(record8(data) && text6(data.error) || `HTTP ${res.status}`);
+        const indexing = record8(data) && data.indexing === true;
         lastIndexing = indexing;
         lineage = decodeSessionLineage(data);
         renderRelationsLink(owner, endpoint);
@@ -4934,8 +5059,8 @@ var PiDishBrowser = (() => {
 
   // src/browser/session-search.ts
   function decodeSessionSearch(value) {
-    if (!record5(value) || !Array.isArray(value.matches)) throw new Error("Invalid session search response");
-    return value.matches.flatMap((match) => record5(match) && typeof match.index === "number" && Number.isInteger(match.index) && match.index >= 0 ? [{ index: match.index, role: typeof match.role === "string" ? match.role : "" }] : []);
+    if (!record8(value) || !Array.isArray(value.matches)) throw new Error("Invalid session search response");
+    return value.matches.flatMap((match) => record8(match) && typeof match.index === "number" && Number.isInteger(match.index) && match.index >= 0 ? [{ index: match.index, role: typeof match.role === "string" ? match.role : "" }] : []);
   }
   function createSessionSearch(options2) {
     const { document: document2, sessionState } = options2;
@@ -5002,7 +5127,7 @@ var PiDishBrowser = (() => {
         const response = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/search?${params}`);
         const data = await response.json();
         if (!owns()) return;
-        if (!response.ok || record5(data) && typeof data.error === "string" && data.error) throw new Error(record5(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+        if (!response.ok || record8(data) && typeof data.error === "string" && data.error) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
         query = value;
         const decoded = decodeSessionSearch(data);
         matches = options2.focusMode() ? decoded.filter((match) => match.role !== "toolResult") : decoded;
@@ -5151,10 +5276,10 @@ var PiDishBrowser = (() => {
   // src/browser/skills-data.ts
   var text7 = (value) => typeof value === "string" ? value : "";
   var number = (value) => finite2(value) ? value : 0;
-  var object2 = (value) => record5(value) ? value : {};
+  var object2 = (value) => record8(value) ? value : {};
   var numbers = (value) => Array.isArray(value) ? value.map(number) : [];
   function decodeSkillDirectory(value) {
-    if (!record5(value) || !Array.isArray(value.skills)) throw new Error("Invalid skills directory");
+    if (!record8(value) || !Array.isArray(value.skills)) throw new Error("Invalid skills directory");
     const summary = object2(value.summary), refine = object2(value.refine);
     return {
       scope: text7(value.scope),
@@ -5162,7 +5287,7 @@ var PiDishBrowser = (() => {
       refine: { mode: refine.mode === "skill" || refine.mode === "path" ? refine.mode : "default", discovered: refine.discovered === true, skillName: text7(refine.skillName), mdPath: text7(refine.mdPath) },
       summary: { discovered: number(summary.discovered), advertised: number(summary.advertised), catalogTokensEst: number(summary.catalogTokensEst), activations30d: number(summary.activations30d), quiet60d: number(summary.quiet60d) },
       skills: value.skills.flatMap((row) => {
-        if (!record5(row) || typeof row.skill !== "string" || !row.skill) return [];
+        if (!record8(row) || typeof row.skill !== "string" || !row.skill) return [];
         const usage = object2(row.usage);
         return [{
           skill: row.skill,
@@ -5189,7 +5314,7 @@ var PiDishBrowser = (() => {
     };
   }
   function decodeSkillCoverage(value) {
-    if (!record5(value) || typeof value.skill !== "string" || !value.skill) throw new Error("Invalid skill coverage");
+    if (!record8(value) || typeof value.skill !== "string" || !value.skill) throw new Error("Invalid skill coverage");
     const kinds = object2(value.kindSplit), latest = object2(value.latest);
     const sections = Array.isArray(value.sections) ? value.sections : [];
     return {
@@ -5207,7 +5332,7 @@ var PiDishBrowser = (() => {
       sessionCount: number(value.sessionCount),
       latest: typeof latest.sessionId === "string" && latest.sessionId ? { sessionId: latest.sessionId, entryId: text7(latest.entryId), name: text7(latest.name), ts: number(latest.ts), model: text7(latest.model) } : null,
       sections: sections.flatMap((section) => {
-        if (!record5(section)) return [];
+        if (!record8(section)) return [];
         const lines = Array.isArray(section.lines) ? section.lines : [];
         return [{
           heading: text7(section.heading),
@@ -5216,7 +5341,7 @@ var PiDishBrowser = (() => {
           reads: number(section.reads),
           fraction: Math.max(0, Math.min(1, number(section.fraction))),
           neverRead: section.neverRead === true,
-          lines: lines.flatMap((line) => record5(line) ? [{ text: text7(line.text), hits: number(line.hits) }] : [])
+          lines: lines.flatMap((line) => record8(line) ? [{ text: text7(line.text), hits: number(line.hits) }] : [])
         }];
       })
     };
@@ -5248,7 +5373,7 @@ var PiDishBrowser = (() => {
       if (!host) throw new Error("Skills host is no longer available");
       const response = await options2.request(host, path);
       const data = await response.json();
-      if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
       return data;
     }
     let skillsData = null;
@@ -5681,8 +5806,8 @@ var PiDishBrowser = (() => {
   var text8 = (value) => typeof value === "string" ? value : "";
   var number2 = (value) => finite2(value) ? value : 0;
   function decodeSearchPayload(value) {
-    if (!record5(value) || !Array.isArray(value.results)) throw new Error("Invalid search response");
-    const results = value.results.flatMap((row) => record5(row) && typeof row.id === "string" && row.id ? [{
+    if (!record8(value) || !Array.isArray(value.results)) throw new Error("Invalid search response");
+    const results = value.results.flatMap((row) => record8(row) && typeof row.id === "string" && row.id ? [{
       id: row.id,
       name: text8(row.name),
       cwd: text8(row.cwd),
@@ -5825,7 +5950,7 @@ var PiDishBrowser = (() => {
             }
             const data = await r.json();
             if (!sameHost(host)) throw new Error("host connection changed");
-            if (!r.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : `HTTP ${r.status}`);
+            if (!r.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${r.status}`);
             payloads[i] = decodeSearchPayload(data);
             status[i] = "ok";
             options2.connection(host, "success");
@@ -6012,7 +6137,7 @@ var PiDishBrowser = (() => {
     if (typeof content === "string") return content;
     if (Array.isArray(content)) {
       const blocks = content;
-      return blocks.map((c) => typeof c === "string" ? c : record5(c) && c.type === "text" && typeof c.text === "string" ? c.text : "").join("\n");
+      return blocks.map((c) => typeof c === "string" ? c : record8(c) && c.type === "text" && typeof c.text === "string" ? c.text : "").join("\n");
     }
     return "";
   }
@@ -6021,7 +6146,7 @@ var PiDishBrowser = (() => {
     if (typeof content === "string") return content;
     if (!Array.isArray(content)) return "";
     const blocks = content;
-    return blocks.filter((c) => typeof c === "string" || record5(c) && c.type === "text").map((c) => typeof c === "string" ? c : record5(c) && typeof c.text === "string" ? c.text : "").join("\n");
+    return blocks.filter((c) => typeof c === "string" || record8(c) && c.type === "text").map((c) => typeof c === "string" ? c : record8(c) && typeof c.text === "string" ? c.text : "").join("\n");
   }
   function ipythonCodeSummary(code) {
     if (typeof code !== "string" || !code) return "";
@@ -6030,7 +6155,7 @@ var PiDishBrowser = (() => {
     return truncate(inner, 60);
   }
   function getToolSummary(toolName, args) {
-    if (!record5(args)) return "";
+    if (!record8(args)) return "";
     if (toolName === "Bash" || toolName === "bash") return typeof args.command === "string" && args.command ? truncate(args.command.split("\n")[0], 60) : "";
     if (toolName === "ipython") return ipythonCodeSummary(args.code);
     if (["Read", "read", "Edit", "edit", "Write", "write"].includes(toolName)) return typeof args.path === "string" ? args.path : "";
@@ -6053,22 +6178,22 @@ var PiDishBrowser = (() => {
     });
   }
   function messageHasVisibleText(msg) {
-    if (!record5(msg)) return false;
+    if (!record8(msg)) return false;
     if (msg.errorMessage) return true;
     if (typeof msg.content === "string") return !!msg.content;
-    return Array.isArray(msg.content) && msg.content.some((b) => record5(b) && b.type === "text" && typeof b.text === "string" && !!b.text);
+    return Array.isArray(msg.content) && msg.content.some((b) => record8(b) && b.type === "text" && typeof b.text === "string" && !!b.text);
   }
   function getToolOutputText(partialResult) {
-    if (!record5(partialResult) || !Array.isArray(partialResult.content)) return "";
+    if (!record8(partialResult) || !Array.isArray(partialResult.content)) return "";
     const blocks = partialResult.content;
-    return blocks.filter((c) => record5(c) && c.type === "text").map((c) => typeof c.text === "string" ? c.text : "").join("");
+    return blocks.filter((c) => record8(c) && c.type === "text").map((c) => typeof c.text === "string" ? c.text : "").join("");
   }
   function extractImageBlocks(content) {
     if (!Array.isArray(content)) return [];
     const out = [];
     const blocks = content;
     for (const block of blocks) {
-      if (!record5(block) || block.type !== "image") continue;
+      if (!record8(block) || block.type !== "image") continue;
       const mimeType = typeof block.mimeType === "string" && block.mimeType ? block.mimeType : "image/png";
       if (typeof block.url === "string" && block.url) out.push({ url: block.url, mimeType });
       else if (typeof block.data === "string" && block.data) out.push({ data: block.data, mimeType });
@@ -6549,8 +6674,8 @@ var PiDishBrowser = (() => {
   var string = (value) => typeof value === "string" ? value : void 0;
   var number3 = (value) => finite2(value) ? value : void 0;
   function decodeMessageUsage(value) {
-    if (!record5(value)) return void 0;
-    const cost = record5(value.cost) ? value.cost : null, price = (value2) => value2 === null ? null : number3(value2);
+    if (!record8(value)) return void 0;
+    const cost = record8(value.cost) ? value.cost : null, price = (value2) => value2 === null ? null : number3(value2);
     return {
       input: number3(value.input),
       output: number3(value.output),
@@ -6564,20 +6689,20 @@ var PiDishBrowser = (() => {
   function decodeMessageContent(value) {
     if (typeof value === "string") return value;
     if (!Array.isArray(value)) return void 0;
-    return value.flatMap((block) => typeof block === "string" ? [block] : !record5(block) || typeof block.type !== "string" ? [] : [{
+    return value.flatMap((block) => typeof block === "string" ? [block] : !record8(block) || typeof block.type !== "string" ? [] : [{
       type: block.type,
       text: string(block.text),
       thinking: string(block.thinking),
       name: string(block.name),
       id: string(block.id),
-      arguments: record5(block.arguments) ? block.arguments : void 0,
+      arguments: record8(block.arguments) ? block.arguments : void 0,
       url: string(block.url),
       data: string(block.data),
       mimeType: string(block.mimeType)
     }]);
   }
   function decodeCacheExpiry(value) {
-    if (!record5(value) || !finite2(value.refreshedAt) || !finite2(value.expiresAt) || !finite2(value.retentionMs) || typeof value.retention !== "string" || !["fixed", "minimum", "estimate"].includes(String(value.basis))) return void 0;
+    if (!record8(value) || !finite2(value.refreshedAt) || !finite2(value.expiresAt) || !finite2(value.retentionMs) || typeof value.retention !== "string" || !["fixed", "minimum", "estimate"].includes(String(value.basis))) return void 0;
     return {
       refreshedAt: value.refreshedAt,
       expiresAt: value.expiresAt,
@@ -6587,7 +6712,7 @@ var PiDishBrowser = (() => {
     };
   }
   function decodeRenderMessage(value) {
-    const row = record5(value) ? value : {}, details = record5(row.details) ? row.details : null;
+    const row = record8(value) ? value : {}, details = record8(row.details) ? row.details : null;
     return {
       role: string(row.role) || "",
       id: string(row.id),
@@ -6608,10 +6733,10 @@ var PiDishBrowser = (() => {
       cacheExpiry: decodeCacheExpiry(row.cacheExpiry),
       durationMs: number3(row.durationMs),
       outputTokens: number3(row.outputTokens),
-      sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record5(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
+      sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry) => record8(entry) && typeof entry.ref === "string" ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : void 0,
       details: details ? {
-        notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record5(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
-        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record5(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number3(job.durationMs) }] : []) : void 0,
+        notes: Array.isArray(details.notes) ? details.notes.flatMap((note) => typeof note === "string" ? [{ note }] : record8(note) && typeof note.note === "string" ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : void 0,
+        jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job) => record8(job) ? [{ label: string(job.label), jobId: string(job.jobId), durationMs: number3(job.durationMs) }] : []) : void 0,
         from: string(details.from),
         message: string(details.message)
       } : void 0
@@ -6722,8 +6847,8 @@ var PiDishBrowser = (() => {
         const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
         const data = await res.json();
         if (!current()) return;
-        if (!res.ok) throw new Error(record5(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
-        lastIndexing = record5(data) && data.indexing === true;
+        if (!res.ok) throw new Error(record8(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
+        lastIndexing = record8(data) && data.indexing === true;
         lineage = decodeSessionLineage(data);
         renderTree();
         if (selectedId) {
@@ -6913,8 +7038,8 @@ var PiDishBrowser = (() => {
         const res = await options2.request(endpoint, `/api/sessions/${encodeURIComponent(target.id)}/messages${query}`);
         const data = await res.json();
         if (stale()) return;
-        if (!res.ok) throw new Error(record5(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
-        const payload = record5(data) ? data : {};
+        if (!res.ok) throw new Error(record8(data) && typeof data.error === "string" && data.error || `HTTP ${res.status}`);
+        const payload = record8(data) ? data : {};
         const messages = Array.isArray(payload.messages) ? payload.messages : [];
         const trace = element("subagentsTrace");
         if (reset && !messages.length) {
@@ -7367,7 +7492,7 @@ var PiDishBrowser = (() => {
   }
 
   // src/browser/usage-data.ts
-  var object3 = (value) => record5(value) ? value : {};
+  var object3 = (value) => record8(value) ? value : {};
   var text9 = (value) => typeof value === "string" ? value : "";
   var number4 = (value) => finite2(value) ? value : 0;
   function costs(value) {
@@ -7397,10 +7522,10 @@ var PiDishBrowser = (() => {
     };
   }
   function decodeUsageSummary(value, host) {
-    if (!record5(value)) throw new Error("Invalid usage summary");
+    if (!record8(value)) throw new Error("Invalid usage summary");
     const groups = object3(value.groups);
     const decodeGroups = (value2, kind) => Array.isArray(value2) ? value2.flatMap((row) => {
-      if (!record5(row) || (kind === "sessions" ? typeof row.id !== "string" : typeof row.key !== "string")) return [];
+      if (!record8(row) || (kind === "sessions" ? typeof row.id !== "string" : typeof row.key !== "string")) return [];
       return [{
         ...bucket(row),
         key: text9(row.key),
@@ -7413,9 +7538,9 @@ var PiDishBrowser = (() => {
       }];
     }) : [];
     const daily = Array.isArray(value.daily) ? value.daily.flatMap((row) => {
-      if (!record5(row) || typeof row.day !== "string") return [];
+      if (!record8(row) || typeof row.day !== "string") return [];
       return [{ ...bucket(row), day: row.day, days: number4(row.days) || 1, models: Array.isArray(row.models) ? row.models.flatMap((model) => {
-        if (!record5(model) || typeof model.ref !== "string") return [];
+        if (!record8(model) || typeof model.ref !== "string") return [];
         return [{
           ref: model.ref,
           provider: text9(model.provider),
@@ -7445,13 +7570,13 @@ var PiDishBrowser = (() => {
     };
   }
   function decodeUsageLimits(value) {
-    if (!record5(value) || !Array.isArray(value.harnesses)) return { harnesses: [] };
+    if (!record8(value) || !Array.isArray(value.harnesses)) return { harnesses: [] };
     return { harnesses: value.harnesses.flatMap((harness) => {
-      if (!record5(harness)) return [];
+      if (!record8(harness)) return [];
       return [{ harness: text9(harness.harness), label: text9(harness.label), error: text9(harness.error), reports: Array.isArray(harness.reports) ? harness.reports.flatMap((report) => {
-        if (!record5(report) || typeof report.provider !== "string") return [];
+        if (!record8(report) || typeof report.provider !== "string") return [];
         return [{ provider: report.provider, planType: text9(report.planType), fetchedAt: number4(report.fetchedAt), limits: Array.isArray(report.limits) ? report.limits.flatMap((limit) => {
-          if (!record5(limit) || typeof limit.label !== "string" || !finite2(limit.usedFraction)) return [];
+          if (!record8(limit) || typeof limit.label !== "string" || !finite2(limit.usedFraction)) return [];
           return [{ label: limit.label, windowLabel: text9(limit.windowLabel), usedFraction: limit.usedFraction, resetsAt: finite2(limit.resetsAt) ? limit.resetsAt : null }];
         }) : [] }];
       }) : [] }];
@@ -7468,16 +7593,16 @@ var PiDishBrowser = (() => {
   var text10 = (value) => typeof value === "string" ? value : "";
   var num = (value) => finite2(value) ? value : null;
   function policy(value) {
-    if (!record5(value) || !finite2(value.retentionMs) || typeof value.retention !== "string") return null;
+    if (!record8(value) || !finite2(value.retentionMs) || typeof value.retention !== "string") return null;
     return { retentionMs: value.retentionMs, retention: value.retention, basis: text10(value.basis) };
   }
   function decodeCacheLifetimes(value) {
-    if (!record5(value) || !Array.isArray(value.identities)) return [];
+    if (!record8(value) || !Array.isArray(value.identities)) return [];
     return value.identities.flatMap((raw) => {
-      if (!record5(raw) || typeof raw.model !== "string" || !record5(raw.probes)) return [];
+      if (!record8(raw) || typeof raw.model !== "string" || !record8(raw.probes)) return [];
       const source = SOURCES.includes(raw.source) ? raw.source : "none";
       const tier = raw.tier === "1h" ? "1h" : null;
-      const fitRaw = record5(raw.fit) ? raw.fit : null, stats = fitRaw && record5(fitRaw.stats) ? fitRaw.stats : {};
+      const fitRaw = record8(raw.fit) ? raw.fit : null, stats = fitRaw && record8(fitRaw.stats) ? fitRaw.stats : {};
       const fit = fitRaw && finite2(fitRaw.ttlMs) && finite2(fitRaw.alpha) && finite2(fitRaw.beta) ? {
         active: fitRaw.active === true,
         ttlMs: fitRaw.ttlMs,
@@ -7488,7 +7613,7 @@ var PiDishBrowser = (() => {
         warmHitRate: num(stats.warmHitRate)
       } : null;
       const gates = Array.isArray(raw.gates) ? raw.gates.flatMap((gate) => {
-        if (!record5(gate) || !GATES.includes(gate.id)) return [];
+        if (!record8(gate) || !GATES.includes(gate.id)) return [];
         return [{ id: gate.id, pass: gate.pass === true, value: num(gate.value), need: num(gate.need) ?? 0 }];
       }) : [];
       const points = Array.isArray(raw.points) ? raw.points.slice(-MAX_POINTS).flatMap((point) => {
@@ -7887,7 +8012,7 @@ var PiDishBrowser = (() => {
             }
             const data = await response.json();
             if (!sameHost(host)) throw new Error("host connection changed");
-            if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+            if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
             entries[i] = { hostId: host.hostId, hostLabel: hostDisplayLabel(host), summary: decodeUsageSummary(data, { hostId: host.hostId, label: hostDisplayLabel(host) }) };
             status[i] = "ok";
             options2.connection(host, "success");
@@ -8406,12 +8531,12 @@ var PiDishBrowser = (() => {
 
   // src/browser/themes.ts
   function decodeThemeTokens(value) {
-    if (!record5(value)) return {};
+    if (!record8(value)) return {};
     return Object.fromEntries(Object.entries(value).filter((entry) => /^--[a-z][a-z0-9-]*$/.test(entry[0]) && typeof entry[1] === "string"));
   }
   function decodeThemes(value) {
-    if (!record5(value) || !Array.isArray(value.themes)) return [];
-    return value.themes.flatMap((row) => record5(row) && typeof row.id === "string" && row.id ? [{ id: row.id, builtin: row.builtin === true, tokens: decodeThemeTokens(row.tokens) }] : []);
+    if (!record8(value) || !Array.isArray(value.themes)) return [];
+    return value.themes.flatMap((row) => record8(row) && typeof row.id === "string" && row.id ? [{ id: row.id, builtin: row.builtin === true, tokens: decodeThemeTokens(row.tokens) }] : []);
   }
   function applyCachedTheme(document2, storage) {
     try {
@@ -8597,7 +8722,7 @@ var PiDishBrowser = (() => {
 
   // src/browser/display-preferences.ts
   function decodeSavedFilters(value) {
-    return Array.isArray(value) ? value.flatMap((row) => record5(row) && typeof row.name === "string" && typeof row.query === "string" ? [{ name: row.name, query: row.query }] : []) : [];
+    return Array.isArray(value) ? value.flatMap((row) => record8(row) && typeof row.name === "string" && typeof row.query === "string" ? [{ name: row.name, query: row.query }] : []) : [];
   }
   function responseMode(value) {
     return value === "hidden" || value === "performance" || value === "performance-cost" ? value : "compact";
@@ -8703,7 +8828,7 @@ var PiDishBrowser = (() => {
         const response = await options2.request(endpoint, "/api/settings");
         const data = await response.json();
         if (!owns()) return;
-        if (!response.ok || !record5(data)) throw new Error("Could not load server setting.");
+        if (!response.ok || !record8(data)) throw new Error("Could not load server setting.");
         input.value = finite2(data.monthlyBudgetUsd) ? String(data.monthlyBudgetUsd) : "";
         if (Array.isArray(data.savedFilters)) {
           options2.setFilters(decodeSavedFilters(data.savedFilters));
@@ -8721,7 +8846,7 @@ var PiDishBrowser = (() => {
         try {
           const response = await options2.request(endpoint, "/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ monthlyBudgetUsd: value }) });
           const data = await response.json();
-          if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : "Save failed");
+          if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : "Save failed");
           if (owns()) status.textContent = "Saved for all devices.";
         } catch (error) {
           if (owns()) status.textContent = "Save failed: " + message2(error);
@@ -8745,7 +8870,7 @@ var PiDishBrowser = (() => {
 
   // src/browser/terminal.ts
   function decodeTerminalOutput(value) {
-    if (!record5(value)) return null;
+    if (!record8(value)) return null;
     switch (value.type) {
       case "attach":
         return { type: "attach", replay: typeof value.replay === "string" ? value.replay : "", cwd: typeof value.cwd === "string" ? value.cwd : "", tmuxPrefix: typeof value.tmuxPrefix === "string" ? value.tmuxPrefix : null };
@@ -9079,9 +9204,9 @@ var PiDishBrowser = (() => {
   var text11 = (value) => typeof value === "string" ? value : "";
   var number5 = (value) => finite2(value) ? value : 0;
   function decodeRoutineInvocations(value) {
-    if (!record5(value)) throw new Error("Invalid routine invocation response");
+    if (!record8(value)) throw new Error("Invalid routine invocation response");
     return { invocations: Array.isArray(value.invocations) ? value.invocations.flatMap((row) => {
-      if (!record5(row) || typeof row.id !== "string") return [];
+      if (!record8(row) || typeof row.id !== "string") return [];
       return [{
         id: row.id,
         version: finite2(row.version) ? row.version : null,
@@ -9100,11 +9225,11 @@ var PiDishBrowser = (() => {
     }) : [], nextBefore: finite2(value.nextBefore) ? value.nextBefore : null };
   }
   function decodeRoutine(value, host) {
-    if (!record5(value)) throw new Error("Invalid routine response");
-    const row = record5(value.routine) ? value.routine : value;
+    if (!record8(value)) throw new Error("Invalid routine response");
+    const row = record8(value.routine) ? value.routine : value;
     if (typeof row.id !== "string" || !row.id) throw new Error("Invalid routine identity");
-    const stats = record5(row.stats) ? row.stats : {};
-    const versions = Array.isArray(row.versions) ? row.versions.flatMap((version) => record5(version) && finite2(version.version) && typeof version.prompt === "string" ? [{ version: version.version, savedAt: number5(version.savedAt), prompt: version.prompt }] : []) : [];
+    const stats = record8(row.stats) ? row.stats : {};
+    const versions = Array.isArray(row.versions) ? row.versions.flatMap((version) => record8(version) && finite2(version.version) && typeof version.prompt === "string" ? [{ version: version.version, savedAt: number5(version.savedAt), prompt: version.prompt }] : []) : [];
     return {
       id: row.id,
       name: text11(row.name),
@@ -9113,7 +9238,7 @@ var PiDishBrowser = (() => {
       cwd: text11(row.cwd),
       model: text11(row.model),
       thinking: text11(row.thinking),
-      schedule: record5(row.schedule) && typeof row.schedule.cron === "string" ? { cron: row.schedule.cron } : null,
+      schedule: record8(row.schedule) && typeof row.schedule.cron === "string" ? { cron: row.schedule.cron } : null,
       enabled: row.enabled !== false,
       mode: row.mode === "continue" ? "continue" : "oneShot",
       onBusy: row.onBusy === "steer" || row.onBusy === "followUp" ? row.onBusy : "skip",
@@ -9128,7 +9253,7 @@ var PiDishBrowser = (() => {
     };
   }
   function decodeRoutineList(value, host) {
-    if (!record5(value) || !Array.isArray(value.routines)) throw new Error("Invalid routines response");
+    if (!record8(value) || !Array.isArray(value.routines)) throw new Error("Invalid routines response");
     return value.routines.flatMap((row) => {
       try {
         return [decodeRoutine(row, host)];
@@ -9190,10 +9315,10 @@ var PiDishBrowser = (() => {
     }
     async function httpError(response) {
       const data = await response.json().catch(() => null);
-      return record5(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`;
+      return record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`;
     }
     function payloadError(data, status) {
-      return record5(data) && typeof data.error === "string" ? data.error : `HTTP ${status}`;
+      return record8(data) && typeof data.error === "string" ? data.error : `HTTP ${status}`;
     }
     let routinesList = [];
     let routinesHostErrors = [];
@@ -9535,7 +9660,7 @@ var PiDishBrowser = (() => {
         const res = await apiFetch(endpoint, "/api/harnesses");
         if (res.ok) {
           const data = await res.json();
-          if (record5(data) && Array.isArray(data.harnesses) && data.harnesses.length) list = data.harnesses.flatMap((row) => record5(row) && typeof row.id === "string" ? [{ id: row.id, label: typeof row.label === "string" ? row.label : row.id, available: row.available !== false }] : []);
+          if (record8(data) && Array.isArray(data.harnesses) && data.harnesses.length) list = data.harnesses.flatMap((row) => record8(row) && typeof row.id === "string" ? [{ id: row.id, label: typeof row.label === "string" ? row.label : row.id, available: row.available !== false }] : []);
         }
       } catch {
       }
@@ -10209,7 +10334,7 @@ var PiDishBrowser = (() => {
         );
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          const extra = res.status === 429 && record5(data) && typeof data.retryAfterSec === "number" ? ` (retry in ${data.retryAfterSec}s)` : "";
+          const extra = res.status === 429 && record8(data) && typeof data.retryAfterSec === "number" ? ` (retry in ${data.retryAfterSec}s)` : "";
           throw new Error(payloadError(data, res.status) + extra);
         }
         if (!ownsForm(owner) || mutationToken !== token) return;
@@ -10316,9 +10441,9 @@ var PiDishBrowser = (() => {
   var text12 = (value) => typeof value === "string" ? value : "";
   var number6 = (value) => finite2(value) ? value : 0;
   var nullable = (value) => finite2(value) ? value : null;
-  var object4 = (value) => record5(value) ? value : {};
+  var object4 = (value) => record8(value) ? value : {};
   function decodeSessionStats(value) {
-    if (!record5(value)) throw new Error("Invalid session stats");
+    if (!record8(value)) throw new Error("Invalid session stats");
     if (typeof value.error === "string" && value.error) throw new Error(value.error);
     const context = object4(value.contextUsage), timing = object4(value.responseTiming), costs2 = object4(value.costs), unavailable = object4(value.costUnavailable), tokens2 = object4(value.tokens), runtime = object4(value.runtime);
     return {
@@ -10344,12 +10469,12 @@ var PiDishBrowser = (() => {
     };
   }
   function decodeSessionShare(value) {
-    if (!record5(value) || value.error) return null;
+    if (!record8(value) || value.error) return null;
     const path = text12(value.path), url = text12(value.url);
     return path || url ? { path, url } : null;
   }
   function decodePublishedPages(value) {
-    return Array.isArray(value) ? value.flatMap((page) => record5(page) && typeof page.token === "string" && typeof page.root === "string" && (typeof page.path === "string" || typeof page.url === "string") ? [{ token: page.token, root: page.root, path: text12(page.path), url: text12(page.url), title: text12(page.title), missing: page.missing === true, createdAt: number6(page.createdAt) }] : []) : [];
+    return Array.isArray(value) ? value.flatMap((page) => record8(page) && typeof page.token === "string" && typeof page.root === "string" && (typeof page.path === "string" || typeof page.url === "string") ? [{ token: page.token, root: page.root, path: text12(page.path), url: text12(page.url), title: text12(page.title), missing: page.missing === true, createdAt: number6(page.createdAt) }] : []) : [];
   }
 
   // src/browser/session-info.ts
@@ -10396,20 +10521,20 @@ var PiDishBrowser = (() => {
     async function json(host, path, init) {
       const response = await apiFetch(host, path, init);
       const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
       return data;
     }
     async function shareFor(host, id) {
       const response = await apiFetch(host, `/api/sessions/${encodeURIComponent(id)}/share`);
       if (response.status === 404) return null;
       const value = await response.json();
-      if (!response.ok) throw new Error(record5(value) && typeof value.error === "string" ? value.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `HTTP ${response.status}`);
       return decodeSessionShare(value);
     }
     async function apiSend(host, path) {
       const response = await apiFetch(host, path, { method: "POST" });
       const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
       return data;
     }
     let statsModalGeneration = 0;
@@ -10638,11 +10763,11 @@ var PiDishBrowser = (() => {
         setStatus("Restarting agent\u2026", "working");
         try {
           const data = await apiSend(endpoint2, `/api/sessions/${encodeURIComponent(sessionId)}/restart`);
-          if (!record5(data) || typeof data.id !== "string" || !data.id) throw new Error("Invalid restart response");
+          if (!record8(data) || typeof data.id !== "string" || !data.id) throw new Error("Invalid restart response");
           if (ownsStatsModal(owner, generation)) closeStatsModal();
           if (owns(owner, endpoint2)) setStatus("Agent restarted");
           await refreshSessions();
-          if (owns(owner, endpoint2) && record5(data) && typeof data.id === "string") {
+          if (owns(owner, endpoint2) && record8(data) && typeof data.id === "string") {
             void selectSession(data.id, { host });
           }
         } catch (e) {
@@ -10860,13 +10985,13 @@ var PiDishBrowser = (() => {
   var text13 = (value) => typeof value === "string" ? value : "";
   var count2 = (value) => finite2(value) ? Math.max(0, Math.floor(value)) : 0;
   function decodeTranscriptTree(value) {
-    if (!record5(value) || !Array.isArray(value.nodes)) throw new Error("Invalid session tree");
+    if (!record8(value) || !Array.isArray(value.nodes)) throw new Error("Invalid session tree");
     const maxDepth = value.nodes.length;
     return {
       leafId: typeof value.leafId === "string" ? value.leafId : null,
       activePathIds: Array.isArray(value.activePathIds) ? value.activePathIds.filter((id) => typeof id === "string") : [],
       nodes: value.nodes.flatMap((node) => {
-        if (!record5(node) || typeof node.id !== "string" || !node.id) return [];
+        if (!record8(node) || typeof node.id !== "string" || !node.id) return [];
         return [{
           id: node.id,
           parentId: typeof node.parentId === "string" ? node.parentId : null,
@@ -10885,7 +11010,7 @@ var PiDishBrowser = (() => {
           errorMessage: text13(node.errorMessage),
           isError: node.isError === true,
           tokensBefore: count2(node.tokensBefore),
-          toolCalls: Array.isArray(node.toolCalls) ? node.toolCalls.flatMap((tool) => record5(tool) && typeof tool.id === "string" ? [{ id: tool.id, name: text13(tool.name), args: text13(tool.args) }] : []) : []
+          toolCalls: Array.isArray(node.toolCalls) ? node.toolCalls.flatMap((tool) => record8(tool) && typeof tool.id === "string" ? [{ id: tool.id, name: text13(tool.name), args: text13(tool.args) }] : []) : []
         }];
       })
     };
@@ -11107,7 +11232,7 @@ var PiDishBrowser = (() => {
       setStatus(summarize ? "Summarizing abandoned branch\u2026" : "Branching...", "working");
       try {
         const data = await sendJson(options2.request, host, "/api/sessions/" + encodeURIComponent(owner.id) + "/branch", { entryId, summarize, customInstructions });
-        if (!disposed && record5(data) && typeof data.editorText === "string" && data.editorText) options2.saveEditorDraft(owner, data.editorText);
+        if (!disposed && record8(data) && typeof data.editorText === "string" && data.editorText) options2.saveEditorDraft(owner, data.editorText);
         if (operation !== operationGeneration || !ownsSelection(owner, host)) return;
         closeTreeModal();
         setStatus("Branched \u2014 reloading");
@@ -11460,7 +11585,7 @@ var PiDishBrowser = (() => {
       },
       renderer: {
         html(html) {
-          return escapeHtml(typeof html === "string" ? html : record5(html) && typeof html.text === "string" ? html.text : "");
+          return escapeHtml(typeof html === "string" ? html : record8(html) && typeof html.text === "string" ? html.text : "");
         }
       },
       walkTokens(token) {
@@ -12267,7 +12392,7 @@ var PiDishBrowser = (() => {
         if (typeof id === "string") dismissExtDialog(extDialogKey(id, session.id, session.host));
       },
       reconcile(value, session) {
-        if (disposed || !record5(value) || !Array.isArray(value.dialogs)) return;
+        if (disposed || !record8(value) || !Array.isArray(value.dialogs)) return;
         const pending = new Set(value.dialogs.filter((id) => typeof id === "string")), key = sessionKey(session.host, session.id);
         for (const [id, entry] of openExtDialogs) if (entry.sessionKey === key && !pending.has(entry.requestId)) dismissExtDialog(id);
       },
@@ -12503,10 +12628,10 @@ var PiDishBrowser = (() => {
   // src/browser/extension-ui-data.ts
   var text14 = (value) => typeof value === "string" ? stripAnsi(value) : "";
   function options(value) {
-    return Array.isArray(value) ? value.map((row) => typeof row === "string" ? { label: text14(row), description: "", preview: "" } : { label: record5(row) ? text14(row.label) : "", description: record5(row) ? text14(row.description) : "", preview: record5(row) ? text14(row.preview) : "" }) : [];
+    return Array.isArray(value) ? value.map((row) => typeof row === "string" ? { label: text14(row), description: "", preview: "" } : { label: record8(row) ? text14(row.label) : "", description: record8(row) ? text14(row.description) : "", preview: record8(row) ? text14(row.preview) : "" }) : [];
   }
   function decodeExtensionRequest(value) {
-    if (!record5(value) || typeof value.method !== "string") return null;
+    if (!record8(value) || typeof value.method !== "string") return null;
     return {
       id: typeof value.id === "string" ? value.id : "",
       method: value.method,
@@ -12523,7 +12648,7 @@ var PiDishBrowser = (() => {
       notifyType: value.notifyType === "warning" || value.notifyType === "error" ? value.notifyType : "info",
       options: options(value.options),
       questions: Array.isArray(value.questions) ? value.questions.flatMap((row) => {
-        if (!record5(row) || typeof row.id !== "string") return [];
+        if (!record8(row) || typeof row.id !== "string") return [];
         return [{
           id: row.id,
           question: text14(row.question),
@@ -12602,7 +12727,7 @@ var PiDishBrowser = (() => {
   var text15 = (v) => typeof v === "string" ? v : "";
   var number7 = (v) => finite2(v) ? v : 0;
   function decodeFilePreview(v) {
-    if (!record5(v) || typeof v.path !== "string" || !v.path) throw new Error("Invalid file preview");
+    if (!record8(v) || typeof v.path !== "string" || !v.path) throw new Error("Invalid file preview");
     return {
       path: v.path,
       relPath: text15(v.relPath),
@@ -12610,12 +12735,12 @@ var PiDishBrowser = (() => {
       size: number7(v.size),
       mtime: number7(v.mtime),
       truncated: v.truncated === true,
-      image: record5(v.image) ? { url: text15(v.image.url), mimeType: text15(v.image.mimeType), data: text15(v.image.data) } : null
+      image: record8(v.image) ? { url: text15(v.image.url), mimeType: text15(v.image.mimeType), data: text15(v.image.data) } : null
     };
   }
   function decodeDiffView(v) {
-    if (!record5(v) || !Array.isArray(v.repos)) throw new Error("Invalid diff response");
-    return { root: text15(v.root), gitAvailable: v.gitAvailable === true, snapshotId: text15(v.snapshotId), repos: v.repos.flatMap((r) => record5(r) && typeof r.path === "string" ? [{
+    if (!record8(v) || !Array.isArray(v.repos)) throw new Error("Invalid diff response");
+    return { root: text15(v.root), gitAvailable: v.gitAvailable === true, snapshotId: text15(v.snapshotId), repos: v.repos.flatMap((r) => record8(r) && typeof r.path === "string" ? [{
       path: r.path,
       branch: text15(r.branch),
       ahead: number7(r.ahead),
@@ -12624,11 +12749,11 @@ var PiDishBrowser = (() => {
       deletions: number7(r.deletions),
       error: text15(r.error),
       moreUntracked: number7(r.moreUntracked),
-      files: Array.isArray(r.files) ? r.files.flatMap((f) => record5(f) && typeof f.path === "string" ? [{ path: f.path, oldPath: text15(f.oldPath), status: text15(f.status), additions: number7(f.additions), deletions: number7(f.deletions), binary: f.binary === true, truncated: f.truncated === true, patch: text15(f.patch), patchDeferred: f.patchDeferred === true }] : []) : []
+      files: Array.isArray(r.files) ? r.files.flatMap((f) => record8(f) && typeof f.path === "string" ? [{ path: f.path, oldPath: text15(f.oldPath), status: text15(f.status), additions: number7(f.additions), deletions: number7(f.deletions), binary: f.binary === true, truncated: f.truncated === true, patch: text15(f.patch), patchDeferred: f.patchDeferred === true }] : []) : []
     }] : []) };
   }
   function decodeDiffPatch(v) {
-    const p = record5(v) ? v : {};
+    const p = record8(v) ? v : {};
     return { patch: text15(p.patch), stale: p.stale === true, truncated: p.truncated === true };
   }
 
@@ -12709,7 +12834,7 @@ var PiDishBrowser = (() => {
     }
     async function json(response) {
       const value = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(record5(value) && typeof value.error === "string" ? value.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `HTTP ${response.status}`);
       return value;
     }
     function closeFile() {
@@ -12949,7 +13074,7 @@ var PiDishBrowser = (() => {
           await loadDiff();
           return;
         }
-        if (!response.ok) throw new Error(record5(value) && typeof value.error === "string" ? value.error : `HTTP ${response.status}`);
+        if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `HTTP ${response.status}`);
         patch.innerHTML = renderDiffHtml(data.patch) + (data.truncated ? '<div class="diff-file-note">\u2026 patch truncated</div>' : "");
         delete patch.dataset.deferred;
         delete patch.dataset.loading;
@@ -12993,8 +13118,8 @@ var PiDishBrowser = (() => {
   // src/browser/anchored-comment-data.ts
   var text16 = (v) => typeof v === "string" ? v : "";
   function decodeCommentTarget(v) {
-    if (!record5(v) || v.kind !== "file" && v.kind !== "diff" || typeof v.path !== "string") return null;
-    const a = record5(v.anchor) ? v.anchor : {};
+    if (!record8(v) || v.kind !== "file" && v.kind !== "diff" || typeof v.path !== "string") return null;
+    const a = record8(v.anchor) ? v.anchor : {};
     const positions = {};
     for (const key of ["startLine", "endLine", "oldStart", "oldEnd", "newStart", "newEnd"]) if (typeof a[key] === "number" && Number.isInteger(a[key]) && a[key] > 0) positions[key] = a[key];
     const anchor = { type: a.type === "lines" ? "lines" : "text", quote: text16(a.quote), prefix: text16(a.prefix), suffix: text16(a.suffix), ...positions };
@@ -13002,14 +13127,14 @@ var PiDishBrowser = (() => {
   }
   function decodeAnchoredComments(value) {
     return Array.isArray(value) ? value.flatMap((v) => {
-      if (!record5(v) || typeof v.id !== "string" || typeof v.sessionId !== "string" || typeof v.body !== "string") return [];
+      if (!record8(v) || typeof v.id !== "string" || typeof v.sessionId !== "string" || typeof v.body !== "string") return [];
       const target = decodeCommentTarget(v.target);
       return target ? [{ id: v.id, sessionId: v.sessionId, body: v.body, target }] : [];
     }) : [];
   }
   function decodeCommentIndex(value) {
-    return record5(value) && Array.isArray(value.comments) ? value.comments.flatMap((v) => {
-      if (!record5(v) || typeof v.id !== "string") return [];
+    return record8(value) && Array.isArray(value.comments) ? value.comments.flatMap((v) => {
+      if (!record8(v) || typeof v.id !== "string") return [];
       const target = decodeCommentTarget(v.target);
       return target ? [{ id: v.id, target }] : [];
     }) : [];
@@ -13175,7 +13300,7 @@ var PiDishBrowser = (() => {
       if (!owns(view) || !endpoint || endpoint.base !== view.endpoint.base) throw new Error("Comment view changed");
       const response = await options2.request({ ...view.endpoint, token: endpoint.token }, path, init);
       const data = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
       return data;
     }
     function position() {
@@ -13405,7 +13530,7 @@ var PiDishBrowser = (() => {
         }
         const full = await request(view, "/api/comments/get", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: view.id, ids }) });
         if (!current()) return;
-        set(record5(full) ? full.comments : []);
+        set(record8(full) ? full.comments : []);
       } catch {
       }
     }
@@ -13942,7 +14067,7 @@ var PiDishBrowser = (() => {
         const response = await options2.request(endpoint, path);
         if (!response.ok) {
           const data = await response.json().catch(() => null);
-          throw new Error(record5(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
+          throw new Error(record8(data) && typeof data.error === "string" ? data.error : `HTTP ${response.status}`);
         }
         const blob = await response.blob();
         if (!endpointCurrent(owner)) return;
@@ -14054,7 +14179,7 @@ var PiDishBrowser = (() => {
     let disposed = false, mounted = false, take = null, transcription = null, pointerType = "";
     const lifetime = new AbortController();
     const MIME_TYPES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus", "audio/ogg"];
-    const errorName = (e) => record5(e) && typeof e.name === "string" ? e.name : "unknown";
+    const errorName = (e) => record8(e) && typeof e.name === "string" ? e.name : "unknown";
     function capture() {
       const key = options2.composerKey();
       return !disposed && key ? { key, selection: sessionState.captureSelection() } : null;
@@ -14063,7 +14188,7 @@ var PiDishBrowser = (() => {
       return !disposed && options2.composerKey() === owner.key && (!owner.selection || sessionState.ownsSelection(owner.selection));
     }
     function host() {
-      return options2.hosts().find((entry) => record5(entry.capabilities) ? entry.capabilities.stt === true : (entry.self === true || entry.base === "") && !!options2.config().stt) || null;
+      return options2.hosts().find((entry) => record8(entry.capabilities) ? entry.capabilities.stt === true : (entry.self === true || entry.base === "") && !!options2.config().stt) || null;
     }
     function reason() {
       return sttUnavailableReason({ isSecureContext: !!window.isSecureContext, hasGetUserMedia: !!navigator.mediaDevices?.getUserMedia, hasMediaRecorder: typeof window.MediaRecorder === "function", origin: window.location.origin });
@@ -14257,8 +14382,8 @@ var PiDishBrowser = (() => {
         const response = await options2.request(entry.host, "/api/stt", { method: "POST", headers: { "Content-Type": mime }, body: blob, signal: entry.events.signal });
         const value = await response.json().catch(() => null);
         if (!current()) return;
-        if (!response.ok) throw new Error(record5(value) && typeof value.error === "string" ? value.error : `Transcription failed (HTTP ${response.status})`);
-        const text18 = record5(value) && typeof value.text === "string" ? value.text.trim() : "";
+        if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `Transcription failed (HTTP ${response.status})`);
+        const text18 = record8(value) && typeof value.text === "string" ? value.text.trim() : "";
         if (!text18) {
           options2.showNote("No speech detected.");
           return;
@@ -14353,7 +14478,7 @@ var PiDishBrowser = (() => {
 
   // src/browser/composer-images.ts
   function decodeComposerImages(value) {
-    return Array.isArray(value) ? value.flatMap((image) => record5(image) && typeof image.data === "string" && typeof image.mimeType === "string" && image.mimeType.startsWith("image/") ? [{ data: image.data, mimeType: image.mimeType }] : []) : [];
+    return Array.isArray(value) ? value.flatMap((image) => record8(image) && typeof image.data === "string" && typeof image.mimeType === "string" && image.mimeType.startsWith("image/") ? [{ data: image.data, mimeType: image.mimeType }] : []) : [];
   }
   function createComposerImages(options2) {
     const { document: document2 } = options2;
@@ -14803,7 +14928,7 @@ ${restored}`;
     }
     function prefix(session) {
       const endpoint = options2.host(hostId(session)), ids = sameHostIds(session);
-      const aliases = endpoint && (record5(endpoint.capabilities) ? endpoint.capabilities.refAliases === true : (endpoint.self === true || endpoint.base === "") && !!options2.config().refAliases);
+      const aliases = endpoint && (record8(endpoint.capabilities) ? endpoint.capabilities.refAliases === true : (endpoint.self === true || endpoint.base === "") && !!options2.config().refAliases);
       return aliases ? shortSessionRef(session.id, ids) : uniqueSessionPrefix(session.id, ids);
     }
     function ref(session, target) {
@@ -14843,10 +14968,10 @@ ${restored}`;
   // src/browser/composer-autocomplete-data.ts
   var text17 = (v) => typeof v === "string" ? v : "";
   function decodeSlashCommands(value) {
-    return Array.isArray(value) ? value.flatMap((v) => record5(v) && typeof v.name === "string" && v.name ? [{ name: v.name, description: text17(v.description), source: text17(v.source), args: text17(v.args) }] : []) : [];
+    return Array.isArray(value) ? value.flatMap((v) => record8(v) && typeof v.name === "string" && v.name ? [{ name: v.name, description: text17(v.description), source: text17(v.source), args: text17(v.args) }] : []) : [];
   }
   function decodeFileCompletions(value) {
-    return Array.isArray(value) ? value.flatMap((v) => record5(v) && typeof v.path === "string" ? [{ path: v.path, isDir: v.isDir === true, gitStatus: text17(v.gitStatus) }] : []) : [];
+    return Array.isArray(value) ? value.flatMap((v) => record8(v) && typeof v.path === "string" ? [{ path: v.path, isDir: v.isDir === true, gitStatus: text17(v.gitStatus) }] : []) : [];
   }
 
   // src/browser/composer-autocomplete.ts
@@ -14998,7 +15123,7 @@ ${restored}`;
             hide();
             return;
           }
-          if (response.ok && record5(value)) showFiles(value.files, owner);
+          if (response.ok && record8(value)) showFiles(value.files, owner);
           else hide();
         }).catch(() => {
           if (owns(owner) && sequence === fileSequence) hide();
@@ -16140,7 +16265,7 @@ ${restored}`;
       try {
         const value = JSON.parse(storage.getItem("pi-dish-seen") || "{}");
         seen = /* @__PURE__ */ Object.create(null);
-        if (record5(value)) {
+        if (record8(value)) {
           for (const [key, at] of Object.entries(value)) if (typeof at === "string" || typeof at === "number" && Number.isFinite(at)) seen[key] = at;
         }
       } catch {
@@ -16404,8 +16529,8 @@ ${row.id}`;
       try {
         const response = await options2.request(target, "/api/settings"), data = await response.json();
         if (disposed || generation !== settingsGeneration || options2.host().base !== target.base) return;
-        if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : "Failed to load filters");
-        commitFilters(decodeSavedFilters(record5(data) ? data.savedFilters : void 0));
+        if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : "Failed to load filters");
+        commitFilters(decodeSavedFilters(record8(data) ? data.savedFilters : void 0));
         refreshViews(false);
       } catch (error) {
         if (!disposed && generation === settingsGeneration && options2.host().base === target.base) console.error("Failed to load saved filters:", error);
@@ -16416,9 +16541,9 @@ ${row.id}`;
       const generation = ++settingsGeneration, target = Object.freeze({ ...host });
       const response = await options2.request(target, "/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ savedFilters: decodeSavedFilters(next) }) });
       const data = await response.json();
-      if (!response.ok) throw new Error(record5(data) && typeof data.error === "string" ? data.error : "save failed");
+      if (!response.ok) throw new Error(record8(data) && typeof data.error === "string" ? data.error : "save failed");
       if (disposed || generation !== settingsGeneration || options2.host().base !== target.base) return;
-      commitFilters(decodeSavedFilters(record5(data) ? data.savedFilters : void 0));
+      commitFilters(decodeSavedFilters(record8(data) ? data.savedFilters : void 0));
       refreshViews();
     }
     function toggleScope(name) {
@@ -16709,14 +16834,14 @@ ${row.id}`;
 
   // src/browser/live-tools.ts
   function decode(value) {
-    if (!record5(value) || typeof value.toolCallId !== "string" || !value.toolCallId) return null;
+    if (!record8(value) || typeof value.toolCallId !== "string" || !value.toolCallId) return null;
     return {
       toolCallId: value.toolCallId,
       toolName: typeof value.toolName === "string" ? value.toolName : void 0,
       args: value.args,
       startedAt: typeof value.startedAt === "string" || finite2(value.startedAt) ? value.startedAt : void 0,
-      partialResult: record5(value.partialResult) ? { content: value.partialResult.content } : void 0,
-      result: record5(value.result) ? { content: value.result.content } : void 0,
+      partialResult: record8(value.partialResult) ? { content: value.partialResult.content } : void 0,
+      result: record8(value.result) ? { content: value.result.content } : void 0,
       isError: value.isError === true
     };
   }
@@ -17057,7 +17182,7 @@ ${row.id}`;
       el.textContent = `${mood.description} ${mood.face}`.trim();
     }
     function applyMoodFromTool(toolName, value) {
-      const args = record5(value) ? value : {};
+      const args = record8(value) ? value : {};
       if (toolName !== "set_mood") return;
       setMoodIndicator(args.description ?? args.label, args.kaomoji || args.face || args.mood);
     }
@@ -17128,8 +17253,8 @@ ${row.id}`;
   // src/browser/transcript-data.ts
   var cursor = (value) => finite2(value) && Number.isInteger(value) && value >= 0 ? value : null;
   function decodeTranscriptPage(value) {
-    if (!record5(value) || !Array.isArray(value.messages)) throw new Error("Invalid transcript page");
-    const session = record5(value.session) ? decodeSessionTranscriptPatch(value.session) : {};
+    if (!record8(value) || !Array.isArray(value.messages)) throw new Error("Invalid transcript page");
+    const session = record8(value.session) ? decodeSessionTranscriptPatch(value.session) : {};
     return { messages: value.messages.map(decodeRenderMessage), session, firstIndex: cursor(value.firstIndex), lastIndex: cursor(value.lastIndex), hasMore: value.hasMore === true, totalMessages: cursor(value.totalMessages) };
   }
 
@@ -17173,7 +17298,7 @@ ${row.id}`;
       try {
         const response = await options2.request({ ...owner.endpoint, token: endpoint.token }, `/api/sessions/${encodeURIComponent(owner.selection.id)}/messages?${suffix}`, { signal: controller.signal });
         const value = await response.json();
-        if (!response.ok) throw new Error(record5(value) && typeof value.error === "string" ? value.error : `Transcript request failed (${response.status})`);
+        if (!response.ok) throw new Error(record8(value) && typeof value.error === "string" ? value.error : `Transcript request failed (${response.status})`);
         return decodeTranscriptPage(value);
       } finally {
         requests.delete(controller);
@@ -17671,7 +17796,7 @@ ${row.id}`;
   // src/browser/prompt-delivery.ts
   function decodeQueueData(value) {
     const strings = (items) => Array.isArray(items) ? items.filter((item) => typeof item === "string") : [];
-    return { steering: strings(record5(value) ? value.steering : null), followUp: strings(record5(value) ? value.followUp : null) };
+    return { steering: strings(record8(value) ? value.steering : null), followUp: strings(record8(value) ? value.followUp : null) };
   }
   function createPromptDelivery(options2) {
     const { document: document2, sessionState } = options2, pending = /* @__PURE__ */ new Map();
@@ -17708,7 +17833,7 @@ ${row.id}`;
     }
     function canCancelQueue() {
       const caps = sessionState.currentSession?.capabilities;
-      return !record5(caps) || caps.queueCancel !== false;
+      return !record8(caps) || caps.queueCancel !== false;
     }
     function owns(row) {
       return !disposed && row.generation === generation && sessionState.ownsSelection(row.owner) && options2.endpoint(row.owner.host).base === row.endpoint.base;
@@ -17798,8 +17923,8 @@ ${row.id}`;
     const { document: document2, sessionState, delivery, drafts: composerDrafts, activity: sessionActivity, btw: btwPanel } = options2;
     let disposed = false, feedbackSequence = 0;
     async function send(endpoint, path, body) {
-      const value = await sendJson(options2.request, endpoint, path, body), data = record5(value) ? value : {};
-      return { info: typeof data.info === "string" ? data.info : "", answer: typeof data.answer === "string" ? data.answer : "", result: { queued: record5(data.result) && data.result.queued === true } };
+      const value = await sendJson(options2.request, endpoint, path, body), data = record8(value) ? value : {};
+      return { info: typeof data.info === "string" ? data.info : "", answer: typeof data.answer === "string" ? data.answer : "", result: { queued: record8(data.result) && data.result.queued === true } };
     }
     async function sendPrompt() {
       const input = document2.getElementById("promptInput");
@@ -18003,7 +18128,7 @@ ${row.id}`;
   // src/browser/message-stream.ts
   function parseRecord(text18) {
     const value = JSON.parse(text18);
-    return record5(value) ? value : {};
+    return record8(value) ? value : {};
   }
   function createMessageStream(options2) {
     const { document: document2, sessionState, renderer, tools } = options2;
@@ -18223,7 +18348,7 @@ ${row.id}`;
               options2.status("Compaction cancelled");
               return;
             }
-            const r = record5(data.result) ? data.result : null;
+            const r = record8(data.result) ? data.result : null;
             let msg = "Compaction finished";
             if (r && typeof r.tokensBefore === "number" && Number.isFinite(r.tokensBefore) && r.tokensBefore) {
               msg = typeof r.estimatedTokensAfter === "number" && Number.isFinite(r.estimatedTokensAfter) ? `Compacted: ${formatTokens(r.tokensBefore)} \u2192 ~${formatTokens(r.estimatedTokensAfter)} tokens` : `Compacted (was ${formatTokens(r.tokensBefore)} tokens)`;
@@ -18246,7 +18371,7 @@ ${row.id}`;
           } catch {
             return;
           }
-          const nextId = record5(data) && typeof data.sessionId === "string" ? data.sessionId : "";
+          const nextId = record8(data) && typeof data.sessionId === "string" ? data.sessionId : "";
           const switchOwner = ++switchSequence;
           if (!nextId || nextId === sessionId) return;
           options2.deleteCached(sessionKey(hostId, nextId));
@@ -18534,7 +18659,7 @@ ${row.id}`;
       try {
         const data = await sendJson(options2.request, endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/resume`, { ...target ? { target: { ...target } } : {}, ...model ? { model } : {} });
         if (disposed) return;
-        if (!record5(data) || typeof data.id !== "string" || !data.id) throw new Error("Resume returned an invalid session");
+        if (!record8(data) || typeof data.id !== "string" || !data.id) throw new Error("Resume returned an invalid session");
         await options2.refresh();
         if (!owns()) return;
         options2.status("Session resumed");
@@ -18838,7 +18963,6 @@ ${row.id}`;
     "closeNewSessionView",
     "onNsHostChange",
     "onNsHarnessChange",
-    "onNsModelChange",
     "onNsThinkingChange",
     "editHarnessAgents",
     "editHarnessModels",

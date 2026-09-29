@@ -1275,7 +1275,6 @@ createAppBindings({ document, actions: {
   closeNewSessionView: () => newSessionController.close(),
   onNsHostChange: (_event, node) => { if (node instanceof HTMLSelectElement) newSessionController.changeHost(node.value); },
   onNsHarnessChange: (_event, node) => { if (node instanceof HTMLSelectElement) newSessionController.changeHarness(node.value); },
-  onNsModelChange: (_event, node) => { if (node instanceof HTMLSelectElement) newSessionController.preferences.selectModel(node.value); },
   onNsThinkingChange: (_event, node) => { if (node instanceof HTMLSelectElement) newSessionController.preferences.selectThinking(node.value); },
   editHarnessAgents: () => openHarnessSettings({ tab: 'agents' }),
   editHarnessModels: () => openHarnessSettings({ tab: 'models' }),

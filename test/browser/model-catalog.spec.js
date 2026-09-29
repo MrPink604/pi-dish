@@ -32,17 +32,19 @@ async function holdBody(page, url) {
     await page.evaluate(() => fixtureApp.features.newSessionController.open());
     await fixtures_js_1.expect.poll(() => held.length).toBe(1);
     await page.selectOption('#nsHostSelect', fleet.peer.hostId);
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('peer');
+    await page.click('#nsModelInput');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('peer');
     await held[0].fulfill({ json: models('self-old') });
     await page.evaluate(() => window.modelLoads[0]);
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).not.toContainText('self-old');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).not.toContainText('self-old');
     (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.modelCatalog.rows().map(row => row.id))).toEqual(['peer']);
 });
 (0, fixtures_js_1.test)('a previous cwd model body cannot publish before the next debounced controller refresh', async ({ page, fleet }) => {
     const url = `${fleet.self.base}/api/models`;
     await page.route(url, route => route.fulfill({ json: models('ready') }));
     await page.evaluate(() => fixtureApp.features.newSessionController.open({ cwd: '/old' }));
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('ready');
+    await page.click('#nsModelInput');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('ready');
     await page.clock.install();
     await page.clock.pauseAt(new Date(Date.now() + 1000));
     await holdBody(page, url);
@@ -56,8 +58,8 @@ async function holdBody(page, url) {
         await window.modelLoads[0];
     });
     (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.modelCatalog.rows().map(row => row.id))).toEqual(['ready']);
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('ready');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).not.toContainText('retired');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('ready');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).not.toContainText('retired');
     (0, fixtures_js_1.expect)(await page.evaluate(() => {
         const rows = JSON.parse(localStorage.getItem('pi-dish-models-cache') ?? '[]');
         if (!Array.isArray(rows))
@@ -70,9 +72,10 @@ async function holdBody(page, url) {
     })).toEqual(['ready']);
     await page.route(url, route => route.fulfill({ json: models('refreshed') }));
     await page.locator('#newSessionName').focus();
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('ready');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('ready');
     await page.clock.runFor(300);
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('refreshed');
+    await page.click('#nsModelInput');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('refreshed');
     (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.modelCatalog.rows().map(row => row.id))).toEqual(['refreshed']);
 });
 (0, fixtures_js_1.test)('closing a model-owning takeover retires its body without replacing a session catalog', async ({ page, fleet }) => {
@@ -102,8 +105,9 @@ async function holdBody(page, url) {
         localStorage.setItem('pi-dish-models-cache@' + peer, JSON.stringify([{ id: 'peer-cache', provider: 'fixture' }]));
         fixtureApp.features.newSessionController.open();
     }, fleet.peer.hostId);
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('peer-cache');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).not.toContainText('self-cache');
+    await page.click('#nsModelInput');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('peer-cache');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).not.toContainText('self-cache');
     for (const route of held)
         await route.fulfill({ json: [{ id: 'pi', available: true }] });
 });

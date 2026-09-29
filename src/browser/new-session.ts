@@ -7,8 +7,8 @@ import { createSpawnTargets, createSpawnTargetPicker } from './spawn-targets';
 import type { SpawnTarget } from './spawn-targets';
 import { createHarnessDiscovery } from './harness-discovery';
 import { createNewSessionPreferences, createNewSessionConfigPreview } from './new-session-options';
-import type { createModelCatalog } from './model-catalog';
-import { modelsCacheKey } from './model-catalog';
+import type { createModelCatalog, ModelPicker } from './model-catalog';
+import { createModelPicker, modelsCacheKey } from './model-catalog';
 import type { createSessionSpawns, SessionSpawnInput } from './session-spawns';
 import type { SessionState } from './session-state';
 import { escapeHtml } from '../core/helper-format';
@@ -67,8 +67,8 @@ export function createNewSession(options: {
   }
   const cwdInput = input('newSessionCwd'), nameInput = input('newSessionName');
   const hostSelect = select('nsHostSelect'), harnessSelect = select('nsHarnessSelect');
-  const modelSelect = select('nsModelSelect'), thinkingSelect = select('nsThinkingSelect');
-  const modelFilterInput = input('nsModelFilter');
+  const thinkingSelect = select('nsThinkingSelect');
+  const modelInput = input('nsModelInput'), modelDropdown = element('nsModelDropdown');
   const spawnElement = element('nsSpawnBtn');
   if (!(spawnElement instanceof HTMLButtonElement)) throw new Error('Invalid spawn button');
   const spawnButton: HTMLButtonElement = spawnElement;
@@ -90,11 +90,17 @@ export function createNewSession(options: {
   const supports = (capability: string) => !host().capabilities || host().capabilities?.[capability] === true;
   const hostOptions = () => options.hosts().filter(row => row.self || !options.hostDown(row));
   const error = (value: string) => { if (!disposed) element('nsError').textContent = value; };
+  let modelPicker: ModelPicker | null = null;
   const preferences = createNewSessionPreferences({
-    model: modelSelect, thinking: thinkingSelect, hiddenNote: element('nsModelHidden'), thinkingNote: element('nsThinkingNote'),
+    thinking: thinkingSelect, hiddenNote: element('nsModelHidden'), thinkingNote: element('nsThinkingNote'),
     rows: () => models.rows(), read: key => storage.getItem(key), write: (key, value) => storage.setItem(key, value), escapeHtml,
+    rendered: () => modelPicker?.sync(),
   });
-  modelFilterInput.addEventListener('input', () => preferences.filterModels(modelFilterInput.value));
+  modelPicker = createModelPicker({
+    input: modelInput, dropdown: modelDropdown, rows: () => models.rows(),
+    selected: () => preferences.selectedModel(), onPick: value => preferences.selectModel(value),
+    match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
+  });
   const config = createNewSessionConfigPreview({
     wrap: element('nsHarnessConfig'), values: element('nsHarnessConfigValues'), roles: element('nsHarnessRoles'),
     buttons: [element('nsEditAgents'), element('nsEditRoles')],
@@ -213,7 +219,7 @@ export function createNewSession(options: {
     if (disposed) return;
     generation++; spawnButton.disabled = false; spawnButton.textContent = '+ New session';
     options.closeOtherViews(); root.classList.add('new-session-open'); draft = value.draft || null;
-    nameInput.value = ''; modelFilterInput.value = ''; preferences.filterModels(''); renderHosts();
+    nameInput.value = ''; renderHosts();
     void directories.load().then(() => { if (isOpen()) renderWorkspaces(); });
     void targets.load(); void harnesses.load();
     cwdInput.value = value.cwd || storage.getItem('pi-dish-cwd') || ''; error('');
@@ -234,7 +240,7 @@ export function createNewSession(options: {
     if (isOpen()) { generation++; models.retire(); }
     targets.retire(); targetPicker.hide(); directories.retire(); directoryTree?.dispose(); directoryTree = null;
     workspaceEvents.abort(); root.classList.remove('new-session-open'); options.closeSettings();
-    clearTimeout(refreshTimer); config.retire(); autocomplete.hide();
+    clearTimeout(refreshTimer); config.retire(); autocomplete.hide(); modelPicker?.hide();
   }
   function captureView(): () => boolean {
     const view = generation, open = isOpen(), selection = options.sessionState.captureSelection(), pending = options.currentSpawn();
@@ -278,7 +284,7 @@ export function createNewSession(options: {
     error(''); spawnButton.disabled = true; spawnButton.textContent = 'Starting…';
     try {
       if (directory) storage.setItem('pi-dish-cwd', directory);
-      await submit({ name, cwd: directory, model: modelSelect.value || undefined, thinking: thinkingSelect.value || undefined,
+      await submit({ name, cwd: directory, model: preferences.selectedModel() || undefined, thinking: thinkingSelect.value || undefined,
         target, harness: selectedHarness(), ownsView });
     } catch (caught) { if (ownsView()) error(message(caught)); }
     finally { if (view === generation) { spawnButton.disabled = false; spawnButton.textContent = '+ New session'; } }
@@ -289,6 +295,6 @@ export function createNewSession(options: {
     preferences, config, harnesses, directories, targets, targetPicker,
     hideCwd: () => autocomplete.hide(), error,
     get generation() { return generation; }, get pendingDraft() { return draft; },
-    dispose() { close(); disposed = true; autocomplete.dispose(); targetPicker.dispose(); },
+    dispose() { close(); disposed = true; autocomplete.dispose(); targetPicker.dispose(); modelPicker?.dispose(); },
   };
 }

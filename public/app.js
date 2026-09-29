@@ -4767,15 +4767,10 @@ ${row.id}`;
       return current() ? scope : null;
     }, reusable, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
   }
-  function modelSelectOptionsHtml(models, escapeHtml2, filter) {
+  function modelSelectOptionsHtml(models, escapeHtml2) {
     const enabled = models.filter((model) => model.enabled !== false);
-    const query = (filter?.query || "").trim(), pinned = filter?.pinned || "";
-    const listed = !query ? enabled : enabled.filter((model) => {
-      const selector = model.selector || `${model.provider}/${model.id}`;
-      return selector === pinned || !!fuzzyMatch(query, `${model.provider}/${model.id}`) || !!fuzzyMatch(query, model.name || model.id);
-    });
     const byProvider = /* @__PURE__ */ new Map();
-    for (const model of listed) {
+    for (const model of enabled) {
       const group = byProvider.get(model.provider) || [];
       group.push(model);
       byProvider.set(model.provider, group);
@@ -4792,6 +4787,123 @@ ${row.id}`;
   }
   function modelHiddenNote(hidden) {
     return hidden > 0 ? `${hidden} model${hidden === 1 ? "" : "s"} hidden (not enabled)` : "";
+  }
+  function catalogModelSelector(model) {
+    return model.selector || `${model.provider}/${model.id}`;
+  }
+  function catalogModelLabel(model) {
+    return model.name || model.id;
+  }
+  function createModelPicker(options2) {
+    const { input, dropdown } = options2;
+    const listeners = new AbortController();
+    let rowListeners = new AbortController();
+    let blurTimer = null;
+    let activeIndex = -1;
+    let open = false;
+    function currentLabel() {
+      const selected = options2.selected();
+      const row = options2.rows().find((model) => model.enabled !== false && catalogModelSelector(model) === selected);
+      return row ? catalogModelLabel(row) : "";
+    }
+    function clearBlur() {
+      if (blurTimer !== null) clearTimeout(blurTimer);
+      blurTimer = null;
+    }
+    function hide() {
+      rowListeners.abort();
+      open = false;
+      dropdown.style.display = "none";
+      activeIndex = -1;
+      clearBlur();
+    }
+    function sync() {
+      if (open) {
+        render(input.value);
+        return;
+      }
+      input.value = currentLabel();
+    }
+    function pick(selector) {
+      options2.onPick(selector);
+      hide();
+      input.value = currentLabel();
+    }
+    function render(query) {
+      rowListeners.abort();
+      open = true;
+      activeIndex = -1;
+      const q = query.trim();
+      let named = options2.rows().filter((model) => model.enabled !== false).flatMap((model) => {
+        const label = catalogModelLabel(model), ref = catalogModelSelector(model);
+        if (!q) return [{ model, label, ref, indices: [], score: 0 }];
+        const indices = options2.match(q, label) || options2.match(q, ref);
+        return indices ? [{ model, label, ref, indices, score: options2.score(indices, label) }] : [];
+      });
+      if (q) named = named.sort((a, b) => b.score - a.score);
+      const rows = [{ key: "", html: "(default)" }].concat(named.map(({ label, ref, indices }) => {
+        const matchedLabel = indices.length && options2.match(q, label) ? options2.highlight(label, indices) : options2.escapeHtml(label);
+        const suffix = ref === label ? "" : ` <span class="model-picker-ref">${options2.escapeHtml(ref)}</span>`;
+        return { key: ref, html: matchedLabel + suffix };
+      }));
+      dropdown.innerHTML = rows.map((row) => `<div class="cwd-option" data-key="${options2.escapeHtml(row.key)}">${row.html}</div>`).join("");
+      dropdown.style.display = "block";
+      rowListeners = new AbortController();
+      for (const row of Array.from(dropdown.querySelectorAll(".cwd-option"))) {
+        row.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          if (dropdown.contains(row)) pick(row.dataset.key || "");
+        }, { signal: rowListeners.signal });
+      }
+    }
+    const listener = { signal: listeners.signal };
+    input.addEventListener("focus", () => {
+      clearBlur();
+      input.select();
+      render("");
+    }, listener);
+    input.addEventListener("click", () => {
+      if (!open) {
+        clearBlur();
+        render("");
+      }
+    }, listener);
+    input.addEventListener("input", () => render(input.value), listener);
+    input.addEventListener("blur", () => {
+      clearBlur();
+      blurTimer = setTimeout(() => {
+        hide();
+        input.value = currentLabel();
+      }, 150);
+    }, listener);
+    input.addEventListener("keydown", (event) => {
+      if (!open) return;
+      const rows = Array.from(dropdown.querySelectorAll(".cwd-option"));
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        if (!rows.length) return;
+        activeIndex = Math.max(0, Math.min(activeIndex + (event.key === "ArrowDown" ? 1 : -1), rows.length - 1));
+        rows.forEach((row, index) => row.classList.toggle("active", index === activeIndex));
+        rows[activeIndex].scrollIntoView({ block: "nearest" });
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const row = rows[activeIndex];
+        if (row) pick(row.dataset.key || "");
+        else {
+          hide();
+          input.value = currentLabel();
+        }
+      } else if (event.key === "Escape") {
+        event.stopPropagation();
+        hide();
+        input.value = currentLabel();
+      }
+    }, listener);
+    const picker = { sync, hide, dispose() {
+      hide();
+      listeners.abort();
+    } };
+    return picker;
   }
 
   // src/browser/session-relations.ts
@@ -13924,7 +14036,7 @@ ${restored}`;
   });
   var thinkingLabel = (level) => Object.hasOwn(NS_THINKING_LABELS, level) ? NS_THINKING_LABELS[level] : level;
   function createNewSessionPreferences(options2) {
-    let harness = "pi", model = "", thinking = "", query = "";
+    let harness = "pi", model = "", thinking = "";
     function preference(kind) {
       return options2.read(`pi-dish-new-${kind}:${harness}`) || (harness === "pi" ? options2.read(`pi-dish-new-${kind}`) : "") || "";
     }
@@ -13938,7 +14050,7 @@ ${restored}`;
       thinking = preference("thinking");
     }
     function syncThinking() {
-      const selected = options2.rows().find((row) => (row.selector || `${row.provider}/${row.id}`) === options2.model.value);
+      const selected = options2.rows().find((row) => catalogModelSelector(row) === model);
       let levels = Object.keys(NS_THINKING_LABELS);
       let disabled = selected?.reasoning === false;
       let note = disabled ? "The selected model does not support configurable thinking" : "";
@@ -13959,19 +14071,19 @@ ${restored}`;
       if (options2.thinkingNote) options2.thinkingNote.textContent = note;
     }
     function render() {
-      const { html, enabled, hidden } = modelSelectOptionsHtml(options2.rows(), options2.escapeHtml, { query, pinned: model });
-      options2.model.innerHTML = html;
-      options2.model.value = model && enabled.some((row) => (row.selector || `${row.provider}/${row.id}`) === model) ? model : "";
-      if (options2.hiddenNote) options2.hiddenNote.textContent = modelHiddenNote(hidden);
+      const rows = options2.rows(), enabled = rows.filter((row) => row.enabled !== false);
+      if (options2.hiddenNote) options2.hiddenNote.textContent = modelHiddenNote(rows.length - enabled.length);
       syncThinking();
+      options2.rendered();
     }
     return {
       restore,
       render,
       syncThinking,
-      filterModels(value) {
-        query = value || "";
-        render();
+      // A saved model the catalog no longer lists stays persisted but is never
+      // submitted — submission reads selectedModel, not the raw preference.
+      selectedModel() {
+        return model && options2.rows().some((row) => row.enabled !== false && catalogModelSelector(row) === model) ? model : "";
       },
       selectModel(value) {
         model = value || "";
@@ -14070,8 +14182,8 @@ ${restored}`;
     }
     const cwdInput = input("newSessionCwd"), nameInput = input("newSessionName");
     const hostSelect = select("nsHostSelect"), harnessSelect = select("nsHarnessSelect");
-    const modelSelect = select("nsModelSelect"), thinkingSelect = select("nsThinkingSelect");
-    const modelFilterInput = input("nsModelFilter");
+    const thinkingSelect = select("nsThinkingSelect");
+    const modelInput = input("nsModelInput"), modelDropdown = element("nsModelDropdown");
     const spawnElement = element("nsSpawnBtn");
     if (!(spawnElement instanceof HTMLButtonElement)) throw new Error("Invalid spawn button");
     const spawnButton = spawnElement;
@@ -14095,17 +14207,28 @@ ${restored}`;
     const error = (value) => {
       if (!disposed) element("nsError").textContent = value;
     };
+    let modelPicker = null;
     const preferences = createNewSessionPreferences({
-      model: modelSelect,
       thinking: thinkingSelect,
       hiddenNote: element("nsModelHidden"),
       thinkingNote: element("nsThinkingNote"),
       rows: () => models.rows(),
       read: (key) => storage.getItem(key),
       write: (key, value) => storage.setItem(key, value),
+      escapeHtml,
+      rendered: () => modelPicker?.sync()
+    });
+    modelPicker = createModelPicker({
+      input: modelInput,
+      dropdown: modelDropdown,
+      rows: () => models.rows(),
+      selected: () => preferences.selectedModel(),
+      onPick: (value) => preferences.selectModel(value),
+      match: fuzzyMatch,
+      score: fuzzyScore,
+      highlight: highlightFuzzy,
       escapeHtml
     });
-    modelFilterInput.addEventListener("input", () => preferences.filterModels(modelFilterInput.value));
     const config = createNewSessionConfigPreview({
       wrap: element("nsHarnessConfig"),
       values: element("nsHarnessConfigValues"),
@@ -14296,8 +14419,6 @@ ${restored}`;
       root.classList.add("new-session-open");
       draft = value.draft || null;
       nameInput.value = "";
-      modelFilterInput.value = "";
-      preferences.filterModels("");
       renderHosts();
       void directories.load().then(() => {
         if (isOpen()) renderWorkspaces();
@@ -14342,6 +14463,7 @@ ${restored}`;
       clearTimeout(refreshTimer);
       config.retire();
       autocomplete.hide();
+      modelPicker?.hide();
     }
     function captureView() {
       const view = generation, open2 = isOpen(), selection = options2.sessionState.captureSelection(), pending = options2.currentSpawn();
@@ -14407,7 +14529,7 @@ ${restored}`;
         await submit({
           name,
           cwd: directory,
-          model: modelSelect.value || void 0,
+          model: preferences.selectedModel() || void 0,
           thinking: thinkingSelect.value || void 0,
           target,
           harness: selectedHarness(),
@@ -14467,6 +14589,7 @@ ${restored}`;
         disposed = true;
         autocomplete.dispose();
         targetPicker.dispose();
+        modelPicker?.dispose();
       }
     };
   }
@@ -18706,7 +18829,6 @@ ${restored}`;
     "closeNewSessionView",
     "onNsHostChange",
     "onNsHarnessChange",
-    "onNsModelChange",
     "onNsThinkingChange",
     "editHarnessAgents",
     "editHarnessModels",
@@ -20163,9 +20285,6 @@ ${restored}`;
     },
     onNsHarnessChange: (_event, node) => {
       if (node instanceof HTMLSelectElement) newSessionController.changeHarness(node.value);
-    },
-    onNsModelChange: (_event, node) => {
-      if (node instanceof HTMLSelectElement) newSessionController.preferences.selectModel(node.value);
     },
     onNsThinkingChange: (_event, node) => {
       if (node instanceof HTMLSelectElement) newSessionController.preferences.selectThinking(node.value);

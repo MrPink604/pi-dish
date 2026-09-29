@@ -31,10 +31,11 @@ test('new-session model responses stay with their selected host', async ({ page,
   await page.evaluate(() => fixtureApp.features.newSessionController.open());
   await expect.poll(() => held.length).toBe(1);
   await page.selectOption('#nsHostSelect', fleet.peer.hostId);
-  await expect(page.locator('#nsModelSelect')).toContainText('peer');
+  await page.click('#nsModelInput');
+  await expect(page.locator('#nsModelDropdown')).toContainText('peer');
   await held[0].fulfill({ json: models('self-old') });
   await page.evaluate(() => window.modelLoads[0]);
-  await expect(page.locator('#nsModelSelect')).not.toContainText('self-old');
+  await expect(page.locator('#nsModelDropdown')).not.toContainText('self-old');
   expect(await page.evaluate(() => fixtureApp.features.modelCatalog.rows().map(row => row.id))).toEqual(['peer']);
 });
 
@@ -42,7 +43,8 @@ test('a previous cwd model body cannot publish before the next debounced control
   const url = `${fleet.self.base}/api/models`;
   await page.route(url, route => route.fulfill({ json: models('ready') }));
   await page.evaluate(() => fixtureApp.features.newSessionController.open({ cwd: '/old' }));
-  await expect(page.locator('#nsModelSelect')).toContainText('ready');
+  await page.click('#nsModelInput');
+  await expect(page.locator('#nsModelDropdown')).toContainText('ready');
   await page.clock.install();
   await page.clock.pauseAt(new Date(Date.now() + 1000));
   await holdBody(page, url);
@@ -56,8 +58,8 @@ test('a previous cwd model body cannot publish before the next debounced control
     await window.modelLoads[0];
   });
   expect(await page.evaluate(() => fixtureApp.features.modelCatalog.rows().map(row => row.id))).toEqual(['ready']);
-  await expect(page.locator('#nsModelSelect')).toContainText('ready');
-  await expect(page.locator('#nsModelSelect')).not.toContainText('retired');
+  await expect(page.locator('#nsModelDropdown')).toContainText('ready');
+  await expect(page.locator('#nsModelDropdown')).not.toContainText('retired');
   expect(await page.evaluate(() => {
     const rows: unknown = JSON.parse(localStorage.getItem('pi-dish-models-cache') ?? '[]');
     if (!Array.isArray(rows)) throw new Error('Invalid model cache');
@@ -68,9 +70,10 @@ test('a previous cwd model body cannot publish before the next debounced control
   })).toEqual(['ready']);
   await page.route(url, route => route.fulfill({ json: models('refreshed') }));
   await page.locator('#newSessionName').focus();
-  await expect(page.locator('#nsModelSelect')).toContainText('ready');
+  await expect(page.locator('#nsModelDropdown')).toContainText('ready');
   await page.clock.runFor(300);
-  await expect(page.locator('#nsModelSelect')).toContainText('refreshed');
+  await page.click('#nsModelInput');
+  await expect(page.locator('#nsModelDropdown')).toContainText('refreshed');
   expect(await page.evaluate(() => fixtureApp.features.modelCatalog.rows().map(row => row.id))).toEqual(['refreshed']);
 });
 
@@ -102,8 +105,9 @@ test('new-session cached catalogs use the selected peer key', async ({ page, fle
     localStorage.setItem('pi-dish-models-cache@' + peer, JSON.stringify([{ id: 'peer-cache', provider: 'fixture' }]));
     fixtureApp.features.newSessionController.open();
   }, fleet.peer.hostId);
-  await expect(page.locator('#nsModelSelect')).toContainText('peer-cache');
-  await expect(page.locator('#nsModelSelect')).not.toContainText('self-cache');
+  await page.click('#nsModelInput');
+  await expect(page.locator('#nsModelDropdown')).toContainText('peer-cache');
+  await expect(page.locator('#nsModelDropdown')).not.toContainText('self-cache');
   for (const route of held) await route.fulfill({ json: [{ id: 'pi', available: true }] });
 });
 

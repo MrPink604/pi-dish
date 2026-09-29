@@ -18,7 +18,8 @@ export { createDirectoryTree } from './directory-tree';
 
 export { createSpawnTargets, createSpawnTargetPicker, decodeSpawnChoices, spawnTargetKey } from './spawn-targets';
 
-export { createModelCatalog, modelsCacheKey, modelSelectOptionsHtml, modelHiddenNote } from './model-catalog';
+export { createModelCatalog, modelsCacheKey, modelSelectOptionsHtml, modelHiddenNote, catalogModelSelector, createModelPicker } from './model-catalog';
+export type { ModelPicker } from './model-catalog';
 
 export { createNewSessionPreferences, createNewSessionConfigPreview, decodeHarnessConfigPreview, NS_THINKING_LABELS } from './new-session-options';
 

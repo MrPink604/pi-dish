@@ -47,7 +47,6 @@ export const APP_ACTION_NAMES = [
   'closeNewSessionView',
   'onNsHostChange',
   'onNsHarnessChange',
-  'onNsModelChange',
   'onNsThinkingChange',
   'editHarnessAgents',
   'editHarnessModels',

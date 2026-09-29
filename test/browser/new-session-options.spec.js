@@ -15,16 +15,18 @@ async function setup(page) {
 }
 (0, fixtures_js_1.test)('new-session preference controls use the model ladder and separate harness keys', async ({ page, fleet }) => {
     await setup(page);
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Model');
-    await page.selectOption('#nsModelSelect', 'fixture/model');
+    await page.click('#nsModelInput');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('Model');
+    await page.locator('#nsModelDropdown .cwd-option', { hasText: 'Model' }).click();
+    (0, fixtures_js_1.expect)(await page.locator('#nsModelInput').inputValue()).toBe('Model');
     await page.selectOption('#nsThinkingSelect', 'high');
     (0, fixtures_js_1.expect)(await page.locator('#nsThinkingSelect').inputValue()).toBe('high');
     (0, fixtures_js_1.expect)(await page.locator('#nsThinkingSelect custom').count()).toBe(0);
     (0, fixtures_js_1.expect)(await page.evaluate(() => localStorage.getItem('pi-dish-new-thinking:omp'))).toBe('high');
     await page.route('**/api/models', route => route.fulfill({ json: [{ id: 'simple', provider: 'fixture', name: 'Simple', reasoning: false }] }));
     await page.selectOption('#nsHarnessSelect', 'pi');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Simple');
-    await page.selectOption('#nsModelSelect', 'fixture/simple');
+    await page.click('#nsModelInput');
+    await page.locator('#nsModelDropdown .cwd-option', { hasText: 'Simple' }).click();
     await (0, fixtures_js_1.expect)(page.locator('#nsThinkingSelect')).toBeDisabled();
     (0, fixtures_js_1.expect)(await page.evaluate(() => localStorage.getItem('pi-dish-new-model:pi'))).toBe('fixture/simple');
     (0, fixtures_js_1.expect)(await page.evaluate(() => localStorage.getItem('pi-dish-new-model:omp'))).toBe('fixture/model');
@@ -94,24 +96,28 @@ async function setup(page) {
     await page.mouse.up();
     await fixtures_js_1.expect.poll(() => sent).toBe(true);
 });
-(0, fixtures_js_1.test)('the model filter narrows the select and keeps the chosen model pinned', async ({ page, fleet }) => {
+(0, fixtures_js_1.test)('the model picker filters as you type and keeps the picked model', async ({ page, fleet }) => {
     await setup(page);
     await page.route('**/api/models?*', (route) => route.fulfill({ json: [
             { id: 'alpha', provider: 'fixture', name: 'Alpha', reasoning: true, thinking: ['high'] },
             { id: 'beta', provider: 'other', name: 'Beta' },
         ] }));
     await page.evaluate(() => fixtureApp.features.newSessionController.refresh());
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Alpha');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Beta');
-    await page.fill('#nsModelFilter', 'beta');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).not.toContainText('Alpha');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Beta');
-    await page.selectOption('#nsModelSelect', 'other/beta');
-    await page.fill('#nsModelFilter', 'alpha');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Alpha');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Beta');
-    (0, fixtures_js_1.expect)(await page.locator('#nsModelSelect').inputValue()).toBe('other/beta');
-    await page.fill('#nsModelFilter', '');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Alpha');
-    await (0, fixtures_js_1.expect)(page.locator('#nsModelSelect')).toContainText('Beta');
+    await page.click('#nsModelInput');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('Alpha');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('Beta');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('(default)');
+    await page.fill('#nsModelInput', 'beta');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).not.toContainText('Alpha');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('Beta');
+    await page.locator('#nsModelDropdown .cwd-option', { hasText: 'Beta' }).click();
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelInput')).toHaveValue('Beta');
+    (0, fixtures_js_1.expect)(await page.evaluate(() => localStorage.getItem('pi-dish-new-model:omp'))).toBe('other/beta');
+    // Typing a non-matching query never clears the submitted selection.
+    await page.fill('#nsModelInput', 'zzz');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).toContainText('(default)');
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelDropdown')).not.toContainText('Alpha');
+    (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureApp.features.newSessionController.preferences.selectedModel())).toBe('other/beta');
+    await page.locator('#nsModelInput').blur();
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelInput')).toHaveValue('Beta');
 });

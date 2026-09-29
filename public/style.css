@@ -1104,6 +1104,12 @@ body.sidebar-open {
   font-weight: 600;
 }
 
+/* Provider/ref suffix in the model picker rows */
+.model-picker-ref {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 /* Known session cwd (vs plain filesystem match) in the picker */
 .cwd-known {
   color: var(--warning);

@@ -2,7 +2,7 @@ import type { CatalogModel } from '../core/session-api';
 import type { ApiRequest } from './api-client';
 import { sameDirectoryHost } from './directory-catalog';
 import type { DirectoryHost } from './directory-catalog';
-import { modelHiddenNote, modelSelectOptionsHtml } from './model-catalog';
+import { catalogModelSelector, modelHiddenNote } from './model-catalog';
 
 export const NS_THINKING_LABELS: Readonly<Record<string, string>> = Object.freeze({
   off: 'Off', minimal: 'Minimal', low: 'Low', medium: 'Medium',
@@ -10,9 +10,8 @@ export const NS_THINKING_LABELS: Readonly<Record<string, string>> = Object.freez
 });
 const thinkingLabel = (level: string) => Object.hasOwn(NS_THINKING_LABELS, level) ? NS_THINKING_LABELS[level] : level;
 
-/** Per-harness launch preferences and their rendered model/thinking choices. */
+/** Per-harness launch preferences and their rendered thinking choices. */
 export function createNewSessionPreferences(options: {
-  model: HTMLSelectElement;
   thinking: HTMLSelectElement;
   hiddenNote: HTMLElement | null;
   thinkingNote: HTMLElement | null;
@@ -20,8 +19,9 @@ export function createNewSessionPreferences(options: {
   read: (key: string) => string | null;
   write: (key: string, value: string) => void;
   escapeHtml: (text: string) => string;
+  rendered: () => void;
 }) {
-  let harness = 'pi', model = '', thinking = '', query = '';
+  let harness = 'pi', model = '', thinking = '';
   function preference(kind: string): string {
     return options.read(`pi-dish-new-${kind}:${harness}`)
       || (harness === 'pi' ? options.read(`pi-dish-new-${kind}`) : '') || '';
@@ -36,7 +36,7 @@ export function createNewSessionPreferences(options: {
     thinking = preference('thinking');
   }
   function syncThinking(): void {
-    const selected = options.rows().find(row => (row.selector || `${row.provider}/${row.id}`) === options.model.value);
+    const selected = options.rows().find(row => catalogModelSelector(row) === model);
     let levels: readonly string[] = Object.keys(NS_THINKING_LABELS);
     let disabled = selected?.reasoning === false;
     let note = disabled ? 'The selected model does not support configurable thinking' : '';
@@ -55,16 +55,15 @@ export function createNewSessionPreferences(options: {
     if (options.thinkingNote) options.thinkingNote.textContent = note;
   }
   function render(): void {
-    const { html, enabled, hidden } = modelSelectOptionsHtml(options.rows(), options.escapeHtml, { query, pinned: model });
-    options.model.innerHTML = html;
-    // Preserve a saved model through interim catalogs. Submission reads the
-    // select itself, so an unavailable model is never sent to the harness.
-    options.model.value = model && enabled.some(row => (row.selector || `${row.provider}/${row.id}`) === model) ? model : '';
-    if (options.hiddenNote) options.hiddenNote.textContent = modelHiddenNote(hidden);
+    const rows = options.rows(), enabled = rows.filter(row => row.enabled !== false);
+    if (options.hiddenNote) options.hiddenNote.textContent = modelHiddenNote(rows.length - enabled.length);
     syncThinking();
+    options.rendered();
   }
   return { restore, render, syncThinking,
-    filterModels(value: string) { query = value || ''; render(); },
+    // A saved model the catalog no longer lists stays persisted but is never
+    // submitted — submission reads selectedModel, not the raw preference.
+    selectedModel() { return model && options.rows().some(row => row.enabled !== false && catalogModelSelector(row) === model) ? model : ''; },
     selectModel(value: string) { model = value || ''; persist('model', model); syncThinking(); },
     selectThinking(value: string) { thinking = value || ''; persist('thinking', thinking); },
   };

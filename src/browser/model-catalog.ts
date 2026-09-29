@@ -1,6 +1,5 @@
 import type { CatalogModel } from '../core/session-api';
 import { decodeModelCatalog } from '../core/session-api';
-import { fuzzyMatch } from '../core/helper-query';
 import type { DirectoryHost } from './directory-catalog';
 
 export interface ModelCatalogScope {
@@ -107,16 +106,10 @@ export function createModelCatalog(options: {
   return { rows, get scope() { return current() ? scope : null; }, reusable, load, seed, retire, clear, filter, toggle, setAll, toggleProvider, enabledIds };
 }
 
-export function modelSelectOptionsHtml(models: readonly Readonly<CatalogModel>[], escapeHtml: (value: string) => string,
-  filter?: { query?: string; pinned?: string }) {
+export function modelSelectOptionsHtml(models: readonly Readonly<CatalogModel>[], escapeHtml: (value: string) => string) {
   const enabled = models.filter(model => model.enabled !== false);
-  const query = (filter?.query || '').trim(), pinned = filter?.pinned || '';
-  const listed = !query ? enabled : enabled.filter(model => {
-    const selector = model.selector || `${model.provider}/${model.id}`;
-    return selector === pinned || !!fuzzyMatch(query, `${model.provider}/${model.id}`) || !!fuzzyMatch(query, model.name || model.id);
-  });
   const byProvider = new Map<string, Readonly<CatalogModel>[]>();
-  for (const model of listed) {
+  for (const model of enabled) {
     const group = byProvider.get(model.provider) || [];
     group.push(model);
     byProvider.set(model.provider, group);
@@ -133,4 +126,120 @@ export function modelSelectOptionsHtml(models: readonly Readonly<CatalogModel>[]
 }
 export function modelHiddenNote(hidden: number): string {
   return hidden > 0 ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)` : '';
+}
+
+export function catalogModelSelector(model: Readonly<CatalogModel>): string {
+  return model.selector || `${model.provider}/${model.id}`;
+}
+function catalogModelLabel(model: Readonly<CatalogModel>): string {
+  return model.name || model.id;
+}
+
+export interface ModelPicker {
+  sync(): void;
+  hide(): void;
+  dispose(): void;
+}
+
+/** Type-to-filter model combobox; mirrors the spawn-target picker. */
+export function createModelPicker(options: {
+  input: HTMLInputElement;
+  dropdown: HTMLElement;
+  rows: () => readonly Readonly<CatalogModel>[];
+  selected: () => string;
+  onPick: (selector: string) => void;
+  match: (query: string, text: string) => readonly number[] | null;
+  score: (indices: readonly number[], text: string) => number;
+  highlight: (text: string, indices: readonly number[]) => string;
+  escapeHtml: (text: string) => string;
+}) {
+  const { input, dropdown } = options;
+  const listeners = new AbortController();
+  let rowListeners = new AbortController();
+  let blurTimer: ReturnType<typeof setTimeout> | null = null;
+  let activeIndex = -1;
+  let open = false;
+  function currentLabel(): string {
+    const selected = options.selected();
+    const row = options.rows().find(model => model.enabled !== false && catalogModelSelector(model) === selected);
+    return row ? catalogModelLabel(row) : '';
+  }
+  function clearBlur(): void {
+    if (blurTimer !== null) clearTimeout(blurTimer);
+    blurTimer = null;
+  }
+  function hide(): void {
+    rowListeners.abort();
+    open = false;
+    dropdown.style.display = 'none';
+    activeIndex = -1;
+    clearBlur();
+  }
+  function sync(): void {
+    if (open) { render(input.value); return; }
+    input.value = currentLabel();
+  }
+  function pick(selector: string): void {
+    options.onPick(selector);
+    hide();
+    input.value = currentLabel();
+  }
+  function render(query: string): void {
+    rowListeners.abort();
+    open = true;
+    activeIndex = -1;
+    const q = query.trim();
+    let named = options.rows().filter(model => model.enabled !== false).flatMap(model => {
+      const label = catalogModelLabel(model), ref = catalogModelSelector(model);
+      if (!q) return [{ model, label, ref, indices: [] as readonly number[], score: 0 }];
+      const indices = options.match(q, label) || options.match(q, ref);
+      return indices ? [{ model, label, ref, indices, score: options.score(indices, label) }] : [];
+    });
+    if (q) named = named.sort((a, b) => b.score - a.score);
+    const rows = [{ key: '', html: '(default)' }].concat(named.map(({ label, ref, indices }) => {
+      const matchedLabel = indices.length && options.match(q, label) ? options.highlight(label, indices) : options.escapeHtml(label);
+      const suffix = ref === label ? '' : ` <span class="model-picker-ref">${options.escapeHtml(ref)}</span>`;
+      return { key: ref, html: matchedLabel + suffix };
+    }));
+    dropdown.innerHTML = rows.map(row =>
+      `<div class="cwd-option" data-key="${options.escapeHtml(row.key)}">${row.html}</div>`).join('');
+    dropdown.style.display = 'block';
+    rowListeners = new AbortController();
+    for (const row of Array.from(dropdown.querySelectorAll<HTMLElement>('.cwd-option'))) {
+      row.addEventListener('mousedown', event => {
+        event.preventDefault();
+        if (dropdown.contains(row)) pick(row.dataset.key || '');
+      }, { signal: rowListeners.signal });
+    }
+  }
+  const listener = { signal: listeners.signal };
+  input.addEventListener('focus', () => { clearBlur(); input.select(); render(''); }, listener);
+  input.addEventListener('click', () => { if (!open) { clearBlur(); render(''); } }, listener);
+  input.addEventListener('input', () => render(input.value), listener);
+  input.addEventListener('blur', () => {
+    clearBlur();
+    blurTimer = setTimeout(() => { hide(); input.value = currentLabel(); }, 150);
+  }, listener);
+  input.addEventListener('keydown', event => {
+    if (!open) return;
+    const rows = Array.from(dropdown.querySelectorAll<HTMLElement>('.cwd-option'));
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!rows.length) return;
+      activeIndex = Math.max(0, Math.min(activeIndex + (event.key === 'ArrowDown' ? 1 : -1), rows.length - 1));
+      rows.forEach((row, index) => row.classList.toggle('active', index === activeIndex));
+      rows[activeIndex].scrollIntoView({ block: 'nearest' });
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      const row = rows[activeIndex];
+      if (row) pick(row.dataset.key || '');
+      else { hide(); input.value = currentLabel(); }
+    } else if (event.key === 'Escape') {
+      event.stopPropagation();
+      hide();
+      input.value = currentLabel();
+    }
+  }, listener);
+  const picker: ModelPicker = { sync, hide, dispose() { hide(); listeners.abort(); } };
+  return picker;
 }

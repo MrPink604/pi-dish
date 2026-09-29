@@ -1316,7 +1316,8 @@ let remoteHost = null;
             await desktop.click('.sidebar-footer .btn');
             await desktop.waitForFunction(() => fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('new-session-open'), null, { timeout: 5000 });
             check(true, 'takeover opens from the sidebar footer button');
-            check(await desktop.locator('#nsModelSelect option').filter({ hasText: '(default)' }).count() > 0, 'model select offers (default)');
+            await desktop.click('#nsModelInput');
+            check(await desktop.locator('#nsModelDropdown .cwd-option').filter({ hasText: '(default)' }).count() > 0, 'model picker offers (default)');
             check(await desktop.locator('#nsThinkingSelect option').filter({ hasText: 'High' }).count() > 0, 'reasoning level selector sits alongside the model selector');
             // Harness discovery is installation-dependent on the real host. Stub an
             // installed alternative here and prove that selecting it survives model
@@ -1440,10 +1441,11 @@ let remoteHost = null;
             await desktop.waitForFunction(() => document.querySelector('#nsHarnessSelect option[value="omp"]'));
             check(await desktop.locator('#nsHarnessSelect option[value="prime"]').count() === 0, 'unavailable harnesses are omitted from the Agent selector');
             check(await desktop.inputValue('#nsHarnessSelect') === 'omp', 'a saved installed alternative survives asynchronous harness discovery');
-            await desktop.waitForFunction(() => document.querySelector('#nsModelSelect option[value="fixture-missing/offline-model"]'));
-            check(await desktop.locator('#nsModelSelect option[value="fixture-missing/offline-model"]:disabled').count() === 0, 'every OMP command-catalog model is selectable before spawn');
-            await desktop.selectOption('#nsModelSelect', 'fixture-missing/offline-model');
-            check(await desktop.inputValue('#nsModelSelect') === 'fixture-missing/offline-model', 'obsolete credential metadata cannot block pre-spawn model selection');
+            await desktop.fill('#nsModelInput', 'offline-model');
+            await desktop.waitForSelector('#nsModelDropdown .cwd-option[data-key="fixture-missing/offline-model"]', { timeout: 5000 });
+            check(true, 'every OMP command-catalog model is selectable before spawn');
+            await desktop.click('#nsModelDropdown .cwd-option[data-key="fixture-missing/offline-model"]');
+            check(await desktop.evaluate(() => localStorage.getItem('pi-dish-new-model:omp')) === 'fixture-missing/offline-model', 'obsolete credential metadata cannot block pre-spawn model selection');
             check((await desktop.locator('#nsHarnessConfigValues').textContent() ?? '').includes('zai/glm-4.7-flash') &&
                 (await desktop.locator('#nsHarnessConfigValues').textContent() ?? '').includes('high'), 'curated OMP default model and thinking are shown in the readout');
             check((await desktop.locator('#nsHarnessRoles').textContent() ?? '').includes('default zai/glm-4.7-flash'), 'the readout summarizes the effective role assignments');
@@ -1504,14 +1506,18 @@ let remoteHost = null;
             }), `saving PUTs only the changed agent settings (got ${JSON.stringify((0, test_types_js_1.record)(readAgentsPatch()).agents)})`);
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('nsHarnessRoles'), "document.getElementById('nsHarnessRoles')").textContent.includes('plan zai/glm-5.2'));
             check(!(await desktop.locator('#nsHarnessRoles').textContent() ?? '').includes('smol'), 'the readout refreshes after a save');
-            await desktop.selectOption('#nsModelSelect', 'zai/glm-5.2');
+            await desktop.fill('#nsModelInput', 'glm-5.2');
+            await desktop.waitForSelector('#nsModelDropdown .cwd-option[data-key="zai/glm-5.2"]', { timeout: 5000 });
+            await desktop.click('#nsModelDropdown .cwd-option[data-key="zai/glm-5.2"]');
             const restrictedLevels = await desktop.locator('#nsThinkingSelect option').evaluateAll(options => options.map(option => {
                 if (!(option instanceof HTMLOptionElement))
                     throw new Error('Expected thinking option');
                 return option.value;
             }));
             check(JSON.stringify(restrictedLevels) === JSON.stringify(['', 'high', 'max']), `restricted model offers only high/max thinking (got ${JSON.stringify(restrictedLevels)})`);
-            await desktop.selectOption('#nsModelSelect', 'zai/glm-4.7-flash');
+            await desktop.fill('#nsModelInput', 'glm-4.7-flash');
+            await desktop.waitForSelector('#nsModelDropdown .cwd-option[data-key="zai/glm-4.7-flash"]', { timeout: 5000 });
+            await desktop.click('#nsModelDropdown .cwd-option[data-key="zai/glm-4.7-flash"]');
             await desktop.fill('#newSessionName', 'UI named session');
             await desktop.selectOption('#nsThinkingSelect', 'minimal');
             // Fuzzy cwd search from the text input (single source of truth).
