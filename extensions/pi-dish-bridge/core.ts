@@ -9,6 +9,8 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createSessionObserver } from "../../lib/session-recovery.js";
+import { EMULATED_COMMAND_METADATA, PI_EMULATED_THINKING_LEVELS } from "../../lib/helper-command-metadata.js";
+import { collectActivePath, walkBranchTree } from "../../lib/helper-tree.js";
 
 // Alternate hosts deliberately enter as unknown. A callable guard establishes
 // only that a member can be invoked; its result is still unknown until consumed.
@@ -241,16 +243,24 @@ export const PUBLIC_EVENT_PROFILE = [
   "extension_ui_request",
 ] as const;
 
-// Built-in TUI commands the bridge can emulate through the extension API.
-// Everything else built-in (e.g. /settings, /tree, /resume) needs the TUI.
-const EMULATED_BUILTINS = [
-  { name: "compact", description: "Manually compact the session context" },
-  { name: "model", description: "Switch model (usage: /model provider/model-id)" },
-  { name: "name", description: "Set session display name" },
-  { name: "thinking", description: "Set thinking level (off|minimal|low|medium|high|xhigh)" },
-  { name: "abort", description: "Abort the current agent operation" },
-  { name: "reload", description: "Reload extensions, skills, and prompt templates" },
-  { name: "btw", description: "Ask an ephemeral side question using the current session context" },
+// Listing and slash execution intentionally use different capability sources.
+// This is not the socket-operation admission map or the upstream TUI catalog.
+type EmulationGate = "runtime" | "descriptor" | "selfPrime";
+type EmulatedBuiltin = {
+  command: { readonly name: string; readonly description: string };
+  capability?: string;
+  listing: EmulationGate;
+  execution: EmulationGate;
+  requiresBtw?: boolean;
+};
+const EMULATED_BUILTINS: readonly EmulatedBuiltin[] = [
+  { command: EMULATED_COMMAND_METADATA.compact, capability: "compact", listing: "runtime", execution: "runtime" },
+  { command: EMULATED_COMMAND_METADATA.model, capability: "setModel", listing: "runtime", execution: "descriptor" },
+  { command: EMULATED_COMMAND_METADATA.name, capability: "rename", listing: "runtime", execution: "descriptor" },
+  { command: EMULATED_COMMAND_METADATA.thinking, capability: "setThinking", listing: "runtime", execution: "descriptor" },
+  { command: EMULATED_COMMAND_METADATA.abort, capability: "abort", listing: "runtime", execution: "descriptor" },
+  { command: EMULATED_COMMAND_METADATA.reload, listing: "selfPrime", execution: "selfPrime" },
+  { command: EMULATED_COMMAND_METADATA.btw, capability: "btw", listing: "runtime", execution: "runtime", requiresBtw: true },
 ];
 
 // Host-specific slash emulations too host-bound for this shared module: the
@@ -258,8 +268,6 @@ const EMULATED_BUILTINS = [
 // shape. OMP uses this for /btw (AgentSession.runEphemeralTurn — a TUI-only
 // built-in its RPC/socket layer never dispatches).
 export type BtwRunner = (question: string) => Promise<string>;
-
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
 // --- Prompt template arg substitution (mirrors pi's prompt-templates.ts) ---
 
@@ -453,17 +461,17 @@ function serializeSessionTree(sessionManager: unknown) {
     throw new Error("tree read unavailable: host returned an invalid session tree");
   }
 
-  const byId = new Map(entries.filter((entry: unknown): entry is HostObject => isObject(entry) && typeof entry.id === "string").map(entry => [entry.id, entry]));
-  const activePathIds = new Set<string>();
-  let current = leafId;
-  while (typeof current === "string" && current && !activePathIds.has(current)) {
-    activePathIds.add(current);
-    const parent = byId.get(current)?.parentId;
-    current = typeof parent === "string" ? parent : null;
+  const byId = new Map<string, HostObject>();
+  for (const entry of entries) {
+    if (isObject(entry) && typeof entry.id === "string") byId.set(entry.id, entry);
   }
+  const activePathIds = collectActivePath(typeof leafId === "string" ? leafId : null, id => {
+    const parent = byId.get(id)?.parentId;
+    return typeof parent === "string" ? parent : null;
+  });
 
   const nodes: Record<string, unknown>[] = [];
-  const flatten = (node: unknown, depth: number) => {
+  walkBranchTree(tree, (node: unknown, depth) => {
     const entry = field(node, "entry");
     if (!isObject(node) || !isObject(entry) || typeof entry.id !== "string" || !entry.id || !Array.isArray(node.children)) {
       throw new Error("tree read unavailable: host returned an invalid tree node");
@@ -510,10 +518,8 @@ function serializeSessionTree(sessionManager: unknown) {
       result.summary = String(entry.summary || "").slice(0, 120);
     }
     nodes.push(result);
-    const childDepth = node.children.length > 1 ? depth + 1 : depth;
-    for (const child of node.children) flatten(child, childDepth);
-  };
-  for (const root of tree) flatten(root, 0);
+    return node.children;
+  });
   return { nodes, leafId, activePathIds: [...activePathIds] };
 }
 
@@ -871,6 +877,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // Resolve that claim against the live public context before registration;
   // alternative hosts must fail closed rather than throwing at extension load.
   const capabilities: Record<string, boolean> = { ...descriptor.capabilities, guardedReload: descriptor.selfPrime === true };
+
+  function emulationAvailable(builtin: EmulatedBuiltin, phase: "listing" | "execution"): boolean {
+    if (builtin.requiresBtw && !descriptor.runBtw) return false;
+    const source = builtin[phase];
+    if (source === "selfPrime") return !!descriptor.selfPrime;
+    const available = source === "runtime" ? capabilities : descriptor.capabilities;
+    return !!(builtin.capability && available[builtin.capability]);
+  }
 
   let turnInProgress = false;
   // Compaction has no active turn (turn_start never fires), yet pi has aborted
@@ -1719,9 +1733,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
     const spaceIdx = text.indexOf(" ");
     const name = (spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx)).trim();
     const args = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
+    const builtin = EMULATED_BUILTINS.find(entry => entry.command.name === name);
+    if (builtin && !emulationAvailable(builtin, "execution")) {
+      return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
+    }
 
     if (name === "btw") {
-      if (!capabilities.btw || !descriptor.runBtw) {
+      // Keep the callable guard beside the host-specific operation as well.
+      if (!descriptor.runBtw) {
         return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
       }
       if (!args) return { ok: false, error: "usage: /btw <question>" };
@@ -1736,9 +1755,6 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
     // --- Emulated built-ins ---
     if (name === "compact") {
-      if (!capabilities.compact) {
-        return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
-      }
       if (!lastCtx) return { ok: false, error: "no active context" };
       // pi's compact() starts by aborting the agent and rewriting its message
       // list — triggered while a compaction (auto or manual) is already
@@ -1802,18 +1818,12 @@ export function createBridge(descriptor: BridgeDescriptor) {
       return { ok: true, info: `Re-broadcast ${r.widgets} widget(s), ${r.statuses} status(es) to ${r.clients} client(s)` };
     }
     if (name === "abort") {
-      if (!descriptor.capabilities.abort) {
-        return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
-      }
       if (!lastCtx) return { ok: false, error: "no active context" };
       descriptor.piPrivate?.abortCompactionIfRunning(compacting);
       optionalHostCall(callHost(lastCtx, "abort"), "catch", (e: unknown) => console.error("[pi-dish-bridge] abort failed:", errorText(e)));
       return { ok: true, info: "Aborted" };
     }
     if (name === "model") {
-      if (!descriptor.capabilities.setModel) {
-        return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
-      }
       if (!args) return { ok: false, error: "usage: /model <provider/model-id>" };
       const model = await resolveModel(args);
       if (!model) return { ok: false, error: `model not found: ${args}` };
@@ -1827,9 +1837,6 @@ export function createBridge(descriptor: BridgeDescriptor) {
       return { ok: false, error: `no API key for ${formatModel(model)}` };
     }
     if (name === "name") {
-      if (!descriptor.capabilities.rename) {
-        return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
-      }
       if (!args) return { ok: false, error: "usage: /name <session name>" };
       await callHost(pi, "setSessionName", args);
       sessionName = args;
@@ -1838,10 +1845,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       return { ok: true, info: `Session renamed` };
     }
     if (name === "thinking") {
-      if (!descriptor.capabilities.setThinking) {
-        return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
-      }
-      const levels = descriptor.thinkingLevels ?? THINKING_LEVELS;
+      const levels = descriptor.thinkingLevels ?? PI_EMULATED_THINKING_LEVELS;
       if (!levels.includes(args)) return { ok: false, error: `usage: /thinking <${levels.join("|")}>` };
       // Runtime-validated against the host's own vocabulary just above;
       // wrapper hosts accept levels pi's ThinkingLevel union doesn't name.
@@ -1851,9 +1855,6 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
 
     if (name === "reload") {
-      if (!descriptor.selfPrime) {
-        return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
-      }
       // ctx.reload() lives on command contexts only; the captured
       // AgentSession's prompt() executes our /dish-reload to get one, so this
       // works on TUI sessions too. Fire-and-forget like /compact: reload
@@ -2241,16 +2242,6 @@ export function createBridge(descriptor: BridgeDescriptor) {
         }
 
         case "get_commands": {
-          const emulated = EMULATED_BUILTINS.filter((command) => {
-            if (command.name === "compact") return !!capabilities.compact;
-            if (command.name === "model") return !!capabilities.setModel;
-            if (command.name === "name") return !!capabilities.rename;
-            if (command.name === "thinking") return !!capabilities.setThinking;
-            if (command.name === "abort") return !!capabilities.abort;
-            if (command.name === "reload") return !!descriptor.selfPrime;
-            if (command.name === "btw") return !!(capabilities.btw && descriptor.runBtw);
-            return true;
-          });
           const commands = hostCommands(pi)
             .filter((c) => c.name !== TREE_SERVICE_COMMAND)
             .map((c) => ({
@@ -2265,9 +2256,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
               || (c.source === "extension" && c.name === "dish-push"),
             }));
           const discoveredNames = new Set(commands.map((command) => command.name));
-          for (const command of emulated) {
+          for (const builtin of EMULATED_BUILTINS) {
+            if (!emulationAvailable(builtin, "listing")) continue;
+            const command = builtin.command;
             if (discoveredNames.has(command.name)) continue;
-            commands.unshift({ name: command.name, description: command.description, source: "builtin", path: undefined, supported: true });
+            const description = command.name === "thinking"
+              ? `${command.description} (${(descriptor.thinkingLevels ?? PI_EMULATED_THINKING_LEVELS).join("|")})`
+              : command.description;
+            commands.unshift({ name: command.name, description, source: "builtin", path: undefined, supported: true });
           }
           respond(true, { commands });
           return;
@@ -2308,7 +2304,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         }
 
         case "set_thinking_level": {
-          const levels = descriptor.thinkingLevels ?? THINKING_LEVELS;
+          const levels = descriptor.thinkingLevels ?? PI_EMULATED_THINKING_LEVELS;
           if (typeof cmd.level !== "string" || !levels.includes(cmd.level)) {
             return respond(false, undefined, `level must be one of: ${levels.join(", ")}`);
           }

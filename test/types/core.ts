@@ -52,8 +52,9 @@ bridge.on('custom_event', payload => {
   // @ts-expect-error A named bridge event does not validate its payload.
   payload.message.content.map(String);
 });
-// @ts-expect-error Bridge model selection takes a model reference, unlike RPC's two arguments.
-bridge.setModel({ provider: 'test', id: 'model' });
+bridge.setModel('test', 'model');
+// @ts-expect-error Model providers must be strings, not parsed payload objects.
+bridge.setModel({ provider: 'test' }, 'model');
 if (rpc) {
   const unsubscribe: () => void = rpc.on('message_update', payload => {
     // @ts-expect-error Event subscribers must narrow the payload they consume.

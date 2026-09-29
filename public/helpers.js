@@ -1172,9 +1172,51 @@ ${block}` : block;
     return rows.slice(0, Math.max(0, limit));
   }
 
+  // src/core/helper-usage-math.ts
+  var USAGE_COST_KEYS = ["input", "output", "cacheRead", "cacheWrite", "total"];
+  var USAGE_TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
+  function addKnownUsageCost(to, from) {
+    return finite(from) ? (finite(to) ? to : 0) + from : to;
+  }
+  function addUsageTokens(to, from) {
+    for (const key of USAGE_TOKEN_KEYS) to[key] += from?.[key] || 0;
+  }
+  function addUsageCosts(to, from) {
+    for (const key of USAGE_COST_KEYS) to[key] = addKnownUsageCost(to[key], from?.[key]);
+  }
+  function addUsageUnavailable(to, from) {
+    for (const key of USAGE_COST_KEYS) to[key] += from?.[key] || 0;
+  }
+  function addUsageCount(to, from) {
+    return (to || 0) + (from || 0);
+  }
+  function addUsage(to, from) {
+    if (!from) return to;
+    addUsageTokens(to.tokens, from.tokens);
+    addUsageCosts(to.costs, from.costs);
+    addUsageUnavailable(to.costUnavailable, from.costUnavailable);
+    to.calls += from.calls || 0;
+    to.measured += from.measured || 0;
+    to.durationMs += from.durationMs || 0;
+    to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
+    return to;
+  }
+  function usageDisplayTokens(tokens) {
+    return (tokens?.input || 0) + (tokens?.output || 0) + (tokens?.cacheRead || 0) + (tokens?.cacheWrite || 0);
+  }
+  function compareKnownCosts(a, b) {
+    const aKnown = finite(a), bKnown = finite(b);
+    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
+    return aKnown && bKnown ? b - a : 0;
+  }
+  function compareUsageBuckets(a, b, sort) {
+    return (sort === "tokens" ? usageDisplayTokens(b.tokens) - usageDisplayTokens(a.tokens) : compareKnownCosts(a.costs?.total, b.costs?.total)) || b.calls - a.calls;
+  }
+  function compareUsageModels(a, b) {
+    return compareKnownCosts(a.cost, b.cost) || b.calls - a.calls;
+  }
+
   // src/browser/helper-usage.ts
-  var USAGE_MERGE_COST_KEYS = ["input", "output", "cacheRead", "cacheWrite", "total"];
-  var USAGE_MERGE_TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
   function createFanoutRenderQueue(states, render, delayMs = 100) {
     let timer;
     let disposed = false;
@@ -1206,38 +1248,15 @@ ${block}` : block;
       slowestMs: 0
     };
   }
-  function addMergedUsage(to, from) {
-    if (!from) return to;
-    for (const k of USAGE_MERGE_TOKEN_KEYS) to.tokens[k] += from.tokens?.[k] || 0;
-    for (const k of USAGE_MERGE_COST_KEYS) {
-      to.costUnavailable[k] += from.costUnavailable?.[k] || 0;
-      const value = from.costs?.[k];
-      if (finite(value)) {
-        to.costs[k] = (finite(to.costs[k]) ? to.costs[k] : 0) + value;
-      }
-    }
-    for (const k of ["calls", "measured", "durationMs"]) to[k] += from[k] || 0;
-    to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
-    return to;
-  }
   function pricedUsageFields(bucket) {
     bucket.unpricedCalls = bucket.costUnavailable?.total || 0;
     bucket.priced = !bucket.unpricedCalls;
     return bucket;
   }
-  function usageDisplayTokens(tokens) {
-    return (tokens?.input || 0) + (tokens?.output || 0) + (tokens?.cacheRead || 0) + (tokens?.cacheWrite || 0);
-  }
   function usageUnattributedCost(costs) {
     if (!finite(costs?.total)) return 0;
     const attributed = ["input", "output", "cacheRead", "cacheWrite"].reduce((sum, key) => sum + (finite(costs[key]) ? costs[key] : 0), 0);
     return Math.max(0, costs.total - attributed);
-  }
-  function compareUsageBuckets(a, b, sort) {
-    if (sort === "tokens") return usageDisplayTokens(b.tokens) - usageDisplayTokens(a.tokens) || b.calls - a.calls;
-    const aKnown = finite(a.costs?.total), bKnown = finite(b.costs?.total);
-    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
-    return (bKnown ? b.costs.total - a.costs.total : 0) || b.calls - a.calls;
   }
   function mergeUsageSummaries(list) {
     const items = Array.isArray(list) ? list : [];
@@ -1258,19 +1277,19 @@ ${block}` : block;
     let indexing = false, discoveryTruncated = false, discoverySkipped = 0;
     let monthlyBudgetUsd = null;
     for (const { summary, hostId = null, hostLabel = null } of entries) {
-      addMergedUsage(totals, summary.totals);
+      addUsage(totals, summary.totals);
       unpricedModelCalls += summary.unpricedModelCalls || 0;
       for (const [key, value] of Object.entries(summary.headlineCosts || {})) {
         headlineKeys.add(key);
-        headlineCostUnavailable[key] = (headlineCostUnavailable[key] || 0) + (summary.headlineCostUnavailable?.[key] || 0);
+        headlineCostUnavailable[key] = addUsageCount(headlineCostUnavailable[key], summary.headlineCostUnavailable?.[key]);
         if (finite(value)) {
-          headlineCosts[key] = (finite(headlineCosts[key]) ? headlineCosts[key] : 0) + value;
+          headlineCosts[key] = addKnownUsageCost(headlineCosts[key], value);
         }
       }
       for (const [key, costs] of Object.entries(summary.headlineCostsByBucket || {})) {
         headlineKeys.add(key);
         const row = headlineCostsByBucket[key] || (headlineCostsByBucket[key] = emptyCosts());
-        for (const k of USAGE_MERGE_COST_KEYS) if (finite(costs?.[k])) row[k] += costs[k];
+        for (const k of USAGE_COST_KEYS) if (finite(costs?.[k])) row[k] += costs[k];
       }
       for (const day of summary.daily || []) {
         if (!day || !day.day) continue;
@@ -1279,7 +1298,7 @@ ${block}` : block;
           slot = { bucket: emptyMergedUsage(), models: /* @__PURE__ */ new Map() };
           days.set(day.day, slot);
         }
-        addMergedUsage(slot.bucket, day);
+        addUsage(slot.bucket, day);
         for (const model of day.models || []) {
           if (!model || !model.ref) continue;
           let row = slot.models.get(model.ref);
@@ -1296,11 +1315,9 @@ ${block}` : block;
             slot.models.set(model.ref, row);
           }
           row.calls += model.calls || 0;
-          for (const k of USAGE_MERGE_TOKEN_KEYS) row.tokens[k] += model.tokens?.[k] || 0;
-          for (const k of USAGE_MERGE_COST_KEYS) row.costUnavailable[k] = (row.costUnavailable[k] || 0) + (model.costUnavailable?.[k] || 0);
-          if (finite(model.cost)) {
-            row.cost = (finite(row.cost) ? row.cost : 0) + model.cost;
-          }
+          addUsageTokens(row.tokens, model.tokens);
+          for (const k of USAGE_COST_KEYS) row.costUnavailable[k] = addUsageCount(row.costUnavailable[k], model.costUnavailable?.[k]);
+          row.cost = addKnownUsageCost(row.cost, model.cost);
         }
       }
       for (const bucket of summary.groups?.models || []) {
@@ -1310,7 +1327,7 @@ ${block}` : block;
           row = { key: bucket.key, provider: bucket.provider, model: bucket.model, ...emptyMergedUsage() };
           models.set(bucket.key, row);
         }
-        addMergedUsage(row, bucket);
+        addUsage(row, bucket);
       }
       for (const bucket of summary.groups?.workspaces || []) {
         if (!bucket || bucket.key == null) continue;
@@ -1320,7 +1337,7 @@ ${block}` : block;
           row = { key: bucket.key, host: hostId, hostLabel, ...emptyMergedUsage() };
           workspaces.set(key, row);
         }
-        addMergedUsage(row, bucket);
+        addUsage(row, bucket);
       }
       for (const bucket of summary.groups?.sessions || []) {
         if (!bucket || bucket.id == null) continue;
@@ -1330,7 +1347,7 @@ ${block}` : block;
           row = { ...bucket, host: hostId, hostLabel, ...emptyMergedUsage() };
           sessionRows.set(key, row);
         }
-        addMergedUsage(row, bucket);
+        addUsage(row, bucket);
       }
       if (summary.indexing) indexing = true;
       if (summary.discoveryTruncated) discoveryTruncated = true;
@@ -1342,7 +1359,7 @@ ${block}` : block;
     const daily = [...days.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(([day, slot]) => ({
       day,
       ...slot.bucket,
-      models: [...slot.models.values()].sort((a, b) => Number(finite(b.cost)) - Number(finite(a.cost)) || (finite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls)
+      models: [...slot.models.values()].sort(compareUsageModels)
     }));
     const rank = (rows) => rows.map(pricedUsageFields).sort((a, b) => compareUsageBuckets(a, b, sort)).slice(0, 20);
     return {
@@ -1404,8 +1421,6 @@ ${block}` : block;
   }
   function aggregateUsageWeekly(daily) {
     const out = [];
-    const tokenKeys = USAGE_MERGE_TOKEN_KEYS;
-    const costKeys = USAGE_MERGE_COST_KEYS;
     for (let end = daily.length; end > 0; end -= 7) {
       const chunk = daily.slice(Math.max(0, end - 7), end);
       const models = /* @__PURE__ */ new Map();
@@ -1420,26 +1435,19 @@ ${block}` : block;
       };
       for (const d of chunk) {
         agg.calls += d.calls || 0;
-        for (const k of tokenKeys) agg.tokens[k] += d.tokens?.[k] || 0;
-        for (const k of costKeys) {
-          agg.costUnavailable[k] += d.costUnavailable?.[k] || 0;
-          const value = d.costs?.[k];
-          if (finite(value)) {
-            agg.costs[k] = (finite(agg.costs[k]) ? agg.costs[k] : 0) + value;
-          }
-        }
+        addUsageTokens(agg.tokens, d.tokens);
+        addUsageCosts(agg.costs, d.costs);
+        addUsageUnavailable(agg.costUnavailable, d.costUnavailable);
         for (const dm of d.models || []) {
           const t = models.get(dm.ref) || { ref: dm.ref, provider: dm.provider, model: dm.model, calls: 0, cost: 0, costUnavailable: { total: 0 }, tokens: emptyTokens() };
           t.calls += dm.calls || 0;
-          t.costUnavailable.total = (t.costUnavailable.total || 0) + (dm.costUnavailable?.total || 0);
-          if (finite(dm.cost)) {
-            t.cost = (finite(t.cost) ? t.cost : 0) + dm.cost;
-          }
-          for (const k of tokenKeys) t.tokens[k] += dm.tokens?.[k] || 0;
+          t.costUnavailable.total = addUsageCount(t.costUnavailable.total, dm.costUnavailable?.total);
+          t.cost = addKnownUsageCost(t.cost, dm.cost);
+          addUsageTokens(t.tokens, dm.tokens);
           models.set(dm.ref, t);
         }
       }
-      agg.models = [...models.values()].sort((a, b) => Number(finite(b.cost)) - Number(finite(a.cost)) || (finite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls);
+      agg.models = [...models.values()].sort(compareUsageModels);
       out.unshift(agg);
     }
     return out;

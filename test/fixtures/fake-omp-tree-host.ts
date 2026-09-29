@@ -17,6 +17,7 @@ interface TreeEntry extends HostRecord {
 interface TreeNode {
   entry: TreeEntry;
   children: TreeNode[];
+  label?: string;
 }
 interface CommandRegistration extends HostRecord {
   name: string;
@@ -39,19 +40,34 @@ const entries: TreeEntry[] = [
   { type: 'message', id: 'a1', parentId: 'u1', timestamp: '2026-08-13T10:00:01.000Z', message: { role: 'assistant', model: 'glm-4.7-flash', content: [{ type: 'text', text: 'first answer' }] } },
   { type: 'message', id: 'u2', parentId: 'a1', timestamp: '2026-08-13T10:00:02.000Z', message: { role: 'user', content: [{ type: 'text', text: 'second prompt' }] } },
 ];
+if (mode === 'parent-cycle') entries[0]!.parentId = 'u2';
+if (mode === 'projection') {
+  entries[0]!.message = { role: 'user', content: ['ignored string block', { type: 'text', text: 'first' }, { type: 'text', text: 'prompt' }] };
+  entries[1]!.message = { role: 'assistant', model: 'fixture-model', stopReason: 'toolUse', errorMessage: 'fixture error', content: [
+    { type: 'text', text: 'hello' }, { type: 'text', text: 'world' },
+    { type: 'toolCall', id: 'call', name: 'bash', arguments: { command: 'x'.repeat(80) } },
+  ] };
+  entries[2]!.message = { role: 'toolResult', toolName: 'bash', toolCallId: 'call', isError: true, content: [] };
+  entries.push(
+    { type: 'model_change', id: 'm1', parentId: 'a1', model: 'provider/variant' },
+    { type: 'compaction', id: 'c1', parentId: 'm1', tokensBefore: 123 },
+    { type: 'branch_summary', id: 'b1', parentId: 'm1', summary: 'summary '.repeat(30) },
+  );
+}
 fs.writeFileSync(sessionFile, [
   JSON.stringify({ type: 'title', title: 'Fake OMP tree' }),
   JSON.stringify({ type: 'session', version: 3, id: sessionId, cwd: process.cwd() }),
   ...entries.map(entry => JSON.stringify(entry)),
 ].join('\n') + '\n');
 
-let leafId: string | null = 'u2';
+let leafId: string | null = mode === 'projection' ? 'b1' : 'u2';
 let insideCommand = false;
 // Which trigger produced the command context servicing an operation: OMP's
 // TUI builds one for an extension command and one per extension shortcut.
 let trigger: 'command' | 'shortcut' | null = null;
 
-function tree(): TreeNode[] {
+function tree(): unknown[] {
+  if (mode === 'invalid-node') return [{ entry: { id: 'broken' }, children: null }];
   const nodes = new Map(entries.map(entry => [entry.id, { entry, children: [] as TreeNode[] }]));
   const roots: TreeNode[] = [];
   for (const entry of entries) {
@@ -60,6 +76,7 @@ function tree(): TreeNode[] {
     if (parent) parent.children.push(node);
     else roots.push(node);
   }
+  if (mode === 'projection' && roots[0]) roots[0].label = '';
   return roots;
 }
 

@@ -353,7 +353,29 @@ test('OMP bridge degrades compact capability when the host context lacks ctx.com
         const commands = (0, test_types_js_1.record)(await session.getCommands());
         assert.equal((0, test_types_js_1.records)(commands.commands).some(command => (0, test_types_js_1.record)(command).name === 'compact'), false, 'compact control is hidden when the host lacks the operation');
         await assert.rejects(session.compact(), /does not advertise compact/);
+        await assert.rejects(session.runCommand('/compact retain decisions'), /unavailable/);
         assert.equal(fs.existsSync(host.callFile), false);
+    }
+    finally {
+        session.close();
+        await host.close();
+    }
+});
+test('OMP bridge keeps context-bound and unknown commands out of slash emulation', async () => {
+    const host = await startFakeHost(false);
+    const session = new BridgeSession(host.claim);
+    try {
+        await session.connect();
+        const commands = (0, test_types_js_1.records)((0, test_types_js_1.record)(await session.getCommands()).commands);
+        for (const name of ['reload', 'tree', 'new', 'export']) {
+            assert.equal(commands.some(command => command.name === name), false, `${name} is not an available bridge emulation`);
+        }
+        await assert.rejects(session.runCommand('/reload'), /unavailable/);
+        assert.equal(commands.some(command => command.name === 'btw'), true, 'the host hook advertises btw independently of the captured session');
+        await assert.rejects(session.runCommand('/btw a question'), /no captured OMP session/);
+        for (const name of ['tree', 'settings', 'new', 'export', 'not-a-command']) {
+            await assert.rejects(session.runCommand(`/${name}`), /unknown or unsupported command/);
+        }
     }
     finally {
         session.close();

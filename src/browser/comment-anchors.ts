@@ -1,5 +1,25 @@
 import type { CommentAnchor } from './anchored-comment-data';
+
+interface QuoteAnchor {
+  readonly quote: string;
+  readonly prefix?: string;
+  readonly suffix?: string;
+}
+
+interface CommentMarkPolicy {
+  readonly exclude: string;
+  readonly className?: string;
+  readonly idAttribute: string;
+}
+
+const appMarkPolicy: CommentMarkPolicy = {
+  exclude: 'script, style',
+  className: 'comment-mark',
+  idAttribute: 'data-comment-id',
+};
+
 export function selectionTextAnchor(root: HTMLElement, range: Range): CommentAnchor {
+  const document = root.ownerDocument;
   const before = document.createRange();
   before.selectNodeContents(root);
   before.setEnd(range.startContainer, range.startOffset);
@@ -16,8 +36,9 @@ export function selectionTextAnchor(root: HTMLElement, range: Range): CommentAnc
   };
 }
 
-export function clearCommentMarks(root: HTMLElement) {
-  root.querySelectorAll('mark.comment-mark').forEach((mark) => {
+export function clearCommentMarks(root: HTMLElement, selector = 'mark.comment-mark') {
+  const document = root.ownerDocument;
+  root.querySelectorAll(selector).forEach((mark) => {
     const parent = mark.parentNode;
     mark.replaceWith(document.createTextNode(mark.textContent || ''));
     parent?.normalize();
@@ -28,9 +49,9 @@ export function clearCommentMarks(root: HTMLElement) {
 // sentence into text + <code> + text), so markSearchTokens' per-node scan
 // can't find it. Flatten the subtree into one string with per-node offsets,
 // locate the quote there, then wrap the covered slice of each node.
-function collectTextRuns(root: HTMLElement) {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) => (node.parentElement?.closest('script, style')
+function collectTextRuns(root: HTMLElement, exclude: string) {
+  const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) => (node.parentElement?.closest(exclude)
       ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
   });
   const runs: { node: Text; start: number; end: number }[] = [];
@@ -57,7 +78,7 @@ function commonPrefixLength(a: string, b: string) {
 
 // Repeated quotes are the normal case for short selections, so pick the
 // occurrence whose neighbours best match the anchor's recorded context.
-export function findQuoteOffset(text: string, anchor: CommentAnchor) {
+export function findQuoteOffset<T extends QuoteAnchor>(text: string, anchor: T) {
   const quote = anchor?.quote;
   if (!quote) return -1;
   const hits = [];
@@ -81,10 +102,13 @@ export function findQuoteOffset(text: string, anchor: CommentAnchor) {
   return best;
 }
 
-export function markCommentQuote(root: HTMLElement, anchor: CommentAnchor, commentId: string) {
+export function markCommentQuote<T extends QuoteAnchor>(
+  root: HTMLElement, anchor: T, commentId: string, policy: CommentMarkPolicy = appMarkPolicy,
+) {
+  const document = root.ownerDocument;
   const quote = anchor?.quote;
   if (!quote) return false;
-  const { runs, text } = collectTextRuns(root);
+  const { runs, text } = collectTextRuns(root, policy.exclude);
   const start = findQuoteOffset(text, anchor);
   if (start < 0) return false; // unanchorable — the chip list still reaches it
   const end = start + quote.length;
@@ -96,8 +120,8 @@ export function markCommentQuote(root: HTMLElement, anchor: CommentAnchor, comme
     if (to <= from) continue;
     const source = run.node.textContent;
     const mark = document.createElement('mark');
-    mark.className = 'comment-mark';
-    mark.dataset.commentId = commentId;
+    if (policy.className) mark.className = policy.className;
+    mark.setAttribute(policy.idAttribute, commentId);
     mark.textContent = source.slice(from, to);
     const frag = document.createDocumentFragment();
     if (from > 0) frag.appendChild(document.createTextNode(source.slice(0, from)));
@@ -109,5 +133,36 @@ export function markCommentQuote(root: HTMLElement, anchor: CommentAnchor, comme
     marked = true;
   }
   return marked;
+}
+
+function commentCardPosition(
+  rect: Pick<DOMRectReadOnly, 'left' | 'top' | 'bottom' | 'width'>,
+  width: number, height: number,
+  viewportLeft: number, viewportTop: number, viewportWidth: number, viewportHeight: number,
+) {
+  const margin = 8, gap = 8;
+  const left = Math.max(viewportLeft + margin, Math.min(
+    viewportLeft + viewportWidth - width - margin, rect.left + (rect.width - width) / 2,
+  ));
+  const below = rect.bottom + gap;
+  const preferred = below + height <= viewportTop + viewportHeight - margin
+    ? below : rect.top - height - gap;
+  const top = Math.max(viewportTop + margin, Math.min(
+    viewportTop + viewportHeight - height - margin, preferred,
+  ));
+  return { left, top };
+}
+
+export function positionCommentCard(card: HTMLElement, rect: DOMRectReadOnly) {
+  const window = card.ownerDocument.defaultView!;
+  const viewport = window.visualViewport;
+  const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+  const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight;
+  // Constrain first: these styles can change both measured dimensions.
+  card.style.maxWidth = `${Math.max(0, width - 16)}px`;
+  card.style.maxHeight = `${Math.max(0, height - 16)}px`;
+  const position = commentCardPosition(rect, card.offsetWidth, card.offsetHeight, left, top, width, height);
+  card.style.left = `${position.left}px`;
+  card.style.top = `${position.top}px`;
 }
 

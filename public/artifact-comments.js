@@ -32,6 +32,123 @@
     return record(value) && typeof value.error === "string" && value.error ? value.error : `HTTP ${status}`;
   }
 
+  // src/browser/comment-anchors.ts
+  var appMarkPolicy = {
+    exclude: "script, style",
+    className: "comment-mark",
+    idAttribute: "data-comment-id"
+  };
+  function clearCommentMarks(root, selector = "mark.comment-mark") {
+    const document2 = root.ownerDocument;
+    root.querySelectorAll(selector).forEach((mark) => {
+      const parent = mark.parentNode;
+      mark.replaceWith(document2.createTextNode(mark.textContent || ""));
+      parent?.normalize();
+    });
+  }
+  function collectTextRuns(root, exclude) {
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => node.parentElement?.closest(exclude) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+    });
+    const runs = [];
+    let text = "";
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      runs.push({ node, start: text.length, end: text.length + node.textContent.length });
+      text += node.textContent;
+    }
+    return { runs, text };
+  }
+  function commonSuffixLength(a, b) {
+    let n = 0;
+    while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++;
+    return n;
+  }
+  function commonPrefixLength(a, b) {
+    let n = 0;
+    while (n < a.length && n < b.length && a[n] === b[n]) n++;
+    return n;
+  }
+  function findQuoteOffset(text, anchor) {
+    const quote = anchor?.quote;
+    if (!quote) return -1;
+    const hits = [];
+    let from = 0;
+    let at;
+    while ((at = text.indexOf(quote, from)) !== -1) {
+      hits.push(at);
+      from = at + Math.max(1, quote.length);
+    }
+    if (hits.length < 2) return hits.length ? hits[0] : -1;
+    const prefix = anchor.prefix || "";
+    const suffix = anchor.suffix || "";
+    let best = hits[0];
+    let bestScore = -1;
+    for (const hit of hits) {
+      const before = text.slice(Math.max(0, hit - prefix.length), hit);
+      const after = text.slice(hit + quote.length, hit + quote.length + suffix.length);
+      const score = commonSuffixLength(before, prefix) + commonPrefixLength(after, suffix);
+      if (score > bestScore) {
+        bestScore = score;
+        best = hit;
+      }
+    }
+    return best;
+  }
+  function markCommentQuote(root, anchor, commentId, policy = appMarkPolicy) {
+    const document2 = root.ownerDocument;
+    const quote = anchor?.quote;
+    if (!quote) return false;
+    const { runs, text } = collectTextRuns(root, policy.exclude);
+    const start = findQuoteOffset(text, anchor);
+    if (start < 0) return false;
+    const end = start + quote.length;
+    let marked = false;
+    for (const run of runs) {
+      if (run.end <= start || run.start >= end) continue;
+      const from = Math.max(0, start - run.start);
+      const to = Math.min(run.node.textContent.length, end - run.start);
+      if (to <= from) continue;
+      const source = run.node.textContent;
+      const mark = document2.createElement("mark");
+      if (policy.className) mark.className = policy.className;
+      mark.setAttribute(policy.idAttribute, commentId);
+      mark.textContent = source.slice(from, to);
+      const frag = document2.createDocumentFragment();
+      if (from > 0) frag.appendChild(document2.createTextNode(source.slice(0, from)));
+      frag.appendChild(mark);
+      if (to < source.length) frag.appendChild(document2.createTextNode(source.slice(to)));
+      run.node.replaceWith(frag);
+      marked = true;
+    }
+    return marked;
+  }
+  function commentCardPosition(rect, width, height, viewportLeft, viewportTop, viewportWidth, viewportHeight) {
+    const margin = 8, gap = 8;
+    const left = Math.max(viewportLeft + margin, Math.min(
+      viewportLeft + viewportWidth - width - margin,
+      rect.left + (rect.width - width) / 2
+    ));
+    const below = rect.bottom + gap;
+    const preferred = below + height <= viewportTop + viewportHeight - margin ? below : rect.top - height - gap;
+    const top = Math.max(viewportTop + margin, Math.min(
+      viewportTop + viewportHeight - height - margin,
+      preferred
+    ));
+    return { left, top };
+  }
+  function positionCommentCard(card, rect) {
+    const window2 = card.ownerDocument.defaultView;
+    const viewport = window2.visualViewport;
+    const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+    const width = viewport?.width || window2.innerWidth, height = viewport?.height || window2.innerHeight;
+    card.style.maxWidth = `${Math.max(0, width - 16)}px`;
+    card.style.maxHeight = `${Math.max(0, height - 16)}px`;
+    const position = commentCardPosition(rect, card.offsetWidth, card.offsetHeight, left, top, width, height);
+    card.style.left = `${position.left}px`;
+    card.style.top = `${position.top}px`;
+  }
+
   // src/browser/artifact-comments.ts
   (() => {
     const script = document.currentScript;
@@ -115,29 +232,7 @@
       } catch {
         return;
       }
-      const viewport = window.visualViewport;
-      const viewportLeft = viewport?.offsetLeft || 0;
-      const viewportTop = viewport?.offsetTop || 0;
-      const viewportWidth = viewport?.width || innerWidth;
-      const viewportHeight = viewport?.height || innerHeight;
-      const viewportRight = viewportLeft + viewportWidth;
-      const viewportBottom = viewportTop + viewportHeight;
-      const margin = 8;
-      const gap = 8;
-      card.style.maxWidth = `${Math.max(0, viewportWidth - margin * 2)}px`;
-      card.style.maxHeight = `${Math.max(0, viewportHeight - margin * 2)}px`;
-      const width = card.offsetWidth;
-      const height = card.offsetHeight;
-      card.style.left = `${Math.max(viewportLeft + margin, Math.min(
-        viewportRight - width - margin,
-        rect.left + (rect.width - width) / 2
-      ))}px`;
-      const below = rect.bottom + gap;
-      const preferredTop = below + height <= viewportBottom - margin ? below : rect.top - height - gap;
-      card.style.top = `${Math.max(viewportTop + margin, Math.min(
-        viewportBottom - height - margin,
-        preferredTop
-      ))}px`;
+      positionCommentCard(card, rect);
     }
     function captureSelection(focusComposer = false) {
       if (card.style.display === "block") return;
@@ -285,75 +380,10 @@
     markStyle.setAttribute("data-pi-dish", "");
     markStyle.textContent = "mark[data-pi-dish-comment] { background: rgba(38,139,210,.16); border-bottom: 1px dotted rgba(38,139,210,.75); color: inherit; cursor: pointer; }";
     (document.head || document.documentElement).append(markStyle);
-    function textRuns() {
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-        acceptNode: (node) => node.parentElement?.closest("script, style, #pi-dish-comment-layer") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
-      });
-      const runs = [];
-      let text = "";
-      while (walker.nextNode()) {
-        const node = walker.currentNode;
-        if (!(node instanceof Text)) continue;
-        runs.push({ node, start: text.length, end: text.length + node.data.length });
-        text += node.data;
-      }
-      return { runs, text };
-    }
-    function overlap(a, b, fromEnd) {
-      let n = 0;
-      while (n < a.length && n < b.length && (fromEnd ? a[a.length - 1 - n] === b[b.length - 1 - n] : a[n] === b[n])) n++;
-      return n;
-    }
-    function markComment(comment) {
-      const anchor = comment.target.anchor;
-      const quote2 = anchor.quote;
-      if (!quote2) return;
-      const { runs, text } = textRuns();
-      const hits = [];
-      let from = 0;
-      let at;
-      while ((at = text.indexOf(quote2, from)) !== -1) {
-        hits.push(at);
-        from = at + Math.max(1, quote2.length);
-      }
-      if (!hits.length) return;
-      let start = hits[0];
-      if (hits.length > 1) {
-        const prefix = anchor.prefix || "";
-        const suffix = anchor.suffix || "";
-        let bestScore = -1;
-        for (const hit of hits) {
-          const score = overlap(text.slice(Math.max(0, hit - prefix.length), hit), prefix, true) + overlap(text.slice(hit + quote2.length, hit + quote2.length + suffix.length), suffix, false);
-          if (score > bestScore) {
-            bestScore = score;
-            start = hit;
-          }
-        }
-      }
-      const end = start + quote2.length;
-      for (const run of runs) {
-        if (run.end <= start || run.start >= end) continue;
-        const source = run.node.data;
-        const sliceFrom = Math.max(0, start - run.start);
-        const sliceTo = Math.min(source.length, end - run.start);
-        if (sliceTo <= sliceFrom) continue;
-        const mark = document.createElement("mark");
-        mark.setAttribute("data-pi-dish-comment", comment.id);
-        mark.textContent = source.slice(sliceFrom, sliceTo);
-        const frag = document.createDocumentFragment();
-        if (sliceFrom > 0) frag.appendChild(document.createTextNode(source.slice(0, sliceFrom)));
-        frag.appendChild(mark);
-        if (sliceTo < source.length) frag.appendChild(document.createTextNode(source.slice(sliceTo)));
-        run.node.replaceWith(frag);
-      }
-    }
+    const markPolicy = { exclude: "script, style, #pi-dish-comment-layer", idAttribute: "data-pi-dish-comment" };
     function renderMarks() {
-      document.querySelectorAll("mark[data-pi-dish-comment]").forEach((mark) => {
-        const parent = mark.parentNode;
-        mark.replaceWith(document.createTextNode(mark.textContent || ""));
-        parent?.normalize();
-      });
-      for (const comment of openComments) markComment(comment);
+      clearCommentMarks(document.documentElement, "mark[data-pi-dish-comment]");
+      for (const comment of openComments) markCommentQuote(document.body, comment.target.anchor, comment.id, markPolicy);
     }
     async function refreshComments() {
       const version = ++refreshVersion;

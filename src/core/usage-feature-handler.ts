@@ -2,7 +2,8 @@ import type { FeatureHandler, FeaturePorts } from './feature-handlers';
 import { discoverHarnessSessions } from './session-discovery';
 import { refreshHarnessPricing } from './harness-pricing';
 import * as sessionIndex from './session-index';
-import type { UsageBucket, UsageModel, UsageTokens, UsageTotal } from './session-index-data';
+import type { UsageModel, UsageTotal } from './session-index-data';
+import { addUsage, compareUsageBuckets, compareUsageModels } from './helper-usage-math';
 import type { SessionSource } from './session-source-contracts';
 
 interface SummaryUsage extends UsageTotal {
@@ -16,27 +17,12 @@ type SessionUsage = SummaryUsage & Pick<SessionSource, 'sessionKey' | 'harnessId
   workspace: string | null;
 };
 
-const USAGE_COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
 const emptyUsage = (): SummaryUsage => ({
   tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
   costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   costUnavailable: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   calls: 0, measured: 0, durationMs: 0, slowestMs: 0,
 });
-function addUsage<T extends UsageTotal>(to: T, from: UsageBucket | undefined): T {
-  if (!from) return to;
-  for (const k of Object.keys(to.tokens) as (keyof UsageTokens)[]) to.tokens[k] += from.tokens?.[k] || 0;
-  for (const k of USAGE_COST_KEYS) {
-    to.costUnavailable[k] += from.costUnavailable?.[k] || 0;
-    const value = from.costs?.[k];
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      to.costs[k] = (Number.isFinite(to.costs[k]) ? to.costs[k] : 0) + value;
-    }
-  }
-  for (const k of ['calls', 'measured', 'durationMs'] as const) to[k] += from[k] || 0;
-  to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
-  return to;
-}
 function localDay(offset = 0): string {
   const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() - offset);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -129,15 +115,8 @@ export function createUsageSummaryHandler(ports: FeaturePorts): FeatureHandler {
       bucket.unpricedCalls = bucket.costUnavailable.total;
     }
     totals.unpricedCalls = unpricedModelCalls;
-    // Rank by the same token total the client displays (reasoning stays out of
-    // the sum there too), so the sorted order matches the numbers on screen.
-    const displayedTokens = (t: Partial<UsageTokens> | undefined) => (t?.input || 0) + (t?.output || 0) + (t?.cacheRead || 0) + (t?.cacheWrite || 0);
-    const compare = (a: UsageTotal, b: UsageTotal) => {
-      if (sort === 'tokens') return displayedTokens(b.tokens) - displayedTokens(a.tokens) || b.calls - a.calls;
-      const aKnown = Number.isFinite(a.costs?.total), bKnown = Number.isFinite(b.costs?.total);
-      if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
-      return (bKnown ? b.costs.total - a.costs.total : 0) || b.calls - a.calls;
-    };
+    // Rank by displayed tokens (excluding reasoning), or known cost then calls.
+    const compare = (a: UsageTotal, b: UsageTotal) => compareUsageBuckets(a, b, sort);
     const top = <T extends UsageTotal>(map: Map<string, T>) => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort(compare).slice(0, 20);
     // The daily series spans the requested range (for 'all', from the earliest
     // dated usage, capped at a year) so the chart always reflects the selected
@@ -164,7 +143,7 @@ export function createUsageSummaryHandler(ports: FeaturePorts): FeatureHandler {
         .filter(([ref]) => !modelFilter || modelFilter.has(ref));
       const models = dayEntries
         .map(([ref, b]) => ({ ref, provider: b.provider, model: b.model, calls: b.calls, cost: b.costs.total, costUnavailable: b.costUnavailable, tokens: b.tokens }))
-        .sort((a, b) => Number(Number.isFinite(b.cost)) - Number(Number.isFinite(a.cost)) || (Number.isFinite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls);
+        .sort(compareUsageModels);
       if (!modelFilter) return { day, ...(dailyMap.get(day) || emptyUsage()), models };
       const dayTotal = emptyUsage();
       for (const [, b] of dayEntries) addUsage(dayTotal, b);

@@ -3,7 +3,7 @@ import type { SessionState, SelectionOwner } from './session-state';
 import type { createFileViews } from './file-views';
 import type { AnchoredComment, CommentDraft, CommentAnchor } from './anchored-comment-data';
 import { decodeAnchoredComments, decodeCommentIndex } from './anchored-comment-data';
-import { selectionTextAnchor, clearCommentMarks, markCommentQuote } from './comment-anchors';
+import { selectionTextAnchor, clearCommentMarks, markCommentQuote, positionCommentCard } from './comment-anchors';
 import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';
 export function createAnchoredComments(options: {
@@ -53,12 +53,7 @@ export function createAnchoredComments(options: {
     const entry = bubble; if (!ownsBubble(entry)) return;
     const el = element('commentBubble'); let rect: DOMRect;
     try { rect = entry.range.getBoundingClientRect(); } catch { return; }
-    const viewport = window.visualViewport, left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
-    const width = viewport?.width || window.innerWidth, height = viewport?.height || window.innerHeight, margin = 8, gap = 8;
-    el.style.maxWidth = `${Math.max(0, width - 2 * margin)}px`; el.style.maxHeight = `${Math.max(0, height - 2 * margin)}px`;
-    el.style.left = `${Math.max(left + margin, Math.min(left + width - el.offsetWidth - margin, rect.left + (rect.width - el.offsetWidth) / 2))}px`;
-    const below = rect.bottom + gap, preferred = below + el.offsetHeight <= top + height - margin ? below : rect.top - el.offsetHeight - gap;
-    el.style.top = `${Math.max(top + margin, Math.min(top + height - el.offsetHeight - margin, preferred))}px`;
+    positionCommentCard(el, rect);
   }
   function disarmDelete() {
     cancelTimer(deleteTimer); deleteTimer = null; deleteArmed = false;

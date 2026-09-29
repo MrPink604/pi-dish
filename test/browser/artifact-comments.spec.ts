@@ -4,7 +4,7 @@ import fs = require('node:fs');
 import path = require('node:path');
 const script = fs.readFileSync(path.resolve(__dirname, '../../public/artifact-comments.js'), 'utf8');
 
-async function setup(page: Page, comments: unknown[] = []) {
+async function setup(page: Page, comments: unknown[] = [], html = '<p id="text">before <b>selected</b> text after</p>') {
   const errors: unknown[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.addInitScript(() => {
@@ -28,7 +28,7 @@ async function setup(page: Page, comments: unknown[] = []) {
     if (url.pathname === '/artifact-comments.js') return route.fulfill({ contentType: 'application/javascript', body: script });
     if (url.pathname === '/api/comments/index') return route.fulfill({ json: { comments } });
     if (url.pathname === '/api/comments/get') return route.fulfill({ json: { comments } });
-    return route.fulfill({ contentType: 'text/html', body: '<p id="text">before <b>selected</b> text after</p><script src="/artifact-comments.js" data-page-token="page-fixture"></script>' });
+    return route.fulfill({ contentType: 'text/html', body: `${html}<script src="/artifact-comments.js" data-page-token="page-fixture"></script>` });
   });
   await page.goto('http://artifact.test/page');
   await expect(page.locator('#pi-dish-comment-layer')).toBeAttached();
@@ -79,6 +79,33 @@ test('published comments anchor across nodes, edit with page routing and confirm
   await del.click();
   await expect(page.locator('#pi-dish-comment-layer #card')).toBeHidden();
   expect(patch).toEqual({ method: 'DELETE', sessionId: 'session-a', pageToken: 'page-fixture' });
+  expect(errors).toEqual([]);
+});
+
+test('published marks preserve exact context and exclude scripts, styles and the overlay on refresh', async ({ page }) => {
+  const exact = { ...comment, target: { anchor: { type: 'text', quote: ' selected text ', prefix: 'right', suffix: 'after' } } };
+  const errors = await setup(page, [exact],
+    '<p id="first">wrong <b>selected</b> text after</p><p id="chosen">right <b>selected</b><script type="application/json">ignored</script><style>/* ignored */</style> text after</p>');
+  await expect(page.locator('#first mark')).toHaveCount(0);
+  await expect(page.locator('#chosen mark')).toHaveCount(3);
+  expect(await page.locator('#chosen mark').evaluateAll(marks => marks.map(mark => mark.textContent))).toEqual([' ', 'selected', ' text ']);
+  expect(await page.locator('#chosen script').textContent()).toBe('ignored');
+  expect(await page.locator('#chosen style').textContent()).toBe('/* ignored */');
+  await page.locator('#chosen mark').nth(1).click();
+  await expect(page.locator('#pi-dish-comment-layer #body')).toHaveValue('original');
+  await page.evaluate(() => {
+    const host = document.getElementById('pi-dish-comment-layer');
+    if (!host) throw new Error('Missing comment layer');
+    // Artifact scripts may relocate the injected host into the body. Its
+    // light DOM must not steal a repeated quote from the artifact prose.
+    host.append(document.createTextNode('right selected text after'));
+    document.body.prepend(host);
+  });
+  await page.route('**/api/comments/comment-a', route => route.fulfill({ json: { ok: true } }));
+  await page.locator('#pi-dish-comment-layer #send').click();
+  await expect.poll(() => page.evaluate(() => window.artifactBodiesRead)).toBe(2);
+  await expect(page.locator('#pi-dish-comment-layer mark')).toHaveCount(0);
+  expect(await page.locator('#chosen mark').evaluateAll(marks => marks.map(mark => mark.textContent))).toEqual([' ', 'selected', ' text ']);
   expect(errors).toEqual([]);
 });
 

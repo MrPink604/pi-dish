@@ -85,7 +85,7 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     abort(): BridgeRequest;
     compact(instructions?: string): BridgeRequest;
     cancelQueued(kind: 'steering' | 'followUp', index: number, text: string): BridgeRequest;
-    setModel(model: string): BridgeRequest;
+    setModel(provider: string, modelId: string): BridgeRequest;
     setName(name: string): BridgeRequest;
     getCommands(): BridgeRequest;
     getAvailableModels(): BridgeRequest;

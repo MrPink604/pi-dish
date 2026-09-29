@@ -24,6 +24,8 @@ test('anchored comment decoders narrow target kinds, identity and positive line 
 test('quote matching uses surrounding context and preserves exact whitespace extent', () => {
     const text = 'one alpha two; three alpha four';
     assert.equal(findQuoteOffset(text, { type: 'text', quote: 'alpha', prefix: 'three ', suffix: ' four' }), 21);
+    assert.equal(findQuoteOffset('x alpha y; x alpha y', { quote: 'alpha', prefix: 'x ', suffix: ' y' }), 2);
     assert.equal(findQuoteOffset('  alpha  ', { type: 'text', quote: ' alpha ' }), 1);
     assert.equal(findQuoteOffset(text, { type: 'text', quote: 'missing' }), -1);
+    assert.equal(findQuoteOffset(text, { quote: '' }), -1);
 });

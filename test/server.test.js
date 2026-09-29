@@ -2548,7 +2548,11 @@ test('usage summary preserves cost availability through every grouping and filte
     ];
     fs.writeFileSync(usageFile, entries.map(e => JSON.stringify(e)).join('\n') + '\n');
     try {
-        const knownToday = usageSummary((await get(filterUrl(refs.join(','), '1'))).body);
+        const knownTodayResponse = await get(filterUrl(refs.join(','), '1'));
+        const wireTotals = (0, test_types_js_1.record)(knownTodayResponse.body.totals);
+        assert.deepEqual(Object.keys(wireTotals).sort(), ['calls', 'costUnavailable', 'costs', 'durationMs', 'measured', 'slowestMs', 'tokens', 'unpricedCalls']);
+        assert.equal('priced' in wireTotals, false, 'server totals do not gain browser-only priced finalization');
+        const knownToday = usageSummary(knownTodayResponse.body);
         assert.equal(knownToday.range, '1');
         assert.equal(knownToday.totals.calls, 4);
         assert.ok(Math.abs(knownToday.totals.costs.total - 1.7) < 1e-9, 'total stays known when every selected call reports it');
@@ -3159,6 +3163,73 @@ test('POST /close on an inactive session is a 404; inactive /stats has no runtim
     const stats = await get(`/api/sessions/${SESSION_ID}/stats`);
     assert.equal(stats.status, 200);
     assert.equal(stats.body.runtime, null);
+});
+test('Pi tree reads terminate at the first repeated parent id', () => {
+    // A regression must fail without hanging this suite's in-process HTTP server.
+    const file = path.join(tmpHome, 'cyclic-tree.jsonl');
+    fs.writeFileSync(file, [
+        { type: 'session', version: 3, id: 'cyclic-tree', cwd: tmpHome, timestamp: '2026-09-28T00:00:00Z' },
+        { type: 'message', id: 'cycle-a', parentId: 'cycle-b', message: { role: 'user', content: 'a' } },
+        { type: 'message', id: 'cycle-b', parentId: 'cycle-a', message: { role: 'user', content: 'b' } },
+    ].map(entry => JSON.stringify(entry)).join('\n') + '\n');
+    try {
+        const result = childProcess.spawnSync(process.execPath, [path.join(__dirname, 'fixtures/pi-tree-read.js'), file], { encoding: 'utf8', timeout: 15000 });
+        assert.equal(result.status, 0, result.error?.message || result.stderr);
+        const tree = (0, test_types_js_1.record)(JSON.parse(result.stdout));
+        assert.equal(tree.leafId, 'cycle-b');
+        assert.deepEqual(tree.activePathIds, ['cycle-b', 'cycle-a']);
+        assert.deepEqual(tree.nodes, []);
+    }
+    finally {
+        fs.rmSync(file, { force: true });
+    }
+});
+test('Pi HTTP tree preserves branch depth and SDK display projection', async () => {
+    const id = '2026-09-28T00-00-00-treeprojection';
+    const file = path.join(sessionDir, `${id}.jsonl`);
+    fs.writeFileSync(file, [
+        { type: 'session', version: 3, id, cwd: tmpHome, timestamp: '2026-09-28T00:00:00Z' },
+        { type: 'message', id: 'u1', parentId: '', message: { role: 'user', content: ['raw', { type: 'text', text: 'first' }, { type: 'text', text: 'prompt' }] } },
+        { type: 'message', id: 'a1', parentId: 'u1', message: { role: 'assistant', model: 'fixture-model', stopReason: 'toolUse', errorMessage: 'fixture error', content: [
+                    { type: 'text', text: 'hello' }, { type: 'text', text: 'world' },
+                    { type: 'toolCall', id: 'call', name: 'bash', arguments: { command: 'x'.repeat(80) } },
+                ] } },
+        { type: 'message', id: 'u2', parentId: 'a1', message: { role: 'toolResult', toolName: 'bash', toolCallId: 'call', isError: true, content: [] } },
+        { type: 'model_change', id: 'm1', parentId: 'a1', provider: 'provider', modelId: 'variant' },
+        { type: 'compaction', id: 'c1', parentId: 'm1', tokensBefore: 123 },
+        { type: 'branch_summary', id: 'b1', parentId: 'm1', summary: 'summary '.repeat(30) },
+        { type: 'model_change', id: 'm2', parentId: 'm1', model: 'combined/only' },
+    ].map(entry => JSON.stringify({ timestamp: '2026-09-28T00:00:00Z', ...entry })).join('\n') + '\n');
+    try {
+        const response = await get(`/api/sessions/${id}/tree`);
+        assert.equal(response.status, 200, JSON.stringify(response.body));
+        const nodes = (0, test_types_js_1.records)(response.body.nodes);
+        assert.deepEqual(nodes.map(node => [node.id, node.depth, node.childCount]), [
+            ['u1', 0, 1], ['a1', 0, 2], ['u2', 1, 0], ['m1', 1, 3], ['c1', 2, 0], ['b1', 2, 0], ['m2', 2, 0],
+        ]);
+        assert.deepEqual(response.body.activePathIds, ['m2', 'm1', 'a1', 'u1']);
+        assert.equal(nodes[0]?.text, 'raw first prompt');
+        assert.equal(nodes[0]?.parentId, null);
+        assert.equal(nodes[0]?.label, null);
+        assert.equal(nodes[1]?.text, 'hello world');
+        assert.equal(nodes[1]?.model, 'fixture-model');
+        assert.equal(nodes[1]?.stopReason, 'toolUse');
+        assert.equal(nodes[1]?.errorMessage, 'fixture error');
+        assert.deepEqual(nodes[1]?.toolCalls, [{ id: 'call', name: 'bash', args: 'x'.repeat(60) + ' … (truncated)' }]);
+        assert.equal(nodes[2]?.toolName, 'bash');
+        assert.equal(nodes[2]?.toolCallId, 'call');
+        assert.equal(nodes[2]?.isError, true);
+        assert.equal(nodes[3]?.modelId, 'variant');
+        assert.equal(nodes[3]?.provider, 'provider');
+        assert.equal(nodes[4]?.tokensBefore, 123);
+        assert.equal(nodes[5]?.summary, 'summary '.repeat(30).substring(0, 120));
+        assert.equal(nodes[6]?.modelId, undefined);
+        assert.equal(nodes[6]?.provider, undefined);
+        assert.equal(nodes[6]?.isLeaf, true);
+    }
+    finally {
+        fs.rmSync(file, { force: true });
+    }
 });
 // --- Tree branching (inactive sessions go through pi's SDK) ---------------
 // These mutate TREE_FILE (branching appends entries by design) and so run

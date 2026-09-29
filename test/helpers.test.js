@@ -1106,6 +1106,10 @@ test('aggregateUsageWeekly preserves component availability across mixed days', 
     assert.equal(week.costs.total, 0.2, 'a mixed week exposes its marked known subtotal');
     assert.equal(week.costUnavailable.total, 1);
     assert.equal(week.models[0].cost, 0.2, 'the same subtotal rule applies per model');
+    assert.deepEqual(Object.keys(week).sort(), ['calls', 'costUnavailable', 'costs', 'day', 'days', 'models', 'tokens']);
+    assert.deepEqual(week.models[0].costUnavailable, { total: 1 }, 'weekly model availability is a total-only projection');
+    assert.equal('measured' in week.models[0], false);
+    assert.equal('costs' in week.models[0], false);
 });
 test('formatLimitReset renders compact future windows', () => {
     const now = 1700000000000;
@@ -1823,6 +1827,37 @@ test('mergeUsageSummaries preserves known subtotals and unavailable counts', () 
     assert.equal((0, test_types_js_1.present)(merged.headlineCostUnavailable).month, 3);
     assert.equal(merged.unpricedModelCalls, 3);
 });
+test('merged daily and weekly model costs retain finite subtotals, availability and stable ties', () => {
+    const day = '2026-08-21';
+    const a = {
+        day, calls: 5, costs: { input: 0.4, total: 0.4 },
+        models: [
+            { ref: 'partial', calls: 1, cost: 0.4, tokens: { input: 3, reasoning: 1000 }, costUnavailable: { input: 1 } },
+            { ref: 'first-tie', calls: 1, cost: 0 },
+            { ref: 'second-tie', calls: 1 },
+            { ref: 'more-calls', calls: 2, cost: null, costUnavailable: { total: 2 } },
+        ],
+    };
+    const b = {
+        day, calls: 2, costs: { input: Infinity, output: NaN, total: null }, costUnavailable: { input: 1, output: 1, total: 2 },
+        models: [
+            { ref: 'partial', calls: 1, cost: Infinity, tokens: { output: 7 }, costUnavailable: { output: 1, total: 1 } },
+            { ref: 'more-calls', calls: 1, cost: NaN, costUnavailable: { total: 1 } },
+        ],
+    };
+    const merged = (0, test_types_js_1.present)(H.mergeUsageSummaries([{ daily: [a] }, { daily: [b] }]));
+    const daily = (0, test_types_js_1.present)(merged.daily);
+    const models = (0, test_types_js_1.present)((0, test_types_js_1.present)(daily[0]).models);
+    assert.deepEqual(models.map(model => [model.ref, model.cost, model.calls]), [['partial', 0.4, 2], ['more-calls', 0, 3], ['first-tie', 0, 1], ['second-tie', 0, 1]]);
+    assert.deepEqual(models[0].tokens, { input: 3, output: 7, cacheRead: 0, cacheWrite: 0, reasoning: 1000 });
+    assert.deepEqual(models[0].costUnavailable, { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 1 });
+    assert.deepEqual(daily[0].costs, { input: 0.4, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.4 });
+    const week = (0, test_types_js_1.present)(H.aggregateUsageWeekly([a, b])[0]);
+    assert.deepEqual(week.models.map(model => [model.ref, model.cost, model.calls]), models.map(model => [model.ref, model.cost, model.calls]));
+    assert.deepEqual(week.models[0].costUnavailable, { total: 1 });
+    assert.deepEqual(week.models[1].costUnavailable, { total: 3 });
+    assert.deepEqual(week.costUnavailable, { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 });
+});
 test('mergeUsageSummaries ranks merged groups by the requested metric', () => {
     const small = usagePayload({
         groups: {
@@ -1839,6 +1874,16 @@ test('mergeUsageSummaries ranks merged groups by the requested metric', () => {
         { hostId: 'b', summary: { ...small, sort: 'tokens' } },
     ]));
     assert.deepEqual((0, test_types_js_1.present)((0, test_types_js_1.present)(byTokens.groups).models).map(model => model.key), ['zai/glm', 'anthropic/opus']);
+    const tiedTokens = (0, test_types_js_1.present)(H.mergeUsageSummaries([
+        { sort: 'tokens', groups: { models: [
+                    { key: 'reasoning-heavy', calls: 100, tokens: { input: 1, reasoning: 10000 } },
+                    { key: 'fewer-calls', calls: 1, tokens: { input: 1, output: 1 } },
+                    { key: 'more-calls', calls: 2, tokens: { cacheRead: 1, cacheWrite: 1 } },
+                    { key: 'stable-tie', calls: 2, tokens: { input: 2 } },
+                ] } },
+        { sort: 'tokens' },
+    ]));
+    assert.deepEqual((0, test_types_js_1.present)((0, test_types_js_1.present)(tiedTokens.groups).models).map(model => model.key), ['more-calls', 'stable-tie', 'fewer-calls', 'reasoning-heavy']);
 });
 test('mergeUsageSummaries reports indexing and discovery flags from any host', () => {
     const merged = (0, test_types_js_1.present)(H.mergeUsageSummaries([

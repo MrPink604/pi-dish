@@ -123,16 +123,33 @@ async function selectText(page) {
     });
     await (0, fixtures_js_1.expect)(page.locator('#commentBubble')).toBeHidden();
 });
-(0, fixtures_js_1.test)('quote anchors span formatting and malformed or other-session comments cannot become marks', async ({ page, fleet }) => {
+(0, fixtures_js_1.test)('quote anchors span formatting, skip scripts/styles and reject malformed or other-session comments', async ({ page, fleet }) => {
     await setup(page, fleet);
     await page.evaluate(entries => {
-        fixtureElement(document.getElementById('fileViewBody'), "document.getElementById('fileViewBody')").innerHTML = '<div>alpha <code>be</code>ta gamma</div>';
+        fixtureElement(document.getElementById('fileViewBody'), "document.getElementById('fileViewBody')").innerHTML = '<div>alpha <code>be</code><script type="application/json">ignored</script><style>/* ignored */</style>ta gamma</div>';
         fixtureApp.features.anchoredCommentController.set(entries);
     }, [comment('good'), null, { ...comment('foreign'), sessionId: 'foreign-session' }]);
     await (0, fixtures_js_1.expect)(page.locator('mark.comment-mark')).toHaveCount(2);
     await (0, fixtures_js_1.expect)(page.locator('#fileViewComments')).toContainText('1');
     await page.locator('mark.comment-mark').first().click();
     await (0, fixtures_js_1.expect)(page.locator('#commentBody')).toHaveValue('good');
+});
+(0, fixtures_js_1.test)('unanchorable comments remain editable in the list and clearing marks preserves formatted text', async ({ page, fleet }) => {
+    await setup(page, fleet);
+    await page.evaluate(entries => {
+        fixtureElement(document.getElementById('fileViewBody'), '#fileViewBody').innerHTML = '<div>alpha <code>be</code>ta gamma</div>';
+        fixtureApp.features.anchoredCommentController.set(entries);
+    }, [comment('anchored'), { ...comment('missing'), target: { kind: 'file', path: '/fixture/a.txt', relPath: 'a.txt', anchor: { type: 'text', quote: 'removed passage' } } }]);
+    await page.locator('#fileViewComments').click();
+    await page.locator('.comment-list-row', { hasText: 'missing' }).click();
+    await (0, fixtures_js_1.expect)(page.locator('#commentBody')).toHaveValue('missing');
+    await page.evaluate(() => {
+        fixtureApp.features.anchoredCommentController.close();
+        fixtureApp.features.anchoredCommentController.set([]);
+    });
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewBody mark.comment-mark')).toHaveCount(0);
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewBody')).toHaveText('alpha beta gamma');
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewBody code')).toHaveText('be');
 });
 (0, fixtures_js_1.test)('comment disposal removes pointer, chip, bubble and delayed-delete actions', async ({ page, fleet }) => {
     await setup(page, fleet, [comment('old')]);

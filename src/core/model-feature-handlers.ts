@@ -4,6 +4,7 @@ import * as piSDK from './pi-sdk';
 import { BridgeSession } from './bridge-session';
 import { getHarness } from './harnesses';
 import { isModelEnabled } from './helper-models';
+import { EMULATED_COMMAND_METADATA } from './helper-command-metadata';
 import { liveSessionSupports, routeIdentity } from './session-ownership';
 import type { BridgeCapability } from './contracts';
 import type { CatalogModel } from './session-api';
@@ -11,14 +12,14 @@ import type { FeatureHandler, FeatureHandlers, FeaturePorts } from './feature-ha
 import { harnessCommandAvailable, runHarnessModelCommand, withCatalogThinkingLevels, MODELS_CACHE_TTL } from './harness-feature-commands';
 
 const RPC_BUILTIN_COMMANDS = [
-  { name: 'compact', description: 'Manually compact the session context', args: '[instructions]' },
-  { name: 'model', description: 'Switch model (usage: /model provider/model-id)', args: '<model>' },
-  { name: 'name', description: 'Set session display name', args: '<name>' },
-  { name: 'thinking', description: 'Set thinking level', args: '<off|minimal|low|medium|high|xhigh>' },
-  { name: 'abort', description: 'Abort the current agent operation' },
+  EMULATED_COMMAND_METADATA.compact,
+  EMULATED_COMMAND_METADATA.model,
+  EMULATED_COMMAND_METADATA.name,
+  EMULATED_COMMAND_METADATA.thinking,
+  EMULATED_COMMAND_METADATA.abort,
   { name: 'new', description: 'Start a new session' },
   { name: 'export', description: 'Export session to HTML', args: '[path]' },
-  { name: 'reload', description: 'Reload extensions, skills, and prompt templates' },
+  EMULATED_COMMAND_METADATA.reload,
 ];
 
 const BRIDGE_COMMAND_CAPABILITIES: Readonly<Record<string, BridgeCapability>> = {

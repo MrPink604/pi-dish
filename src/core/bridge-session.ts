@@ -631,7 +631,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   abort() { return this.send('abort'); }
   compact(instructions?: string) { return this.send('compact', { instructions }); }
   cancelQueued(kind: 'steering' | 'followUp', index: number, text: string) { return this.send('cancel_queued', { kind, index, text }); }
-  setModel(model: string) { return this.send('set_model', { model }); }
+  setModel(provider: string, modelId: string) { return this.send('set_model', { model: `${provider}/${modelId}` }); }
   setName(name: string) { return this.send('set_session_name', { name }); }
   getCommands() { return this.send('get_commands'); }
   getAvailableModels() { return this.send('get_available_models'); }

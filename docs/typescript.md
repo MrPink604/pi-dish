@@ -168,11 +168,15 @@ The integration lead, not this guide, records milestone acceptance.
 | `feature-handlers.ts` | Sixteen named feature response handlers and narrow root observation/persistence ports |
 | `skills.ts`, `skill-feature-handlers.ts` | SDK skill inventory, bundle/catalog estimates, activation NDJSON and coverage reusing one covered-line set per mapped activation |
 | `usage-feature-handler.ts` | Indexed usage summaries, known subtotals/unknown counters, model facets and local-day windows |
+| `helper-usage-math.ts` | Portable in-place usage arithmetic, displayed-token totals and stable ranking; server/browser response shapes stay local |
+| `helper-tree.ts` | Cycle-safe active ancestry and preorder branch-depth walking; Pi/OMP acquisition guards and display dialects stay local |
+| `helper-command-metadata.ts` | Pi-dish emulation facts shared by bridge/RPC; no capability authority or upstream TUI catalog |
 | `model-feature-handlers.ts` | SDK/command/live model discovery, scoped-model persistence and capability-filtered command listings; no delivery |
 | `session-files.ts` | Cached display parser, policy-separated chronological display/usage model changes, stable-ID lookup and search/stats/usage projections |
 | `harness-pricing.ts`, `skill-mining.ts` | Pricing refresh/override revisions and skill evidence through the established session parser; truncation remains batch-local |
 | `pi-sdk.ts`, `omp-export.ts`, `session-refs.ts` | Bundled SDK adapters, raw native OMP export, shared embedded-data decoding with distinct import/export policies and lazy prompt-reference expansion |
 | `session-read-handlers.ts` | Individual Express read handlers and bound share snapshot/export operations |
+| `session-command-handlers.ts` | Shared HTTP prompt/steer/follow-up admission, attachments and reference expansion through existing owner ports |
 | `pages.ts`, `shares.ts`, `comments.ts` | Distinct live page references, immutable imported share snapshots and anchored comments with ownership/acknowledgement rules |
 | `fleet-artifacts.ts` | Host-scoped artifact reachability mappings and persisted timestamp compatibility |
 | `file-search.ts`, `file-mention.ts` | Lazy native FFF search/fallback and bounded file completion/reach behavior |
@@ -746,7 +750,8 @@ ownership before kickoff and retains the submitted refine draft through the POST
 
 Shared runtime helpers live in `src/core/helper-*.ts`, with structural contracts in
 `helper-types.ts`. Browser-only formatting, identity presentation, grouping, usage
-and markdown/path/diff behavior remain under `src/browser/`. Browser and checked
+orchestration and markdown/path/diff behavior remain under `src/browser/`; usage
+arithmetic is shared through `helper-usage-math.ts`. Browser and checked
 core consumers import the actual owners; JavaScript Node consumers use narrow
 generated `lib/helper-*.js` modules, not `public/helpers.js`.
 `src/browser/shared-helpers.ts` preserves the 121 CommonJS/browser-global exports.
@@ -843,10 +848,12 @@ File and diff takeovers live in `file-views.ts`, with explicit wire narrowing in
 operations, clipboard feedback and deferred patches retain independent ownership
 under read-only view snapshots used by anchored-comment coordination.
 
-Anchored comment selection, edits and marks live in `anchored-comments.ts` with
-explicit file/diff targets in `anchored-comment-data.ts` and durable quote matching
-in `comment-anchors.ts`. Editors and comment lists retain view owners; overlapping
-refreshes, delayed selections and mutation completion effects have separate guards.
+Application comment selection and edits live in `anchored-comments.ts`, with
+explicit file/diff targets in `anchored-comment-data.ts`. Both application and
+standalone-page editors use `comment-anchors.ts` for quote matching, mark
+application/clearing and constrained viewport placement. Selection capture,
+exclusion/decorating policy and mutation lifetimes remain editor-owned; overlapping
+refreshes, delayed selections and mutation completion effects retain separate guards.
 
 Session header orchestration lives in `session-controls.ts`: pending model/thinking
 menus, rename editors, field-specific mutation ordering, serving-host preference

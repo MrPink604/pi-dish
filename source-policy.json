@@ -149,6 +149,7 @@
     "test/fixtures/native-queue-boundary-host.ts",
     "test/fixtures/skill-client-cwd-driver.ts",
     "test/fixtures/tmux-prune-driver.ts",
+    "test/fixtures/pi-tree-read.ts",
     "test/fixtures/remote-server-host.ts",
     "test/fixtures/idle-child.ts",
     "test/fixtures/tmux-survivor-host.ts",

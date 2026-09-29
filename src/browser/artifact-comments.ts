@@ -1,5 +1,6 @@
 import { decodeCommentEntries, decodePageComments, responseError } from './artifact-comment-data';
 import type { PageComment, TextAnchor } from './artifact-comment-data';
+import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comment-anchors';
 
 /* Anchored comments for pi-dish published pages.
  *
@@ -93,30 +94,7 @@ import type { PageComment, TextAnchor } from './artifact-comment-data';
     let rect;
     try { rect = selectedRange.getBoundingClientRect(); }
     catch { return; }
-    const viewport = window.visualViewport;
-    const viewportLeft = viewport?.offsetLeft || 0;
-    const viewportTop = viewport?.offsetTop || 0;
-    const viewportWidth = viewport?.width || innerWidth;
-    const viewportHeight = viewport?.height || innerHeight;
-    const viewportRight = viewportLeft + viewportWidth;
-    const viewportBottom = viewportTop + viewportHeight;
-    const margin = 8;
-    const gap = 8;
-    card.style.maxWidth = `${Math.max(0, viewportWidth - margin * 2)}px`;
-    card.style.maxHeight = `${Math.max(0, viewportHeight - margin * 2)}px`;
-    const width = card.offsetWidth;
-    const height = card.offsetHeight;
-    card.style.left = `${Math.max(viewportLeft + margin, Math.min(
-      viewportRight - width - margin,
-      rect.left + (rect.width - width) / 2,
-    ))}px`;
-    const below = rect.bottom + gap;
-    const preferredTop = below + height <= viewportBottom - margin
-      ? below : rect.top - height - gap;
-    card.style.top = `${Math.max(viewportTop + margin, Math.min(
-      viewportBottom - height - margin,
-      preferredTop,
-    ))}px`;
+    positionCommentCard(card, rect);
   }
 
   function captureSelection(focusComposer = false) {
@@ -280,81 +258,11 @@ import type { PageComment, TextAnchor } from './artifact-comment-data';
     + ' border-bottom: 1px dotted rgba(38,139,210,.75); color: inherit; cursor: pointer; }';
   (document.head || document.documentElement).append(markStyle);
 
-  // A quote routinely spans several text nodes, so flatten the body into one
-  // string with per-node offsets, locate the quote, then wrap each covered
-  // node slice. Repeated quotes are scored against the anchor's context.
-  function textRuns() {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-      acceptNode: (node) => (node.parentElement?.closest('script, style, #pi-dish-comment-layer')
-        ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
-    });
-    const runs = [];
-    let text = '';
-    while (walker.nextNode()) {
-      const node = walker.currentNode;
-      if (!(node instanceof Text)) continue;
-      runs.push({ node, start: text.length, end: text.length + node.data.length });
-      text += node.data;
-    }
-    return { runs, text };
-  }
-
-  function overlap(a: string, b: string, fromEnd: boolean): number {
-    let n = 0;
-    while (n < a.length && n < b.length
-      && (fromEnd ? a[a.length - 1 - n] === b[b.length - 1 - n] : a[n] === b[n])) n++;
-    return n;
-  }
-
-  function markComment(comment: PageComment) {
-    const anchor = comment.target.anchor;
-    const quote = anchor.quote;
-    if (!quote) return;
-    const { runs, text } = textRuns();
-    const hits = [];
-    let from = 0;
-    let at;
-    while ((at = text.indexOf(quote, from)) !== -1) {
-      hits.push(at);
-      from = at + Math.max(1, quote.length);
-    }
-    if (!hits.length) return;
-    let start = hits[0];
-    if (hits.length > 1) {
-      const prefix = anchor.prefix || '';
-      const suffix = anchor.suffix || '';
-      let bestScore = -1;
-      for (const hit of hits) {
-        const score = overlap(text.slice(Math.max(0, hit - prefix.length), hit), prefix, true)
-          + overlap(text.slice(hit + quote.length, hit + quote.length + suffix.length), suffix, false);
-        if (score > bestScore) { bestScore = score; start = hit; }
-      }
-    }
-    const end = start + quote.length;
-    for (const run of runs) {
-      if (run.end <= start || run.start >= end) continue;
-      const source = run.node.data;
-      const sliceFrom = Math.max(0, start - run.start);
-      const sliceTo = Math.min(source.length, end - run.start);
-      if (sliceTo <= sliceFrom) continue;
-      const mark = document.createElement('mark');
-      mark.setAttribute('data-pi-dish-comment', comment.id);
-      mark.textContent = source.slice(sliceFrom, sliceTo);
-      const frag = document.createDocumentFragment();
-      if (sliceFrom > 0) frag.appendChild(document.createTextNode(source.slice(0, sliceFrom)));
-      frag.appendChild(mark);
-      if (sliceTo < source.length) frag.appendChild(document.createTextNode(source.slice(sliceTo)));
-      run.node.replaceWith(frag);
-    }
-  }
+  const markPolicy = { exclude: 'script, style, #pi-dish-comment-layer', idAttribute: 'data-pi-dish-comment' };
 
   function renderMarks() {
-    document.querySelectorAll('mark[data-pi-dish-comment]').forEach((mark) => {
-      const parent = mark.parentNode;
-      mark.replaceWith(document.createTextNode(mark.textContent || ''));
-      parent?.normalize();
-    });
-    for (const comment of openComments) markComment(comment);
+    clearCommentMarks(document.documentElement, 'mark[data-pi-dish-comment]');
+    for (const comment of openComments) markCommentQuote(document.body, comment.target.anchor, comment.id, markPolicy);
   }
 
   // The page knows its own token, not the session behind it; the index

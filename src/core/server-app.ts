@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { errorMonitor, type EventEmitter } from 'node:events';
 import piSDK = require('./pi-sdk');
 import { createSessionReadHandlers } from './session-read-handlers';
+import { createSessionCommandHandlers } from './session-command-handlers';
 import { getAllRPCSessions } from './rpc-session';
 import {
   listRegisteredSessions,
@@ -1031,15 +1032,6 @@ export function startServer(rootDirectory: string): Server {
 
   app.get('/api/sessions/:id/search', sessionReadHandlers.search);
 
-  // Normalize client-sent attachments to pi's ImageContent shape, dropping
-  // anything malformed rather than failing the whole prompt.
-  const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
-  function sanitizeImages(images: unknown) {
-    if (!Array.isArray(images)) return [];
-    return images
-      .filter((i: unknown) => i && typeof property(i, 'data') === 'string' && BASE64_RE.test(property(i, 'data') as string) && typeof property(i, 'mimeType') === 'string' && (property(i, 'mimeType') as string).startsWith('image/'))
-      .map((i: unknown) => ({ type: 'image', data: property(i, 'data'), mimeType: property(i, 'mimeType') }));
-  }
 
   // The dependency bundle for lib/session-refs.js. Cheap to build — the catalog
   // is only read once a prompt actually carries a `#ref` — so the routes can
@@ -1056,65 +1048,15 @@ export function startServer(rootDirectory: string): Server {
     };
   }
 
-  app.post('/api/sessions/:id/prompt', async (req: ApplicationRequest, res: ApplicationResponse) => {
-    const message = property(req.body, 'message');
-    const deliverAs = property(req.body, 'deliverAs');
-    const images = sanitizeImages(property(req.body, 'images'));
-    if (!message && !images.length) return res.status(400).json({ error: 'Message required' });
-    if (deliverAs != null && deliverAs !== 'steer' && deliverAs !== 'followUp') {
-      return res.status(400).json({ error: 'deliverAs must be steer or followUp' });
-    }
-    try {
-      const sess = await getLiveSession(req.params.id);
-      if (!sess) return res.status(404).json({ error: 'Session not active' });
-      const capability = deliverAs === 'steer' ? 'steer' : deliverAs === 'followUp' ? 'followUp' : 'prompt';
-      if (!liveSessionSupports(sess, capability)) {
-        return res.status(409).json({ error: `This session does not support ${capability}.` });
-      }
-      const opts: NonNullable<Parameters<LiveSession['prompt']>[1]> = deliverAs ? { deliverAs } : {};
-      if (images.length) opts.images = images;
-      const result = await sess.prompt(expandSessionRefs(message, property(req.body, 'refs'), sessionRefDeps()), opts);
-      res.json({ success: true, result });
-    } catch (e) {
-      res.status(500).json({ error: property(e, 'message') });
-    }
+  const sessionCommandHandlers = createSessionCommandHandlers({
+    getLiveSession,
+    supports: liveSessionSupports,
+    expandRefs: (message, refs) => expandSessionRefs(message, refs, sessionRefDeps()),
   });
-
-  app.post('/api/sessions/:id/steer', async (req: ApplicationRequest, res: ApplicationResponse) => {
-    const message = property(req.body, 'message');
-    const images = sanitizeImages(property(req.body, 'images'));
-    if (!message && !images.length) return res.status(400).json({ error: 'Message required' });
-    try {
-      const sess = await getLiveSession(req.params.id);
-      if (!sess) return res.status(404).json({ error: 'Session not active' });
-      if (!liveSessionSupports(sess, 'steer')) return res.status(409).json({ error: 'This session does not support steering.' });
-      const result = await sess.steer(
-        expandSessionRefs(message, property(req.body, 'refs'), sessionRefDeps()),
-        images.length ? { images } : {});
-      res.json({ success: true, result });
-    } catch (e) {
-      res.status(500).json({ error: property(e, 'message') });
-    }
-  });
-
-  // Explicit semantic follow-up endpoint for agents and other non-browser
-  // clients. The existing prompt route remains backward compatible.
-  app.post('/api/sessions/:id/follow-up', async (req: ApplicationRequest, res: ApplicationResponse) => {
-    const message = property(req.body, 'message');
-    const images = sanitizeImages(property(req.body, 'images'));
-    if (!message && !images.length) return res.status(400).json({ error: 'Message required' });
-    try {
-      const sess = await getLiveSession(req.params.id);
-      if (!sess) return res.status(404).json({ error: 'Session not active' });
-      if (!liveSessionSupports(sess, 'followUp')) return res.status(409).json({ error: 'This session does not support follow-ups.' });
-      const opts: NonNullable<Parameters<LiveSession['prompt']>[1]> = { deliverAs: 'followUp' };
-      if (images.length) opts.images = images;
-      const result = await sess.prompt(expandSessionRefs(message, property(req.body, 'refs'), sessionRefDeps()), opts);
-      res.json({ success: true, result });
-    } catch (e) {
-      res.status(500).json({ error: property(e, 'message') });
-    }
-  });
+  app.post('/api/sessions/:id/prompt', sessionCommandHandlers.prompt);
+  app.post('/api/sessions/:id/steer', sessionCommandHandlers.steer);
+  // Explicit semantic follow-up endpoint for agents and other non-browser clients.
+  app.post('/api/sessions/:id/follow-up', sessionCommandHandlers.followUp);
 
   // Remove a not-yet-delivered queued steer/follow-up so its text can go back to
   // the composer. Bridge-only (pi's queue arrays live inside the process); RPC
@@ -1600,10 +1542,7 @@ export function startServer(rootDirectory: string): Server {
         if (!liveSessionSupports(sess, 'setModel')) {
           return res.status(409).json({ error: 'This session does not support changing models.' });
         }
-        // The two backends take different setModel shapes (bridge: one ref
-        // string, RPC: provider + id on the wire).
-        if (sess instanceof BridgeSession) await sess.setModel(`${provider}/${id}`);
-        else await sess.setModel(provider, id);
+        await sess.setModel(provider, id);
         return res.json({ success: true });
       }
       // Inactive session: append a model_change entry to the JSONL directly.

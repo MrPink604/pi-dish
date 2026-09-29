@@ -52,6 +52,12 @@ navigation uses the first ready owned main or alias listener's actual address,
 including ephemeral ports and retry replacements, never an advertised share URL.
 Native close, signal and error policies remain distinct from readiness notification.
 
+`session-command-handlers.ts` owns the shared HTTP prompt/steer/follow-up
+admission, attachment filtering and reference-expansion invocation. Composition
+supplies the existing live resolver, capability predicate and lazy reference
+ports. Explicit steer still calls `steer`; prompt delivery modes call `prompt`.
+Routine/recovery delivery and lifecycle authority do not pass through HTTP handlers.
+
 `tsconfig.tools.json` checks actual build/tool implementations and emits their
 existing sibling runtime paths through `build:tools`; its generated bootstrap
 works before other tools are built. `tsconfig.configs.json` checks the real ESLint

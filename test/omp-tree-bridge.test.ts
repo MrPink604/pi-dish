@@ -163,6 +163,46 @@ test('OMP bridge serializes tree reads and runs navigate/branch only in command 
   }
 });
 
+test('OMP tree preserves branch topology and its display dialect', { skip: !bunAvailable }, async () => {
+  const host = await startHost('projection');
+  try {
+    const tree = record(await host.session.readTree());
+    const nodes = records(tree.nodes);
+    assert.deepEqual(nodes.map(node => [node.id, node.depth, node.childCount]), [
+      ['u1', 0, 1], ['a1', 0, 2], ['u2', 1, 0], ['m1', 1, 2], ['c1', 2, 0], ['b1', 2, 0],
+    ]);
+    assert.deepEqual(tree.activePathIds, ['b1', 'm1', 'a1', 'u1']);
+    assert.equal(nodes[0]?.text, 'firstprompt');
+    assert.equal(nodes[0]?.label, '');
+    assert.equal(nodes[1]?.text, 'helloworld');
+    assert.equal(nodes[1]?.model, 'fixture-model');
+    assert.equal(nodes[1]?.stopReason, 'toolUse');
+    assert.equal(nodes[1]?.errorMessage, 'fixture error');
+    assert.deepEqual(nodes[1]?.toolCalls, [{ id: 'call', name: 'bash', args: 'x'.repeat(60) }]);
+    assert.equal(nodes[2]?.toolName, 'bash');
+    assert.equal(nodes[2]?.toolCallId, 'call');
+    assert.equal(nodes[2]?.isError, true);
+    assert.equal(nodes[3]?.modelId, 'variant');
+    assert.equal(nodes[3]?.provider, 'provider');
+    assert.equal(nodes[4]?.tokensBefore, 123);
+    assert.equal(nodes[5]?.summary, 'summary '.repeat(30).slice(0, 120));
+    assert.equal(nodes[5]?.isLeaf, true);
+  } finally { await host.stop(); }
+});
+
+test('OMP tree stops repeated ancestry and rejects malformed host nodes', { skip: !bunAvailable }, async () => {
+  const cyclic = await startHost('parent-cycle');
+  try {
+    const tree = record(await cyclic.session.readTree());
+    assert.deepEqual(tree.activePathIds, ['u2', 'a1', 'u1']);
+    assert.deepEqual(tree.nodes, []);
+  } finally { await cyclic.stop(); }
+  const invalid = await startHost('invalid-node');
+  try {
+    await assert.rejects(invalid.session.readTree(), /invalid tree node/);
+  } finally { await invalid.stop(); }
+});
+
 test('OMP bridge maps command-context acquisition and operation timeouts to distinct errors', { skip: !bunAvailable }, async (t) => {
   await t.test('acquisition timeout', async () => {
     const host = await startHost('acquisition-timeout');

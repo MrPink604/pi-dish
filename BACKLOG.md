@@ -1,17 +1,16 @@
 # pi-dish roadmap and migration status
 
-Updated 2026-09-19. **M0–M7, R1–R12, C1 and C2 are accepted and delivered on
+Updated 2026-09-28. **M0–M7, R1–R12, C1 and C2 are accepted and delivered on
 exact pushed main `1dc8bf8`. The parent acceptance receipt and its evidence are
 tracked in [the final acceptance record](docs/c2-final-acceptance.json).**
 
-**Post-refactor architecture proposal (2026-09-28):** the
-[detailed simplification proposal](docs/architecture-simplification-proposal.md)
-maps current ownership and hot paths, inventories specialization-driven
-duplication, and defines eight bounded stages with explicit non-goals and
-acceptance criteria. Its
+**Post-refactor architecture simplification (2026-09-28):** S1–S8 are implemented.
+The [execution record](docs/architecture-simplification-implementation.md) records
+shared algorithm/API owners, conditional extraction decisions, preserved
+specializations, runtime evidence and implementation review. The
+[detailed proposal](docs/architecture-simplification-proposal.md) and its
 [Opus 5.5/high review receipt](docs/architecture-simplification-review-2026-09-28.md)
-records plan agreement separately from implementation approval. No stage in
-this proposal is implemented or reopened by the historical acceptance below.
+remain historical plan evidence, separate from implementation acceptance.
 
 All first-party browser application logic is authored in `src/browser/`, including
 the application entrypoint and static control bindings. The five scripts shipped
@@ -95,6 +94,7 @@ controller/port observations.
 | Server application and feature modules | M1–M5 and M7 accepted | Actual implementations and composition are checked; the policy-free root preserves the synchronous native server export. |
 | Harness extensions and Electron shell | M6 and R7 accepted on Linux x64 | Strict edge programs, installed CLIs and real development/packaged Electron passed. R7's same-source trio, integrated gates, native readiness/failure proofs and all five exact pushed-main CI jobs passed on `a441edab`. macOS delivery is unverified. |
 | Repository source and delivery closure | C1 and C2 accepted and delivered | C1 passed all five jobs and 11 required steps on exact main `f0b7721`. C2 accounts for all 928 existing JS/JSX/MJS/CJS/TS/TSX/MTS/CTS paths, 177 declarations and five named shell paths; declared/discovered shell sets, Git index modes and non-following worktree kind/presence/modes are enforced. Its four reports retain accepted R evidence and separate local proof from parent-owned final delivery. The frozen shell-kind candidate was accepted by `zai/glm-5.3` and `opencode-go/deepseek-v4.1-flash` (both high thinking, OMP), integrated on exact main `1dc8bf8` and passed [all five jobs and 11 required steps](https://github.com/MrPink604/pi-dish/actions/runs/35414102192). |
+| Architecture simplification | S1–S8 implemented and reviewed | Shared comment algorithms, usage math, tree topology, formatting, emulation facts and model API replace competing implementations. HTTP delivery and search/usage identity reuse passed their bounded extraction gates; editor/cache/lifecycle owners remain separate. See the [execution record](docs/architecture-simplification-implementation.md) for acceptance evidence and the blocked real OMP/Prime canary. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
 
 The completed browser source migration does not imply a whole-application

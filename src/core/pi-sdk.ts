@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import type * as PiSDK from '@earendil-works/pi-coding-agent' with { 'resolution-mode': 'import' };
 import type * as PiHtmlExport from '../../node_modules/@earendil-works/pi-coding-agent/dist/core/export-html/index.js' with { 'resolution-mode': 'import' };
 import { extractTextContent, getToolSummary } from './helper-content';
+import { collectActivePath, walkBranchTree } from './helper-tree';
 import { exportOmpSessionHtml } from './omp-export';
 import { getPiLaunchSpec } from './harness-launch-spec';
 
@@ -348,17 +349,10 @@ export async function getSessionTree(sessionPath: string): Promise<SessionTree> 
   const leafId = sm.getLeafId();
   
   // Build active path (leaf → root)
-  const activePathIds = new Set<string>();
   const entries = sm.getEntries();
   const byId = new Map<string, PiSDK.SessionEntry>();
   for (const e of entries) byId.set(e.id, e);
-  let cur = leafId;
-  while (cur) {
-    activePathIds.add(cur);
-    const entry = byId.get(cur);
-    if (!entry || !entry.parentId || entry.parentId === cur) break;
-    cur = entry.parentId;
-  }
+  const activePathIds = collectActivePath(leafId, id => byId.get(id)?.parentId);
   
   // Flatten tree to serializable format
   function flattenNode(node: PiSDK.SessionTreeNode, depth: number): SessionTreeNode {
@@ -416,18 +410,10 @@ export async function getSessionTree(sessionPath: string): Promise<SessionTree> 
 
   // Flatten tree — only increase depth at actual branch points (like TUI)
   const nodes: SessionTreeNode[] = [];
-  function walk(nodeList: PiSDK.SessionTreeNode[], depth: number, parentHadBranch: boolean) {
-    for (let i = 0; i < nodeList.length; i++) {
-      const node = nodeList[i];
-      nodes.push(flattenNode(node, depth));
-      if (node.children.length > 0) {
-        const hasBranch = node.children.length > 1;
-        // Only increase depth when entering a branch point
-        walk(node.children, hasBranch ? depth + 1 : depth, hasBranch);
-      }
-    }
-  }
-  walk(tree, 0, false);
+  walkBranchTree(tree, (node, depth) => {
+    nodes.push(flattenNode(node, depth));
+    return node.children;
+  });
   
   return { nodes, leafId, activePathIds: [...activePathIds] };
 }

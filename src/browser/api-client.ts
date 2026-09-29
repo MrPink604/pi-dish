@@ -6,6 +6,14 @@ export interface HostEndpoint { base: string; token?: string | null }
 export type HostTarget = string | HostEndpoint | null;
 export interface RequestOptions extends RequestInit { timeoutMs?: number }
 export type ApiRequest = (host: HostTarget, path: string, options?: RequestOptions) => Promise<Response>;
+
+type CapturedHost = Readonly<HostEndpoint & { hostId: string | null }>;
+/** Search/usage retire on credential changes; absent credentials compare equal. */
+export function sameCapturedHost(current: CapturedHost | null, captured: CapturedHost): boolean {
+  return !!current && current.hostId === captured.hostId && current.base === captured.base
+    && (current.token || '') === (captured.token || '');
+}
+
 export class ApiHttpError extends Error {
   constructor(message: string, public readonly status: number) { super(message); this.name = 'ApiHttpError'; }
 }

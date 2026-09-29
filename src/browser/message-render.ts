@@ -3,7 +3,7 @@ import type { Timestamp, RefContextEntry } from '../core/helper-types';
 import type { RenderMessage, MessageBlock, AdvisorNote } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { escapeHtml, truncate } from '../core/helper-format';
-import { formatTime, formatDuration } from './helper-format';
+import { formatTime, formatDuration, formatThinkingPreview, formatToolArguments } from './helper-format';
 import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
 import { splitSessionRefContext } from '../core/helper-refs';
 export function createMessageRenderer(options: {
@@ -189,9 +189,8 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
 }
 
 function renderThinkingBlock(thinking: string) {
-  const preview = thinking.substring(0, 80).replace(/\n/g, ' ');
   return `<details class="thinking-block">
-    <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview">${escapeHtml(preview)}…</span></summary>
+    <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview">${escapeHtml(formatThinkingPreview(thinking))}</span></summary>
     <div class="thinking-text">${escapeHtml(thinking)}</div>
   </details>`;
 }
@@ -199,11 +198,7 @@ function renderThinkingBlock(thinking: string) {
 function renderToolCall(block: MessageBlock) {
   const args = block.arguments || {};
   const summary = getToolSummary(block.name || '', args);
-  // Prime's ipython tool takes one `code` argument; the raw JSON wrapper
-  // around it is noise. Other tools keep the JSON dump.
-  const bodyHtml = block.name === 'ipython' && typeof args.code === 'string'
-    ? `<pre><code>${escapeHtml(args.code)}</code></pre>`
-    : `<pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre>`;
+  const bodyHtml = `<pre><code>${escapeHtml(formatToolArguments(block.name, args))}</code></pre>`;
 
   return `<details class="tool-call">
     <summary class="tool-call-header">

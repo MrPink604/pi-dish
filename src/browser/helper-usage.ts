@@ -1,17 +1,14 @@
-import type { CostKey, TokenKey, Costs, Tokens, UsageBucket, MergedUsage, MergedUsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry, HostUsageLimit } from './shared-helper-types';
+import type { CostKey, TokenKey, Costs, UsageBucket, MergedUsage, MergedUsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry, HostUsageLimit } from './shared-helper-types';
 import { finite } from '../core/helper-values';
 import { escapeHtml } from '../core/helper-format';
+import { USAGE_COST_KEYS, addUsage, addUsageTokens, addUsageCosts, addUsageUnavailable, addUsageCount, addKnownUsageCost, compareUsageBuckets, compareUsageModels } from '../core/helper-usage-math';
+export { addUsage as addMergedUsage, usageDisplayTokens, compareUsageBuckets, USAGE_COST_KEYS as USAGE_MERGE_COST_KEYS, USAGE_TOKEN_KEYS as USAGE_MERGE_TOKEN_KEYS } from '../core/helper-usage-math';
 
 // --- Usage summary merging (multi-host) ----------------------------------
 // The usage view fans /api/usage-summary out to every reachable host and
 // merges the payloads here. Costs retain the known subtotal while
 // costUnavailable counts the calls omitted from it; the renderer marks those
 // partial estimates instead of presenting them as complete or free.
-export const USAGE_MERGE_COST_KEYS: readonly CostKey[] = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
-
-
-export const USAGE_MERGE_TOKEN_KEYS: readonly TokenKey[] = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
-
 /**
  * Coalesce a burst of healthy fan-out responses into one complete render.
  * If a peer is genuinely slow, the delayed call still publishes the useful
@@ -46,32 +43,12 @@ export function emptyMergedUsage(): MergedUsage {
 }
 
 
-export function addMergedUsage(to: MergedUsage, from?: UsageBucket | null) {
-  if (!from) return to;
-  for (const k of USAGE_MERGE_TOKEN_KEYS) to.tokens[k] += from.tokens?.[k] || 0;
-  for (const k of USAGE_MERGE_COST_KEYS) {
-    to.costUnavailable[k] += from.costUnavailable?.[k] || 0;
-    const value = from.costs?.[k];
-    if (finite(value)) {
-      to.costs[k] = (finite(to.costs[k]) ? to.costs[k] : 0) + value;
-    }
-  }
-  for (const k of ['calls', 'measured', 'durationMs'] as const) to[k] += from[k] || 0;
-  to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
-  return to;
-}
-
-
 export function pricedUsageFields<T extends UsageBucket>(bucket: T) {
   bucket.unpricedCalls = bucket.costUnavailable?.total || 0;
   bucket.priced = !bucket.unpricedCalls;
   return bucket;
 }
 
-
-export function usageDisplayTokens(tokens?: Tokens | null) {
-  return (tokens?.input || 0) + (tokens?.output || 0) + (tokens?.cacheRead || 0) + (tokens?.cacheWrite || 0);
-}
 
 /** Known spend that cannot be assigned to a component. Older session entries
  * may record only cost.total; mixed-version fleet payloads can do the same.
@@ -81,14 +58,6 @@ export function usageUnattributedCost(costs?: Costs | null) {
   const attributed = (['input', 'output', 'cacheRead', 'cacheWrite'] as const)
     .reduce((sum, key) => sum + (finite(costs[key]) ? costs[key] : 0), 0);
   return Math.max(0, costs.total - attributed);
-}
-
-/** The server's group comparator, so a merged list ranks like a local one. */
-export function compareUsageBuckets(a: MergedUsage, b: MergedUsage, sort: string) {
-  if (sort === 'tokens') return usageDisplayTokens(b.tokens) - usageDisplayTokens(a.tokens) || b.calls - a.calls;
-  const aKnown = finite(a.costs?.total), bKnown = finite(b.costs?.total);
-  if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
-  return (bKnown ? b.costs.total - a.costs.total : 0) || b.calls - a.calls;
 }
 
 /**
@@ -132,27 +101,26 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
   let monthlyBudgetUsd: number | null = null;
 
   for (const { summary, hostId = null, hostLabel = null } of entries) {
-    addMergedUsage(totals, summary.totals);
+    addUsage(totals, summary.totals);
     unpricedModelCalls += summary.unpricedModelCalls || 0;
     for (const [key, value] of Object.entries(summary.headlineCosts || {})) {
       headlineKeys.add(key);
-      headlineCostUnavailable[key] = (headlineCostUnavailable[key] || 0) +
-        (summary.headlineCostUnavailable?.[key] || 0);
+      headlineCostUnavailable[key] = addUsageCount(headlineCostUnavailable[key], summary.headlineCostUnavailable?.[key]);
       if (finite(value)) {
-        headlineCosts[key] = (finite(headlineCosts[key]) ? headlineCosts[key] : 0) + value;
+        headlineCosts[key] = addKnownUsageCost(headlineCosts[key], value);
       }
     }
     for (const [key, costs] of Object.entries(summary.headlineCostsByBucket || {})) {
       headlineKeys.add(key);
       const row = headlineCostsByBucket[key] ||
         (headlineCostsByBucket[key] = emptyCosts());
-      for (const k of USAGE_MERGE_COST_KEYS) if (finite(costs?.[k])) row[k] += costs[k];
+      for (const k of USAGE_COST_KEYS) if (finite(costs?.[k])) row[k] += costs[k];
     }
     for (const day of summary.daily || []) {
       if (!day || !day.day) continue;
       let slot = days.get(day.day);
       if (!slot) { slot = { bucket: emptyMergedUsage(), models: new Map() }; days.set(day.day, slot); }
-      addMergedUsage(slot.bucket, day);
+      addUsage(slot.bucket, day);
       for (const model of day.models || []) {
         if (!model || !model.ref) continue;
         let row = slot.models.get(model.ref);
@@ -165,11 +133,9 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
           slot.models.set(model.ref, row);
         }
         row.calls += model.calls || 0;
-        for (const k of USAGE_MERGE_TOKEN_KEYS) row.tokens[k] += model.tokens?.[k] || 0;
-        for (const k of USAGE_MERGE_COST_KEYS) row.costUnavailable[k] = (row.costUnavailable[k] || 0) + (model.costUnavailable?.[k] || 0);
-        if (finite(model.cost)) {
-          row.cost = (finite(row.cost) ? row.cost : 0) + model.cost;
-        }
+        addUsageTokens(row.tokens, model.tokens);
+        for (const k of USAGE_COST_KEYS) row.costUnavailable[k] = addUsageCount(row.costUnavailable[k], model.costUnavailable?.[k]);
+        row.cost = addKnownUsageCost(row.cost, model.cost);
       }
     }
     for (const bucket of summary.groups?.models || []) {
@@ -179,7 +145,7 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
         row = { key: bucket.key, provider: bucket.provider, model: bucket.model, ...emptyMergedUsage() };
         models.set(bucket.key, row);
       }
-      addMergedUsage(row, bucket);
+      addUsage(row, bucket);
     }
     for (const bucket of summary.groups?.workspaces || []) {
       if (!bucket || bucket.key == null) continue;
@@ -190,7 +156,7 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
         row = { key: bucket.key, host: hostId, hostLabel, ...emptyMergedUsage() };
         workspaces.set(key, row);
       }
-      addMergedUsage(row, bucket);
+      addUsage(row, bucket);
     }
     for (const bucket of summary.groups?.sessions || []) {
       if (!bucket || bucket.id == null) continue;
@@ -200,7 +166,7 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
         row = { ...bucket, host: hostId, hostLabel, ...emptyMergedUsage() };
         sessionRows.set(key, row);
       }
-      addMergedUsage(row, bucket);
+      addUsage(row, bucket);
     }
     if (summary.indexing) indexing = true;
     if (summary.discoveryTruncated) discoveryTruncated = true;
@@ -214,9 +180,7 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
     .map(([day, slot]) => ({
       day,
       ...slot.bucket,
-      models: [...slot.models.values()].sort((a, b) =>
-        Number(finite(b.cost)) - Number(finite(a.cost))
-        || (finite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls),
+      models: [...slot.models.values()].sort(compareUsageModels),
     }));
   const rank = <T extends MergedUsage>(rows: T[]) => rows.map(pricedUsageFields)
     .sort((a, b) => compareUsageBuckets(a, b, sort)).slice(0, 20);
@@ -303,8 +267,6 @@ export function formatUsageDay(day: unknown, style = 'short') {
  */
 export function aggregateUsageWeekly(daily: readonly UsageDay[]) {
   const out = [];
-  const tokenKeys = USAGE_MERGE_TOKEN_KEYS;
-  const costKeys = USAGE_MERGE_COST_KEYS;
   for (let end = daily.length; end > 0; end -= 7) {
     const chunk = daily.slice(Math.max(0, end - 7), end);
     const models = new Map<string, MergedUsageModel>();
@@ -317,26 +279,19 @@ export function aggregateUsageWeekly(daily: readonly UsageDay[]) {
     };
     for (const d of chunk) {
       agg.calls += d.calls || 0;
-      for (const k of tokenKeys) agg.tokens[k] += d.tokens?.[k] || 0;
-      for (const k of costKeys) {
-        agg.costUnavailable[k] += d.costUnavailable?.[k] || 0;
-        const value = d.costs?.[k];
-        if (finite(value)) {
-          agg.costs[k] = (finite(agg.costs[k]) ? agg.costs[k] : 0) + value;
-        }
-      }
+      addUsageTokens(agg.tokens, d.tokens);
+      addUsageCosts(agg.costs, d.costs);
+      addUsageUnavailable(agg.costUnavailable, d.costUnavailable);
       for (const dm of d.models || []) {
         const t = models.get(dm.ref) || { ref: dm.ref, provider: dm.provider, model: dm.model, calls: 0, cost: 0, costUnavailable: { total: 0 }, tokens: emptyTokens() };
         t.calls += dm.calls || 0;
-        t.costUnavailable.total = (t.costUnavailable.total || 0) + (dm.costUnavailable?.total || 0);
-        if (finite(dm.cost)) {
-          t.cost = (finite(t.cost) ? t.cost : 0) + dm.cost;
-        }
-        for (const k of tokenKeys) t.tokens[k] += dm.tokens?.[k] || 0;
+        t.costUnavailable.total = addUsageCount(t.costUnavailable.total, dm.costUnavailable?.total);
+        t.cost = addKnownUsageCost(t.cost, dm.cost);
+        addUsageTokens(t.tokens, dm.tokens);
         models.set(dm.ref, t);
       }
     }
-    agg.models = [...models.values()].sort((a, b) => Number(finite(b.cost)) - Number(finite(a.cost)) || (finite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls);
+    agg.models = [...models.values()].sort(compareUsageModels);
     out.unshift(agg);
   }
   return out;

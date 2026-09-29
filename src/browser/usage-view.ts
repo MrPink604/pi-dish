@@ -1,4 +1,5 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
+import { sameCapturedHost } from './api-client';
 import type { HelperHost } from '../core/helper-types';
 import type { Costs, Tokens, UsageBucket, UsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry } from './shared-helper-types';
 import { escapeHtml } from '../core/helper-format';
@@ -6,6 +7,7 @@ import { formatEstimatedCost, formatUsageCost, formatTokens, formatCacheStat, sh
 import { hostDisplayLabel } from './helper-identity';
 import { mergeUsageSummaries, createFanoutRenderQueue, aggregateUsageWeekly, niceTicks, formatUsageDay, usageUnattributedCost, usageLimitsHtml, shortModelName } from './helper-usage';
 import { finite, record } from '../core/helper-values';
+import { usageDisplayTokens } from '../core/helper-usage-math';
 import { decodeUsageSummary, decodeUsageLimits } from './usage-data';
 import { decodeCacheLifetimes, cacheLifetimesHtml } from './cache-lifetimes';
 import type { CacheLifetimeHost } from './cache-lifetimes';
@@ -44,8 +46,7 @@ export function createUsageView(options: {
   let usageStack: 'buckets' | 'models' = localStorage.getItem('pi-dish-usage-stack') === 'buckets' ? 'buckets' : 'models';
   const usageModelFilter = new Set<string>();
   function sameHost(host: UsageHost): boolean {
-    const current = options.host(host.hostId);
-    return !!current && current.hostId === host.hostId && current.base === host.base && (current.token || '') === (host.token || '');
+    return sameCapturedHost(options.host(host.hostId), host);
   }
   function retireRender(): void { renderGeneration++; bodyEvents.abort(); chartEvents.abort(); detailEvents.abort(); hideUsageTooltip(); }
   // --- Usage view (main-pane takeover) ---
@@ -248,7 +249,7 @@ export function createUsageView(options: {
 
   function usageMetricValue(bucket: UsageBucket, metric: UsageMetric) {
     if (metric === 'cost') return finite(bucket.costs?.total) ? bucket.costs.total : 0;
-    if (metric === 'tokens') return usageTokensTotal(bucket.tokens);
+    if (metric === 'tokens') return usageDisplayTokens(bucket.tokens);
     return bucket.calls || 0;
   }
   const USAGE_METRIC_LABELS: Readonly<Record<UsageMetric, string>> = { cost: 'Estimated spend', tokens: 'Tokens', calls: 'Calls' };
@@ -271,11 +272,8 @@ export function createUsageView(options: {
   }
   function usageModelValue(m: Pick<UsageModel, 'cost' | 'tokens' | 'calls'> | undefined, metric: UsageMetric) {
     if (metric === 'cost') return finite(m?.cost) ? m.cost : 0;
-    if (metric === 'tokens') return usageTokensTotal(m?.tokens);
+    if (metric === 'tokens') return usageDisplayTokens(m?.tokens);
     return m?.calls || 0;
-  }
-  function usageTokensTotal(tokens?: Tokens) {
-    return (['input', 'output', 'cacheRead', 'cacheWrite'] as const).reduce((s, k) => s + (tokens?.[k] || 0), 0);
   }
   // Compact per-row breakdown: "1.2M in / 800k out · 92% cached". The cached
   // share is cacheRead over the whole prompt side (input + cache read + cache
@@ -323,7 +321,7 @@ export function createUsageView(options: {
       }
     }
 
-    const summary = `<div class="usage-total-line"><strong>${formatUsageCost(t.costs?.total, t.costUnavailable?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range || ''] || 'the selected range'}</div>` +
+    const summary = `<div class="usage-total-line"><strong>${formatUsageCost(t.costs?.total, t.costUnavailable?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageDisplayTokens(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range || ''] || 'the selected range'}</div>` +
       `<div class="usage-token-line">${formatTokens(t.tokens?.input)} in · ${formatTokens(t.tokens?.output)} out · cache ${formatCacheStat(t.tokens?.cacheRead, t.tokens?.cacheWrite, t.tokens?.input)}</div>`;
     const filterNote = usageModelFilter.size
       ? `<div class="usage-filter-note">Filtered to ${[...usageModelFilter].map(r => `<b title="${escapeHtml(r)}">${escapeHtml(shortModelName(r))}</b>`).join(', ')}<button class="usage-range-btn" data-clear-models>✕ clear</button></div>`
@@ -482,7 +480,7 @@ export function createUsageView(options: {
       const x = margin.left + band * i + (band - barW) / 2;
       const label = ((b.days || 1) > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, 'long')) + ': ' +
         (metric === 'cost' ? formatUsageCost(b.costs?.total, b.costUnavailable?.total)
-          : metric === 'tokens' ? `${formatTokens(usageTokensTotal(b.tokens))} tokens`
+          : metric === 'tokens' ? `${formatTokens(usageDisplayTokens(b.tokens))} tokens`
           : `${b.calls} calls`);
       const seg = [];
       let cursor = yFor(0);
@@ -571,8 +569,8 @@ export function createUsageView(options: {
       return i >= 0 ? 's' + (i + 1) : 'sother';
     };
     const rows = (bucket.models || []).map(m => {
-      const meta = [`${m.calls} calls`, `${formatTokens(usageTokensTotal(m.tokens))} tok`];
-      if (usageTokensTotal(m.tokens) > 0) meta.push(usageTokensDetail(m.tokens));
+      const meta = [`${m.calls} calls`, `${formatTokens(usageDisplayTokens(m.tokens))} tok`];
+      if (usageDisplayTokens(m.tokens) > 0) meta.push(usageTokensDetail(m.tokens));
       if (metric === 'cost') meta.push(formatUsageCost(m.cost, m.costUnavailable?.total));
       return `
       <div class="usage-row" title="${escapeHtml(m.ref)}">
@@ -644,12 +642,12 @@ export function createUsageView(options: {
       const share = on && total > 0 ? val(m) / total : 0;
       const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + '%' : '—';
       const spend = `${formatUsageCost(m.costs?.total, m.unpricedCalls)}${m.unpricedCalls ? ` · ${m.unpricedCalls} unpriced` : ''}`;
-      const detail = usageTokensTotal(m.tokens) > 0 ? ` · ${usageTokensDetail(m.tokens)}` : '';
+      const detail = usageDisplayTokens(m.tokens) > 0 ? ` · ${usageTokensDetail(m.tokens)}` : '';
       const breakdown = usageCostBreakdown(m.costs);
       return `<div class="usage-row model-toggle${filtered ? (on ? ' on' : ' off') : ''}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml([m.key, breakdown].filter(Boolean).join('\n'))} — click to toggle model filter">
         <i class="swatch ${on ? slotFor(m.key) : 'soff'}"></i>
         <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || '')}</small></span>
-        <span class="usage-row-meta">${pct} · ${m.calls} calls · ${formatTokens(usageTokensTotal(m.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
+        <span class="usage-row-meta">${pct} · ${m.calls} calls · ${formatTokens(usageDisplayTokens(m.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
       </div>`;
     };
     const rows = models.map(m => rowHtml(m, isOn(m.key))).join('');
@@ -678,11 +676,11 @@ export function createUsageView(options: {
       // Merged rows keep their host: the same path (or session id) on two
       // machines is two different rows.
       const hostTag = isMultiHost() && x.hostLabel ? `<small class="usage-row-host">${escapeHtml(x.hostLabel)}</small>` : '';
-      const detail = usageTokensTotal(x.tokens) > 0 ? ` · ${usageTokensDetail(x.tokens)}` : '';
+      const detail = usageDisplayTokens(x.tokens) > 0 ? ` · ${usageTokensDetail(x.tokens)}` : '';
       const breakdown = usageCostBreakdown(x.costs);
       return `<div class="usage-row usage-bar-row${kind === 'session' ? ' clickable' : ''}"${attrs} title="${escapeHtml([x.key || x.name || x.id, breakdown].filter(Boolean).join('\n'))}">
         <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}${hostTag}</span>
-        <span class="usage-row-meta">${x.calls} calls · ${formatTokens(usageTokensTotal(x.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
+        <span class="usage-row-meta">${x.calls} calls · ${formatTokens(usageDisplayTokens(x.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
         <span class="usage-row-bar" style="width:${(val(x) / maxV * 100).toFixed(1)}%"></span>
       </div>`;
     }).join('');
@@ -713,7 +711,7 @@ export function createUsageView(options: {
     const total = document.createElement('div');
     total.className = 'tt-total';
     total.textContent = metric === 'cost' ? `${formatUsageCost(bucket.costs?.total, bucket.costUnavailable?.total)} · ${bucket.calls || 0} calls`
-      : metric === 'tokens' ? `${formatTokens(usageTokensTotal(bucket.tokens))} tokens · ${bucket.calls || 0} calls`
+      : metric === 'tokens' ? `${formatTokens(usageDisplayTokens(bucket.tokens))} tokens · ${bucket.calls || 0} calls`
       : `${bucket.calls} calls`;
     el.append(head, total);
     const rows: [string, string, number][] = [];

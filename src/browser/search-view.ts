@@ -1,4 +1,5 @@
 import type { ApiRequest } from './api-client';
+import { sameCapturedHost } from './api-client';
 import type { SessionState } from './session-state';
 import type { createSessionSearch } from './session-search';
 import { escapeHtml } from '../core/helper-format';
@@ -29,8 +30,7 @@ export function createSearchView(options: {
   const events = new AbortController();
   let view = 0;
   function sameHost(host: SearchHost): boolean {
-    const current = options.host(host.hostId);
-    return !!current && current.hostId === host.hostId && current.base === host.base && (current.token || '') === (host.token || '');
+    return sameCapturedHost(options.host(host.hostId), host);
   }
   const message = (error: unknown) => error instanceof Error ? error.message : String(error);
   // --- Advanced search (main-pane takeover) ---

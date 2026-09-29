@@ -222,7 +222,8 @@ test('synchronous OMP launch rejects a thinking level outside the selected model
     });
     assert.equal(invalid.status, 400);
     assert.match(String((0, test_types_js_1.record)(invalid.body).error), /valid levels: high, max/i);
-    assert.equal(fs.readFileSync(modelEventsFile, 'utf8').trim().split('\n').length, 1, 'launch validation reuses the catalog loaded by the new-session view');
+    const events = fs.readFileSync(modelEventsFile, 'utf8').trim().split('\n');
+    assert.equal(events.filter(event => event.startsWith('start ')).length, 1, 'launch validation reuses the catalog loaded by the new-session view');
 });
 test('shared catalogs preserve cwd, environment, config and credential freshness during discovery', async () => {
     const commands = require('../lib/harness-feature-commands');

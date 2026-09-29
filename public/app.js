@@ -562,6 +562,12 @@
     if (text18 == null || text18 === "") return "";
     return String(text18).replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "").replace(/\x1b\[[0-9;:?]*[ -\/]*[@-~]/g, "").replace(/\x1b[ -\/]*./g, "");
   }
+  function formatThinkingPreview(thinking) {
+    return thinking.substring(0, 80).replace(/\n/g, " ") + "\u2026";
+  }
+  function formatToolArguments(name, args) {
+    return name === "ipython" && typeof args.code === "string" ? args.code : JSON.stringify(args, null, 2);
+  }
   function formatTokens(tokens2) {
     if (!tokens2 || tokens2 === 0) return "0";
     if (tokens2 >= 1e6) return `${(tokens2 / 1e6).toFixed(1)}M`;
@@ -1228,6 +1234,9 @@
   }
 
   // src/browser/api-client.ts
+  function sameCapturedHost(current, captured) {
+    return !!current && current.hostId === captured.hostId && current.base === captured.base && (current.token || "") === (captured.token || "");
+  }
   var ApiHttpError = class extends Error {
     constructor(message3, status) {
       super(message3);
@@ -3723,9 +3732,51 @@ ${row.id}`;
     };
   }
 
+  // src/core/helper-usage-math.ts
+  var USAGE_COST_KEYS = ["input", "output", "cacheRead", "cacheWrite", "total"];
+  var USAGE_TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
+  function addKnownUsageCost(to, from) {
+    return finite(from) ? (finite(to) ? to : 0) + from : to;
+  }
+  function addUsageTokens(to, from) {
+    for (const key of USAGE_TOKEN_KEYS) to[key] += from?.[key] || 0;
+  }
+  function addUsageCosts(to, from) {
+    for (const key of USAGE_COST_KEYS) to[key] = addKnownUsageCost(to[key], from?.[key]);
+  }
+  function addUsageUnavailable(to, from) {
+    for (const key of USAGE_COST_KEYS) to[key] += from?.[key] || 0;
+  }
+  function addUsageCount(to, from) {
+    return (to || 0) + (from || 0);
+  }
+  function addUsage(to, from) {
+    if (!from) return to;
+    addUsageTokens(to.tokens, from.tokens);
+    addUsageCosts(to.costs, from.costs);
+    addUsageUnavailable(to.costUnavailable, from.costUnavailable);
+    to.calls += from.calls || 0;
+    to.measured += from.measured || 0;
+    to.durationMs += from.durationMs || 0;
+    to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
+    return to;
+  }
+  function usageDisplayTokens(tokens2) {
+    return (tokens2?.input || 0) + (tokens2?.output || 0) + (tokens2?.cacheRead || 0) + (tokens2?.cacheWrite || 0);
+  }
+  function compareKnownCosts(a, b) {
+    const aKnown = finite(a), bKnown = finite(b);
+    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
+    return aKnown && bKnown ? b - a : 0;
+  }
+  function compareUsageBuckets(a, b, sort) {
+    return (sort === "tokens" ? usageDisplayTokens(b.tokens) - usageDisplayTokens(a.tokens) : compareKnownCosts(a.costs?.total, b.costs?.total)) || b.calls - a.calls;
+  }
+  function compareUsageModels(a, b) {
+    return compareKnownCosts(a.cost, b.cost) || b.calls - a.calls;
+  }
+
   // src/browser/helper-usage.ts
-  var USAGE_MERGE_COST_KEYS = ["input", "output", "cacheRead", "cacheWrite", "total"];
-  var USAGE_MERGE_TOKEN_KEYS = ["input", "output", "cacheRead", "cacheWrite", "reasoning"];
   function createFanoutRenderQueue(states, render, delayMs = 100) {
     let timer;
     let disposed = false;
@@ -3757,38 +3808,15 @@ ${row.id}`;
       slowestMs: 0
     };
   }
-  function addMergedUsage(to, from) {
-    if (!from) return to;
-    for (const k of USAGE_MERGE_TOKEN_KEYS) to.tokens[k] += from.tokens?.[k] || 0;
-    for (const k of USAGE_MERGE_COST_KEYS) {
-      to.costUnavailable[k] += from.costUnavailable?.[k] || 0;
-      const value = from.costs?.[k];
-      if (finite(value)) {
-        to.costs[k] = (finite(to.costs[k]) ? to.costs[k] : 0) + value;
-      }
-    }
-    for (const k of ["calls", "measured", "durationMs"]) to[k] += from[k] || 0;
-    to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
-    return to;
-  }
   function pricedUsageFields(bucket2) {
     bucket2.unpricedCalls = bucket2.costUnavailable?.total || 0;
     bucket2.priced = !bucket2.unpricedCalls;
     return bucket2;
   }
-  function usageDisplayTokens(tokens2) {
-    return (tokens2?.input || 0) + (tokens2?.output || 0) + (tokens2?.cacheRead || 0) + (tokens2?.cacheWrite || 0);
-  }
   function usageUnattributedCost(costs2) {
     if (!finite(costs2?.total)) return 0;
     const attributed = ["input", "output", "cacheRead", "cacheWrite"].reduce((sum, key) => sum + (finite(costs2[key]) ? costs2[key] : 0), 0);
     return Math.max(0, costs2.total - attributed);
-  }
-  function compareUsageBuckets(a, b, sort) {
-    if (sort === "tokens") return usageDisplayTokens(b.tokens) - usageDisplayTokens(a.tokens) || b.calls - a.calls;
-    const aKnown = finite(a.costs?.total), bKnown = finite(b.costs?.total);
-    if (aKnown !== bKnown) return Number(bKnown) - Number(aKnown);
-    return (bKnown ? b.costs.total - a.costs.total : 0) || b.calls - a.calls;
   }
   function mergeUsageSummaries(list) {
     const items = Array.isArray(list) ? list : [];
@@ -3809,19 +3837,19 @@ ${row.id}`;
     let indexing = false, discoveryTruncated = false, discoverySkipped = 0;
     let monthlyBudgetUsd = null;
     for (const { summary, hostId = null, hostLabel = null } of entries) {
-      addMergedUsage(totals, summary.totals);
+      addUsage(totals, summary.totals);
       unpricedModelCalls += summary.unpricedModelCalls || 0;
       for (const [key, value] of Object.entries(summary.headlineCosts || {})) {
         headlineKeys.add(key);
-        headlineCostUnavailable[key] = (headlineCostUnavailable[key] || 0) + (summary.headlineCostUnavailable?.[key] || 0);
+        headlineCostUnavailable[key] = addUsageCount(headlineCostUnavailable[key], summary.headlineCostUnavailable?.[key]);
         if (finite(value)) {
-          headlineCosts[key] = (finite(headlineCosts[key]) ? headlineCosts[key] : 0) + value;
+          headlineCosts[key] = addKnownUsageCost(headlineCosts[key], value);
         }
       }
       for (const [key, costs2] of Object.entries(summary.headlineCostsByBucket || {})) {
         headlineKeys.add(key);
         const row = headlineCostsByBucket[key] || (headlineCostsByBucket[key] = emptyCosts());
-        for (const k of USAGE_MERGE_COST_KEYS) if (finite(costs2?.[k])) row[k] += costs2[k];
+        for (const k of USAGE_COST_KEYS) if (finite(costs2?.[k])) row[k] += costs2[k];
       }
       for (const day of summary.daily || []) {
         if (!day || !day.day) continue;
@@ -3830,7 +3858,7 @@ ${row.id}`;
           slot = { bucket: emptyMergedUsage(), models: /* @__PURE__ */ new Map() };
           days.set(day.day, slot);
         }
-        addMergedUsage(slot.bucket, day);
+        addUsage(slot.bucket, day);
         for (const model of day.models || []) {
           if (!model || !model.ref) continue;
           let row = slot.models.get(model.ref);
@@ -3847,11 +3875,9 @@ ${row.id}`;
             slot.models.set(model.ref, row);
           }
           row.calls += model.calls || 0;
-          for (const k of USAGE_MERGE_TOKEN_KEYS) row.tokens[k] += model.tokens?.[k] || 0;
-          for (const k of USAGE_MERGE_COST_KEYS) row.costUnavailable[k] = (row.costUnavailable[k] || 0) + (model.costUnavailable?.[k] || 0);
-          if (finite(model.cost)) {
-            row.cost = (finite(row.cost) ? row.cost : 0) + model.cost;
-          }
+          addUsageTokens(row.tokens, model.tokens);
+          for (const k of USAGE_COST_KEYS) row.costUnavailable[k] = addUsageCount(row.costUnavailable[k], model.costUnavailable?.[k]);
+          row.cost = addKnownUsageCost(row.cost, model.cost);
         }
       }
       for (const bucket2 of summary.groups?.models || []) {
@@ -3861,7 +3887,7 @@ ${row.id}`;
           row = { key: bucket2.key, provider: bucket2.provider, model: bucket2.model, ...emptyMergedUsage() };
           models.set(bucket2.key, row);
         }
-        addMergedUsage(row, bucket2);
+        addUsage(row, bucket2);
       }
       for (const bucket2 of summary.groups?.workspaces || []) {
         if (!bucket2 || bucket2.key == null) continue;
@@ -3871,7 +3897,7 @@ ${row.id}`;
           row = { key: bucket2.key, host: hostId, hostLabel, ...emptyMergedUsage() };
           workspaces.set(key, row);
         }
-        addMergedUsage(row, bucket2);
+        addUsage(row, bucket2);
       }
       for (const bucket2 of summary.groups?.sessions || []) {
         if (!bucket2 || bucket2.id == null) continue;
@@ -3881,7 +3907,7 @@ ${row.id}`;
           row = { ...bucket2, host: hostId, hostLabel, ...emptyMergedUsage() };
           sessionRows.set(key, row);
         }
-        addMergedUsage(row, bucket2);
+        addUsage(row, bucket2);
       }
       if (summary.indexing) indexing = true;
       if (summary.discoveryTruncated) discoveryTruncated = true;
@@ -3893,7 +3919,7 @@ ${row.id}`;
     const daily = [...days.entries()].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(([day, slot]) => ({
       day,
       ...slot.bucket,
-      models: [...slot.models.values()].sort((a, b) => Number(finite(b.cost)) - Number(finite(a.cost)) || (finite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls)
+      models: [...slot.models.values()].sort(compareUsageModels)
     }));
     const rank = (rows) => rows.map(pricedUsageFields).sort((a, b) => compareUsageBuckets(a, b, sort)).slice(0, 20);
     return {
@@ -3955,8 +3981,6 @@ ${row.id}`;
   }
   function aggregateUsageWeekly(daily) {
     const out = [];
-    const tokenKeys = USAGE_MERGE_TOKEN_KEYS;
-    const costKeys = USAGE_MERGE_COST_KEYS;
     for (let end = daily.length; end > 0; end -= 7) {
       const chunk = daily.slice(Math.max(0, end - 7), end);
       const models = /* @__PURE__ */ new Map();
@@ -3971,26 +3995,19 @@ ${row.id}`;
       };
       for (const d of chunk) {
         agg.calls += d.calls || 0;
-        for (const k of tokenKeys) agg.tokens[k] += d.tokens?.[k] || 0;
-        for (const k of costKeys) {
-          agg.costUnavailable[k] += d.costUnavailable?.[k] || 0;
-          const value = d.costs?.[k];
-          if (finite(value)) {
-            agg.costs[k] = (finite(agg.costs[k]) ? agg.costs[k] : 0) + value;
-          }
-        }
+        addUsageTokens(agg.tokens, d.tokens);
+        addUsageCosts(agg.costs, d.costs);
+        addUsageUnavailable(agg.costUnavailable, d.costUnavailable);
         for (const dm of d.models || []) {
           const t = models.get(dm.ref) || { ref: dm.ref, provider: dm.provider, model: dm.model, calls: 0, cost: 0, costUnavailable: { total: 0 }, tokens: emptyTokens() };
           t.calls += dm.calls || 0;
-          t.costUnavailable.total = (t.costUnavailable.total || 0) + (dm.costUnavailable?.total || 0);
-          if (finite(dm.cost)) {
-            t.cost = (finite(t.cost) ? t.cost : 0) + dm.cost;
-          }
-          for (const k of tokenKeys) t.tokens[k] += dm.tokens?.[k] || 0;
+          t.costUnavailable.total = addUsageCount(t.costUnavailable.total, dm.costUnavailable?.total);
+          t.cost = addKnownUsageCost(t.cost, dm.cost);
+          addUsageTokens(t.tokens, dm.tokens);
           models.set(dm.ref, t);
         }
       }
-      agg.models = [...models.values()].sort((a, b) => Number(finite(b.cost)) - Number(finite(a.cost)) || (finite(b.cost) ? b.cost - a.cost : 0) || b.calls - a.calls);
+      agg.models = [...models.values()].sort(compareUsageModels);
       out.unshift(agg);
     }
     return out;
@@ -5278,16 +5295,15 @@ ${row.id}`;
   </div>`;
     }
     function renderThinkingBlock(thinking) {
-      const preview = thinking.substring(0, 80).replace(/\n/g, " ");
       return `<details class="thinking-block">
-    <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview">${escapeHtml(preview)}\u2026</span></summary>
+    <summary class="thinking-header"><span class="thinking-label">Thinking</span><span class="thinking-preview">${escapeHtml(formatThinkingPreview(thinking))}</span></summary>
     <div class="thinking-text">${escapeHtml(thinking)}</div>
   </details>`;
     }
     function renderToolCall(block) {
       const args = block.arguments || {};
       const summary = getToolSummary(block.name || "", args);
-      const bodyHtml = block.name === "ipython" && typeof args.code === "string" ? `<pre><code>${escapeHtml(args.code)}</code></pre>` : `<pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre>`;
+      const bodyHtml = `<pre><code>${escapeHtml(formatToolArguments(block.name, args))}</code></pre>`;
       return `<details class="tool-call">
     <summary class="tool-call-header">
       <span class="tool-call-icon">\u26A1</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
@@ -7602,8 +7618,7 @@ ${row.id}`;
     const events = new AbortController();
     let view = 0;
     function sameHost(host) {
-      const current = options2.host(host.hostId);
-      return !!current && current.hostId === host.hostId && current.base === host.base && (current.token || "") === (host.token || "");
+      return sameCapturedHost(options2.host(host.hostId), host);
     }
     const message3 = (error) => error instanceof Error ? error.message : String(error);
     let searchViewSeq = 0;
@@ -8409,15 +8424,15 @@ ${row.id}`;
   var number4 = (value) => finite(value) ? value : 0;
   function costs(value) {
     const row = object3(value);
-    return Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, finite(row[key]) ? row[key] : null]));
+    return Object.fromEntries(USAGE_COST_KEYS.map((key) => [key, finite(row[key]) ? row[key] : null]));
   }
   function counts(value) {
     const row = object3(value);
-    return Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, number4(row[key])]));
+    return Object.fromEntries(USAGE_COST_KEYS.map((key) => [key, number4(row[key])]));
   }
   function tokens(value) {
     const row = object3(value);
-    return Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map((key) => [key, number4(row[key])]));
+    return Object.fromEntries(USAGE_TOKEN_KEYS.map((key) => [key, number4(row[key])]));
   }
   function bucket(value) {
     const row = object3(value);
@@ -8732,8 +8747,7 @@ ${row.id}`;
     let usageStack = localStorage2.getItem("pi-dish-usage-stack") === "buckets" ? "buckets" : "models";
     const usageModelFilter = /* @__PURE__ */ new Set();
     function sameHost(host) {
-      const current = options2.host(host.hostId);
-      return !!current && current.hostId === host.hostId && current.base === host.base && (current.token || "") === (host.token || "");
+      return sameCapturedHost(options2.host(host.hostId), host);
     }
     function retireRender() {
       renderGeneration++;
@@ -8949,7 +8963,7 @@ ${row.id}`;
     }
     function usageMetricValue(bucket2, metric) {
       if (metric === "cost") return finite(bucket2.costs?.total) ? bucket2.costs.total : 0;
-      if (metric === "tokens") return usageTokensTotal(bucket2.tokens);
+      if (metric === "tokens") return usageDisplayTokens(bucket2.tokens);
       return bucket2.calls || 0;
     }
     const USAGE_METRIC_LABELS = { cost: "Estimated spend", tokens: "Tokens", calls: "Calls" };
@@ -8968,11 +8982,8 @@ ${row.id}`;
     }
     function usageModelValue(m, metric) {
       if (metric === "cost") return finite(m?.cost) ? m.cost : 0;
-      if (metric === "tokens") return usageTokensTotal(m?.tokens);
+      if (metric === "tokens") return usageDisplayTokens(m?.tokens);
       return m?.calls || 0;
-    }
-    function usageTokensTotal(tokens2) {
-      return ["input", "output", "cacheRead", "cacheWrite"].reduce((s, k) => s + (tokens2?.[k] || 0), 0);
     }
     function usageTokensDetail(tokens2) {
       const t = tokens2 || {};
@@ -9012,7 +9023,7 @@ ${row.id}`;
           budgetHtml = `<div class="usage-budget"><small>Budget tracking unavailable${hu.month ? ` \u2014 ${hu.month} calls have unavailable pricing` : ""}.</small></div>`;
         }
       }
-      const summary = `<div class="usage-total-line"><strong>${formatUsageCost(t.costs?.total, t.costUnavailable?.total)}</strong> \xB7 ${t.calls || 0} calls \xB7 ${formatTokens(usageTokensTotal(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range || ""] || "the selected range"}</div><div class="usage-token-line">${formatTokens(t.tokens?.input)} in \xB7 ${formatTokens(t.tokens?.output)} out \xB7 cache ${formatCacheStat(t.tokens?.cacheRead, t.tokens?.cacheWrite, t.tokens?.input)}</div>`;
+      const summary = `<div class="usage-total-line"><strong>${formatUsageCost(t.costs?.total, t.costUnavailable?.total)}</strong> \xB7 ${t.calls || 0} calls \xB7 ${formatTokens(usageDisplayTokens(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range || ""] || "the selected range"}</div><div class="usage-token-line">${formatTokens(t.tokens?.input)} in \xB7 ${formatTokens(t.tokens?.output)} out \xB7 cache ${formatCacheStat(t.tokens?.cacheRead, t.tokens?.cacheWrite, t.tokens?.input)}</div>`;
       const filterNote = usageModelFilter.size ? `<div class="usage-filter-note">Filtered to ${[...usageModelFilter].map((r) => `<b title="${escapeHtml(r)}">${escapeHtml(shortModelName(r))}</b>`).join(", ")}<button class="usage-range-btn" data-clear-models>\u2715 clear</button></div>` : "";
       const metric = usageSort === "tokens" ? "tokens" : finite(t.costs?.total) && t.costs.total > 0 ? "cost" : "calls";
       const ranges = USAGE_RANGES.map(([v, l]) => `<button class="usage-range-btn${usageRange === v ? " active" : ""}" data-range="${v}">${l}</button>`).join("");
@@ -9156,7 +9167,7 @@ ${row.id}`;
           }
         }
         const x2 = margin.left + band * i + (band - barW) / 2;
-        const label = ((b.days || 1) > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, "long")) + ": " + (metric === "cost" ? formatUsageCost(b.costs?.total, b.costUnavailable?.total) : metric === "tokens" ? `${formatTokens(usageTokensTotal(b.tokens))} tokens` : `${b.calls} calls`);
+        const label = ((b.days || 1) > 1 ? `Week of ${formatUsageDay(b.day)}` : formatUsageDay(b.day, "long")) + ": " + (metric === "cost" ? formatUsageCost(b.costs?.total, b.costUnavailable?.total) : metric === "tokens" ? `${formatTokens(usageDisplayTokens(b.tokens))} tokens` : `${b.calls} calls`);
         const seg = [];
         let cursor2 = yFor(0);
         for (let sI = 0; sI < segs.length; sI++) {
@@ -9246,8 +9257,8 @@ ${row.id}`;
         return i >= 0 ? "s" + (i + 1) : "sother";
       };
       const rows = (bucket2.models || []).map((m) => {
-        const meta = [`${m.calls} calls`, `${formatTokens(usageTokensTotal(m.tokens))} tok`];
-        if (usageTokensTotal(m.tokens) > 0) meta.push(usageTokensDetail(m.tokens));
+        const meta = [`${m.calls} calls`, `${formatTokens(usageDisplayTokens(m.tokens))} tok`];
+        if (usageDisplayTokens(m.tokens) > 0) meta.push(usageTokensDetail(m.tokens));
         if (metric === "cost") meta.push(formatUsageCost(m.cost, m.costUnavailable?.total));
         return `
       <div class="usage-row" title="${escapeHtml(m.ref)}">
@@ -9308,12 +9319,12 @@ ${row.id}`;
         const share = on && total > 0 ? val(m) / total : 0;
         const pct2 = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + "%" : "\u2014";
         const spend = `${formatUsageCost(m.costs?.total, m.unpricedCalls)}${m.unpricedCalls ? ` \xB7 ${m.unpricedCalls} unpriced` : ""}`;
-        const detail = usageTokensTotal(m.tokens) > 0 ? ` \xB7 ${usageTokensDetail(m.tokens)}` : "";
+        const detail = usageDisplayTokens(m.tokens) > 0 ? ` \xB7 ${usageTokensDetail(m.tokens)}` : "";
         const breakdown = usageCostBreakdown(m.costs);
         return `<div class="usage-row model-toggle${filtered ? on ? " on" : " off" : ""}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml([m.key, breakdown].filter(Boolean).join("\n"))} \u2014 click to toggle model filter">
         <i class="swatch ${on ? slotFor(m.key) : "soff"}"></i>
         <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || "")}</small></span>
-        <span class="usage-row-meta">${pct2} \xB7 ${m.calls} calls \xB7 ${formatTokens(usageTokensTotal(m.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
+        <span class="usage-row-meta">${pct2} \xB7 ${m.calls} calls \xB7 ${formatTokens(usageDisplayTokens(m.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
       </div>`;
       };
       const rows = models.map((m) => rowHtml(m, isOn(m.key))).join("");
@@ -9332,11 +9343,11 @@ ${row.id}`;
         const spend = `${formatUsageCost(x2.costs?.total, x2.unpricedCalls)}${x2.unpricedCalls ? ` \xB7 ${x2.unpricedCalls} unpriced` : ""}`;
         const attrs = kind === "session" ? ` data-session-id="${escapeHtml(x2.id)}"${x2.host ? ` data-session-host="${escapeHtml(x2.host)}"` : ""} role="button" tabindex="0"` : "";
         const hostTag = isMultiHost2() && x2.hostLabel ? `<small class="usage-row-host">${escapeHtml(x2.hostLabel)}</small>` : "";
-        const detail = usageTokensTotal(x2.tokens) > 0 ? ` \xB7 ${usageTokensDetail(x2.tokens)}` : "";
+        const detail = usageDisplayTokens(x2.tokens) > 0 ? ` \xB7 ${usageTokensDetail(x2.tokens)}` : "";
         const breakdown = usageCostBreakdown(x2.costs);
         return `<div class="usage-row usage-bar-row${kind === "session" ? " clickable" : ""}"${attrs} title="${escapeHtml([x2.key || x2.name || x2.id, breakdown].filter(Boolean).join("\n"))}">
         <span class="usage-row-name">${escapeHtml(name)}${sub ? `<small>${escapeHtml(sub)}</small>` : ""}${hostTag}</span>
-        <span class="usage-row-meta">${x2.calls} calls \xB7 ${formatTokens(usageTokensTotal(x2.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
+        <span class="usage-row-meta">${x2.calls} calls \xB7 ${formatTokens(usageDisplayTokens(x2.tokens))} tok${detail} \xB7 ${escapeHtml(spend)}</span>
         <span class="usage-row-bar" style="width:${(val(x2) / maxV * 100).toFixed(1)}%"></span>
       </div>`;
       }).join("");
@@ -9362,7 +9373,7 @@ ${row.id}`;
       head.textContent = (bucket2.days || 1) > 1 ? `Week of ${formatUsageDay(bucket2.day)} \xB7 ${bucket2.days} days` : formatUsageDay(bucket2.day, "long");
       const total = document2.createElement("div");
       total.className = "tt-total";
-      total.textContent = metric === "cost" ? `${formatUsageCost(bucket2.costs?.total, bucket2.costUnavailable?.total)} \xB7 ${bucket2.calls || 0} calls` : metric === "tokens" ? `${formatTokens(usageTokensTotal(bucket2.tokens))} tokens \xB7 ${bucket2.calls || 0} calls` : `${bucket2.calls} calls`;
+      total.textContent = metric === "cost" ? `${formatUsageCost(bucket2.costs?.total, bucket2.costUnavailable?.total)} \xB7 ${bucket2.calls || 0} calls` : metric === "tokens" ? `${formatTokens(usageDisplayTokens(bucket2.tokens))} tokens \xB7 ${bucket2.calls || 0} calls` : `${bucket2.calls} calls`;
       el.append(head, total);
       const rows = [];
       if (usageChart?.stack === "buckets" && metric === "cost") {
@@ -9466,9 +9477,9 @@ ${row.id}`;
       cost: nullable(value.cost),
       contextUsage: { tokens: nullable(context.tokens), contextWindow: nullable(context.contextWindow), percent: nullable(context.percent) },
       responseTiming: { medianMs: number5(timing.medianMs), slowestMs: number5(timing.slowestMs) },
-      costs: Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, nullable(costs2[key])])),
-      costUnavailable: Object.fromEntries(USAGE_MERGE_COST_KEYS.map((key) => [key, number5(unavailable[key])])),
-      tokens: Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map((key) => [key, number5(tokens2[key])])),
+      costs: Object.fromEntries(USAGE_COST_KEYS.map((key) => [key, nullable(costs2[key])])),
+      costUnavailable: Object.fromEntries(USAGE_COST_KEYS.map((key) => [key, number5(unavailable[key])])),
+      tokens: Object.fromEntries(USAGE_TOKEN_KEYS.map((key) => [key, number5(tokens2[key])])),
       runtime: typeof runtime.kind === "string" ? { kind: runtime.kind, pid: nullable(runtime.pid), server: text10(runtime.server), tmuxSession: text10(runtime.tmuxSession), windowIndex: nullable(runtime.windowIndex), windowName: text10(runtime.windowName) } : null
     };
   }
@@ -10623,11 +10634,17 @@ ${row.id}`;
   }
 
   // src/browser/comment-anchors.ts
+  var appMarkPolicy = {
+    exclude: "script, style",
+    className: "comment-mark",
+    idAttribute: "data-comment-id"
+  };
   function selectionTextAnchor(root, range) {
-    const before = document.createRange();
+    const document2 = root.ownerDocument;
+    const before = document2.createRange();
     before.selectNodeContents(root);
     before.setEnd(range.startContainer, range.startOffset);
-    const after = document.createRange();
+    const after = document2.createRange();
     after.selectNodeContents(root);
     after.setStart(range.endContainer, range.endOffset);
     return {
@@ -10639,16 +10656,17 @@ ${row.id}`;
       suffix: after.toString().slice(0, 300)
     };
   }
-  function clearCommentMarks(root) {
-    root.querySelectorAll("mark.comment-mark").forEach((mark) => {
+  function clearCommentMarks(root, selector = "mark.comment-mark") {
+    const document2 = root.ownerDocument;
+    root.querySelectorAll(selector).forEach((mark) => {
       const parent = mark.parentNode;
-      mark.replaceWith(document.createTextNode(mark.textContent || ""));
+      mark.replaceWith(document2.createTextNode(mark.textContent || ""));
       parent?.normalize();
     });
   }
-  function collectTextRuns(root) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode: (node) => node.parentElement?.closest("script, style") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
+  function collectTextRuns(root, exclude) {
+    const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => node.parentElement?.closest(exclude) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT
     });
     const runs = [];
     let text18 = "";
@@ -10695,10 +10713,11 @@ ${row.id}`;
     }
     return best;
   }
-  function markCommentQuote(root, anchor, commentId) {
+  function markCommentQuote(root, anchor, commentId, policy2 = appMarkPolicy) {
+    const document2 = root.ownerDocument;
     const quote = anchor?.quote;
     if (!quote) return false;
-    const { runs, text: text18 } = collectTextRuns(root);
+    const { runs, text: text18 } = collectTextRuns(root, policy2.exclude);
     const start = findQuoteOffset(text18, anchor);
     if (start < 0) return false;
     const end = start + quote.length;
@@ -10709,18 +10728,43 @@ ${row.id}`;
       const to = Math.min(run.node.textContent.length, end - run.start);
       if (to <= from) continue;
       const source = run.node.textContent;
-      const mark = document.createElement("mark");
-      mark.className = "comment-mark";
-      mark.dataset.commentId = commentId;
+      const mark = document2.createElement("mark");
+      if (policy2.className) mark.className = policy2.className;
+      mark.setAttribute(policy2.idAttribute, commentId);
       mark.textContent = source.slice(from, to);
-      const frag = document.createDocumentFragment();
-      if (from > 0) frag.appendChild(document.createTextNode(source.slice(0, from)));
+      const frag = document2.createDocumentFragment();
+      if (from > 0) frag.appendChild(document2.createTextNode(source.slice(0, from)));
       frag.appendChild(mark);
-      if (to < source.length) frag.appendChild(document.createTextNode(source.slice(to)));
+      if (to < source.length) frag.appendChild(document2.createTextNode(source.slice(to)));
       run.node.replaceWith(frag);
       marked2 = true;
     }
     return marked2;
+  }
+  function commentCardPosition(rect, width, height, viewportLeft, viewportTop, viewportWidth, viewportHeight) {
+    const margin = 8, gap = 8;
+    const left = Math.max(viewportLeft + margin, Math.min(
+      viewportLeft + viewportWidth - width - margin,
+      rect.left + (rect.width - width) / 2
+    ));
+    const below = rect.bottom + gap;
+    const preferred = below + height <= viewportTop + viewportHeight - margin ? below : rect.top - height - gap;
+    const top = Math.max(viewportTop + margin, Math.min(
+      viewportTop + viewportHeight - height - margin,
+      preferred
+    ));
+    return { left, top };
+  }
+  function positionCommentCard(card, rect) {
+    const window2 = card.ownerDocument.defaultView;
+    const viewport = window2.visualViewport;
+    const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
+    const width = viewport?.width || window2.innerWidth, height = viewport?.height || window2.innerHeight;
+    card.style.maxWidth = `${Math.max(0, width - 16)}px`;
+    card.style.maxHeight = `${Math.max(0, height - 16)}px`;
+    const position = commentCardPosition(rect, card.offsetWidth, card.offsetHeight, left, top, width, height);
+    card.style.left = `${position.left}px`;
+    card.style.top = `${position.top}px`;
   }
 
   // src/browser/anchored-comments.ts
@@ -10795,13 +10839,7 @@ ${row.id}`;
       } catch {
         return;
       }
-      const viewport = window2.visualViewport, left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0;
-      const width = viewport?.width || window2.innerWidth, height = viewport?.height || window2.innerHeight, margin = 8, gap = 8;
-      el.style.maxWidth = `${Math.max(0, width - 2 * margin)}px`;
-      el.style.maxHeight = `${Math.max(0, height - 2 * margin)}px`;
-      el.style.left = `${Math.max(left + margin, Math.min(left + width - el.offsetWidth - margin, rect.left + (rect.width - el.offsetWidth) / 2))}px`;
-      const below = rect.bottom + gap, preferred = below + el.offsetHeight <= top + height - margin ? below : rect.top - el.offsetHeight - gap;
-      el.style.top = `${Math.max(top + margin, Math.min(top + height - el.offsetHeight - margin, preferred))}px`;
+      positionCommentCard(el, rect);
     }
     function disarmDelete() {
       cancelTimer(deleteTimer);
@@ -15095,7 +15133,7 @@ ${restored}`;
           if (!blockEl) return;
           if (sources.get(blockEl) !== text18) {
             sources.set(blockEl, text18);
-            blockEl.querySelector(".thinking-preview").textContent = text18.substring(0, 80).replace(/\n/g, " ") + "\u2026";
+            blockEl.querySelector(".thinking-preview").textContent = formatThinkingPreview(text18);
             blockEl.querySelector(".thinking-text").textContent = text18;
           }
         } else if (block.type === "text") {
@@ -15114,8 +15152,6 @@ ${restored}`;
           }
         } else if (block.type === "toolCall") {
           const args = block.arguments || {};
-          const argsJson = JSON.stringify(args, null, 2);
-          const bodyText = block.name === "ipython" && typeof args.code === "string" ? args.code : argsJson;
           if (!blockEl) {
             el.insertAdjacentHTML(
               "beforeend",
@@ -15135,7 +15171,7 @@ ${restored}`;
             sources.set(blockEl, signature);
             blockEl.querySelector(".tool-call-name").textContent = block.name || "tool";
             blockEl.querySelector(".tool-call-summary").textContent = getToolSummary(block.name || "", args);
-            blockEl.querySelector(".tool-call-content code").textContent = bodyText;
+            blockEl.querySelector(".tool-call-content code").textContent = formatToolArguments(block.name, args);
           }
         }
       });
@@ -17301,6 +17337,7 @@ ${restored}`;
       }
       return options2.request(host, path, init);
     };
+    const sessionApi2 = createSessionApi(apiFetch);
     const isMultiHost2 = options2.multiHost, hostChipHtml = options2.hostChip;
     const copyTextToClipboard3 = options2.copy, setStatus2 = options2.status, confirm2 = options2.confirm;
     const createCwdAutocomplete3 = options2.autocomplete;
@@ -17702,12 +17739,7 @@ ${restored}`;
       const seq = ++routineModelSeq;
       let models = [];
       try {
-        const url = harnessId !== "pi" ? modelCatalogUrl(harnessId, cwd) : "/api/models";
-        const res = await apiFetch(endpoint, url);
-        if (res.ok) {
-          const data = await res.json();
-          models = decodeModelCatalog(data);
-        }
+        models = await sessionApi2.models(endpoint, { harnessId, cwd });
       } catch {
       }
       if (disposed || seq !== routineModelSeq || !sameHost(hostId, endpoint)) return models;

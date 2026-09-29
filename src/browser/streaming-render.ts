@@ -1,6 +1,6 @@
 import type { SessionState, SelectionOwner } from './session-state';
 import type { RenderMessage, MessageBlock } from './message-data';
-import { formatTime } from './helper-format';
+import { formatTime, formatThinkingPreview, formatToolArguments } from './helper-format';
 import { getToolSummary, messageHasVisibleText } from '../core/helper-content';
 /** Coalesce cumulative frames while retaining block DOM and the frame's selection owner. */
 export function createStreamingRenderer(options: {
@@ -65,7 +65,7 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
       if (!blockEl) return;
       if (sources.get(blockEl) !== text) {
         sources.set(blockEl, text);
-        blockEl.querySelector('.thinking-preview')!.textContent = text.substring(0, 80).replace(/\n/g, ' ') + '…';
+        blockEl.querySelector('.thinking-preview')!.textContent = formatThinkingPreview(text);
         blockEl.querySelector('.thinking-text')!.textContent = text;
       }
     } else if (block.type === 'text') {
@@ -82,10 +82,6 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
       }
     } else if (block.type === 'toolCall') {
       const args = block.arguments || {};
-      const argsJson = JSON.stringify(args, null, 2);
-      // Match the static renderer: prime's ipython tool shows its `code`
-      // argument directly instead of the JSON wrapper.
-      const bodyText = block.name === 'ipython' && typeof args.code === 'string' ? args.code : argsJson;
       if (!blockEl) {
         el.insertAdjacentHTML('beforeend',
           `<details class="tool-call" data-block-index="${i}" data-block-type="toolCall">
@@ -103,7 +99,7 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
         sources.set(blockEl, signature);
         blockEl.querySelector('.tool-call-name')!.textContent = block.name || 'tool';
         blockEl.querySelector('.tool-call-summary')!.textContent = getToolSummary(block.name || '', args);
-        blockEl.querySelector('.tool-call-content code')!.textContent = bodyText;
+        blockEl.querySelector('.tool-call-content code')!.textContent = formatToolArguments(block.name, args);
       }
     }
   });

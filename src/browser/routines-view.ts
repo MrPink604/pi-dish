@@ -6,8 +6,7 @@ import type { HarnessRow } from './harness-discovery';
 import type { CwdAutocompleteOptions, createCwdAutocomplete } from './cwd-autocomplete';
 import type { Routine, RoutineForm, RoutineInvocation } from './routines-data';
 import { decodeRoutine, decodeRoutineList, decodeRoutineInvocations } from './routines-data';
-import { decodeModelCatalog } from '../core/session-api';
-import { modelCatalogUrl } from './api-client';
+import { createSessionApi } from './api-client';
 import { modelSelectOptionsHtml as selectOptions, modelHiddenNote } from './model-catalog';
 import { NS_THINKING_LABELS } from './new-session-options';
 import { escapeHtml, truncate } from '../core/helper-format';
@@ -37,6 +36,7 @@ export function createRoutinesView(options: {
     }
     return options.request(host, path, init);
   };
+  const sessionApi = createSessionApi(apiFetch);
   const isMultiHost = options.multiHost, hostChipHtml = options.hostChip;
   const copyTextToClipboard = options.copy, setStatus = options.status, confirm = options.confirm;
   const createCwdAutocomplete = options.autocomplete;
@@ -475,12 +475,7 @@ export function createRoutinesView(options: {
     const seq = ++routineModelSeq;
     let models: CatalogModel[] = [];
     try {
-      const url = harnessId !== 'pi' ? modelCatalogUrl(harnessId, cwd) : '/api/models';
-      const res = await apiFetch(endpoint, url);
-      if (res.ok) {
-        const data: unknown = await res.json();
-        models = decodeModelCatalog(data);
-      }
+      models = await sessionApi.models(endpoint, { harnessId, cwd });
     } catch {}
     if (disposed || seq !== routineModelSeq || !sameHost(hostId, endpoint)) return models;
     routineModelCatalogs.set(key, models);
