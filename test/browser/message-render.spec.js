@@ -59,6 +59,21 @@ const fixtures_js_1 = require("./fixtures.js");
     (0, fixtures_js_1.expect)(result.fallbackImgs).toBe(0);
     (0, fixtures_js_1.expect)(result.fallbackBody?.trim()).toBe('Fallback body.');
 });
+(0, fixtures_js_1.test)('OMP model annotations render as readable mentions in persisted user prompts', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const rendered = await page.evaluate(() => {
+        window.fixtureSessionListPatch(fixtureCurrentSession().id, { harnessId: 'omp' });
+        const root = fixtureElement(document.getElementById('messages'), '#messages');
+        root.innerHTML = fixtureApp.features.messageRenderer.message({
+            role: 'user', content: 'Use <model agent="m1" name="GPT-6-Astra"/> for this task.\n\n`<model agent="m1" name="Example"/>`',
+        });
+        return { prose: root.querySelector('.user-content p')?.textContent, code: root.querySelector('.user-content code')?.textContent,
+            tags: root.querySelectorAll('.user-content model').length };
+    });
+    (0, fixtures_js_1.expect)(rendered.prose).toBe('Use ^GPT-6-Astra for this task.');
+    (0, fixtures_js_1.expect)(rendered.code).toBe('<model agent="m1" name="Example"/>');
+    (0, fixtures_js_1.expect)(rendered.tags).toBe(0);
+});
 (0, fixtures_js_1.test)('transcript image resources and share controls use the selected owning host', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
     const html = await page.evaluate(() => fixtureApp.features.messageRenderer.message({ role: 'user', id: 'entry', content: [{ type: 'image', url: '/api/image', mimeType: 'image/png' }] }));
