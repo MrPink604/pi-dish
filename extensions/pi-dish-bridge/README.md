@@ -110,7 +110,9 @@ native todo-projection transition (counts, clear markers, timestamps) to
 `~/.pi/dish/projection-debug.log`. Use it when the web Todos card flickers:
 the client absorbs clear/set churn under ~500ms, so visible flicker means the
 projection itself oscillates and this log shows the gap and whether the raw
-todos value was an array.
+todos value was an array. OMP captures are scoped to the bridge's own
+`ctx.sessionManager`; a roughly 1 Hz `CLEAR`/set cycle during task-tool runs
+was in-process subagents' empty todos leaking into the parent projection.
 
 Pi's private queue arrays, event subscription and captured command receiver belong
 to `pi-private.ts`. Shared bridge core consumes only its queue/subscription/

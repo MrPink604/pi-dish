@@ -11,10 +11,10 @@ NEVER ask follow-up questions.
 Question:
 {{question}}`;
 
-async function runOmpBtw(question: string): Promise<string> {
-  const session = getOmpNativeSession();
+async function runOmpBtw(question: string, sessionManager: unknown): Promise<string> {
+  const session = getOmpNativeSession(sessionManager);
   if (!session) {
-    const stats = getOmpNativeCaptureStats();
+    const stats = getOmpNativeCaptureStats(sessionManager);
     throw new Error(`/btw has no captured OMP session yet (patch applied: ${stats.patches > 0}, accessor calls seen: ${stats.publishes}).`);
   }
   const run = session.runEphemeralTurn;

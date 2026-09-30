@@ -124,6 +124,10 @@ if (process.env.FAKE_OMP_HAS_COMPACT === '1') {
 // bridge observes in a real OMP process. State moves only through the setters
 // OMP itself calls on a transition, so the capture wiring is what publishes.
 class FakeOmpAgentSession {
+  // OMP hands the extension runner (ctx.sessionManager) and its AgentSession
+  // the same SessionManager; in-process subagents own separate ones.
+  sessionManager: unknown;
+  constructor(sessionManager: unknown) { this.sessionManager = sessionManager; }
   todos: unknown[] = [];
   planMode: unknown = null;
   goal: unknown = undefined;
@@ -158,14 +162,22 @@ class FakeOmpAgentSession {
 
 const stepFile = process.env.FAKE_OMP_NATIVE_STEP_FILE || '';
 let nativeSession: FakeOmpAgentSession | null = null;
+let subagentSession: FakeOmpAgentSession | null = null;
 // The bridge's getOmpNativeSession reads the native-state capture, which a
 // patched-accessor call publishes — OMP's status line does this constantly;
 // the fake calls subscribe() once instead. /btw tests need the capture even
 // without the projection step driver.
 if (stepFile || process.env.FAKE_OMP_HAS_BTW === '1') {
   patchOmpAgentSession(FakeOmpAgentSession);
-  nativeSession = new FakeOmpAgentSession();
+  nativeSession = new FakeOmpAgentSession(ctx.sessionManager);
   nativeSession.subscribe();
+  // An in-process subagent (OMP's task tool) shares the patched prototype
+  // but not the session manager; its reads must not reach this bridge.
+  subagentSession = new FakeOmpAgentSession({
+    getSessionFile() { return path.join(sessionFile.replace(/\.jsonl$/, ''), 'Scout.jsonl'); },
+    getSessionId() { return 'fake-omp-subagent'; },
+  });
+  subagentSession.subscribe();
 }
 if (stepFile) {
   let appliedSeq: unknown;
@@ -176,6 +188,7 @@ if (stepFile) {
     if (!record(step) || step.seq === appliedSeq) return;
     appliedSeq = step.seq;
     const session = nativeSession!;
+    if (step.subagentRead === true) subagentSession!.getTodoPhases();
     if (Array.isArray(step.todos)) session.setTodoPhases(step.todos);
     if ('planMode' in step) session.setPlanModeState(step.planMode);
     if ('goal' in step) session.setGoalModeState(step.goal ?? undefined);
@@ -205,7 +218,7 @@ const bridgeFactory = nativeProjection
       ...bridgeDescriptor,
       nativeProjection: {
         get: () => nativeProjection,
-        subscribe(listener: (projection: unknown) => void) {
+        subscribe(_sessionManager: unknown, listener: (projection: unknown) => void) {
           projectionListeners.add(listener);
           return () => projectionListeners.delete(listener);
         },

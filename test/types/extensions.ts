@@ -19,7 +19,7 @@ createOmpBridge('launch-token', hostConstructors[3]);
 createPrimeBridge('launch-token');
 createBridge({ ...primeDescriptor, spawnToken: 'adopted-token' });
 
-const unsubscribe: () => void = subscribeOmpNativeProjection(projection => {
+const unsubscribe: () => void = subscribeOmpNativeProjection({}, projection => {
   const todos: unknown[] = projection.todos;
   const enabled: boolean | undefined = projection.advisor?.enabled;
   void [todos, enabled];
@@ -30,7 +30,7 @@ declare const opaqueModule: typeof OmpHost;
 // @ts-expect-error OMP's AgentSession is unavailable until runtime member guards narrow the unknown module.
 opaqueModule.AgentSession;
 
-const captured = getOmpNativeSession();
+const captured = getOmpNativeSession({});
 if (captured) {
   // @ts-expect-error A captured host's member is unknown, not a modeled Pi method.
   captured.runEphemeralTurn({ promptText: 'question' });

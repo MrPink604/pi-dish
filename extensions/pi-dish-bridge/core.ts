@@ -266,8 +266,9 @@ const EMULATED_BUILTINS: readonly EmulatedBuiltin[] = [
 // Host-specific slash emulations too host-bound for this shared module: the
 // wrapper supplies the implementation, core owns parsing/gating/response
 // shape. OMP uses this for /btw (AgentSession.runEphemeralTurn — a TUI-only
-// built-in its RPC/socket layer never dispatches).
-export type BtwRunner = (question: string) => Promise<string>;
+// built-in its RPC/socket layer never dispatches). `sessionManager` is the
+// bridge's ctx.sessionManager, identifying which host session to run against.
+export type BtwRunner = (question: string, sessionManager: unknown) => Promise<string>;
 
 // --- Prompt template arg substitution (mirrors pi's prompt-templates.ts) ---
 
@@ -325,9 +326,12 @@ export type BridgeDescriptor = {
   eventProfile: readonly string[];
   capabilities: Record<string, boolean>;
   piPrivate?: PiPrivateOperations;
+  // Keyed by the bridge's ctx.sessionManager: one host process may run
+  // several sessions (OMP's in-process subagents), and only the bridge's own
+  // session may drive its widgets.
   nativeProjection?: {
-    get: () => unknown;
-    subscribe: (listener: (projection: unknown) => void) => (() => void);
+    get: (sessionManager: unknown) => unknown;
+    subscribe: (sessionManager: unknown, listener: (projection: unknown) => void) => (() => void);
   };
   selfPrime?: boolean;
   piLifecycleEvents?: boolean;
@@ -913,6 +917,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let lastQueue: { steering: string[]; followUp: string[] } = { steering: [], followUp: [] };
   let queueUnsub: (() => void) | null = null;
   let nativeProjectionUnsub: (() => void) | null = null;
+  let nativeProjectionOwner: unknown = null;
   let modelId: string | null = null;
   let contextUsage: ContextUsage | null = null;
   let sessionName: string | null = null;
@@ -1217,7 +1222,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
   }
 
   function refreshNativeProjection(): void {
-    try { projectNativeState(descriptor.nativeProjection?.get()); } catch {}
+    const owner = field(lastCtx, "sessionManager");
+    // A session switch may hand the bridge a different SessionManager.
+    if (owner !== nativeProjectionOwner) return attachNativeProjection();
+    try { projectNativeState(descriptor.nativeProjection?.get(owner)); } catch {}
   }
 
   function attachNativeProjection(): void {
@@ -1226,8 +1234,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
       nativeProjectionUnsub = null;
     }
     if (!descriptor.nativeProjection) return;
+    nativeProjectionOwner = field(lastCtx, "sessionManager");
     try {
-      nativeProjectionUnsub = descriptor.nativeProjection.subscribe(projectNativeState);
+      nativeProjectionUnsub = descriptor.nativeProjection.subscribe(nativeProjectionOwner, projectNativeState);
     } catch {}
     refreshNativeProjection();
   }
@@ -1601,6 +1610,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     compactionQueue.length = 0;
     if (queueUnsub) { try { queueUnsub(); } catch {} queueUnsub = null; }
     if (nativeProjectionUnsub) { try { nativeProjectionUnsub(); } catch {} nativeProjectionUnsub = null; }
+    nativeProjectionOwner = null;
     compactionEventsLive = false;
     lastQueue = { steering: [], followUp: [] };
     contextUsage = null;
@@ -1748,7 +1758,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       // the point: the answer only ever reaches the caller, never the
       // transcript. The socket timeout for this request lives server-side.
       try {
-        return { ok: true, answer: await descriptor.runBtw(args) };
+        return { ok: true, answer: await descriptor.runBtw(args, field(lastCtx, "sessionManager")) };
       } catch (e: unknown) {
         return { ok: false, error: errorText(e) };
       }

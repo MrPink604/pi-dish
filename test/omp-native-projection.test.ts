@@ -211,4 +211,34 @@ test('OMP bridge projects captured advisor state as a status', async () => {
   }
 });
 
+// OMP's task tool runs subagents in-process, so their AgentSessions share the
+// patched prototype. A subagent's status line reading its own empty todos
+// must not clear the parent's Todos widget (it flickered about once a second).
+test('OMP bridge ignores native state read by in-process subagent sessions', async () => {
+  const host = await startFakeHost();
+  const session = new BridgeSession(host.claim);
+  const requests: Record<string, unknown>[] = [];
+  session.on('extension_ui_request', (request: unknown) => { if (isRecord(request)) requests.push(request); });
+  try {
+    await session.connect();
+
+    let from = requests.length;
+    await host.step({ todos: [{ name: 'Lanes', tasks: [{ content: 'Scout assets', status: 'in_progress' }] }] });
+    const todos = await waitFor(() => requests.slice(from)
+      .find(request => request.method === 'setWidget' && request.widgetKey === 'Todos'));
+    assert.deepEqual(todos.widgetLines, ['Lanes  0/1', '  [>] Scout assets']);
+
+    from = requests.length;
+    await host.step({ subagentRead: true });
+    // A later owned transition orders the socket: anything the subagent read
+    // emitted arrives before this status.
+    await host.step({ goal: { enabled: true, mode: 'active', goal: { id: 'goal-1', objective: 'Land lanes', status: 'active' } } });
+    assert.equal((await nextStatus(requests, from, 'goal')).statusText, 'Goal · Land lanes');
+    assert.deepEqual(requests.slice(from).filter(request => request.method === 'setWidget' && request.widgetKey === 'Todos'), []);
+  } finally {
+    session.close();
+    await host.close();
+  }
+});
+
 export {};

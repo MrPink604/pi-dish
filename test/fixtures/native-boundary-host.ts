@@ -10,9 +10,9 @@ function record(value: unknown): value is HostRecord {
   return value !== null && (typeof value === 'object' || typeof value === 'function');
 }
 
-const before = getOmpNativeCaptureStats();
+const before = getOmpNativeCaptureStats(null);
 for (const malformed of [null, 1, {}, { prototype: {} }, () => {}]) patchOmpAgentSession(malformed);
-assert.deepEqual(getOmpNativeCaptureStats(), before);
+assert.deepEqual(getOmpNativeCaptureStats(null), before);
 const load = createHarnessBridge();
 for (const malformed of [null, {}, { on: true, registerCommand() {} }, { on() {} }]) {
   assert.throws(() => load(malformed), /host with on and registerCommand/);

@@ -230,7 +230,9 @@ OMP's `ask` tool uses the same UI context OMP gives extensions, so the wrapper
 races its browser form against the local TUI form and the first answer wins.
 OMP's exported `AgentSession` getters drive bridge-owned `Todos`, `planmode`,
 and `prewalk` projections; they are capability-detected, so an older OMP keeps
-ordinary bridge behavior instead of failing extension load.
+ordinary bridge behavior instead of failing extension load. Captures are keyed
+by the session's `SessionManager`, so in-process subagents never drive the
+parent session's widgets.
 
 To delegate to another model **inside the current OMP session**, type `^` in
 the pi-dish composer and select a model from that session's catalog. For
