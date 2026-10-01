@@ -228,6 +228,11 @@ complete application coverage.
 It also covers loaded empty assistant rows across paging, live catch-up and cache
 restoration: no false unloaded gaps, stray assistant headers or thinking-only groups.
 
+`rich-text.spec.js` covers on-demand math loading and delayed hydration of live
+and retained transcripts. The desktop/mobile smoke waits for the visible rendered
+formula and checks its content; transcript appearance does not imply that the
+asynchronously loaded math assets are ready.
+
 `session-activity.spec.js` covers activity/abort gates, replacement questions and panel disposal.
 
 `prompt-delivery.spec.js` covers queue row and submit ownership, including replacement and disposal.

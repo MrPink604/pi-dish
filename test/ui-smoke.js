@@ -652,7 +652,9 @@ let remoteHost = null;
             const initialAnswer = desktop.locator('.message.assistant', {
                 has: desktop.locator('[data-entry-id="ui-a1"]'),
             });
-            check(await initialAnswer.locator('.katex').count() === 1, 'selecting a session loads KaTeX before transcript hydration');
+            const initialMath = initialAnswer.locator('.katex-html');
+            await initialMath.waitFor({ state: 'visible' });
+            check(await initialMath.textContent() === 'x2', 'historical inline math hydrates to visible x²');
             check((await initialAnswer.locator('.markdown-body').textContent() ?? '').includes('~literal tildes~'), 'single tildes remain literal text');
             check(await initialAnswer.locator('del').count() === 1 &&
                 await initialAnswer.locator('del').textContent() === 'intentional strike', 'double tildes still render intentional strikethrough');
