@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { createSessionObserver } from "../../lib/session-recovery.js";
 import { EMULATED_COMMAND_METADATA, PI_EMULATED_THINKING_LEVELS } from "../../lib/helper-command-metadata.js";
 import { collectActivePath, walkBranchTree } from "../../lib/helper-tree.js";
+import { createToolEventStream } from "../../lib/tool-event-stream.js";
 
 // Alternate hosts deliberately enter as unknown. A callable guard establishes
 // only that a member can be invoked; its result is still unknown until consumed.
@@ -991,6 +992,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
   }
 
+  // Bound cumulative worker snapshots before JSON serialization and socket writes.
+  const toolEvents = createToolEventStream((event, data) => broadcast({ type: "event", event, data }));
+
   function emitTo(sock: net.Socket, obj: unknown) {
     try { sock.write(JSON.stringify(obj) + "\n"); } catch {}
   }
@@ -1572,6 +1576,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   }
 
   function cleanup() {
+    toolEvents.clear();
     recoveryObserver.dispose();
     for (const [id, resolve] of pendingDialogs) {
       try { resolve({ cancelled: true }); } catch {}
@@ -2522,6 +2527,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     // registry above is useful, but a wire event would make the browser bounce
     // and reload an unchanged transcript.
     if (!previousSessionId || sessionId === previousSessionId) return;
+    toolEvents.clear();
     broadcast({
       type: "event",
       event: "session_switch",
@@ -2586,7 +2592,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       } else if (ev === "thinking_level_select") {
         writeRegistry();
       }
-      broadcast({ type: "event", event: ev, data: event });
+      toolEvents.push(ev, event);
     });
   }
 

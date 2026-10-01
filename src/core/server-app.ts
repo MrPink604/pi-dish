@@ -15,6 +15,7 @@ import {
   invalidateRegistryCache,
   BridgeSession,
 } from './bridge-session';
+import { createToolEventStream } from './tool-event-stream';
 import { createFileHandlers } from './file-handlers';
 import terminal = require('./terminal');
 import tmux = require('./tmux');
@@ -2222,6 +2223,8 @@ export function startServer(rootDirectory: string): Server {
       // waiting for another event to make the chunk observable.
       res.flush?.();
     };
+    // Also bounds older live bridges and RPC producers that do not coalesce.
+    const toolEvents = createToolEventStream(send);
     const messageForStream = (message: unknown): unknown => {
       if (message == null || property(message, 'role') !== 'custom') return message;
       // interrupted-thinking content is hidden model reasoning. The client only
@@ -2270,11 +2273,11 @@ export function startServer(rootDirectory: string): Server {
       if (!updateTimer) flushUpdate();
     });
 
-    sub('turn_end', () => { clearPendingUpdate(); send('turn_end', {}); });
+    sub('turn_end', () => { clearPendingUpdate(); toolEvents.push('turn_end', {}); });
     // Both session backends treat agent_end as turn-terminating (an aborted or
     // errored turn can end without a paired turn_end) — forward it, or the
     // client's working indicator ticks forever and the JSONL catch-up never runs.
-    sub('agent_end', () => { clearPendingUpdate(); send('agent_end', {}); });
+    sub('agent_end', () => { clearPendingUpdate(); toolEvents.push('agent_end', {}); });
 
     sub('message_end', (data) => {
       const message = messageForStream(data == null ? undefined : property(data, 'message'));
@@ -2302,12 +2305,13 @@ export function startServer(rootDirectory: string): Server {
     // owned-pane state by the time this SSE listener runs.
     sub('session_switch', (data) => {
       const routed = sessionSwitchRouteData(sess, data);
+      if (routed && routed.sessionId !== routed.previousSessionId) toolEvents.clear();
       if (routed && routed.sessionId !== routed.previousSessionId) send('session_switch', routed);
     });
 
-    sub('tool_execution_start', (data) => send('tool_execution_start', data));
-    sub('tool_execution_update', (data) => send('tool_execution_update', data));
-    sub('tool_execution_end', (data) => send('tool_execution_end', data));
+    sub('tool_execution_start', (data) => toolEvents.push('tool_execution_start', data));
+    sub('tool_execution_update', (data) => toolEvents.push('tool_execution_update', data));
+    sub('tool_execution_end', (data) => toolEvents.push('tool_execution_end', data));
     // Subscribe before taking the snapshot: a call that ends during replay is
     // still forwarded, while one that started just before subscription is found
     // in the session-owned map. Repeated starts are harmless client-side because
@@ -2319,9 +2323,9 @@ export function startServer(rootDirectory: string): Server {
         args: call.args,
         startedAt: call.startedAt,
       };
-      send('tool_execution_start', common);
+      toolEvents.push('tool_execution_start', common);
       if (call.lastPartialResult != null) {
-        send('tool_execution_update', { ...common, partialResult: call.lastPartialResult });
+        toolEvents.push('tool_execution_update', { ...common, partialResult: call.lastPartialResult });
       }
     }
     // setWidget/setStatus re-fire with unchanged content on every extension
@@ -2375,7 +2379,7 @@ export function startServer(rootDirectory: string): Server {
     sub('auto_retry_start', (data) => send('auto_retry_start', data));
     sub('auto_retry_end', (data) => send('auto_retry_end', data));
 
-    const onClose = () => { clearPendingUpdate(); send('session_ended', {}); };
+    const onClose = () => { clearPendingUpdate(); toolEvents.clear(); send('session_ended', {}); };
     if (typeof optionalProperty(sess, 'once') === 'function') {
       (sess as { once(event: string, listener: (data: unknown) => void): unknown }).once('close', onClose);
       offs.push(() => sess.off('close', onClose));
@@ -2385,6 +2389,7 @@ export function startServer(rootDirectory: string): Server {
 
     req.on('close', () => {
       clearPendingUpdate();
+      toolEvents.clear();
       for (const off of offs) { try { off(); } catch {} }
     });
   });

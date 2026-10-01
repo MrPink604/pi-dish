@@ -41,6 +41,7 @@
     "test/session-index.test.ts",
     "test/terminal.test.ts",
     "test/bridge-session.test.ts",
+    "test/tool-event-stream.test.ts",
     "test/native-extension-boundary.test.ts",
     "test/omp-export.test.ts",
     "test/routines-api.test.ts",

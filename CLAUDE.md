@@ -1587,6 +1587,17 @@ far** — intermediates are droppable. The path is:
    messages' indexes — an old check did, and streamed text vanished until
    catch-up).
 
+Cumulative `tool_execution_update` snapshots follow the same latest-wins rule
+per `toolCallId`, with a 50ms window implemented in `src/core/tool-event-stream.ts`.
+The bridge applies it **before** serializing to its Unix socket; SSE applies it
+again for RPC producers and older running bridges. Tool frames carry panel fields
+and result `content` (including images), not harness-native result `details` such
+as complete task-worker traces. Starts and completions remain immediate; pending
+latest output flushes before completion/run-end, and session switches/disposal
+cancel old timers. Transcript JSONL is unchanged. Bridge-side reductions take
+effect when the harness next loads the updated extension; server-only updates
+cannot reduce traffic already emitted by an older live bridge.
+
 Working indicator: `setTurnInProgress` drives an elapsed-turn ticker
 (`updateWorkingIndicator`); the header badge reads "Working 1:42 · Bash"
 (current tool tracked via `tool_execution_start/end` in `runningTools`; the
