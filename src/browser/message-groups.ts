@@ -8,13 +8,26 @@ function createToolGroup(document: Document) {
 
 export function groupToolActivity(container: HTMLElement | null) {
   if (!container) return; const document = container.ownerDocument;
+  // Eviction can leave only hidden index markers in a formerly visible group.
+  for (const group of container.querySelectorAll<HTMLDetailsElement>(':scope > details.tool-group')) {
+    const body = group.querySelector('.tool-group-body')!;
+    if (!body.querySelector('[data-msg-index]:not([hidden])')) group.replaceWith(...body.childNodes);
+  }
   const isToolNoise = (el: Element) =>
-    el.matches('.message.tool-result[data-msg-index], .message.assistant.no-text[data-msg-index]');
+    el.matches('.message.tool-result[data-msg-index], .message.assistant.no-text[data-msg-index], [hidden][data-msg-index]');
 
   // Pass 1: wrap each maximal run of ungrouped tool activity.
   let run: Element[] = [];
   const wrapRun = () => {
     if (!run.length) return;
+    // Keep hidden index markers in order without inventing a thinking-only
+    // group when the entire run has no visible tool activity.
+    if (run.every(el => el.hasAttribute('hidden'))) {
+      const previous = run[0].previousElementSibling, next = run[run.length - 1].nextElementSibling;
+      if (previous?.matches('details.tool-group')) previous.querySelector('.tool-group-body')!.append(...run);
+      else if (next?.matches('details.tool-group')) next.querySelector('.tool-group-body')!.prepend(...run);
+      run = []; return;
+    }
     const group = createToolGroup(document);
     run[0].before(group);
     const body = group.querySelector('.tool-group-body')!;

@@ -2487,6 +2487,10 @@ and preserve retained panel identity when resetting selection.
 
 The typed transcript controller owns pagination cursors and retained DOM; retire
 requests before stashing, and preserve the later group anchor during prepend.
+Loaded rows that render no content retain a hidden indexed DOM marker. Keep those
+markers in chronological order through grouping, eviction and cache restoration;
+only genuinely absent indices become paging gaps. Hidden markers never serve as
+viewport anchors or create a visible thinking-only group.
 
 Browser activity/abort gates and `/btw` panels use typed owners. Keep per-question
 response tokens separate from the session identity and dispose clipboard timers.

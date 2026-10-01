@@ -61,6 +61,11 @@ export function createTranscript(options: {
     while (node.parentElement && node.parentElement !== container) node = node.parentElement;
     return node;
   }
+  /** Hidden rows still own their stream index: paging, dedup and eviction must not mistake them for unfetched history. */
+  function renderMessage(message: RenderMessage) {
+    const html = options.renderMessage(message);
+    return html || (message.index != null ? `<span hidden data-msg-index="${escapeHtml(message.index)}"></span>` : '');
+  }
   /** Parse rendered HTML as one fragment so callers learn exactly which subtrees were inserted and can scope post-render work to them. */
   function insertHtml(html: string, before: HTMLElement | null): HTMLElement[] {
     const template = document.createElement('template'); template.innerHTML = html;
@@ -77,7 +82,7 @@ export function createTranscript(options: {
   function boundActive() {
     const indexed = Array.from(container.querySelectorAll<HTMLElement>('[data-msg-index]'));
     if (indexed.length <= MAX_ACTIVE) return false;
-    const top = container.getBoundingClientRect().top, anchor = indexed.find(node => node.getBoundingClientRect().bottom > top) || null;
+    const top = container.getBoundingClientRect().top, anchor = indexed.find(node => !node.hidden && node.getBoundingClientRect().bottom > top) || null;
     const ranges: { start: number; end: number }[] = [], center = Number(anchor?.dataset.msgIndex);
     if (Number.isFinite(center)) ranges.push({ start: center - ACTIVE_CONTEXT, end: center + ACTIVE_CONTEXT });
     if (protectedRange) ranges.push(protectedRange);
@@ -133,7 +138,7 @@ export function createTranscript(options: {
       while (index != null && next < indexed.length && Number(indexed[next]!.dataset.msgIndex) < index) next++;
       const target = index != null && next < indexed.length ? topLevel(indexed[next]!) : null;
       if (target !== anchor) { flush(); anchor = target; }
-      html += options.renderMessage(message);
+      html += renderMessage(message);
       if (index != null) cursors.oldestIndex = Math.min(cursors.oldestIndex ?? index, index);
     }
     flush();
@@ -199,7 +204,7 @@ export function createTranscript(options: {
   function render(messages: readonly RenderMessage[]) {
     if (disposed) return; options.updateMood(messages);
     if (!messages.length) { container.innerHTML = '<div class="empty-state" style="padding: 48px;"><p style="color: var(--text-muted);">No messages yet</p></div>'; barEvents.abort(); return; }
-    container.innerHTML = barHtml() + messages.map(options.renderMessage).join(''); bindBar(); options.finalize(container); options.scroll(container);
+    container.innerHTML = barHtml() + messages.map(renderMessage).join(''); bindBar(); options.finalize(container); options.scroll(container);
   }
   async function load(selection = sessionState.captureSelection()) {
     if (!capture(selection)) return; retire(); const owner = capture(selection); if (!owner) return;
@@ -257,7 +262,7 @@ export function createTranscript(options: {
       // sparse window chronologically, but keep the normal live append cheap.
       if (Number(indexed[indexed.length - 1]?.dataset.msgIndex) > after) insertWindow(fresh, true);
       else {
-        const inserted = insertHtml(fresh.map(options.renderMessage).join(''), null);
+        const inserted = insertHtml(fresh.map(renderMessage).join(''), null);
         if (boundActive()) refreshPaging();
         options.finalize(container, { inserted: inserted.filter(node => node.isConnected) });
       }

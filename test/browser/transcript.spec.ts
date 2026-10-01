@@ -102,6 +102,51 @@ test('transcript HTTP failures render literal text and leave paging unavailable'
   expect(await page.evaluate(() => window.ownedTranscript.hasOlder)).toBe(false);
 });
 
+test('loaded empty assistant rows never become gaps or visible thinking groups', async ({ page, fleet }) => {
+  await setup(page, fleet);
+  const messages = Array.from({ length: 74 }, (_, index) => {
+    if (index === 0 || index === 73) return { index, role: 'toolResult', toolName: 'bash', content: `result ${index}` };
+    if (index === 45) return { index, role: 'custom', customType: 'async-result', content: '', details: { jobs: [{ jobId: 'completed' }] } };
+    return { index, role: 'assistant', content: [] };
+  });
+  await page.evaluate(() => { window.transcriptLoad = window.ownedTranscript.load(); });
+  await reply(page, 0, { messages: messages.slice(50), firstIndex: 50, lastIndex: 73, totalMessages: 74, hasMore: true });
+  await page.evaluate(() => window.transcriptLoad);
+  await page.evaluate(() => { window.oldPage = window.ownedTranscript.loadOlder(); });
+  await reply(page, 1, { messages: messages.slice(0, 50), firstIndex: 0, lastIndex: 49, totalMessages: 74, hasMore: false });
+  await page.evaluate(() => window.oldPage);
+  await expect(page.locator('#messages .transcript-gap')).toHaveCount(0);
+  const restored = await page.evaluate(id => {
+    window.ownedTranscript.stash();
+    return window.ownedTranscript.restore(id);
+  }, ROOT);
+  expect(restored).toBe(true);
+  await expect(page.locator('#messages .transcript-gap')).toHaveCount(0);
+  await expect(page.locator('#messages > details.tool-group')).toHaveCount(2);
+  await expect(page.locator('#messages .tool-group-label')).toHaveText(['⚡ 1 tool use', '⚡ 1 tool use']);
+  await page.locator('#messages > details.tool-group > summary').first().click();
+  await expect(page.locator('#messages [data-msg-index="0"]')).toBeVisible();
+  await expect(page.locator('#messages [data-msg-index="1"]')).toBeHidden();
+  await expect(page.locator('#messages .message.assistant')).toHaveCount(0);
+  await page.evaluate(() => { window.newCatchup = window.ownedTranscript.catchup(); });
+  await reply(page, 2, { messages: [
+    { index: 74, role: 'assistant', content: [] },
+    { index: 75, role: 'user', content: 'next prompt' },
+    { index: 76, role: 'assistant', content: [] },
+    { index: 77, role: 'user', content: 'another prompt' },
+  ], firstIndex: 74, lastIndex: 77, totalMessages: 78 });
+  await page.evaluate(() => window.newCatchup);
+  await page.evaluate(id => { window.ownedTranscript.stash(); window.ownedTranscript.restore(id); }, ROOT);
+  await expect(page.locator('#messages .transcript-gap')).toHaveCount(0);
+  await expect(page.locator('#messages > details.tool-group')).toHaveCount(2);
+  await expect(page.locator('#messages [data-msg-index="75"]')).toHaveText(/next prompt/);
+  await expect(page.locator('#messages [data-msg-index="77"]')).toHaveText(/another prompt/);
+  expect(await page.evaluate(() => ({
+    indices: Array.from(document.querySelectorAll<HTMLElement>('#messages [data-msg-index]'), node => Number(node.dataset.msgIndex)),
+    oldest: window.ownedTranscript.oldestIndex, last: window.ownedTranscript.lastIndex,
+  }))).toEqual({ indices: Array.from({ length: 78 }, (_, index) => index), oldest: 0, last: 77 });
+});
+
 test('deep windows preserve gaps, grouped nodes and the live cursor across host-qualified restoration', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   const result = await page.evaluate(async ({ id, self, peer }) => {

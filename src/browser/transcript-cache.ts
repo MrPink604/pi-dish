@@ -55,7 +55,7 @@ export function createTranscriptCache(document: Document) {
   function stash(key: string, base: string, cursors: TranscriptCursors, container: HTMLElement) {
     if (cursors.lastIndex == null || container.querySelector('.loading, .error')) return;
     const scrollTop = container.scrollTop, viewportTop = container.getBoundingClientRect().top;
-    const anchor = Array.from(container.querySelectorAll<HTMLElement>('[data-msg-index]')).find(node => node.getBoundingClientRect().bottom > viewportTop) || null;
+    const anchor = Array.from(container.querySelectorAll<HTMLElement>('[data-msg-index]')).find(node => !node.hidden && node.getBoundingClientRect().bottom > viewportTop) || null;
     const anchorOffset = anchor ? anchor.getBoundingClientRect().top - viewportTop : 0;
     const mood = document.getElementById('moodIndicator'), fragment = entries.get(key)?.fragment || document.createDocumentFragment();
     fragment.replaceChildren(); while (container.firstChild) fragment.appendChild(container.firstChild);
