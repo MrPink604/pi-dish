@@ -18,7 +18,7 @@ export interface CatalogLiveObservation extends Readonly<SessionIdentity> {
   readonly source: SessionSource | null;
   readonly id: SessionId;
   readonly fields: Readonly<Pick<SessionFields<Date | string | number>,
-    'name' | 'model' | 'thinkingLevel' | 'contextTokens' | 'contextPercent' | 'contextWindow'
+    'name' | 'model' | 'thinkingLevel' | 'fastMode' | 'contextTokens' | 'contextPercent' | 'contextWindow'
     | 'messageCount' | 'lastActivity' | 'turnInProgress' | 'askPending' | 'compacting' | 'cwd'>>;
   readonly info: Readonly<SessionInfo> | null;
   readonly pid: number | null;

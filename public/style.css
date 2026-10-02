@@ -2561,6 +2561,24 @@ body.sidebar-open {
 .composer-tools .tool-ctx.high { color: var(--warning); }
 .composer-tools .tool-ctx.critical { color: var(--error); }
 
+/* Fast mode bolt, left of the context readout: outline glyph when the
+   priority tier is off, filled (and warmed) when it is engaged. */
+.composer-tools .tool-fast {
+  color: var(--text-muted);
+}
+
+.composer-tools .tool-fast.on {
+  color: var(--warning);
+}
+
+.composer-tools .tool-fast.on svg {
+  fill: currentColor;
+}
+
+.composer-tools .tool-fast.on:hover {
+  color: var(--text);
+}
+
 /* Stop is the one coloured glyph, and it holds its slot when idle so the
    readout beside it never moves. */
 .composer-tools .tool-stop {

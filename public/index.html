@@ -373,6 +373,12 @@
                 </button>
                 <span class="composer-gap"></span>
                 <button class="tool-btn tool-cache" id="sessionCache" data-app-click="openStatsModal" title="Session stats" style="display:none"></button>
+                <!-- Fast mode (OMP's /fast priority service tier). Filled bolt
+                     when the tier is engaged, outline when off; hidden unless
+                     the live model is eligible. Bound in session-controls. -->
+                <button class="tool-btn tool-fast" id="sessionFast" title="Fast mode" aria-label="Fast mode" aria-pressed="false" style="display:none">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                </button>
                 <button class="tool-btn tool-ctx" id="sessionContext" data-app-click="openStatsModal" title="Session stats">0%</button>
                 <!-- Keeps its slot when idle (visibility, not display): the
                      context readout must not shift when a turn starts. -->

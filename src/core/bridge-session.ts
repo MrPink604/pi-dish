@@ -343,6 +343,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   declare name: unknown;
   declare model: unknown;
   declare contextUsage: unknown;
+  declare fastMode: unknown;
   declare turnInProgress: boolean;
   declare compacting: boolean;
   declare queueState: unknown;
@@ -508,6 +509,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
       if (msg.model) this.model = msg.model;
       if (msg.name) this.name = msg.name;
       if (msg.contextUsage) this.contextUsage = msg.contextUsage;
+      if (msg.fastMode !== undefined) this.fastMode = msg.fastMode;
       // Remembered so the SSE stream route can replay it into a client that
       // just (re)connected — the bridge only pushes hello when our socket
       // connects, which is once per session.
@@ -637,6 +639,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   getAvailableModels() { return this.send('get_available_models'); }
   getShareSnapshot() { return this.send('share_snapshot'); }
   setThinkingLevel(level: string) { return this.send('set_thinking_level', { level }); }
+  setFastMode(enabled: boolean) { return this.send('set_fast_mode', { enabled }); }
   // /btw awaits a full ephemeral provider turn inside the run_command call, so
   // the caller passes a prompt-scale timeout; everything else keeps 30s.
   runCommand(message: string, deliverAs?: 'steer' | 'followUp', opts: { timeout?: number } = {}) {

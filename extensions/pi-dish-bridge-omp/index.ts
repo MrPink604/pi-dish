@@ -1,5 +1,5 @@
 import { createBridge, PUBLIC_EVENT_PROFILE, type BridgeDescriptor } from "../pi-dish-bridge/core.js";
-import { getOmpNativeCaptureStats, getOmpNativeProjection, getOmpNativeSession, patchOmpAgentSession, subscribeOmpNativeProjection } from "./native-state.js";
+import { getOmpNativeProjection, subscribeOmpNativeProjection, ompFastModeState, setOmpFastMode, getOmpNativeCaptureStats, getOmpNativeSession, patchOmpAgentSession } from "./native-state.js";
 
 // OMP's own /btw prompt ($bunfs/root/btw-user-*.md, verified 18.1.16). The
 // embedded asset is unreadable from an extension, so the text is mirrored
@@ -33,7 +33,7 @@ export const bridgeDescriptor = {
   eventProfile: PUBLIC_EVENT_PROFILE,
   capabilities: {
     prompt: true, steer: true, followUp: true, abort: true, compact: true,
-    models: true, setModel: true, setThinking: true, rename: true,
+    models: true, setModel: true, setThinking: true, rename: true, fastMode: true,
     commands: true, reload: false, queueRead: false, queueCancel: false,
     treeRead: true, treeNavigation: true, extensionUI: true, shareSnapshot: true,
     btw: true,
@@ -50,6 +50,10 @@ export const bridgeDescriptor = {
   nativeProjection: {
     get: getOmpNativeProjection,
     subscribe: subscribeOmpNativeProjection,
+  },
+  fastMode: {
+    state: ompFastModeState,
+    set: setOmpFastMode,
   },
 } satisfies BridgeDescriptor;
 

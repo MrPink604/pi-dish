@@ -4,6 +4,7 @@ export type OmpNativeProjection = {
   prewalk: unknown | null;
   goal: unknown | null;
   advisor: { enabled: boolean; active: boolean; overview: unknown | null } | null;
+  fastMode: { available: boolean; enabled: boolean; active: boolean } | null;
 };
 
 type HostSession = Record<PropertyKey, unknown>;
@@ -16,6 +17,8 @@ type Readers = {
   advisorEnabled?: HostMethod;
   advisorActive?: HostMethod;
   advisorOverview?: HostMethod;
+  fastModeEnabled?: HostMethod;
+  fastModeActive?: HostMethod;
 };
 type Subscriber = { owner: object; listener: (projection: OmpNativeProjection) => void; signature: string | null };
 type ObserverState = {
@@ -86,6 +89,75 @@ function isHostMethod(value: unknown): value is HostMethod {
   return typeof value === "function";
 }
 
+// OMP's u0o(): an OpenAI-compatible direct provider (not fireworks or
+// github-copilot) speaking an OpenAI wire protocol with OpenAI identity.
+function isOpenAiCompatible(model: Record<string, unknown>): boolean {
+  const provider = typeof model.provider === "string" ? model.provider : "";
+  if (provider === "fireworks" || provider === "github-copilot") return false;
+  const api = typeof model.api === "string" ? model.api : "";
+  if (api !== "openai-completions" && api !== "openai-responses" && api !== "openai-codex-responses") return false;
+  const identity = isObject(model.identity) ? model.identity : null;
+  return !!identity && identity.class === "openai";
+}
+
+/**
+ * OMP's TWe("priority", model) gate behind /fast: whether the priority tier
+ * (OpenAI service_tier=priority, Anthropic speed=fast, Google priority) can
+ * engage for this model. Mirrors the 18.4 host; a drifting host still refuses
+ * at setFastMode(), which surfaces as a failed toggle instead of a wrong icon.
+ */
+export function ompFastModeAvailable(model: unknown): boolean {
+  if (!isObject(model)) return false;
+  // Codex models advertise their tiers; a list that omits priority is a hard
+  // no even though the provider family itself supports it.
+  if (model.api === "openai-codex-responses" && Array.isArray(model.serviceTiers)
+      && model.serviceTiers.length > 0 && !model.serviceTiers.includes("priority")) return false;
+  const provider = typeof model.provider === "string" ? model.provider : "";
+  if (provider === "anthropic" || provider === "openai" || provider === "openai-codex") return true;
+  if (provider === "openrouter") {
+    const identity = isObject(model.identity) ? model.identity : null;
+    return !!identity && (identity.class === "openai" || identity.class === "gemini");
+  }
+  if (model.api === "anthropic-messages") return false;
+  if (provider === "google" || provider === "google-vertex" || provider === "fireworks") return true;
+  return isOpenAiCompatible(model);
+}
+
+/** Fast-mode state read straight off a captured AgentSession; null when the host lacks the API. */
+export function ompFastModeStateOf(session: HostSession | null): OmpNativeProjection["fastMode"] {
+  if (!isObject(session) || typeof session.isFastModeEnabled !== "function") return null;
+  let enabled: unknown;
+  try { enabled = Reflect.apply(session.isFastModeEnabled as (this: HostSession) => unknown, session, []); } catch { return null; }
+  if (typeof enabled !== "boolean") return null;
+  let active = false;
+  if (typeof session.isFastModeActive === "function") {
+    try { active = Reflect.apply(session.isFastModeActive as (this: HostSession) => unknown, session, []) === true; } catch {}
+  }
+  return { available: ompFastModeAvailable(session.model), enabled, active };
+}
+
+export type OmpFastModeSetResult = { ok: boolean; state: OmpNativeProjection["fastMode"]; message?: string };
+
+/** Toggle the priority tier on the captured AgentSession (its setFastMode). */
+export function setOmpFastMode(sessionManager: unknown, fast: boolean): OmpFastModeSetResult {
+  const session = getOmpNativeSession(sessionManager);
+  const state = ompFastModeStateOf(session);
+  if (!session || !state) {
+    return { ok: false, state: null, message: "Fast mode is unavailable on this OMP session." };
+  }
+  if (typeof session.setFastMode !== "function") {
+    return { ok: false, state, message: "Fast mode needs an OMP with AgentSession.setFastMode." };
+  }
+  if (fast && !state.available) {
+    return { ok: false, state, message: "Fast mode is unavailable for the current model." };
+  }
+  let ok = false;
+  try {
+    ok = Reflect.apply(session.setFastMode as (this: HostSession, fast: boolean) => unknown, session, [fast]) === true;
+  } catch {}
+  return { ok, state: ompFastModeStateOf(session), message: ok ? undefined : "Fast mode is unavailable for the current model." };
+}
+
 function readProjection(session: HostSession): OmpNativeProjection {
   const call = (reader: HostMethod | undefined, fallback: unknown): unknown => {
     if (!reader) return fallback;
@@ -96,6 +168,7 @@ function readProjection(session: HostSession): OmpNativeProjection {
   // feature-detected on its own: an OMP too old for one still projects the rest.
   const todos = call(state.readers.todos, []);
   const advisorEnabled = call(state.readers.advisorEnabled, undefined);
+  const fastEnabled = call(state.readers.fastModeEnabled, undefined);
   return {
     todos: Array.isArray(todos) ? todos : [],
     planMode: call(state.readers.planMode, null),
@@ -106,6 +179,13 @@ function readProjection(session: HostSession): OmpNativeProjection {
       enabled: advisorEnabled,
       active: call(state.readers.advisorActive, false) === true,
       overview: call(state.readers.advisorOverview, null) ?? null,
+    } : null,
+    // isFastModeEnabled() predates isFastModeActive() by a wide margin; a
+    // session whose host exposes neither (OMP < 17) projects no fast mode.
+    fastMode: typeof fastEnabled === "boolean" ? {
+      available: ompFastModeAvailable(session.model),
+      enabled: fastEnabled,
+      active: call(state.readers.fastModeActive, false) === true,
     } : null,
   };
 }
@@ -171,6 +251,13 @@ function patchAgentSession(AgentSession: { prototype: HostSession }): void {
   capture("isAdvisorEnabled", "advisorEnabled");
   capture("isAdvisorActive", "advisorActive");
   capture("getAdvisorStatusOverview", "advisorOverview");
+  // Fast mode: OMP's status line reads the enabled/active accessors on every
+  // render, and /fast flips them through these writers — wrapping both keeps
+  // the projection (and the registry's fastMode) current without a poller.
+  capture("isFastModeEnabled", "fastModeEnabled");
+  capture("isFastModeActive", "fastModeActive");
+  capture("setFastMode");
+  capture("toggleFastMode");
   capture("setTodoPhases");
   capture("setPlanModeState");
   capture("setGoalModeState");
@@ -214,6 +301,11 @@ export function getOmpNativeSession(sessionManager: unknown): HostSession | null
 export function getOmpNativeProjection(sessionManager: unknown): OmpNativeProjection | null {
   const session = getOmpNativeSession(sessionManager);
   return session ? readProjection(session) : null;
+}
+
+/** Fast-mode state for the bridge descriptor (registry, snapshot, commands). */
+export function ompFastModeState(sessionManager: unknown): OmpNativeProjection["fastMode"] {
+  return ompFastModeStateOf(getOmpNativeSession(sessionManager));
 }
 
 // Capture health for /btw-style consumers: a patched class that never

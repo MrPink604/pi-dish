@@ -71,6 +71,7 @@ async function startFakeHost() {
     let seq = 0;
     return {
         claim: JSON.parse(fs.readFileSync(registryPath, 'utf8')),
+        registryPath,
         async step(patch) {
             const current = ++seq;
             fs.writeFileSync(stepFile, JSON.stringify({ seq: current, ...patch }));
@@ -199,6 +200,42 @@ test('OMP bridge projects captured advisor state as a status', async () => {
         await host.step({ advisor: { enabled: false, active: false, advisors: [] } });
         assert.equal((await nextStatus(requests, from, 'advisor')).statusText, undefined);
         assert.equal(requests.some(request => request.statusKey === 'goal'), false, 'a session with no goal never emits a goal status');
+    }
+    finally {
+        session.close();
+        await host.close();
+    }
+});
+// The composer's fast-mode bolt is driven by the bridge: hello/stateSnapshot
+// carry the tier state, set_fast_mode flips it on the captured AgentSession,
+// and the registry entry republishes it for /api/sessions polls.
+test('OMP bridge reports and toggles fast mode over the socket', async () => {
+    const host = await startFakeHost();
+    const session = new BridgeSession(host.claim);
+    try {
+        await session.connect();
+        // Capture: the fake host's subscribe() publishes the session; the default
+        // anthropic model is priority-eligible, fast mode off.
+        await host.step({ fastModeSettable: true });
+        const off = await waitFor(async () => {
+            const state = await session.send('get_state');
+            return (0, wire_protocol_js_1.isRecord)(state.fastMode) && state.fastMode.available === true ? state : null;
+        });
+        assert.ok(off, 'get_state reports the initial fast-mode state');
+        assert.deepEqual((0, wire_protocol_js_1.isRecord)(off.fastMode) ? off.fastMode : null, { available: true, enabled: false, active: false });
+        const toggled = await session.setFastMode(true);
+        const enabled = (0, wire_protocol_js_1.isRecord)(toggled) && (0, wire_protocol_js_1.isRecord)(toggled.fastMode) ? toggled.fastMode : null;
+        assert.deepEqual(enabled, { available: true, enabled: true, active: true });
+        // The registry entry republishes the new state for /api/sessions polls.
+        const registry = await waitFor(() => {
+            const entry = JSON.parse(fs.readFileSync(host.registryPath, 'utf8'));
+            return (0, wire_protocol_js_1.isRecord)(entry.fastMode) && entry.fastMode.enabled === true ? entry : null;
+        });
+        assert.deepEqual((0, wire_protocol_js_1.isRecord)(registry.fastMode) ? registry.fastMode : null, { available: true, enabled: true, active: true });
+        // An ineligible model refuses the enable with the host's own message.
+        await host.step({ fastModeModel: { provider: 'zai', id: 'glm-5.3' }, fastMode: false });
+        const refused = await session.setFastMode(true).then(() => null, (error) => error.message);
+        assert.match(String(refused), /unavailable for the current model/);
     }
     finally {
         session.close();

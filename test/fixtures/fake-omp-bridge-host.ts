@@ -133,6 +133,12 @@ class FakeOmpAgentSession {
   goal: unknown = undefined;
   advisor: { enabled: boolean; active: boolean; advisors: Array<{ name: string; status: string }> } =
     { enabled: false, active: false, advisors: [] };
+  // AgentSession's /fast surface (OMP ≥ 17.x): the model object carries the
+  // fields the bridge's eligibility mirror reads.
+  model: unknown = { provider: 'anthropic', id: 'claude-fake' };
+  fastModeEnabled = false;
+  fastModeActive = false;
+  fastModeSettable = true;
   getTodoPhases() { return this.todos; }
   setTodoPhases(phases: unknown[]) { this.todos = phases; }
   getPlanModeState() { return this.planMode; }
@@ -145,6 +151,14 @@ class FakeOmpAgentSession {
     return { configured: this.advisor.advisors.length > 0, advisors: this.advisor.advisors };
   }
   setAdvisorEnabled(enabled: boolean) { this.advisor.enabled = enabled; return this.isAdvisorActive(); }
+  isFastModeEnabled() { return this.fastModeEnabled; }
+  isFastModeActive() { return this.fastModeActive; }
+  setFastMode(fast: boolean) {
+    if (fast && !this.fastModeSettable) return false;
+    this.fastModeEnabled = fast;
+    this.fastModeActive = fast;
+    return true;
+  }
   subscribe() { return () => {}; }
   // /btw's backing API on the real AgentSession. The bridge mirrors OMP's
   // embedded btw-user template into promptText; the test asserts the question
@@ -190,7 +204,9 @@ if (stepFile) {
     const session = nativeSession!;
     if (step.subagentRead === true) subagentSession!.getTodoPhases();
     if (Array.isArray(step.todos)) session.setTodoPhases(step.todos);
-    if ('planMode' in step) session.setPlanModeState(step.planMode);
+    if (typeof step.fastMode === 'boolean') session.setFastMode(step.fastMode);
+    if (record(step.fastModeModel)) session.model = step.fastModeModel;
+    if ('fastModeSettable' in step) session.fastModeSettable = step.fastModeSettable === true;
     if ('goal' in step) session.setGoalModeState(step.goal ?? undefined);
     if (record(step.advisor)) {
       session.advisor.active = step.advisor.active === true;

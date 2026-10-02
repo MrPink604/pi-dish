@@ -79,7 +79,9 @@ Rules of thumb:
   extension widgets/status badges plus OMP todos, plan mode, and prewalk state
   render natively.
 - **Session controls** — model switcher (mirrors pi's scoped-models
-  settings), thinking-level toggle, session rename, response performance and
+  settings), thinking-level toggle, OMP fast mode (the `/fast` priority
+  service tier, as a lightning bolt beside the context readout that fills
+  when engaged), session rename, response performance and
   estimated-spend details, HTML export via pi's own exporter, session tree for
   branching — with optional branch summaries (pi's `/tree` summarize flow):
   jump back to an earlier point and inject an LLM summary of the branch you're
@@ -249,6 +251,7 @@ Current alternative-harness support is capability-detected:
 | Feature | OMP | Prime Agent |
 |---|---|---|
 | Prompts, steering, follow-ups, abort, model/thinking controls | Supported through the bridge | Supported through the bridge |
+| Fast mode (priority service tier) | Supported through the bridge on eligible models; session pricing prefers OMP's tier-adjusted reported cost | Unavailable |
 | Compaction | Supported on live capable bridges | Unavailable |
 | Ephemeral side questions (`/btw`) | Supported on live capable bridges; the answer renders in a dismissible composer panel, never in the transcript | Unavailable |
 | Tree navigation | Supported live, with a reachable tmux pane for command-context handoff | Unavailable |

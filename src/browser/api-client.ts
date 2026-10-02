@@ -1,4 +1,4 @@
-import { decodeSessionList, decodeModelCatalog, decodeMutationResult, decodeThinkingResult,
+import { decodeSessionList, decodeModelCatalog, decodeMutationResult, decodeThinkingResult, decodeFastModeResult,
   decodeEnabledModelsResult } from '../core/session-api';
 import type { ModelChangeRequest, ThinkingChangeRequest, EnabledModelsRequest } from '../core/session-api';
 
@@ -73,6 +73,10 @@ export async function setSessionModel(request: ApiRequest, endpoint: HostEndpoin
 export async function setSessionThinking(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, level: string) {
   const body: ThinkingChangeRequest = { level };
   return decodeThinkingResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/thinking`, body));
+}
+
+export async function setSessionFast(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, enabled: boolean) {
+  return decodeFastModeResult(await sendJson(request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/fast`, { enabled }));
 }
 
 export async function renameSession(request: ApiRequest, endpoint: HostEndpoint, sessionId: string, name: string) {

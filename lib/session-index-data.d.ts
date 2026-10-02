@@ -2,6 +2,7 @@
 export interface UsageState {
     provider: string | null;
     model: string;
+    serviceTier?: Record<string, string>;
 }
 export interface UsageTokens {
     input: number;

@@ -1,5 +1,5 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import { setSessionModel, setSessionThinking, renameSession, sendJson } from './api-client';
+import { setSessionModel, setSessionThinking, setSessionFast, renameSession, sendJson } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { createModelCatalog } from './model-catalog';
 import { mountModelSelector } from './model-selector';
@@ -153,6 +153,21 @@ export function createSessionControls(options: {
       if (owns(owner)) options.status(reported !== level ? `Thinking level: ${reported} (model doesn't support ${level})` : `Thinking level: ${reported}`);
     } catch (error) { if (current() && owns(owner)) options.status('Thinking level failed: ' + errorText(error), 'error'); }
   }
+
+  async function toggleFast() {
+    const session = header(), owner = capture();
+    if (!owner || !session?.isActive || !sessionSupports(session, 'fastMode')) return;
+    const fast = session.fastMode;
+    if (!fast?.available) return;
+    const enabled = !fast.enabled;
+    const current = mutation(owner, 'fast');
+    try {
+      const result = await setSessionFast(options.request, mutationEndpoint(owner), owner.selection.id, enabled);
+      if (!current()) return;
+      sessionState.patchSession(owner.selection.id, { fastMode: result.fastMode }, owner.selection.host);
+      if (owns(owner)) options.status(result.fastMode?.enabled ? 'Fast mode on — priority service tier' : 'Fast mode off');
+    } catch (error) { if (current() && owns(owner)) options.status('Fast mode failed: ' + errorText(error), 'error'); }
+  }
   function cancelRename() { renameOwner = null; renameEvents.abort(); element('sessionNameInput').style.display = 'none'; element('sessionName').style.display = ''; }
   function startRename() {
     const session = header(), owner = capture(); if (!owner || !session?.isActive || !sessionSupports(session, 'rename')) return;
@@ -192,8 +207,9 @@ export function createSessionControls(options: {
   element('sessionName').addEventListener('click', startRename, { signal: lifetime.signal });
   element('sessionModel').addEventListener('click', () => { void toggleModels(); }, { signal: lifetime.signal });
   element('sessionThinking').addEventListener('click', () => { void toggleThinking(); }, { signal: lifetime.signal });
+  element('sessionFast').addEventListener('click', () => { void toggleFast(); }, { signal: lifetime.signal });
   return { toggleModels, closeModels, renderModels, setEditMode, toggleModel, toggleProvider, setAll, saveEnabled, selectModel,
-    toggleThinking, closeThinking, selectThinking, updateThinking, startRename, cancelRename, commitRename, renameKey, export: exportSession, download,
+    toggleThinking, closeThinking, selectThinking, toggleFast, updateThinking, startRename, cancelRename, commitRename, renameKey, export: exportSession, download,
     get modelOpen() { return modelOpen; }, get thinkingOpen() { return thinkingOpen; }, get query() { return query; },
     get modelSelector() { return modelSelector; }, get thinkingSelector() { return thinkingSelector; },
     dispose() { closeModels(); closeThinking(); cancelRename(); disposed = true; lifetime.abort(); mutations.clear(); for (const timer of timers) clearTimeout(timer); timers.clear(); for (const url of urls.keys()) URL.revokeObjectURL(url); urls.clear(); },

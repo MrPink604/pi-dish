@@ -5,7 +5,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const session_capabilities_js_1 = require("../lib/session-capabilities.js");
 const keys = ['prompt', 'steer', 'followUp', 'abort', 'compact', 'models', 'setModel',
-    'setThinking', 'rename', 'commands', 'queueCancel', 'tree', 'export', 'close', 'restart', 'resume'];
+    'setThinking', 'fastMode', 'rename', 'commands', 'queueCancel', 'tree', 'export', 'close', 'restart', 'resume'];
 function expectEnabled(actual, enabled) {
     assert.deepEqual(Object.keys(actual).sort(), [...keys].sort());
     assert.deepEqual(Object.entries(actual).filter(([, value]) => value === true).map(([key]) => key).sort(), enabled.sort());
@@ -32,7 +32,7 @@ test('inactive projections preserve harness-specific history operations', () => 
     expectEnabled((0, session_capabilities_js_1.sessionCapabilities)('prime', flags), ['resume']);
 });
 test('active projections distinguish absent flags from explicit denials', () => {
-    expectEnabled((0, session_capabilities_js_1.sessionCapabilities)('pi', {}, { active: true }), keys.filter(key => !['restart', 'resume'].includes(key)));
+    expectEnabled((0, session_capabilities_js_1.sessionCapabilities)('pi', {}, { active: true }), keys.filter(key => !['restart', 'resume', 'fastMode'].includes(key)));
     expectEnabled((0, session_capabilities_js_1.sessionCapabilities)('omp', {}, { active: true }), ['export']);
     expectEnabled((0, session_capabilities_js_1.sessionCapabilities)('prime', {}, { active: true }), []);
     expectEnabled((0, session_capabilities_js_1.sessionCapabilities)('prime', { prompt: true, steer: true, models: true, queueCancel: false }, { active: true }), ['prompt', 'steer', 'models']);
@@ -47,6 +47,18 @@ test('OMP tree requires both live read and navigation; Prime never advertises a 
             assert.equal((0, session_capabilities_js_1.sessionCapabilities)('omp', flags, { active: true }).tree, treeRead && treeNavigation);
             assert.equal((0, session_capabilities_js_1.sessionCapabilities)('prime', flags, { active: true }).tree, false);
         }
+});
+test('fast mode is an OMP bridge feature: exact true on an active session only', () => {
+    assert.equal((0, session_capabilities_js_1.sessionCapabilities)('omp', { fastMode: true }, { active: true }).fastMode, true);
+    // The permissive legacy-Pi rule must not advertise a tier control Pi lacks.
+    assert.equal((0, session_capabilities_js_1.sessionCapabilities)('pi', {}, { active: true }).fastMode, false);
+    assert.equal((0, session_capabilities_js_1.sessionCapabilities)('pi', { fastMode: true }, { active: true }).fastMode, false);
+    assert.equal((0, session_capabilities_js_1.sessionCapabilities)('prime', { fastMode: true }, { active: true }).fastMode, false);
+    assert.equal((0, session_capabilities_js_1.sessionCapabilities)('omp', { fastMode: true }).fastMode, false, 'inactive sessions cannot toggle');
+    assert.equal((0, session_capabilities_js_1.sessionCapabilities)('omp', {}, { active: true }).fastMode, false, 'absent flag is not a denial-free default');
+    for (const value of [false, null, 0, '', {}, []]) {
+        assert.equal((0, session_capabilities_js_1.sessionCapabilities)('omp', { fastMode: value }, { active: true }).fastMode, false);
+    }
 });
 test('close and restart advice requires active state and separate ownership inputs', () => {
     for (const harness of ['pi', 'omp', 'prime']) {

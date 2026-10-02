@@ -295,8 +295,40 @@ function advanceModelChange(entry: Record<string, unknown>, state: ModelContinui
   }
 }
 
+type ServiceTierFamily = 'openai' | 'anthropic' | 'google';
+type ServiceTierContinuity = Partial<Record<ServiceTierFamily, string>> | null;
+
+/**
+ * OMP's service_tier_change entries track the per-family tier map /fast
+ * writes (null clears it). Billing-provider families mirror OMP's own
+ * Sv() resolution for the providers pi-dish prices; unknown providers have
+ * no known tier accounting and keep the flat estimate.
+ */
+function advanceServiceTierChange(entry: Record<string, unknown>, tiers: { value: ServiceTierContinuity }): void {
+  if (entry.type !== 'service_tier_change') return;
+  const raw = entry.serviceTier;
+  if (!raw || typeof raw !== 'object') { tiers.value = null; return; }
+  const next: Partial<Record<ServiceTierFamily, string>> = {};
+  for (const family of ['openai', 'anthropic', 'google'] as const) {
+    const tier = (raw as Record<string, unknown>)[family];
+    if (typeof tier === 'string' && tier) next[family] = tier;
+  }
+  tiers.value = Object.keys(next).length ? next : null;
+}
+
+/** Whether a message's provider bills under an engaged fast tier (priority/ultrafast). */
+function providerUnderFastTier(provider: unknown, tiers: ServiceTierContinuity): boolean {
+  if (!tiers) return false;
+  if (provider === 'openai' || provider === 'openai-codex') {
+    return tiers.openai === 'priority' || tiers.openai === 'ultrafast';
+  }
+  if (provider === 'anthropic') return tiers.anthropic === 'priority';
+  if (provider === 'google' || provider === 'google-vertex') return tiers.google === 'priority';
+  return false;
+}
+
 function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFileProfile | undefined,
-  estimateCost: UsageCostEstimator, fallbackModel: { provider?: unknown; model?: unknown } = {}, cacheExpiry?: CacheExpiry | null): SessionMessage | null {
+  estimateCost: UsageCostEstimator, fallbackModel: { provider?: unknown; model?: unknown } = {}, cacheExpiry?: CacheExpiry | null, tiers: ServiceTierContinuity = null): SessionMessage | null {
   if (entry.type === 'message' && entry.message) {
     const message = fields(entry.message);
     // Hidden custom messages are model continuity/state, not transcript UI.
@@ -305,7 +337,7 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
     if (message.role === 'custom' && message.display === false) return null;
     const usage = sanitizeUsage(message.usage);
     if (usage) {
-      const estimated = messageUsageCost(candidate, message, fallbackModel, estimateCost);
+      const estimated = messageUsageCost(candidate, message, fallbackModel, estimateCost, tiers);
       if (estimated) usage.cost = estimated;
       else delete usage.cost;
     }
@@ -405,6 +437,7 @@ function parseMessageData(entries: SessionEntries, candidate?: SessionFileProfil
   const byId = new Map<unknown, SessionMessage>();
   const model: ModelContinuity = { provider: null, model: null };
   let cacheExpiry: CacheExpiry | null = null;
+  const tiers: { value: ServiceTierContinuity } = { value: null };
   for (const raw of entries) {
     try {
       const entry = fields(raw);
@@ -412,6 +445,7 @@ function parseMessageData(entries: SessionEntries, candidate?: SessionFileProfil
         advanceModelChange(entry, model, candidate?.profileId, 'display');
         cacheExpiry = null;
       }
+      advanceServiceTierChange(entry, tiers);
       if (entry.type === 'compaction') cacheExpiry = null;
       let responseCacheExpiry: CacheExpiry | null = null;
       const rawMessage = entry.type === 'message' && entry.message ? fields(entry.message) : null;
@@ -424,7 +458,7 @@ function parseMessageData(entries: SessionEntries, candidate?: SessionFileProfil
         responseCacheExpiry = cacheExpiryForMessage(cacheMessage, cacheExpiry, entry.timestamp, cacheConfig);
         cacheExpiry = responseCacheExpiry;
       }
-      const message = messageFromEntry(entry, candidate, estimateCost, model, applyLearnedCacheExpiry(responseCacheExpiry, cacheConfig));
+      const message = messageFromEntry(entry, candidate, estimateCost, model, applyLearnedCacheExpiry(responseCacheExpiry, cacheConfig), tiers.value);
       if (!message) continue;
       // Resource lookup is by stable JSONL id across the whole tree. Keep
       // abandoned entries addressable so an already-rendered lazy image URL
@@ -700,15 +734,21 @@ function reportedCost(harnessId: string | undefined, provider: unknown, usage: u
   return Object.keys(sanitized).length ? sanitized : undefined;
 }
 
-function usageCost(candidate: SessionFileProfile | undefined, provider: unknown, model: unknown, usage: unknown, estimateCost: UsageCostEstimator): Partial<UsageCosts> | undefined {
+function usageCost(candidate: SessionFileProfile | undefined, provider: unknown, model: unknown, usage: unknown, estimateCost: UsageCostEstimator, preferReported = false): Partial<UsageCosts> | undefined {
   const estimated = estimateCost(provider, model, usage);
+  // Under an engaged fast tier OMP scales its own persisted usage cost by the
+  // model's service-tier multiplier (account-specific, never in `models --json`),
+  // so the reported cost outranks the flat catalog estimate for those turns.
+  if (preferReported) return reportedCost(candidate?.harnessId, provider, usage) ?? estimated;
   return estimated || reportedCost(candidate?.harnessId, provider, usage);
 }
 
 /** Display/stats price the raw selected/response identity without rewriting it. */
-function messageUsageCost(candidate: SessionFileProfile | undefined, message: Record<string, unknown>, fallback: { provider?: unknown; model?: unknown }, estimateCost: UsageCostEstimator): Partial<UsageCosts> | undefined {
-  return usageCost(candidate, message.provider || fallback.provider,
-    message.responseModel || message.model || fallback.model, message.usage, estimateCost);
+function messageUsageCost(candidate: SessionFileProfile | undefined, message: Record<string, unknown>, fallback: { provider?: unknown; model?: unknown }, estimateCost: UsageCostEstimator, tiers: ServiceTierContinuity = null): Partial<UsageCosts> | undefined {
+  const provider = message.provider || fallback.provider;
+  return usageCost(candidate, provider,
+    message.responseModel || message.model || fallback.model, message.usage, estimateCost,
+    providerUnderFastTier(provider, tiers));
 }
 
 function isEmptyFailedUsage(message: Record<string, unknown>): boolean {
@@ -754,9 +794,11 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
   let genMs = 0, genOutput = 0;
   const responseDurations: number[] = [];
   const model: ModelContinuity = { provider: null, model: null };
+  const tiers: { value: ServiceTierContinuity } = { value: null };
   for (const raw of readSessionFileEntries(filePath, stats).entries) {
     const entry = fields(raw);
     if (entry.type === 'model_change') advanceModelChange(entry, model, candidate.profileId, 'display');
+    advanceServiceTierChange(entry, tiers);
     // Both Pi and OMP (snapcompact included) record a `compaction` entry per
     // compaction; abandoned-branch entries are counted here like every other
     // counter in this pass.
@@ -777,7 +819,7 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
         reasoningTokens += tokenAmount(u.reasoning);
         if (isHardCacheMiss(u)) hardCacheMisses++;
       }
-      addReportedCosts(costBucket, messageUsageCost(candidate, m, model, estimateCost));
+      addReportedCosts(costBucket, messageUsageCost(candidate, m, model, estimateCost, tiers.value));
       const gen = assistantGenStats(entry);
       if (gen.durationMs && gen.outputTokens) {
         genMs += gen.durationMs;
@@ -829,6 +871,7 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
   const profileId = candidate.profileId || 'pi-v3';
   const { total, days, models } = usage;
   const model = { provider: usage.state?.provider ?? null, model: usage.state?.model ?? 'unknown' };
+  const tiers: { value: ServiceTierContinuity } = { value: usage.state?.serviceTier ?? null };
   let cwd = usage.cwd ?? null;
   const add = (bucket: UsageBucket, u: Record<string, unknown> & { cost?: Partial<UsageCosts> }, duration: number) => {
     bucket.calls = (bucket.calls || 0) + 1;
@@ -843,6 +886,7 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
     const e = fields(raw);
     if (e.type === 'session' && typeof e.cwd === 'string' && e.cwd) cwd = e.cwd;
     if (e.type === 'model_change') advanceModelChange(e, model, profileId, 'usage');
+    advanceServiceTierChange(e, tiers);
     const message = e.type === 'message' && fields(e.message ?? EMPTY_FIELDS);
     const m = message && message.role === 'assistant' ? message : null;
     if (!m) continue;
@@ -858,13 +902,13 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
     const ts = entryDate(e.timestamp || m.timestamp);
     const day = Number.isFinite(ts.getTime()) ? `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')}` : 'unknown';
     const duration = assistantGenStats(e).durationMs || 0;
-    const u = { ...fields(m.usage ?? EMPTY_FIELDS), cost: usageCost(candidate, p, mid, m.usage, estimateCost) };
+    const u = { ...fields(m.usage ?? EMPTY_FIELDS), cost: usageCost(candidate, p, mid, m.usage, estimateCost, providerUnderFastTier(p, tiers.value)) };
     add(total, u, duration); add(days[day] ||= {}, u, duration);
     const modelBucket = models[ref] ||= { provider: p, model: mid, days: {} };
     add(modelBucket, u, duration); add(modelBucket.days[day] ||= {}, u, duration);
   }
   usage.cwd = cwd;
-  usage.state = model;
+  usage.state = { provider: model.provider, model: model.model, ...(tiers.value ? { serviceTier: tiers.value } : {}) };
   return usage;
 }
 

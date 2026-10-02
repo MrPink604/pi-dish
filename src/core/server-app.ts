@@ -1199,6 +1199,25 @@ export function startServer(rootDirectory: string): Server {
     }
   });
 
+  // OMP fast mode (/fast): flip the priority service tier on the live session.
+  // Pi has no service-tier control, so its RPC sessions are refused here.
+  app.post('/api/sessions/:id/fast', async (req: ApplicationRequest, res: ApplicationResponse) => {
+    const enabled = property(req.body || {}, 'enabled');
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'enabled must be a boolean' });
+    }
+    try {
+      const sess = await getLiveSession(req.params.id);
+      if (!sess) return res.status(404).json({ error: 'Session not active' });
+      if (!(sess instanceof BridgeSession) || !liveSessionSupports(sess, 'fastMode')) {
+        return res.status(409).json({ error: 'This session does not support fast mode.' });
+      }
+      const data = await sess.setFastMode(enabled);
+      res.json({ success: true, fastMode: property(data, 'fastMode') ?? null });
+    } catch (e) {
+      res.status(500).json({ error: property(e, 'message') });
+    }
+  });
   app.get('/api/sessions/:id/stats', sessionReadHandlers.stats);
 
 

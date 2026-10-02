@@ -1,7 +1,7 @@
 /** Persisted index projections and their consumed disk-ingress validation. */
 import { isRecord } from './session-metadata';
 
-export interface UsageState { provider: string | null; model: string }
+export interface UsageState { provider: string | null; model: string; serviceTier?: Record<string, string> }
 export interface UsageTokens {
   input: number;
   output: number;
@@ -69,7 +69,10 @@ export interface SkillProjection { records: SkillActivation[]; state: SkillState
 export function finite(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value); }
 function nullableString(value: unknown): value is string | null { return value === null || typeof value === 'string'; }
 function usageState(value: unknown): value is UsageState {
-  return isRecord(value) && nullableString(value.provider) && typeof value.model === 'string';
+  return isRecord(value) && nullableString(value.provider) && typeof value.model === 'string' &&
+    (value.serviceTier === undefined || isRecord(value.serviceTier) &&
+      Object.entries(value.serviceTier).every(([family, tier]) =>
+        ['openai', 'anthropic', 'google'].includes(family) && typeof tier === 'string'));
 }
 const TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'] as const;
 const COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;

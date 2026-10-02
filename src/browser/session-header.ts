@@ -94,10 +94,11 @@ function updateSessionHeader() {
   const ctxClass = contextClass(contextPercent);
   const contextEl = element('sessionContext');
   contextEl.textContent = `${contextPercent}%`;
-  contextEl.className = 'tool-btn tool-ctx' + (ctxClass ? ' ' + ctxClass : '');
+  contextEl.className = 'tool-btn tool-ctx' + (ctxClass ? ` ${ctxClass}` : '');
   contextEl.title = current.contextTokens
     ? `Session stats — ${formatTokens(current.contextTokens)} tokens of context`
     : 'Session stats';
+  updateFastMode();
   updateCacheExpiry();
 
   options.thinking();
@@ -113,6 +114,25 @@ function updateSessionHeader() {
     cwdChip.textContent = cwd ? (cwd.split('/').filter(Boolean).pop() || cwd) : '';
     cwdChip.title = cwd ? `${cwd} — session stats` : 'Session stats';
   }
+}
+
+/** The composer's fast-mode bolt: filled when the priority tier is engaged. */
+function updateFastMode() {
+  const current = sessionState.currentSession;
+  const fastEl = element('sessionFast');
+  if (!current || !fastEl) return;
+  const fast = current.fastMode;
+  // Eligibility lives in the state, not the capability: a model with no
+  // priority tier keeps the bolt hidden instead of showing a dead toggle.
+  const show = !!current.isActive && sessionSupports(current, 'fastMode') && !!fast?.available;
+  fastEl.style.display = show ? '' : 'none';
+  fastEl.classList.toggle('on', !!(show && fast!.enabled));
+  fastEl.setAttribute('aria-pressed', show && fast!.enabled ? 'true' : 'false');
+  const state = !fast?.enabled ? 'Fast mode off'
+    : fast.active ? 'Fast mode on — priority service tier'
+      : 'Fast mode on — tier not currently applied';
+  fastEl.title = `${state} (click to ${fast?.enabled ? 'disable' : 'enable'})`;
+  fastEl.setAttribute('aria-label', fastEl.title);
 }
 
 const cacheExpiryTimer = setInterval(updateCacheExpiry, 15_000);

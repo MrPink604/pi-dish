@@ -25,9 +25,13 @@ process.env.HOME = tmpDir;
 fs.mkdirSync(path.join(tmpDir, '.pi', 'dish', 'pricing'), { recursive: true });
 fs.writeFileSync(path.join(tmpDir, '.pi', 'dish', 'pricing', 'pi.json'), JSON.stringify({
     updatedAt: Date.now(),
-    models: ['glm-4.7', 'glm-5.2', 'glm-5.2-highspeed'].map(id => ({
-        provider: 'zai', id, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    })),
+    models: [
+        ...['glm-4.7', 'glm-5.2', 'glm-5.2-highspeed'].map(id => ({
+            provider: 'zai', id, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        })),
+        // Priced row for the service-tier cost test: flat 0.45 per the usage below.
+        { provider: 'anthropic', id: 'claude-tiered', cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 } },
+    ],
 }) + '\n');
 const dishSettingsFile = path.join(tmpDir, '.pi', 'dish', 'settings.json');
 const SF = require('../lib/session-files.js');
@@ -541,6 +545,30 @@ test('getSessionStats sums generation time over measurable assistant messages on
     assert.equal(stats.genOutput, 300, 'unmeasurable output does not dilute the average');
     assert.equal(stats.tokens.output, 350, 'token totals still count everything');
     assert.deepEqual(stats.responseTiming, { measured: 2, medianMs: 7500, slowestMs: 10000 });
+});
+test('an engaged fast tier prices turns by the reported tier cost, not the flat estimate', () => {
+    // OMP's service_tier_change carries the per-family tier map /fast writes.
+    // Under an engaged tier OMP scales its own persisted usage cost (the
+    // multiplier is account-specific and never reaches `models --json`), so
+    // pi-dish must prefer that reported cost; once the tier clears, the flat
+    // catalog estimate outranks the same embedded cost again.
+    const usage = { input: 100000, output: 10000 };
+    const file = writeSession([
+        { type: 'service_tier_change', serviceTier: { anthropic: 'priority' } },
+        { type: 'message', message: { role: 'assistant', provider: 'anthropic', model: 'claude-tiered',
+                content: [], usage: { ...usage, cost: { input: 1.2, output: 4.5, cacheRead: 0, cacheWrite: 0, total: 5.7 } } } },
+        { type: 'service_tier_change', serviceTier: null },
+        { type: 'message', message: { role: 'assistant', provider: 'anthropic', model: 'claude-tiered',
+                content: [], usage: { ...usage, cost: { input: 1.2, output: 4.5, cacheRead: 0, cacheWrite: 0, total: 5.7 } } } },
+    ]);
+    const stats = SF.getSessionStats(file);
+    // Flat estimate per turn: 100k×$3/M + 10k×$15/M = 0.45.
+    assert.ok(Math.abs(stats.cost - (5.7 + 0.45)) < 1e-9, `tiered turn keeps its reported cost, cleared turn re-estimates: ${stats.cost}`);
+    const indexed = SF.buildIndexedUsageFromEntries(SF.parseSessionEntries(fs.readFileSync(file, 'utf8')), { harnessId: 'pi' });
+    assert.ok(Math.abs(indexed.total.costs.total - (5.7 + 0.45)) < 1e-9, 'usage view prices the same way');
+    assert.equal(indexed.state?.serviceTier, undefined, 'a cleared tier does not persist into incremental state');
+    const engaged = SF.buildIndexedUsageFromContent([{ type: 'service_tier_change', serviceTier: { anthropic: 'priority' } }].map(e => JSON.stringify(e)).join('\n') + '\n');
+    assert.deepEqual(engaged.state?.serviceTier, { anthropic: 'priority' }, 'an engaged tier survives into the incremental-usage state');
 });
 test('indexed usage groups local days and model changes without retaining message content', () => {
     const content = [

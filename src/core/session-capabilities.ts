@@ -18,6 +18,7 @@ function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities: Advertise
     prompt: false, steer: false, followUp: false, abort: false, compact: false,
     models: false, setModel: false, setThinking: false, rename: false, commands: false,
     queueCancel: false, tree: false, export: false, close: false, restart: false, resume: false,
+    fastMode: false,
   };
   const pi = harnessId === 'pi';
   const closeMode = getHarness(harnessId)?.closeMode || 'unsupported';
@@ -32,6 +33,9 @@ function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities: Advertise
     setModel: active ? advertised('setModel') : pi,
     setThinking: advertised('setThinking'),
     rename: active ? advertised('rename') : pi,
+    // OMP-only host control; the permissive legacy-Pi bridge rule must not
+    // advertise it for sessions that can never toggle a service tier.
+    fastMode: harnessId === 'omp' && advertised('fastMode'),
     commands: active ? advertised('commands') : pi,
     queueCancel: advertised('queueCancel'),
     tree: pi

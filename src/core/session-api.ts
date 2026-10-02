@@ -7,6 +7,13 @@ export interface CacheExpiryProjection {
   readonly basis: CacheExpiryBasis;
 }
 
+/** OMP fast mode (/fast): the priority service tier on the live model. */
+export interface FastModeState {
+  readonly available: boolean;
+  readonly enabled: boolean;
+  readonly active: boolean;
+}
+
 /** Closed first-party metadata. Identity and opaque extras are separate owners. */
 export interface SessionFields<Timestamp = string | number> {
   name?: string | null;
@@ -14,6 +21,7 @@ export interface SessionFields<Timestamp = string | number> {
   harnessId?: string;
   harnessLabel?: string;
   thinkingLevel?: string | null;
+  fastMode?: FastModeState | null;
   isActive?: boolean;
   capabilities?: Partial<Record<string, boolean>>;
   closeMode?: string;
@@ -50,7 +58,7 @@ export interface SessionRow {
   readonly fields: Readonly<SessionFields>;
   readonly extras: Readonly<Record<string, unknown>>;
 }
-export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'thinkingLevel'>;
+export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'thinkingLevel' | 'fastMode'>;
 export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'askPending' | 'compacting'>;
 export type SessionTranscriptPatch = Pick<SessionFields,
   'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'cacheExpiry' | 'lastActivity' | 'isActive'>;
@@ -85,6 +93,7 @@ export interface ThinkingChangeRequest { level: string }
 export interface EnabledModelsRequest { enabledIds: string[] | null }
 export interface MutationResult extends Record<string, unknown> { success: true }
 export interface ThinkingResult extends MutationResult { level: string }
+export interface FastModeResult extends MutationResult { fastMode: FastModeState | null }
 export interface EnabledModelsResult extends MutationResult { enabledModels: string[] | null }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -99,6 +108,11 @@ const optionalString = (value: unknown) => typeof value === 'string' ? value : u
 const nullableString = (value: unknown) => value === null ? null : optionalString(value);
 const optionalNumber = (value: unknown) => finite(value) ? value : undefined;
 const optionalBoolean = (value: unknown) => typeof value === 'boolean' ? value : undefined;
+export function decodeFastModeState(value: unknown): FastModeState | undefined {
+  if (!record(value) || typeof value.available !== 'boolean' ||
+      typeof value.enabled !== 'boolean' || typeof value.active !== 'boolean') return undefined;
+  return { available: value.available, enabled: value.enabled, active: value.active };
+}
 const optionalCacheExpiry = (value: unknown): CacheExpiryProjection | null | undefined => {
   if (value === null) return null;
   if (!record(value) || !finite(value.refreshedAt) || !finite(value.expiresAt) || !finite(value.retentionMs) ||
@@ -107,7 +121,7 @@ const optionalCacheExpiry = (value: unknown): CacheExpiryProjection | null | und
     retention: value.retention, basis: value.basis as CacheExpiryBasis };
 };
 const fieldDecoders: FieldDecoders = {
-  name: nullableString, model: nullableString, thinkingLevel: nullableString,
+  name: nullableString, model: nullableString, thinkingLevel: nullableString, fastMode: decodeFastModeState,
   harnessId: optionalString, harnessLabel: optionalString, capabilities: decodeCapabilities,
   isActive: optionalBoolean, closeMode: optionalString, conflicted: optionalBoolean,
   liveInstanceCount: optionalNumber, contextPercent: optionalNumber, contextTokens: optionalNumber,
@@ -167,7 +181,7 @@ function decodePatch<K extends keyof SessionFields>(value: unknown, keys: readon
   return patch;
 }
 export function decodeSessionMutationPatch(value: unknown): SessionMutationPatch {
-  return decodePatch(value, ['name', 'model', 'thinkingLevel']);
+  return decodePatch(value, ['name', 'model', 'thinkingLevel', 'fastMode']);
 }
 export function decodeSessionActivityPatch(value: unknown): SessionActivityPatch {
   return decodePatch(value, ['turnInProgress', 'askPending', 'compacting']);
@@ -269,6 +283,10 @@ export function decodeThinkingResult(value: unknown): ThinkingResult {
   const result = decodeMutationResult(value);
   if (!text(result.level)) return invalid('thinking');
   return { ...result, level: result.level };
+}
+export function decodeFastModeResult(value: unknown): FastModeResult {
+  const result = decodeMutationResult(value);
+  return { ...result, fastMode: decodeFastModeState(result.fastMode) ?? null };
 }
 export function decodeEnabledModelsResult(value: unknown): EnabledModelsResult {
   const result = decodeMutationResult(value);

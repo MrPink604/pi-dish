@@ -8,13 +8,13 @@ export type HarnessId = 'pi' | 'omp' | 'prime';
 export type BridgeCapability = 'prompt' | 'steer' | 'followUp' | 'abort' | 'compact'
   | 'models' | 'setModel' | 'setThinking' | 'rename' | 'commands' | 'reload'
   | 'queueRead' | 'queueCancel' | 'treeRead' | 'treeNavigation' | 'extensionUI'
-  | 'shareSnapshot' | 'guardedReload' | 'btw';
+  | 'shareSnapshot' | 'guardedReload' | 'btw' | 'fastMode';
 
 /** Registry/wire values are unvalidated; policy checks exact booleans. */
 export type AdvertisedCapabilities = Partial<Record<BridgeCapability, unknown>>;
 export type SessionCapability = 'prompt' | 'steer' | 'followUp' | 'abort' | 'compact'
   | 'models' | 'setModel' | 'setThinking' | 'rename' | 'commands' | 'queueCancel'
-  | 'tree' | 'export' | 'close' | 'restart' | 'resume';
+  | 'tree' | 'export' | 'close' | 'restart' | 'resume' | 'fastMode';
 export type SessionCapabilities = Record<SessionCapability, boolean>;
 export interface CapabilityContext {
   active?: boolean;

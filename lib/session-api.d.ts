@@ -7,6 +7,12 @@ export interface CacheExpiryProjection {
     readonly retention: string;
     readonly basis: CacheExpiryBasis;
 }
+/** OMP fast mode (/fast): the priority service tier on the live model. */
+export interface FastModeState {
+    readonly available: boolean;
+    readonly enabled: boolean;
+    readonly active: boolean;
+}
 /** Closed first-party metadata. Identity and opaque extras are separate owners. */
 export interface SessionFields<Timestamp = string | number> {
     name?: string | null;
@@ -14,6 +20,7 @@ export interface SessionFields<Timestamp = string | number> {
     harnessId?: string;
     harnessLabel?: string;
     thinkingLevel?: string | null;
+    fastMode?: FastModeState | null;
     isActive?: boolean;
     capabilities?: Partial<Record<string, boolean>>;
     closeMode?: string;
@@ -49,7 +56,7 @@ export interface SessionRow {
     readonly fields: Readonly<SessionFields>;
     readonly extras: Readonly<Record<string, unknown>>;
 }
-export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'thinkingLevel'>;
+export type SessionMutationPatch = Pick<SessionFields, 'name' | 'model' | 'thinkingLevel' | 'fastMode'>;
 export type SessionActivityPatch = Pick<SessionFields, 'turnInProgress' | 'askPending' | 'compacting'>;
 export type SessionTranscriptPatch = Pick<SessionFields, 'name' | 'model' | 'cwd' | 'messageCount' | 'contextTokens' | 'contextWindow' | 'contextPercent' | 'cacheExpiry' | 'lastActivity' | 'isActive'>;
 export interface SessionList {
@@ -93,9 +100,13 @@ export interface MutationResult extends Record<string, unknown> {
 export interface ThinkingResult extends MutationResult {
     level: string;
 }
+export interface FastModeResult extends MutationResult {
+    fastMode: FastModeState | null;
+}
 export interface EnabledModelsResult extends MutationResult {
     enabledModels: string[] | null;
 }
+export declare function decodeFastModeState(value: unknown): FastModeState | undefined;
 /**
  * Browser ingress. Keep the established fatal control checks; malformed
  * newly named presentation fields are omitted, never smuggled into extras.
@@ -118,6 +129,7 @@ export declare function normalizeModels(value: unknown): CatalogModel[];
 export declare function decodeModelCatalog(value: unknown): CatalogModel[];
 export declare function decodeMutationResult(value: unknown): MutationResult;
 export declare function decodeThinkingResult(value: unknown): ThinkingResult;
+export declare function decodeFastModeResult(value: unknown): FastModeResult;
 export declare function decodeEnabledModelsResult(value: unknown): EnabledModelsResult;
 /** A harness can acknowledge the mutation without reporting a usable level. */
 export declare function thinkingResult(value: unknown, requested: string): ThinkingResult;

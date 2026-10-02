@@ -12,6 +12,7 @@ import type {
   CatalogAdvice, CatalogHistoryObservation, CatalogLiveObservation, CatalogRoutineAnnotation,
   CatalogSession, SessionCatalog, SessionCatalogInput, SessionCatalogOptions,
 } from './session-catalog-contracts';
+import { decodeFastModeState, type SessionFields } from './session-api';
 
 type LiveFields = CatalogLiveObservation['fields'];
 interface ObservationContext {
@@ -56,6 +57,7 @@ function registeredSessionObservation(value: unknown, context: RegisteredContext
   const usage = record(value.contextUsage);
   return observation('registered', context.harnessId, string(value.sessionFile), {
     name: string(value.name), model: string(value.model), thinkingLevel: string(value.thinkingLevel),
+    fastMode: decodeFastModeState(value.fastMode) ?? null,
     contextTokens: number(usage.tokens), contextPercent: number(usage.percent),
     contextWindow: number(usage.contextWindow), lastActivity: timestamp(value.updatedAt),
     turnInProgress: value.turnInProgress === true, askPending: value.askPending === true, compacting: value.compacting === true,
@@ -149,6 +151,7 @@ function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalo
     contextWindow: (registered ? fields.contextWindow || options.contextWindowForModel(model) : fields.contextWindow) || 0,
     cacheExpiry: info?.cacheExpiry ?? null,
     thinkingLevel: fields.thinkingLevel || null,
+    fastMode: registered ? fields.fastMode ?? null : null,
     messageCount: (registered ? info?.messageCount : fields.messageCount) || 0,
     lastActivity: registered ? info?.lastActivity || fields.lastActivity || new Date(0) : fields.lastActivity,
     isActive: true, turnInProgress: fields.turnInProgress === true, askPending: fields.askPending === true, compacting: fields.compacting === true,

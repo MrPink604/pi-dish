@@ -23,6 +23,7 @@ type DeliveryOptions = Parameters<ExtensionAPI["sendUserMessage"]>[1];
 type UIRequest = Record<string, unknown> & { method: string; id?: string };
 type HostModel = HostObject & { provider: string; id: string };
 type HostCommand = HostObject & { name: string; source: string };
+type FastModeBridgeState = { available: boolean; enabled: boolean; active: boolean };
 
 function isObject(value: unknown): value is HostObject {
   return value !== null && (typeof value === "object" || typeof value === "function");
@@ -333,6 +334,13 @@ export type BridgeDescriptor = {
   nativeProjection?: {
     get: (sessionManager: unknown) => unknown;
     subscribe: (sessionManager: unknown, listener: (projection: unknown) => void) => (() => void);
+  };
+  // Fast mode (OMP's /fast priority service tier). `state` reads the live
+  // session (registry, hello, get_state); `set` flips it for the
+  // set_fast_mode command and reports the host's own refusal message.
+  fastMode?: {
+    state: (sessionManager: unknown) => FastModeBridgeState | null;
+    set: (sessionManager: unknown, enabled: boolean) => { ok: boolean; state: FastModeBridgeState | null; message?: string };
   };
   selfPrime?: boolean;
   piLifecycleEvents?: boolean;
@@ -1558,6 +1566,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       name: sessionName,
       model: modelId,
       contextUsage,
+      fastMode: fastModeState(),
       thinkingLevel: getThinkingLevel(),
       turnInProgress,
       askPending: hasPendingAskDialog(),
@@ -1671,6 +1680,12 @@ export function createBridge(descriptor: BridgeDescriptor) {
       backgroundWork,
     };
   }
+  // Fresh read every time: the registry and snapshot must never serve a
+  // stale tier after a TUI /fast flip.
+  function fastModeState(): FastModeBridgeState | null {
+    return descriptor.fastMode?.state(field(lastCtx, "sessionManager")) ?? null;
+  }
+
 
   function stateSnapshot() {
     return {
@@ -1692,6 +1707,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       compacting,
       model: modelId,
       contextUsage,
+      fastMode: fastModeState(),
       thinkingLevel: getThinkingLevel(),
       name: sessionName,
       pid: process.pid,
@@ -2059,6 +2075,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         extension_ui_response: "extensionUI",
         set_model: "setModel",
         set_thinking_level: "setThinking",
+        set_fast_mode: "fastMode",
         tree_read: "treeRead",
         tree_leaf: "treeRead",
         navigate_tree: "treeNavigation",
@@ -2326,6 +2343,20 @@ export function createBridge(descriptor: BridgeDescriptor) {
           callHost(pi, "setThinkingLevel", cmd.level);
           writeRegistry();
           respond(true, { level: getThinkingLevel() });
+          return;
+        }
+
+        case "set_fast_mode": {
+          if (typeof cmd.enabled !== "boolean") {
+            return respond(false, undefined, "enabled must be a boolean");
+          }
+          if (!descriptor.fastMode) {
+            return respond(false, undefined, `unsupported command set_fast_mode: ${descriptor.name} bridge does not implement fast mode`);
+          }
+          const result = descriptor.fastMode.set(field(lastCtx, "sessionManager"), cmd.enabled);
+          writeRegistry();
+          if (!result.ok) return respond(false, undefined, result.message);
+          respond(true, { fastMode: result.state });
           return;
         }
 

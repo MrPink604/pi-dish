@@ -93,6 +93,28 @@ const fixtures_js_1 = require("./fixtures.js");
     await (0, fixtures_js_1.expect)(page.locator('#sessionCache')).toHaveClass(/\bcold\b/);
     await (0, fixtures_js_1.expect)(page.locator('#sessionCache')).toHaveAttribute('aria-label', /Cache likely cold/);
 });
+(0, fixtures_js_1.test)('the composer fast-mode bolt follows live state: hidden when ineligible, filled when enabled', async ({ page, fleet }) => {
+    await page.evaluate(({ id, host }) => window.fixtureSessionListPatch(id, { isActive: true }, host), { id: fixtures_js_1.ROOT, host: fleet.self.hostId });
+    await fleet.select(fleet.self);
+    // The fixture session is Pi: no service-tier control, so no bolt.
+    await (0, fixtures_js_1.expect)(page.locator('#sessionFast')).toBeHidden();
+    await page.evaluate(() => window.fixtureSessionListPatch(fixtureCurrentSession().id, {
+        harnessId: 'omp', isActive: true,
+        capabilities: { ...fixtureCurrentSession().capabilities, fastMode: true },
+        fastMode: { available: true, enabled: false, active: false },
+    }));
+    await (0, fixtures_js_1.expect)(page.locator('#sessionFast')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('#sessionFast')).not.toHaveClass(/\bon\b/);
+    await (0, fixtures_js_1.expect)(page.locator('#sessionFast')).toHaveAttribute('aria-pressed', 'false');
+    await (0, fixtures_js_1.expect)(page.locator('#sessionFast')).toHaveAttribute('title', /Fast mode off \(click to enable\)/);
+    await page.evaluate(() => window.fixtureSessionListPatch(fixtureCurrentSession().id, { fastMode: { available: true, enabled: true, active: true } }));
+    await (0, fixtures_js_1.expect)(page.locator('#sessionFast')).toHaveClass(/\bon\b/);
+    await (0, fixtures_js_1.expect)(page.locator('#sessionFast')).toHaveAttribute('aria-pressed', 'true');
+    await (0, fixtures_js_1.expect)(page.locator('#sessionFast')).toHaveAttribute('title', /priority service tier/);
+    // A model change to an ineligible one withdraws the toggle entirely.
+    await page.evaluate(() => window.fixtureSessionListPatch(fixtureCurrentSession().id, { fastMode: { available: false, enabled: false, active: false } }));
+    await (0, fixtures_js_1.expect)(page.locator('#sessionFast')).toBeHidden();
+});
 (0, fixtures_js_1.test)('restored same-host tool panels retain their node and duration after a new selection generation', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
     await page.evaluate(() => {

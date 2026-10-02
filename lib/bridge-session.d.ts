@@ -57,6 +57,7 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     name: unknown;
     model: unknown;
     contextUsage: unknown;
+    fastMode: unknown;
     turnInProgress: boolean;
     compacting: boolean;
     queueState: unknown;
@@ -91,6 +92,7 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     getAvailableModels(): BridgeRequest;
     getShareSnapshot(): BridgeRequest;
     setThinkingLevel(level: string): BridgeRequest;
+    setFastMode(enabled: boolean): BridgeRequest;
     runCommand(message: string, deliverAs?: 'steer' | 'followUp', opts?: {
         timeout?: number;
     }): BridgeRequest;
