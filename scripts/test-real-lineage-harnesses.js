@@ -91,6 +91,7 @@ const tmuxSocket = path.join(tmuxDir, 's');
 const work = path.join(root, 'work');
 const socketDir = path.join(root, 'sockets');
 const primeDaemon = path.join(root, 'prime-daemon.sock');
+fs.mkdirSync(socketDir, { recursive: true });
 fs.chmodSync(socketDir, 0o700);
 // Drop the operator's deployment env (HOST/PORT/share port) before pinning
 // this run's own — see test/test-env.js.
