@@ -1,6 +1,6 @@
 import type { SessionState, SessionEntry } from './session-state';
 import type { EffectiveHost } from './host-catalog';
-import { shortSessionRef, uniqueSessionPrefix, parseSessionRefParts, parseSessionRefTokens, searchSessionsForRef } from '../core/helper-refs';
+import { shortSessionRef, uniqueSessionPrefix, parseSessionRefParts, parseSessionRefTokens, searchSessionsForRef, resolveSessionRefAmong } from '../core/helper-refs';
 import { record } from '../core/helper-values';
 export function createSessionReferences(options: {
   sessionState: SessionState; selfId: () => string | null; host: (id: string | null) => Readonly<EffectiveHost> | null;
@@ -31,8 +31,7 @@ export function createSessionReferences(options: {
       if (parts.hostPart.toLowerCase() === 'self') return host === localHostId;
       const entry = options.host(host); return !!entry && String(entry.name || '').toLowerCase() === parts.hostPart.toLowerCase();
     });
-    const exact = onHost.find(row => row.id === parts.id); if (exact || parts.hostIdForm) return exact || null;
-    const matches = onHost.filter(row => row.id.startsWith(parts.id)); return matches.length === 1 ? matches[0]! : null;
+    return resolveSessionRefAmong(onHost, parts.id, { exactOnly: parts.hostIdForm }).session;
   }
   function hints(message: string) {
     return parseSessionRefTokens(message).flatMap(({ ref }) => { const session = match(ref); return session ? [{ ref, name: session.name || '', host: options.hostLabel(session.host || null) || '', cwd: session.cwd || '', isActive: !!session.isActive }] : []; });

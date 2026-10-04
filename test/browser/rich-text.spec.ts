@@ -2,7 +2,7 @@ import type { Page, Route } from '@playwright/test';
 import type { MermaidRuntime } from '../../src/browser/rich-text-vendors.js';
 import fs = require('node:fs');
 import path = require('node:path');
-import { test, expect, ROOT, requiredRoute } from './fixtures.js';
+import { test, expect, ROOT, CHILD, requiredRoute } from './fixtures.js';
 
 const katexScript = fs.readFileSync(path.resolve(__dirname, '../../public/vendor/katex.min.js'), 'utf8');
 const katexStyles = fs.readFileSync(path.resolve(__dirname, '../../public/vendor/katex.min.css'), 'utf8');
@@ -20,6 +20,47 @@ test('Markdown keeps HTML and unsafe links inert, literal single tildes and expl
   await expect(page.locator('#rich-fixture del')).toHaveText('strike');
   await expect(page.locator('#rich-fixture strong')).toHaveText('bold');
   expect(await page.evaluate(() => window.richInjected)).toBeUndefined();
+});
+
+test('session refs navigate by owning host without linking examples or ambiguous prefixes', async ({ page, fleet }) => {
+  const remote = `${fleet.peer.hostId}:${CHILD}`;
+  const markdown = `Open #${CHILD}. Again #${CHILD}, or \`${CHILD}\`.\n\nRemote #${remote}.\n\nUnknown #include; ambiguous #2026-09-; glued word#${CHILD}.\n\n[Existing #${CHILD}](https://example.com)\n\n\`command #${CHILD}\`\n\n\`\`\`text\n#${CHILD}\n\`\`\``;
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({
+    json: { messages: [{ role: 'assistant', index: 0, content: markdown }], session: {} },
+  }));
+  await fleet.select(fleet.self);
+  const links = page.locator('#messages .session-ref-link');
+  await expect(links).toHaveText([`#${CHILD}`, `#${CHILD}`, CHILD, `#${remote}`]);
+  await expect(page.locator('#messages pre .session-ref-link, #messages a .session-ref-link')).toHaveCount(0);
+  await expect(page.locator('#messages')).toContainText('Unknown #include; ambiguous #2026-09-; glued word#');
+  await links.first().click();
+  await expect(page.locator('#messages')).toContainText('self child transcript');
+  await expect(fleet.row(fleet.self, CHILD)).toHaveClass(/\bactive\b/);
+  await fleet.select(fleet.self);
+  await links.last().focus(); await links.last().press('Enter');
+  await expect(page.locator('#messages')).toContainText('peer child transcript');
+  await expect(fleet.row(fleet.peer, CHILD)).toHaveClass(/\bactive\b/);
+  // A ref rendered on self must not resolve against peer after a selection
+  // switch, even if its node is retained and displayed outside the old feed.
+  await fleet.select(fleet.self);
+  await page.evaluate(() => {
+    const button = fixtureElement(document.querySelector('#messages .session-ref-link'), 'local session ref');
+    document.body.append(button); button.id = 'retained-session-ref';
+  });
+  await fleet.select(fleet.peer);
+  await page.locator('#retained-session-ref').click();
+  await expect(page.locator('#messages')).toContainText('self child transcript');
+  await expect(fleet.row(fleet.self, CHILD)).toHaveClass(/\bactive\b/);
+});
+
+test('streamed session mentions become clickable before the turn finishes', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  await page.evaluate(id => {
+    fixtureElement(document.getElementById('messages'), '#messages').replaceChildren();
+    fixtureApp.features.streamingRenderer.render({ role: 'assistant', content: `See #${id} for context.` });
+  }, CHILD);
+  await page.locator('#messages .session-ref-link').click();
+  await expect(page.locator('#messages')).toContainText('self child transcript');
 });
 
 test('local assets share in-flight loads, retry errors and retire pending elements on disposal', async ({ page, fleet }) => {

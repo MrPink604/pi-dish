@@ -583,6 +583,11 @@ family block. Sessions launched by other schemes remain normal rows and degrade
 by what is available: live bridge controls when registered, historical read/resume
 when only JSONL remains, and no relation decoration when no hint exists.
 
+Session mentions such as `#019f9834` are clickable in transcript prose, including
+while streaming. A standalone ref in inline code is clickable too. Clicking opens
+the referenced session on its owning host; unknown or ambiguous refs, fenced code,
+and existing Markdown links stay unchanged.
+
 ### Public share links
 
 The stats modal (📊 in the session header) has a **Create share link** button.

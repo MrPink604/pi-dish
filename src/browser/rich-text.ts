@@ -5,7 +5,8 @@ import type { createDiagrams } from './diagrams';
 import { escapeHtml } from '../core/helper-format';
 import { createMathExtensions } from '../core/helper-markdown';
 import { sanitizeMarkdownUrl, diagramKindForFence, looksLikeFilePath, findPathTokens } from './helper-markdown';
-import type { SessionState } from './session-state';
+import type { SessionState, SessionEntry } from './session-state';
+import { SESSION_REF_TOKEN_RE } from '../core/helper-refs';
 import type { StreamingBlockState, StreamingFrame } from './streaming-render';
 import { record } from '../core/helper-values';
 
@@ -78,6 +79,7 @@ function stablePrefixEnd(source: string, tokens: readonly MarkdownToken[]) {
 export function createRichText(options: { document: Document; marked: MarkedRuntime | null; highlight: () => HighlightRuntime | null;
   assets: ReturnType<typeof createBrowserAssets>; diagrams: ReturnType<typeof createDiagrams>; sessionState: SessionState;
   retainedRoots?: () => readonly ParentNode[];
+  matchRef: (ref: string) => Pick<SessionEntry, 'id' | 'host' | 'name'> | null | undefined;
   copy: (text: string) => Promise<unknown>; status: (message: string, type?: string) => void;
 }) {
   const { document, sessionState } = options;
@@ -141,7 +143,7 @@ function formatMarkdown(text: string) {
       // was parsed while KaTeX is absent — no matching of text that merely
       // mentions the attribute, so math-free markdown loads nothing.
       if (pendingMathRenders !== renders && !mathRuntime()) void loadMathAssets().catch(() => {});
-      return html;
+      return linkSessionRefs(html);
     } catch(e) {}
   }
   let html = escapeHtml(text);
@@ -149,7 +151,45 @@ function formatMarkdown(text: string) {
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   html = html.replace(/\n/g, '<br>');
-  return html;
+  return linkSessionRefs(html);
+}
+
+// Resolve while rendering, not on click: retained DOM keeps the destination's
+// host even after selection changes. Fences, existing links and math stay inert.
+function linkSessionRefs(html: string) {
+  if (!html.includes('#') && !html.includes('<code>')) return html;
+  const template = document.createElement('template'); template.innerHTML = html;
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT, {
+    acceptNode: node => node.parentElement?.closest('pre, a, button, .katex, .math-block, .math-pending')
+      ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const nodes: Text[] = []; while (walker.nextNode()) nodes.push(walker.currentNode as Text);
+  function link(ref: string, label: string) {
+    const session = options.matchRef(ref); if (!session) return null;
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'session-ref-link';
+    button.dataset.sessionId = session.id; button.dataset.sessionHost = session.host || '';
+    button.title = `Open session: ${session.name || ref}`; button.textContent = label;
+    return button;
+  }
+  for (const node of nodes) {
+    if (node.parentElement?.closest('code')) {
+      const text = node.data.trim();
+      if (!/^#?[A-Za-z0-9~][A-Za-z0-9._:/~-]{3,}$/.test(text)) continue;
+      const button = link(text.replace(/^#/, ''), text); if (!button) continue;
+      node.replaceWith(node.data.slice(0, node.data.indexOf(text)), button, node.data.slice(node.data.indexOf(text) + text.length));
+      continue;
+    }
+    if (!node.data.includes('#')) continue;
+    const fragment = document.createDocumentFragment(); let position = 0;
+    for (const match of node.data.matchAll(SESSION_REF_TOKEN_RE)) {
+      const ref = match[1].replace(/[.:/]+$/, ''); if (ref.length < 4) continue;
+      const token = '#' + ref, button = link(ref, token); if (!button) continue;
+      const start = match.index + match[0].indexOf('#');
+      fragment.append(node.data.slice(position, start), button); position = start + token.length;
+    }
+    if (position) { fragment.append(node.data.slice(position)); node.replaceWith(fragment); }
+  }
+  return template.innerHTML;
 }
 
 // Post-render pass over final markdown: syntax-highlight fenced code blocks,
@@ -248,7 +288,7 @@ function linkifyFilePaths(root: ParentNode) {
       acceptNode(n) {
         // .diagram-render holds an SVG: a <span> spliced into an SVG <text>
         // renders nothing, so a linkified label would silently vanish.
-        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .katex, .math-block, .math-pending, .diagram-render')
+        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .session-ref-link, .katex, .math-block, .math-pending, .diagram-render')
           ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });

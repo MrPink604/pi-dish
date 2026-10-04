@@ -436,17 +436,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   const messagesEl = (document.getElementById('messages') as HTMLElement);
   if (messagesEl) {
     appChrome.mount();
-    // Open the session a #ref chip names. Cross-host chips carry the host in
-    // the ref, so the lookup — not the click — decides which host to switch to.
-    messagesEl.addEventListener('click', (e) => {
-      const chip = (e.target instanceof Element ? e.target.closest<HTMLElement>('.session-ref-chip') : null);
-      if (!chip) return;
-      const ref = chip.getAttribute('data-session-ref') || '';
-      const session = sessionReferences.match(ref);
-      if (!session) { setStatus(`No session here matches ${ref}`, 'error'); return; }
-      sessionView.select(session.id, { host: session.host || null });
-    });
   }
+  // Inline refs carry the identity resolved at render time; chips use the
+  // same host-aware resolver. Delegation also covers refs in peek transcripts.
+  document.addEventListener('click', (e) => {
+    const link = e.target instanceof Element ? e.target.closest<HTMLElement>('.session-ref-link, .session-ref-chip') : null;
+    if (!link) return;
+    e.preventDefault();
+    if (link.dataset.sessionId) { sessionView.select(link.dataset.sessionId, { host: link.dataset.sessionHost || null }); return; }
+    const ref = link.getAttribute('data-session-ref') || '', session = sessionReferences.match(ref);
+    if (!session) { setStatus(`No session here matches ${ref}`, 'error'); return; }
+    sessionView.select(session.id, { host: session.host || null });
+  });
 
   // Restore focus mode (hide tool calls/results) preference
   appChrome.setFocus(localStorage.getItem('pi-dish-focus') === '1');
@@ -1061,6 +1062,7 @@ const richText: ReturnType<typeof createRichText> = createRichText({
   document, marked: typeof marked === 'undefined' ? null : marked, highlight: () => typeof hljs === 'undefined' ? null : hljs,
   assets: browserAssets, diagrams: diagramRenderer, sessionState, copy: text => copyTextToClipboard(text), status: (message, type) => setStatus(message, type),
   retainedRoots: () => transcriptController.retainedRoots(),
+  matchRef: ref => sessionReferences.match(ref),
 });
 
 function copyTextToClipboard(text: string) { return copyTextToClipboardBase(text, document, navigator); }

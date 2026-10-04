@@ -7,7 +7,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require('node:vm');
-const context = {};
+const context = { atob };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
 (0, browser_vm_js_1.assertBrowserApiContext)(context);
 const { decodeSlashCommands, decodeFileCompletions, createSessionState, createSessionReferences } = context.PiDishBrowser;
@@ -44,4 +44,19 @@ test('session refs use target-host naming and keep exact host-id references unam
     assert.equal(refs.candidates().filter(row => row.id === 'same-id').length, 1);
     assert.equal(refs.ref({ id: 'same-id', host: 'peer' }, { id: 'same-id', host: 'self' }), 'named-peer/same-id');
     assert.equal(refs.ref({ id: 'same-id', host: 'self' }, { id: 'same-id', host: 'peer' }), 'self:same-id');
+});
+test('browser refs resolve native UUID aliases while rejecting ambiguous and truncated provenance refs', () => {
+    const hostId = '11111111-1111-4111-8111-111111111111';
+    const native = '2026-10-03T00-00-00_019fbbbb-2222-4222-8222-222222222222';
+    const id = '~sk1_' + Buffer.from(JSON.stringify(['omp', native])).toString('base64url');
+    const state = createSessionState({ getSelfHostId: () => hostId, getHostLabel: id => id, onListsChanged() { }, onCurrentChanged() { } });
+    state.setSessionLists([{ hostId, active: [{ id }], previous: [{ id }] }]);
+    const refs = createSessionReferences({ sessionState: state, selfId: () => hostId, host: () => null, hostLabel: () => '', config: () => ({}) });
+    assert.equal(refs.match('019fbbbb')?.id, id);
+    assert.equal(refs.match(native)?.id, id);
+    assert.equal(refs.match(`${hostId}:${id}`)?.id, id);
+    assert.equal(refs.match(`${hostId}:019fbbbb`), null);
+    state.setSessionLists([{ hostId, active: [{ id }, { id: '2026-10-03T00-01-00_019fbbbb-3333-4333-8333-333333333333' }] }]);
+    assert.equal(refs.match('019fbbbb'), null);
+    assert.equal(refs.match('019fbbbb-2222')?.id, id);
 });
