@@ -534,6 +534,12 @@ server can be reconciled with `scripts/pi-dish-tmux.sh restart`; it uses the
 The manager always targets the default tmux server, even when invoked from
 inside a pane attached to another socket.
 
+The composer's OMP fast-mode toggle also needs the updated bridge loaded in
+the agent process. Update the checkout targeted by the installed extension
+symlink, not just a development checkout; restarting the web server alone
+cannot add fast-mode support to an already-running OMP agent. The tier applies
+to subsequent provider requests, not one already streaming.
+
 Keep the bundled Pi SDK aligned with the installed host Pi; the integration
 canary checks this. Pi 0.85.0's SDK imports `@earendil-works/pi-server` without
 declaring that runtime dependency, so pi-dish explicitly includes the matching
@@ -898,9 +904,11 @@ streamed turn and persisted transcript, canonical history routes, OMP live
 and inactive tree capability checks, owned-pane close and resume, plus Prime's
 worker/client split, idle/busy root close, another root surviving and answering,
 close after client exit, manual-close refusal, and a persisted turn after
-resume. The independent OMP path was verified with OMP 18.1.16 on 2026-09-09
-and Prime 0.9.4 close/resume and idle/busy same-pane restart on 2026-09-10; both remain opt-in
-checks requiring their own installations. See [docs/prime-agent.md](docs/prime-agent.md)
+resume. The OMP path also checks that fast mode sends `service_tier: "priority"`
+to the local provider when enabled and stops sending it when disabled; it was
+verified with OMP 18.5.0 on 2026-10-04. Prime 0.9.4 close/resume and idle/busy
+same-pane restart were verified on 2026-09-10. Both remain opt-in checks requiring
+their own installations. See [docs/prime-agent.md](docs/prime-agent.md)
 for Prime's verified coverage and outstanding gaps.
 
 Start with [AGENTS.md](AGENTS.md) for contributor commands and invariants.

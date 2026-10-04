@@ -85,6 +85,8 @@ const tmuxSocket = path.join(tmuxDir, 's');
 const work = path.join(root, 'work');
 const socketDir = path.join(root, 'sockets');
 const primeDaemon = path.join(root, 'prime-daemon.sock');
+fs.mkdirSync(tmuxDir, { recursive: true });
+fs.mkdirSync(work, { recursive: true });
 fs.mkdirSync(socketDir, { recursive: true });
 fs.chmodSync(socketDir, 0o700);
 
@@ -131,6 +133,10 @@ let tmux: typeof import('../lib/tmux') | null = null;
 let fakeRequestCount = 0;
 let holdNextResponse = false;
 const fakeRequests: string[] = [];
+// service_tier values by provider request sequence (1-based), so a streamed
+// turn can assert what the harness actually put on the wire. `null` means the
+// field was absent (the provider's standard tier).
+const fakeServiceTiers: (string | null)[] = [];
 const fakeOpenAi = http.createServer((req, res) => {
   fakeRequests.push(`${req.method} ${req.url}`);
   if (req.method !== 'POST' || req.url !== '/v1/responses') {
@@ -144,9 +150,11 @@ const fakeOpenAi = http.createServer((req, res) => {
     let request: TestRecord;
     try { request = record(JSON.parse(body)); } catch { res.writeHead(400).end(); return; }
     assert.equal(request.stream, true);
+    const serviceTier = typeof request.service_tier === 'string' ? request.service_tier : null;
     const holdResponse = holdNextResponse;
     holdNextResponse = false;
     const sequence = ++fakeRequestCount;
+    fakeServiceTiers[sequence - 1] = serviceTier;
     const messageId = `msg_pi_dish_${sequence}`;
     const responseId = `resp_pi_dish_${sequence}`;
     const text = `pi-dish fake provider response ${sequence}`;
@@ -262,7 +270,7 @@ async function runStreamedTurn(sessionId: string, prompt: string) {
       }
     }
   })().catch((error: unknown) => {
-    if (record(error).name !== 'AbortError') throw error;
+    if (!(abort.signal.aborted && error instanceof Error && error.name === 'AbortError')) throw error;
   });
   try {
     await waitFor(() => events.includes('init'), 'SSE init');
@@ -284,6 +292,7 @@ async function runStreamedTurn(sessionId: string, prompt: string) {
       events: [...new Set(events)],
       transcript,
       providerRequestSequence: requestCountBefore + 1,
+      providerServiceTier: fakeServiceTiers[requestCountBefore] ?? null,
       assistantText: expectedAssistantText,
     };
   } catch (error) {
@@ -340,7 +349,27 @@ async function testOmp() {
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/rename`, { name: 'OMP managed real canary' })).status, 200);
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/thinking`, { level: 'low' })).status, 200);
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/command`, { message: '/dish-push' })).status, 200);
+  // Fast mode only counts if the priority tier reaches the provider payload.
+  // The local fake provider records each request's service_tier, so assert the
+  // real streamed turn while /fast is on, then assert it drops once /fast is off.
+  const fastOn = await post(`/api/sessions/${encodeURIComponent(id)}/fast`, { enabled: true });
+  assert.equal(fastOn.status, 200, JSON.stringify(fastOn.body));
+  const fastOnState = record(present(fastOn.body.fastMode));
+  assert.equal(fastOnState.available, true, `real OMP fast mode availability after /fast on: ${JSON.stringify(fastOn.body)}`);
+  assert.equal(fastOnState.enabled, true, `real OMP fast mode enabled after /fast on: ${JSON.stringify(fastOn.body)}`);
+  assert.equal(fastOnState.active, true, `real OMP fast mode active after /fast on: ${JSON.stringify(fastOn.body)}`);
   const turn = await runStreamedTurn(id, 'pi-dish managed OMP integration canary');
+  assert.equal(turn.providerServiceTier, 'priority',
+    'fast mode must send service_tier=priority on the real streamed provider request');
+  const fastOff = await post(`/api/sessions/${encodeURIComponent(id)}/fast`, { enabled: false });
+  assert.equal(fastOff.status, 200, JSON.stringify(fastOff.body));
+  const fastOffState = record(present(fastOff.body.fastMode));
+  assert.equal(fastOffState.available, true, `real OMP fast mode availability after /fast off: ${JSON.stringify(fastOff.body)}`);
+  assert.equal(fastOffState.enabled, false, `real OMP fast mode enabled after /fast off: ${JSON.stringify(fastOff.body)}`);
+  assert.equal(fastOffState.active, false, `real OMP fast mode active after /fast off: ${JSON.stringify(fastOff.body)}`);
+  const plainTurn = await runStreamedTurn(id, 'pi-dish managed OMP standard-tier canary');
+  assert.notEqual(plainTurn.providerServiceTier, 'priority',
+    'fast mode must be gone from the provider payload after /fast off');
   // /btw runs an ephemeral side turn against the same fake provider: the
   // answer comes back over the command response and nothing is persisted.
   const btw = await post(`/api/sessions/${encodeURIComponent(id)}/command`, { message: '/btw summarize this session' });
@@ -348,7 +377,7 @@ async function testOmp() {
   assert.match(text(btw.body.answer), /^pi-dish fake provider response \d+$/, 'real OMP /btw answer');
   const tree = await get(`/api/sessions/${encodeURIComponent(id)}/tree`);
   assert.equal(tree.status, 200, JSON.stringify(tree.body));
-  assert.ok(records(tree.body.nodes).some(node => node.role === 'assistant' && node.text === turn.assistantText && node.active),
+  assert.ok(records(tree.body.nodes).some(node => node.role === 'assistant' && node.text === plainTurn.assistantText && node.active),
     'the real OMP live tree includes the persisted assistant response on its active path');
   const closeSpawn = present(tmuxApi().getSpawn(id));
   assert.ok(record(closeSpawn.paneProcess).startTime, 'real OMP close has an owned pane identity');
@@ -395,6 +424,10 @@ async function testOmp() {
     commands: commands.body.length,
     models: models.body.length,
     streamedTurnEvents: turn.events,
+    fastModeEnabledState: fastOnState,
+    fastModeEnabledProviderTier: turn.providerServiceTier,
+    fastModeDisabledState: fastOffState,
+    fastModeDisabledProviderTier: plainTurn.providerServiceTier,
     persistedAssistantMessage: true,
     liveTreeRead: true,
     inactiveTreeReadRefused: true,
@@ -629,8 +662,8 @@ async function cleanup() {
     }
     const result: TestRecord = {};
     for (const id of selected) result[id] = await (id === 'omp' ? testOmp() : testPrime());
-    // OMP: one streamed turn plus one ephemeral /btw side turn.
-    const expectedCalls = (selected.includes('omp') ? 2 : 0) + (selected.includes('prime') ? 8 : 0);
+    // OMP: two streamed turns (fast on, then off) plus one ephemeral /btw side turn.
+    const expectedCalls = (selected.includes('omp') ? 3 : 0) + (selected.includes('prime') ? 8 : 0);
     assert.equal(fakeRequestCount, expectedCalls, 'each streamed turn must use the local fake provider');
     result.fakeProviderRequests = fakeRequestCount;
     console.log(JSON.stringify(result, null, 2));
