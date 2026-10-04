@@ -20,7 +20,10 @@ exposing it to a network you don't fully trust.
 |---|---|
 | ![Streaming mid-turn with working badge and live tool panel](docs/screenshots/desktop-streaming.png) | ![Extension widget card above the composer](docs/screenshots/desktop-widget.png) |
 
-<p align="center"><img src="docs/screenshots/mobile-session.png" width="380" alt="The same session on a phone"></p>
+<p align="center">
+  <img src="docs/screenshots/mobile-drawer.png" width="300" alt="Session sidebar as a slide-out drawer on a phone">
+  <img src="docs/screenshots/mobile-session.png" width="300" alt="The same session on a phone">
+</p>
 
 (All screenshots are staged fixture data — regenerate with `npm run shots`.)
 
@@ -58,8 +61,9 @@ Rules of thumb:
 ## What it does
 
 - **Session list** — live pi sessions in a sidebar (grouped by workspace,
-  pinnable, collapsible), plus your full session history from pi's JSONL
-  store. Status dots for working / unread activity.
+  pinnable, collapsible) with per-row model and context use, plus your full
+  session history from pi's JSONL store. Status dots for working / unread
+  activity; search across every session, and save reusable filters as chips.
 - **Live streaming** — markdown renders live mid-stream via an incremental
   block renderer; tool activity folds into per-turn accordions; a working
   badge shows elapsed time and the currently running tool.
@@ -120,6 +124,14 @@ Rules of thumb:
 - **Reading tools** — in-session search (Ctrl+F) jumps directly to a bounded
   window around the match, with explicit controls for unloaded history gaps;
   focus mode hides tool noise, and messages have copy buttons.
+- **Files and diffs** — tap a file mention in a transcript to read it in a
+  viewer (raw link plus a 🌐 publish action), or open the session workspace's
+  aggregate uncommitted diff from the header. Select text in a file or lines
+  in the diff to leave anchored comments for the agent (below).
+- **Rich content** — markdown with syntax highlighting, KaTeX-typeset
+  `$…$`/`$$…$$` math in the transcript and in published/rendered file pages,
+  and Mermaid fenced diagrams rendered to theme-matched SVG with source and
+  zoom controls — all from locally vendored assets.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control
   panel, touch-sized everything.
 - **Themes** — solarized dark by default, a neutral "graphite" built in, and
@@ -140,9 +152,9 @@ Rules of thumb:
   section first: this hands a raw shell to anyone who can reach the port
   (the prompt API already executes code via the agent, but the terminal
   removes even that indirection).
-- **No CDN dependencies** — `marked`, `highlight.js`, `xterm`, and a
-  symbols-only Nerd Font (terminal prompt glyphs) are vendored, so it works
-  on LAN clients with no internet.
+- **No CDN dependencies** — `marked`, `highlight.js`, `katex`, `mermaid`,
+  `xterm`, and a symbols-only Nerd Font (terminal prompt glyphs) are
+  vendored, so it works on LAN clients with no internet.
 
 There's also an Electron shell (`npm run electron:dev`) if you want it as a
 desktop app for some reason.
@@ -179,8 +191,10 @@ cd pi-dish
 The bridge links land in `~/.pi/agent/extensions/pi-dish-bridge`,
 `~/.omp/agent/extensions/pi-dish-bridge-omp`, and
 `~/.prime/agent/extensions/pi-dish-bridge-prime` (plus the shared bridge core
-beside it — see the alternative-harness section below). Every directory under
-`skills/` is linked into the Pi and OMP agents' default `skills/` directories.
+beside it — see the alternative-harness section below). Every bundled skill
+directory — each one containing a `SKILL.md`, which excludes the shared
+`skills/lib` CLI core — is linked into the Pi and OMP agents' default
+`skills/` directories.
 `PI_AGENT_DIR`, `OMP_AGENT_DIR`, and `PRIME_AGENT_DIR` override those
 destinations for an isolated install, and `./install.sh --links-only` skips
 `npm ci`.
@@ -305,9 +319,9 @@ descriptions to that export. An offline historical JSONL still renders all of
 its persisted OMP records natively, but cannot reconstruct runtime-only prompt
 or tool state that OMP did not write to the file.
 
-The current real-host compatibility canary is pinned to OMP 18.1.16 (which
-requires Bun 1.3.14+) and Prime Agent 0.9.4. See Development for the isolated
-install and test command.
+The current real-host compatibility canary is pinned to OMP 18.5.0 (run with
+Bun 1.3.14) and Prime Agent 0.9.4. See Development for the isolated install
+and test command.
 
 After that, any `pi` you launch (TUI in tmux, headless, spawned from
 pi-dish) writes an instance-scoped entry under `~/.pi/dish/sessions/` and opens
@@ -541,9 +555,9 @@ cannot add fast-mode support to an already-running OMP agent. The tier applies
 to subsequent provider requests, not one already streaming.
 
 Keep the bundled Pi SDK aligned with the installed host Pi; the integration
-canary checks this. Pi 0.85.0's SDK imports `@earendil-works/pi-server` without
-declaring that runtime dependency, so pi-dish explicitly includes the matching
-server package as well.
+canary checks this. Upstream's `pi-server`, `pi-client` and `pi-protocol`
+packages are development-only and excluded from the SDK's npm output, so
+pi-dish does not rely on them at runtime.
 
 Bulk maintenance targets a snapshot: sessions launched later are not added.
 Only server-owned RPC children and proven pi-dish-owned tmux panes qualify.
@@ -869,7 +883,7 @@ paid request are needed. One reproducible isolated install is:
 PREFIX="$HOME/.local/share/pi-dish-harnesses"
 npm install --prefix "$PREFIX/bun" --no-audit --no-fund bun@1.3.14
 BUN="$PREFIX/bun/node_modules/.bin/bun"
-BUN_INSTALL="$PREFIX/omp" "$BUN" install -g @oh-my-pi/pi-coding-agent@18.1.16
+BUN_INSTALL="$PREFIX/omp" "$BUN" install -g @oh-my-pi/pi-coding-agent@18.5.0
 curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | \
   env PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 \
       PRIME_AGENT_INSTALLER_PLAIN=1 \
