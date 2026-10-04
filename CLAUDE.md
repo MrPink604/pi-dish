@@ -2229,7 +2229,11 @@ recognition errors are the user's to fix before the agent sees them.
   args + absolute tokens in bash commands — most recent reference wins), then
   fff fuzzy search under the cwd. Reads are gated to the cwd subtree +
   tool-touched paths (lexical containment — `..` normalizes away before the
-  check; a LAN client must not read arbitrary files).
+  check; a LAN client must not read arbitrary files). Published artifact
+  paths (`ARTIFACT_PATH_RE`: `/page/<22-char token>[/…]`, `/share/<token>`)
+  are never file mentions: the same pass turns them into `a.published-link`
+  on the browsing origin (`target=_blank`), whichever host's session cited
+  them — the origin's fleet discovery resolves the owner.
 - **In-session search**: 🔍 header button / Ctrl+F; owned by
   `src/browser/session-search.ts`. Query sequences retire old results and marks;
   close/reopen can share an identical hit-window request, but each query owns

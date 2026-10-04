@@ -649,7 +649,10 @@ Agents can still use the pages skill's `--via <hub>` (or a
 `PI_DISH_PUBLIC_VIA` default), always through their own server, to get the
 hub's link back immediately. Revoking on the owning host kills the link
 everywhere; `DELETE /api/fleet-artifacts/<token>` on the front-door host only
-stops it fronting (and keeps it from being rediscovered).
+stops it fronting (and keeps it from being rediscovered). A `/page/<token>` or
+`/share/<token>` path mentioned in any transcript — inline code, a markdown
+link or plain prose, from any host's session — opens in a new tab on the
+pi-dish address you're browsing, so the front door's discovery finds it.
 
 ### Anchored comments
 

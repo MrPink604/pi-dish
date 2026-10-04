@@ -4,7 +4,7 @@ import type { createBrowserAssets } from './browser-assets';
 import type { createDiagrams } from './diagrams';
 import { escapeHtml } from '../core/helper-format';
 import { createMathExtensions } from '../core/helper-markdown';
-import { sanitizeMarkdownUrl, diagramKindForFence, looksLikeFilePath, findPathTokens } from './helper-markdown';
+import { sanitizeMarkdownUrl, diagramKindForFence, looksLikeFilePath, findPathTokens, ARTIFACT_PATH_RE } from './helper-markdown';
 import type { SessionState, SessionEntry } from './session-state';
 import { SESSION_REF_TOKEN_RE } from '../core/helper-refs';
 import type { StreamingBlockState, StreamingFrame } from './streaming-render';
@@ -259,10 +259,29 @@ function fenceLanguage(code: HTMLElement) {
 // render gets it; idempotent — linked elements are skipped and each
 // .markdown-body's prose is walked once (data-linkified). Clicks are
 // delegated on document → openFileViewer.
+//
+// Published artifact paths (/page/<token>, /share/<token>) are not files:
+// in any of those forms they become real links on this pi-dish origin, whose
+// fleet discovery serves the artifact whichever host published it, opened in
+// a new tab like the artifacts modal's links.
 function linkifyFilePaths(root: ParentNode) {
+  const artifactLink = (href: string, label: Node | string) => {
+    const link = document.createElement('a');
+    link.className = 'published-link';
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.append(label);
+    return link;
+  };
   root.querySelectorAll<HTMLElement>('.markdown-body code, .tool-call-summary, .live-tool-summary').forEach(el => {
     if (el.closest('pre') || el.classList.contains('file-link') || el.children.length) return;
-    if (looksLikeFilePath((el.textContent || '').trim())) {
+    const text = (el.textContent || '').trim();
+    if (el.tagName === 'CODE' && el.parentNode && !el.closest('a') && ARTIFACT_PATH_RE.test(text)) {
+      // The span moves inside its link; reinsert at its old position.
+      const parent = el.parentNode, next = el.nextSibling;
+      parent.insertBefore(artifactLink(text, el), next);
+    } else if (looksLikeFilePath(text)) {
       el.classList.add('file-link');
       el.title = 'Open file';
     }
@@ -273,8 +292,14 @@ function linkifyFilePaths(root: ParentNode) {
   // Strip the dead href and let the delegated click open the file viewer on
   // the path instead (data-file-path, read by app.ts).
   root.querySelectorAll<HTMLAnchorElement>('.markdown-body a[href]').forEach(link => {
-    if (link.classList.contains('file-link')) return;
+    if (link.classList.contains('file-link') || link.classList.contains('published-link')) return;
     const href = (link.getAttribute('href') || '').trim();
+    if (ARTIFACT_PATH_RE.test(href)) {
+      link.classList.add('published-link');
+      link.target = '_blank';
+      link.rel = 'noopener';
+      return;
+    }
     if (!looksLikeFilePath(href)) return;
     link.classList.add('file-link');
     link.title = 'Open file';
@@ -301,11 +326,15 @@ function linkifyFilePaths(root: ParentNode) {
       let pos = 0;
       for (const t of tokens) {
         frag.append(node.data.slice(pos, t.start));
-        const span = document.createElement('span');
-        span.className = 'file-link';
-        span.title = 'Open file';
-        span.textContent = t.token;
-        frag.append(span);
+        if (t.artifact) {
+          frag.append(artifactLink(t.token, t.token));
+        } else {
+          const span = document.createElement('span');
+          span.className = 'file-link';
+          span.title = 'Open file';
+          span.textContent = t.token;
+          frag.append(span);
+        }
         pos = t.end;
       }
       frag.append(node.data.slice(pos));
@@ -313,7 +342,6 @@ function linkifyFilePaths(root: ParentNode) {
     }
   });
 }
-
 
   /**
    * Reparse only what streaming has not finalized. Only the uncommitted tail is

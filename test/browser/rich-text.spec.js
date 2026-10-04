@@ -53,6 +53,33 @@ const katexStyles = fs.readFileSync(path.resolve(__dirname, '../../public/vendor
     await (0, fixtures_js_1.expect)(page.locator('#messages')).toContainText('self child transcript');
     await (0, fixtures_js_1.expect)(fleet.row(fleet.self, fixtures_js_1.CHILD)).toHaveClass(/\bactive\b/);
 });
+(0, fixtures_js_1.test)('published page and share paths open on the browsing origin, not as files', async ({ page, fleet }) => {
+    const pageToken = 'MBavZPYvWkvzohuFjANqHg', shareToken = 'dudLylaLf55dbQEevAtwkA';
+    const markdown = `Review \`/page/${pageToken}\`, [the plan](/page/${pageToken}/) or /share/${shareToken}. Notes in \`/etc/hosts\` and /page/short.`;
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/messages?**`, route => route.fulfill({
+        json: { messages: [{ role: 'assistant', index: 0, content: markdown }], session: {} },
+    }));
+    // A remote host's transcript: the artifact may live on any fleet host, and
+    // only the browsing origin's discovery can find it.
+    await fleet.select(fleet.peer);
+    const links = page.locator('#messages a.published-link');
+    await (0, fixtures_js_1.expect)(links).toHaveCount(3);
+    const origin = new URL(fleet.self.base).origin;
+    (0, fixtures_js_1.expect)(await links.evaluateAll(nodes => nodes.map(node => [node.href, node.target, node.textContent]))).toEqual([
+        [`${origin}/page/${pageToken}`, '_blank', `/page/${pageToken}`],
+        [`${origin}/page/${pageToken}/`, '_blank', 'the plan'],
+        [`${origin}/share/${shareToken}`, '_blank', `/share/${shareToken}`],
+    ]);
+    await (0, fixtures_js_1.expect)(page.locator('#messages a.published-link code')).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(page.locator('#messages .file-link')).toHaveText(['/etc/hosts', '/page/short']);
+    const opened = page.context().waitForEvent('page');
+    await links.first().click();
+    const tab = await opened;
+    await tab.waitForLoadState();
+    (0, fixtures_js_1.expect)(tab.url()).toBe(`${origin}/page/${pageToken}`);
+    await tab.close();
+    await (0, fixtures_js_1.expect)(page.locator('#sessionView.file-open')).toHaveCount(0);
+});
 (0, fixtures_js_1.test)('streamed session mentions become clickable before the turn finishes', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
     await page.evaluate(id => {

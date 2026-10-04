@@ -111,11 +111,22 @@ export var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?:
 
 export var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
 
+/**
+ * A published pi-dish artifact as the publish APIs report it: `/page/<token>`
+ * (optionally a trailing slash, an asset or a query under it) or
+ * `/share/<token>`. Minted tokens are 16 random bytes in base64url (22
+ * characters), which keeps real filesystem paths from matching. These are
+ * URLs on the pi-dish origin the reader browses — whose fleet discovery finds
+ * the owning host — never files on a session's host.
+ */
+export var ARTIFACT_PATH_RE = /^\/(?:page\/[A-Za-z0-9_-]{22}(?:[/?#]\S*)?|share\/[A-Za-z0-9_-]{22}\/?)$/;
+
 
 export function looksLikeFilePath(text: unknown) {
   const s = String(text == null ? '' : text).trim();
   if (!s || s.length > 260) return false;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) return false; // URLs
+  if (ARTIFACT_PATH_RE.test(s)) return false;
   if (!FILE_MENTION_RE.test(s)) return false;
   const stripped = s.replace(/:\d+(?::\d+)?$/, '');
   return stripped.includes('/') || FILE_EXT_RE.test(stripped);
@@ -126,7 +137,8 @@ export function looksLikeFilePath(text: unknown) {
  * more permissively). Stricter than looksLikeFilePath: a bare word only
  * counts with a rooted prefix or a real extension — "and/or" and
  * "input/output" must not linkify — and domain-ish extensions are dropped
- * ("example.com" is prose, not a file). Returns [{ start, end, token }].
+ * ("example.com" is prose, not a file). Published artifact paths come back
+ * flagged `artifact`. Returns [{ start, end, token, artifact }].
  */
 export var PATH_TOKEN_RE = /(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?/g;
 
@@ -145,13 +157,17 @@ export function findPathTokens(text: unknown) {
     if (!token) continue;
     const prev = s[m.index - 1];
     if (prev && /[\w.@:/+-]/.test(prev)) continue; // mid-URL / mid-word
+    if (ARTIFACT_PATH_RE.test(token)) {
+      out.push({ start: m.index, end: m.index + token.length, token, artifact: true });
+      continue;
+    }
     if (!looksLikeFilePath(token)) continue;
     const stripped = token.replace(/:\d+(?::\d+)?$/, '');
     const rooted = /^(?:~\/|\.{1,2}\/|\/)/.test(stripped);
     const ext = (stripped.match(FILE_EXT_RE) || [''])[0].slice(1);
     if (!rooted && !ext) continue;
     if (!rooted && !stripped.includes('/') && BARE_EXT_STOPLIST.has(ext.toLowerCase())) continue;
-    out.push({ start: m.index, end: m.index + token.length, token });
+    out.push({ start: m.index, end: m.index + token.length, token, artifact: false });
   }
   return out;
 }

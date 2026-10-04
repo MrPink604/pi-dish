@@ -53,6 +53,33 @@ test('session refs navigate by owning host without linking examples or ambiguous
   await expect(fleet.row(fleet.self, CHILD)).toHaveClass(/\bactive\b/);
 });
 
+test('published page and share paths open on the browsing origin, not as files', async ({ page, fleet }) => {
+  const pageToken = 'MBavZPYvWkvzohuFjANqHg', shareToken = 'dudLylaLf55dbQEevAtwkA';
+  const markdown = `Review \`/page/${pageToken}\`, [the plan](/page/${pageToken}/) or /share/${shareToken}. Notes in \`/etc/hosts\` and /page/short.`;
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({
+    json: { messages: [{ role: 'assistant', index: 0, content: markdown }], session: {} },
+  }));
+  // A remote host's transcript: the artifact may live on any fleet host, and
+  // only the browsing origin's discovery can find it.
+  await fleet.select(fleet.peer);
+  const links = page.locator('#messages a.published-link');
+  await expect(links).toHaveCount(3);
+  const origin = new URL(fleet.self.base).origin;
+  expect(await links.evaluateAll(nodes => nodes.map(node => [(node as HTMLAnchorElement).href, (node as HTMLAnchorElement).target, node.textContent]))).toEqual([
+    [`${origin}/page/${pageToken}`, '_blank', `/page/${pageToken}`],
+    [`${origin}/page/${pageToken}/`, '_blank', 'the plan'],
+    [`${origin}/share/${shareToken}`, '_blank', `/share/${shareToken}`],
+  ]);
+  await expect(page.locator('#messages a.published-link code')).toHaveCount(1);
+  await expect(page.locator('#messages .file-link')).toHaveText(['/etc/hosts', '/page/short']);
+  const opened = page.context().waitForEvent('page');
+  await links.first().click();
+  const tab = await opened; await tab.waitForLoadState();
+  expect(tab.url()).toBe(`${origin}/page/${pageToken}`);
+  await tab.close();
+  await expect(page.locator('#sessionView.file-open')).toHaveCount(0);
+});
+
 test('streamed session mentions become clickable before the turn finishes', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.evaluate(id => {
