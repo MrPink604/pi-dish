@@ -4,9 +4,11 @@ import { record } from './helper-values';
 export function projectToolEvent(event: string, value: unknown): unknown {
   if (!event.startsWith('tool_execution_') || !record(value)) return value;
   const { toolCallId, toolName, args, startedAt, isError } = value;
+  const intent = typeof value.intent === 'string' && value.intent ? value.intent : undefined;
   const result = (value: unknown) => record(value) ? { content: value.content } : value;
   return {
     toolCallId, toolName, args, startedAt, isError,
+    ...(intent ? { intent } : {}),
     ...(event === 'tool_execution_update' ? { partialResult: result(value.partialResult) } : {}),
     ...(event === 'tool_execution_end' ? { result: result(value.result) } : {}),
   };

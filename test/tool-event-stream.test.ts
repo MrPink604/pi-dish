@@ -69,3 +69,14 @@ test('tool projection preserves images and errors without serializing native wor
   assert.deepEqual(JSON.parse(JSON.stringify(projected)), { toolCallId: 'a', toolName: 'task', args: { tasks: [] }, isError: true, result: { content } });
   assert.equal(native.content, content);
 });
+
+test('tool projection keeps eval intent and code without reading result details', () => {
+  const native = { content: [{ type: 'text', text: '1' }], details: { get trace() { throw new Error('native trace must not be read'); } } };
+  const projected = projectToolEvent('tool_execution_start', {
+    toolCallId: 'e', toolName: 'eval', args: { language: 'py', code: 'print(1)' }, intent: 'print one', startedAt: 1,
+    partialResult: native,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(projected)), {
+    toolCallId: 'e', toolName: 'eval', args: { language: 'py', code: 'print(1)' }, intent: 'print one', startedAt: 1,
+  });
+});

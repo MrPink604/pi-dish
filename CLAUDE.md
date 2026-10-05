@@ -2197,7 +2197,11 @@ recognition errors are the user's to fix before the agent sees them.
   and merges adjacent groups so pagination can't fragment a turn. Streaming
   elements (no `data-msg-index`) are never grouped; live tool panels are
   removed once the authoritative JSONL messages land
-  (`removeDuplicatedLiveContent`). Gotchas: the older-messages scroll anchor
+  (`removeDuplicatedLiveContent`). `eval` (OMP) and `ipython` (Prime) open
+  with the cell source while they run — title or first code line in the
+  header, not the language argument — and keep that source above streamed
+  output. A start event that only carries `intent` uses that label instead
+  of a blank cursor. Gotchas: the older-messages scroll anchor
   must be a *top-level* child (elements inside a closed group have no box),
   and in-session search opens the enclosing group before scrolling to a match.
 - **Focus mode** hides tool results, tool-call details, live tool panels, and

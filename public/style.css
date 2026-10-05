@@ -6710,6 +6710,24 @@ mark.comment-mark {
   background: var(--bg-darker);
 }
 
+.live-tool-code {
+  border-top: 1px solid var(--line);
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--bg-darker);
+  color: var(--text-muted);
+}
+
+.live-tool-code pre {
+  margin: 0;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
 .live-tool-panel.running .live-tool-output {
   max-height: 200px;
 }

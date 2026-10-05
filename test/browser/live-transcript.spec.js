@@ -53,6 +53,44 @@ const fixtures_js_1 = require("./fixtures.js");
     await (0, fixtures_js_1.expect)(page.locator('#moodIndicator')).toHaveText('focused <literal> face');
     await (0, fixtures_js_1.expect)(page.locator('#moodIndicator literal')).toHaveCount(0);
 });
+(0, fixtures_js_1.test)('a running eval panel shows the cell instead of a blank cursor', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const result = await page.evaluate(() => {
+        fixtureElement(document.getElementById('messages'), "document.getElementById('messages')").replaceChildren();
+        fixtureApp.features.liveToolsController.append({
+            toolCallId: 'eval-cell', toolName: 'eval', intent: 'ignored when code exists',
+            args: { language: 'py', title: 'count files', code: 'print(len(files))\nprint(1)' },
+        });
+        fixtureApp.features.liveToolsController.append({ toolCallId: 'eval-intent', toolName: 'eval', intent: 'Load class map' });
+        fixtureApp.features.liveToolsController.append({ toolCallId: 'prime-cell', toolName: 'ipython', args: { code: "await bash('ls')" } });
+        const cell = fixtureElement(document.querySelector('[data-tool-call-id="eval-cell"]'), 'eval-cell');
+        const intent = fixtureElement(document.querySelector('[data-tool-call-id="eval-intent"]'), 'eval-intent');
+        const prime = fixtureElement(document.querySelector('[data-tool-call-id="prime-cell"]'), 'prime-cell');
+        const before = {
+            open: cell.hasAttribute('open'),
+            summary: cell.querySelector('.live-tool-summary')?.textContent,
+            code: cell.querySelector('.live-tool-code')?.textContent,
+            intentSummary: intent.querySelector('.live-tool-summary')?.textContent,
+            intentCode: intent.querySelector('.live-tool-code')?.textContent,
+            primeSummary: prime.querySelector('.live-tool-summary')?.textContent,
+            primeCode: prime.querySelector('.live-tool-code')?.textContent,
+        };
+        fixtureApp.features.liveToolsController.update({
+            toolCallId: 'eval-cell', partialResult: { content: [{ type: 'text', text: '3' }] },
+        });
+        return {
+            ...before,
+            output: cell.querySelector('.live-tool-output')?.textContent,
+            codeAfter: cell.querySelector('.live-tool-code')?.textContent,
+        };
+    });
+    (0, fixtures_js_1.expect)(result).toEqual({
+        open: true, summary: 'count files', code: 'print(len(files))\nprint(1)',
+        intentSummary: 'Load class map', intentCode: 'Load class map',
+        primeSummary: 'ls', primeCode: "await bash('ls')",
+        output: '3', codeAfter: 'print(len(files))\nprint(1)',
+    });
+});
 (0, fixtures_js_1.test)('same-id tool completion on a newer host cannot replace the older retained panel', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
     const result = await page.evaluate(({ id, host }) => {

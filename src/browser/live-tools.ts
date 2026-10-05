@@ -2,15 +2,16 @@ import type { SessionState, SelectionOwner } from './session-state';
 import { record, finite } from '../core/helper-values';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { parseIpythonResult, getToolSummary, getToolOutputText } from '../core/helper-content';
-interface ToolEvent { toolCallId: string; toolName?: string; args?: unknown; startedAt?: string | number; partialResult?: { content?: unknown }; result?: { content?: unknown }; isError: boolean }
+interface ToolEvent { toolCallId: string; toolName?: string; args?: unknown; intent?: string; startedAt?: string | number; partialResult?: { content?: unknown }; result?: { content?: unknown }; isError: boolean }
 function decode(value: unknown): ToolEvent | null {
   if (!record(value) || typeof value.toolCallId !== 'string' || !value.toolCallId) return null;
   return { toolCallId: value.toolCallId, toolName: typeof value.toolName === 'string' ? value.toolName : undefined, args: value.args,
+    intent: typeof value.intent === 'string' && value.intent ? value.intent : undefined,
     startedAt: typeof value.startedAt === 'string' || finite(value.startedAt) ? value.startedAt : undefined,
     partialResult: record(value.partialResult) ? { content: value.partialResult.content } : undefined,
     result: record(value.result) ? { content: value.result.content } : undefined, isError: value.isError === true };
 }
-interface ToolPanel { owner: SelectionOwner; el: HTMLDetailsElement; startTime: number | null; toolName: string; args: unknown }
+interface ToolPanel { owner: SelectionOwner; el: HTMLDetailsElement; startTime: number | null; toolName: string; args: unknown; intent?: string }
 export function createLiveTools(options: {
   document: Document; sessionState: SessionState; started: (id: string, name: string) => void; finished: (id: string) => void;
   pinned: (root: HTMLElement) => boolean; scroll: (root: HTMLElement) => void; jump: (root: HTMLElement) => void;
@@ -27,15 +28,50 @@ export function createLiveTools(options: {
     if (!entry || !matches(entry)) return null;
     entry.owner = owner; liveToolPanels.set(id, entry); return entry;
   }
+function kernelSource(toolName: string, args: unknown, intent?: string) {
+  if (toolName !== 'eval' && toolName !== 'ipython') return '';
+  if (record(args) && typeof args.code === 'string' && args.code) return args.code;
+  return typeof intent === 'string' && intent.trim() ? intent.trim() : '';
+}
+function kernelSummary(toolName: string, args: unknown, intent?: string) {
+  const summary = getToolSummary(toolName, args);
+  if (summary) return summary;
+  if ((toolName !== 'eval' && toolName !== 'ipython') || typeof intent !== 'string') return '';
+  return intent.trim() ? truncate(intent.trim(), 60) : '';
+}
+function syncKernelPreview(el: HTMLDetailsElement, toolName: string, args: unknown, intent?: string) {
+  const summary = kernelSummary(toolName, args, intent);
+  let summaryEl = el.querySelector('.live-tool-summary');
+  if (summary) {
+    if (!summaryEl) {
+      el.querySelector('.live-tool-name')?.insertAdjacentHTML('afterend', '<span class="live-tool-summary"></span>');
+      summaryEl = el.querySelector('.live-tool-summary');
+    }
+    if (summaryEl) summaryEl.textContent = summary;
+  }
+  const source = kernelSource(toolName, args, intent);
+  if (!source) return;
+  let codeEl = el.querySelector('.live-tool-code');
+  if (!codeEl) {
+    codeEl = document.createElement('div');
+    codeEl.className = 'live-tool-code';
+    const outputEl = el.querySelector('.live-tool-output');
+    if (outputEl) outputEl.before(codeEl);
+    else el.appendChild(codeEl);
+  }
+  codeEl.innerHTML = '<pre>' + escapeHtml(truncate(source, 8000)) + '</pre>';
+  el.setAttribute('open', '');
+}
 function liveToolOutputHtml(output: string) {
   const parsed = parseIpythonResult(output);
   return escapeHtml(truncate(parsed ? parsed.output : output, 8000));
 }
 
-function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown, output: string, isError: boolean, isComplete: boolean, durationMs: number | null = null, imagesHtml = '') {
+function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown, output: string, isError: boolean, isComplete: boolean, durationMs: number | null = null, imagesHtml = '', intent?: string) {
   const stateClass = isComplete ? (isError ? 'error' : 'complete') : 'running';
-  const summary = getToolSummary(toolName, args);
-  const openAttr = (output || imagesHtml) ? ' open' : '';
+  const summary = kernelSummary(toolName, args, intent);
+  const source = kernelSource(toolName, args, intent);
+  const openAttr = (output || imagesHtml || source) ? ' open' : '';
 
   let statusHtml = '';
   if (isComplete) {
@@ -63,6 +99,7 @@ function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown,
       statusHtml +
       '<span class="live-tool-status-dot"></span>' +
     '</summary>' +
+    (source ? '<div class="live-tool-code"><pre>' + escapeHtml(truncate(source, 8000)) + '</pre></div>' : '') +
     outputHtml +
     imagesHtml +
   '</details>';
@@ -75,8 +112,11 @@ function appendLiveToolPanel(data: ToolEvent, { completionOnly = false } = {}): 
   const existing = lookup(toolCallId);
   const resolvedName = toolName || existing?.toolName || 'tool';
   const resolvedArgs = args ?? existing?.args ?? {};
+  const intent = data.intent || existing?.intent;
   options.started(toolCallId, resolvedName);
   if (existing?.el?.isConnected && existing.el.classList.contains('running')) {
+    syncKernelPreview(existing.el, resolvedName, resolvedArgs, intent);
+    existing.toolName = resolvedName; existing.args = resolvedArgs; existing.intent = intent;
     return existing; // cumulative/repeated starts never duplicate a panel
   }
 
@@ -84,7 +124,7 @@ function appendLiveToolPanel(data: ToolEvent, { completionOnly = false } = {}): 
   if (!container) return null;
 
   const wasPinned = options.pinned(container);
-  const html = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, '', false, false);
+  const html = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, '', false, false, null, '', intent);
   let el: HTMLDetailsElement;
   if (existing?.el?.isConnected) {
     const tmp = document.createElement('div');
@@ -103,6 +143,7 @@ function appendLiveToolPanel(data: ToolEvent, { completionOnly = false } = {}): 
     startTime: finite(parsedStartedAt) ? parsedStartedAt : (completionOnly ? null : Date.now()),
     toolName: resolvedName,
     args: resolvedArgs,
+    intent,
   };
   liveToolPanels.set(toolCallId, entry); retained.set(el, entry);
   if (wasPinned) options.scroll(container); else options.jump(container);
@@ -123,6 +164,11 @@ function updateLiveToolPanel(data: ToolEvent) {
     });
   }
   if (!entry?.el) return;
+  const intent = data.intent || entry.intent;
+  const resolvedName = data.toolName || entry.toolName;
+  const resolvedArgs = data.args ?? entry.args;
+  syncKernelPreview(entry.el, resolvedName, resolvedArgs, intent);
+  entry.toolName = resolvedName; entry.args = resolvedArgs; entry.intent = intent;
 
   const output = getToolOutputText(partialResult);
   // Images derive idempotently from the latest partial result — the whole
@@ -175,6 +221,7 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   options.finished(toolCallId);
   const resolvedName = toolName || entry?.toolName || 'tool';
   const resolvedArgs = args ?? entry?.args ?? {};
+  const intent = data.intent || entry?.intent;
   options.mood(resolvedName, resolvedArgs);
   if (!entry?.el) return;
 
@@ -183,7 +230,7 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
 
   // Rebuild the panel in its final state
-  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, imagesHtml);
+  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, imagesHtml, intent);
   const tmp = document.createElement('div');
   tmp.innerHTML = newHtml;
   const newEl = tmp.firstElementChild as HTMLDetailsElement;
@@ -192,6 +239,7 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   entry.el = newEl; retained.set(newEl, entry);
   entry.toolName = resolvedName;
   entry.args = resolvedArgs;
+  entry.intent = intent;
 
   // Keep in map for dedup — will be cleaned up on turn_end
 }

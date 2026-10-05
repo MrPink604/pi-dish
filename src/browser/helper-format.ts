@@ -22,7 +22,8 @@ export function formatThinkingPreview(thinking: string): string {
 }
 
 export function formatToolArguments(name: string | undefined, args: Readonly<Record<string, unknown>>): string {
-  return name === 'ipython' && typeof args.code === 'string' ? args.code : JSON.stringify(args, null, 2);
+  if ((name === 'ipython' || name === 'eval') && typeof args.code === 'string') return args.code;
+  return JSON.stringify(args, null, 2);
 }
 
 

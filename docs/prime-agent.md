@@ -41,7 +41,8 @@ What works today, live:
   its children, wait for worker exit, then resume the root with a fresh wrapper
   token. Other roots keep running; child agents are not automatically resumed.
 - ipython tool calls and `BashResult(...)` results render as code/command
-  output in the web transcript and the CLI read path.
+  output in the web transcript and the CLI read path. A running ipython or
+  `eval` cell shows its source in the live panel, not a blank cursor.
 - RLM subagent fan-outs are discovered from the `session-artifacts/**/sub-*`
   layout (recursive, header-verified), surface as live children while the
   daemon reports them running, and render in the shared session-family tree

@@ -42,6 +42,13 @@ export function getToolSummary(toolName: string, args: unknown) {
   if (!record(args)) return '';
   if (toolName === 'Bash' || toolName === 'bash') return typeof args.command === 'string' && args.command ? truncate(args.command.split('\n')[0], 60) : '';
   if (toolName === 'ipython') return ipythonCodeSummary(args.code);
+  // OMP eval args lead with language ("py"), which is not the work. Prefer the
+  // cell title, then the same first-line/bash summary Prime's ipython uses.
+  if (toolName === 'eval') {
+    const title = typeof args.title === 'string' ? args.title.trim() : '';
+    if (title) return truncate(title, 60);
+    return ipythonCodeSummary(args.code);
+  }
   if (['Read', 'read', 'Edit', 'edit', 'Write', 'write'].includes(toolName)) return typeof args.path === 'string' ? args.path : '';
   const keys = Object.keys(args);
   if (keys.length) return truncate(String(args[keys[0]]), 40);

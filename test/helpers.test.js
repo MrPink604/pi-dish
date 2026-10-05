@@ -193,6 +193,14 @@ test('getToolSummary surfaces prime ipython shell work and code lines', () => {
     assert.equal(H.getToolSummary('ipython', {}), '');
     assert.equal(H.getToolSummary('ipython', null), '');
 });
+test('getToolSummary surfaces eval cell title or code, not the language', () => {
+    assert.equal(H.getToolSummary('eval', { language: 'py', title: 'Load class map', code: 'import json\nprint(1)' }), 'Load class map');
+    assert.equal(H.getToolSummary('eval', { language: 'py', code: 'print(1)\nprint(2)' }), 'print(1)');
+    assert.equal(H.getToolSummary('eval', { language: 'py', code: "await bash('ls -la')" }), 'ls -la');
+    assert.equal(H.getToolSummary('eval', { language: 'py' }), '');
+    assert.equal(H.getToolSummary('eval', { language: 'js', title: '   ', code: 'console.log(1)' }), 'console.log(1)');
+    assert.equal(H.getToolSummary('eval', null), '');
+});
 test('parseIpythonResult unwraps BashResult reprs only when complete', () => {
     assert.deepEqual(H.parseIpythonResult("BashResult(exit_code=0, output='hello\\n', duration=0.017216796055436134)"), { exitCode: 0, output: 'hello\n', durationMs: 17 });
     assert.deepEqual(H.parseIpythonResult('BashResult(exit_code=1, output=\'boom: it\\\'s done\\n\', duration=1.5)'), { exitCode: 1, output: "boom: it's done\n", durationMs: 1500 });
