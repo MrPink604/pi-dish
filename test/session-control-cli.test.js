@@ -108,7 +108,14 @@ test('peer-session CLI attributes spawn and uses semantic control routes', async
     const controls = [['send', 'prompt'], ['steer', 'steer'], ['follow-up', 'follow-up']];
     for (const [command, route] of controls) {
         await run([command, 'peer-1', 'Then', 'summarize'], base);
-        assert.ok(requests.some(request => request.url === `/api/sessions/peer-1/${route}` && request.body?.message === 'Then summarize'));
+        const control = (0, test_types_js_1.present)(requests.find(request => request.url === `/api/sessions/peer-1/${route}` && request.body?.message === 'Then summarize'));
+        // The calling session is stamped on send/follow-up so the target's host can
+        // hold it; steer interrupts, so it carries no identity and is never held.
+        const sender = (0, test_types_js_1.record)(control.body).sender;
+        if (command === 'steer')
+            assert.equal(sender, undefined, 'steer carries no sender');
+        else
+            assert.equal((0, test_types_js_1.record)(sender).id, 'source-1', `${command} carries the calling session as sender`);
     }
     for (const command of ['interrupt', 'resume', 'close'])
         await run([command, 'peer-1'], base);

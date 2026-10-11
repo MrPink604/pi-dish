@@ -603,6 +603,36 @@ family block. Sessions launched by other schemes remain normal rows and degrade
 by what is available: live bridge controls when registered, historical read/resume
 when only JSONL remains, and no relation decoration when no hint exists.
 
+#### Peer-message hold
+
+By default a peer message is delivered immediately. Set an integer
+`messageHoldWindowMs` (milliseconds; `0`, the default, is off) in
+`~/.pi/dish/settings.json` and the target's owning host holds incoming peer
+messages for that window instead of interrupting a session that is mid-turn:
+
+```json
+{
+  "messageHoldWindowMs": 30000
+}
+```
+
+The same host setting can be read with `GET /api/settings` and changed with
+`PUT /api/settings` carrying `{ "messageHoldWindowMs": 30000 }`; this partial
+update preserves other machine settings. Values must be integers from `0` to
+`86400000` (24 hours). Cross-host requests are relayed to the owning host.
+
+Only `send` and `follow-up` carry a sender and can be held; `steer` is an
+explicit interruption and always delivers immediately, and a message with no
+sender (the caller cannot be identified) is delivered immediately too. A held
+delivery answers `{success, held, until}` — `until` being the flush time — and
+messages to the same session and delivery mode coalesce into one batch, each
+keeping the sender's ref and name as a header. A held message to an inactive
+session waits for an explicit resume; the hold never resumes a session itself.
+The setting is read per request, so it applies without a restart. The inbox is
+durable (`~/.pi/dish/message-holds.json`), but delivery is best-effort, not
+exactly-once: a batch is retired only after the target's harness acknowledges
+it, so a crash in between can redeliver the batch.
+
 Session mentions such as `#019f9834` are clickable in transcript prose, including
 while streaming. A standalone ref in inline code is clickable too. Clicking opens
 the referenced session on its owning host; unknown or ambiguous refs, fenced code,

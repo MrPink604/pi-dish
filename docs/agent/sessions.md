@@ -18,8 +18,37 @@ Three delivery semantics, all queue-safe:
   Use for "then also do X" while a turn runs.
 
 A queued message can be seen and cancelled by the user in the pi-dish UI, and
-by the target's own TUI. There is no inbox: a message to an inactive session
-means `resume <ref>` first, then `follow-up`.
+by the target's own TUI. Without a hold (the default) there is no inbox: a
+message to an inactive session means `resume <ref>` first, then `follow-up`.
+
+### Peer-message hold (opt-in)
+
+By default a peer message is delivered immediately. A host may set an integer
+`messageHoldWindowMs` (milliseconds, default `0` = off) in
+`~/.pi/dish/settings.json`; with a positive window the *target's* owning host
+holds incoming peer messages for that window instead of interrupting a busy
+session:
+
+- `send` and `follow-up` carry their sender, so the owning host can hold them.
+  `steer` is an explicit interruption: it carries no sender and always
+  delivers now.
+- A message with no sender (a caller the CLI cannot identify, or any non-peer
+  surface) is delivered immediately — the unheld behavior.
+- A held delivery answers `{success: true, held: true, until: <iso>}`
+  instead of the usual `{success, result}`; `until` is when the batch flushes.
+- Held messages to the same session and delivery mode coalesce into one batch,
+  each entry keeping its sender as a header (`[<ref> · <name> · <sentAt>]`).
+- A held message to an inactive target waits for an explicit `resume <ref>`.
+  The hold never resumes a session by itself, and an explicit resume does not
+  shorten an open window — an overdue batch is only retried.
+- The inbox is durable (`~/.pi/dish/message-holds.json`) and refuses to
+  discard pending state it cannot parse. Delivery is best-effort, not
+  exactly-once: a batch is retired only after the target's harness
+  acknowledges it, so a crash in between can redeliver the batch.
+
+The setting is also exposed through the owning host's `GET /api/settings` and
+`PUT /api/settings` (partial update); valid values are integers from `0` through
+`86400000` milliseconds.
 
 ## Reading a session (memory recall)
 

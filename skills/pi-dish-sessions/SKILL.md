@@ -50,6 +50,15 @@ node "$CLI" spawn --cwd "$PWD" --name "investigation" \
 node "$CLI" resume <ref>                                   # revive an inactive session
 ```
 
+`send` and `follow-up` carry this session as their sender. When the target's
+host sets `messageHoldWindowMs` (integer milliseconds, default `0` = off), it
+holds a peer message for that window instead of interrupting and answers
+`held`/`until`; held messages coalesce into one batch, each prefixed with the
+sender's ref, name and time, and a held message to an inactive session waits
+for an explicit `resume` (the hold never resumes it). A missing sender
+delivers immediately, and `steer` is always immediate — it interrupts, so it
+carries no sender.
+
 A spawned peer runs the same harness as the session spawning it (Pi from Pi,
 OMP from OMP), so it has the same tools and skills you do. Pass
 `--harness pi|omp|prime` to cross over deliberately; the spawn result names

@@ -110,6 +110,10 @@ const COMMANDS = [
         summary: 'Send a normal prompt. Mid-turn it is queued; otherwise it starts a turn.',
         flags: [],
         example: 'send 8f3ab2c1 "Check whether the cap is still 4MB"',
+        notes: [
+            'Carries this caller as its sender. A target host with `messageHoldWindowMs` set holds a peer send for that window instead of interrupting; the answer then reports `held` and `until` (the target is left alone, and a held message to an inactive target waits for an explicit `resume`).',
+            'A session that cannot be identified as the sender sends nothing extra, and the host delivers immediately — the unheld behavior.',
+        ],
     },
     {
         name: 'steer',
@@ -117,6 +121,7 @@ const COMMANDS = [
         summary: 'Deliver a message *into* the current turn to redirect work already in progress.',
         flags: [],
         example: 'steer 8f3ab2c1 "Stop — the regression is in session-index, not the parser"',
+        notes: ['An explicit interruption: it carries no sender and is never held.'],
     },
     {
         name: 'follow-up',
@@ -124,6 +129,7 @@ const COMMANDS = [
         summary: 'Queue a message for after the current turn completes.',
         flags: [],
         example: 'follow-up 8f3ab2c1 "Then run the full suite and report the tail"',
+        notes: ['Held like `send` when the target host holds peer messages; the answer reports `held` and `until`.'],
     },
     {
         name: 'interrupt',
@@ -365,14 +371,61 @@ function writeSnippets(session) {
 // Host-qualified caller identity (`<hostId>:<sessionId>`, TASKS/multi-host.md
 // block 6): still advisory, still just the existing provenance fields — the
 // qualifier only says which host the id belongs to.
-async function qualifyCaller(base, sessionId) {
+async function localHostIdentity(base) {
     try {
-        const { data } = await request(base, '/api/host');
-        return core.record(data ?? {}).hostId ? `${core.record(data).hostId}:${sessionId}` : sessionId;
+        const host = core.record((await request(base, '/api/host')).data ?? {});
+        if (typeof host.hostId !== 'string' || !host.hostId)
+            return null;
+        return { id: host.hostId, label: typeof host.label === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(host.label) ? host.label : null };
     }
     catch {
-        return sessionId;
+        return null;
     }
+}
+async function qualifyCaller(base, sessionId) {
+    const hostId = (await localHostIdentity(base))?.id ?? null;
+    return hostId ? `${hostId}:${sessionId}` : sessionId;
+}
+// The identity stamped on a peer `send`/`follow-up` so the target's owning
+// host may hold it for its configured window (`messageHoldWindowMs`) instead
+// of interrupting a busy session. `steer` carries none: it is an explicit
+// interruption and always delivers immediately.
+//
+// The sender is the calling session. Its name comes from the local bridge
+// registry, falling back to the host's resolved session (and to the same
+// `Unnamed` placeholder the rest of the CLI prints for a nameless session).
+// A caller the CLI cannot identify at all yields null, and the route then
+// delivers immediately — the old, unheld behavior. Cross-host sends qualify
+// the durable identity with the host id and the display ref with this host's
+// fleet label (falling back to the host id when no usable label is configured).
+async function peerSenderIdentity(base, targetHost, sourceSessionId) {
+    if (sourceSessionId == null || sourceSessionId === '')
+        return null;
+    const self = String(sourceSessionId);
+    const entries = registryEntries();
+    const entry = entries.find((candidate) => String(registryRouteId(candidate)) === self);
+    let name = entry ? String(entry.name || core.record(entry.wrapper ?? {}).name || '') : '';
+    let ref = entry ? stableSessionRef(self, entries.map(registryRouteId)) : '';
+    if (!name || !ref) {
+        // Not (or no longer) in the local registry — e.g. `--session` naming a
+        // sibling. Ask the host for the name and the short handle it recommends.
+        try {
+            const resolved = await resolveSessionRef(base, self, null);
+            name = name || String(resolved.session.name || '');
+            ref = ref || resolved.ref || '';
+        }
+        catch { }
+    }
+    if (!ref)
+        ref = stableSessionRef(self, null) || self;
+    if (!name)
+        name = 'Unnamed';
+    if (!targetHost)
+        return { id: self, ref, name };
+    const host = await localHostIdentity(base);
+    if (!host)
+        return null;
+    return { id: `${host.id}:${self}`, ref: `${host.label || host.id}/${ref}`, name };
 }
 // A peer spawned from an OMP session should be an OMP session: the harness is
 // inherited from the caller, not defaulted to Pi (the HTTP route's own default,
@@ -1001,7 +1054,14 @@ async function main() {
             if (!message)
                 throw new Error(`${args.command} needs message text`);
             const route = spec.name === 'send' ? 'prompt' : spec.name;
-            const { data } = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/${route}`, jsonInit({ message }));
+            const body = { message };
+            if (spec.name !== 'steer') {
+                // `steer` interrupts now, so it carries no sender and is never held.
+                const sender = await peerSenderIdentity(base, host, core.discoverSessionQuietly(args.session));
+                if (sender)
+                    body.sender = sender;
+            }
+            const { data } = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/${route}`, jsonInit(body));
             return print(data, args.json);
         }
         const route = spec.name === 'interrupt' ? 'abort' : spec.name === 'resume' ? 'resume' : 'close';

@@ -2,6 +2,7 @@ import type { RequestHandler } from 'express';
 import * as harnessSettings from './harness-feature-settings';
 import * as stt from './stt';
 import { recoveryMode } from './recovery-runner';
+import { MAX_MESSAGE_HOLD_WINDOW_MS, messageHoldWindowMs } from './message-hold';
 import { listHarnesses } from './harnesses';
 import { harnessCommandAvailable, runHarnessJsonCommand } from './harness-feature-commands';
 import type { SessionCatalog } from './session-catalog-contracts';
@@ -76,6 +77,7 @@ function settingsForClient(settings: Record<string, unknown>) {
     monthlyBudgetUsd: settings.monthlyBudgetUsd ?? null,
     savedFilters: sanitizeSavedFilters(settings.savedFilters) || [],
     recoveryMode: recoveryMode(settings.recoveryMode),
+    messageHoldWindowMs: messageHoldWindowMs(settings),
   };
 }
 
@@ -155,6 +157,13 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
         return res.status(400).json({ error: 'recoveryMode must be off, restore, or continue' });
       }
       settings.recoveryMode = body.recoveryMode;
+    }
+    if ('messageHoldWindowMs' in body) {
+      const value = body.messageHoldWindowMs;
+      if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > MAX_MESSAGE_HOLD_WINDOW_MS) {
+        return res.status(400).json({ error: 'messageHoldWindowMs must be an integer between 0 and 86400000' });
+      }
+      settings.messageHoldWindowMs = value;
     }
     try {
       ports.writeDishSettings(settings);

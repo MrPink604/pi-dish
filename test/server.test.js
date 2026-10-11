@@ -2766,6 +2766,20 @@ test('server-global telemetry settings preserve unrelated fields and validate bu
     assert.equal(cleared.body.monthlyBudgetUsd, null);
     assert.equal('monthlyBudgetUsd' in JSON.parse(fs.readFileSync(settingsFile, 'utf8')), false);
 });
+test('peer hold window is a partial host setting with a zero default and bounded writes', async () => {
+    const settingsFile = path.join(tmpHome, '.pi', 'dish', 'settings.json');
+    assert.equal((await get('/api/settings')).body.messageHoldWindowMs, 0);
+    const saved = await put('/api/settings', { messageHoldWindowMs: 30000 });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.body.messageHoldWindowMs, 30000);
+    assert.equal((await get('/api/settings')).body.messageHoldWindowMs, 30000);
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).keep, 'yes');
+    for (const value of [-1, 1.5, '30000', 86400001]) {
+        assert.equal((await put('/api/settings', { messageHoldWindowMs: value })).status, 400);
+    }
+    assert.equal((await get('/api/settings')).body.messageHoldWindowMs, 30000);
+    await put('/api/settings', { messageHoldWindowMs: 0 });
+});
 test('saved filters persist server-globally and update independently of the budget', async () => {
     const settingsFile = path.join(tmpHome, '.pi', 'dish', 'settings.json');
     await put('/api/settings', { monthlyBudgetUsd: 10 });

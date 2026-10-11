@@ -9,6 +9,7 @@ import { errorMonitor, type EventEmitter } from 'node:events';
 import piSDK = require('./pi-sdk');
 import { createSessionReadHandlers } from './session-read-handlers';
 import { createSessionCommandHandlers } from './session-command-handlers';
+import { createMessageHold } from './message-hold';
 import { getAllRPCSessions } from './rpc-session';
 import {
   listRegisteredSessions,
@@ -237,6 +238,11 @@ export function startServer(rootDirectory: string): Server {
     getLiveSession, adoptBridgeSessionSwitch, describeRuntime, locatePiPane,
     liveSubsessionCandidates, liveSourceObservations,
   } = ownership;
+  const messageHold = createMessageHold({
+    getLiveSession,
+    supports: liveSessionSupports,
+    readSettings: readDishSettings,
+  });
   const fileHandlers = createFileHandlers({ resolveSessionCwd, findSessionSource });
   const sessionReadHandlers = createSessionReadHandlers({
     findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession,
@@ -321,6 +327,7 @@ export function startServer(rootDirectory: string): Server {
   const observedSessions = new WeakSet<LiveSession>();
 
   function observeSessionLifecycle(sess: LiveSession): void {
+    messageHold.wake(sess instanceof BridgeSession ? routeSessionId(getHarness(sess.harnessId)?.id || 'pi', sess.id) : sess.id);
     const dismissAskDialogs = (source: string) => {
       for (const [id, data] of sess.extUIState.dialogs) {
         if ((data == null ? undefined : property(data, 'method')) !== 'ask') continue;
@@ -1053,6 +1060,9 @@ export function startServer(rootDirectory: string): Server {
     getLiveSession,
     supports: liveSessionSupports,
     expandRefs: (message, refs) => expandSessionRefs(message, refs, sessionRefDeps()),
+    hold: messageHold,
+    readSettings: readDishSettings,
+    sessionExists: id => !!routeIdentity(id) && !!findSessionSource(id, { exact: true }),
   });
   app.post('/api/sessions/:id/prompt', sessionCommandHandlers.prompt);
   app.post('/api/sessions/:id/steer', sessionCommandHandlers.steer);
@@ -2101,6 +2111,7 @@ export function startServer(rootDirectory: string): Server {
         model: optionalProperty(req.body, 'model'),
         target: optionalProperty(req.body, 'target') as HarnessLaunchTarget | null | undefined,
       }));
+      messageHold.wake(req.params.id);
     } catch (error) { res.status((property(error, 'status') || 500) as number).json({ error: property(error, 'message') }); }
   });
 
@@ -2462,6 +2473,7 @@ export function startServer(rootDirectory: string): Server {
     recoveryStopped = true;
     recoveryRunner.stop();
     routineRunner.stop();
+    messageHold.stop();
     if (shareServer) { try { shareServer.close(); } catch {} }
     remoteHosts.shutdown();
     sessionBounces.stop();
@@ -2551,6 +2563,7 @@ export function startServer(rootDirectory: string): Server {
     skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds(buildSessionCatalog) })
       .then(paths => sessionIndex.setSkillRoots(paths))
       .catch(() => {});
+    messageHold.start();
     sessionBounces.start();
     // A restored idle session is interrupted work, not a completed oneShot.
     recoveryRunner.start()
