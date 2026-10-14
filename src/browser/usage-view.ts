@@ -37,7 +37,7 @@ export function createUsageView(options: {
   let usageTab: 'usage' | 'cache' | 'limits' = 'usage';
   let usageData: UsageSummary | null = null, usageChart: UsageChart | null = null, usageSelectedDay: string | null = null;
   let usageHostErrors: string[] = [], usageHostPending: string[] = [], usageError: string | null = null;
-  let usageLimitsEntries: UsageLimitEntry[] = [], usageLimitsLoading = false, usageFetchSeq = 0;
+  let usageLimitsEntries: UsageLimitEntry[] = [], usageLimitsLoading = false, usageFetchSeq = 0, limitsFetchSeq = 0;
   // Cache lifetimes: per-host learner reports, the host being shown, and the
   // expanded rows. The selection outlives refetches; it is view memory only.
   let cacheLifetimeHosts: CacheLifetimeHost[] = [], cacheLifetimeHostKey: string | null = null;
@@ -103,12 +103,19 @@ export function createUsageView(options: {
     options.closeOtherViews();
     if (isUsageViewOpen()) return;
     options.root.classList.add('usage-open');
-    loadUsageView();
+    refreshUsageView();
+  }
+  // Open and the Refresh button reload everything; range/sort/filter changes
+  // and the indexing poll reload only the summary (loadUsageView).
+  function refreshUsageView() {
+    if (!isUsageViewOpen()) return;
+    void loadUsageLimits();
+    void loadUsageView();
   }
 
   function closeUsageView() {
     if (disposed) return;
-    usageFetchSeq++; retireRender(); renderQueue?.dispose(); renderQueue = null;
+    usageFetchSeq++; limitsFetchSeq++; retireRender(); renderQueue?.dispose(); renderQueue = null;
     clearTimeout(usageResizeTimer);
     options.root.classList.remove('usage-open');
     clearTimeout(usageTimer); usageTimer = undefined;
@@ -159,30 +166,45 @@ export function createUsageView(options: {
     loadUsageView();
   }
 
-  // Limits settle independently of summary data; only the active limits pane
-  // needs painting when a host answers.
-  async function loadUsageLimits(fetchSeq: number): Promise<void> {
-    const stale = () => fetchSeq !== usageFetchSeq || !isUsageViewOpen();
-    usageLimitsEntries = []; usageLimitsLoading = true;
+  // Limits are range-independent and each host answers by running the harness
+  // usage CLI, so they load on open/Refresh only — never on range/sort/filter
+  // changes or the indexing poll, which used to blank and re-fill the tab
+  // every cycle. A reload keeps the last rows and swaps each host's rows as
+  // it answers; hosts that no longer answer drop out when the fan-out ends.
+  // Only the active limits pane needs painting when a host answers.
+  async function loadUsageLimits(): Promise<void> {
+    const fetchSeq = ++limitsFetchSeq;
+    const stale = () => fetchSeq !== limitsFetchSeq || !isUsageViewOpen();
+    usageLimitsLoading = true;
     if (usageTab === 'limits') renderLimitsTab();
     await options.fleetReady();
     if (stale()) return;
     const hosts = options.hosts().filter(host => host.capabilities?.usageLimits).map(host => Object.freeze({ ...host }));
-    const entries: UsageLimitEntry[] = [];
+    const entries = new Map(usageLimitsEntries.map(entry => [entry.hostLabel, entry]));
+    const answered = new Set<string>();
+    const publish = () => {
+      usageLimitsEntries = [...entries.values()].sort((a, b) => a.hostLabel.localeCompare(b.hostLabel));
+      if (usageTab === 'limits') renderLimitsTab();
+    };
     await Promise.all(hosts.map(async host => {
+      const hostLabel = hostDisplayLabel(host);
+      let payload: UsageLimitEntry['payload'] | null = null;
       try {
         const response = await options.request(host, '/api/usage-limits', { timeoutMs: 20000 });
         if (response.status === 401) { if (sameHost(host)) options.connection(host, 'blocked'); throw new Error('needs a token'); }
         const data: unknown = await response.json();
-        if (!response.ok || stale() || !sameHost(host)) return;
-        const payload = decodeUsageLimits(data);
-        if (payload.harnesses?.length) entries.push({ hostLabel: hostDisplayLabel(host), payload });
+        if (response.ok && sameHost(host)) payload = decodeUsageLimits(data);
       } catch { /* Limits are supplementary; unavailable hosts add no rows. */ }
       if (stale()) return;
-      usageLimitsEntries = [...entries].sort((a, b) => a.hostLabel.localeCompare(b.hostLabel));
-      if (usageTab === 'limits') renderLimitsTab();
+      answered.add(hostLabel);
+      if (payload?.harnesses?.length) entries.set(hostLabel, { hostLabel, payload });
+      else entries.delete(hostLabel);
+      publish();
     }));
-    if (!stale()) { usageLimitsLoading = false; if (usageTab === 'limits') renderLimitsTab(); }
+    if (stale()) return;
+    for (const hostLabel of entries.keys()) if (!answered.has(hostLabel)) entries.delete(hostLabel);
+    usageLimitsLoading = false;
+    publish();
   }
   // Learned cache lifetimes are per host (each learns from its own sessions)
   // and range-independent, so they ride their own capability-gated fan-out
@@ -233,7 +255,6 @@ export function createUsageView(options: {
     const fetchSeq = ++usageFetchSeq;
     clearTimeout(usageTimer); renderQueue?.dispose(); renderQueue = null;
     usageError = null;
-    void loadUsageLimits(fetchSeq);
     void loadCacheLifetimes(fetchSeq);
     const range = usageRange, sort = usageSort, models = usageModelsKey();
     const stale = () => fetchSeq !== usageFetchSeq || range !== usageRange || sort !== usageSort || models !== usageModelsKey() || !isUsageViewOpen();
@@ -862,7 +883,7 @@ export function createUsageView(options: {
 
 
 
-  return { open: openUsageView, close: closeUsageView, isOpen: isUsageViewOpen, load: loadUsageView,
+  return { open: openUsageView, close: closeUsageView, isOpen: isUsageViewOpen, load: refreshUsageView,
     setRange: setUsageRange, setSort: setUsageSort, setStack: setUsageStack,
     get data() { return usageData as Readonly<UsageSummary> | null; }, get chart() { return usageChart; },
     dispose() { closeUsageView(); events.abort(); document.getElementById('usageTooltip')?.remove(); disposed = true; },

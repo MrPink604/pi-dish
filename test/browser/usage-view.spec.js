@@ -11,8 +11,11 @@ const limits = (label) => ({ harnesses: [{ harness: 'omp', reports: [{ provider:
 async function mockSummary(page, indexing = false) {
     await page.route('**/api/usage-summary?*', (route) => route.fulfill({ json: summary(new URL(route.request().url()).searchParams.get('days') ?? undefined, indexing) }));
 }
-(0, fixtures_js_1.test)('usage late limits cannot enter the new range after their response body settles', async ({ page, fleet }) => {
-    await mockSummary(page);
+(0, fixtures_js_1.test)('limits load once per open and late responses cannot enter the reopened view', async ({ page, fleet }) => {
+    await mockSummary(page, true);
+    let summaryReads = 0;
+    page.on('request', request => { if (request.url().includes('/api/usage-summary?'))
+        summaryReads++; });
     await page.evaluate(() => {
         window.limitReads = 0;
         const original = fixtureApp.features.usageController;
@@ -44,11 +47,16 @@ async function mockSummary(page, indexing = false) {
     await (0, fixtures_js_1.expect)(page.locator('.usage-kpis')).toBeVisible();
     await page.locator('[data-range="7"]').click();
     await (0, fixtures_js_1.expect)(page.locator('[data-range="7"]')).toHaveClass(/active/);
-    await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).not.toContainText('new-provider');
+    const polled = summaryReads;
+    await fixtures_js_1.expect.poll(() => summaryReads).toBeGreaterThan(polled + 1);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.limitReads), 'range changes and indexing polls never refetch limits').toBe(1);
     await page.locator('[data-usage-tab="limits"]').click();
+    await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).toContainText('Loading subscription limits');
+    await page.evaluate(() => { window.testUsage.close(); window.testUsage.open(); });
     await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).toContainText('new-provider');
     await page.evaluate(payload => window.finishOldLimits(payload), limits('old-provider'));
     await (0, fixtures_js_1.expect)(page.locator('#usageViewBody')).not.toContainText('old-provider');
+    (0, fixtures_js_1.expect)(await page.evaluate(() => window.limitReads)).toBe(2);
     await page.locator('[data-usage-tab="usage"]').click();
     await (0, fixtures_js_1.expect)(page.locator('[data-range="7"]')).toHaveClass(/active/);
 });

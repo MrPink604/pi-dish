@@ -106,6 +106,27 @@ function normalizeUsageLimit(value: unknown) {
   };
 }
 
+// Usage-limit reset credits ("resets available"): only unused grants, with
+// the display fields — upstream ids/programs/limit maps stay off the wire.
+function normalizeResetCredits(value: unknown) {
+  if (!value || typeof value !== 'object') return null;
+  const raw = optionalRecord(value);
+  const credits = (Array.isArray(raw.credits) ? raw.credits as unknown[] : []).flatMap(item => {
+    const credit = optionalRecord(item);
+    if (credit.status !== undefined && credit.status !== 'available') return [];
+    const expiresAt = Date.parse(String(credit.expiresAt));
+    const remainingCount = Number(credit.remainingCount);
+    return [{
+      title: typeof credit.title === 'string' ? credit.title.slice(0, 160) : null,
+      expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
+      remainingCount: Number.isInteger(remainingCount) && remainingCount > 0 ? remainingCount : 1,
+    }];
+  });
+  const availableCount = Number(raw.availableCount);
+  if (!credits.length && !(availableCount > 0)) return null;
+  return { availableCount: Number.isInteger(availableCount) && availableCount >= 0 ? availableCount : null, credits };
+}
+
 export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
   const usageLimits: FeatureHandler = async (_req, res) => {
     const harnesses = listHarnesses().filter(d => d.argv.usage && harnessCommandAvailable(d));
@@ -123,6 +144,7 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
             fetchedAt: Number.isFinite(Number(report.fetchedAt)) ? Number(report.fetchedAt) : null,
             planType: typeof metadata.planType === 'string' ? metadata.planType.slice(0, 40) : null,
             limits: (Array.isArray(report.limits) ? report.limits as unknown[] : []).map(normalizeUsageLimit).filter(limit => limit !== null),
+            resetCredits: normalizeResetCredits(report.resetCredits),
           };
         }).filter(report => report.limits.length);
         return { harness: d.id, label: d.label, reports };

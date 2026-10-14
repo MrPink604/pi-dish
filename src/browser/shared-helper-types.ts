@@ -55,6 +55,8 @@ export interface UsageSummary {
 }
 export interface HostUsageSummary { readonly hostId?: string | null; readonly hostLabel?: string | null; readonly summary: UsageSummary }
 export interface UsageLimit { readonly label: string; readonly windowLabel?: string; readonly usedFraction: number; readonly resetsAt?: number | null }
-export interface UsageLimitReport { readonly provider: string; readonly planType?: string | null; readonly fetchedAt?: number; readonly limits?: readonly UsageLimit[] }
+export interface UsageResetCredit { readonly title?: string | null; readonly expiresAt?: number | null; readonly remainingCount?: number }
+export interface UsageResetCredits { readonly availableCount?: number | null; readonly credits?: readonly UsageResetCredit[] }
+export interface UsageLimitReport { readonly provider: string; readonly planType?: string | null; readonly fetchedAt?: number; readonly limits?: readonly UsageLimit[]; readonly resetCredits?: UsageResetCredits | null }
 export interface UsageLimitEntry { readonly hostLabel: string; readonly payload?: { readonly harnesses?: readonly { readonly harness?: string; readonly label?: string; readonly error?: string; readonly reports?: readonly UsageLimitReport[] }[] } }
 export interface HostUsageLimit extends UsageLimit { planType: string | null; fetchedAt: number; hostLabel: string }

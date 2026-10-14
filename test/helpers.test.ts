@@ -9,7 +9,7 @@
 import test = require('node:test');
 import type { HostConnectionRecord } from '../src/browser/host-connections.js';
 import type { HelperSession, Timestamp } from '../src/core/helper-types.js';
-import type { UsageDay, UsageLimit, UsageLimitEntry, UsageLimitReport } from '../src/browser/shared-helper-types.js';
+import type { UsageDay, UsageLimit, UsageLimitEntry, UsageLimitReport, UsageResetCredit } from '../src/browser/shared-helper-types.js';
 import { Marked } from 'marked';
 import katex = require('katex');
 import { assertBrowserApiContext } from './browser-vm.js';
@@ -1346,6 +1346,22 @@ test('usageLimitsHtml renders the merged provider quota view', () => {
     entry('host-b', [{ harness: 'omp', label: 'Oh My Pi', error: 'boom <x>' }]),
   ], { now });
   assert.ok(err.includes('on host-b: boom &lt;x&gt;'), 'harness errors render escaped per host');
+
+  const withCredits = (credits: readonly UsageResetCredit[]): LimitHarness => ({
+    harness: 'omp', label: 'Oh My Pi',
+    reports: [{ provider: 'anthropic', planType: 'max', fetchedAt: now, limits: base, resetCredits: { availableCount: credits.length, credits } }],
+  });
+  const shared = { title: 'Launch <reset>', expiresAt: now + 8 * 86400000, remainingCount: 2 };
+  const resets = H.usageLimitsHtml([
+    entry('host-a', [withCredits([shared, { title: 'Gone', expiresAt: now - 1 }])]),
+    entry('host-b', [withCredits([shared, { title: 'Second', expiresAt: now + 3600000 }])]),
+  ], { now });
+  assert.ok(/Resets available<\/span><small>3<\/small>/.test(resets), 'one grant seen by two hosts counts once; expired grants drop');
+  assert.ok(resets.includes('2× Launch &lt;reset&gt;') && resets.includes('expires in 8d'));
+  assert.ok(!resets.includes('Gone'));
+  assert.ok(/Second<\/span><small>expires in 1h · [^<]* · host-b</.test(resets), 'a grant only one host holds names it');
+  assert.ok(resets.indexOf('Second') < resets.indexOf('Launch'), 'soonest expiry first');
+  assert.ok(!H.usageLimitsHtml([entry('host-a', [withCredits([{ title: 'Gone', expiresAt: now - 1 }])])], { now }).includes('Resets available'));
   assert.equal(H.usageLimitsHtml([], { now }), '');
   assert.equal(H.usageLimitsHtml([entry('host-a', [])], { now }), '',
     'a host with no supporting harness contributes no section');

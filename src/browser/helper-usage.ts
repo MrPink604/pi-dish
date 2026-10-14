@@ -1,4 +1,4 @@
-import type { CostKey, TokenKey, Costs, UsageBucket, MergedUsage, MergedUsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry, HostUsageLimit } from './shared-helper-types';
+import type { CostKey, TokenKey, Costs, UsageBucket, MergedUsage, MergedUsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry, HostUsageLimit, UsageResetCredit } from './shared-helper-types';
 import { finite } from '../core/helper-values';
 import { escapeHtml } from '../core/helper-format';
 import { USAGE_COST_KEYS, addUsage, addUsageTokens, addUsageCosts, addUsageUnavailable, addUsageCount, addKnownUsageCost, compareUsageBuckets, compareUsageModels } from '../core/helper-usage-math';
@@ -324,18 +324,28 @@ export function formatLimitReset(resetsAt: unknown, now = Date.now()) {
  * `resetToleranceMs` (null only equals null), and the same planType (a plan
  * mismatch almost certainly means different accounts). Errors pass through
  * per host. Harness labels ride along so a future second reporting harness
- * still attributes correctly.
+ * still attributes correctly. Reset credits ("resets available") dedupe by
+ * title+expiry — the same account seen from two hosts is one grant — and
+ * carry host labels on the same rule as limit rows.
  */
 export function mergeUsageLimits(entries: readonly UsageLimitEntry[] | null | undefined, { fractionTolerance = 0.02, resetToleranceMs = 15 * 60000 } = {}) {
-  const providers = new Map<string, { provider: string; planTypes: Set<string>; groups: Map<string, { rows: HostUsageLimit[] }> }>();
+  const providers = new Map<string, { provider: string; planTypes: Set<string>; groups: Map<string, { rows: HostUsageLimit[] }>; credits: Map<string, { credit: UsageResetCredit; hosts: Set<string> }>; availableCount: number | null }>();
   const errors: { hostLabel: string; harnessLabel: string | undefined; error: string }[] = [];
   for (const entry of entries || []) {
     for (const h of entry?.payload?.harnesses || []) {
       if (h.error) { errors.push({ hostLabel: entry.hostLabel, harnessLabel: h.label || h.harness, error: h.error }); continue; }
       for (const report of h.reports || []) {
         let prov = providers.get(report.provider);
-        if (!prov) providers.set(report.provider, prov = { provider: report.provider, planTypes: new Set(), groups: new Map() });
+        if (!prov) providers.set(report.provider, prov = { provider: report.provider, planTypes: new Set(), groups: new Map(), credits: new Map(), availableCount: null });
         if (report.planType) prov.planTypes.add(report.planType);
+        for (const credit of report.resetCredits?.credits || []) {
+          const key = `${credit.title || ''}\u0000${credit.expiresAt ?? ''}`;
+          let merged = prov.credits.get(key);
+          if (!merged) prov.credits.set(key, merged = { credit, hosts: new Set() });
+          merged.hosts.add(entry.hostLabel);
+        }
+        const available = report.resetCredits?.availableCount;
+        if (available != null) prov.availableCount = Math.max(prov.availableCount ?? 0, available);
         for (const limit of report.limits || []) {
           const key = `${limit.label}${limit.windowLabel || ''}`;
           let group = prov.groups.get(key);
@@ -373,6 +383,10 @@ export function mergeUsageLimits(entries: readonly UsageLimitEntry[] | null | un
       provider: prov.provider,
       planType: prov.planTypes.size === 1 ? [...prov.planTypes][0] : null,
       limits,
+      resetCredits: [...prov.credits.values()]
+        .map(({ credit, hosts }) => ({ ...credit, hosts: hosts.size >= hostCount ? null : [...hosts].sort() }))
+        .sort((a, b) => (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity)),
+      availableCount: prov.availableCount,
     };
   }).filter(p => p.limits.length);
   return { reports, errors };
@@ -382,7 +396,8 @@ export function mergeUsageLimits(entries: readonly UsageLimitEntry[] | null | un
  * "Subscription limits" section of the usage view: provider quota windows
  * (5h/7d utilization + reset) as reported by the harness CLIs, merged across
  * hosts by mergeUsageLimits — a row shows its host label only when hosts
- * disagree about it. Returns '' when there is nothing to show, so the
+ * disagree about it — then each provider's unexpired reset credits with
+ * their expiry. Returns '' when there is nothing to show, so the
  * section vanishes on hosts/fleets with no supporting harness.
  */
 export function usageLimitsHtml(entries: readonly UsageLimitEntry[] | null | undefined, { now = Date.now() } = {}) {
@@ -397,7 +412,21 @@ export function usageLimitsHtml(entries: readonly UsageLimitEntry[] | null | und
       return `<div class="usage-limit-row"><div class="usage-limit-head"><span>${escapeHtml(limit.label)}</span><small>${Math.round(limit.usedFraction * 100)}% used${escapeHtml(reset)}${host}</small></div><div class="usage-limit-track"><div class="usage-limit-fill${cls}" style="width:${pct.toFixed(1)}%"></div></div></div>`;
     }).join('');
     const plan = report.planType ? ` <small>${escapeHtml(report.planType)}</small>` : '';
-    return `<div class="usage-limits-provider"><div class="usage-limits-provider-name">${escapeHtml(report.provider)}${plan}</div>${rows}</div>`;
+    // Listed credits are authoritative (and age out client-side); the bare
+    // upstream count only stands in when no grants were itemized.
+    const credits = report.resetCredits.filter(credit => credit.expiresAt == null || credit.expiresAt > now);
+    const available = report.resetCredits.length
+      ? credits.reduce((sum, credit) => sum + (credit.remainingCount ?? 1), 0)
+      : report.availableCount ?? 0;
+    const resets = available ? `<div class="usage-limit-resets"><div class="usage-limit-head"><span>Resets available</span><small>${available}</small></div>${credits.map(credit => {
+      const count = (credit.remainingCount ?? 1) > 1 ? `${credit.remainingCount}× ` : '';
+      const expires = credit.expiresAt != null
+        ? `expires ${formatLimitReset(credit.expiresAt, now)} · ${new Date(credit.expiresAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+        : 'no expiry reported';
+      const host = credit.hosts ? ` · ${credit.hosts.join(', ')}` : '';
+      return `<div class="usage-limit-head usage-reset-credit"><span>${escapeHtml(count + (credit.title || 'Usage-limit reset'))}</span><small>${escapeHtml(expires + host)}</small></div>`;
+    }).join('')}</div>` : '';
+    return `<div class="usage-limits-provider"><div class="usage-limits-provider-name">${escapeHtml(report.provider)}${plan}</div>${rows}${resets}</div>`;
   }).join('');
   const errHtml = errors.map(e =>
     `<div class="usage-limits-error">${escapeHtml(e.harnessLabel)} on ${escapeHtml(e.hostLabel)}: ${escapeHtml(e.error)}</div>`).join('');

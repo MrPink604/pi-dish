@@ -5991,6 +5991,9 @@ body.standalone-file-page {
 .usage-limit-fill { height: 100%; border-radius: 3px; background: var(--accent); }
 .usage-limit-fill.warn { background: var(--warning); }
 .usage-limit-fill.over { background: var(--error); }
+.usage-limit-resets { margin-top: 8px; }
+.usage-reset-credit { margin-top: 2px; }
+.usage-reset-credit span { color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-limits-error { margin-top: 8px; font-size: 11px; color: var(--text-muted); }
 
 .usage-ranges { display: flex; flex-wrap: wrap; gap: 4px; margin: 18px 0 4px; align-items: center; }

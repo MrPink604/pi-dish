@@ -33,7 +33,8 @@ if (exportIndex >= 0) {
     process.exit(0);
 }
 // `omp usage --json --redact`: one provider report with raw account metadata
-// the server must strip, plus one malformed limit it must drop.
+// the server must strip, one malformed limit it must drop, and reset credits
+// whose used grant and upstream ids must not reach the wire.
 if (args[0] === 'usage' && args.includes('--json')) {
     process.stdout.write(JSON.stringify({
         generatedAt: 1700000000000,
@@ -47,6 +48,14 @@ if (args[0] === 'usage' && args.includes('--json')) {
                         amount: { usedFraction: 0.42, remainingFraction: 0.58, unit: 'percent' }, status: 'ok' },
                     { id: 'broken', label: null, amount: { usedFraction: 'x' } },
                 ],
+                resetCredits: {
+                    availableCount: 1,
+                    credits: [
+                        { id: 'promo-secret-id', program: 'internal', title: 'Launch reset', remainingCount: 2,
+                            grantedAt: '2023-11-01T00:00:00.000Z', expiresAt: '2023-12-01T00:00:00.000Z', status: 'available' },
+                        { id: 'spent', title: 'Old reset', expiresAt: '2023-12-02T00:00:00.000Z', status: 'used' },
+                    ],
+                },
             }, { provider: 'nolimits', limits: [] }],
     }) + '\n');
     process.exit(0);

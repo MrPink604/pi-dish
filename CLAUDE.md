@@ -512,7 +512,8 @@ every miss. Cache activity with no built-in window keeps an internal
 `'unknown'` expiry anchor that only the learner overlay may serve.
 
 The Limits subtab shows provider-account quota (5h/7d windows, percent used,
-reset countdowns), not spend. Prompt cache timings uses the summary's token
+reset countdowns) and unexpired usage-limit reset credits with their expiry,
+not spend. Prompt cache timings uses the summary's token
 shares and overall response duration; no separate cache lookup latency is
 recorded. Quota reporting deliberately reuses the harness's own reporter
 instead of reimplementing provider quota APIs: `GET /api/usage-limits` runs
@@ -520,19 +521,24 @@ the descriptor's `argv.usage` command (OMP's `omp usage --json --redact`,
 which reads OMP's auth store and queries providers directly — no running
 session needed) through the same `runHarnessJsonCommand` shell-out as
 `config get`/`agents unpack`, whitelists fields server-side (even `--redact`
-output carries partial account ids; emails never reach the wire), and
+output carries partial account ids; emails never reach the wire; reset
+credits keep only available grants' title, expiry and remaining count), and
 degrades per harness to an `error` entry. Harnesses without a `usage` argv
 (Pi, Prime) contribute nothing; the host advertises the feature as the
 `usageLimits` capability only when such a harness is installed, and the
-client fans the route out per capable host (`loadUsageLimits`, alongside but
-independent of the summary fan-out). Hosts in a fleet often hold the *same*
+client fans the route out per capable host (`loadUsageLimits`) on open and
+the Refresh button only — never on range/sort/filter changes or the summary
+indexing poll, since each answer costs a CLI run and refetching blanked the
+tab every poll. A reload keeps the previous rows and swaps each host's rows
+as it answers. Hosts in a fleet often hold the *same*
 provider accounts, so per-host rendering would duplicate every window:
 `mergeUsageLimits` (helpers.js) groups reports by provider and limits by
 label+window, collapsing rows that agree within a tolerance (2 points of
 usedFraction, 15 minutes of resetsAt, same planType — fetch times and
 rolling windows shift values slightly, so exact equality would split every
 row) into one unqualified row, while rows that genuinely differ stay
-separate and carry their host label(s). `usageLimitsHtml` renders that merged
+separate and carry their host label(s). Reset credits dedupe by title+expiry
+under the same host-label rule. `usageLimitsHtml` renders that merged
 view; the Limits subtab shows an empty state when no host answers with reports.
 
 Server-side session dispatch: `getLiveSession(id)` in `src/core/server-app.ts` is the one

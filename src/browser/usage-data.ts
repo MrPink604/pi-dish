@@ -42,10 +42,17 @@ export function decodeUsageLimits(value: unknown): NonNullable<UsageLimitEntry['
     if (!record(harness)) return [];
     return [{ harness: text(harness.harness), label: text(harness.label), error: text(harness.error), reports: Array.isArray(harness.reports) ? harness.reports.flatMap((report: unknown) => {
       if (!record(report) || typeof report.provider !== 'string') return [];
+      const credits = object(report.resetCredits);
       return [{ provider: report.provider, planType: text(report.planType), fetchedAt: number(report.fetchedAt), limits: Array.isArray(report.limits) ? report.limits.flatMap((limit: unknown) => {
         if (!record(limit) || typeof limit.label !== 'string' || !finite(limit.usedFraction)) return [];
         return [{ label: limit.label, windowLabel: text(limit.windowLabel), usedFraction: limit.usedFraction, resetsAt: finite(limit.resetsAt) ? limit.resetsAt : null }];
-      }) : [] }];
+      }) : [], resetCredits: record(report.resetCredits) ? {
+        availableCount: finite(credits.availableCount) ? credits.availableCount : null,
+        credits: Array.isArray(credits.credits) ? credits.credits.flatMap((credit: unknown) => record(credit) ? [{
+          title: text(credit.title) || null, expiresAt: finite(credit.expiresAt) ? credit.expiresAt : null,
+          remainingCount: finite(credit.remainingCount) && credit.remainingCount > 0 ? credit.remainingCount : 1,
+        }] : []) : [],
+      } : null }];
     }) : [] }];
   }) };
 }

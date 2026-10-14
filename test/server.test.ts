@@ -2959,6 +2959,11 @@ test('usage limits come from the harness CLI, sanitized and failure-tolerant', a
   assert.equal(limit.label, '7 days');
   assert.equal(limit.usedFraction, 0.42);
   assert.equal(limit.resetsAt, 1700604800000);
+  assert.deepEqual(report.resetCredits, {
+    availableCount: 1,
+    credits: [{ title: 'Launch reset', expiresAt: Date.parse('2023-12-01T00:00:00.000Z'), remainingCount: 2 }],
+  }, 'only unused grants reach the wire, as display fields with epoch expiry');
+  assert.ok(!JSON.stringify(body).includes('promo-secret-id'));
   // Account identifiers never reach the wire, even in fields the fixture
   // left unredacted (email, scope.accountId, metadata.accountId).
   assert.ok(!JSON.stringify(body).includes('secret@example.com'));

@@ -12,8 +12,10 @@ async function mockSummary(page: Page, indexing = false) {
   await page.route('**/api/usage-summary?*', (route: Route) => route.fulfill({ json: summary(new URL(route.request().url()).searchParams.get('days') ?? undefined, indexing) }));
 }
 
-test('usage late limits cannot enter the new range after their response body settles', async ({ page, fleet }) => {
-  await mockSummary(page);
+test('limits load once per open and late responses cannot enter the reopened view', async ({ page, fleet }) => {
+  await mockSummary(page, true);
+  let summaryReads = 0;
+  page.on('request', request => { if (request.url().includes('/api/usage-summary?')) summaryReads++; });
   await page.evaluate(() => {
     window.limitReads = 0;
     const original = fixtureApp.features.usageController;
@@ -44,11 +46,16 @@ test('usage late limits cannot enter the new range after their response body set
   await expect(page.locator('.usage-kpis')).toBeVisible();
   await page.locator('[data-range="7"]').click();
   await expect(page.locator('[data-range="7"]')).toHaveClass(/active/);
-  await expect(page.locator('#usageViewBody')).not.toContainText('new-provider');
+  const polled = summaryReads;
+  await expect.poll(() => summaryReads).toBeGreaterThan(polled + 1);
+  expect(await page.evaluate(() => window.limitReads), 'range changes and indexing polls never refetch limits').toBe(1);
   await page.locator('[data-usage-tab="limits"]').click();
+  await expect(page.locator('#usageViewBody')).toContainText('Loading subscription limits');
+  await page.evaluate(() => { window.testUsage.close(); window.testUsage.open(); });
   await expect(page.locator('#usageViewBody')).toContainText('new-provider');
   await page.evaluate(payload => window.finishOldLimits(payload), limits('old-provider'));
   await expect(page.locator('#usageViewBody')).not.toContainText('old-provider');
+  expect(await page.evaluate(() => window.limitReads)).toBe(2);
   await page.locator('[data-usage-tab="usage"]').click();
   await expect(page.locator('[data-range="7"]')).toHaveClass(/active/);
 });
