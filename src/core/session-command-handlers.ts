@@ -12,6 +12,8 @@ interface SessionCommandPorts {
   hold: MessageHold;
   readSettings(): Record<string, unknown>;
   sessionExists(id: string): boolean;
+  /** Resumes a hibernated session and returns it live; null when it was not hibernated. */
+  wake(id: string): Promise<LiveSession | null>;
 }
 
 // Retain the existing boundary's primitive boxing and null failures.
@@ -57,11 +59,14 @@ export function createSessionCommandHandlers(ports: SessionCommandPorts): {
       let session: LiveSession | null;
       try { session = await ports.getLiveSession(req.params.id); }
       catch (error) { if (!hold) throw error; session = null; }
+      const capability = operation === 'steer' || deliverAs === 'steer' ? 'steer'
+        : deliverAs === 'followUp' ? 'followUp' : 'prompt';
+      // A held message wakes its target at delivery. A steer has no turn to
+      // interrupt in a hibernated session, so it never resumes one.
+      if (!session && !hold && capability !== 'steer') session = await ports.wake(req.params.id);
       if (!session && !(hold && ports.sessionExists(req.params.id))) {
         return res.status(404).json({ error: 'Session not active' });
       }
-      const capability = operation === 'steer' || deliverAs === 'steer' ? 'steer'
-        : deliverAs === 'followUp' ? 'followUp' : 'prompt';
       if (session && !ports.supports(session, capability)) {
         const unsupported = operation === 'steer' ? 'steering' : operation === 'followUp' ? 'follow-ups' : capability;
         return res.status(409).json({ error: `This session does not support ${unsupported}.` });

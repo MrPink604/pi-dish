@@ -10,6 +10,8 @@ import type { SessionOperations } from './session-operations';
 import * as tmux from './tmux';
 
 export type SessionBounceMode = 'reload' | 'restart';
+/** Bulk modes plus pressure hibernation, which reuses the same safety proof without the queue. */
+export type SessionLifecycleMode = SessionBounceMode | 'hibernate';
 export type SessionBounceStatus = 'waiting' | 'executing' | 'completed' | 'skipped' | 'failed' | 'cancelled';
 
 /** Catalog observations carry presentation and conflict data, never permission to act. */
@@ -87,6 +89,7 @@ export interface SessionBounceOperationPorts {
   beginBounceAction: SessionOperations['beginBounceAction'];
   endBounceAction: SessionOperations['endBounceAction'];
   restartSession: SessionOperations['restartSession'];
+  hibernateSession: SessionOperations['hibernateSession'];
 }
 
 export interface SessionBounceOwnershipPorts {
@@ -96,9 +99,18 @@ export interface SessionBounceOwnershipPorts {
   refreshRegisteredSession: SessionOwnership['refreshRegisteredSession'];
 }
 
-export interface SessionBounceRuntimeOptions extends SessionBounceBounds {
+export interface SessionLifecycleActionOptions {
   operations: SessionBounceOperationPorts;
   ownership: SessionBounceOwnershipPorts;
+}
+
+export interface SessionLifecycleActions {
+  capture(row: SessionBounceCatalogRow): BounceAuthority | null;
+  inspect(authority: BounceAuthority, mode: SessionLifecycleMode): Promise<SessionBounceInspection<LiveSession>>;
+  execute(authority: BounceAuthority, mode: SessionLifecycleMode, inspected: SessionBounceInspection<LiveSession>): Promise<SessionBounceExecutionResult>;
+}
+
+export interface SessionBounceRuntimeOptions extends SessionBounceBounds, SessionLifecycleActionOptions {
   /** Raw catalog data only; capture, inspection, and execution belong to this module. */
   catalog(): unknown;
 }
@@ -302,9 +314,9 @@ function bounceDescendantBlockers(authority: BounceAuthority): string[] {
   return inspectSubsessionExits(authority.sessionFile, { harnessId: authority.harnessId }).blockers;
 }
 
-/** Checked production policy composes the same process-local queue used in isolation. */
-export function createSessionBounceRuntime({ operations, ownership, catalog, ...bounds }: SessionBounceRuntimeOptions): SessionBounces {
-  async function inspectBounce(authority: BounceAuthority, mode: SessionBounceMode): Promise<SessionBounceInspection<LiveSession>> {
+/** Checked ownership, live-safety and final-guard policy shared by bulk operations and hibernation. */
+export function createSessionLifecycleActions({ operations, ownership }: SessionLifecycleActionOptions): SessionLifecycleActions {
+  async function inspectBounce(authority: BounceAuthority, mode: SessionLifecycleMode): Promise<SessionBounceInspection<LiveSession>> {
     const failure = ownership.bounceIdentityFailure(authority);
     if (failure) return { eligible: false, reason: failure, blockers: [] };
     if (mode === 'reload' && authority.harnessId !== 'pi') {
@@ -341,7 +353,7 @@ export function createSessionBounceRuntime({ operations, ownership, catalog, ...
     return { eligible: true, blockers, live };
   }
 
-  async function executeBounce(authority: BounceAuthority, mode: SessionBounceMode, inspected: SessionBounceInspection<LiveSession>): Promise<SessionBounceExecutionResult> {
+  async function executeBounce(authority: BounceAuthority, mode: SessionLifecycleMode, inspected: SessionBounceInspection<LiveSession>): Promise<SessionBounceExecutionResult> {
     const live = inspected.live;
     // Only a successful, unblocked inspection reaches execute; absence is an internal failure, not retry admission.
     if (!live) throw new Error('The inspected live agent is unavailable.');
@@ -364,8 +376,10 @@ export function createSessionBounceRuntime({ operations, ownership, catalog, ...
       };
     };
     try {
-      if (mode === 'restart') {
-        const result = await operations.restartSession(authority.sessionId, { beforeAction });
+      if (mode === 'restart' || mode === 'hibernate') {
+        const result = mode === 'restart'
+          ? await operations.restartSession(authority.sessionId, { beforeAction })
+          : await operations.hibernateSession(authority.sessionId, { beforeAction });
         if (result.kind === 'stopped') return { replacementId: result.replacement?.id };
         // Only replacement-not-ready carried body.stopped in the former wire response.
         // Preserve terminal skip/fail semantics without mistaking either for a retry.
@@ -401,6 +415,12 @@ export function createSessionBounceRuntime({ operations, ownership, catalog, ...
     }
   }
 
+  return { capture: row => ownership.captureBounceAuthority(row), inspect: inspectBounce, execute: executeBounce };
+}
+
+/** Checked production policy composes the same process-local queue used in isolation. */
+export function createSessionBounceRuntime({ operations, ownership, catalog, ...bounds }: SessionBounceRuntimeOptions): SessionBounces {
+  const actions = createSessionLifecycleActions({ operations, ownership });
   return createSessionBounces<BounceAuthority, LiveSession>({
     ...bounds,
     catalog: () => {
@@ -410,8 +430,8 @@ export function createSessionBounceRuntime({ operations, ownership, catalog, ...
       }
       return rows;
     },
-    capture: row => ownership.captureBounceAuthority(row),
-    inspect: inspectBounce,
-    execute: executeBounce,
+    capture: actions.capture,
+    inspect: actions.inspect,
+    execute: actions.execute,
   });
 }

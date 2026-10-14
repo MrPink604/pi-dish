@@ -62,7 +62,9 @@ import { createRoutineRunner } from './routine-runner';
 import { createRoutineHandlers, composeRoutinePrompt } from './routine-handlers';
 import recoveryStore = require('./session-recovery');
 import { createRecoveryRuntime } from './recovery-runner';
-import { createSessionBounceRuntime } from './session-bounces';
+import { createSessionBounceRuntime, createSessionLifecycleActions } from './session-bounces';
+import { createSessionHibernation } from './session-hibernation';
+import { canonicalSessionId } from './session-key';
 import type { SessionBounceMode } from './session-bounces';
 import skillsLib = require('./skills');
 import { knownWorkspaceCwds } from './skill-feature-handlers';
@@ -239,10 +241,13 @@ export function startServer(rootDirectory: string): Server {
     liveSubsessionCandidates, liveSourceObservations,
   } = ownership;
   const messageHold = createMessageHold({
-    getLiveSession,
+    getLiveSession: liveOrWake,
     supports: liveSessionSupports,
     readSettings: readDishSettings,
   });
+  // Open browser event streams per canonical session: an open view is a reader
+  // hibernation must not pull the agent out from under.
+  const streamViewers = new Map<string, number>();
   const fileHandlers = createFileHandlers({ resolveSessionCwd, findSessionSource });
   const sessionReadHandlers = createSessionReadHandlers({
     findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession,
@@ -616,6 +621,13 @@ export function startServer(rootDirectory: string): Server {
     let { active, previous, children, indexing, discoveryTruncated, discoverySkipped } =
       buildSessionCatalog({ activeOnly: req.query.active === '1' });
 
+    const hibernated = hibernation.records();
+    if (hibernated.size) {
+      previous = previous.map(session => {
+        const state = hibernated.get(session.id);
+        return state ? { ...session, hibernation: state } : session;
+      });
+    }
     if (query) {
       active = filterSessionsByQuery(active, query);
       previous = filterSessionsByQuery(previous, query);
@@ -1063,6 +1075,7 @@ export function startServer(rootDirectory: string): Server {
     hold: messageHold,
     readSettings: readDishSettings,
     sessionExists: id => !!routeIdentity(id) && !!findSessionSource(id, { exact: true }),
+    wake: liveOrWake,
   });
   app.post('/api/sessions/:id/prompt', sessionCommandHandlers.prompt);
   app.post('/api/sessions/:id/steer', sessionCommandHandlers.steer);
@@ -1819,6 +1832,7 @@ export function startServer(rootDirectory: string): Server {
 
   app.post('/api/sessions/:id/close', async (req: ApplicationRequest, res: ApplicationResponse) => {
     const { status, body } = await sessionOperations.closeSessionById(req.params.id);
+    if (status >= 200 && status < 300) hibernation.forget(req.params.id);
     res.status(status).json(body);
   });
 
@@ -2111,6 +2125,7 @@ export function startServer(rootDirectory: string): Server {
         model: optionalProperty(req.body, 'model'),
         target: optionalProperty(req.body, 'target') as HarnessLaunchTarget | null | undefined,
       }));
+      hibernation.forget(req.params.id);
       messageHold.wake(req.params.id);
     } catch (error) { res.status((property(error, 'status') || 500) as number).json({ error: property(error, 'message') }); }
   });
@@ -2120,6 +2135,7 @@ export function startServer(rootDirectory: string): Server {
     operations: sessionOperations,
     ownership,
     getMode: () => readDishSettings().recoveryMode,
+    hibernated: id => hibernation.isHibernated(id),
   });
 
   app.get('/api/recovery', (_req: ApplicationRequest, res: ApplicationResponse) => {
@@ -2140,7 +2156,11 @@ export function startServer(rootDirectory: string): Server {
   });
   app.post('/api/recovery/retry', async (req: ApplicationRequest, res: ApplicationResponse) => {
     if (typeof optionalProperty(req.body, 'id') !== 'string') return res.status(400).json({ error: 'id is required' });
-    try { res.json(await recoveryRunner.retry(property(req.body, 'id') as string)); }
+    try {
+      const outcome = await recoveryRunner.retry(property(req.body, 'id') as string);
+      if (outcome.status === 'restored' || outcome.status === 'continued' || outcome.status === 'live') hibernation.forget(outcome.id);
+      res.json(outcome);
+    }
     catch (error) { res.status((property(error, 'status') || 500) as number).json({ error: property(error, 'message') }); }
   });
 
@@ -2151,11 +2171,40 @@ export function startServer(rootDirectory: string): Server {
   });
 
 
+  const lifecycleActions = createSessionLifecycleActions({ operations: sessionOperations, ownership });
   const sessionBounces = createSessionBounceRuntime({
     operations: sessionOperations,
     ownership,
     catalog: () => { invalidateRegistryCache(); return getActiveSessions(); },
   });
+
+  const hibernation = createSessionHibernation({
+    readSettings: readDishSettings,
+    readMeminfo: () => { try { return fs.readFileSync('/proc/meminfo', 'utf8'); } catch { return null; } },
+    candidates: () => { invalidateRegistryCache(); return getActiveSessions(); },
+    viewers: id => { try { return streamViewers.get(canonicalSessionId(id)) || 0; } catch { return 0; } },
+    capture: lifecycleActions.capture,
+    paneAttached: async authority => {
+      if (!authority.spawn) return false;
+      const clients = await tmux.paneAttachedClients(authority.spawn.socket, authority.spawn.paneId);
+      return clients === null || clients > 0;
+    },
+    inspect: authority => lifecycleActions.inspect(authority, 'hibernate'),
+    execute: async (authority, inspection) => { await lifecycleActions.execute(authority, 'hibernate', inspection); },
+    resume: async id => {
+      await sessionOperations.resumeSessionById(id);
+      messageHold.wake(id);
+    },
+  });
+
+  /** Live session, resuming it first when memory pressure hibernated it. */
+  async function liveOrWake(sessionId: string): Promise<LiveSession | null> {
+    const live = await getLiveSession(sessionId);
+    if (live || !await hibernation.wake(sessionId)) return live;
+    const woken = await getLiveSession(sessionId);
+    if (woken instanceof BridgeSession) await woken.waitForHello({ timeout: 5000 });
+    return woken;
+  }
 
   app.get('/api/session-bounces/preview', async (req: ApplicationRequest, res: ApplicationResponse) => {
     if (!['reload', 'restart'].includes(req.query.mode as string)) return res.status(400).json({ error: 'mode must be reload or restart' });
@@ -2245,6 +2294,14 @@ export function startServer(rootDirectory: string): Server {
       res.write(`event: stream_error\ndata: ${JSON.stringify({ error: 'Session not active' })}\n\n`);
       return res.end();
     }
+    // A stream that closed during the await above has already emitted 'close'.
+    if (req.destroyed || res.destroyed) return res.end();
+    const viewerKey = canonicalSessionId(sessionId);
+    streamViewers.set(viewerKey, (streamViewers.get(viewerKey) || 0) + 1);
+    req.on('close', () => {
+      const remaining = (streamViewers.get(viewerKey) || 1) - 1;
+      if (remaining) streamViewers.set(viewerKey, remaining); else streamViewers.delete(viewerKey);
+    });
 
     const send = (event: string, data: unknown) => {
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -2477,6 +2534,7 @@ export function startServer(rootDirectory: string): Server {
     if (shareServer) { try { shareServer.close(); } catch {} }
     remoteHosts.shutdown();
     sessionBounces.stop();
+    hibernation.stop();
   }
 
   // Fleet relay takes precedence even when this host's terminal is disabled.
@@ -2565,6 +2623,7 @@ export function startServer(rootDirectory: string): Server {
       .catch(() => {});
     messageHold.start();
     sessionBounces.start();
+    hibernation.start();
     // A restored idle session is interrupted work, not a completed oneShot.
     recoveryRunner.start()
       .then(() => routineRunner.recoverAfterRestart())

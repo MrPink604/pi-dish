@@ -14,6 +14,14 @@ export interface FastModeState {
   readonly active: boolean;
 }
 
+/** Why and when pi-dish stopped an idle agent under memory pressure; a message resumes it. */
+export interface HibernationState {
+  readonly hibernatedAt: string;
+  readonly reason: string;
+  readonly freedBytes: number;
+  readonly discarded: readonly string[];
+}
+
 /** Closed first-party metadata. Identity and opaque extras are separate owners. */
 export interface SessionFields<Timestamp = string | number> {
   name?: string | null;
@@ -46,6 +54,7 @@ export interface SessionFields<Timestamp = string | number> {
   routineInvocationId?: string;
   searchSnippet?: string;
   searchScore?: number;
+  hibernation?: HibernationState | null;
 }
 /** Legacy wire helper compatibility; authoritative browser state uses SessionRow. */
 export interface SessionMetadata extends Record<string, unknown>,
@@ -120,6 +129,12 @@ const optionalCacheExpiry = (value: unknown): CacheExpiryProjection | null | und
   return { refreshedAt: value.refreshedAt, expiresAt: value.expiresAt, retentionMs: value.retentionMs,
     retention: value.retention, basis: value.basis as CacheExpiryBasis };
 };
+const optionalHibernation = (value: unknown): HibernationState | null | undefined => {
+  if (value === null) return null;
+  if (!record(value) || typeof value.hibernatedAt !== 'string' || typeof value.reason !== 'string' || !finite(value.freedBytes)
+      || !Array.isArray(value.discarded) || !value.discarded.every(item => typeof item === 'string')) return undefined;
+  return { hibernatedAt: value.hibernatedAt, reason: value.reason, freedBytes: value.freedBytes, discarded: [...value.discarded] };
+};
 const fieldDecoders: FieldDecoders = {
   name: nullableString, model: nullableString, thinkingLevel: nullableString, fastMode: decodeFastModeState,
   harnessId: optionalString, harnessLabel: optionalString, capabilities: decodeCapabilities,
@@ -132,6 +147,7 @@ const fieldDecoders: FieldDecoders = {
   subagentLive: optionalBoolean, parentId: nullableString, parentSource: nullableString,
   familyParentId: nullableString, routine: optionalString, routineId: optionalString,
   routineInvocationId: optionalString, searchSnippet: optionalString, searchScore: optionalNumber,
+  hibernation: optionalHibernation,
 };
 function decodeCapabilities(value: unknown): SessionFields['capabilities'] {
   if (value === undefined) return undefined;

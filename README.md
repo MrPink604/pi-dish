@@ -627,7 +627,8 @@ sender (the caller cannot be identified) is delivered immediately too. A held
 delivery answers `{success, held, until}` — `until` being the flush time — and
 messages to the same session and delivery mode coalesce into one batch, each
 keeping the sender's ref and name as a header. A held message to an inactive
-session waits for an explicit resume; the hold never resumes a session itself.
+session waits for an explicit resume; the hold never resumes a session itself,
+except one the host hibernated (below), which resumes when its batch delivers.
 The setting is read per request, so it applies without a restart. The inbox is
 durable (`~/.pi/dish/message-holds.json`), but delivery is best-effort, not
 exactly-once: a batch is retired only after the target's harness acknowledges
@@ -637,6 +638,34 @@ Session mentions such as `#019f9834` are clickable in transcript prose, includin
 while streaming. A standalone ref in inline code is clickable too. Clicking opens
 the referenced session on its owning host; unknown or ambiguous refs, fenced code,
 and existing Markdown links stay unchanged.
+
+#### Memory-pressure hibernation
+
+Long-lived idle agents hold a lot of memory, mostly in swap. When the host is
+under memory pressure (less than 10% of RAM available, or more than 75% of swap
+used, sampled every minute), pi-dish stops the longest-idle live Pi or OMP
+session that is provably doing nothing, one per sample, and keeps it resumable.
+A session is kept when any of these hold:
+
+- it was active in the last 2 hours, or its prompt cache is still warm;
+- a turn, compaction, ask dialog, queued input, background job, running tool or
+  live subagent is in flight;
+- a browser has it open, or a tmux client is attached to its pane;
+- a supervised service runs under its OMP launch broker;
+- it has a live eval kernel and its transcript used `eval` in the last 8 hours.
+
+The stop is graceful and does not count as an explicit close, so the session is
+not marked closed for recovery. The sidebar marks the session **hibernated**;
+its tooltip and the session view name the reason, the memory freed and any
+state discarded (eval kernels idle for over 8 hours, browser tabs). Sending a
+prompt or follow-up, from the browser, the CLI or a peer, resumes it and then
+delivers the message. A steer does not resume it. Startup recovery leaves
+hibernated sessions alone; explicit restore from the recovery report still
+works. Records live in `~/.pi/dish/hibernation.json`.
+
+Hibernation is on by default. Turn it off per host with
+`{ "hibernation": "off" }` in `~/.pi/dish/settings.json` or through
+`PUT /api/settings` (`"pressure"` turns it back on).
 
 ### Public share links
 

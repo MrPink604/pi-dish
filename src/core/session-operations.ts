@@ -134,6 +134,8 @@ export interface SessionOperations {
   closeSessionById(sessionId: unknown): Promise<SessionOperationResponse>;
   restartSession(sessionId: string, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationOutcome>;
   restartSessionById(sessionId: string, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationResponse>;
+  /** Graceful stop that keeps recovery intent and resumability; never an explicit close. */
+  hibernateSession(sessionId: string, options: { beforeAction: BeforeLifecycleAction }): Promise<SessionOperationOutcome>;
   hasCloseFlight(canonicalRoute: string): boolean;
   hasRestartFlight(canonicalRoute: string): boolean;
   hasResumeFlight(canonicalFile: string): boolean;
@@ -275,7 +277,10 @@ export function createSessionOperations(observations: SessionOperationObservatio
       let capture;
       try {
         capture = await ownership.captureOwnedPaneClose(routeSessionId(route.harnessId, route.nativeSessionId), descriptor);
+        // The guard's async half precedes the last synchronous ownership proof.
+        const finalCheck = beforeAction ? await beforeAction() : null;
         ownership.revalidateOwnedPaneClose(capture);
+        finalCheck?.();
       } catch (error) {
         if (error instanceof OwnershipRefusal) return noAction(error.status, error.message, error);
         throw error;
@@ -348,7 +353,9 @@ export function createSessionOperations(observations: SessionOperationObservatio
       let proof;
       try {
         const capture = await ownership.captureLogicalClose(sessionId, registry);
+        const finalCheck = beforeAction ? await beforeAction() : null;
         proof = ownership.revalidateLogicalClose(capture);
+        finalCheck?.();
       } catch (error) {
         if (error instanceof OwnershipRefusal) return noAction(error.status, error.message, error);
         throw error;
@@ -408,6 +415,18 @@ export function createSessionOperations(observations: SessionOperationObservatio
         return noAction(500, errorMessage(error), error);
       }
     });
+    closeFlights.set(id, flight);
+    try { return await flight; }
+    finally { if (closeFlights.get(id) === flight) closeFlights.delete(id); }
+  }
+
+  async function hibernateSession(sessionId: string, { beforeAction }: { beforeAction: BeforeLifecycleAction }): Promise<SessionOperationOutcome> {
+    const identity = routeIdentity(sessionId);
+    if (!identity) return noAction(400, 'Invalid session ID');
+    const id = routeSessionId(identity.harnessId, identity.nativeSessionId);
+    if (restartFlights.has(id) || closeFlights.has(id)) return noAction(409, 'The session is already being restarted or closed.');
+    // Unlike closeSession, recovery intent is untouched: the transcript stays resumable.
+    const flight = performSessionClose(id, { beforeAction });
     closeFlights.set(id, flight);
     try { return await flight; }
     finally { if (closeFlights.get(id) === flight) closeFlights.delete(id); }
@@ -716,7 +735,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
 
   return {
     createSession, startSessionSpawn, getSessionSpawn: spawnId => sessionSpawnOperations.get(spawnId), recordSessionLaunch,
-    resumeSessionById, probeRecoveryLive, assertNoConflictingWriter, closeSession, restartSession,
+    resumeSessionById, probeRecoveryLive, assertNoConflictingWriter, closeSession, restartSession, hibernateSession,
     closeSessionById: async sessionId => sessionOperationResponse(await closeSession(sessionId)),
     restartSessionById: async (sessionId, options) => sessionOperationResponse(await restartSession(sessionId, options)),
     hasCloseFlight: id => closeFlights.has(id), hasRestartFlight: id => restartFlights.has(id),

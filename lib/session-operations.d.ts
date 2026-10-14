@@ -121,6 +121,10 @@ export interface SessionOperations {
     restartSessionById(sessionId: string, options?: {
         beforeAction?: BeforeLifecycleAction | null;
     }): Promise<SessionOperationResponse>;
+    /** Graceful stop that keeps recovery intent and resumability; never an explicit close. */
+    hibernateSession(sessionId: string, options: {
+        beforeAction: BeforeLifecycleAction;
+    }): Promise<SessionOperationOutcome>;
     hasCloseFlight(canonicalRoute: string): boolean;
     hasRestartFlight(canonicalRoute: string): boolean;
     hasResumeFlight(canonicalFile: string): boolean;

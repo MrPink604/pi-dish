@@ -3,6 +3,7 @@ import * as harnessSettings from './harness-feature-settings';
 import * as stt from './stt';
 import { recoveryMode } from './recovery-runner';
 import { MAX_MESSAGE_HOLD_WINDOW_MS, messageHoldWindowMs } from './message-hold';
+import { hibernationMode } from './session-hibernation';
 import { listHarnesses } from './harnesses';
 import { harnessCommandAvailable, runHarnessJsonCommand } from './harness-feature-commands';
 import type { SessionCatalog } from './session-catalog-contracts';
@@ -78,6 +79,7 @@ function settingsForClient(settings: Record<string, unknown>) {
     savedFilters: sanitizeSavedFilters(settings.savedFilters) || [],
     recoveryMode: recoveryMode(settings.recoveryMode),
     messageHoldWindowMs: messageHoldWindowMs(settings),
+    hibernation: hibernationMode(settings.hibernation),
   };
 }
 
@@ -164,6 +166,12 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
         return res.status(400).json({ error: 'messageHoldWindowMs must be an integer between 0 and 86400000' });
       }
       settings.messageHoldWindowMs = value;
+    }
+    if ('hibernation' in body) {
+      if (body.hibernation !== 'pressure' && body.hibernation !== 'off') {
+        return res.status(400).json({ error: 'hibernation must be pressure or off' });
+      }
+      settings.hibernation = body.hibernation;
     }
     try {
       ports.writeDishSettings(settings);

@@ -11,6 +11,8 @@ interface SessionCommandPorts {
     hold: MessageHold;
     readSettings(): Record<string, unknown>;
     sessionExists(id: string): boolean;
+    /** Resumes a hibernated session and returns it live; null when it was not hibernated. */
+    wake(id: string): Promise<LiveSession | null>;
 }
 /** HTTP admission only; lifecycle, routine and recovery delivery keep their owners. */
 export declare function createSessionCommandHandlers(ports: SessionCommandPorts): {

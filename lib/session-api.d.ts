@@ -13,6 +13,13 @@ export interface FastModeState {
     readonly enabled: boolean;
     readonly active: boolean;
 }
+/** Why and when pi-dish stopped an idle agent under memory pressure; a message resumes it. */
+export interface HibernationState {
+    readonly hibernatedAt: string;
+    readonly reason: string;
+    readonly freedBytes: number;
+    readonly discarded: readonly string[];
+}
 /** Closed first-party metadata. Identity and opaque extras are separate owners. */
 export interface SessionFields<Timestamp = string | number> {
     name?: string | null;
@@ -45,6 +52,7 @@ export interface SessionFields<Timestamp = string | number> {
     routineInvocationId?: string;
     searchSnippet?: string;
     searchScore?: number;
+    hibernation?: HibernationState | null;
 }
 /** Legacy wire helper compatibility; authoritative browser state uses SessionRow. */
 export interface SessionMetadata extends Record<string, unknown>, Pick<SessionFields, 'name' | 'model' | 'harnessId' | 'thinkingLevel' | 'isActive' | 'capabilities'> {

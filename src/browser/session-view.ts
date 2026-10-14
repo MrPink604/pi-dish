@@ -1,5 +1,6 @@
 import { escapeHtml } from '../core/helper-format';
 import { sessionRefKey } from './helper-identity';
+import { hibernationSummary } from './hibernation';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import type { HostEndpoint } from './api-client';
 import type { PendingSessionSpawn } from './session-spawns';
@@ -191,8 +192,10 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
     options.resume.reset();
     options.drafts.restore();
   } else {
-    options.drafts.clear();
-    if (inputArea) inputArea.style.display = 'none';
+    // A hibernated session keeps its composer: the prompt endpoint resumes it.
+    const hibernation = current.hibernation;
+    if (hibernation) options.drafts.restore(); else options.drafts.clear();
+    if (inputArea) inputArea.style.display = hibernation ? '' : 'none';
     // A live subagent's transcript belongs to the session running it, so
     // resuming would put a second harness process on a file that process
     // keeps appending to. The bar keeps the read-only label and Stats; only
@@ -204,9 +207,9 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
       if (cwdSpan) cwdSpan.textContent = current.cwd || '~';
       const label = resumeBar.querySelector('.resume-label');
       if (label) {
-        label.textContent = resumable
-          ? 'Read-only — session is inactive'
-          : 'Read-only — a live session owns this transcript';
+        label.textContent = hibernation ? hibernationSummary(hibernation)
+          : resumable ? 'Read-only — session is inactive'
+            : 'Read-only — a live session owns this transcript';
       }
       const resumeBtn = resumeBar.querySelector<HTMLElement>('#resumeSessionBtn');
       if (resumeBtn) resumeBtn.style.display = resumable ? '' : 'none';

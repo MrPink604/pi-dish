@@ -18,6 +18,8 @@ export function createComposerSubmit(options: {
   activity: ReturnType<typeof createSessionActivity>; btw: ReturnType<typeof createBtwPanel>; request: ApiRequest; endpoint: (host: string | null) => HostEndpoint;
   spawnId: () => string | null; spawnPending: () => boolean; refs: ReturnType<typeof createSessionReferences>['hints'];
   status: (text: string, type?: string) => void; openTree: () => void; hideAutocomplete: () => void; refresh: () => unknown;
+  /** The prompt resumed a hibernated session: reload the list and attach its live stream. */
+  woke: (id: string, host: string | null) => unknown;
   follow: () => void; scroll: (container: HTMLElement) => void; renderUser: (message: RenderMessage, time: string, attrs: string) => string;
 }) {
   const { document, sessionState, delivery, drafts: composerDrafts, activity: sessionActivity, btw: btwPanel } = options;
@@ -103,7 +105,9 @@ async function sendPrompt() {
   composerDrafts.clearDraft(ownerKey);
   const images = composerDrafts.images.take();
   const refs = options.refs(message);
-  options.status('Sending...', 'working');
+  // The prompt endpoint resumes a hibernated session before delivering.
+  const hibernated = !sessionState.currentSession.isActive && !!sessionState.currentSession.hibernation;
+  options.status(hibernated ? 'Resuming hibernated session...' : 'Sending...', 'working');
 
   const container = document.getElementById('messages')!;
   const emptyState = container.querySelector('.empty-state');
@@ -134,6 +138,7 @@ async function sendPrompt() {
     const resp = await send(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, body);
     if (!disposed) delivery.acknowledge(clientPromptId, !!resp.result?.queued);
     if (!owns()) return;
+    if (hibernated) options.woke(owner.id, owner.host);
     if (resp?.result?.queued) {
       // Held by the bridge until compaction finishes; no turn is running yet.
       // Raise the compacting indicator before undoing the optimistic

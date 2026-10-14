@@ -1,7 +1,9 @@
 // Generated from src/core/session-bounces.ts; edit that source and run npm run build:core.
-import type { LiveSession, SessionOwnership } from './session-ownership';
+import type { BounceAuthority, LiveSession, SessionOwnership } from './session-ownership';
 import type { SessionOperations } from './session-operations';
 export type SessionBounceMode = 'reload' | 'restart';
+/** Bulk modes plus pressure hibernation, which reuses the same safety proof without the queue. */
+export type SessionLifecycleMode = SessionBounceMode | 'hibernate';
 export type SessionBounceStatus = 'waiting' | 'executing' | 'completed' | 'skipped' | 'failed' | 'cancelled';
 /** Catalog observations carry presentation and conflict data, never permission to act. */
 export interface SessionBounceCatalogRow {
@@ -73,6 +75,7 @@ export interface SessionBounceOperationPorts {
     beginBounceAction: SessionOperations['beginBounceAction'];
     endBounceAction: SessionOperations['endBounceAction'];
     restartSession: SessionOperations['restartSession'];
+    hibernateSession: SessionOperations['hibernateSession'];
 }
 export interface SessionBounceOwnershipPorts {
     captureBounceAuthority: SessionOwnership['captureBounceAuthority'];
@@ -80,13 +83,22 @@ export interface SessionBounceOwnershipPorts {
     getLiveSession: SessionOwnership['getLiveSession'];
     refreshRegisteredSession: SessionOwnership['refreshRegisteredSession'];
 }
-export interface SessionBounceRuntimeOptions extends SessionBounceBounds {
+export interface SessionLifecycleActionOptions {
     operations: SessionBounceOperationPorts;
     ownership: SessionBounceOwnershipPorts;
+}
+export interface SessionLifecycleActions {
+    capture(row: SessionBounceCatalogRow): BounceAuthority | null;
+    inspect(authority: BounceAuthority, mode: SessionLifecycleMode): Promise<SessionBounceInspection<LiveSession>>;
+    execute(authority: BounceAuthority, mode: SessionLifecycleMode, inspected: SessionBounceInspection<LiveSession>): Promise<SessionBounceExecutionResult>;
+}
+export interface SessionBounceRuntimeOptions extends SessionBounceBounds, SessionLifecycleActionOptions {
     /** Raw catalog data only; capture, inspection, and execution belong to this module. */
     catalog(): unknown;
 }
 export declare function createSessionBounces<Authority extends object, Runtime = unknown>({ catalog, capture, inspect, execute, intervalMs, maxOperations, maxTargets, }: SessionBounceQueueOptions<Authority, Runtime>): SessionBounces;
 export declare function lifecycleBlockers(state: unknown, live: LiveSession | null | undefined): string[];
+/** Checked ownership, live-safety and final-guard policy shared by bulk operations and hibernation. */
+export declare function createSessionLifecycleActions({ operations, ownership }: SessionLifecycleActionOptions): SessionLifecycleActions;
 /** Checked production policy composes the same process-local queue used in isolation. */
 export declare function createSessionBounceRuntime({ operations, ownership, catalog, ...bounds }: SessionBounceRuntimeOptions): SessionBounces;

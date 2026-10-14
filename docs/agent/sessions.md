@@ -20,6 +20,9 @@ Three delivery semantics, all queue-safe:
 A queued message can be seen and cancelled by the user in the pi-dish UI, and
 by the target's own TUI. Without a hold (the default) there is no inbox: a
 message to an inactive session means `resume <ref>` first, then `follow-up`.
+The exception is a session the host *hibernated* under memory pressure: `send`
+and `follow-up` resume it and then deliver (the call takes a few seconds
+longer). `steer` never resumes one.
 
 ### Peer-message hold (opt-in)
 
@@ -40,7 +43,8 @@ session:
   each entry keeping its sender as a header (`[<ref> · <name> · <sentAt>]`).
 - A held message to an inactive target waits for an explicit `resume <ref>`.
   The hold never resumes a session by itself, and an explicit resume does not
-  shorten an open window — an overdue batch is only retried.
+  shorten an open window — an overdue batch is only retried. A *hibernated*
+  target is resumed when its batch is delivered.
 - The inbox is durable (`~/.pi/dish/message-holds.json`) and refuses to
   discard pending state it cannot parse. Delivery is best-effort, not
   exactly-once: a batch is retired only after the target's harness
@@ -80,6 +84,13 @@ harness-specific formats that raw JSONL reads get wrong.
   is no force-kill: a hung session is for the user to inspect.
 - `related <ref>` — parents/children from native Pi lineage plus advisory
   pi-dish launch provenance.
+- Hibernation: under memory pressure the owning host stops the longest-idle
+  live session that is provably doing nothing (no turn, queued input, dialog,
+  background job, live subagent, supervised service, viewer, warm prompt
+  cache, or `eval` use in the last 8 hours; idle at least 2 hours). The
+  transcript stays resumable and the next `send`/`follow-up` resumes it.
+  Live eval kernel state and browser tabs are discarded and named in the
+  session's `hibernation` field. Hosts opt out with `"hibernation": "off"`.
 
 ### Bulk maintenance
 

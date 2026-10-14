@@ -195,6 +195,18 @@ test('excluded and explicitly closed sessions do not recover', async t => {
   assert.equal(closed.row().status, 'closed');
 });
 
+test('hibernated sessions wait for a message at startup but stay explicitly restorable', async t => {
+  const s = scenario(t);
+  const runner = createRecoveryRunner({ ...s.deps, hibernated: id => id === 'session' });
+  await runner.start();
+  assert.deepEqual(s.launches, []);
+  const row = runner.report().sessions[0];
+  assert.equal(row.status, 'pending');
+  assert.match(String(row.reason), /^Hibernated under memory pressure/);
+  await runner.retry('session');
+  assert.deepEqual(s.launches, ['session']);
+});
+
 test('generic shutdown does not resurrect a deliberately quit TUI', async t => {
   const s = scenario(t, { mode: 'continue', record: { shutdown: true, activity: 'running', runId: 'run' } });
   await s.runner.start();

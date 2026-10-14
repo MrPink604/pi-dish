@@ -907,6 +907,7 @@ const composerSubmit: ReturnType<typeof createComposerSubmit> = createComposerSu
   request: (...args) => apiTransport.request(...args), endpoint: (...args) => hostDirectory.resolveHost(...args), spawnId: () => sessionView.spawnId, spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
   refs: message => sessionReferences.hints(message), status: (message, type) => setStatus(message, type), openTree: () => transcriptTree.open(), hideAutocomplete: () => composerAutocomplete.hide(),
   refresh: () => sidebarLists.refresh(), follow: () => { appChrome.follow(); }, scroll: (...args) => appChrome.scroll(...args), renderUser: (message, time, attrs) => messageRenderer.user(message, time, attrs),
+  woke: async (id, host) => { await sidebarLists.refresh(); const current = sessionState.currentSession; if (current?.id === id && (current.host || null) === host) await sessionView.select(id, { host }); },
 });
 
 const pendingSessionSpawns: ReturnType<typeof createSessionSpawns> = createSessionSpawns({

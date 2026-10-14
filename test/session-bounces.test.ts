@@ -4,11 +4,12 @@ import assert = require('node:assert/strict');
 import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
-import { createSessionBounces, createSessionBounceRuntime, lifecycleBlockers } from '../lib/session-bounces';
+import { createSessionBounces, createSessionBounceRuntime, createSessionLifecycleActions, lifecycleBlockers } from '../lib/session-bounces';
 import type { SessionBounceInspection, SessionBounceOperationPorts, SessionBounceOwnershipPorts, SessionBounceQueueOptions } from '../lib/session-bounces';
 import { inspectSubsessionExits } from '../lib/session-discovery';
 import { BridgeSession } from '../lib/bridge-session';
 import type { BridgeRegistryEntry, ProcessIdentity } from '../lib/contracts';
+import { LifecycleInterruption } from '../lib/session-ownership';
 import type { PaneBounceAuthority } from '../lib/session-ownership';
 import type { SessionOperationOutcome } from '../lib/session-operations';
 import { validSessionId } from '../lib/session-key';
@@ -183,6 +184,12 @@ function productionFixture(t: TestContext) {
       actions.push('restart');
       return { kind: 'stopped', replacement: { id: 'replacement', placement: 'tmux' } };
     },
+    hibernateSession: async (_id, options) => {
+      const guard = await options.beforeAction();
+      guard();
+      actions.push('hibernate');
+      return { kind: 'stopped' };
+    },
   };
   const scheduler = createSessionBounceRuntime({
     operations, ownership, catalog: () => [{ id: 'parent', name: 'Parent', harnessId: 'pi' }],
@@ -190,6 +197,24 @@ function productionFixture(t: TestContext) {
   t.after(() => scheduler.stop());
   return { scheduler, ownership, operations, live, state, claim, actions };
 }
+
+test('hibernation stops only through the shared final guard and is not a bulk mode', async t => {
+  const { scheduler, operations, ownership, state, actions } = productionFixture(t);
+  const lifecycle = createSessionLifecycleActions({ operations, ownership });
+  const authority = lifecycle.capture({ id: 'parent', harnessId: 'pi' });
+  assert.ok(authority);
+  const inspected = await lifecycle.inspect(authority, 'hibernate');
+  assert.deepEqual(inspected.blockers, []);
+  // A turn that starts after inspection is caught at the stop boundary.
+  state.turnInProgress = true;
+  await assert.rejects(lifecycle.execute(authority, 'hibernate', inspected),
+    (error: unknown) => error instanceof LifecycleInterruption && error.disposition === 'waiting');
+  assert.deepEqual(actions, []);
+  state.turnInProgress = false;
+  await lifecycle.execute(authority, 'hibernate', inspected);
+  assert.deepEqual(actions, ['hibernate']);
+  assert.throws(() => scheduler.enqueue('hibernate', ['parent']), /reload or restart/);
+});
 
 test('production safety rejects transient activity during inspection even when the reply is idle', async t => {
   const { scheduler, live, state, actions } = productionFixture(t);

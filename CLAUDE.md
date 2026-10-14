@@ -684,6 +684,31 @@ explicitly restores idle, never replays an uncertain prompt. Continuation is
 best effort, not exactly-once side effects; changed/unverifiable transcripts
 and unresolved tool results require review. See README for operational limits.
 
+### Memory-pressure hibernation (src/core/session-hibernation.ts)
+
+A server-owned sampler (60 s, unref'd) reads `/proc/meminfo`; pressure is
+`MemAvailable` below 10% of RAM or swap use above 75%. Each pressured sample
+stops at most one live Pi/OMP session, oldest activity first, then the next
+sample measures again. Cheap row filters (2 h idle, cold prompt cache, no
+turn/ask/compaction, no open SSE stream) precede deep checks: the agent's
+`/proc` tree (supervised services under an OMP launch broker block; eval
+kernels block only when the transcript's backwards-bounded scan finds `eval`
+within 8 h), tmux `session_attached`/`session_group_attached` (unreadable means
+watched), then the shared bounce inspection. The stop is
+`createSessionLifecycleActions(...).execute(..., 'hibernate')`:
+`SessionOperations.hibernateSession` runs `performSessionClose` with the bounce
+final guard and never writes recovery close intent; owned-pane and logical
+closes now take `beforeAction` like the RPC path. Prime is never a candidate.
+Records live in `~/.pi/dish/hibernation.json`, written only after a confirmed
+stop, stamped onto `previous` rows of `/api/sessions` as `hibernation`, and
+forgotten on wake, explicit resume/close, a restored recovery retry, or when the
+sampler sees the session live again. `/prompt` and `/follow-up` (not steer, not
+held messages) wake through `liveOrWake`; the message hold's delivery port
+wakes too. Wake is single-flight per session and a failed resume forgets the
+record, leaving an ordinary inactive session. Startup recovery reports
+hibernated sessions as pending; explicit retry still restores. Host setting
+`hibernation` is `pressure` (default) or `off`.
+
 ## tmux spawning (lib/tmux.js)
 
 `src/core/session-launch.ts` owns launch construction/registration and fallback;

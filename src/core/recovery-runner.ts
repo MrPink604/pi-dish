@@ -53,6 +53,8 @@ export interface RecoveryPresentationOptions {
   getMode(): unknown;
   now?: () => number;
   log?: { error?: (message: string) => void };
+  /** Memory-pressure hibernation keeps a session for wake-on-message, not startup restore. */
+  hibernated?(routeId: string): boolean;
 }
 
 /** Isolated runner seams; production policy is composed by createRecoveryRuntime below. */
@@ -74,6 +76,7 @@ type RememberedOutcome = RecoveryOutcome & { readonly observationId?: string };
 
 const MAX_SESSIONS = 5000;
 export const RECOVERY_PROMPT = 'pi-dish recovery: this session was interrupted while work was in progress. Before continuing, inspect the transcript, working files, and any external state affected by prior tools. A tool or external action may have completed without its result being recorded. Do not blindly repeat commands, writes, deployments, purchases, or other side effects. Reconcile what actually happened, explain any uncertainty, and ask for confirmation where safe continuation cannot be established. Continue the existing task only after this inspection; this message is not an instruction to replay the last prompt or retry a tool.';
+const HIBERNATED_REASON = 'Hibernated under memory pressure; a message resumes it.';
 
 export function recoveryMode(value: unknown): RecoveryMode {
   return value === 'off' || value === 'restore' || value === 'continue' ? value : 'off';
@@ -137,7 +140,7 @@ export async function continuationSafety(file: string): Promise<string | null> {
 
 export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunner {
   const { store, getMode, routeId, probeLive, validateRecord, restore, continueSession,
-    now = () => Date.now(), log = console } = deps;
+    now = () => Date.now(), log = console, hibernated = () => false } = deps;
   const reports = new Map<string, RememberedOutcome>();
   const reportLookup: ReadonlyMap<unknown, RememberedOutcome> = reports;
   const flights = new Map<string, Promise<RecoveryOutcome>>();
@@ -193,6 +196,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
       }
       rows.set(id, { ...row, excluded: !!control.excluded,
         ...(control.closed ? { status: 'closed', reason: 'This session was explicitly closed.' }
+          : hibernated(id) ? { status: 'pending', reason: HIBERNATED_REASON }
           : control.excluded ? { reason: 'Excluded from automatic recovery.' } : {}) });
     }
     return { mode: recoveryMode(getMode()), sessions: [...rows.values()],
@@ -212,6 +216,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
         ? 'The session is live, but an earlier recovery prompt has uncertain delivery. It was not resent.' : 'Attached to the surviving session; no prompt was sent.');
       control = store.getControl(record.harnessId, record.nativeSessionId);
       if (control.closed) return remember(record, 'closed', 'This session was explicitly closed.');
+      if (hibernated(id) && !explicit) return remember(record, 'pending', HIBERNATED_REASON);
       if (control.excluded) return remember(record, 'pending', 'Excluded from automatic recovery.');
       if (stopped || (!explicit && recoveryMode(getMode()) === 'off')) return remember(record, 'pending', 'Automatic recovery is off.');
       if (!explicit && record.shutdown) return remember(record, 'needs-review', 'The harness shut down; quit, reload, and operating-system shutdown cannot be distinguished.');
@@ -317,12 +322,13 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
 }
 
 /** Checked production restore/delivery policy; callers provide owners and presentation, not authority callbacks. */
-export function createRecoveryRuntime({ operations, ownership, getMode, now, log }: RecoveryRuntimeOptions): RecoveryRunner {
+export function createRecoveryRuntime({ operations, ownership, getMode, now, log, hibernated }: RecoveryRuntimeOptions): RecoveryRunner {
   return createRecoveryRunner({
     store: recoveryStore,
     getMode,
     now,
     log,
+    hibernated,
     routeId: recoveryRouteId,
     probeLive: operations.probeRecoveryLive,
     validateRecord: validateRecoveryRecord,

@@ -8,6 +8,7 @@ import { shortModelName } from './helper-usage';
 import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDisplayLabel, sortHostSections, hostSectionKey } from './helper-identity';
 import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
 import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, evaluateSessionQuery, scoreSessionMatch } from '../core/helper-query';
+import { hibernationSummary } from './hibernation';
 export interface SidebarHost extends HelperHost { state: string; key: string; color: string; dot: string; hasCache: boolean }
 export interface SidebarRenderOptions {
   active: readonly SessionEntry[]; previous: readonly SessionEntry[]; selected: SessionEntry | null;
@@ -112,6 +113,7 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
         session.parentId, session.parentSource, session.familyParentId, session.searchScore,
         session.searchSnippet, session.lastActivity, relativeTimeFingerprint(session.lastActivity, now),
         cacheExpiryFingerprint(session.cacheExpiry, now), options.unread(session) ? 1 : 0,
+        session.hibernation?.reason, relativeTimeFingerprint(session.hibernation?.hibernatedAt, now),
       );
     }
   }
@@ -229,6 +231,9 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const routineChip = session.routine
     ? `<span class="routine-chip" title="Started by the &quot;${escapeHtml(session.routine)}&quot; routine">⏱ ${escapeHtml(session.routine)}</span>`
     : '';
+  const hibernationChip = session.hibernation
+    ? `<span class="hibernation-chip" title="${escapeHtml(hibernationSummary(session.hibernation))}">hibernated</span>`
+    : '';
   // Rows in the pinned section get a drag handle (reorder); pinned and
   // Recent-view rows get a cwd hint — they've left their workspace group,
   // so the group label isn't there.
@@ -270,7 +275,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
         ${cacheHtml}<span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
       </div>
       <div class="session-item-tags${hostChip ? ' with-host' : ''}">
-        ${hostChip}${harnessBadge}${routineChip}${cwdHint}
+        ${hostChip}${harnessBadge}${routineChip}${hibernationChip}${cwdHint}
       </div>
       ${snippetLine}
     </div>

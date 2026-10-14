@@ -57,7 +57,9 @@ holds a peer message for that window instead of interrupting and answers
 sender's ref, name and time, and a held message to an inactive session waits
 for an explicit `resume` (the hold never resumes it). A missing sender
 delivers immediately, and `steer` is always immediate — it interrupts, so it
-carries no sender.
+carries no sender. A host under memory pressure may *hibernate* a long-idle
+peer (its `hibernation` field says why); `send` and `follow-up` resume it
+before delivering, `steer` does not.
 
 A spawned peer runs the same harness as the session spawning it (Pi from Pi,
 OMP from OMP), so it has the same tools and skills you do. Pass

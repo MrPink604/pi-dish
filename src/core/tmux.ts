@@ -446,6 +446,25 @@ export async function paneExists(socket: string, paneId: string): Promise<boolea
 }
 
 /**
+ * Clients attached to the pane's session, including grouped viewer sessions
+ * (attachPaneArgv). Null when the pane cannot be read: callers treat that as
+ * "possibly watched", never as "nobody is looking".
+ */
+export async function paneAttachedClients(socket: string, paneId: string): Promise<number | null> {
+  try {
+    const out = await runTmux(
+      ['-S', socket, 'display-message', '-p', '-t', paneId, '#{session_attached} #{session_group_attached}'],
+      { timeout: 2000 },
+    );
+    const counts = out.trim().split(/\s+/).filter(Boolean).map(Number);
+    if (!counts.length || counts.some(count => !Number.isInteger(count) || count < 0)) return null;
+    return Math.max(...counts);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * A viewer gets a throwaway grouped session: independent current window, same
  * windows, destroyed on detach, without stealing the desktop client's focus.
  */

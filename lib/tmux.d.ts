@@ -101,6 +101,12 @@ export declare function paneLocation(socket: string, paneId: string): Promise<Pa
 export declare function findPaneByPid(pid: number | string | null | undefined): Promise<(PaneTarget & PaneLocation) | null>;
 export declare function paneExists(socket: string, paneId: string): Promise<boolean>;
 /**
+ * Clients attached to the pane's session, including grouped viewer sessions
+ * (attachPaneArgv). Null when the pane cannot be read: callers treat that as
+ * "possibly watched", never as "nobody is looking".
+ */
+export declare function paneAttachedClients(socket: string, paneId: string): Promise<number | null>;
+/**
  * A viewer gets a throwaway grouped session: independent current window, same
  * windows, destroyed on detach, without stealing the desktop client's focus.
  */

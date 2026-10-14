@@ -7178,6 +7178,21 @@ mark.comment-mark {
   white-space: nowrap;
 }
 
+/* Memory-pressure hibernation: an inactive session a message resumes. */
+.hibernation-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--accent) 55%, var(--text-muted));
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
 /* Routines on phones: one column at a time. Lives after the base rules so
    the same-specificity cascade lands on this side. */
 @media (max-width: 768px) {

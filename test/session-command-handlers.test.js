@@ -16,10 +16,11 @@ const assert = require("node:assert/strict");
 const express = require("express");
 const session_command_handlers_1 = require("../lib/session-command-handlers");
 const PEER = { id: 'peer-1', ref: 'tycho/aaaa', name: 'Tycho' };
-function harness({ windowMs = 5_000, live = true, known = true, capabilities = ['prompt', 'followUp', 'steer'], } = {}) {
+function harness({ windowMs = 5_000, live = true, known = true, hibernated = false, capabilities = ['prompt', 'followUp', 'steer'], } = {}) {
     const held = [];
     const prompts = [];
     let steers = 0;
+    const wakes = [];
     const session = {
         prompt: async (text, options) => { prompts.push({ text, options }); return { ok: true }; },
         steer: async (text) => { steers++; return { ok: true, text }; },
@@ -38,13 +39,19 @@ function harness({ windowMs = 5_000, live = true, known = true, capabilities = [
         hold,
         readSettings: () => (windowMs ? { messageHoldWindowMs: windowMs } : {}),
         sessionExists: () => known,
+        wake: async (id) => {
+            if (!hibernated)
+                return null;
+            wakes.push(id);
+            return session;
+        },
     });
     const app = express();
     app.use(express.json());
     app.post('/api/sessions/:id/prompt', handlers.prompt);
     app.post('/api/sessions/:id/steer', handlers.steer);
     app.post('/api/sessions/:id/follow-up', handlers.followUp);
-    return { app, held, prompts, get steers() { return steers; } };
+    return { app, held, prompts, wakes, get steers() { return steers; } };
 }
 async function post(app, requestPath, body) {
     const server = app.listen(0, '127.0.0.1');
@@ -156,4 +163,28 @@ test('a live session lacking the capability is 409 before any hold', async () =>
     const res = await post(h.app, '/api/sessions/sess-1/prompt', { message: 'nope', sender: PEER });
     assert.equal(res.status, 409);
     assert.equal(h.held.length, 0);
+});
+test('a UI prompt or follow-up resumes a hibernated session before delivering', async () => {
+    const h = harness({ live: false, windowMs: 0, hibernated: true });
+    const prompt = await post(h.app, '/api/sessions/sess-1/prompt', { message: 'wake up' });
+    assert.equal(prompt.status, 200);
+    const followUp = await post(h.app, '/api/sessions/sess-1/follow-up', { message: 'then this' });
+    assert.equal(followUp.status, 200);
+    assert.deepEqual(h.wakes, ['sess-1', 'sess-1']);
+    assert.deepEqual(h.prompts, [{ text: 'wake up', options: {} }, { text: 'then this', options: { deliverAs: 'followUp' } }]);
+});
+test('a steer never resumes a hibernated session', async () => {
+    const h = harness({ live: false, windowMs: 0, hibernated: true });
+    for (const [requestPath, body] of [['/steer', { message: 'interrupt' }], ['/prompt', { message: 'redirect', deliverAs: 'steer' }]]) {
+        const res = await post(h.app, `/api/sessions/sess-1${requestPath}`, body);
+        assert.equal(res.status, 404);
+    }
+    assert.deepEqual(h.wakes, []);
+    assert.equal(h.steers, 0);
+});
+test('a held peer message leaves waking to delivery time', async () => {
+    const h = harness({ live: false, hibernated: true });
+    const res = await post(h.app, '/api/sessions/sess-1/prompt', { message: 'later', sender: PEER });
+    assert.equal(res.body.held, true);
+    assert.deepEqual(h.wakes, []);
 });

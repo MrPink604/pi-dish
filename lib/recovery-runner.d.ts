@@ -41,6 +41,8 @@ export interface RecoveryPresentationOptions {
     log?: {
         error?: (message: string) => void;
     };
+    /** Memory-pressure hibernation keeps a session for wake-on-message, not startup restore. */
+    hibernated?(routeId: string): boolean;
 }
 /** Isolated runner seams; production policy is composed by createRecoveryRuntime below. */
 export interface RecoveryRunnerOptions extends RecoveryPresentationOptions {
@@ -60,4 +62,4 @@ export declare function recoveryMode(value: unknown): RecoveryMode;
 export declare function continuationSafety(file: string): Promise<string | null>;
 export declare function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunner;
 /** Checked production restore/delivery policy; callers provide owners and presentation, not authority callbacks. */
-export declare function createRecoveryRuntime({ operations, ownership, getMode, now, log }: RecoveryRuntimeOptions): RecoveryRunner;
+export declare function createRecoveryRuntime({ operations, ownership, getMode, now, log, hibernated }: RecoveryRuntimeOptions): RecoveryRunner;
