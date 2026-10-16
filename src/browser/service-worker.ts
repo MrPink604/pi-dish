@@ -63,9 +63,12 @@ worker.addEventListener('notificationclick', event => {
     const windows = await worker.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const existing = windows.find(client => new URL(client.url).origin === worker.location.origin);
     if (existing) {
-      await existing.focus();
-      if (open) existing.postMessage(open);
-      return;
+      // A frozen or discarded client can refuse focus; open a fresh window instead.
+      const focused = await existing.focus().catch(() => null);
+      if (focused) {
+        if (open) focused.postMessage(open);
+        return;
+      }
     }
     const url = new URL('./', worker.location.href);
     if (open) { url.searchParams.set('openHost', open.hostId); url.searchParams.set('openSession', open.sessionId); }

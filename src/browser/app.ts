@@ -570,10 +570,7 @@ const sidebarLists: ReturnType<typeof createSidebarLists> = createSidebarLists({
   hosts: effectiveHosts, pollable: pollableHosts, selfId: () => hostDirectory.self.hostId,
   query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: (...args) => hostDiscovery.refreshSoon(...args),
   connection: (host, event) => hostConnections.note(host, event),
-  askBlocked: (session, host) => extensionUI.toast(`${session.name || 'Unnamed'} is waiting for an answer`, 'warning', () => {
-    void sessionView.select(session.id, { host });
-    if (window.innerWidth <= 768) sidebarQuery.close();
-  }),
+  askBlocked: (session, host) => extensionUI.toast(`${session.name || 'Unnamed'} is waiting for an answer`, 'warning', () => { void revealSession(session.id, host); }),
 });
 const hostSessionLoader = sidebarLists.loader;
 
@@ -721,11 +718,17 @@ const pushNotifications: PushNotifications = createPushNotifications({
     await sidebarLists.loadHost(hostId);
     if (!sessionState.findSession(sessionId, hostId)) await sidebarLists.loadHost(hostId, true);
     const found = sessionState.findSession(sessionId, hostId);
-    if (found && generation === sessionState.selectionGeneration) void sessionView.select(sessionId, { host: found.host || null });
+    if (found && generation === sessionState.selectionGeneration) void revealSession(sessionId, found.host || null);
   },
 });
 
 function closeSettingsModal() { displayPreferences.close(); }
+/** An explicit "take me there" (toast or notification click) also clears what would hide the chat. */
+function revealSession(id: string, host: string | null) {
+  closeSettingsModal();
+  if (window.innerWidth <= 768) sidebarQuery.close();
+  return sessionView.select(id, { host });
+}
 
 // Recovery owns its preferences/report views and captured host endpoints.
 const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
