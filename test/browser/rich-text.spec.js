@@ -11,7 +11,7 @@ const katexStyles = fs.readFileSync(path.resolve(__dirname, '../../public/vendor
     await page.evaluate(() => {
         const root = document.createElement('div');
         root.id = 'rich-fixture';
-        root.innerHTML = fixtureApp.features.richText.format('<img src=x onerror="window.richInjected=1">\n\n[unsafe](javascript:alert(1))\n\n~literal~ ~~strike~~ **bold**');
+        root.innerHTML = fixtureApp.features.richText.format('<img src=x onerror="window.richInjected=1">\n\n[unsafe](javascript:alert(1))\n\n~literal~ ~~strike~~ **bold**\n\n| fix |\n|---|\n| one<br>two<br />three `<br>` <br onclick=x> |');
         document.body.append(root);
     });
     await (0, fixtures_js_1.expect)(page.locator('#rich-fixture img')).toHaveCount(0);
@@ -19,6 +19,9 @@ const katexStyles = fs.readFileSync(path.resolve(__dirname, '../../public/vendor
     await (0, fixtures_js_1.expect)(page.locator('#rich-fixture')).toContainText('~literal~');
     await (0, fixtures_js_1.expect)(page.locator('#rich-fixture del')).toHaveText('strike');
     await (0, fixtures_js_1.expect)(page.locator('#rich-fixture strong')).toHaveText('bold');
+    // A bare <br> breaks a table cell; code and attribute-carrying tags stay text.
+    await (0, fixtures_js_1.expect)(page.locator('#rich-fixture td br')).toHaveCount(2);
+    await (0, fixtures_js_1.expect)(page.locator('#rich-fixture td')).toHaveText('onetwothree <br> <br onclick=x>');
     (0, fixtures_js_1.expect)(await page.evaluate(() => window.richInjected)).toBeUndefined();
 });
 (0, fixtures_js_1.test)('session refs navigate by owning host without linking examples or ambiguous prefixes', async ({ page, fleet }) => {

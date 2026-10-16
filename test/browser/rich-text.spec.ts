@@ -11,7 +11,7 @@ test('Markdown keeps HTML and unsafe links inert, literal single tildes and expl
   await fleet.select(fleet.self);
   await page.evaluate(() => {
     const root = document.createElement('div'); root.id = 'rich-fixture';
-    root.innerHTML = fixtureApp.features.richText.format('<img src=x onerror="window.richInjected=1">\n\n[unsafe](javascript:alert(1))\n\n~literal~ ~~strike~~ **bold**');
+    root.innerHTML = fixtureApp.features.richText.format('<img src=x onerror="window.richInjected=1">\n\n[unsafe](javascript:alert(1))\n\n~literal~ ~~strike~~ **bold**\n\n| fix |\n|---|\n| one<br>two<br />three `<br>` <br onclick=x> |');
     document.body.append(root);
   });
   await expect(page.locator('#rich-fixture img')).toHaveCount(0);
@@ -19,6 +19,9 @@ test('Markdown keeps HTML and unsafe links inert, literal single tildes and expl
   await expect(page.locator('#rich-fixture')).toContainText('~literal~');
   await expect(page.locator('#rich-fixture del')).toHaveText('strike');
   await expect(page.locator('#rich-fixture strong')).toHaveText('bold');
+  // A bare <br> breaks a table cell; code and attribute-carrying tags stay text.
+  await expect(page.locator('#rich-fixture td br')).toHaveCount(2);
+  await expect(page.locator('#rich-fixture td')).toHaveText('onetwothree <br> <br onclick=x>');
   expect(await page.evaluate(() => window.richInjected)).toBeUndefined();
 });
 

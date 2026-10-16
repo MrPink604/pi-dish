@@ -52,8 +52,11 @@ const markdown = new Marked({
     },
   },
   renderer: {
-    html(html: string | { text?: unknown } | null) {
-      return escapeHtml(typeof html === 'string' ? html : (html && html.text) || '');
+    // Raw HTML stays inert, except a bare inline <br>: GFM table cells cannot
+    // hold newlines, so authors break cell lines with it.
+    html(html: string | { text?: unknown } | null, block?: boolean) {
+      const text = typeof html === 'string' ? html : String((html && html.text) || '');
+      return !block && /^<br\s*\/?>$/i.test(text) ? '<br>' : escapeHtml(text);
     },
     code(code, info) {
       const language = String(info || '').match(/^\S*/)?.[0] || '';

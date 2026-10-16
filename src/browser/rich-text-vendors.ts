@@ -2,7 +2,7 @@ import type { MathExtension } from '../core/helper-types';
 export interface MarkedOptions {
   breaks: boolean; gfm: boolean;
   tokenizer: { del(this: { lexer: { inlineTokens(source: string): unknown[] } }, source: string): { type: string; raw: string; text: string; tokens: unknown[] } | undefined };
-  renderer: { html(value: unknown): string };
+  renderer: { html(value: unknown, block?: boolean): string };
   walkTokens(token: { type: string; href?: string }): void;
   extensions: MathExtension[];
 }
