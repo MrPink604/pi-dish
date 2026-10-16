@@ -103,8 +103,24 @@ html {
   height: 100%;
 }
 
+/* Harnesses configured with Nerd Font symbols put Material Design icons
+   (U+F0001…, private use) in session titles, which phones render as tofu.
+   Same vendored file as the terminal's face below, limited to private-use
+   code points so it only downloads when such a glyph is on screen and never
+   replaces real letters or emoji. It leads the stack: Chrome on Linux draws
+   tofu from the Ubuntu face instead of falling through to a later family.
+   U+F8FF stays with the system (Apple logo). Its glyphs fill the whole em;
+   80% matches the sidebar's emoji treatment. */
+@font-face {
+  font-family: 'Nerd Symbols Text';
+  src: url('vendor/nerd-symbols.woff2') format('woff2');
+  font-display: swap;
+  size-adjust: 80%;
+  unicode-range: U+E000-F8FE, U+F0000-FFFFD, U+100000-10FFFD;
+}
+
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-family: 'Nerd Symbols Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   background: var(--bg-dark);
   color: var(--text);
   line-height: 1.5;
@@ -887,7 +903,7 @@ body.sidebar-open {
 }
 
 .session-item-name {
-  font-family: 'Session Emoji', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  font-family: 'Session Emoji', 'Nerd Symbols Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   font-weight: 500;
   font-size: 13px;
   white-space: nowrap;
