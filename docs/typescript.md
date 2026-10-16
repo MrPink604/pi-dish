@@ -553,8 +553,9 @@ content, every endpoint, or lifecycle authority.
 
 `src/browser/` compiles strictly using `tsconfig.browser.json`.
 `npm run build:browser` checks types, then uses the pinned esbuild dependency to
-emit five local entrypoints: `public/app.js`, `public/browser.js`,
-`public/helpers.js`, `public/artifact-comments.js` and `public/theme-prepaint.js`.
+emit six local entrypoints: `public/app.js`, `public/browser.js`,
+`public/helpers.js`, `public/artifact-comments.js`, `public/sw.js` (the service
+worker) and `public/theme-prepaint.js`.
 All entrypoints are validated before any generated output is written. The
 application entrypoint bundles ordinary imports from feature modules and helpers
 into an IIFE with private bindings. The production page loads `app.js` after the
@@ -749,7 +750,7 @@ provider. The build rejects runtime imports out of the portable helper closure.
 Portability is checked jointly by core NodeNext, browser Bundler/DOM with
 `types: []`, and `tsconfig.helpers.json` without DOM libraries. The last probe
 retains Node ambient types; it does not establish browser compatibility alone.
-Atomic browser output validation and drift checks still cover all five entrypoints.
+Atomic browser output validation and drift checks still cover all six entrypoints.
 
 `main-pane.ts` owns the registered takeover/session-surface/overlay exclusion
 policy used by `app.ts`. Controllers keep their close/dispose/request-generation
@@ -801,7 +802,7 @@ Display preferences, themes and pointer resizing are owned by
 `display-preferences.ts`, `themes.ts` and `panel-resize.ts`. The separate
 `theme-prepaint.ts` entrypoint generates `public/theme-prepaint.js`; it runs
 synchronously before CSS and shares the typed token decoder with theme switching.
-The browser build validates all five outputs before writing any of them.
+The browser build validates all six outputs before writing any of them.
 
 `terminal.ts` owns terminal instances and all open/connection/input lifetimes.
 Pending opens are cancellable before an instance exists; font deadlines and

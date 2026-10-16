@@ -14,8 +14,8 @@ implementations live in `src/core/`; `server.js` is the checked, policy-free lau
 Browser session state lives in `src/browser/session-state.ts`; use its writers
 and selection guards from `app.ts` through its `createSessionState` import. Continue
 with vanilla TypeScript modules in `src/browser/`; regenerate and commit
-`public/app.js`, `public/browser.js`, `public/helpers.js`, `public/artifact-comments.js` and
-`public/theme-prepaint.js` with
+`public/app.js`, `public/browser.js`, `public/helpers.js`, `public/artifact-comments.js`,
+`public/sw.js` and `public/theme-prepaint.js` with
 `npm run build:browser`. Shared runtime helpers live in `src/core/helper-*.ts`;
 browser-only helpers remain under `src/browser/`. Rebuild core before browser after
 shared changes; keep the 121 helper CommonJS/browser exports stable. Portability,

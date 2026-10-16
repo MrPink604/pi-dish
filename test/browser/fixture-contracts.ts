@@ -1,5 +1,6 @@
 import type { Terminal } from '@xterm/xterm';
 import type { HostEndpoint } from '../../src/browser/api-client.js';
+import type { PushNotifications } from '../../src/browser/push-notifications.js';
 
 /** Private exact projections for the application-observation browser fixture. */
 export interface FixtureFactories {
@@ -28,6 +29,7 @@ export interface FixtureFactories {
   sessionControls: typeof import('../../src/browser/session-controls.js').createSessionControls;
   sessionSearch: typeof import('../../src/browser/session-search.js').createSessionSearch;
   displayPreferences: typeof import('../../src/browser/display-preferences.js').createDisplayPreferences;
+  pushNotifications: typeof import('../../src/browser/push-notifications.js').createPushNotifications;
   recoveryController: typeof import('../../src/browser/recovery.js').createRecovery;
   hostSettings: typeof import('../../src/browser/host-settings.js').createHostSettings;
   fleetController: typeof import('../../src/browser/fleet-view.js').createFleetView;
@@ -94,6 +96,7 @@ export interface FixtureFeatures {
   sessionControls: ReturnType<typeof import('../../src/browser/session-controls.js').createSessionControls>;
   sessionSearch: ReturnType<typeof import('../../src/browser/session-search.js').createSessionSearch>;
   displayPreferences: ReturnType<typeof import('../../src/browser/display-preferences.js').createDisplayPreferences>;
+  pushNotifications: PushNotifications;
   recoveryController: ReturnType<typeof import('../../src/browser/recovery.js').createRecovery>;
   hostSettings: ReturnType<typeof import('../../src/browser/host-settings.js').createHostSettings>;
   fleetController: ReturnType<typeof import('../../src/browser/fleet-view.js').createFleetView>;
@@ -240,6 +243,7 @@ export const FEATURE_FACTORY_NAMES = {
   sessionControls: 'createSessionControls',
   sessionSearch: 'createSessionSearch',
   displayPreferences: 'createDisplayPreferences',
+  pushNotifications: 'createPushNotifications',
   recoveryController: 'createRecovery',
   hostSettings: 'createHostSettings',
   fleetController: 'createFleetView',
@@ -280,7 +284,7 @@ export const FEATURE_FACTORY_NAMES = {
   appBindings: 'createAppBindings',
 } as const satisfies Record<keyof FixtureFeatures, string>;
 
-export const FIXTURE_FEATURE_NAMES = ['hostView', 'hostDirectory', 'apiTransport', 'sessionApi', 'hostConnections', 'hostDiscovery', 'hostPresentation', 'sessionState', 'responseDetailsController', 'appChrome', 'sessionReferences', 'composerAutocomplete', 'sidebarActivity', 'sidebarQuery', 'sidebarLists', 'sidebarControls', 'sessionView', 'sessionResume', 'modelCatalog', 'appModels', 'sessionRelationsController', 'sessionHeader', 'sessionControls', 'sessionSearch', 'displayPreferences', 'recoveryController', 'hostSettings', 'fleetController', 'searchViewController', 'skillsController', 'usageController', 'sessionInfo', 'fileViews', 'anchoredCommentController', 'transcriptController', 'messageRenderer', 'subagentsController', 'liveToolsController', 'messageStreamController', 'composerDrafts', 'composerNotes', 'composerSpeech', 'promptDelivery', 'sessionActivity', 'btwPanel', 'composerSubmit', 'pendingSessionSpawns', 'newSessionController', 'harnessSettingsController', 'streamingRenderer', 'moodController', 'extensionUI', 'browserAssets', 'diagramRenderer', 'richText', 'transcriptTree', 'themesController', 'terminalController', 'panelResize', 'routinesController', 'bounceController', 'mainPane', 'appBindings'] as const satisfies readonly (keyof FixtureFeatures)[];
+export const FIXTURE_FEATURE_NAMES = ['hostView', 'hostDirectory', 'apiTransport', 'sessionApi', 'hostConnections', 'hostDiscovery', 'hostPresentation', 'sessionState', 'responseDetailsController', 'appChrome', 'sessionReferences', 'composerAutocomplete', 'sidebarActivity', 'sidebarQuery', 'sidebarLists', 'sidebarControls', 'sessionView', 'sessionResume', 'modelCatalog', 'appModels', 'sessionRelationsController', 'sessionHeader', 'sessionControls', 'sessionSearch', 'displayPreferences', 'pushNotifications', 'recoveryController', 'hostSettings', 'fleetController', 'searchViewController', 'skillsController', 'usageController', 'sessionInfo', 'fileViews', 'anchoredCommentController', 'transcriptController', 'messageRenderer', 'subagentsController', 'liveToolsController', 'messageStreamController', 'composerDrafts', 'composerNotes', 'composerSpeech', 'promptDelivery', 'sessionActivity', 'btwPanel', 'composerSubmit', 'pendingSessionSpawns', 'newSessionController', 'harnessSettingsController', 'streamingRenderer', 'moodController', 'extensionUI', 'browserAssets', 'diagramRenderer', 'richText', 'transcriptTree', 'themesController', 'terminalController', 'panelResize', 'routinesController', 'bounceController', 'mainPane', 'appBindings'] as const satisfies readonly (keyof FixtureFeatures)[];
 
 export const FIXTURE_PORT_NAMES = ['appBindings', 'appModels', 'composerDrafts', 'composerSubmit', 'hostDiscovery', 'messageStreamController', 'newSessionController', 'routinesController', 'sessionControls', 'sessionState', 'sidebarControls', 'transcriptController', 'usageController'] as const satisfies readonly (keyof FixturePorts)[];
 

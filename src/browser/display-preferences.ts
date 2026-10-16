@@ -17,6 +17,7 @@ export function createDisplayPreferences(options: {
   filters: () => readonly SavedFilter[]; setFilters: (filters: readonly SavedFilter[]) => void;
   persistFilters: (filters: readonly SavedFilter[], host: Readonly<HostEndpoint>) => Promise<unknown>;
   metadataChanged: () => void; contextChanged: () => void; alert: (message: string) => void;
+  notifications: (container: HTMLElement, signal: AbortSignal) => void;
 }) {
   const { document, storage } = options;
   const modal = document.getElementById('settingsModal')!, body = document.getElementById('settingsBody')!;
@@ -44,6 +45,7 @@ export function createDisplayPreferences(options: {
     <div class="preference-row"><label for="responseMetadataMode"><strong>Response metadata</strong><small>Stored on this device. “Effective speed” includes time to first token and JSONL append.</small></label>
     <select id="responseMetadataMode"><option value="hidden">Hidden</option><option value="compact">Compact</option><option value="performance">Performance</option><option value="performance-cost">Performance + estimated cost</option></select></div>
     <div class="preference-row"><label for="monthlyBudget"><strong>Monthly budget warning (USD)</strong><small>Server-global: applies to every device. Estimates use each session harness's catalog pricing; blank clears.</small></label><div class="budget-save"><input id="monthlyBudget" type="number" min="0.01" step="0.01" placeholder="No warning"><button class="btn-small" id="saveBudget">Save</button></div><small id="budgetStatus"></small></div>
+    <div id="settingsNotifications"></div>
     <div class="preference-row"><label><strong>Hosts, bounce and recovery</strong><small>Fleet-wide controls live in the Fleet view, beside each host's load.</small></label><button class="btn-small" id="settingsOpenFleet">Open Fleet</button></div>
     <div class="preference-row"><label><strong>Saved sidebar filters</strong><small>Server-global. Chips under the sidebar filter toggle these per device; type a query there and hit “+ save filter” to add one.</small></label><div id="savedFiltersList" class="saved-filters-list"></div></div>`;
 
@@ -57,6 +59,7 @@ export function createDisplayPreferences(options: {
     metric.addEventListener('change', () => {
       if (!owns()) return; context = metric.value === 'tokens' ? 'tokens' : 'percent'; storage.setItem(CONTEXT_METRIC_KEY, context); options.contextChanged();
     }, listener);
+    options.notifications(body.querySelector<HTMLElement>('#settingsNotifications')!, events.signal);
     function renderFilters(): void {
       if (!owns()) return; filterEvents.abort(); filterEvents = new AbortController();
       const list = body.querySelector<HTMLElement>('#savedFiltersList')!;

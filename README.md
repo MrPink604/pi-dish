@@ -133,7 +133,8 @@ Rules of thumb:
   and Mermaid fenced diagrams rendered to theme-matched SVG with source and
   zoom controls — all from locally vendored assets.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control
-  panel, touch-sized everything.
+  panel, touch-sized everything. Installable as an app with push
+  notifications when a session finishes or waits for you (over https).
 - **Themes** — solarized dark by default, a neutral "graphite" built in, and
   bring-your-own: drop a JSON file of token overrides in `~/.pi/dish/themes/`
   (e.g. `mytheme.json` containing `{"--bg-dark": "#101014", "--accent":
@@ -473,6 +474,47 @@ how much you'll enjoy them:
 - Chrome, desktop and Android: add the origin at
   `chrome://flags/#unsafely-treat-insecure-origin-as-secure` and relaunch.
 - iOS Safari has no override at all. It needs https.
+
+### Install as an app and notifications
+
+On a secure origin (https, e.g. `tailscale serve`, or localhost) pi-dish is
+an installable web app: Chrome's **Install app** — or the button that appears
+under Settings → **Notifications** — opens it in its own window with a
+launcher icon instead of a browser tab. Plain-http LAN addresses cannot
+install or receive notifications; the settings row says so.
+
+Settings → **Notifications** → **Turn on** subscribes this device. From then
+on each host pushes when one of its live sessions:
+
+- **finishes**: it was working and has been idle for two consecutive samples
+  (about 3–6 s, so the gap between turns does not ring); the notification
+  carries the session name, host label and the start of the last assistant
+  message;
+- **waits for an answer**: an ask dialog became pending.
+
+Tapping a notification opens that session, in the existing window or a new
+one. Nothing is shown while a pi-dish window is focused, and sessions launched
+by another agent (peer spawns) report to that agent instead. **Send test**
+checks the path from every registered host; a brand-new subscription can take
+a minute before the push service accepts it.
+
+Pushes travel through the browser vendor's push service (FCM for Chrome), so
+hosts need outbound https. Payloads are end-to-end encrypted to the device;
+the service sees only the endpoint, size and timing.
+
+**Fleets:** the device subscribes with the signing key of the host it was
+installed from, then registers that subscription with every host that
+advertises `push`. Every host must therefore sign with the same key pair:
+`~/.pi/dish/vapid.json` is created (mode 0600) on first use; copy the entry
+host's file to each peer. A peer with a different key is listed under the
+settings row as signing with a different VAPID key. An optional `"subject"`
+(`mailto:` or `https:` URL) in that file is the contact address sent to push
+services. Registered devices live in `~/.pi/dish/push-subscriptions.json`;
+an endpoint the push service reports as gone is pruned once its subscription
+is ten minutes old.
+
+The service worker only displays notifications and routes their clicks. It
+caches nothing, so an upgraded server never meets a stale offline UI.
 
 ### Session recovery
 
@@ -903,7 +945,7 @@ repository-wide test/tooling closure; planned packages are not implemented featu
 
 Run `npm run build:browser` after browser source changes and commit all generated
 scripts: `public/app.js`, `public/browser.js`, `public/helpers.js`,
-`public/artifact-comments.js` and `public/theme-prepaint.js`. `npm run check`
+`public/artifact-comments.js`, `public/sw.js` and `public/theme-prepaint.js`. `npm run check`
 verifies strict types and byte-for-byte output consistency. Normal startup uses
 the committed scripts directly.
 

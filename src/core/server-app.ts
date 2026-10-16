@@ -64,6 +64,7 @@ import recoveryStore = require('./session-recovery');
 import { createRecoveryRuntime } from './recovery-runner';
 import { createSessionBounceRuntime, createSessionLifecycleActions } from './session-bounces';
 import { createSessionHibernation } from './session-hibernation';
+import { createPushNotifier } from './push-notifications';
 import { canonicalSessionId } from './session-key';
 import type { SessionBounceMode } from './session-bounces';
 import skillsLib = require('./skills');
@@ -2200,6 +2201,39 @@ export function startServer(rootDirectory: string): Server {
     },
   });
 
+  // Web Push: this host notifies subscribed devices about its own sessions.
+  const pushNotifier = createPushNotifier({
+    sessions: () => getActiveSessions(),
+    agentLaunched: id => {
+      const launchParents: ReadonlyMap<string, unknown> = decodeLaunchParents(sessionProvenance.readLaunches());
+      return launchParents.has(id);
+    },
+    readMessages: file => readSessionMessages(file),
+    host: () => ({ hostId: hostIdentity.getHostId(), label: hostIdentity.getHostLabel(readDishSettings()) }),
+  });
+
+  app.get('/api/push', (_req: ApplicationRequest, res: ApplicationResponse) => {
+    try { res.json({ publicKey: pushNotifier.publicKey() }); }
+    catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  app.post('/api/push/subscriptions', (req: ApplicationRequest, res: ApplicationResponse) => {
+    try {
+      const result = pushNotifier.subscribe(property(req.body, 'subscription'), property(req.body, 'publicKey'));
+      if (result.ok) res.status(204).end();
+      else res.status(result.status).json({ error: result.error });
+    } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  app.delete('/api/push/subscriptions', (req: ApplicationRequest, res: ApplicationResponse) => {
+    pushNotifier.unsubscribe(property(req.body, 'endpoint'));
+    res.status(204).end();
+  });
+  app.post('/api/push/test', async (req: ApplicationRequest, res: ApplicationResponse) => {
+    try {
+      if (await pushNotifier.test(property(req.body, 'endpoint'))) res.status(204).end();
+      else res.status(404).json({ error: 'This device is not registered with this host.' });
+    } catch (error) { res.status(500).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
   /** Live session, resuming it first when memory pressure hibernated it. */
   async function liveOrWake(sessionId: string): Promise<LiveSession | null> {
     const live = await getLiveSession(sessionId);
@@ -2543,6 +2577,7 @@ export function startServer(rootDirectory: string): Server {
     remoteHosts.shutdown();
     sessionBounces.stop();
     hibernation.stop();
+    pushNotifier.stop();
   }
 
   // Fleet relay takes precedence even when this host's terminal is disabled.
@@ -2632,6 +2667,7 @@ export function startServer(rootDirectory: string): Server {
     messageHold.start();
     sessionBounces.start();
     hibernation.start();
+    pushNotifier.start();
     // A restored idle session is interrupted work, not a completed oneShot.
     recoveryRunner.start()
       .then(() => routineRunner.recoverAfterRestart())

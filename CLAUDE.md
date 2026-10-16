@@ -1360,6 +1360,44 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   /cloudflared in front of each host, or use the `/hosts` proxy (same
   origin). See TASKS/multi-host.md for topology rationale.
 
+## Web Push and the installable app (src/core/push-notifications.ts, src/browser/push-notifications.ts, src/browser/service-worker.ts)
+
+Per-host push keeps the fleet rule: no hub-side aggregation. The device creates
+one subscription with the **serving host's** VAPID public key (`GET /api/push`)
+and registers it (`POST /api/push/subscriptions {subscription, publicKey}`,
+upsert by endpoint) with every effective host whose descriptor advertises
+`push`. A host whose key differs answers 409 rather than storing a subscription
+it can never sign for; keys live in `~/.pi/dish/vapid.json` (generated `wx`
+0600 on first use, re-read per call, file-level like the token) and must be
+copied across the fleet. `DELETE` unregisters; `POST /api/push/test` sends to
+one registered endpoint and 404s when it is not (or no longer) registered.
+
+Triggers are sampled, not event-subscribed: every 3 s (unref'd, skipped while
+the subscription store is empty) the notifier reads `getActiveSessions()`,
+whose `turnInProgress`/`askPending`/`compacting` come from bridge registry
+entries without a socket client. `sessionTransitions` is the pure rule: the
+first sample after subscriptions appear is a baseline; `finished` needs a
+working session idle for `FINISHED_IDLE_SAMPLES` (2) consecutive samples;
+`waiting` is the rising edge of `askPending`; a vanished session reports
+nothing. Agent-launched peers (launch provenance) are skipped. Payloads are
+`{kind, title, body, hostId, sessionId, tag}`; `tag` is `hostId:sessionId`
+and the push `topic` is its hash, so an offline device collapses to the latest
+state. Gone (404/410) endpoints are pruned only after `GONE_GRACE_MS` (10 min)
+since registration: FCM answers 410 for subscriptions it has not finished
+provisioning, and pruning then would silently drop a working device.
+
+Browser: `pushNotifications.mount()` registers `sw.js` (scope = app directory)
+on secure origins and listens for `pi-dish-open-session` messages; `sync()` runs
+on self/peer identification and registers with hosts not yet `on` this page
+load. Device opt-in is `localStorage['pi-dish-push']`. The worker suppresses
+non-test notifications while any pi-dish window is focused and visible; a click
+focuses an existing window (posting the session) or opens
+`./?openHost=…&openSession=…`, which startup writes into the saved-session key
+before `restoreSavedSession`. The worker has **no fetch handler and no cache**
+on purpose — regenerated scripts must never be served stale. It is typed with
+local worker interfaces because the browser program's lib is DOM, not
+WebWorker. `manifest.webmanifest` and the PNG icons are static assets.
+
 ## Fleet view and host health (src/browser/fleet-view.ts, GET /api/host/health)
 
 The Fleet takeover (`.main.fleet-open`, boat icon in the sidebar header)

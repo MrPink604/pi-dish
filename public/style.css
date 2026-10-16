@@ -4755,6 +4755,13 @@ img.msg-image {
 .preference-row small, .settings-body > small { color: var(--text-muted); }
 .preference-row select, .preference-row input { color: var(--text); background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px; padding: 6px; }
 .budget-save { display: flex; gap: 6px; }
+/* Notifications: controls beside the label, per-host registration below. */
+.push-row { flex-wrap: wrap; }
+.push-row > .push-hosts, .push-row > #pushStatus { flex-basis: 100%; align-self: stretch; }
+.push-controls { display: flex; gap: 6px; }
+.push-hosts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 12px; }
+.push-host { display: flex; justify-content: space-between; gap: 12px; }
+.push-host.failed small { color: var(--warning); }
 
 /* Saved-filter management in the settings modal (creation lives in the
    sidebar's "+ save filter" chip). */

@@ -349,12 +349,13 @@
         "strategy": "bundles",
         "builder": "scripts/build-browser.ts",
         "checkCommand": "npm run build:browser -- --check",
-        "consumer": "public HTML, VM/parity tests, browser fixtures and ESLint consume five independent local browser/helper entrypoints",
+        "consumer": "public HTML, VM/parity tests, browser fixtures and ESLint consume five independent local browser/helper entrypoints; the browser registers the service worker bundle",
         "entries": [
           {"source": "src/browser/app.ts", "output": "public/app.js"},
           {"source": "src/browser/theme-prepaint.ts", "output": "public/theme-prepaint.js"},
           {"source": "src/browser/index.ts", "output": "public/browser.js"},
           {"source": "src/browser/artifact-comments.ts", "output": "public/artifact-comments.js"},
+          {"source": "src/browser/service-worker.ts", "output": "public/sw.js"},
           {"source": "src/browser/shared-helpers.ts", "output": "public/helpers.js"}
         ]
       },

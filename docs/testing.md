@@ -136,6 +136,7 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Recovery bounded inspection, malformed evidence, handshake rechecks and no uncertain-delivery replay | `test/recovery-runner.test.js`, `test/session-recovery.test.js`, real Pi bridge integration |
 | Production Bounce activity races, final guards, stopped replacement outcomes and proved reload completion | `test/session-bounces.test.js`, browser Bounce scenarios and desktop/mobile smoke |
 | Memory-pressure hibernation thresholds, process-tree classification, bounded `eval` scan, selection/skip/wake policy and recovery pending status | `test/session-hibernation.test.js`, `test/session-bounces.test.js`, `test/session-command-handlers.test.js`, `test/recovery-runner.test.js` |
+| Web Push finished/waiting transitions, baseline and vanished sessions, VAPID key creation, subscription admission/mismatch, peer skipping and gone-endpoint grace | `test/push-notifications.test.js`; the service worker and settings flow were smoke-checked against a real push service |
 | Sidebar query/scopes, list polling and unread ownership | `test/types/browser-sidebar-lists.ts`, `test/browser/sidebar-lists.spec.js` |
 | Sidebar row controls, close endpoints, menus and drag lifetime | `test/types/browser-sidebar-controls.ts`, `test/browser/sidebar-controls.spec.js` |
 | Sidebar metadata, host collapse and search authority | `test/browser-sidebar-render.test.js`, `test/types/browser-sidebar-render.ts`, family/search/multi-host UI smoke |

@@ -24,6 +24,7 @@ test('browser build detects stale output and preserves it on type failure', () =
     fs.writeFileSync(commentsSource, 'const pageAnswer: number = 7; console.log(pageAnswer);');
     const helpersSource = path.join(root, 'src/browser/shared-helpers.ts');
     fs.writeFileSync(helpersSource, 'export const fixtureHelper: number = 17;');
+    fs.writeFileSync(path.join(root, 'src/browser/service-worker.ts'), 'const workerAnswer: number = 5; console.log(workerAnswer);');
     const run = (...args: string[]) => spawnSync(process.execPath, ['scripts/build-browser.js', ...args], {
       cwd: root, env: sanitizeTestEnv(process.env), encoding: 'utf8', timeout: 30000,
     });

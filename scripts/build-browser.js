@@ -20,6 +20,7 @@ const entries = [
     { source: 'src/browser/theme-prepaint.ts', target: 'public/theme-prepaint.js' },
     { source: 'src/browser/index.ts', target: 'public/browser.js', globalName: 'PiDishBrowser' },
     { source: 'src/browser/artifact-comments.ts', target: 'public/artifact-comments.js' },
+    { source: 'src/browser/service-worker.ts', target: 'public/sw.js' },
     { source: 'src/browser/shared-helpers.ts', target: 'public/helpers.js', globalName: 'PiDishHelpers',
         footer: 'if (typeof module !== \"undefined\" && module.exports) module.exports = PiDishHelpers; else Object.assign(globalThis, PiDishHelpers);' },
 ];

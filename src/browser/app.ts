@@ -32,6 +32,7 @@ import { createSessionHeader } from './session-header';
 import { createSessionControls } from './session-controls';
 import { createSessionSearch } from './session-search';
 import { createDisplayPreferences } from './display-preferences';
+import { createPushNotifications, type PushNotifications } from './push-notifications';
 import { createRecovery } from './recovery';
 import { createHostSettings, hostSettingsHtml } from './host-settings';
 import { createFleetView } from './fleet-view';
@@ -241,6 +242,7 @@ const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscover
     hostDirectory.setSelf(data);
     migrateClientKeys();
     if (newSessionController.isOpen()) newSessionController.renderHosts();
+    void pushNotifications.sync();
   },
   onFleet: data => {
     hostDirectory.setFleet(data);
@@ -254,6 +256,7 @@ const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscover
     composerSpeech.updateButton();
     renderSessions();
     startDiscoveredHosts?.();
+    void pushNotifications.sync();
   },
   onConnection: (host, event) => hostConnections.note(host, event),
   afterFleet: () => {
@@ -479,12 +482,20 @@ document.addEventListener('DOMContentLoaded', async () => {
   sidebarQuery.renderChips(); // cached definitions paint immediately…
   sidebarQuery.loadFilters(); // …then the server copy replaces them
   composerSpeech.mount();
+  pushNotifications.mount();
   terminalController.mountKeybar();
   panelResize.terminal();
   panelResize.sidebar();
   anchoredCommentController.mount();
   // The default Active view needs only live rows. Fetch history only when a
   // saved inactive session must be restored; opening All fetches it on demand.
+  // A notification opening a new window names its session the same way.
+  const opened = new URLSearchParams(location.search);
+  const openHost = opened.get('openHost'), openSession = opened.get('openSession');
+  if (openHost && openSession) {
+    try { localStorage.setItem('pi-dish-session', sessionKey(openHost, openSession)); } catch {}
+    history.replaceState(null, '', location.pathname);
+  }
   const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
   let restoring = false;
   let restored = false;
@@ -692,6 +703,23 @@ const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDi
   filters: () => sidebarQuery.filters, setFilters: value => sidebarQuery.setFilters(value),
   persistFilters: (value, host) => persistSavedFilters([...value], host),
   metadataChanged: () => responseDetailsController.update(), contextChanged: () => renderSessions(), alert: message => alert(message),
+  notifications: (container, signal) => pushNotifications.renderSettings(container, signal),
+});
+
+// Web Push registration and the service worker that makes the app installable.
+const pushNotifications: PushNotifications = createPushNotifications({
+  window, storage: localStorage, request: (...args) => apiTransport.request(...args), hosts: effectiveHosts,
+  supports: host => hostSupportsCapability(host, 'push', appConfig), label: host => hostDisplayLabel(host),
+  changed: () => { void displayPreferences.render(); },
+  // A click is a fresh user selection: anything selected while lists load wins.
+  open: async (hostId, sessionId) => {
+    const generation = sessionState.selectionGeneration;
+    if (!hostEntryFor(hostId)) return;
+    await sidebarLists.loadHost(hostId);
+    if (!sessionState.findSession(sessionId, hostId)) await sidebarLists.loadHost(hostId, true);
+    const found = sessionState.findSession(sessionId, hostId);
+    if (found && generation === sessionState.selectionGeneration) void sessionView.select(sessionId, { host: found.host || null });
+  },
 });
 
 function closeSettingsModal() { displayPreferences.close(); }
