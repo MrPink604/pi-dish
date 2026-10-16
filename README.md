@@ -477,11 +477,15 @@ how much you'll enjoy them:
 
 ### Install as an app and notifications
 
-On a secure origin (https, e.g. `tailscale serve`, or localhost) pi-dish is
-an installable web app: Chrome's **Install app** — or the button that appears
-under Settings → **Notifications** — opens it in its own window with a
-launcher icon instead of a browser tab. Plain-http LAN addresses cannot
-install or receive notifications; the settings row says so.
+On a secure origin (https, e.g. `tailscale serve`, a cloudflared tunnel, or
+localhost) pi-dish is an installable web app: Chrome's **Install app** — or
+the button that appears under Settings → **Notifications** — opens it in its
+own window with a launcher icon instead of a browser tab. Plain-http LAN
+addresses cannot install or receive notifications; the settings row says so.
+Behind an auth proxy such as Cloudflare Access the page requests its manifest
+with credentials, so the proxy's session cookie lets it through; without that
+the manifest gets the login redirect and Android only creates a Chrome
+shortcut (Chrome's icon in the app switcher, no Settings → Apps entry).
 
 Settings → **Notifications** → **Turn on** subscribes this device. From then
 on each host pushes when one of its live sessions:
