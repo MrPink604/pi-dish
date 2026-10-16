@@ -1,6 +1,4 @@
 # Exact generated outputs enforced by scripts/check-source-policy.mjs.
-electron/main.d.ts linguist-generated=true
-electron/main.js linguist-generated=true
 extensions/pi-dish-share-omp.d.mts linguist-generated=true
 extensions/pi-dish-share-omp.mjs linguist-generated=true
 lib/access-handlers.d.ts linguist-generated=true

@@ -19,7 +19,7 @@ if (!config || typeof config !== 'object' || !('files' in config) || !Array.isAr
     throw new Error('Edge config must contain a files array.');
 }
 const sources = config.files;
-const roots = ['skills', 'electron', 'extensions'];
+const roots = ['skills', 'extensions'];
 const banner = '// Generated edge from ';
 const outputs = new Map();
 for (const source of sources) {

@@ -187,15 +187,14 @@ projection is 9.5 KB versus 13.9 KB (32% smaller).
 
 KaTeX's checked-in font directory was 1.08 MB, of which 260 KB was WOFF2.
 The vendor build now removes stale outputs and copies WOFF2 only. Chrome 108+
-and Electron are the supported browser floor, so the 816 KB of WOFF/TTF
-fallbacks increased build/package I/O without serving a client.
+is the supported browser floor, so the 816 KB of WOFF/TTF
+fallbacks increased build I/O without serving a client.
 
 Mermaid and xterm are build inputs only: the running server serves their
 checked-in vendor files and never imports their npm packages. They now live in
-`devDependencies`, and Electron packaging relies on electron-builder's
-production-dependency collection instead of an explicit `node_modules/**/*`
-glob. The three direct package directories occupy 94.6 MB in a development
-install; they are absent from the production dependency graph and the built
-desktop archive, which keeps only their vendored browser outputs.
+`devDependencies`, keeping them out of the production dependency graph instead of
+relying on an explicit `node_modules/**/*` copy. The three direct package
+directories occupy 94.6 MB in a development install; only their vendored browser
+outputs are served.
 Server-rendered file pages still import marked,
 highlight.js, and KaTeX, so those remain production dependencies.

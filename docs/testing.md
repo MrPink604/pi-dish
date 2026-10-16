@@ -19,8 +19,8 @@ pull requests, and manual dispatch. All jobs use Ubuntu 24.04 x64 and `npm ci`.
 | OMP 18.5.0 | Opt-in real CLI canary, including fast-mode on/off provider payloads, verified locally on 2026-10-04 |
 | Prime Agent 0.9.4 | Opt-in real CLI canary, including owned-root close/resume and idle/busy same-pane restart, verified locally on 2026-09-10; see [prime-agent.md](prime-agent.md) |
 
-Linux is the automated baseline. Other operating systems and Electron packaging
-are outside this matrix. Node's `>=22.19.0` engine declaration does not imply
+Linux is the automated baseline. Other operating systems are outside this
+matrix. Node's `>=22.19.0` engine declaration does not imply
 that every intervening or future major has been tested. Native `node-pty`
 installation requires a compiler and Python; terminal/lifecycle tests require
 tmux and zsh. Install Bun on PATH before running the full backend suite.

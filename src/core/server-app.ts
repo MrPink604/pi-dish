@@ -2517,7 +2517,7 @@ export function startServer(rootDirectory: string): Server {
   const terminalUpgrade = terminalHandlers?.upgrade;
 
   // The restricted listener is not a full-app listener: no API or WS dispatch,
-  // and never a source of Electron readiness.
+  // and never a source of application readiness.
   let shareServer: Server | null = null;
   if (process.env.PI_DISH_SHARE_PORT) {
     const shareApp = express();
@@ -2528,7 +2528,7 @@ export function startServer(rootDirectory: string): Server {
     shareApp.get('/vendor/hljs-theme.min.css', publicationHandlers.highlightStyles);
     shareApp.use((req: ApplicationRequest, res: ApplicationResponse) => res.status(404).type('text/plain').send('Not found'));
     shareServer = createServer(shareApp);
-    // Observe without consuming the error: native Node/Electron ownership stays.
+    // Observe without consuming the error: native Node ownership stays.
     const shareEvents: EventEmitter = shareServer;
     shareEvents.on(errorMonitor, reportFailure);
   }
@@ -2579,7 +2579,7 @@ export function startServer(rootDirectory: string): Server {
   }
 
   function reportFailure(error: Error) {
-    // A share error can leave Electron alive; it must not suppress a later bind.
+    // A share error can leave the process alive; it must not suppress a later bind.
     const count = startup.observers.length;
     for (let i = 0; i < count; i++) startup.observers[i].failed(error);
   }

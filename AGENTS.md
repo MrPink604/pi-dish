@@ -57,7 +57,7 @@ npm run check                         # correctness lint + incremental types
 npm run build:tools                   # regenerate checked build/tool entrypoints
 npm run build:core                    # regenerate lib/ after changing src/core/
 npm run build:browser                 # regenerate first-party browser scripts
-npm run build:edges                   # regenerate skill CLI and Electron outputs
+npm run build:edges                   # regenerate skill CLI and share hook outputs
 npm test                              # unit, API, bridge and lifecycle suites
 npm test -- test/remote-hosts.test.js   # example focused suite
 npm run test:browser                   # isolated browser scenarios

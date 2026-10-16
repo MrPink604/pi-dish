@@ -21,8 +21,7 @@
     "scripts",
     "test",
     "extensions",
-    "skills",
-    "electron"
+    "skills"
   ],
   "files": [
     "scripts/build-tools.ts",
@@ -235,7 +234,6 @@
     "skills/pi-dish-sessions/scripts/pi-dish-sessions.ts",
     "skills/pi-dish-comments/scripts/pi-dish-comments.ts",
     "skills/pi-dish-pages/scripts/pi-dish-pages.ts",
-    "electron/main.ts",
     "extensions/pi-dish-share-omp.mts",
     "extensions/mood.ts",
     "extensions/pi-dish-bridge/core.ts",
@@ -309,7 +307,7 @@
         "outputRoot": "lib",
         "builder": "scripts/build-core.ts",
         "checkCommand": "npm run build:core -- --check",
-        "consumer": "server.js, backend tests, Electron and installed runtime modules require the checked-in CommonJS lib entrypoints"
+        "consumer": "server.js, backend tests and installed runtime modules require the checked-in CommonJS lib entrypoints"
       },
       {
         "name": "tools",
@@ -344,7 +342,7 @@
         "declarationPrograms": ["tsconfig.edges.json"],
         "builder": "scripts/build-edges.ts",
         "checkCommand": "npm run build:edges -- --check",
-        "consumer": "Electron, installed skill CLIs and the OMP share hook load their existing checked-in runtime entrypoints"
+        "consumer": "Installed skill CLIs and the OMP share hook load their existing checked-in runtime entrypoints"
       },
       {
         "name": "browser",

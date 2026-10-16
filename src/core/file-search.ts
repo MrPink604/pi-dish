@@ -25,7 +25,6 @@ import type { FileFinder, FileItem } from '@ff-labs/fff-node' with { 'resolution
 import type * as FffSdk from '@ff-labs/fff-node' with { 'resolution-mode': 'import' };
 import { fuzzyMatch, fuzzyScore } from './helper-query.js';
 import { record } from './helper-values';
-import { fffImportSpecifier } from './runtime-resources';
 
 export interface FileSearchResult {
   path: string;
@@ -81,7 +80,7 @@ let fffModulePromise: Promise<FffModule | null> | null = null;
 function loadFff(): Promise<FffModule | null> {
   if (!fffModulePromise) {
     fffModulePromise = (async (): Promise<FffModule> =>
-      import(fffImportSpecifier(path.resolve(__dirname, '..'))))().catch((e: unknown) => {
+      import('@ff-labs/fff-node'))().catch((e: unknown) => {
       console.warn('fff unavailable, falling back to walker:', record(e) ? e.message : undefined);
       return null;
     });

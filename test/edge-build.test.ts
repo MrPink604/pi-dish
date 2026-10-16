@@ -11,7 +11,7 @@ import { sanitizeTestEnv } from './test-env';
 test('edge delivery preserves executable CJS and ESM, rejects drift and leaves outputs intact on failure', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-edge-build-'));
   try {
-    for (const dir of ['scripts', 'skills/scripts', 'electron', 'extensions']) fs.mkdirSync(path.join(root, dir), { recursive: true });
+    for (const dir of ['scripts', 'skills/scripts', 'extensions']) fs.mkdirSync(path.join(root, dir), { recursive: true });
     fs.copyFileSync(path.join(__dirname, '../scripts/build-edges.js'), path.join(root, 'scripts/build-edges.js'));
     const config: unknown = JSON.parse(fs.readFileSync(path.join(__dirname, '../tsconfig.edges.json'), 'utf8'));
     assert.ok(typeof config === 'object' && config !== null && 'files' in config);
@@ -55,10 +55,10 @@ test('edge delivery preserves executable CJS and ESM, rejects drift and leaves o
     assert.equal(run().status, 1);
     assert.deepEqual(outputs.map(file => fs.readFileSync(path.join(root, file), 'utf8')), before);
     fs.writeFileSync(cliSource, '#!/usr/bin/env node\nexport const value: number = 42;\nconsole.log(value);\n');
-    const authored = path.join(root, 'electron/authored.js');
+    const authored = path.join(root, 'extensions/authored.js');
     fs.writeFileSync(authored, 'module.exports = 7;\n');
-    const orphan = path.join(root, 'electron/obsolete.js');
-    fs.writeFileSync(orphan, '// Generated edge from electron/obsolete.ts; edit that source and run npm run build:edges.\n');
+    const orphan = path.join(root, 'extensions/obsolete.js');
+    fs.writeFileSync(orphan, '// Generated edge from extensions/obsolete.ts; edit that source and run npm run build:edges.\n');
     for (const args of [[], ['--check']]) {
       assert.equal(run(...args).status, 1);
       assert.deepEqual(outputs.map(file => fs.readFileSync(path.join(root, file), 'utf8')), before);
@@ -74,7 +74,7 @@ test('edge delivery preserves executable CJS and ESM, rejects drift and leaves o
 test('skill client bundle resolves aliases after installation without the source tree', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-edge-client-'));
   try {
-    for (const dir of ['scripts', 'skills/lib', 'electron', 'extensions', 'src/core']) {
+    for (const dir of ['scripts', 'skills/lib', 'extensions', 'src/core']) {
       fs.mkdirSync(path.join(root, dir), { recursive: true });
     }
     for (const file of ['scripts/build-edges.js', 'skills/lib/pi-dish-client.ts']) {

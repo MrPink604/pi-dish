@@ -16,7 +16,6 @@
     "skills/pi-dish-sessions/scripts/pi-dish-sessions.ts",
     "skills/pi-dish-comments/scripts/pi-dish-comments.ts",
     "skills/pi-dish-pages/scripts/pi-dish-pages.ts",
-    "electron/main.ts",
     "extensions/pi-dish-share-omp.mts"
   ]
 }

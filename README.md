@@ -156,13 +156,10 @@ Rules of thumb:
   `xterm`, and a symbols-only Nerd Font (terminal prompt glyphs) are
   vendored, so it works on LAN clients with no internet.
 
-There's also an Electron shell (`npm run electron:dev`) if you want it as a
-desktop app for some reason.
-Its entrypoint is authored in `electron/main.ts`; run `npm run build:edges`
-after changing it or the skill CLI sources. Runtime JavaScript is checked in,
-so ordinary installs and installed skill symlinks do not need a TypeScript loader.
-Packaging uses an explicit runtime manifest and real unpacked paths for external
-harnesses and native dependencies. See the [runtime build guide](docs/typescript.md#native-extensions-skill-clis-and-electron).
+The skill CLI sources under `skills/` are authored in TypeScript; run
+`npm run build:edges` after changing them. Runtime JavaScript is checked in,
+so ordinary installs and installed skill symlinks do not need a TypeScript
+loader. See the [runtime build guide](docs/typescript.md#native-extensions-and-skill-clis).
 
 
 ## Requirements
@@ -888,7 +885,6 @@ npm run test:browser  # isolated browser scenarios (Playwright)
 npm run test:ui:scenarios # feature scenarios, each with fresh fixtures
 npm run test:ui       # full desktop/mobile integration smoke
 npm run build:vendor  # regenerate public/vendor/ after bumping marked/highlight.js
-npm run electron:dev  # desktop shell
 ```
 
 Shared identity, harness, transport and lifecycle implementations are authored in
@@ -908,8 +904,8 @@ repository-wide test/tooling closure; planned packages are not implemented featu
 Run `npm run build:browser` after browser source changes and commit all generated
 scripts: `public/app.js`, `public/browser.js`, `public/helpers.js`,
 `public/artifact-comments.js` and `public/theme-prepaint.js`. `npm run check`
-verifies strict types and byte-for-byte output consistency. Normal startup and
-Electron packaging use the committed scripts directly.
+verifies strict types and byte-for-byte output consistency. Normal startup uses
+the committed scripts directly.
 
 Build-tool implementations are authored as sibling TypeScript in `scripts/`;
 their checked-in `.js`/`.mjs` outputs retain the existing direct command paths.

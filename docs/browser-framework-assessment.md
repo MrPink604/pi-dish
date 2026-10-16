@@ -46,9 +46,9 @@ not the current distribution of controller code. Use the roadmap and
 - `stashCurrentTranscript`/`restoreCachedTranscript` and the streaming renderer
   preserve DOM nodes, open details, pagination and scroll state. They should
   retain sole ownership of transcript DOM during any pilot.
-- `public/index.html` uses local plain scripts; `scripts/build-vendor.js` emits
-  local vendor assets. Direct server startup and Electron package `public/`.
-  A pilot must account for these delivery paths explicitly.
+  `public/index.html` uses local plain scripts; `scripts/build-vendor.js` emits
+  local vendor assets. Direct server startup serves `public/` as-is. A pilot must
+  account for these delivery paths explicitly.
 
 These are architectural observations, not performance measurements.
 
@@ -102,7 +102,7 @@ that a future component version can implement unchanged:
 Use local assets, without a whole-app router, global reactive-store replacement,
 CDN, or production JSX transform. Choose and document the pilot's local module
 or bundle delivery before implementation. Preserve the current server startup
-and packaged Electron asset paths. There must be one rendering implementation
+and asset delivery paths. There must be one rendering implementation
 per root, with a simple revert removing the pilot and its dependency assets.
 
 ## Evidence needed before adoption
@@ -118,7 +118,7 @@ Record the production asset byte delta, cold and warm dropdown-open timings,
 filter input responsiveness with the same catalog, and cleanup after repeated
 open/close and session switches. Compare repeated runs on the same browser and
 hardware, reporting the baseline and variability before choosing tolerances.
-Check startup and Electron asset delivery and verify all requests stay local.
+Check startup and asset delivery and verify all requests stay local.
 
 Review source and adapter complexity together: count removed manual DOM/event
 handling, new state/effect code, duplicated state, and tooling changes. A shorter

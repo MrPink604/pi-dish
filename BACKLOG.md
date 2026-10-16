@@ -24,7 +24,7 @@ source resolution, indexed metadata, catalog composition and browser state throu
 checked contracts. The [implementation record](docs/session-catalog-migration.md)
 records verification and both Fable review clearances. **Browser composition
 cleanup is implemented, locally verified and externally reviewed** in its
-[stage record](docs/browser-composition-cleanup.md). Vanilla DOM rendering, local assets and existing server/Electron
+[stage record](docs/browser-composition-cleanup.md). Vanilla DOM rendering, local assets and existing server
 delivery remain supported.
 
 Browser work was divided into 43 checkpoints. See
@@ -92,7 +92,7 @@ controller/port observations.
 | Shared runtime helpers | Implemented, locally verified and reviewed | Actual portable core source serves browser and Node consumers; 121 compatibility exports remain. Strict checks, 984 backend tests, 286 browser cases and UI suites passed. Fable approved `1cbd826` without blocking findings. |
 | Session lifecycle | Implemented, locally verified and reviewed | Actual ownership/launch/operation/recovery/Bounce owners replace JS policy closures. Strict checks, 996 backend tests, 286 browser cases, UI suites and real Pi/OMP/Prime paths passed. Fable approved `8e89e99` without blockers; its pruning observation was fixed with a regression. |
 | Server application and feature modules | M1–M5 and M7 accepted | Actual implementations and composition are checked; the policy-free root preserves the synchronous native server export. |
-| Harness extensions and Electron shell | M6 and R7 accepted on Linux x64 | Strict edge programs, installed CLIs and real development/packaged Electron passed. R7's same-source trio, integrated gates, native readiness/failure proofs and all five exact pushed-main CI jobs passed on `a441edab`. macOS delivery is unverified. |
+| Harness extensions | M6 and R7 accepted on Linux x64; Electron shell later removed | Strict edge programs, installed CLIs and real development/packaged Electron passed. R7's same-source trio, integrated gates, native readiness/failure proofs and all five exact pushed-main CI jobs passed on `a441edab`. macOS delivery is unverified. The desktop Electron shell was removed on 2026-10-16; the skill CLIs and OMP share hook remain the supported edge outputs. |
 | Repository source and delivery closure | C1 and C2 accepted and delivered | C1 passed all five jobs and 11 required steps on exact main `f0b7721`. C2 accounts for all 928 existing JS/JSX/MJS/CJS/TS/TSX/MTS/CTS paths, 177 declarations and five named shell paths; declared/discovered shell sets, Git index modes and non-following worktree kind/presence/modes are enforced. Its four reports retain accepted R evidence and separate local proof from parent-owned final delivery. The frozen shell-kind candidate was accepted by `zai/glm-5.3` and `opencode-go/deepseek-v4.1-flash` (both high thinking, OMP), integrated on exact main `1dc8bf8` and passed [all five jobs and 11 required steps](https://github.com/MrPink604/pi-dish/actions/runs/35414102192). |
 | Architecture simplification | S1–S8 implemented and reviewed | Shared comment algorithms, usage math, tree topology, formatting, emulation facts and model API replace competing implementations. HTTP delivery and search/usage identity reuse passed their bounded extraction gates; editor/cache/lifecycle owners remain separate. See the [execution record](docs/architecture-simplification-implementation.md) for acceptance evidence and the blocked real OMP/Prime canary. |
 | UI framework adoption | Deferred | Vanilla TypeScript and ordinary DOM rendering remain the chosen approach. Preact/Svelte adoption is not a scheduled migration stage. |
@@ -103,7 +103,7 @@ its bounded read path, and browser composition cleanup is delivered. Browser
 contract cleanup is verified and reviewed; its pushed approval checkpoint passed CI.
 Shared helpers and lifecycle implementation are verified and approved by Fable.
 Exact delivery checkpoints and CI are tracked in their stage records. Extension
-checking, Electron and remaining backend boundaries retain separate scopes.
+checking and remaining backend boundaries retain separate scopes.
 
 ## What is already in TypeScript
 

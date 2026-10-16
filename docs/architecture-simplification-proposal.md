@@ -54,7 +54,7 @@ Performance improvement is not presumed; existing hot-path costs must not increa
 | `src/core/helper-*.ts` | Core output and bundled portable browser/CLI imports | Shared pure runtime logic; existing compatibility exports remain stable. |
 | `src/browser/` | Five generated scripts under `public/` | Browser composition, state, controllers and rendering. |
 | `extensions/pi-dish-bridge/core.ts` plus Pi/OMP/Prime adapters | Loaded by the host harness | Registry/socket lifecycle, host command/event adaptation, replay state. |
-| `skills/` and `electron/main.ts` | Sibling generated outputs via `build:edges` | HTTP clients and a shell loading the same server/UI. |
+| `skills/` | Sibling generated outputs via `build:edges` | HTTP clients for agent sessions. |
 | `scripts/`, compiler configs, `test/` | Checked build/test runtime boundaries | Source policy, generation, packaging and isolated verification. |
 
 At the inspected baseline, `src/core/` contains 86 source modules and
@@ -73,7 +73,6 @@ application implementations loaded beside `app.js`. See
 flowchart TB
     Browser["Browser / phone<br/>src/browser/app.ts + controllers"]
     CLI["Agent skill CLIs<br/>skills/*/scripts"]
-    Electron["Electron<br/>starts server and loads same UI"]
     subgraph Host["One pi-dish host"]
         App["server.js → lib/server-app.js<br/>routing, auth, composition"]
         Read["Read side<br/>discovery / source / files / index / catalog"]
@@ -94,7 +93,6 @@ flowchart TB
     Peer["Peer pi-dish host<br/>same architecture"]
     Browser --> App
     CLI --> App
-    Electron --> App
     App --> Read
     App --> Commands
     App --> Ops
@@ -123,7 +121,7 @@ flowchart TB
 ```
 
 The browser aggregates the fleet. A relay supplies reachability, not a hub-owned
-merged session database. Electron does not introduce a second backend.
+merged session database.
 
 ### 2.3 Primary hot paths
 

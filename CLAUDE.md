@@ -5,9 +5,9 @@ Contributor entrypoint: [AGENTS.md](AGENTS.md). Current work order:
 implementation notes; historical task plans may describe superseded behavior.
 
 Web/phone remote control for pi coding-agent sessions. Checked Express composition
-(`src/core/server-app.ts`, launched by `server.js`)
-+ vanilla TypeScript frontend (`src/browser/`, generated scripts in `public/`), plus an Electron shell (`electron/`) that loads
-the same server. Sessions are discovered three ways: live sessions via the
+(`src/core/server-app.ts`, launched by `server.js`) plus a vanilla TypeScript
+frontend (`src/browser/`, generated scripts in `public/`). Sessions are discovered
+three ways: live sessions via the
 pi-dish-bridge extension registry (`~/.pi/dish/sessions/*.json`, one Unix socket
 per session), historical sessions by scanning the harness session stores
 (`~/.pi/agent/sessions/`, `~/.omp/agent/sessions/`, …), and the subagents
@@ -25,7 +25,7 @@ npm run test:ui    # full desktop/mobile browser smoke
 npm run build:tools # regenerate checked scripts/*.ts and *.mts runtime outputs
 npm run build:core  # regenerate checked server CommonJS/declarations in lib/
 npm run build:browser # regenerate all first-party browser scripts in public/
-npm run build:edges   # regenerate skill CLIs, Electron and the OMP ESM share hook
+npm run build:edges   # regenerate skill CLIs and the OMP ESM share hook
 npm run build:vendor  # regenerate public/vendor/ from node_modules
 ```
 
@@ -37,7 +37,7 @@ npm run build:vendor  # regenerate public/vendor/ from node_modules
 plus declarations for typed consumers; the generated banner identifies these
 files. Edit the sources and run `npm run build:core`. `npm run check` compiles
 into a temporary directory and rejects mismatched or orphaned generated output.
-Node, Electron and harness consumers continue to execute the checked-in JS;
+Node and harness consumers continue to execute the checked-in JS;
 do not run these sources directly, since runtime-relative paths belong to `lib/`.
 
 `src/core/server-app.ts` owns application composition, session controls, SSE and
@@ -46,8 +46,8 @@ explicitly; assets, docs and package metadata must not resolve relative to `lib/
 The strict-checkJs launcher is only
 `module.exports = require('./lib/server-app').startServer(__dirname);`.
 It exports the actual initial native `http.Server` synchronously. Construction
-registers upgrade handling and closeable resources before binding. Electron
-requires that same cached root export, then observes `observeServerStartup`;
+registers upgrade handling and closeable resources before binding. Callers
+observe that same cached root export through `observeServerStartup`;
 navigation uses the first ready owned main or alias listener's actual address,
 including ephemeral ports and retry replacements, never an advertised share URL.
 Native close, signal and error policies remain distinct from readiness notification.
@@ -102,13 +102,11 @@ The remaining root policy is now checked in `server-app.ts`; coverage/store simp
 Native extension `.ts` files are checked without emission by
 `tsconfig.extensions.json`; use real SDK/TUI/TypeBox types and unknown host-only
 imports with guards. `tsconfig.edges.json` emits sibling CommonJS/declarations
-for skills/Electron and ESM for the `.mts` share hook. `build:edges --check`
+for the skill CLIs and ESM for the `.mts` share hook. `build:edges --check`
 is part of `npm run check`; generated CLI modes and first-line shebangs matter.
-`src/core/runtime-resources.ts` owns shipped external resource paths and the
-physical metadata-selected FFF import. Package metadata alone changes main to
-`electron/main.js`; root `server.js` still exports the actual initial HTTP server.
-Keep docs/assets/SDK archive paths separate from external harness/skill paths,
-and unpack the complete FFF native dependency closure, not just binary files.
+`src/core/runtime-resources.ts` resolves shipped external resource paths against
+the installed application root. Root `server.js` exports the actual initial HTTP
+server. Keep docs/assets/SDK paths separate from external harness/skill paths.
 
 ## Committing
 
@@ -147,8 +145,8 @@ only when the markdown tokenizer encounters math, never as a session-selection
 barrier. Escaped TeX placeholders paint immediately and hydrate after the
 assets arrive, including inside retained transcript fragments. Math-free
 transcripts fetch no KaTeX assets. The vendor build retains only KaTeX's WOFF2
-fonts — supported clients are modern Chrome/Electron, and shipping the WOFF/TTF
-fallbacks triples packaged font bytes without changing what they request. Note
+fonts — supported clients are modern Chrome, and shipping the WOFF/TTF
+fallbacks triples the vendored font bytes without changing what they request. Note
 marked v12 removed the
 `highlight` option — code blocks are highlighted post-render via
 `applyHighlight()` (final renders only, never during streaming). The
@@ -192,10 +190,9 @@ likely because of a navigation" with no navigation) while the app's own chain
 completed fine. Keep the task boundary.
 
 `mermaid` and the xterm packages are build-time inputs in `devDependencies`;
-the running server uses their checked-in `public/vendor` outputs. Electron
-Builder already collects the production dependency graph, so do not restore a
-blanket `node_modules/**/*` entry to `build.files` — it repackages these large
-browser-only source trees beside their bundles.
+the running server uses their checked-in `public/vendor` outputs. They are absent
+from the production dependency graph, so the large browser-only source trees are
+not shipped beside their bundles.
 
 PlantUML (`@startuml`) is *not* rendered: it needs a PlantUML server or the
 Java jar, i.e. a network dependency or a 12MB runtime, which the offline-LAN

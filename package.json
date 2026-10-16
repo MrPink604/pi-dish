@@ -15,9 +15,6 @@
     "build:vendor": "node scripts/build-vendor.js",
     "build:core": "node scripts/build-core.js",
     "build:edges": "node scripts/build-edges.js",
-    "electron:dev": "electron electron/main.js",
-    "electron:build": "electron-builder",
-    "postinstall": "electron-builder install-app-deps",
     "test:ui": "node test/ui-smoke.js",
     "shots": "node scripts/readme-shots.js",
     "test:browser": "playwright test",
@@ -31,79 +28,7 @@
     "build:tools": "node scripts/build-tools.js",
     "build:tests": "node scripts/build-tests.js"
   },
-  "build": {
-    "appId": "com.pidish.app",
-    "productName": "pi-dish",
-    "files": [
-      "server.js",
-      "lib/*.js",
-      "public/**/*",
-      "electron/main.js",
-      "extensions/pi-dish-bridge/package.json",
-      "extensions/pi-dish-bridge/core.ts",
-      "extensions/pi-dish-bridge/index.ts",
-      "extensions/pi-dish-bridge/login.ts",
-      "extensions/pi-dish-bridge/pi-login.ts",
-      "extensions/pi-dish-bridge/pi-private.ts",
-      "extensions/pi-dish-bridge-omp/index.ts",
-      "extensions/pi-dish-bridge-omp/login.ts",
-      "extensions/pi-dish-bridge-omp/native-state.ts",
-      "extensions/pi-dish-bridge-prime/index.ts",
-      "extensions/mood.ts",
-      "extensions/pi-dish-share-omp.mjs",
-      "skills/lib/pi-dish-client.js",
-      "skills/pi-dish-sessions/scripts/pi-dish-sessions.js",
-      "skills/pi-dish-comments/scripts/pi-dish-comments.js",
-      "skills/pi-dish-pages/scripts/pi-dish-pages.js",
-      "skills/*/SKILL.md",
-      "skills/*/agents/**/*",
-      "skills/*/references/**/*",
-      "docs/agent/*.md",
-      "!src/**/*",
-      "!test/**/*",
-      "!scripts/**/*",
-      "!tsconfig*.json",
-      "!source-policy.json",
-      "!eslint.config.js",
-      "!playwright.config.ts",
-      "!skills/**/*.ts",
-      "!electron/**/*.ts",
-      "!extensions/pi-dish-share-omp.mts",
-      "!**/*.d.ts",
-      "!**/*.d.mts",
-      "!**/*.map"
-    ],
-    "extraMetadata": {
-      "main": "electron/main.js"
-    },
-    "asar": true,
-    "asarUnpack": [
-      "lib/*.js",
-      "extensions/**/*",
-      "skills/**/*",
-      "node_modules/@ff-labs/fff-node/**/*",
-      "node_modules/@ff-labs/fff-bin-*/**/*",
-      "node_modules/ffi-rs/**/*",
-      "node_modules/@yuuang/ffi-rs-*/**/*",
-      "**/*.node",
-      "**/*.so"
-    ],
-    "directories": {
-      "output": "dist"
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "category": "Development"
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.developer-tools"
-    }
-  },
+
   "author": {
     "name": "MrPink604",
     "email": "pi-dish@localhost"
@@ -133,8 +58,6 @@
     "@xmldom/xmldom": "0.8.15",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "electron": "44.4.1",
-    "electron-builder": "26.15.3",
     "esbuild": "0.28.1",
     "eslint": "10.10.0",
     "espree": "11.2.0",
