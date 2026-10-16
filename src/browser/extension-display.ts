@@ -12,7 +12,8 @@ export function createExtensionDisplay(options: { document: Document; sessionSta
   const cancel = (timer: Timer | null) => { if (timer !== null) clearTimeout(timer); };
   const current = (owner: SelectionOwner | null) => !disposed && sessionState.ownsSelection(owner);
   function later(callback: () => void, delay: number) { const timer = setTimeout(() => { toastTimers.delete(timer); if (!disposed) callback(); }, delay); toastTimers.add(timer); return timer; }
-  function toast(message: string, type: 'info' | 'warning' | 'error') {
+  /** `open` makes the toast body a button; activating it dismisses the toast first. */
+  function toast(message: string, type: 'info' | 'warning' | 'error', open?: () => void) {
     if (disposed) return;
     let root = document.getElementById('extUiToasts');
     if (!root) { root = document.createElement('div'); root.id = 'extUiToasts'; root.className = 'ext-ui-toasts'; document.body.append(root); }
@@ -23,6 +24,12 @@ export function createExtensionDisplay(options: { document: Document; sessionSta
     let hiding = false;
     const hide = () => { if (disposed || hiding || !toasts.has(node)) return; hiding = true; node.classList.add('hiding'); later(() => { node.remove(); toasts.delete(node); }, 200); };
     node.querySelector('button')!.addEventListener('click', hide, { signal: events.signal });
+    if (open) {
+      node.classList.add('actionable'); node.tabIndex = 0; node.setAttribute('role', 'button');
+      const activate = () => { if (disposed || hiding) return; hide(); open(); };
+      node.addEventListener('click', event => { if (!(event.target instanceof Element && event.target.closest('.ext-ui-toast-close'))) activate(); }, { signal: events.signal });
+      node.addEventListener('keydown', event => { if (event.target === node && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); activate(); } }, { signal: events.signal });
+    }
     if (type === 'info') later(hide, 6000);
   }
   function widget(key: string, lines: readonly string[], placement: string) {

@@ -16,7 +16,7 @@ export function createSidebarLists(options: {
   document: Document; request: ApiRequest; sessionState: SessionState; activity: ReturnType<typeof createSidebarActivity>;
   hosts: () => readonly SidebarListHost[]; pollable: () => readonly SidebarListHost[]; selfId: () => string | null;
   query: () => string; all: () => boolean; refreshFleet: () => void; connection: (host: SessionHost, event: HostConnectionEvent) => void;
-  askBlocked?: (session: SessionEntry) => void;
+  askBlocked?: (session: SessionEntry, host: string | null) => void;
 }) {
   const { document, sessionState } = options, api = createSessionApi(options.request);
   let disposed = false, sequence = 0, indexing = false, queriedFor = '';
@@ -68,7 +68,7 @@ export function createSidebarLists(options: {
         const key = `${hostId || ''}\n${row.id}`;
         now.add(key);
         // The selected session already shows the ask dialog itself.
-        if (!askPendingSeen.has(key) && !(selected && selected.id === row.id && (selected.host || null) === hostId)) options.askBlocked?.(row);
+        if (!askPendingSeen.has(key) && !(selected && selected.id === row.id && (selected.host || null) === hostId)) options.askBlocked?.(row, hostId);
       }
     }
     askPendingSeen = now;
