@@ -122,7 +122,12 @@ export function createRichText(options: { document: Document; marked: MarkedRunt
       },
     },
     renderer: {
-      html(html) { return escapeHtml(typeof html === 'string' ? html : record(html) && typeof html.text === 'string' ? html.text : ''); },
+      // Raw HTML stays inert, except a bare inline <br>: GFM table cells cannot
+      // hold newlines, so models break cell lines with it.
+      html(html, block) {
+        const text = typeof html === 'string' ? html : record(html) && typeof html.text === 'string' ? html.text : '';
+        return !block && /^<br\s*\/?>$/i.test(text) ? '<br>' : escapeHtml(text);
+      },
     },
     walkTokens(token) {
       if (token.type === 'link' || token.type === 'image') token.href = sanitizeMarkdownUrl(token.href);

@@ -1601,6 +1601,10 @@ test('file-viewer pages render as standalone read-only documents', async () => {
         '',
         '<script>globalThis.pwned = true</script>',
         '[unsafe](javascript:alert(1))',
+        '',
+        '| fix |',
+        '|---|',
+        '| one<br>two <br onclick=x> |',
     ].join('\n'));
     const published = await post('/api/pages', {
         path: viewedFile,
@@ -1621,6 +1625,7 @@ test('file-viewer pages render as standalone read-only documents', async () => {
     assert.match(html, /class="hljs language-js"/);
     assert.match(html, /&lt;script&gt;globalThis\.pwned = true&lt;\/script&gt;/);
     assert.match(html, /href="#"/);
+    assert.match(html, /<td>one<br>two &lt;br onclick=x&gt;<\/td>/);
     assert.doesNotMatch(html, /artifact-comments|commentBubble|app\.js/, 'the standalone renderer has no app or commenting UI');
     // File-rendered pages are not valid page-comment targets, even through the
     // trusted main API.
