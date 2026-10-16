@@ -1,5 +1,6 @@
 import { createBridge, PUBLIC_EVENT_PROFILE, type BridgeDescriptor } from "../pi-dish-bridge/core.js";
 import { getOmpNativeProjection, subscribeOmpNativeProjection, ompFastModeState, setOmpFastMode, getOmpNativeCaptureStats, getOmpNativeSession, patchOmpAgentSession } from "./native-state.js";
+import { ompLogin, useOmpAuthModule } from "./login.js";
 
 // OMP's own /btw prompt ($bunfs/root/btw-user-*.md, verified 18.1.16). The
 // embedded asset is unreadable from an extension, so the text is mirrored
@@ -36,7 +37,7 @@ export const bridgeDescriptor = {
     models: true, setModel: true, setThinking: true, rename: true, fastMode: true,
     commands: true, reload: false, queueRead: false, queueCancel: false,
     treeRead: true, treeNavigation: true, extensionUI: true, shareSnapshot: true,
-    btw: true,
+    btw: true, login: true,
   },
   // OMP's --thinking vocabulary (omp --help). Models support a subset — OMP
   // clamps — but the bridge must accept every value the harness does.
@@ -47,6 +48,7 @@ export const bridgeDescriptor = {
   compactArgument: (instructions: string) => instructions,
   treeCommandContext: true,
   runBtw: runOmpBtw,
+  login: ompLogin,
   nativeProjection: {
     get: getOmpNativeProjection,
     subscribe: subscribeOmpNativeProjection,
@@ -57,13 +59,15 @@ export const bridgeDescriptor = {
   },
 } satisfies BridgeDescriptor;
 
-// hostAgentSession is the host's AgentSession class, imported by the
-// generated launch wrapper itself (OMP's bare-specifier rewrite only covers
-// the entry file's directory tree, which the repo's native-state module is
-// outside when the entry lives in launch-wrappers/). Discovery loads get the
-// same patch from native-state's own top-level import.
-export function createHarnessBridge(spawnToken?: string, hostAgentSession?: unknown) {
+// hostAgentSession is the host's AgentSession class and hostAuthModule its
+// @oh-my-pi/pi-ai module, both imported by the generated launch wrapper
+// itself (OMP's bare-specifier rewrite only covers the entry file's directory
+// tree, which the repo's modules are outside when the entry lives in
+// launch-wrappers/). Discovery loads get both from the modules' own
+// top-level imports.
+export function createHarnessBridge(spawnToken?: string, hostAgentSession?: unknown, hostAuthModule?: unknown) {
   if (hostAgentSession) patchOmpAgentSession(hostAgentSession);
+  if (hostAuthModule) useOmpAuthModule(hostAuthModule);
   return createBridge({ ...bridgeDescriptor, spawnToken });
 }
 

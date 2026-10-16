@@ -1,7 +1,8 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import { sendJson } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
-import type { ExtensionRequest, ExtensionResponse } from './extension-ui-data';
+import type { ExtensionRequest, ExtensionResponse, ExtensionAuth } from './extension-ui-data';
+import { authCallbackMatches, authUrlState, parseAuthCallback } from './extension-auth';
 import { escapeHtml } from '../core/helper-format';
 import { sessionKey } from './helper-identity';
 import { record } from '../core/helper-values';
@@ -9,7 +10,7 @@ export type ExtensionSession = Readonly<Pick<SelectionOwner, 'id' | 'host'>>;
 interface DialogEntry {
   readonly el: HTMLElement; readonly events: AbortController; readonly endpoint: Readonly<HostEndpoint>;
   owner: SelectionOwner | null; readonly sessionId: string; readonly hostId: string | null; readonly sessionKey: string;
-  readonly requestId: string; minimized: boolean; readonly sig: string;
+  readonly requestId: string; minimized: boolean; readonly sig: string; readonly loginId?: string; readonly authKind?: string;
 }
 export function createExtensionDialogs(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
@@ -18,6 +19,8 @@ export function createExtensionDialogs(options: {
   const { document, sessionState } = options;
   let disposed = false;
   const openExtDialogs = new Map<string, DialogEntry>();
+  // Values already answered per (session, loginId): never re-submit them from the clipboard.
+  const authSubmitted = new Map<string, Set<string>>();
   function extDialogKey(requestId: string, sessionId: string, hostId: string | null) { return JSON.stringify([hostId, sessionId, requestId]); }
   function extDialogSig(req: ExtensionRequest) { return req.method === 'ask' ? 'ask:' + JSON.stringify(req.questions) : `${req.method}:${JSON.stringify([req.title, req.message, req.options, req.placeholder, req.prefill])}`; }
   function matches(entry: DialogEntry) {
@@ -87,6 +90,7 @@ function dismissExtDialog(requestId: string) {
   if (!entry) return;
   entry.events.abort(); entry.el.remove();
   openExtDialogs.delete(requestId);
+  if (entry.loginId) authSubmitted.delete(JSON.stringify([entry.sessionKey, entry.loginId]));
   updateExtDialogDock();
 }
 
@@ -370,6 +374,145 @@ function showExtDialog(req: ExtensionRequest, session: ExtensionSession) {
   if (field) field.focus();
 }
 
+// Remote /login step. A later step with the same loginId replaces this card in
+// place (new request id); answers keep the card in a Submitting state until the
+// bridge supersedes or resolves the step.
+function showExtAuthDialog(req: ExtensionRequest, auth: ExtensionAuth, session: ExtensionSession) {
+  if (!req.id) return;
+  const { id: sessionId, host: hostId } = session;
+  const endpoint = options.host(hostId); if (disposed || !endpoint) return;
+  const dialogKey = extDialogKey(req.id, sessionId, hostId);
+  const previous = openExtDialogs.get(dialogKey); if (previous && previous.endpoint.base !== endpoint.base) dismissExtDialog(dialogKey);
+  const existing = openExtDialogs.get(dialogKey);
+  if (existing) { dockExtDialog(existing); return; }
+  const key = sessionKey(hostId, sessionId);
+  const supersededKey = [...openExtDialogs.keys()].find(id => {
+    const entry = openExtDialogs.get(id)!;
+    return entry.sessionKey === key && entry.loginId === auth.loginId && entry.endpoint.base === endpoint.base;
+  });
+  const superseded = supersededKey ? openExtDialogs.get(supersededKey)! : null;
+  const submittedKey = JSON.stringify([key, auth.loginId]);
+  const submitted = authSubmitted.get(submittedKey) || new Set<string>();
+  authSubmitted.set(submittedKey, submitted);
+  const prompt = auth.prompt, expectedState = auth.url ? authUrlState(auth.url) : null;
+  const canPaste = prompt?.kind === 'code' && typeof navigator.clipboard?.readText === 'function';
+
+  let bodyHtml = '';
+  if (req.message) bodyHtml += `<div class="ext-ui-dialog-message ext-ui-auth-status">${escapeHtml(req.message)}</div>`;
+  if (auth.url) bodyHtml += `<div class="ext-ui-dialog-actions ext-ui-auth-link-row">
+      <a class="ext-ui-dialog-btn primary ext-ui-auth-open" href="${escapeHtml(auth.url)}" target="_blank" rel="noopener noreferrer">Open sign-in page</a>
+      <button class="ext-ui-dialog-btn" data-action="copy-link">Copy link</button>
+    </div>`;
+  if (auth.instructions) bodyHtml += `<div class="ext-ui-auth-instructions">${escapeHtml(auth.instructions)}</div>`;
+  if (auth.userCode) bodyHtml += `<div class="ext-ui-auth-code-row">
+      <code class="ext-ui-auth-user-code">${escapeHtml(auth.userCode)}</code>
+      <button class="ext-ui-dialog-btn" data-action="copy-code">Copy</button>
+    </div>`;
+  if (prompt) {
+    if (prompt.message) bodyHtml += `<div class="ext-ui-auth-prompt">${escapeHtml(prompt.message)}</div>`;
+    if (prompt.kind === 'select') {
+      if (prompt.options.length > 8) bodyHtml += '<input class="ext-ui-dialog-input ext-ui-auth-filter" type="text" placeholder="Filter…">';
+      bodyHtml += '<div class="ext-ui-dialog-options">' + prompt.options.map((opt, i) => `<button class="ext-ui-dialog-option" data-option-index="${i}">
+          <span class="ext-ui-ask-option-label">${escapeHtml(opt.label)}</span>${opt.description ? `<span class="ext-ui-ask-option-description">${escapeHtml(opt.description)}</span>` : ''}
+        </button>`).join('') + '</div>';
+    } else {
+      bodyHtml += `<input class="ext-ui-dialog-input ext-ui-auth-input" type="${prompt.kind === 'secret' ? 'password' : 'text'}" autocomplete="off" placeholder="${escapeHtml(prompt.placeholder)}">
+      <div class="ext-ui-dialog-actions">
+        ${canPaste ? '<button class="ext-ui-dialog-btn" data-action="paste">Paste</button>' : ''}
+        <button class="ext-ui-dialog-btn primary" data-action="submit">Submit</button>
+      </div>`;
+      // Host instructions already explain the paste fallback; otherwise say it here.
+      if (prompt.kind === 'code' && !auth.instructions) bodyHtml += '<div class="ext-ui-auth-hint">Signing in on another device, like your phone? If sign-in ends on a page that won’t load, copy that page’s full address and paste it here.</div>';
+    }
+  } else if (auth.url || auth.userCode) bodyHtml += '<div class="ext-ui-auth-waiting">Waiting for sign-in to finish…</div>';
+  bodyHtml += '<div class="ext-ui-auth-submitting" hidden>Submitting…</div>';
+
+  const title = req.title || 'Log in';
+  const events = new AbortController();
+  const card = buildExtDialogCard(dialogKey, events, {
+    title, bodyHtml, collapsedLabel: `${title} pending — click to continue`,
+    onClose: () => sendExtDialogResponse(dialogKey, { cancelled: true }, card),
+  });
+  card.classList.add('ext-ui-auth-dialog');
+  const input = card.querySelector<HTMLInputElement>('.ext-ui-auth-input');
+  const setSubmitting = (busy: boolean) => {
+    for (const control of card.querySelectorAll<HTMLInputElement | HTMLButtonElement>('.ext-ui-dialog-body input, .ext-ui-dialog-body button')) control.disabled = busy;
+    card.classList.toggle('submitting', busy);
+    card.querySelector<HTMLElement>('.ext-ui-auth-submitting')!.hidden = !busy;
+  };
+  const submit = (value: string) => {
+    const entry = openExtDialogs.get(dialogKey);
+    if (!entry || !currentCard(dialogKey, card) || card.classList.contains('submitting')) return;
+    const host = options.host(entry.hostId); if (!host || host.base !== entry.endpoint.base) return;
+    const owner = entry.owner;
+    submitted.add(value.trim());
+    setSubmitting(true);
+    void sendJson(options.request, Object.freeze({ ...host }), `/api/sessions/${encodeURIComponent(entry.sessionId)}/ui-response`, { requestId: entry.requestId, value })
+      .catch(error => {
+        if (openExtDialogs.get(dialogKey)?.el === card) setSubmitting(false);
+        if (!disposed && sessionState.ownsSelection(owner)) options.status('Dialog response failed: ' + (error instanceof Error ? error.message : String(error)), 'error');
+      });
+  };
+  const copy = (value: string) => {
+    void navigator.clipboard?.writeText(value).then(() => options.toast('Copied', 'info'), () => options.toast('Copy failed', 'warning'));
+  };
+  // Fill from clipboard text; auto-submit only when it provably is this login's redirect.
+  const usePasted = (raw: string, fillUnmatched: boolean) => {
+    const value = raw.trim();
+    if (!input || !value || submitted.has(value) || !currentCard(dialogKey, card) || card.classList.contains('submitting')) return;
+    const matched = authCallbackMatches(parseAuthCallback(value), expectedState);
+    if (!matched && !fillUnmatched) return;
+    input.value = value;
+    if (matched) submit(value);
+  };
+
+  card.querySelectorAll<HTMLButtonElement>('.ext-ui-dialog-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const option = prompt?.options[Number(btn.dataset.optionIndex)];
+      if (option) submit(option.id);
+    }, { signal: events.signal });
+  });
+  card.querySelector<HTMLInputElement>('.ext-ui-auth-filter')?.addEventListener('input', (e) => {
+    const filter = (e.currentTarget as HTMLInputElement).value.trim().toLowerCase();
+    card.querySelectorAll<HTMLButtonElement>('.ext-ui-dialog-option').forEach(btn => { btn.hidden = !!filter && !(btn.textContent || '').toLowerCase().includes(filter); });
+  }, { signal: events.signal });
+  card.querySelectorAll<HTMLButtonElement>('.ext-ui-dialog-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!currentCard(dialogKey, card)) return;
+      const action = btn.dataset.action;
+      if (action === 'copy-link') copy(auth.url);
+      else if (action === 'copy-code') copy(auth.userCode);
+      else if (action === 'submit' && input) submit(input.value);
+      else if (action === 'paste') void navigator.clipboard.readText().then(text => usePasted(text, true), () => options.toast('Clipboard unavailable', 'warning'));
+    }, { signal: events.signal });
+  });
+  input?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); submit(input.value); } }, { signal: events.signal });
+  if (prompt?.kind === 'code') {
+    const view = document.defaultView;
+    const autoRead = () => {
+      if (document.visibilityState !== 'visible' || !currentCard(dialogKey, card) || !view?.navigator.permissions || !navigator.clipboard?.readText) return;
+      void view.navigator.permissions.query({ name: 'clipboard-read' as PermissionName })
+        .then(status => status.state === 'granted' ? navigator.clipboard.readText().then(text => usePasted(text, false)) : undefined)
+        .catch(() => undefined);
+    };
+    document.addEventListener('visibilitychange', autoRead, { signal: events.signal });
+    view?.addEventListener('focus', autoRead, { signal: events.signal });
+  }
+
+  const entry: DialogEntry = { el: card, events, endpoint: Object.freeze({ ...endpoint }), owner: sessionState.captureSelection(), sessionId, hostId, sessionKey: key,
+    requestId: req.id, minimized: superseded?.minimized ?? false, sig: 'auth:' + req.id, loginId: auth.loginId, authKind: prompt?.kind || '' };
+  let focus = !superseded;
+  if (superseded && supersededKey) {
+    const oldInput = superseded.el.querySelector<HTMLInputElement>('.ext-ui-auth-input');
+    if (input && oldInput && superseded.authKind === entry.authKind) { input.value = oldInput.value; focus = superseded.el.contains(document.activeElement); }
+    if (superseded.el.isConnected) { superseded.el.replaceWith(card); entry.owner = superseded.owner; }
+    superseded.events.abort(); openExtDialogs.delete(supersededKey);
+  }
+  openExtDialogs.set(dialogKey, entry);
+  dockExtDialog(entry);
+  if (focus && !entry.minimized && card.isConnected) card.querySelector<HTMLElement>('.ext-ui-dialog-input, .ext-ui-dialog-option')?.focus();
+}
+
 
   function removeSession(session: ExtensionSession) {
     const key = sessionKey(session.host, session.id);
@@ -378,7 +521,9 @@ function showExtDialog(req: ExtensionRequest, session: ExtensionSession) {
   return {
     show(request: ExtensionRequest, session: ExtensionSession) {
       if (disposed) return;
-      if (request.method === 'ask') showExtAskDialog(request, session); else showExtDialog(request, session);
+      if (request.method === 'ask') showExtAskDialog(request, session);
+      else if (request.method === 'auth') { if (request.auth) showExtAuthDialog(request, request.auth, session); }
+      else showExtDialog(request, session);
     },
     detach() { for (const entry of openExtDialogs.values()) { entry.el.remove(); entry.owner = null; } updateExtDialogDock(); },
     resolved(id: unknown, session: ExtensionSession) { if (typeof id === 'string') dismissExtDialog(extDialogKey(id, session.id, session.host)); },

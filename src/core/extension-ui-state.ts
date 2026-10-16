@@ -1,7 +1,9 @@
 import type { ExtensionUIState } from './contracts';
 import type { ProtocolRecord } from './wire-protocol';
 
-const DIALOG_METHODS: Record<string, true> = { select: true, confirm: true, input: true, editor: true, ask: true };
+// `auth` is the bridge's remote /login flow: one pending step at a time, owned
+// by a live login in the harness rather than by a turn.
+const DIALOG_METHODS: Record<string, true> = { select: true, confirm: true, input: true, editor: true, ask: true, auth: true };
 
 export function createExtensionUIState(): ExtensionUIState {
   return { widgets: new Map(), statuses: new Map(), dialogs: new Map() };

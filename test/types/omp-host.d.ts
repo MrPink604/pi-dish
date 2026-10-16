@@ -4,3 +4,7 @@ declare module "@oh-my-pi/pi-coding-agent" {
   const host: unknown;
   export = host;
 }
+declare module "@oh-my-pi/pi-ai" {
+  const auth: unknown;
+  export = auth;
+}

@@ -268,6 +268,7 @@ Current alternative-harness support is capability-detected:
 | Fast mode (priority service tier) | Supported through the bridge on eligible models; session pricing prefers OMP's tier-adjusted reported cost | Unavailable |
 | Compaction | Supported on live capable bridges | Unavailable |
 | Ephemeral side questions (`/btw`) | Supported on live capable bridges; the answer renders in a dismissible composer panel, never in the transcript | Unavailable |
+| Provider sign-in (`/login`) | Supported on live capable bridges | Unavailable |
 | Tree navigation | Supported live, with a reachable tmux pane for command-context handoff | Unavailable |
 | Harness queue listing/cancellation | Unavailable | Unavailable |
 | Read-only HTML export and sharing | Supported | Unavailable |
@@ -790,12 +791,28 @@ commands; see the alternative-harness section above.
 | Command type | TUI session (bridge) | pi-dish-spawned session (RPC) |
 |---|---|---|
 | `/compact`, `/model`, `/name`, `/thinking`, `/abort` | ✅ emulated via extension API | ✅ mapped to RPC commands |
+| `/login [provider]` | ✅ runs the host's own sign-in flow | ✅ through the bridge the RPC child loads |
 | `/new`, `/export` | ❌ (needs command context) | ✅ |
 | Skills (`/skill:x`) and prompt templates | ✅ expanded by the bridge | ✅ native |
 | Extension commands (`/mood`, `/todos`, …) | ❌ pi extensions can't invoke each other's commands | ✅ native |
 | Other TUI built-ins (`/settings`, `/resume`, …) | ❌ TUI-only | ❌ (`/tree` has a web modal) |
 
 Unknown commands return a clear error instead of being sent to the model.
+
+**Signing in remotely**: `/login` in a live bridge session (Pi or OMP) runs
+the harness's own provider sign-in. pi-dish shows each step in one **Log in**
+card: a provider or method list, an **Open sign-in page** link with **Copy
+link**, any device code, and inputs for API keys or authorization codes. The
+harness stores the credential. If the browser running the sign-in is on the
+harness machine, the provider's `localhost` redirect reaches the harness and
+the card finishes without further input. On a phone, that redirect lands on
+a page that does not load. Copy that page's full address and paste it into
+the card. **Paste** reads the clipboard. When the browser has clipboard
+permission, the card also checks the clipboard each time you return to the
+tab. A pasted redirect whose `state` matches the sign-in link is submitted
+automatically. Pi checks the `state` value and fails on a mismatch; OMP asks
+again. Closing the card cancels the sign-in. A new `/login` replaces any
+sign-in already in progress.
 
 **Dialog caveat**: when a TUI session's dialog is answered from the web, the
 terminal keeps showing the already-resolved dialog until you press Escape —

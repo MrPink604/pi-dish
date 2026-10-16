@@ -72,3 +72,49 @@ async function select(fleet, page, host) {
     await (0, fixtures_js_1.expect)(page.locator('.ext-ui-widget-body')).toHaveText('peer widget');
     await (0, fixtures_js_1.expect)(page.locator('.ext-ui-widget')).not.toHaveClass(/collapsed/);
 });
+function responses(host) {
+    return (host.commands || []).filter(command => command.command === 'extension_ui_response')
+        .map(command => ({ id: command.requestId ?? command.id, value: command.value, cancelled: command.cancelled }));
+}
+(0, fixtures_js_1.test)('auth login steps render links, submit without dismissing, and replace in place by loginId', async ({ page, fleet }) => {
+    await select(fleet, page, fleet.self);
+    const url = 'https://auth.example.com/authorize?client_id=x&state=abc123';
+    fleet.self.emit('extension_ui_request', { method: 'auth', id: 'step-1', loginId: 'login-1', title: 'Log in to Example', message: 'Open the page to continue',
+        url, prompt: { kind: 'code', message: 'Paste the redirect URL', placeholder: 'http://localhost:1455/…' } });
+    const card = page.locator('.ext-ui-auth-dialog');
+    await (0, fixtures_js_1.expect)(card.locator('.ext-ui-dialog-title')).toHaveText('Log in to Example');
+    const link = card.locator('a.ext-ui-auth-open');
+    await (0, fixtures_js_1.expect)(link).toHaveText('Open sign-in page');
+    await (0, fixtures_js_1.expect)(link).toHaveAttribute('href', url);
+    await (0, fixtures_js_1.expect)(link).toHaveAttribute('target', '_blank');
+    await card.locator('.ext-ui-dialog-min').click();
+    await card.locator('.ext-ui-auth-input').evaluate((input) => { input.value = 'http://localhost:1455/cb?code=c1&state=abc123'; });
+    await card.click();
+    await card.locator('.ext-ui-auth-input').press('Enter');
+    await fixtures_js_1.expect.poll(() => responses(fleet.self)).toEqual([{ id: 'step-1', value: 'http://localhost:1455/cb?code=c1&state=abc123', cancelled: undefined }]);
+    await (0, fixtures_js_1.expect)(card).toHaveClass(/submitting/);
+    await (0, fixtures_js_1.expect)(card.locator('.ext-ui-auth-submitting')).toBeVisible();
+    await (0, fixtures_js_1.expect)(card.locator('.ext-ui-auth-input')).toBeDisabled();
+    fleet.self.emit('extension_ui_request', { method: 'auth', id: 'step-2', loginId: 'login-1', title: 'Log in to Example', message: 'Pick a plan',
+        prompt: { kind: 'select', message: 'Which account?', options: [{ id: 'pro', label: 'Pro' }, { id: 'team', label: 'Team', description: 'Org' }] } });
+    fleet.self.emit('extension_ui_resolved', { id: 'step-1', source: 'superseded' });
+    await (0, fixtures_js_1.expect)(card.locator('.ext-ui-dialog-option')).toHaveCount(2);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(card).not.toHaveClass(/submitting/);
+    await card.locator('.ext-ui-dialog-option', { hasText: 'Team' }).click();
+    await fixtures_js_1.expect.poll(() => responses(fleet.self).at(-1)).toEqual({ id: 'step-2', value: 'team', cancelled: undefined });
+    await (0, fixtures_js_1.expect)(card).toHaveClass(/submitting/);
+    fleet.self.emit('extension_ui_resolved', { id: 'step-2', source: 'login' });
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(0);
+});
+(0, fixtures_js_1.test)('auth cancel posts cancelled and non-http urls are not links', async ({ page, fleet }) => {
+    await select(fleet, page, fleet.self);
+    fleet.self.emit('extension_ui_request', { method: 'auth', id: 'step-x', loginId: 'login-x', title: 'Log in', url: 'javascript:alert(1)', userCode: 'ABCD-1234' });
+    const card = page.locator('.ext-ui-auth-dialog');
+    await (0, fixtures_js_1.expect)(card.locator('.ext-ui-auth-user-code')).toHaveText('ABCD-1234');
+    await (0, fixtures_js_1.expect)(card.locator('.ext-ui-auth-waiting')).toBeVisible();
+    await (0, fixtures_js_1.expect)(card.locator('a')).toHaveCount(0);
+    await card.locator('.ext-ui-dialog-close').click();
+    await fixtures_js_1.expect.poll(() => responses(fleet.self)).toEqual([{ id: 'step-x', value: undefined, cancelled: true }]);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(0);
+});

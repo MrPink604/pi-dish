@@ -4124,6 +4124,27 @@ body.sidebar-open {
   color: var(--text-on-accent);
 }
 
+a.ext-ui-dialog-btn { display: inline-block; text-decoration: none; }
+.ext-ui-dialog-btn:disabled { opacity: 0.55; cursor: default; }
+
+.ext-ui-auth-link-row { justify-content: flex-start; flex-wrap: wrap; margin-top: 4px; }
+.ext-ui-auth-instructions,
+.ext-ui-auth-prompt { font-size: 13px; margin-top: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ext-ui-auth-hint,
+.ext-ui-auth-waiting,
+.ext-ui-auth-submitting { font-size: 12px; color: var(--text-muted); margin-top: 8px; }
+.ext-ui-auth-code-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.ext-ui-auth-user-code {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--bg-darker);
+  user-select: all;
+}
+.ext-ui-auth-dialog .ext-ui-dialog-option[hidden] { display: none; }
+
 .ext-ui-dialog-input,
 .ext-ui-dialog-editor {
   width: 100%;

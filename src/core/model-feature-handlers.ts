@@ -24,7 +24,7 @@ const RPC_BUILTIN_COMMANDS = [
 
 const BRIDGE_COMMAND_CAPABILITIES: Readonly<Record<string, BridgeCapability>> = {
   compact: 'compact', tree: 'treeNavigation', model: 'setModel', name: 'rename',
-  thinking: 'setThinking', abort: 'abort', reload: 'reload', btw: 'btw',
+  thinking: 'setThinking', abort: 'abort', reload: 'reload', btw: 'btw', login: 'login',
 };
 
 // Payload fields remain opaque. These accesses intentionally retain native

@@ -33,4 +33,9 @@ export declare const EMULATED_COMMAND_METADATA: {
         readonly name: 'btw';
         readonly description: 'Ask an ephemeral side question using the current session context';
     };
+    readonly login: {
+        readonly name: 'login';
+        readonly description: 'Sign in to a model provider (OAuth or API key)';
+        readonly args: '[provider]';
+    };
 };

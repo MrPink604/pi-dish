@@ -2,6 +2,7 @@
 // upstream Pi's AgentSession implementation at runtime.
 import type { ContextUsage, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PiPrivateOperations } from "./pi-private.js";
+import { createLoginController, type LoginAdapter } from "./login.js";
 import * as cp from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -263,6 +264,7 @@ const EMULATED_BUILTINS: readonly EmulatedBuiltin[] = [
   { command: EMULATED_COMMAND_METADATA.abort, capability: "abort", listing: "runtime", execution: "descriptor" },
   { command: EMULATED_COMMAND_METADATA.reload, listing: "selfPrime", execution: "selfPrime" },
   { command: EMULATED_COMMAND_METADATA.btw, capability: "btw", listing: "runtime", execution: "runtime", requiresBtw: true },
+  { command: EMULATED_COMMAND_METADATA.login, capability: "login", listing: "runtime", execution: "runtime" },
 ];
 
 // Host-specific slash emulations too host-bound for this shared module: the
@@ -377,6 +379,8 @@ export type BridgeDescriptor = {
   // owns the session and a second generic-pi claim shows it twice in pi-dish.
   standDownUnderForeignHost?: boolean;
   runBtw?: BtwRunner;
+  // Remote /login: adapts the host's provider login to `auth` dialog steps.
+  login?: LoginAdapter;
 };
 
 // Identifying the OMP host from inside an extension is subtler than it
@@ -1442,6 +1446,28 @@ export function createBridge(descriptor: BridgeDescriptor) {
     wrapDialog("editor", (title: unknown, prefill?: unknown) => ({ method: "editor", title, prefill }), valueResponse);
   }
 
+  // Remote /login steps are ordinary pending dialogs (replayed, reconciled,
+  // cancelled on shutdown) that the login flow opens and retires itself.
+  const loginController = descriptor.login ? createLoginController({
+    open(req, onResponse) {
+      pendingDialogs.set(req.id, onResponse);
+      dialogRequests.set(req.id, req);
+      writeRegistry();
+      emitExtensionUIRequest(req);
+    },
+    close(id, source) {
+      pendingDialogs.delete(id);
+      dialogRequests.delete(id);
+      writeRegistry();
+      broadcast({ type: "event", event: "extension_ui_resolved", data: { id, source } });
+    },
+    notify(message, type) {
+      // pi-dish started the login, so tell pi-dish directly (OMP 18.11:
+      // notify through the stored session_start context never arrived).
+      emitExtensionUIRequest({ method: "notify", message, notifyType: type });
+    },
+  }, descriptor.login) : null;
+
   // Callers invoke this on every turn/message/model event; skip the disk
   // write when nothing but the timestamp would change (message_end fires per
   // assistant message and usually only moves contextUsage).
@@ -1783,6 +1809,12 @@ export function createBridge(descriptor: BridgeDescriptor) {
       } catch (e: unknown) {
         return { ok: false, error: errorText(e) };
       }
+    }
+    if (name === "login") {
+      if (!loginController || !lastCtx) {
+        return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
+      }
+      return loginController.start(lastCtx, args);
     }
     // --- Emulated built-ins ---
     if (name === "compact") {
@@ -2488,6 +2520,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
       capabilities.shareSnapshot = isHostMethod(ctx.getSystemPrompt)
         && isHostMethod(pi.getActiveTools)
         && isHostMethod(pi.getAllTools);
+    }
+    if (descriptor.capabilities.login) {
+      capabilities.login = !!descriptor.login?.available(ctx);
     }
     commandCtx = null; // any stashed command ctx predates this runner/session
     const manager = ctx.sessionManager;

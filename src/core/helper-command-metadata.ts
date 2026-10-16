@@ -10,4 +10,5 @@ export const EMULATED_COMMAND_METADATA = {
   abort: { name: 'abort', description: 'Abort the current agent operation' },
   reload: { name: 'reload', description: 'Reload extensions, skills, and prompt templates' },
   btw: { name: 'btw', description: 'Ask an ephemeral side question using the current session context' },
+  login: { name: 'login', description: 'Sign in to a model provider (OAuth or API key)', args: '[provider]' },
 } as const;

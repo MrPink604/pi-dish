@@ -185,7 +185,8 @@ After editing `src/browser/`, run `npm run build:browser` before `npm test`;
 | Family pinning, expansion, ancestor lookup, drag ordering | `test/browser/session-families.spec.js` |
 | Composer drafts, attachments, delayed preparation and send | `test/browser/composer-ownership.spec.js` |
 | Queue edit/cancel/send and abort ownership | `test/browser/queue-ownership.spec.js` |
-| Reused extension dialog ids, responses and replay | `test/browser/extension-dialogs.spec.js` |
+| Reused extension dialog ids, responses and replay; remote `/login` cards | `test/browser/extension-dialogs.spec.js` |
+| Remote `/login` for Pi and OMP: provider/method choice, paste, loopback callback, cancel, failure, idle replay | `test/bridge-login.test.js` (requires Bun; skipped without it), `test/rpc-session.test.js` |
 | Harness discovery order, host ownership, background cache races and malformed rows | `test/browser-harness-discovery.test.js`, `test/types/browser-harnesses.ts`, `test/browser/harness-discovery.spec.js` |
 | Prime owned-root close/restart, replacement-failure guards, legacy detach labels, unowned controls and host-bound requests | `test/browser/prime-close.spec.js`, `test/tmux.test.js`, `npm run test:lineage -- prime` |
 | Listener startup, bind retry, delayed/failed aliases, advertised URLs, signal release | `test/listener-lifecycle.test.js` |

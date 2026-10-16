@@ -16,7 +16,10 @@ For a managed OMP/Prime launch, pi-dish generates a tiny per-launch module in
 `~/.pi/dish/launch-wrappers/`. It imports the wrapper above and embeds the
 correlation token instead of relying on inherited environment variables. The
 file is retained because Prime's resident worker can reload or recover the
-extension after its original tmux client is gone.
+extension after its original tmux client is gone. For OMP, the generated module
+also imports `@oh-my-pi/pi-ai` and passes it to the wrapper. OMP resolves that
+package only for a literal specifier inside the importing extension's own
+directory tree. Remote `/login` uses the package to list providers.
 
 The bridge forwards a *subset* of pi's `ctx.ui` surface to web clients. The
 TUI renders everything either way, so an incompatible call is **silently
@@ -119,6 +122,13 @@ to `pi-private.ts`. Shared bridge core consumes only its queue/subscription/
 compaction/command operations; it owns protocol handling and the compaction send
 buffer, not Pi's private session. Cancellation checks both aligned native queues
 before removing the selected index, preserving duplicate messages and images.
+
+Remote `/login` (`login.ts`) drives the host's own sign-in: Pi's private
+`modelRegistry.runtime` login (`pi-login.ts`) or OMP's
+`modelRegistry.authStorage.oauth.login` (`../pi-dish-bridge-omp/login.ts`). It
+emits each step as an `auth` extension-UI request. A step carries a new id and
+the flow's stable `loginId`. The harness keeps the credential and its loopback
+callback server.
 
 ## One bridge install only
 

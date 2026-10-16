@@ -9,6 +9,14 @@ export interface ExtensionRequest {
   readonly id: string; readonly method: string; readonly title: string; readonly message: string; readonly text: string; readonly prefill: string; readonly placeholder: string;
   readonly widgetKey: string; readonly widgetLines: readonly string[]; readonly widgetPlacement: string; readonly statusKey: string; readonly statusText: string;
   readonly notifyType: 'info' | 'warning' | 'error'; readonly options: readonly ExtensionOption[]; readonly questions: readonly ExtensionQuestion[];
+  readonly auth: ExtensionAuth | null;
+}
+export interface ExtensionAuthOption { readonly id: string; readonly label: string; readonly description: string }
+export interface ExtensionAuthPrompt {
+  readonly kind: 'select' | 'text' | 'secret' | 'code'; readonly message: string; readonly placeholder: string; readonly options: readonly ExtensionAuthOption[];
+}
+export interface ExtensionAuth {
+  readonly loginId: string; readonly url: string; readonly instructions: string; readonly userCode: string; readonly prompt: ExtensionAuthPrompt | null;
 }
 export interface ExtensionAnswer {
   readonly id: string; readonly question: string; readonly options: readonly string[]; readonly multi: boolean;
@@ -21,6 +29,22 @@ function options(value: unknown): ExtensionOption[] {
     ? { label: text(row), description: '', preview: '' }
     : { label: record(row) ? text(row.label) : '', description: record(row) ? text(row.description) : '', preview: record(row) ? text(row.preview) : '' }) : [];
 }
+function httpUrl(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  try { const url = new URL(value); return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : ''; } catch { return ''; }
+}
+function authPrompt(value: unknown): ExtensionAuthPrompt | null {
+  if (!record(value)) return null;
+  const kind = value.kind;
+  if (kind !== 'select' && kind !== 'text' && kind !== 'secret' && kind !== 'code') return null;
+  return { kind, message: text(value.message), placeholder: text(value.placeholder),
+    options: Array.isArray(value.options) ? value.options.flatMap((row: unknown) => record(row) && typeof row.id === 'string'
+      ? [{ id: row.id, label: text(row.label) || row.id, description: text(row.description) }] : []) : [] };
+}
+function auth(value: Readonly<Record<string, unknown>>): ExtensionAuth | null {
+  if (value.method !== 'auth' || typeof value.loginId !== 'string' || !value.loginId) return null;
+  return { loginId: value.loginId, url: httpUrl(value.url), instructions: text(value.instructions), userCode: text(value.userCode), prompt: authPrompt(value.prompt) };
+}
 export function decodeExtensionRequest(value: unknown): ExtensionRequest | null {
   if (!record(value) || typeof value.method !== 'string') return null;
   return { id: typeof value.id === 'string' ? value.id : '', method: value.method,
@@ -31,6 +55,6 @@ export function decodeExtensionRequest(value: unknown): ExtensionRequest | null 
       if (!record(row) || typeof row.id !== 'string') return [];
       return [{ id: row.id, question: text(row.question), header: text(row.header), multi: row.multi === true,
         recommended: finite(row.recommended) && Number.isInteger(row.recommended) ? row.recommended : null, options: options(row.options) }];
-    }) : [],
+    }) : [], auth: auth(value),
   };
 }

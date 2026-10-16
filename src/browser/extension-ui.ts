@@ -24,7 +24,7 @@ export function createExtensionUI(options: {
         const input = document.getElementById('promptInput') as HTMLTextAreaElement | null;
         if (input) { input.value = request.text; input.dispatchEvent(new Event('input')); } break;
       }
-      case 'select': case 'confirm': case 'input': case 'editor': case 'ask': dialogs.show(request, session); break;
+      case 'select': case 'confirm': case 'input': case 'editor': case 'ask': case 'auth': dialogs.show(request, session); break;
       default: display.toast(`[${request.method}] ${JSON.stringify(request).slice(0, 200)}`, 'info');
     }
   }

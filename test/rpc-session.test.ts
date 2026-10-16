@@ -444,6 +444,26 @@ test('RPC remembers dialogs before observers attach and HTTP answers retire thei
   }
 });
 
+test('an idle stream replays a pending login step but not a stale tool dialog', async () => {
+  const { createRPCSession }: typeof import('../lib/rpc-session') = require('../lib/rpc-session')
+  const rpc = await createRPCSession();
+  const stale = { type: 'extension_ui_request', method: 'confirm', id: 'idle-confirm', title: 'Left over?' };
+  const login = { type: 'extension_ui_request', method: 'auth', id: 'login-step', loginId: 'login-1', title: 'Log in to Example' };
+  let sse;
+  try {
+    rpc._handleMessage(stale);
+    rpc._handleMessage(login);
+    sse = sseReader(`${base}/api/sessions/${rpc.id}/stream`);
+    const pending = await sse.waitFor((e: unknown) => eventName(e) === 'extension_ui_state');
+    assert.deepEqual(eventData(pending).dialogs, [login.id], 'a login runs outside turns, so its step survives reconnect');
+    const replayed = sse.events.filter((e: unknown) => eventName(e) === 'extension_ui_request').map((e: unknown) => eventData(e).id);
+    assert.deepEqual(replayed, [login.id]);
+  } finally {
+    sse?.close();
+    rpc.kill();
+  }
+});
+
 test('a prompt sent mid-turn is delivered with steer behavior', async () => {
   const sse = sseReader(`${base}/api/sessions/${sessionId}/stream`);
   try {

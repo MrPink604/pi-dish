@@ -584,6 +584,34 @@ a process restart. The Pi integration test's reload canary asserts a marker
 extension really re-evaluates — keep it last in the file, because it churns
 the bridge socket.
 
+Remote `/login` (`extensions/pi-dish-bridge/login.ts`): the bridge runs the
+host's own provider sign-in, so credentials and the provider's loopback
+callback server stay with the harness. Two adapters implement it. `piLogin` (`pi-login.ts`)
+drives Pi's private `ctx.modelRegistry.runtime`, using `getProviders`,
+`login(id, "oauth"|"api_key", {prompt, notify})` and `refresh`. `ompLogin`
+(`extensions/pi-dish-bridge-omp/login.ts`) drives
+`modelRegistry.authStorage.oauth.login` with provider lists from
+`@oh-my-pi/pi-ai`. OMP only resolves that package for a literal specifier
+inside the extension's own tree. The launch wrapper materialized under
+`~/.pi/dish/launch-wrappers/` therefore imports it itself
+(`HarnessDescriptor.wrapperAuthPackage`) and passes the module to
+`createHarnessBridge`. The bridge advertises capability `login` only when its
+adapter finds that host surface (`available(ctx)`). The `/command` route
+returns 409 otherwise. Each step is an extension-UI request with
+`method: "auth"`. Every step gets a **new** dialog id and keeps one `loginId`.
+The bridge emits the new step first and then resolves the previous step with
+`superseded`. As a result, the server's `removeExtensionUIDialog` after a
+`ui-response` never deletes the step that replaced it. The browser card
+replaces itself in place by `loginId`. `replayDialogs` replays pending `auth`
+steps even when no turn is running, because a sign-in happens between turns.
+OMP always receives `onManualCodeInput`, so pasting the redirect address
+works for every callback flow. When the loopback callback answers first, the
+host aborts the paste prompt and the card shows "Sign-in received —
+finishing…". Login toasts go straight to pi-dish clients. Notifications
+through OMP's stored command context never arrive. `test/bridge-login.test.ts`
+covers both adapters against `test/fixtures/fake-login-host.ts`. That fixture
+requires Bun; without Bun the test is skipped.
+
 Close + runtime location: `POST /api/sessions/:id/close` shuts a live
 session's pi down — RPC children via `RPCSession.kill()`, anything
 bridge-registered via SIGTERM to the registry pid. Both pi modes treat

@@ -8,7 +8,7 @@ export type HarnessId = 'pi' | 'omp' | 'prime';
 export type BridgeCapability = 'prompt' | 'steer' | 'followUp' | 'abort' | 'compact'
   | 'models' | 'setModel' | 'setThinking' | 'rename' | 'commands' | 'reload'
   | 'queueRead' | 'queueCancel' | 'treeRead' | 'treeNavigation' | 'extensionUI'
-  | 'shareSnapshot' | 'guardedReload' | 'btw' | 'fastMode';
+  | 'shareSnapshot' | 'guardedReload' | 'btw' | 'fastMode' | 'login';
 
 /** Registry/wire values are unvalidated; policy checks exact booleans. */
 export type AdvertisedCapabilities = Partial<Record<BridgeCapability, unknown>>;
@@ -140,6 +140,8 @@ export interface HarnessDescriptor {
    * the same import inside the repo's nested modules resolves nothing there.
    */
   wrapperHostPackage?: string;
+  /** Host auth package the wrapper imports and passes after the host package (remote /login). */
+  wrapperAuthPackage?: string;
   argv: {
     new: (options?: LaunchOptions) => unknown[];
     resume: HarnessResumeArgv;

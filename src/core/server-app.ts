@@ -1499,6 +1499,9 @@ export function startServer(rootDirectory: string): Server {
           const data = await sess.runCommand(message as string, undefined, { timeout: 180000 });
           return res.json({ success: true, info: optionalProperty(data, 'info'), answer: optionalProperty(data, 'answer') });
         }
+        if (/^\/login(\s|$)/.test(message as string) && !liveSessionSupports(sess, 'login')) {
+          return res.status(409).json({ error: `This ${descriptor?.label ?? 'harness'} session does not support signing in from pi-dish.` });
+        }
         if (!liveSessionSupports(sess, 'commands')) {
           return res.status(409).json({ error: 'This session does not support remote commands.' });
         }
@@ -2442,7 +2445,12 @@ export function startServer(rootDirectory: string): Server {
     // this session's widgets/statuses/pending dialogs instead of waiting for
     // the next live emission. Seeding the dedupe signatures keeps the bridge's
     // unchanged re-emissions from double-rendering right after the replay.
-    const replayDialogs = sess.extUIState && sess.turnInProgress ? [...sess.extUIState.dialogs.values()] : [];
+    // Tool/extension dialogs are replayed only mid-turn (an idle session's
+    // leftovers are stale). A login step belongs to a live harness login,
+    // which runs while idle and is cleared by the bridge when it ends.
+    const replayDialogs = sess.extUIState
+      ? [...sess.extUIState.dialogs.values()].filter(data => sess.turnInProgress || property(data, 'method') === 'auth')
+      : [];
     if (sess.extUIState) {
       const { widgets, statuses } = sess.extUIState;
       for (const data of [...widgets.values(), ...statuses.values(), ...replayDialogs]) {
