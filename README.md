@@ -520,6 +520,52 @@ is ten minutes old.
 The service worker only displays notifications and routes their clicks. It
 caches nothing, so an upgraded server never meets a stale offline UI.
 
+### Hub-deployed hosts (a phone)
+
+A machine that should run agents but not a whole pi-dish, such as an Android
+phone in Termux, can be owned by a hub over ssh. The far side needs only
+`sshd`, `node`, `tmux` and the harness (`pi`); no checkout, `npm ci` or native
+builds. In the hub's `~/.pi/dish/settings.json`:
+
+```json
+{ "remotes": [{ "name": "phone", "sshDest": "phone", "deploy": true }] }
+```
+
+`sshDest` is an `~/.ssh/config` alias or `user@host[:port]`; ssh runs with
+`BatchMode`, so the key and host key must already be accepted. On first use
+the hub builds a self-contained host bundle (about 7 MB) from its own
+checkout, uploads it to `~/.pi/dish/host/<hash>/` on the far side, copies its
+`vapid.json` there if none exists (so the phone's sessions push to the same
+installed app), and starts it as the ssh session's command. The phone then
+appears in the sidebar like any other host: start sessions on it, steer them,
+read transcripts, get notifications.
+
+- **Lifetime:** the deployed host exists only while the hub's ssh session
+  does. It exits when the hub stops, the link drops (Doze, offline), or after
+  10 minutes without requests while no session there is working or waiting
+  for an answer. The next request starts it again. Agents run in hidden tmux
+  on the far side and keep running across all of this.
+- **Upgrades:** a hub upgrade changes the bundle hash, so the next connection
+  uploads the new version; an unchanged bundle is never uploaded twice.
+  Bundles unused for 7 days are deleted.
+- **Access:** the host binds `127.0.0.1` and accepts only a token the hub
+  hands it over the ssh session, so other apps on the phone cannot drive it.
+  The ssh key is the credential, as with any `sshDest` remote.
+- **Limits:** no web terminal (no `node-pty`), slower `@` file search (no
+  native index), and finished/waiting notifications only while the host runs.
+  Logs are in `~/.pi/dish/host/host.log` on the far side.
+- **Errors** in the Fleet view: `host_node_missing`, `host_tmux_missing`,
+  `host_bundle_failed` (hub could not build or pack), `host_deploy_failed`,
+  `host_exited`, plus the usual `ssh_*` classes.
+
+Phone setup (Termux from F-Droid or GitHub, and Tailscale): `pkg install
+nodejs tmux openssh procps termux-api`, `npm install -g --ignore-scripts
+@earendil-works/pi-coding-agent`, log pi in once, add the hub's public key to
+`~/.ssh/authorized_keys`, run `sshd` (port 8022), set `"hostLabel"` in the
+phone's `~/.pi/dish/settings.json`, and exempt Termux from battery
+optimization. Termux:Boot can start `sshd` after a reboot. On the hub, an
+`~/.ssh/config` entry with `Port 8022` and the phone's tailnet name.
+
 ### Session recovery
 
 Fleet → **Session recovery** configures the selected host, for all devices.

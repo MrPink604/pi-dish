@@ -1242,6 +1242,30 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   Success only clears the failure count after `STABLE_RESET_MS` (30s) of
   continuous reachability — a flapper must keep climbing the ladder, not
   reset it to the 3s rung on every brief recovery.
+- **Hub-deployed hosts** (`{ name, sshDest, deploy: true, remotePort? }`,
+  `remote-hosts.ts` + `host-bundle.ts` + `host-entry.ts`): the hub owns the
+  far pi-dish. `hostBundle()` esbuilds `lib/host-entry.js` with every npm
+  dependency into `lib/pi-dish-host.js` (native `node-pty`/`fff` and esbuild
+  stay external), beside plain copies of `lib/*.js` (bridge extensions import
+  some), `extensions/`, `skills/` and `package.json`, once per process under
+  `~/.pi/dish/host-bundle/<content-hash>/`. The forward's ssh command is
+  `hostLaunchScript()`: exit 97 → tar upload to `~/.pi/dish/host/<hash>/`
+  (marked `.complete` only once whole), 98 → install the hub's `vapid.json`
+  if the far side has none, 96/95 → node/tmux missing (classified
+  `host_node_missing`/`host_tmux_missing`). Otherwise it links install.sh's
+  discovery paths (pi bridge, skills; OMP's when `omp` exists) at the bundle,
+  replaces a host left by a dropped session (pid file **and** bundle path in
+  `/proc/<pid>/cmdline`), and execs with `HOST=127.0.0.1`,
+  `PI_DISH_HEADLESS=tmux` (agents must outlive the host) and stderr to
+  `~/.pi/dish/host/host.log`. The first stdin line is a fresh 32-byte hex
+  token (never argv/env of the remote command), so other processes on the
+  far loopback — any Android app — get 401; stdin EOF (session gone) is the
+  host's SIGTERM. Ready = stdout `pi-dish running at` **and** the local
+  socket. `request()` stamps `lastUse`; an unref'd 60s check closes the
+  forward after `DEPLOY_IDLE_MS` (10 min) unless `/api/sessions` shows a
+  turn or ask pending, and a closed forward is not a failure (no backoff),
+  so the next request redeploys cold. Termux defaults (PREFIX, TMPDIR, PATH,
+  termux-exec LD_PRELOAD) apply only when `/data/data/com.termux` exists.
 - **Proxy**: `GET /api/hosts` = self entry + per-remote probe results
   (parallel, bounded ~3s). `/hosts/:name/api/*` streams both directions
   unbuffered (the only exception: the tiny JSON bodies the fleet-artifact

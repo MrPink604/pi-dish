@@ -187,7 +187,8 @@ The integration lead, not this guide, records milestone acceptance.
 | `host-identity.ts` | Stable host id and host label |
 | `host-colors.ts` | Shared pure color sanitization, palette assignment and RGB conversion |
 | `dish-store.ts` | HOME-scoped reads and atomic writes for small JSON stores |
-| `remote-hosts.ts` | Direct/SSH fleet requests, credential replacement, HOME-qualified forwards, bounded descriptor probes and reachability backoff |
+| `remote-hosts.ts` | Direct/SSH fleet requests, credential replacement, HOME-qualified forwards, bounded descriptor probes, reachability backoff and hub-deployed host sessions (upload, launch, per-session token, idle release) |
+| `host-bundle.ts`, `host-entry.ts` | The content-hashed self-contained host tree a hub deploys, and its entrypoint that takes the token from stdin and exits when the ssh session ends |
 | `terminal.ts`, `terminal-handlers.ts` | Optional native PTY pool, bounded reconnect replay, output-aware idle expiry, restart continuity and local WebSocket attachment |
 | `access-handlers.ts`, `relay-handlers.ts` | Checked compression/parser bypass, auth/tickets/CORS, fleet descriptors and separate API/public/comment/peer-upgrade policies |
 | `process-identity.ts` | Linux birth identity, liveness and bounded ancestry proofs |

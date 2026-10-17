@@ -20,7 +20,7 @@ import test = require('node:test');
 import { present, record, records } from './test-types.js';
 import type { ChildProcess } from 'node:child_process';
 import assert = require('node:assert');
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs = require('node:fs');
 import http = require('node:http');
 import net = require('node:net');
@@ -220,6 +220,22 @@ test('ssh forwards land on a per-remote socket under the dish run dir', () => {
   });
   withHome({ remotes: [{ name: 'bad', sshDest: 'bee', remoteHost: 'evil host' }] }, () => {
     assert.equal(remoteHosts.getRemote('bad'), null);
+  });
+});
+
+test('a deployed remote forwards to its own loopback host and runs it as the session command', () => {
+  // The hub starts the far host itself: it binds loopback and accepts only the
+  // per-session token, so a configured interface or token must not leak in.
+  withHome({ remotes: [{ name: 'phone', sshDest: 'phone', deploy: true, remoteHost: '100.70.163.97', token: 'stale', remotePort: 3390 }] }, () => {
+    const phone = present(remoteHosts.getRemote('phone'));
+    if (!('sshDest' in phone)) throw new Error('Expected SSH remote fixture');
+    assert.equal(phone.deploy, true);
+    assert.equal(phone.remoteHost, '127.0.0.1');
+    assert.equal(phone.token, null);
+    const argv = remoteHosts.sshArgv(phone, remoteHosts.socketPathFor('phone'), 'launch');
+    assert.equal(argv[0], '-T');
+    assert.equal(argv.includes('-N'), false);
+    assert.deepEqual(argv.slice(-3), [`${remoteHosts.socketPathFor('phone')}:127.0.0.1:3390`, 'phone', 'launch']);
   });
 });
 
@@ -611,6 +627,93 @@ test('a failing ssh forward is reported as a class, never as its stderr', async 
   assert.equal(proxied.status, 502);
   const body = record(await proxied.json());
   assert.equal(/publickey|Permission denied/.test(JSON.stringify(body)), false);
+});
+
+test('a probe whose deadline passes before a slow forward opens neither throws nor leaks an error', async () => {
+  const home = makeHome();
+  // Nothing is ever sent: both requests are destroyed before the splice dials.
+  writeSettings(home, { remotes: [{ name: 'slow', sshDest: 'slow', remotePort: 9 }] });
+  const previous = { HOME: process.env.HOME, PATH: process.env.PATH, delay: process.env.PI_DISH_FAKE_SSH_LISTEN_DELAY_MS };
+  // The forward socket appears after the 2.5s probe deadline but within the 8s forward deadline.
+  Object.assign(process.env, { HOME: home, PATH: fakeSshPath(), PI_DISH_FAKE_SSH_LISTEN_DELAY_MS: '3500' });
+  try {
+    const result = await remoteHosts.probe('slow', { force: true });
+    assert.deepEqual([result.reachable, 'error' in result && result.error], [false, 'timeout']);
+    // The late request is destroyed as soon as the forward opens; an 'error'
+    // with no listener there would crash this process (it once crashed hubs).
+    const late = await remoteHosts.request('slow');
+    late.on('error', () => {});
+    late.destroy();
+    await new Promise<void>(resolve => setImmediate(resolve));
+  } finally {
+    remoteHosts.shutdown();
+    process.env.HOME = previous.HOME;
+    process.env.PATH = previous.PATH;
+    if (previous.delay === undefined) delete process.env.PI_DISH_FAKE_SSH_LISTEN_DELAY_MS;
+    else process.env.PI_DISH_FAKE_SSH_LISTEN_DELAY_MS = previous.delay;
+  }
+});
+
+/** Polls the hub until its `name` remote is reachable; returns that host row. */
+async function reachableRemote(hub: BootedServer, name: string, timeoutMs = 60_000): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const hosts = records(record(await (await fetch(`${hub.base}/api/hosts`)).json()).hosts);
+    const row = hosts.find(host => host.name === name);
+    if (row?.reachable === true) return row;
+    if (Date.now() > deadline) throw new Error(`remote ${name} never became reachable: ${JSON.stringify(row)}`);
+    await new Promise<void>(resolve => setTimeout(resolve, 500));
+  }
+}
+
+test('a deployed host is uploaded once, gated by its session token and ends with the hub', async (t) => {
+  if (spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux is not installed');
+  const home = makeHome();
+  const phone = makeHome();
+  writeSettings(phone, { hostLabel: 'fakephone' });
+  // Outside the kernel's ephemeral range: a port the far host binds seconds from
+  // now must not be handed meanwhile to another suite's port-0 probe.
+  let phonePort = 0;
+  while (!phonePort) {
+    const candidate = 20_000 + Math.floor(Math.random() * 10_000);
+    const probe = net.createServer();
+    if (await new Promise<boolean>(resolve => { probe.once('error', () => resolve(false)); probe.listen(candidate, '127.0.0.1', () => resolve(true)); })) phonePort = candidate;
+    await new Promise<void>(resolve => probe.close(() => resolve()));
+  }
+  writeSettings(home, { remotes: [{ name: 'phone', sshDest: 'phone', deploy: true, remotePort: phonePort }] });
+  const sshLog = path.join(home, 'ssh.log');
+  const env = { PATH: fakeSshPath(), PI_DISH_FAKE_SSH_HOME: phone, PI_DISH_FAKE_SSH_LOG: sshLog };
+  const hub = await boot(home, env);
+
+  const row = await reachableRemote(hub, 'phone');
+  assert.equal(row.label, 'fakephone');
+  const hostDir = path.join(phone, '.pi', 'dish', 'host');
+  const bundles = fs.readdirSync(hostDir).filter(name => /^[0-9a-f]{24}$/.test(name));
+  assert.equal(bundles.length, 1);
+  assert.ok(fs.existsSync(path.join(hostDir, bundles[0], '.complete')));
+  assert.equal(fs.readFileSync(path.join(phone, '.pi', 'dish', 'vapid.json'), 'utf8'),
+    fs.readFileSync(path.join(home, '.pi', 'dish', 'vapid.json'), 'utf8'), 'the far side signs pushes with the hub key');
+  assert.equal(fs.realpathSync(path.join(phone, '.pi', 'agent', 'extensions', 'pi-dish-bridge')),
+    fs.realpathSync(path.join(hostDir, bundles[0], 'extensions', 'pi-dish-bridge')), 'pi discovers the bundled bridge');
+
+  // Anything else on the far machine's loopback (another Android app) is refused.
+  assert.equal((await fetch(`http://127.0.0.1:${phonePort}/api/sessions`)).status, 401);
+  assert.equal((await fetch(`${hub.base}/hosts/phone/api/sessions`)).status, 200);
+
+  // The host lives exactly as long as the hub's ssh session.
+  const hostPid = Number(fs.readFileSync(path.join(hostDir, 'host.pid'), 'utf8'));
+  const exited = new Promise<void>(resolve => hub.child.once('exit', () => resolve()));
+  hub.child.kill('SIGTERM');
+  await exited;
+  const deadline = Date.now() + 10_000;
+  while (fs.existsSync(`/proc/${hostPid}`) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(fs.existsSync(`/proc/${hostPid}`), false, 'the deployed host must not outlive its ssh session');
+
+  // A new hub session restarts it without uploading the unchanged bundle again.
+  const again = await boot(home, env);
+  await reachableRemote(again, 'phone');
+  const uploads = fs.readFileSync(sshLog, 'utf8').split('\n').filter(line => line.includes('.incoming-'));
+  assert.equal(uploads.length, 1);
 });
 
 // --- hub-side auth over the proxy ----------------------------------------

@@ -13,6 +13,8 @@ export interface SshRemote {
     remoteHost: string;
     remotePort: number;
     token: string | null;
+    /** Hub-owned peer: bundle uploaded and started per ssh session. */
+    deploy: boolean;
 }
 export type Remote = DirectRemote | SshRemote;
 export interface RemoteRequestOptions {
@@ -51,6 +53,11 @@ export type SshErrorCode = 'ssh_host_key_failed' | 'ssh_auth_failed' | 'ssh_dns_
 export declare const DEFAULT_REMOTE_PORT = 3333;
 export declare const BACKOFF_LADDER: number[];
 export declare const STABLE_RESET_MS = 30000;
+export declare const DEPLOY_IDLE_MS: number;
+export declare const EXIT_TMUX_MISSING = 95;
+export declare const EXIT_NODE_MISSING = 96;
+export declare const EXIT_NEEDS_BUNDLE = 97;
+export declare const EXIT_NEEDS_VAPID = 98;
 export declare function isValidRemoteName(name: unknown): name is string;
 /** Config entry -> normalized remote, or null when the entry is unusable. */
 export declare function normalizeRemote(value: unknown): Remote | null;
@@ -68,9 +75,20 @@ export declare function socketPathFor(name: string): string;
  * argv for the long-lived forward (spawned as `ssh <argv>`, never a shell
  * string). BatchMode keeps a passphrase prompt from hanging the spawn;
  * ExitOnForwardFailure means a dead forward exits instead of pretending;
- * the keepalives notice a silently dropped link.
+ * the keepalives notice a silently dropped link. With `launch` (deployed
+ * remotes) the session runs that command instead of `-N`.
  */
-export declare function sshArgv(remote: SshRemote, socketPath?: string): string[];
+export declare function sshArgv(remote: SshRemote, socketPath?: string, launch?: string): string[];
+/**
+ * The deployed host's ssh command. Exits EXIT_NEEDS_BUNDLE / EXIT_NEEDS_VAPID
+ * / EXIT_NODE_MISSING before starting anything; otherwise replaces a host a
+ * silently dropped session left holding the port (matched by its bundle path
+ * in /proc, never by pid alone) and execs the bundle. Host logs go to
+ * ~/.pi/dish/host/host.log on the far side; stdout carries the ready line.
+ */
+export declare function hostLaunchScript(hash: string, port: number): string;
+/** Unpacks a bundle tarball from stdin into ~/.pi/dish/host/<hash>, marked complete only once whole. */
+export declare function hostUploadScript(hash: string): string;
 /** Kill every ssh child. Hooked into the server's close (server.js). */
 export declare function shutdown(): void;
 /**

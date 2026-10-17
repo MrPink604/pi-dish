@@ -274,9 +274,10 @@ reachability, not authority. No shared mutable singleton beyond existing store
 ownership. HOME resolution/re-read/temp-rename semantics remain `dish-store`'s.
 
 M5-owned `Remote` is `{name,kind:'direct',origin,token:string|null}` or
-`{name,kind:'ssh',sshDest,remoteHost,remotePort,token:string|null}`. Direct origin
+`{name,kind:'ssh',sshDest,remoteHost,remotePort,token:string|null,deploy:boolean}`. Direct origin
 strips URL path; invalid entries disappear, first duplicate name wins, SSH defaults
-remain loopback:3333. `request(remoteOrName, {method?,path?,headers?,upgrade?})`
+remain loopback:3333. A `deploy` remote is always loopback with a null configured
+token; its bearer is minted per ssh session. `request(remoteOrName, {method?,path?,headers?,upgrade?})`
 returns `Promise<http.ClientRequest>`: caller owns write/end/response/upgrade/error,
 not buffered JSON. `probe` yields reachable descriptor or unreachable short error
 with `at`; descriptor hostId is required, label/version nullable, capabilities
