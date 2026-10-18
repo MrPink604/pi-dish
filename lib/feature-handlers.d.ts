@@ -33,6 +33,8 @@ export interface FeatureHandlers {
     updateModelRoles: FeatureHandler;
     harnessAgents: FeatureHandler;
     updateHarnessAgents: FeatureHandler;
+    listHarnessSettings: FeatureHandler;
+    updateHarnessSettings: FeatureHandler;
     transcribe: FeatureHandler;
     settings: FeatureHandler;
     updateSettings: FeatureHandler;

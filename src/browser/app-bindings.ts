@@ -72,8 +72,6 @@ export const APP_ACTION_NAMES = [
   'submitBounceTargets',
   'backdropCloseHarnessSettings',
   'closeHarnessSettings',
-  'harnessTabAgents',
-  'harnessTabModels',
   'saveHarnessSettings',
   'backdropCloseResponseDetails',
   'closeResponseDetails',

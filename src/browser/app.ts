@@ -1344,8 +1344,6 @@ createAppBindings({ document, actions: {
   submitBounceTargets: () => bounceController.submit(),
   backdropCloseHarnessSettings: (event, node) => { if (event.target === node) harnessSettingsController.close(); },
   closeHarnessSettings: () => harnessSettingsController.close(),
-  harnessTabAgents: () => harnessSettingsController.showTab('agents'),
-  harnessTabModels: () => harnessSettingsController.showTab('models'),
   saveHarnessSettings: () => harnessSettingsController.save(),
   backdropCloseResponseDetails: (event, node) => { if (event.target === node) responseDetailsController.close(); },
   closeResponseDetails: () => responseDetailsController.close(),

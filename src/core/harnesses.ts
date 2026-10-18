@@ -80,6 +80,10 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
       agentPrewalk: 'task.agentPrewalk',
       agentAdvisor: 'task.agentAdvisor',
     },
+    // OMP's SETTING_TABS order for its /settings panel. Settings outside these
+    // tabs ("internal") have no TUI entry; the agents/models panes own the
+    // pilotConfig records above.
+    settingsTabs: ['appearance', 'model', 'interaction', 'context', 'memory', 'files', 'shell', 'tools', 'tasks', 'providers'],
     // Where task-agent definitions live. `unpack` into a throwaway dir is the
     // only way to enumerate the agents bundled into the executable; the other
     // two are the dirs `omp agents unpack --user|--project` writes to.
@@ -181,7 +185,11 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
       // `config set` replaces the whole record in the *global* config
       // regardless of cwd (dotted sub-keys are unsupported), so json is a
       // pre-stringified whole value passed as one execFile argv entry.
-      configSet: (key, json) => ['config', 'set', key, json, '--json'],
+      // Scalars are parsed from their plain text (true, 42, an enum name).
+      configSet: (key, value) => ['config', 'set', key, value, '--json'],
+      configList: ['config', 'list', '--json'],
+      configSchema: ['config', 'list'],
+      configReset: (key) => ['config', 'reset', key, '--json'],
     },
   },
   prime: {

@@ -115,6 +115,12 @@ export interface HarnessDescriptor {
     wrapperTokenRequired?: boolean;
     spawnEnv?: Record<string, string>;
     pilotConfig?: Record<string, string>;
+    /**
+     * Schema-driven settings editor (OMP's /settings): the CLI's tab order. The
+     * schema itself comes from `argv.configList`/`configSchema` at request time,
+     * so settings a newer harness adds appear without a pi-dish change.
+     */
+    settingsTabs?: readonly string[];
     taskAgents?: {
         unpack: (dir: string) => string[];
         userDir: (env?: HarnessEnvironment) => string;
@@ -140,7 +146,13 @@ export interface HarnessDescriptor {
             output: string;
         }) => string[];
         configGet?: (key: string) => string[];
-        configSet?: (key: string, json: string) => string[];
+        /** `value` is the CLI's raw form: JSON for arrays/records, plain text for scalars. */
+        configSet?: (key: string, value: string) => string[];
+        /** Every setting with value, type and description (credentials redacted). */
+        configList?: string[];
+        /** Human listing: the only CLI surface carrying each setting's tab and enum values. */
+        configSchema?: string[];
+        configReset?: (key: string) => string[];
         usage?: string[];
     };
 }

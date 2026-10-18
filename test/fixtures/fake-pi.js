@@ -89,6 +89,83 @@ function main() {
         fs.writeSync(1, JSON.stringify({ targetDir: dir, total: written.length, written, skipped: [] }) + '\n');
         process.exit(0);
     }
+    // A slice of OMP's settings schema: a TUI tab (or "internal"), a type and
+    // default. `config list` and `config set|reset` speak it like the real CLI —
+    // scalars parse from trimmed text, and an argv entry starting with "-" reads
+    // as a flag, leaving the value missing.
+    const FAKE_SETTINGS = {
+        'theme.dark': { tab: 'appearance', type: 'string', description: 'Theme used when the terminal has a dark background', default: 'titanium' },
+        symbolPreset: { tab: 'appearance', type: 'enum', description: 'Glyph set for icons and symbols', default: 'unicode', values: ['unicode', 'nerd', 'ascii'] },
+        defaultThinkingLevel: { tab: 'model', type: 'enum', description: 'Reasoning depth', default: 'high', values: ['minimal', 'low', 'medium', 'high', 'xhigh', 'auto'] },
+        autoResume: { tab: 'interaction', type: 'boolean', description: 'Automatically resume the most recent session', default: false },
+        'compaction.reserveTokens': { tab: 'context', type: 'number', description: 'Tokens kept free for the reply', default: 16384 },
+        'bash.patterns': { tab: 'shell', type: 'array', description: 'Bash command patterns', default: [] },
+        'hindsight.apiToken': { tab: 'memory', type: 'string', description: 'Hindsight API token', credential: true },
+        setupVersion: { tab: 'internal', type: 'number', description: '', default: 2 },
+    };
+    if (harnessId === 'omp' && args[0] === 'config' && args[1] === 'list') {
+        const stored = readJsonFile(fakeGlobalConfigFile);
+        const project = readJsonFile(path.join(process.cwd(), '.omp', 'fake-project-settings.json'));
+        const value = (key) => key in project ? project[key] : key in stored ? stored[key] : FAKE_SETTINGS[key].default;
+        if (args.includes('--json')) {
+            const result = {
+                modelRoles: { value: { default: 'zai/glm-4.7-flash', ...(stored.modelRoles || {}) }, type: 'record', description: '' },
+            };
+            for (const [key, spec] of Object.entries(FAKE_SETTINGS)) {
+                result[key] = spec.credential && value(key) ? { redacted: true, type: spec.type, description: spec.description }
+                    : { value: value(key), type: spec.type, description: spec.description };
+            }
+            fs.writeSync(1, JSON.stringify(result, null, 2) + '\n');
+        }
+        else {
+            const tabs = new Map([['internal', [`  modelRoles = {} (record)`]]]);
+            for (const [key, spec] of Object.entries(FAKE_SETTINGS)) {
+                const shown = spec.credential && value(key) ? '********' : value(key) === undefined ? '(not set)'
+                    : typeof value(key) === 'string' ? value(key) : JSON.stringify(value(key));
+                const lines = tabs.get(spec.tab) || [];
+                lines.push(`  ${key} = ${shown} (${spec.values ? spec.values.join('|') : spec.type})`);
+                tabs.set(spec.tab, lines);
+            }
+            const text = ['Settings:', ''];
+            for (const tab of [...tabs.keys()].sort())
+                text.push(`[${tab}]`, ...(tabs.get(tab) || []), '');
+            fs.writeSync(1, text.join('\n') + '\n');
+        }
+        process.exit(0);
+    }
+    if (harnessId === 'omp' && args[0] === 'config' && (args[1] === 'set' || args[1] === 'reset') && Object.hasOwn(FAKE_SETTINGS, args[2] || '')) {
+        const key = args[2], spec = FAKE_SETTINGS[key];
+        const stored = readJsonFile(fakeGlobalConfigFile);
+        const positional = args.slice(3).filter(arg => !arg.startsWith('-'));
+        if (args[1] === 'reset') {
+            delete stored[key];
+        }
+        else {
+            if (!positional.length) {
+                fs.writeSync(2, 'Usage: omp config set <key> <value>\n');
+                process.exit(1);
+            }
+            const raw = positional.join(' ').trim();
+            let parsed = raw;
+            if (spec.type === 'boolean')
+                parsed = raw === 'true' ? true : raw === 'false' ? false : undefined;
+            else if (spec.type === 'number')
+                parsed = Number.isFinite(Number(raw)) ? Number(raw) : undefined;
+            else if (spec.type === 'array')
+                parsed = JSON.parse(raw);
+            else if (spec.type === 'enum' && !spec.values?.includes(raw))
+                parsed = undefined;
+            if (parsed === undefined) {
+                fs.writeSync(2, `Error: Invalid value: ${raw}\n`);
+                process.exit(1);
+            }
+            stored[key] = parsed;
+        }
+        fs.mkdirSync(path.dirname(fakeGlobalConfigFile), { recursive: true });
+        fs.writeFileSync(fakeGlobalConfigFile, JSON.stringify(stored));
+        fs.writeSync(1, JSON.stringify({ key, value: key in stored ? stored[key] : spec.default }) + '\n');
+        process.exit(0);
+    }
     if (harnessId === 'omp' && args[0] === 'config' && args.includes('--json')) {
         const key = args[2];
         const baseRoles = { default: 'zai/glm-4.7-flash' };

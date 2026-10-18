@@ -134,6 +134,8 @@ export function catalogModelSelector(model: Readonly<CatalogModel>): string {
 function catalogModelLabel(model: Readonly<CatalogModel>): string {
   return model.name || model.id;
 }
+/** A non-catalog choice listed ahead of the models: an inherit/default row, a role ref, a stored value the catalog lacks. */
+export interface ModelPickerChoice { readonly key: string; readonly label: string }
 
 export interface ModelPicker {
   sync(): void;
@@ -141,11 +143,18 @@ export interface ModelPicker {
   dispose(): void;
 }
 
-/** Type-to-filter model combobox; mirrors the spawn-target picker. */
+/**
+ * Type-to-filter model combobox; mirrors the spawn-target picker. Fixed
+ * choices precede the catalog; the empty-key choice is always listed, the
+ * others filter with the query like models do.
+ */
 export function createModelPicker(options: {
   input: HTMLInputElement;
   dropdown: HTMLElement;
   rows: () => readonly Readonly<CatalogModel>[];
+  choices: () => readonly ModelPickerChoice[];
+  /** List catalog models the harness reports as not enabled. */
+  includeDisabled?: boolean;
   selected: () => string;
   onPick: (selector: string) => void;
   match: (query: string, text: string) => readonly number[] | null;
@@ -159,9 +168,12 @@ export function createModelPicker(options: {
   let blurTimer: ReturnType<typeof setTimeout> | null = null;
   let activeIndex = -1;
   let open = false;
+  const listed = () => options.includeDisabled ? options.rows() : options.rows().filter(model => model.enabled !== false);
   function currentLabel(): string {
     const selected = options.selected();
-    const row = options.rows().find(model => model.enabled !== false && catalogModelSelector(model) === selected);
+    const choice = options.choices().find(row => row.key === selected);
+    if (choice) return choice.key ? choice.label : '';
+    const row = listed().find(model => catalogModelSelector(model) === selected);
     return row ? catalogModelLabel(row) : '';
   }
   function clearBlur(): void {
@@ -189,18 +201,27 @@ export function createModelPicker(options: {
     open = true;
     activeIndex = -1;
     const q = query.trim();
-    let named = options.rows().filter(model => model.enabled !== false).flatMap(model => {
+    const matched = (label: string, ref: string) => {
+      if (!q) return { indices: [] as readonly number[], score: 0, onLabel: false };
+      const onLabel = options.match(q, label);
+      const indices = onLabel || options.match(q, ref);
+      return indices ? { indices, score: options.score(indices, label), onLabel: !!onLabel } : null;
+    };
+    const rowHtml = (label: string, ref: string, hit: { indices: readonly number[]; onLabel: boolean }) => {
+      const text = hit.indices.length && hit.onLabel ? options.highlight(label, hit.indices) : options.escapeHtml(label);
+      return !ref || ref === label ? text : `${text} <span class="model-picker-ref">${options.escapeHtml(ref)}</span>`;
+    };
+    const fixed = options.choices().flatMap(choice => {
+      const hit = choice.key ? matched(choice.label, choice.key) : { indices: [], score: 0, onLabel: false };
+      return hit ? [{ key: choice.key, html: rowHtml(choice.label, '', hit) }] : [];
+    });
+    let named = listed().flatMap(model => {
       const label = catalogModelLabel(model), ref = catalogModelSelector(model);
-      if (!q) return [{ model, label, ref, indices: [] as readonly number[], score: 0 }];
-      const indices = options.match(q, label) || options.match(q, ref);
-      return indices ? [{ model, label, ref, indices, score: options.score(indices, label) }] : [];
+      const hit = matched(label, ref);
+      return hit ? [{ ref, score: hit.score, html: rowHtml(label, ref, hit) }] : [];
     });
     if (q) named = named.sort((a, b) => b.score - a.score);
-    const rows = [{ key: '', html: '(default)' }].concat(named.map(({ label, ref, indices }) => {
-      const matchedLabel = indices.length && options.match(q, label) ? options.highlight(label, indices) : options.escapeHtml(label);
-      const suffix = ref === label ? '' : ` <span class="model-picker-ref">${options.escapeHtml(ref)}</span>`;
-      return { key: ref, html: matchedLabel + suffix };
-    }));
+    const rows = fixed.concat(named.map(({ ref, html }) => ({ key: ref, html })));
     dropdown.innerHTML = rows.map(row =>
       `<div class="cwd-option" data-key="${options.escapeHtml(row.key)}">${row.html}</div>`).join('');
     dropdown.style.display = 'block';

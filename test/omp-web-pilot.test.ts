@@ -248,6 +248,67 @@ test('OMP agents PUT validates the patch and is unsupported for pi', async () =>
   assert.equal((await get('/api/harnesses/pi/agents')).status, 501);
 });
 
+test('OMP settings list offers the TUI tabs in panel order with types, enum values and project overrides', async () => {
+  fs.mkdirSync(path.join(cwd, '.omp'), { recursive: true });
+  fs.writeFileSync(path.join(cwd, '.omp', 'fake-project-settings.json'), JSON.stringify({ autoResume: true }));
+  try {
+    const { status, body } = await get(`/api/harnesses/omp/settings?${new URLSearchParams({ cwd })}`);
+    assert.equal(status, 200);
+    assert.deepEqual(records(record(body).tabs).map(tab => tab.id), ['appearance', 'model', 'interaction', 'context', 'memory', 'shell']);
+    const rows = records(record(body).settings);
+    assert.equal(rows.some(row => row.key === 'setupVersion' || row.key === 'modelRoles'), false, 'internal settings have no TUI tab');
+    assert.deepEqual(present(rows.find(row => row.key === 'symbolPreset')), {
+      key: 'symbolPreset', tab: 'appearance', type: 'enum', description: 'Glyph set for icons and symbols',
+      values: ['unicode', 'nerd', 'ascii'], value: 'unicode',
+    });
+    assert.deepEqual(present(rows.find(row => row.key === 'autoResume')).override, { value: true });
+    assert.equal(Object.hasOwn(present(rows.find(row => row.key === 'theme.dark')), 'override'), false);
+  } finally {
+    fs.rmSync(path.join(cwd, '.omp', 'fake-project-settings.json'), { force: true });
+  }
+});
+
+test('OMP settings PUT writes typed global values, resets with null and never echoes credentials', async () => {
+  const written = await put('/api/harnesses/omp/settings', { cwd, settings: {
+    symbolPreset: 'ascii', autoResume: true, 'compaction.reserveTokens': -1, 'theme.dark': '-night',
+    'bash.patterns': ['git *'], 'hindsight.apiToken': 'fixture-secret',
+  } });
+  assert.equal(written.status, 200);
+  const value = (body: unknown, key: string) => present(records(record(body).settings).find(row => row.key === key));
+  assert.equal(value(written.body, 'symbolPreset').value, 'ascii');
+  assert.equal(value(written.body, 'autoResume').value, true);
+  assert.equal(value(written.body, 'compaction.reserveTokens').value, -1, 'a leading "-" survives the CLI flag parser');
+  assert.equal(value(written.body, 'theme.dark').value, '-night');
+  assert.deepEqual(value(written.body, 'bash.patterns').value, ['git *']);
+  assert.equal(value(written.body, 'hindsight.apiToken').redacted, true);
+  assert.equal(JSON.stringify(written.body).includes('fixture-secret'), false);
+
+  const reset = await put('/api/harnesses/omp/settings', { settings: { symbolPreset: null, 'hindsight.apiToken': null } });
+  assert.equal(reset.status, 200);
+  assert.equal(value(reset.body, 'symbolPreset').value, 'unicode');
+  assert.equal(Object.hasOwn(value(reset.body, 'hindsight.apiToken'), 'redacted'), false);
+});
+
+test('OMP settings PUT checks every key and value against the schema before writing', async () => {
+  for (const settings of [null, 'symbolPreset', ['symbolPreset'], {}]) {
+    assert.equal((await put('/api/harnesses/omp/settings', { settings })).status, 400);
+  }
+  for (const settings of [
+    { symbolPreset: 'emoji' }, { autoResume: 'yes' }, { 'compaction.reserveTokens': '5' },
+    { 'bash.patterns': 'git *' }, { setupVersion: 3 }, { 'no.such.key': true }, { '-flag': true },
+    { autoResume: false, symbolPreset: 'emoji' },
+  ]) {
+    assert.equal((await put('/api/harnesses/omp/settings', { settings })).status, 400, JSON.stringify(settings));
+  }
+  const after = await get('/api/harnesses/omp/settings');
+  assert.equal(present(records(record(after.body).settings).find(row => row.key === 'autoResume')).value, true,
+    'a rejected patch writes none of its keys');
+  assert.equal((await put('/api/harnesses/omp/settings', { cwd: 7, settings: { autoResume: true } })).status, 400);
+  assert.equal((await put('/api/harnesses/nope/settings', { settings: { autoResume: true } })).status, 404);
+  assert.equal((await put('/api/harnesses/pi/settings', { settings: { autoResume: true } })).status, 501);
+  assert.equal((await get('/api/harnesses/pi/settings')).status, 501);
+});
+
 test('synchronous OMP launch rejects a thinking level outside the selected model catalog entry', async () => {
   const invalid = await post('/api/sessions/new', {
     harness: 'omp', cwd, model: 'zai/glm-5.2', thinking: 'minimal',

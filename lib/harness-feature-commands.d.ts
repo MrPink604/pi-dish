@@ -8,6 +8,10 @@ export declare function runHarnessJsonCommand(descriptor: HarnessDescriptor, com
     cwd?: unknown;
     acceptCompleteJson?: boolean;
 }): Promise<unknown>;
+/** Plain-text variant for CLI listings that have no JSON form; colour stays off. */
+export declare function runHarnessTextCommand(descriptor: HarnessDescriptor, commandArgs: string[], { cwd }?: {
+    cwd?: unknown;
+}): Promise<string>;
 /** Shared raw catalog: pricing and interactive discovery must not start two CLIs. */
 export declare function runHarnessModelCatalog(descriptor: HarnessDescriptor, { cwd, force }?: {
     cwd?: unknown;

@@ -1436,6 +1436,31 @@ let remoteHost = null;
                 }
                 await route.fulfill({ status: 200, contentType: 'application/json', body: ompAgentsBody() });
             });
+            // The harness's own settings panel: tabs and typed rows from its schema.
+            let settingsPatch;
+            const readSettingsPatch = () => settingsPatch;
+            await desktop.route(/\/api\/harnesses\/omp\/settings(?:\?|$)/, async (route) => {
+                if (route.request().method() === 'PUT')
+                    settingsPatch = (0, test_types_js_1.record)(route.request().postDataJSON());
+                await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+                        tabs: [{ id: 'appearance', label: 'Appearance' }, { id: 'shell', label: 'Shell' }, { id: 'memory', label: 'Memory' }],
+                        settings: [
+                            { key: 'symbolPreset', tab: 'appearance', type: 'enum', description: 'Glyph set', values: ['unicode', 'nerd', 'ascii'], value: 'unicode' },
+                            { key: 'statusLine.showHookStatus', tab: 'appearance', type: 'boolean', description: 'Show hook status', value: true, override: { value: false } },
+                            { key: 'bash.patterns', tab: 'shell', type: 'array', description: 'Command patterns', value: [] },
+                            { key: 'shell.timeoutSeconds', tab: 'shell', type: 'number', description: 'Timeout', value: 30 },
+                            { key: 'hindsight.apiToken', tab: 'memory', type: 'string', description: 'Token', redacted: true },
+                        ],
+                    }) });
+            });
+            // Model comboboxes keep their choice in data-value; options filter as you type.
+            const pickModel = async (selector, query, key) => {
+                await desktop.click(selector);
+                if (query)
+                    await desktop.fill(selector, query);
+                await desktop.locator('.hs-model-pick', { has: desktop.locator(selector) }).locator(`.cwd-option[data-key="${key}"]`).click();
+            };
+            const pickedModel = (selector) => desktop.getAttribute(selector, 'data-value');
             await desktop.evaluate(() => {
                 localStorage.setItem('pi-dish-new-harness', 'omp');
                 return fixtureApp.features.newSessionController.harnesses.load();
@@ -1459,20 +1484,28 @@ let remoteHost = null;
             check(await desktop.isChecked('.hs-agent-enabled[data-agent="scout"]') &&
                 !(await desktop.isChecked('.hs-agent-enabled[data-agent="sonic"]')), 'the enable toggle initializes from the global disabled list');
             check((await desktop.locator('.hs-agent-row[data-agent="scout"]').textContent() ?? '').includes('project override'), 'an agent the project disables here is flagged as a project override');
-            check(await desktop.inputValue('.hs-agent-model[data-agent="scout"]') === 'zai/glm-5.2' &&
+            check(await pickedModel('.hs-agent-model[data-agent="scout"]') === 'zai/glm-5.2' &&
+                await desktop.inputValue('.hs-agent-model[data-agent="scout"]') === 'GLM-5.2' &&
                 await desktop.inputValue('.hs-agent-advisor[data-agent="reviewer"]') === 'on' &&
                 await desktop.inputValue('.hs-agent-prewalk[data-agent="reviewer"]') === '', 'per-agent model, advisor and prewalk controls initialize from the global records');
-            check((await desktop.locator('.hs-agent-row[data-agent="reviewer"] .hs-agent-model option').first().textContent())
-                === '(inherit @slow)', 'the inherit option names the definition\'s own model');
+            check(await desktop.getAttribute('.hs-agent-model[data-agent="reviewer"]', 'placeholder') === '(inherit @slow)', 'the inherit choice names the definition\'s own model');
+            await desktop.fill('.hs-agent-model[data-agent="reviewer"]', 'slow');
+            const reviewerChoices = await desktop.locator('.hs-agent-row[data-agent="reviewer"] .cwd-option')
+                .evaluateAll(rows => rows.map(row => row instanceof HTMLElement ? row.dataset.key : null));
+            check(JSON.stringify(reviewerChoices) === JSON.stringify(['', '@slow']), `typing filters the agent model combobox to matching role refs and models (got ${JSON.stringify(reviewerChoices)})`);
+            await desktop.keyboard.press('Escape');
+            check(await pickedModel('.hs-agent-model[data-agent="reviewer"]') === '' &&
+                await desktop.inputValue('.hs-agent-model[data-agent="reviewer"]') === '', 'Escape abandons a typed filter without changing the choice');
             await desktop.click('#hsTabModels');
             await desktop.waitForSelector('#modelRolesBody .model-role-row');
             check(await desktop.locator('.model-role-row').count() >= 10, 'every canonical OMP role gets a row');
-            check(await desktop.inputValue('.model-role-select[data-role="smol"]') === 'zai/glm-5.2', 'role selects initialize from the global record');
-            check(await desktop.inputValue('.model-role-select[data-role="vision"]') === '', 'a project-only assignment leaves the global select unset');
+            check(await pickedModel('.model-role-select[data-role="smol"]') === 'zai/glm-5.2', 'role pickers initialize from the global record');
+            check(await pickedModel('.model-role-select[data-role="vision"]') === '', 'a project-only assignment leaves the global picker unset');
             check((await desktop.locator('.model-role-row[data-role="vision"]').textContent() ?? '').includes('project override'), 'a differing effective value is flagged as a project override');
-            check((await desktop.locator('.model-role-row[data-role="plan"] option[value="fixture-missing/offline-model"]').textContent())
-                === 'fixture-missing/offline-model', 'role models use the authoritative OMP catalog without credential guesses');
-            check(await desktop.inputValue('.model-role-select[data-role="advisor"]') === 'zai/glm-4.7-flash', 'a level-pinned role parses its model out of the stored ref');
+            await desktop.click('.model-role-select[data-role="plan"]');
+            check(await desktop.locator('.model-role-row[data-role="plan"] .cwd-option[data-key="fixture-missing/offline-model"]').count() === 1, 'role models use the authoritative OMP catalog without credential guesses');
+            await desktop.keyboard.press('Escape');
+            check(await pickedModel('.model-role-select[data-role="advisor"]') === 'zai/glm-4.7-flash', 'a level-pinned role parses its model out of the stored ref');
             check(await desktop.inputValue('.model-role-level[data-role="advisor"]') === 'max' &&
                 (await desktop.locator('.model-role-level[data-role="advisor"] option[value="max"]').textContent()) === '(current) max', 'an off-ladder stored level stays selectable as (current)');
             check(await desktop.inputValue('.model-role-level[data-role="smol"]') === '', 'a bare role ref initializes the level select to inherit');
@@ -1482,7 +1515,7 @@ let remoteHost = null;
             // One Save covers both panes, sending only the rows the user moved.
             await desktop.click('#nsEditRoles');
             await desktop.waitForSelector('#modelRolesBody .model-role-row');
-            await desktop.selectOption('.model-role-select[data-role="plan"]', 'zai/glm-5.2');
+            await pickModel('.model-role-select[data-role="plan"]', 'glm-5', 'zai/glm-5.2');
             const planLevels = await desktop.locator('.model-role-level[data-role="plan"] option')
                 .evaluateAll(options => options.map(option => {
                 if (!(option instanceof HTMLOptionElement))
@@ -1492,11 +1525,27 @@ let remoteHost = null;
             check(JSON.stringify(planLevels) === JSON.stringify(['', 'off', 'auto', 'high', 'max']), `switching the role's model rebuilds the level ladder (got ${JSON.stringify(planLevels)})`);
             await desktop.selectOption('.model-role-level[data-role="plan"]', 'max');
             await desktop.selectOption('.model-role-level[data-role="advisor"]', '');
-            await desktop.selectOption('.model-role-select[data-role="smol"]', '');
+            await pickModel('.model-role-select[data-role="smol"]', '', '');
             await desktop.click('#hsTabAgents');
             await desktop.uncheck('.hs-agent-enabled[data-agent="reviewer"]');
-            await desktop.selectOption('.hs-agent-model[data-agent="scout"]', '');
+            await pickModel('.hs-agent-model[data-agent="scout"]', '', '');
             await desktop.selectOption('.hs-agent-prewalk[data-agent="scout"]', 'off');
+            await desktop.click('.hs-tab[data-tab="settings:appearance"]');
+            await desktop.waitForSelector('.hs-setting-row[data-key="symbolPreset"]');
+            check(await desktop.locator('.hs-setting-row[data-key="bash.patterns"]').isHidden() &&
+                (await desktop.locator('.hs-setting-row[data-key="statusLine.showHookStatus"]').textContent() ?? '').includes('project override'), 'a settings tab shows only its rows and calls out project overrides');
+            await desktop.selectOption('.hs-setting-input[data-key="symbolPreset"]', 'ascii');
+            await desktop.uncheck('.hs-setting-input[data-key="statusLine.showHookStatus"]');
+            await desktop.fill('#hsSettingsSearch', 'patterns');
+            check(await desktop.locator('.hs-setting-row[data-key="bash.patterns"]').isVisible() &&
+                await desktop.locator('.hs-setting-row[data-key="symbolPreset"]').isHidden(), 'settings search spans every tab and hides non-matching rows');
+            await desktop.fill('.hs-setting-input[data-key="bash.patterns"]', '["git *"]');
+            await desktop.fill('#hsSettingsSearch', '');
+            await desktop.click('.hs-tab[data-tab="settings:shell"]');
+            await desktop.fill('.hs-setting-input[data-key="shell.timeoutSeconds"]', '');
+            await desktop.click('.hs-tab[data-tab="settings:memory"]');
+            check(await desktop.inputValue('.hs-setting-input[data-key="hindsight.apiToken"]') === '', 'a configured credential never fills its input');
+            await desktop.check('.hs-setting-clear-box[data-key="hindsight.apiToken"]');
             await desktop.click('#modelRolesSave');
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('harnessSettingsModal'), "document.getElementById('harnessSettingsModal')").style.display === 'none');
             check(JSON.stringify((0, test_types_js_1.record)(readModelRolesPatch()).roles) === JSON.stringify({
@@ -1506,6 +1555,11 @@ let remoteHost = null;
             check(JSON.stringify((0, test_types_js_1.record)(readAgentsPatch()).agents) === JSON.stringify({
                 reviewer: { disabled: true }, scout: { model: null, prewalk: false },
             }), `saving PUTs only the changed agent settings (got ${JSON.stringify((0, test_types_js_1.record)(readAgentsPatch()).agents)})`);
+            check(JSON.stringify((0, test_types_js_1.record)(readSettingsPatch()).settings) === JSON.stringify({
+                'hindsight.apiToken': null, symbolPreset: 'ascii', 'statusLine.showHookStatus': false,
+                'bash.patterns': ['git *'], 'shell.timeoutSeconds': null,
+            }), `saving PUTs only the moved settings; emptied fields and cleared credentials reset ` +
+                `(got ${JSON.stringify((0, test_types_js_1.record)(readSettingsPatch()).settings)})`);
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('nsHarnessRoles'), "document.getElementById('nsHarnessRoles')").textContent.includes('plan zai/glm-5.2'));
             check(!(await desktop.locator('#nsHarnessRoles').textContent() ?? '').includes('smol'), 'the readout refreshes after a save');
             await desktop.fill('#nsModelInput', 'glm-5.2');
@@ -1628,6 +1682,7 @@ let remoteHost = null;
             await desktop.unroute(/\/api\/models\?harness=omp(?:&|$)/);
             await desktop.unroute(/\/api\/harnesses\/omp\/config(?:\?|$)/);
             await desktop.unroute(/\/api\/harnesses\/omp\/agents(?:\?|$)/);
+            await desktop.unroute(/\/api\/harnesses\/omp\/settings(?:\?|$)/);
             await desktop.unroute('**/api/harnesses');
             // 5. Rename propagates to the sidebar without a reload
             console.log('rename:');

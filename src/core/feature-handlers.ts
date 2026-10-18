@@ -41,6 +41,8 @@ export interface FeatureHandlers {
   updateModelRoles: FeatureHandler;
   harnessAgents: FeatureHandler;
   updateHarnessAgents: FeatureHandler;
+  listHarnessSettings: FeatureHandler;
+  updateHarnessSettings: FeatureHandler;
   transcribe: FeatureHandler;
   settings: FeatureHandler;
   updateSettings: FeatureHandler;
@@ -232,6 +234,8 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
     updateModelRoles: harnessSettings.updateModelRoles,
     harnessAgents: harnessSettings.harnessAgents,
     updateHarnessAgents: harnessSettings.updateHarnessAgents,
+    listHarnessSettings: harnessSettings.listHarnessSettings,
+    updateHarnessSettings: harnessSettings.updateHarnessSettings,
     transcribe,
   };
 }

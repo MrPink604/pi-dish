@@ -788,23 +788,28 @@
     </div>
   </div>
 
-  <!-- Harness settings: pi-dish's stand-in for OMP's /agents and /models
-       hubs. Two panes over one save: the task-agent hub (enable, model
-       override, prewalk, advisor) and the model-role assignments. Opened from
-       the session header's harness badge and from the new-session takeover;
-       both entries land on the same editor, scoped to a working directory. -->
+  <!-- Harness settings: pi-dish's stand-in for OMP's /agents, /models and
+       /settings. The task-agent hub (enable, model override, prewalk,
+       advisor), the model-role assignments, then one tab per settings-panel
+       tab the harness reports, all behind one Save. Opened from the session
+       header's harness badge and from the new-session takeover; both entries
+       land on the same editor, scoped to a working directory. -->
   <div class="modal-overlay" id="harnessSettingsModal" style="display:none" data-app-click="backdropCloseHarnessSettings">
     <div class="modal harness-settings-modal" role="dialog" aria-modal="true" aria-labelledby="harnessSettingsTitle">
-      <div class="modal-header"><h3 id="harnessSettingsTitle">Harness settings</h3><button class="btn-icon" data-app-click="closeHarnessSettings" title="Close (Esc)">✕</button></div>
+      <div class="modal-header"><h3 id="harnessSettingsTitle">Harness settings</h3><span class="hs-scope" id="harnessSettingsScope"></span><button class="btn-icon" data-app-click="closeHarnessSettings" title="Close (Esc)">✕</button></div>
       <div class="hs-tabs" role="tablist">
-        <button class="hs-tab" id="hsTabAgents" role="tab" data-app-click="harnessTabAgents">Agents</button>
-        <button class="hs-tab" id="hsTabModels" role="tab" data-app-click="harnessTabModels">Models</button>
-        <span class="hs-scope" id="harnessSettingsScope"></span>
+        <button class="hs-tab" id="hsTabAgents" role="tab" data-tab="agents">Agents</button>
+        <button class="hs-tab" id="hsTabModels" role="tab" data-tab="models">Models</button>
+        <span class="hs-dynamic-tabs" id="hsDynamicTabs"></span>
       </div>
       <div class="hs-pane" id="hsPaneAgents"><div class="hs-agents-body" id="harnessAgentsBody">Loading…</div></div>
       <div class="hs-pane" id="hsPaneModels" style="display:none">
         <div class="hs-defaults" id="harnessSettingsDefaults">Loading…</div>
         <div class="model-roles-body" id="modelRolesBody"></div>
+      </div>
+      <div class="hs-pane" id="hsPaneSettings" style="display:none">
+        <div class="hs-settings-search" id="hsSettingsSearchWrap"><input type="search" id="hsSettingsSearch" class="cwd-input" placeholder="Search all settings…" spellcheck="false" autocomplete="off" aria-label="Search all settings"></div>
+        <div class="hs-settings-body" id="hsSettingsBody"></div>
       </div>
       <div class="modal-footer model-roles-footer">
         <span class="model-roles-error" id="modelRolesError"></span>

@@ -18,6 +18,7 @@ import { formatModelRoleSummary } from '../core/helper-models';
 import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
 
 export const NEW_SESSION_HARNESS_KEY = 'pi-dish-new-harness';
+const NEW_SESSION_MODEL_CHOICES = [{ key: '', label: '(default)' }] as const;
 const HOST_KEY = 'pi-dish-new-host';
 export interface NewSessionHost extends DirectoryHost {
   readonly self?: boolean;
@@ -97,7 +98,7 @@ export function createNewSession(options: {
     rendered: () => modelPicker?.sync(),
   });
   modelPicker = createModelPicker({
-    input: modelInput, dropdown: modelDropdown, rows: () => models.rows(),
+    input: modelInput, dropdown: modelDropdown, rows: () => models.rows(), choices: () => NEW_SESSION_MODEL_CHOICES,
     selected: () => preferences.selectedModel(), onPick: value => preferences.selectModel(value),
     match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
   });

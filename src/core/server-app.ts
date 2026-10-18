@@ -1809,6 +1809,12 @@ export function startServer(rootDirectory: string): Server {
   // `advisor` take a value or null to drop the override and inherit again.
   app.put('/api/harnesses/:id/agents', featureHandlers.updateHarnessAgents);
 
+  // The harness's own settings panel (OMP's /settings), schema-driven: tabs,
+  // types and enum values come from its config CLI. PUT sets global values;
+  // null resets a key to the harness default.
+  app.get('/api/harnesses/:id/settings', featureHandlers.listHarnessSettings);
+  app.put('/api/harnesses/:id/settings', featureHandlers.updateHarnessSettings);
+
 
   app.get('/api/models', featureHandlers.models);
 

@@ -6,4 +6,6 @@ export declare const harnessConfig: Handler;
 export declare const updateModelRoles: Handler;
 export declare const harnessAgents: Handler;
 export declare const updateHarnessAgents: Handler;
+export declare const listHarnessSettings: Handler;
+export declare const updateHarnessSettings: Handler;
 export {};

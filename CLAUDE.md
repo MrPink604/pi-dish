@@ -997,10 +997,12 @@ settings-badge reads share pending work per host; a delayed background result
 cannot overwrite a newer picker catalog. Malformed rows without string ids are
 isolated before rendering. The app retains transport and preference/DOM callbacks.
 
-### Harness settings: agents + model roles (`#harnessSettingsModal`)
+### Harness settings: agents, model roles and settings tabs (`#harnessSettingsModal`)
 
-One modal covers pi-dish's take on OMP's `/models` roles and `/agents` hub:
-two panes (`showHarnessSettingsTab('agents'|'models')`), one Save
+One modal covers pi-dish's take on OMP's `/models` roles, `/agents` hub and
+`/settings` panel: the Agents and Models panes plus one tab per settings-panel
+tab the harness reports (`showTab('agents'|'models'|'settings:<tab>')`, tab
+buttons delegate through `data-tab`), one Save
 (`saveHarnessSettings` → only the rows the user moved). Entries: the session
 header's harness badge (`openSessionHarnessSettings`, mirrored by the mobile
 control panel's `#cpHarnessRow`) and the takeover's `#nsEditAgents` /
@@ -1023,7 +1025,10 @@ exact catalog matches win over suffix parsing, since a model id can itself end
 in `:max`), offering off/auto plus the model's catalog ladder; the server
 stores refs verbatim and needed no change. The "Oh My Pi defaults" readout in
 the takeover summarizes them (`formatModelRoleSummary`); rows come from the
-pure `buildModelRoleRows(global, effective)`.
+pure `buildModelRoleRows(global, effective)`. Role and agent model choices are
+type-to-filter comboboxes (`createModelPicker` with fixed `choices` — unset or
+inherit, role refs, a stored ref the catalog lacks — ahead of the catalog); the
+input's `data-value` holds the choice and `data-initial` the stored value.
 
 **Task agents** (`GET`/`PUT /api/harnesses/:id/agents`): the per-agent settings
 are one array plus three records — `task.disabledAgents`,
@@ -1057,6 +1062,24 @@ fake-pi fixture emulates the two-tier merge
 (`$HOME/.omp/agent/fake-config.json` global + `<cwd>/.omp/fake-project-roles.json`
 and `fake-project-agents.json` overlays) plus `agents unpack`, so the no-leak
 guarantee is testable without the real binary.
+
+**Settings tabs** (`GET`/`PUT /api/harnesses/:id/settings`): schema-driven so
+settings a newer OMP adds appear without a pi-dish change. `omp config list
+--json` gives value/type/description (credentials `redacted`, value omitted);
+only the human `omp config list` carries each key's TUI tab (`[tab]` headings;
+`internal` = no TUI entry, not offered) and an enum's values (`(a|b|c)`), so
+`parseSettingsSchema` joins the two by key. Tab order is the descriptor's
+`settingsTabs` (OMP's `SETTING_TABS`). Rows edit global with the same
+empty-tmpdir read and project-override hint as above. A PUT maps each key to
+`config set <key> <raw>` (JSON for arrays/records, text for scalars) or, for
+`null`, `config reset <key>`; every key/value is validated against a fresh
+schema read before the first write. The CLI drops an argv entry beginning with
+`-` as a flag, so such values get a leading space it trims back off. In the
+browser (`src/browser/harness-settings-tabs.ts`), an emptied text/number/JSON
+field or a ticked "Clear" on a credential sends `null`; a credential input
+never shows its value. Labels derive from the key (the CLI exposes no TUI
+labels, groups, visibility conditions or runtime option lists such as themes).
+OMP's Plugins tab is a package manager, not a schema tab, and is not offered.
 
 ## Routines (lib/routines.js, lib/cron.js, lib/routine-runner.js, /api/routines)
 

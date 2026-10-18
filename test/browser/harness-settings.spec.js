@@ -13,6 +13,12 @@ async function routes(page) {
         } }));
     await page.route('**/api/harnesses/omp/agents?*', (route) => route.fulfill({ json: agents }));
     await page.route('**/api/models?*', (route) => route.fulfill({ json: [model] }));
+    await page.route('**/api/harnesses/omp/settings?*', (route) => route.fulfill({ json: { tabs: [{ id: 'appearance', label: 'Appearance' }],
+            settings: [{ key: 'symbolPreset', tab: 'appearance', type: 'enum', description: '', values: ['unicode', 'ascii'], value: 'unicode' }] } }));
+}
+async function pickModel(page, selector, key) {
+    await page.locator(selector).click();
+    await page.locator('.hs-model-pick', { has: page.locator(selector) }).locator(`.cwd-option[data-key="${key}"]`).click();
 }
 async function open(page, host, cwd) {
     await page.evaluate(({ hostId, cwd }) => fixtureApp.features.harnessSettingsController.open({ hostId, harnessId: 'omp', label: cwd, cwd }), { hostId: host.hostId, cwd });
@@ -28,9 +34,9 @@ async function open(page, host, cwd) {
     await (0, fixtures_js_1.requiredRoute)(held).fulfill({ json: { defaultModel: 'old-response', globalModelRoles: {} } });
     await page.evaluate(() => window.oldSettings);
     await (0, fixtures_js_1.expect)(page.locator('#harnessSettingsDefaults')).toContainText('/peer');
-    await (0, fixtures_js_1.expect)(page.locator('.hs-agent-model[data-agent="constructor"]')).toHaveValue('');
+    await (0, fixtures_js_1.expect)(page.locator('.hs-agent-model[data-agent="constructor"]')).toHaveAttribute('data-value', '');
     await page.locator('#hsTabModels').click();
-    await (0, fixtures_js_1.expect)(page.locator('.model-role-select[data-role="constructor"]')).toHaveValue('fixture/model');
+    await (0, fixtures_js_1.expect)(page.locator('.model-role-select[data-role="constructor"]')).toHaveAttribute('data-value', 'fixture/model');
     await (0, fixtures_js_1.expect)(page.locator('.model-role-row[data-role="constructor"] .model-role-override')).toHaveCount(0);
 });
 for (const resultStatus of [200, 500])
@@ -39,7 +45,7 @@ for (const resultStatus of [200, 500])
         await open(page, fleet.self, '/self');
         await page.locator('.hs-agent-enabled[data-agent="scout"]').uncheck();
         await page.locator('#hsTabModels').click();
-        await page.selectOption('.model-role-select[data-role="smol"]', '');
+        await pickModel(page, '.model-role-select[data-role="smol"]', '');
         const writes = [];
         await page.route(/\/api\/harnesses\/omp\/(agents|model-roles)$/, route => { writes.push(route); });
         await page.evaluate(() => { window.oldSave = fixtureApp.features.harnessSettingsController.save(); });
@@ -70,7 +76,7 @@ for (const resultStatus of [200, 500])
     await open(page, fleet.self, '/self');
     await page.locator('.hs-agent-enabled[data-agent="constructor"]').uncheck();
     await page.locator('#hsTabModels').click();
-    await page.selectOption('.model-role-select[data-role="smol"]', '');
+    await pickModel(page, '.model-role-select[data-role="smol"]', '');
     const writes = [];
     await page.route(/\/api\/harnesses\/omp\/(agents|model-roles)$/, route => {
         writes.push(route.request().postDataJSON());
@@ -105,5 +111,19 @@ for (const resultStatus of [200, 500])
     await (0, fixtures_js_1.requiredRoute)(held).fulfill({ json: { ok: true } });
     await page.evaluate(() => window.closedSave);
     await (0, fixtures_js_1.expect)(page.locator('#nsHarnessConfigValues')).toContainText('after-save');
+    await (0, fixtures_js_1.expect)(page.locator('#harnessSettingsModal')).toBeHidden();
+});
+(0, fixtures_js_1.test)('a harness without a settings panel gets no settings tabs, and one with a panel saves moved rows', async ({ page, fleet }) => {
+    await routes(page);
+    await page.route('**/api/harnesses/omp/settings?cwd=%2Fnone', route => route.fulfill({ status: 501, json: { error: 'Settings are not editable' } }));
+    await open(page, fleet.self, '/none');
+    await (0, fixtures_js_1.expect)(page.locator('#hsDynamicTabs .hs-tab')).toHaveCount(0);
+    await open(page, fleet.self, '/self');
+    await page.locator('.hs-tab[data-tab="settings:appearance"]').click();
+    await page.selectOption('.hs-setting-input[data-key="symbolPreset"]', 'ascii');
+    const writes = [];
+    await page.route(/\/api\/harnesses\/omp\/settings$/, route => { writes.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); });
+    await page.evaluate(() => fixtureApp.features.harnessSettingsController.save());
+    (0, fixtures_js_1.expect)(writes).toEqual([{ settings: { symbolPreset: 'ascii' }, cwd: '/self' }]);
     await (0, fixtures_js_1.expect)(page.locator('#harnessSettingsModal')).toBeHidden();
 });

@@ -5620,18 +5620,11 @@ body.standalone-file-page {
 .model-role-key { color: var(--cyan); font-family: var(--font-mono); font-size: 11px; }
 .model-role-label small { color: var(--text-muted); font-size: 11px; }
 .model-role-override { color: var(--warning); }
-.model-role-select {
-  flex: 0 1 300px;
-  max-width: 100%;
-  padding: 6px;
-  color: var(--text);
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-family: inherit;
-  font-size: 12px;
-}
-.model-role-select:focus { outline: none; border-color: var(--accent); }
+/* Model comboboxes (roles and agent overrides): the wrapper sizes, the input fills it. */
+.hs-model-pick { flex: 0 1 300px; min-width: 0; }
+.model-role-row .hs-model-pick { max-width: 100%; }
+.hs-model-pick .cwd-input { padding: 6px; font-family: inherit; font-size: 12px; text-transform: none; }
+.harness-settings-modal .cwd-dropdown { top: calc(100% + 4px); bottom: auto; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); text-transform: none; }
 .model-role-level {
   flex: 0 1 150px;
   max-width: 100%;
@@ -5648,19 +5641,24 @@ body.standalone-file-page {
 
 @media (max-width: 600px) {
   .model-role-row { gap: 6px; }
-  .model-role-select, .model-role-level { flex: 1 1 100%; }
+  .model-role-row .hs-model-pick, .model-role-level { flex: 1 1 100%; }
 }
 
-/* Harness settings modal: agents hub + model roles behind one Save. */
+/* Harness settings modal: agents hub, model roles and settings tabs behind one Save. */
 .harness-settings-modal { width: min(760px, calc(100vw - 24px)); max-height: min(800px, 90dvh); display: flex; flex-direction: column; }
 .hs-tabs {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 0 16px;
+  overflow-x: auto;
+  scrollbar-width: thin;
   border-bottom: 1px solid var(--line);
 }
+.hs-dynamic-tabs { display: contents; }
 .hs-tab {
+  flex: none;
   padding: 8px 10px;
   color: var(--text-muted);
   background: none;
@@ -5668,12 +5666,14 @@ body.standalone-file-page {
   border-bottom: 2px solid transparent;
   font-family: inherit;
   font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
 }
 .hs-tab:hover { color: var(--text); }
 .hs-tab.active { color: var(--text-bright); border-bottom-color: var(--accent); }
 .hs-scope {
-  margin-left: auto;
+  min-width: 0;
+  margin: 0 8px 0 auto;
   overflow: hidden;
   color: var(--text-muted);
   font-family: var(--font-mono);
@@ -5734,14 +5734,70 @@ body.standalone-file-page {
   text-transform: none;
 }
 .hs-agent-field select:focus { outline: none; border-color: var(--accent); }
-.hs-agent-model { max-width: 240px; }
+.hs-agent-model-field .hs-model-pick { width: 240px; flex: none; }
 
 @media (max-width: 600px) {
   .hs-agent-row { gap: 8px; }
   .hs-agent-controls { width: 100%; }
   .hs-agent-field { flex: 1 1 30%; }
   .hs-agent-field select { width: 100%; }
-  .hs-agent-model { max-width: none; }
+  .hs-agent-model-field { flex-basis: 100%; }
+  .hs-agent-model-field .hs-model-pick { width: 100%; }
+}
+
+/* Settings tabs: the harness's own settings panel, one row per key. */
+.hs-settings-search { position: sticky; top: 0; z-index: 2; padding: 8px 16px; background: var(--bg-card); }
+.hs-settings-search[hidden] { display: none; }
+.hs-settings-search .cwd-input { width: 100%; padding: 6px 8px; }
+.hs-settings-body { padding: 0 16px 8px; color: var(--text); font-size: 12px; }
+.hs-settings-body [hidden] { display: none !important; }
+.hs-settings-tab-title { display: none; margin: 14px 0 0; color: var(--text-bright); font-size: 13px; }
+.hs-settings-body.searching .hs-settings-tab-title { display: block; }
+.hs-settings-error { padding: 12px 0; color: var(--text-muted); }
+.hs-setting-group {
+  margin: 14px 0 0;
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.hs-setting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.hs-setting-label { display: flex; flex-direction: column; gap: 2px; flex: 1 1 260px; min-width: 0; }
+.hs-setting-label strong { color: var(--text-bright); font-size: 13px; }
+.hs-setting-label small { color: var(--text-muted); font-size: 11px; }
+.hs-setting-control { display: flex; align-items: center; gap: 8px; flex: 0 1 260px; min-width: 0; }
+.hs-setting-array .hs-setting-control, .hs-setting-record .hs-setting-control { flex-basis: 100%; }
+.hs-setting-control select,
+.hs-setting-control textarea,
+.hs-setting-control input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  padding: 6px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.hs-setting-control textarea { resize: vertical; }
+.hs-setting-control select:focus,
+.hs-setting-control textarea:focus,
+.hs-setting-control input:focus { outline: none; border-color: var(--accent); }
+.hs-setting-control input[type="checkbox"] { width: 16px; height: 16px; margin: 4px 0; accent-color: var(--accent); }
+.hs-setting-clear { display: flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+
+@media (max-width: 600px) {
+  .hs-setting-row { gap: 6px; }
+  .hs-setting-control { flex-basis: 100%; }
+  .hs-setting-boolean .hs-setting-control { flex-basis: auto; }
 }
 
 @media (max-width: 600px) {

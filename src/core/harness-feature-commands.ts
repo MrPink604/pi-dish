@@ -98,6 +98,24 @@ export function runHarnessJsonCommand(
   });
 }
 
+/** Plain-text variant for CLI listings that have no JSON form; colour stays off. */
+export function runHarnessTextCommand(descriptor: HarnessDescriptor, commandArgs: string[], { cwd }: { cwd?: unknown } = {}): Promise<string> {
+  const spec = harnessLaunchSpec(descriptor);
+  const env: NodeJS.ProcessEnv = { ...process.env, ...spec.env, NO_COLOR: '1' };
+  delete env.FORCE_COLOR;
+  return new Promise((resolve, reject) => {
+    execFile(spec.argv[0], [...spec.argv.slice(1), ...commandArgs], {
+      env,
+      cwd: resolveHarnessCwd(cwd),
+      timeout: 15_000,
+      maxBuffer: 10 * 1024 * 1024,
+    }, (error, stdout, stderr) => {
+      if (error) reject(new Error((stderr || error.message).trim()));
+      else resolve(stdout);
+    });
+  });
+}
+
 /** Shared raw catalog: pricing and interactive discovery must not start two CLIs. */
 export async function runHarnessModelCatalog(
   descriptor: HarnessDescriptor,
