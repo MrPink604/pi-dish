@@ -27,4 +27,17 @@ export declare function encodeEnvelope(body: {
 }): string;
 /** aac v0.11.0 pairs non-interactively only alongside a request; the listener answers this probe itself. */
 export declare const PAIR_PROBE = "pidish-vault:pair";
+/** The listener answers this probe itself with item metadata as JSON in `notes`. */
+export declare const SEARCH_PREFIX = "pidish-vault:search:";
+interface SearchEntry {
+    id: string;
+    name: string;
+    kind: string;
+    uris: string[];
+}
+/** The listing carried in an `aac --output json connect` reply. */
+export declare function decodeSearchReply(stdout: string): {
+    results: SearchEntry[];
+    truncated: boolean;
+};
 export {};

@@ -65,6 +65,13 @@ device name comes from the verified pairing.
 together with a request, so `pi-dish-vault pair <token>` sends this query once and the
 listener answers it with an empty credential without involving pi-dish.
 
+`pidish-vault:search:` + base64url(text) is the search probe. The listener answers it
+itself, without approval, with JSON `{ results: [{ id, name, kind, uris }], truncated }`
+(at most 100, from `bw list items --search`) in the credential's `notes`: metadata only,
+never values or usernames. Before any request reaches pi-dish the listener looks the
+item up (`bw get item`): items in the deny folder (`--deny-folder`, default `no-agents`)
+are refused and never listed, and the card shows the item's Bitwarden name.
+
 The wrapper runs `aac --output json run …`: aac otherwise logs INFO status lines to
 stdout, into the command's own output.
 
@@ -107,3 +114,6 @@ the reason; tag `<hostId>:vault:<id>`; click opens the app with the approval car
 - No persistence of pending requests or grants across pi-dish restarts.
 - aac v0.11.0 is the protocol pin; the listener's `ap-client` dependency uses the same
   tag. Upgrading either side means upgrading both.
+- Agents may list item metadata without approval (operator decision, 2026-10-19): names
+  and URIs reveal which services exist, which the operator accepts for discoverability;
+  the deny folder hides anything that should not be visible at all.

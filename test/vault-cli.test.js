@@ -33,7 +33,8 @@ function setup(t, withSession) {
     }
     const argvLog = path.join(home, 'aac-argv.json');
     const aac = path.join(home, 'aac');
-    fs.writeFileSync(aac, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(process.argv.slice(2)));\nprocess.exit(7);\n`, { mode: 0o755 });
+    // Records its argv; prints AAC_STUB_STDOUT and exits 0 when given, else exits 7.
+    fs.writeFileSync(aac, `#!${process.execPath}\nrequire('fs').writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(process.argv.slice(2)));\nif (process.env.AAC_STUB_STDOUT) { process.stdout.write(process.env.AAC_STUB_STDOUT); process.exit(0); }\nprocess.exit(7);\n`, { mode: 0o755 });
     return { home, aac, argvLog };
 }
 async function hostServer(t) {
@@ -84,4 +85,17 @@ test('run refuses unknown fields, missing commands and out-of-range timeouts bef
         assert.ok(failed, args.join(' '));
     }
     assert.equal(fs.existsSync(argvLog), false);
+});
+test('search sends the encoded text as a probe and prints only the listed metadata', async (t) => {
+    const { home, aac, argvLog } = setup(t, false);
+    const listing = { results: [{ id: 'i-1', name: 'github.com', kind: 'login', uris: ['https://github.com'] }], truncated: true };
+    const env = { ...process.env, HOME: home, AAC_BIN: aac, AAC_STUB_STDOUT: JSON.stringify({ success: true, credential: { notes: JSON.stringify(listing) } }) };
+    delete env.PI_DISH_VAULT_RELAY_URL;
+    const { stdout } = await run(process.execPath, [cli, 'search', 'git', 'hub'], { env });
+    const argv = JSON.parse(fs.readFileSync(argvLog, 'utf8'));
+    assert.deepEqual(argv.slice(0, 4), ['--output', 'json', 'connect', '--domain']);
+    assert.equal(Buffer.from(argv[4].slice('pidish-vault:search:'.length), 'base64url').toString('utf8'), 'git hub');
+    assert.equal(stdout, 'i-1\tlogin\tgithub.com\thttps://github.com\n# More items match; narrow the search.\n');
+    const json = await run(process.execPath, [cli, 'search', '--json'], { env });
+    assert.deepEqual(JSON.parse(json.stdout), listing);
 });

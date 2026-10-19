@@ -11,6 +11,23 @@ pub const PREFIX: &str = "pidish-vault:v1:";
 /// v0.11.0 pairs non-interactively only as part of a credential request. It is
 /// answered with an empty credential and never reaches pi-dish.
 pub const PAIR_PROBE: &str = "pidish-vault:pair";
+/// `pi-dish-vault search` sends `pidish-vault:search:` + base64url(query). The
+/// listener answers it itself with item names, ids and URIs (never values),
+/// as JSON in the credential's `notes`.
+pub const SEARCH_PREFIX: &str = "pidish-vault:search:";
+
+/// The search text of a search probe; `None` for any other query.
+pub fn search_query(query: &CredentialQuery) -> Option<Result<String, String>> {
+    let encoded = query.search_string().trim().strip_prefix(SEARCH_PREFIX)?;
+    Some(
+        URL_SAFE_NO_PAD
+            .decode(encoded.trim_end_matches('='))
+            .map_err(|e| format!("bad search encoding: {e}"))
+            .and_then(|bytes| String::from_utf8(bytes).map_err(|e| format!("bad search text: {e}")))
+            .map(|text| text.trim().to_string()),
+    )
+}
+
 pub const FIELDS: [&str; 5] = ["username", "password", "totp", "uri", "notes"];
 /// Login fields released to a stock `aac` query that names no fields.
 const LOGIN_FIELDS: [&str; 4] = ["username", "password", "totp", "uri"];
@@ -145,5 +162,14 @@ mod tests {
         assert!(decode(&domain(r#"{"item":"x","fields":["ssn"]}"#)).is_err());
         assert!(decode(&domain(r#"{"item":"x","fields":["password","password"]}"#)).is_err());
         assert!(decode(&CredentialQuery::Domain("  ".to_string())).is_err());
+    }
+
+    #[test]
+    fn search_probes_are_recognized_and_decoded() {
+        let probe = CredentialQuery::Domain(format!("{SEARCH_PREFIX}{}", URL_SAFE_NO_PAD.encode(" github ")));
+        assert_eq!(search_query(&probe), Some(Ok("github".to_string())));
+        assert_eq!(search_query(&CredentialQuery::Domain(SEARCH_PREFIX.to_string())), Some(Ok(String::new())));
+        assert!(matches!(search_query(&CredentialQuery::Domain(format!("{SEARCH_PREFIX}!!!"))), Some(Err(_))));
+        assert_eq!(search_query(&CredentialQuery::Domain("github.com".to_string())), None);
     }
 }

@@ -36,16 +36,18 @@ const POLL: Duration = Duration::from_secs(1);
 /// Answer before the agent's own `aac run --timeout` gives up.
 const ANSWER_MARGIN: Duration = Duration::from_secs(5);
 const COMMANDS: &str = "commands: pair <host-name> | status | sync | lock | unlock | quit";
+const DEFAULT_DENY_FOLDER: &str = "no-agents";
 
-const USAGE: &str = "Usage: pi-dish-vault-listener [--relay-url URL] [--dish-url URL] [--state-dir DIR] [--token-file FILE] [--bw-bin PATH]
+const USAGE: &str = "Usage: pi-dish-vault-listener [--relay-url URL] [--dish-url URL] [--state-dir DIR] [--token-file FILE] [--bw-bin PATH] [--deny-folder NAME]
 
 Bitwarden Agent Access listener whose approvals come from pi-dish.
 
-  --relay-url URL   Agent Access relay (default wss://ap.lesspassword.dev)
-  --dish-url URL    local pi-dish server (default http://127.0.0.1:3333)
-  --state-dir DIR   identity and paired hosts (default ~/.pi/dish/vault)
-  --token-file FILE pi-dish bridge token (default ~/.pi/dish/vault/bridge.token)
-  --bw-bin PATH     Bitwarden CLI (default bw)
+  --relay-url URL    Agent Access relay (default wss://ap.lesspassword.dev)
+  --dish-url URL     local pi-dish server (default http://127.0.0.1:3333)
+  --state-dir DIR    identity and paired hosts (default ~/.pi/dish/vault)
+  --token-file FILE  pi-dish bridge token (default ~/.pi/dish/vault/bridge.token)
+  --bw-bin PATH      Bitwarden CLI (default bw)
+  --deny-folder NAME items in this Bitwarden folder are never listed or released (default no-agents)
 
 Set BW_SESSION to start unlocked; otherwise the master password is read from the tty.";
 
@@ -55,6 +57,7 @@ struct Options {
     state_dir: PathBuf,
     token_file: PathBuf,
     bw_bin: String,
+    deny_folder: String,
 }
 
 fn parse_options() -> Result<Option<Options>, String> {
@@ -66,6 +69,7 @@ fn parse_options() -> Result<Option<Options>, String> {
         state_dir: vault_dir.clone(),
         token_file: vault_dir.join("bridge.token"),
         bw_bin: "bw".to_string(),
+        deny_folder: DEFAULT_DENY_FOLDER.to_string(),
     };
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -79,6 +83,7 @@ fn parse_options() -> Result<Option<Options>, String> {
             "--state-dir" => options.state_dir = PathBuf::from(value),
             "--token-file" => options.token_file = PathBuf::from(value),
             "--bw-bin" => options.bw_bin = value,
+            "--deny-folder" => options.deny_folder = value,
             _ => return Err(format!("unknown option {flag}")),
         }
     }
@@ -195,6 +200,23 @@ async fn handle_request(
         let _ = reply.send(CredentialRequestReply { approved: true, credential: Some(empty), credential_id: None });
         return;
     }
+    if let Some(search) = envelope::search_query(&query) {
+        let listing = match search {
+            Ok(text) => vault.search(&text).await.map(|found| (text, found)),
+            Err(error) => Err(error),
+        };
+        return match listing.and_then(|(text, found)| serde_json::to_string(&found).map(|json| (text, found.results.len(), json)).map_err(|e| e.to_string())) {
+            Ok((text, count, json)) => {
+                println!("{device} searched {text:?}: {count} item(s) listed.");
+                let names = CredentialData { username: None, password: None, totp: None, uri: None, notes: Some(json), credential_id: None, domain: None };
+                let _ = reply.send(CredentialRequestReply { approved: true, credential: Some(names), credential_id: None });
+            }
+            Err(error) => {
+                println!("Refused a search from {device}: {error}");
+                deny(reply);
+            }
+        };
+    }
     let request = match envelope::decode(&query) {
         Ok(request) => request,
         Err(error) => {
@@ -206,13 +228,21 @@ async fn handle_request(
         println!("Denied {} for {device}: the vault is locked (type `unlock`).", request.item);
         return deny(reply);
     }
+    // Resolve the item before asking: the card names it, and deny-folder items never reach pi-dish.
+    let prepared = match vault.prepare(&request.item).await {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            println!("Denied {} for {device}: {error}", request.item);
+            return deny(reply);
+        }
+    };
     let id = uuid::Uuid::new_v4().to_string();
     let lifetime = Duration::from_secs(request.timeout_sec).saturating_sub(ANSWER_MARGIN);
     let deadline = Instant::now() + lifetime;
     let new_request = NewRequest {
         id: &id,
         device: Device { name: device.clone(), fingerprint },
-        item: &request.item,
+        item: &prepared.name,
         fields: &request.fields,
         reason: request.reason.as_deref(),
         session: request.session.as_ref(),
@@ -226,7 +256,7 @@ async fn handle_request(
         }
     };
     let short = id.get(..8).unwrap_or(&id).to_string();
-    println!("[{short}] {device} wants {} ({}) — waiting for pi-dish", request.item, request.fields.join(", "));
+    println!("[{short}] {device} wants {} ({}) — waiting for pi-dish", prepared.name, request.fields.join(", "));
     let poller = bridge.clone();
     let decision = bridge::await_decision(first, deadline, POLL, || {
         let poller = poller.clone();
@@ -241,7 +271,7 @@ async fn handle_request(
         println!("[{short}] {decision:?}");
         return deny(reply);
     }
-    match vault.fetch(&request.item, &request.fields).await {
+    match vault.release(&prepared, &request.fields).await {
         Ok(credential) => {
             let credential_id = credential.credential_id.clone();
             let delivered = reply.send(CredentialRequestReply { approved: true, credential: Some(credential), credential_id }).is_ok();
@@ -256,7 +286,7 @@ async fn handle_request(
 
 async fn run(options: Options, session: Option<SecretString>) -> Result<(), String> {
     storage::ensure_dir(&options.state_dir).map_err(|e| format!("{}: {e}", options.state_dir.display()))?;
-    let vault = Arc::new(Vault::new(options.bw_bin.clone(), session));
+    let vault = Arc::new(Vault::new(options.bw_bin.clone(), options.deny_folder.clone(), session));
     if vault.is_unlocked() {
         if let Err(error) = vault.sync().await {
             println!("bw sync failed: {error}");

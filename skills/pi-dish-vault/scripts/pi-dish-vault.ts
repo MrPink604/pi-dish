@@ -52,6 +52,12 @@ Flags:
 Example:
   run --item fleet-sudo-desktop --env PW=password --reason "install rocprofiler" \\
     -- sh -c 'printf "%s\\n" "$PW" | sudo -S pacman -S --needed rocprofiler'`,
+  search: `search — list vault items you may request: names, ids and URIs, never values. No approval needed.
+
+Usage: search [text...] [--json]
+
+Without text, lists every requestable item (up to 100). Request an item by its id
+with \`run --item <id>\`; names are not unique.`,
   pair: `pair — pair this host with the hub's vault listener (once per host).
 
 Usage: pair <psk-token>
@@ -159,6 +165,40 @@ function pair(token: string | undefined): void {
   process.stdout.write('Paired with the vault listener. `status` lists the cached connection.\n');
 }
 
+/** The listener answers this probe itself with item metadata as JSON in `notes`. */
+export const SEARCH_PREFIX = 'pidish-vault:search:';
+
+interface SearchEntry { id: string; name: string; kind: string; uris: string[] }
+
+/** The listing carried in an `aac --output json connect` reply. */
+export function decodeSearchReply(stdout: string): { results: SearchEntry[]; truncated: boolean } {
+  const notes = core.record(core.record(JSON.parse(stdout)).credential ?? {}).notes;
+  if (typeof notes !== 'string') throw new Error('the listener returned no listing (is it up to date?)');
+  const listing = core.record(JSON.parse(notes));
+  const results = Array.isArray(listing.results) ? listing.results.flatMap((entry: unknown) => {
+    const row = core.record(entry ?? {});
+    return typeof row.id === 'string' ? [{
+      id: row.id, name: typeof row.name === 'string' ? row.name : '', kind: typeof row.kind === 'string' ? row.kind : '',
+      uris: Array.isArray(row.uris) ? row.uris.filter((uri): uri is string => typeof uri === 'string') : [],
+    }] : [];
+  }) : [];
+  return { results, truncated: listing.truncated === true };
+}
+
+function search(args: readonly string[]): void {
+  const json = args.includes('--json');
+  const text = args.filter(arg => arg !== '--json').join(' ').trim();
+  const probe = SEARCH_PREFIX + Buffer.from(text, 'utf8').toString('base64url');
+  const result = spawnSync(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', '30']), { encoding: 'utf8' });
+  if (result.error) return fail(`could not run ${aacBin()}: ${result.error.message}`);
+  if (result.status !== 0) return fail(`search failed (exit ${result.status}): ${(result.stderr || result.stdout || '').trim().split('\n').pop() || 'no output'}`);
+  const listing = decodeSearchReply(result.stdout);
+  if (json) return void process.stdout.write(JSON.stringify(listing, null, 2) + '\n');
+  for (const entry of listing.results) process.stdout.write(`${entry.id}\t${entry.kind}\t${entry.name}\t${entry.uris.join(' ')}\n`);
+  if (!listing.results.length) process.stdout.write('# No matching items.\n');
+  if (listing.truncated) process.stdout.write('# More items match; narrow the search.\n');
+}
+
 function status(): void {
   const result = spawnSync(aacBin(), ['connections', 'list'], { encoding: 'utf8' });
   if (result.error) return fail(`aac is not installed (${result.error.message}); install aac v0.11.0 or set AAC_BIN`);
@@ -178,6 +218,7 @@ async function main(): Promise<void> {
   try {
     if (command === 'run') return await run(rest);
     if (command === 'pair') return pair(rest[0]);
+    if (command === 'search') return search(rest);
     if (command === 'status') return status();
     fail(`unknown command: ${command} (run --help for the command list)`);
   } catch (error) {

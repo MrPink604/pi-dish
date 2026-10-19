@@ -899,6 +899,12 @@ the same host, item, fields and session until the window ends; open windows
 are listed with **Revoke**. Pending requests and windows live in memory and
 vanish on restart.
 
+Agents discover what they can ask for with `pi-dish-vault.js search [text]`,
+which lists item names, ids and URIs (never values or usernames) without an
+approval. Items in the Bitwarden folder `no-agents` (listener flag
+`--deny-folder`) are never listed and are refused before reaching pi-dish;
+move anything agents should not even see there.
+
 Setup, on the host whose pi-dish your phone uses:
 
 1. Build the listener (Rust, against the system OpenSSL from `libssl-dev`;
