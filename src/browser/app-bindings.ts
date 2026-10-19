@@ -84,7 +84,10 @@ export function createAppBindings(options: { document: Document; actions: AppAct
   for (const event of ['click', 'change', 'keydown', 'toggle'] as const) {
     for (const node of Array.from(options.document.querySelectorAll<HTMLElement>(`[data-app-${event}]`))) {
       const name = node.getAttribute(`data-app-${event}`);
-      const action = APP_ACTION_NAMES.find(action => action === name); if (!action) throw new Error('Unknown app action: ' + name);
+      // A page whose markup is newer than its cached script names actions this
+      // script lacks; skip those rather than leaving every control unbound.
+      const action = APP_ACTION_NAMES.find(action => action === name);
+      if (!action) { console.error('Unknown app action: ' + name); continue; }
       node.addEventListener(event, value => { if (!disposed && node.isConnected) options.actions[action](value, node); }, { signal: lifetime.signal });
     }
   }
