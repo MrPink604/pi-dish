@@ -496,6 +496,9 @@ on each host pushes when one of its live sessions:
   message;
 - **waits for an answer**: an ask dialog became pending.
 
+A host running the vault listener also pushes each pending
+[vault approval](#vault-approvals-bitwarden); tapping it opens the approval card.
+
 Tapping a notification opens that session, in the existing window or a new
 one. Nothing is shown while a pi-dish window is focused, and sessions launched
 by another agent (peer spawns) report to that agent instead. **Send test**
@@ -871,6 +874,48 @@ steered into the running session, or queued as a follow-up, per routine.
 There is no scripting, chaining, or outbound notification: the event source
 lives outside pi-dish and polls the invocation it started. Agents read the
 contract from `/api/agent-docs/routines`.
+
+### Vault approvals (Bitwarden)
+
+Agents can use single Bitwarden items without the vault ever being unlocked
+for them: each request shows up as a push notification and an approval card
+in pi-dish, and only your **Approve** releases the requested fields of that
+one item into one command's environment. Values never reach the browser, the
+transcript or the model. Transport is Bitwarden's
+[Agent Access](https://github.com/bitwarden/agent-access) (`aac` v0.11.0,
+end-to-end encrypted through Bitwarden's relay); design and contracts are in
+[TASKS/vault-approvals.md](TASKS/vault-approvals.md).
+
+```bash
+# agent side (the pi-dish-vault skill teaches agents this):
+node ~/.pi/agent/skills/pi-dish-vault/scripts/pi-dish-vault.js run \
+  --item fleet-sudo-desktop --env PW=password --reason "install rocprofiler" \
+  -- sh -c 'printf "%s\n" "$PW" | sudo -S pacman -S --needed rocprofiler'
+```
+
+The card shows the item, fields, requesting host (verified by pairing) and
+the session and reason the agent reports. **Approve 15 min** also approves
+the same host, item, fields and session until the window ends; open windows
+are listed with **Revoke**. Pending requests and windows live in memory and
+vanish on restart.
+
+Setup, on the host whose pi-dish your phone uses:
+
+1. Build the listener (Rust, against the system OpenSSL from `libssl-dev`;
+   without `pkg-config`, set `OPENSSL_LIB_DIR` and `OPENSSL_INCLUDE_DIR`):
+   `cargo build --release --manifest-path vault-listener/Cargo.toml`.
+2. `bw login` once, then run
+   `vault-listener/target/release/pi-dish-vault-listener` in a tmux window
+   and type the master password at its prompt. Unlock only here (ssh/tmux
+   over the tailnet), never through the web UI. `lock`/`unlock`/`status`/`sync`
+   work in that window; requests are denied while locked.
+3. On each agent host install `aac` v0.11.0 on `PATH` (or set `AAC_BIN`),
+   type `pair <host-name>` in the listener window and run the printed
+   `pi-dish-vault.js pair <token>` there.
+
+The threat model is cooperative: an agent running as your user could read
+the same local credentials the listener uses, so this guards against
+accidental use and keeps secrets out of transcripts; it is not containment.
 
 ## Slash command support
 

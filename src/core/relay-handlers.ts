@@ -97,6 +97,8 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     // An unknown or malformed name is a bare 404 — the fleet map is not a
     // discovery surface.
     if (!remote) return res.status(404).type('text/plain').send('Not found');
+    // The vault bridge belongs to the host's own listener; it is never a fleet route.
+    if (/^\/vault\/bridge(?:\/|$)/.test(req.path)) return res.status(404).type('text/plain').send('Not found');
     proxyToRemote(remote, req, res, fleetArtifactHook(remote, req));
   };
 

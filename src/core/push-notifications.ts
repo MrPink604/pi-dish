@@ -61,13 +61,15 @@ export interface PushSessionRow {
 export type PushEventKind = 'finished' | 'waiting';
 
 export interface PushPayload {
-  readonly kind: PushEventKind | 'test';
+  readonly kind: PushEventKind | 'test' | 'vault';
   readonly title: string;
   readonly body: string;
   readonly hostId: string;
   readonly sessionId: string | null;
   /** Notification tag: one visible notification per session per device. */
   readonly tag: string;
+  /** Pending vault approval the notification opens (kind `vault` only). */
+  readonly vaultRequestId?: string;
 }
 
 interface SessionWatch { working: boolean; idleSamples: number; asking: boolean }
@@ -201,6 +203,8 @@ export interface PushNotifier {
   unsubscribe(endpoint: unknown): boolean;
   /** Sends a test notification to one registered endpoint; false when not registered here. */
   test(endpoint: unknown): Promise<boolean>;
+  /** Delivers a host-level notification (not a session transition) to every registered device; `tag` is host-relative. */
+  notify(payload: Omit<PushPayload, 'hostId'>): Promise<void>;
   /** One sampling step (exposed for tests). */
   sample(): Promise<void>;
   start(): void;
@@ -308,6 +312,12 @@ export function createPushNotifier(ports: PushNotifierPorts): PushNotifier {
       if (failure) throw new Error(`Push service refused the test: ${failure}`);
       // A push service answering "gone" pruned the endpoint: report it as unregistered.
       return subscriptions().some(entry => entry.endpoint === endpoint);
+    },
+    async notify(payload) {
+      const targets = subscriptions();
+      if (!targets.length || stopped) return;
+      const { hostId } = ports.host();
+      await deliver(targets, { ...payload, hostId, tag: `${hostId}:${payload.tag}` });
     },
     sample: tick,
     start() {

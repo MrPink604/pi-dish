@@ -65,6 +65,7 @@ import { createRecoveryRuntime } from './recovery-runner';
 import { createSessionBounceRuntime, createSessionLifecycleActions } from './session-bounces';
 import { createSessionHibernation } from './session-hibernation';
 import { createPushNotifier } from './push-notifications';
+import { createVaultApprovals, createVaultHandlers, vaultPushPayload } from './vault-approvals';
 import { canonicalSessionId } from './session-key';
 import type { SessionBounceMode } from './session-bounces';
 import skillsLib = require('./skills');
@@ -203,9 +204,28 @@ export function startServer(rootDirectory: string): Server {
 
   app.use(express.static(path.join(rootDirectory, 'public')));
 
+  // Vault approvals (TASKS/vault-approvals.md). The listener's loopback bridge
+  // carries its own token and must answer before the bearer gate; the browser
+  // routes are ordinary gated /api routes. Push is declared further down and
+  // only reached once a request arrives.
+  const vaultHandlers = createVaultHandlers(createVaultApprovals({
+    notify: request => {
+      pushNotifier.notify(vaultPushPayload(request))
+        .catch(error => console.error(`[vault] push failed: ${error instanceof Error ? error.message : String(error)}`));
+    },
+  }));
+  app.use('/api/vault/bridge', vaultHandlers.bridgeGate);
+  app.post('/api/vault/bridge/status', vaultHandlers.bridgeStatus);
+  app.post('/api/vault/bridge/requests', vaultHandlers.bridgeCreate);
+  app.get('/api/vault/bridge/requests/:id', vaultHandlers.bridgeGet);
+  app.delete('/api/vault/bridge/requests/:id', vaultHandlers.bridgeAbandon);
+
   app.use('/api', accessHandlers.apiGate);
   app.get('/api/host', accessHandlers.host);
   app.post('/api/auth/ticket', accessHandlers.ticket);
+  app.get('/api/vault', vaultHandlers.overview);
+  app.post('/api/vault/requests/:id/decision', vaultHandlers.decide);
+  app.delete('/api/vault/grants/:id', vaultHandlers.revokeGrant);
 
   const relayHandlers = createRelayHandlers({
     fleetArtifacts,

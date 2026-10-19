@@ -123,6 +123,19 @@ test('a finished session notifies every device with a preview; agent-launched pe
   });
 });
 
+test('a host-level notification reaches every device with a host-scoped tag', async () => {
+  const { instance, sent } = notifier({ current: [] });
+  await instance.notify({ kind: 'vault', title: 'Vault request', body: 'b', sessionId: null, tag: 'vault:r1', vaultRequestId: 'r1' });
+  assert.equal(sent.length, 0);
+  instance.subscribe(subscription('https://push.example/phone'), instance.publicKey());
+  instance.subscribe(subscription('https://push.example/laptop'), instance.publicKey());
+  await instance.notify({ kind: 'vault', title: 'Vault request', body: 'b', sessionId: null, tag: 'vault:r1', vaultRequestId: 'r1' });
+  assert.deepEqual(sent.map(entry => entry.endpoint).sort(), ['https://push.example/laptop', 'https://push.example/phone']);
+  assert.deepEqual(sent[0].payload, {
+    kind: 'vault', title: 'Vault request', body: 'b', sessionId: null, tag: 'host-1:vault:r1', vaultRequestId: 'r1', hostId: 'host-1',
+  });
+});
+
 test('a gone endpoint is pruned only once its subscription is past the provisioning grace', async () => {
   const clock = { now: Date.parse('2026-10-16T00:00:00Z') };
   const endpoint = 'https://push.example/old';

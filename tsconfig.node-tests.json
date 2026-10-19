@@ -56,6 +56,8 @@
     "test/session-command-handlers.test.ts",
     "test/session-hibernation.test.ts",
     "test/push-notifications.test.ts",
+    "test/vault-approvals.test.ts",
+    "test/vault-cli.test.ts",
     "test/fixtures/fake-ssh.ts",
     "test/fixtures/fake-omp-export.ts",
     "test/fixtures/browser-server.ts",

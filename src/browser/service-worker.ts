@@ -24,13 +24,17 @@ interface WorkerScope {
 
 const worker = self as unknown as WorkerScope;
 
-interface PushMessage { kind: string; title: string; body: string; tag: string; hostId: string; sessionId: string | null }
+interface PushMessage { kind: string; title: string; body: string; tag: string; hostId: string; sessionId: string | null; vaultRequestId: string | null }
 
 function decode(value: unknown): PushMessage | null {
   if (!value || typeof value !== 'object') return null;
   const data = value as Record<string, unknown>;
   if (typeof data.title !== 'string' || typeof data.body !== 'string' || typeof data.tag !== 'string' || typeof data.hostId !== 'string') return null;
-  return { kind: typeof data.kind === 'string' ? data.kind : '', title: data.title, body: data.body, tag: data.tag, hostId: data.hostId, sessionId: typeof data.sessionId === 'string' ? data.sessionId : null };
+  return {
+    kind: typeof data.kind === 'string' ? data.kind : '', title: data.title, body: data.body, tag: data.tag, hostId: data.hostId,
+    sessionId: typeof data.sessionId === 'string' ? data.sessionId : null,
+    vaultRequestId: typeof data.vaultRequestId === 'string' ? data.vaultRequestId : null,
+  };
 }
 
 worker.addEventListener('install', event => event.waitUntil(worker.skipWaiting()));
@@ -48,7 +52,7 @@ worker.addEventListener('push', event => {
     if (shown.kind !== 'test' && windows.some(client => client.focused && client.visibilityState === 'visible')) return;
     await worker.registration.showNotification(shown.title, {
       body: shown.body, tag: shown.tag, icon: 'icon-192.png', badge: 'badge-96.png',
-      data: { hostId: shown.hostId, sessionId: shown.sessionId },
+      data: { hostId: shown.hostId, sessionId: shown.sessionId, vaultRequestId: shown.vaultRequestId },
     });
   })());
 });
@@ -56,9 +60,12 @@ worker.addEventListener('push', event => {
 worker.addEventListener('notificationclick', event => {
   event.notification.close();
   const data: unknown = event.notification.data;
-  const target = data && typeof data === 'object' ? data as { hostId?: unknown; sessionId?: unknown } : {};
-  const open = typeof target.hostId === 'string' && typeof target.sessionId === 'string'
-    ? { type: 'pi-dish-open-session', hostId: target.hostId, sessionId: target.sessionId } : null;
+  const target = data && typeof data === 'object' ? data as { hostId?: unknown; sessionId?: unknown; vaultRequestId?: unknown } : {};
+  // A vault request opens the approval surface; a session notification opens its session.
+  type OpenMessage = { type: 'pi-dish-open-vault' } | { type: 'pi-dish-open-session'; hostId: string; sessionId: string };
+  const open: OpenMessage | null = typeof target.vaultRequestId === 'string' ? { type: 'pi-dish-open-vault' }
+    : typeof target.hostId === 'string' && typeof target.sessionId === 'string'
+      ? { type: 'pi-dish-open-session', hostId: target.hostId, sessionId: target.sessionId } : null;
   event.waitUntil((async () => {
     const windows = await worker.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const existing = windows.find(client => new URL(client.url).origin === worker.location.origin);
@@ -71,7 +78,8 @@ worker.addEventListener('notificationclick', event => {
       }
     }
     const url = new URL('./', worker.location.href);
-    if (open) { url.searchParams.set('openHost', open.hostId); url.searchParams.set('openSession', open.sessionId); }
+    if (open?.type === 'pi-dish-open-vault') url.searchParams.set('openVault', '1');
+    else if (open?.type === 'pi-dish-open-session') { url.searchParams.set('openHost', open.hostId); url.searchParams.set('openSession', open.sessionId); }
     await worker.clients.openWindow(url.href);
   })());
 });

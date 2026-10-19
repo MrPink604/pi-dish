@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pi-dish vault"
+  short_description: "Use one Bitwarden item, approved by the operator in pi-dish"
+  default_prompt: "Use $pi-dish-vault to fetch a credential from the operator's Bitwarden vault, approved in pi-dish, into one command's environment."

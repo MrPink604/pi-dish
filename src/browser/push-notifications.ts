@@ -39,7 +39,7 @@ export interface PushNotifications {
 export function createPushNotifications(options: {
   window: Window; storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>; request: ApiRequest;
   hosts: () => readonly Readonly<BrowserHost>[]; supports: (host: Readonly<BrowserHost>) => boolean; label: (host: Readonly<BrowserHost>) => string;
-  open: (hostId: string, sessionId: string) => void; changed: () => void;
+  open: (hostId: string, sessionId: string) => void; openVault: () => void; changed: () => void;
 }): PushNotifications {
   const { window, storage } = options, navigator = window.navigator;
   const states = new Map<string, HostPushState>();
@@ -139,6 +139,8 @@ export function createPushNotifications(options: {
       const data: unknown = event.data;
       if (record(data) && data.type === 'pi-dish-open-session' && typeof data.hostId === 'string' && typeof data.sessionId === 'string') {
         options.open(data.hostId, data.sessionId);
+      } else if (record(data) && data.type === 'pi-dish-open-vault') {
+        options.openVault();
       }
     });
     registration = navigator.serviceWorker.register('sw.js');
@@ -153,7 +155,7 @@ export function createPushNotifications(options: {
       const text = !entry ? 'Not registered yet' : entry.state === 'failed' ? entry.message : entry.state === 'on' ? 'On' : 'Registering…';
       return `<li class="push-host${entry?.state === 'failed' ? ' failed' : ''}"><span>${escapeHtml(options.label(host))}</span><small>${escapeHtml(text)}</small></li>`;
     }).join('') : '';
-    container.innerHTML = `<div class="preference-row push-row"><label><strong>Notifications</strong><small>Stored on this device. Each host notifies when one of its sessions finishes or waits for an answer, unless pi-dish is focused.</small></label>
+    container.innerHTML = `<div class="preference-row push-row"><label><strong>Notifications</strong><small>Stored on this device. Each host notifies when one of its sessions finishes or waits for an answer, or when its vault listener needs an approval, unless pi-dish is focused.</small></label>
       <div class="push-controls">${unavailable ? '' : `<button class="btn-small" id="pushToggle">${on ? 'Turn off' : 'Turn on'}</button>${on ? '<button class="btn-small" id="pushTest">Send test</button>' : ''}`}${installPrompt ? '<button class="btn-small" id="pushInstall">Install app</button>' : ''}</div>
       ${rows ? `<ul class="push-hosts">${rows}</ul>` : ''}<small id="pushStatus">${unavailable ? escapeHtml(unavailable) : ''}</small></div>`;
     const status = container.querySelector<HTMLElement>('#pushStatus')!;

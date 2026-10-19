@@ -70,6 +70,7 @@ import { createThemes, terminalTheme as terminalThemeBase } from './themes';
 import { createTerminalController } from './terminal';
 import { createPanelResize } from './panel-resize';
 import { createRoutinesView } from './routines-view';
+import { createVaultApprovals, type VaultApprovalsController } from './vault-approvals';
 import { createBounce } from './bounce';
 import { createAppBindings } from './app-bindings';
 import type { HostEndpoint } from './api-client';
@@ -483,6 +484,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   sidebarQuery.loadFilters(); // …then the server copy replaces them
   composerSpeech.mount();
   pushNotifications.mount();
+  vaultApprovals.mount();
   terminalController.mountKeybar();
   panelResize.terminal();
   panelResize.sidebar();
@@ -494,6 +496,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const openHost = opened.get('openHost'), openSession = opened.get('openSession');
   if (openHost && openSession) {
     try { localStorage.setItem('pi-dish-session', sessionKey(openHost, openSession)); } catch {}
+    history.replaceState(null, '', location.pathname);
+  }
+  if (opened.has('openVault')) {
+    vaultApprovals.open();
     history.replaceState(null, '', location.pathname);
   }
   const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
@@ -720,6 +726,12 @@ const pushNotifications: PushNotifications = createPushNotifications({
     const found = sessionState.findSession(sessionId, hostId);
     if (found && generation === sessionState.selectionGeneration) void revealSession(sessionId, found.host || null);
   },
+  openVault: () => vaultApprovals.open(),
+});
+
+// Vault approvals float above every view on the front-door host (TASKS/vault-approvals.md).
+const vaultApprovals: VaultApprovalsController = createVaultApprovals({
+  document, window, request: (...args) => apiTransport.request(...args),
 });
 
 function closeSettingsModal() { displayPreferences.close(); }

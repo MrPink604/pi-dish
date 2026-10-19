@@ -40,6 +40,7 @@
     "test/browser-shared-helpers.test.ts",
     "test/browser-recovery.test.ts",
     "test/browser-bounce.test.ts",
+    "test/browser-vault-approvals.test.ts",
     "test/browser-skills.test.ts",
     "test/browser-search-view.test.ts",
     "test/browser-usage-view.test.ts",
