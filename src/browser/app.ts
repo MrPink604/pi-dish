@@ -308,8 +308,8 @@ const hostPresentation: ReturnType<typeof createHostPresentation> = createHostPr
 const sessionState: ReturnType<typeof createSessionState> = createSessionState({
   getSelfHostId: () => hostDirectory.self.hostId,
   getHostLabel: hostLabelFor,
-  onListsChanged: renderSessions,
-  onCurrentChanged: (...args) => sessionHeader.update(...args),
+  onListsChanged: () => { renderSessions(); vaultApprovals.render(); },
+  onCurrentChanged: (...args) => { sessionHeader.update(...args); vaultApprovals.render(); },
 });
 // Provisional rows for asynchronous harness launches. They are presentation state,
 // not sessions: the durable source of truth remains tmux + the bridge registry.
@@ -499,7 +499,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     history.replaceState(null, '', location.pathname);
   }
   if (opened.has('openVault')) {
-    vaultApprovals.open();
+    vaultApprovals.open(opened.get('openVault'));
     history.replaceState(null, '', location.pathname);
   }
   const saved = parseSessionKey(localStorage.getItem('pi-dish-session') || '');
@@ -726,12 +726,16 @@ const pushNotifications: PushNotifications = createPushNotifications({
     const found = sessionState.findSession(sessionId, hostId);
     if (found && generation === sessionState.selectionGeneration) void revealSession(sessionId, found.host || null);
   },
-  openVault: () => vaultApprovals.open(),
+  openVault: requestId => vaultApprovals.open(requestId),
 });
 
-// Vault approvals float above every view on the front-door host (TASKS/vault-approvals.md).
+// Vault approvals answer in the requesting session's view (TASKS/vault-approvals.md).
 const vaultApprovals: VaultApprovalsController = createVaultApprovals({
   document, window, request: (...args) => apiTransport.request(...args),
+  sessions: () => [...sessionState.sessions.active, ...sessionState.sessions.previous],
+  current: () => sessionState.currentSession,
+  reveal: (id, host) => { void revealSession(id, host); },
+  toast: (message, open) => extensionUI.toast(message, 'warning', open),
 });
 
 function closeSettingsModal() { displayPreferences.close(); }
@@ -1287,6 +1291,7 @@ createAppBindings({ document, actions: {
   openRoutinesView: () => routinesController.open(),
   openSettingsModal: () => displayPreferences.open(),
   openFleetView: () => fleetController.open(),
+  toggleVaultPanel: () => vaultApprovals.togglePanel(),
   refreshFleetView: () => fleetController.refresh(),
   closeFleetView: () => fleetController.close(),
   refreshSessions: () => sidebarLists.refresh(),

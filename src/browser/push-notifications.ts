@@ -39,7 +39,7 @@ export interface PushNotifications {
 export function createPushNotifications(options: {
   window: Window; storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>; request: ApiRequest;
   hosts: () => readonly Readonly<BrowserHost>[]; supports: (host: Readonly<BrowserHost>) => boolean; label: (host: Readonly<BrowserHost>) => string;
-  open: (hostId: string, sessionId: string) => void; openVault: () => void; changed: () => void;
+  open: (hostId: string, sessionId: string) => void; openVault: (requestId: string | null) => void; changed: () => void;
 }): PushNotifications {
   const { window, storage } = options, navigator = window.navigator;
   const states = new Map<string, HostPushState>();
@@ -140,7 +140,7 @@ export function createPushNotifications(options: {
       if (record(data) && data.type === 'pi-dish-open-session' && typeof data.hostId === 'string' && typeof data.sessionId === 'string') {
         options.open(data.hostId, data.sessionId);
       } else if (record(data) && data.type === 'pi-dish-open-vault') {
-        options.openVault();
+        options.openVault(typeof data.requestId === 'string' ? data.requestId : null);
       }
     });
     registration = navigator.serviceWorker.register('sw.js');

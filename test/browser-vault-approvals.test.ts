@@ -7,51 +7,59 @@ import vm = require('node:vm');
 const context = { URL };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
 assertBrowserApiContext(context);
-const { decodeVaultOverview, vaultSurfaceHtml, vaultListenerText } = context.PiDishBrowser;
+const { decodeVaultOverview, vaultCardsHtml, vaultPanelHtml, vaultListenerText, vaultRequestSession } = context.PiDishBrowser;
 
 const NOW = Date.parse('2026-10-19T00:00:00Z');
 const wire = {
   listener: { state: 'ready', account: 'me@example.com', stale: false },
   pending: [
     { id: 'r1', device: { name: 'desktop' }, item: 'fleet-sudo-desktop', fields: ['password'], reason: '<img src=x onerror=alert(1)>',
-      session: { ref: 'desktop/01a0a845', name: 'Htpc <b>provision</b>' }, expiresAt: NOW + 95_000 },
+      session: { ref: 'desktop/01a0a845', name: 'Htpc <b>provision</b>', host: 'desktop' }, expiresAt: NOW + 95_000 },
     { id: '', item: 'dropped' }, null,
   ],
-  grants: [{ id: 'g1', device: { name: 'desktop' }, item: 'github.com', fields: ['username', 'password'], expiresAt: NOW + 600_000 }],
+  grants: [{ id: 'g1', device: { name: 'desktop' }, item: 'github.com', fields: ['username', 'password'], sessionRef: 'desktop/01a0a845', expiresAt: NOW + 600_000 }],
   recent: [],
 };
+const options = { now: NOW, busy: new Set<string>(), notice: '' };
 
 test('the overview keeps usable requests and grants and drops malformed rows', () => {
   const view = decodeVaultOverview(wire);
   assert.deepEqual(view.pending.map(request => request.id), ['r1']);
-  assert.equal(view.pending[0].sessionName, 'Htpc <b>provision</b>');
-  assert.deepEqual(view.grants.map(grant => grant.id), ['g1']);
+  assert.equal(view.pending[0].sessionHost, 'desktop');
+  assert.deepEqual(view.grants.map(grant => [grant.id, grant.sessionRef]), [['g1', 'desktop/01a0a845']]);
   assert.equal(decodeVaultOverview({ ...wire, listener: { state: 'open' } }).listener, null);
   assert.throws(() => decodeVaultOverview({ pending: [] }), /Invalid vault response/);
 });
 
-test('agent-supplied text renders inert and claims are labelled as reported', () => {
-  const html = vaultSurfaceHtml(decodeVaultOverview(wire), { now: NOW, busy: new Set(), expanded: true, notice: '' });
-  assert.ok(!html.includes('<img'), 'reason markup is escaped');
-  assert.ok(!html.includes('<b>'), 'session name markup is escaped');
-  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
-  assert.match(html, /Reason <small>\(reported\)<\/small>/);
-  assert.match(html, /in 1m 35s/);
-  assert.match(html, /data-vault-decision="approve-window"/);
-  assert.match(html, /data-vault-revoke="g1"/);
-  // A pending request has no close button: it must be answered or expire.
-  assert.ok(!html.includes('data-vault-action="collapse"'));
+test('a request resolves to its session only on the host its ref names', () => {
+  const [request] = decodeVaultOverview(wire).pending;
+  const sessions = [
+    { id: '01a0a845-cc06-772e-9e2c-51ae78b25cf6', host: 'h-framework', hostLabel: 'framework' },
+    { id: '01a0a845-cc06-772e-9e2c-51ae78b25cf6', host: 'h-desktop', hostLabel: 'desktop' },
+    { id: '01a0a999-0000-0000-0000-000000000000', host: 'h-desktop', hostLabel: 'desktop' },
+  ];
+  assert.equal(vaultRequestSession(request, sessions)?.host, 'h-desktop');
+  assert.equal(vaultRequestSession(request, sessions.slice(0, 1)), null);
+  assert.equal(vaultRequestSession({ ...request, sessionRef: '' }, sessions), null);
+});
+
+test('in-session cards omit the session line; panel cards link to it; claims render inert', () => {
+  const view = decodeVaultOverview(wire);
+  const card = vaultCardsHtml(view.pending, { ...options, inSession: true });
+  assert.ok(!card.includes('data-vault-open'));
+  assert.ok(!card.includes('<img'));
+  assert.match(card, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(card, /in 1m 35s/);
+  const panel = vaultPanelHtml(view, options);
+  assert.match(panel, /data-vault-open="r1"/);
+  assert.ok(!panel.includes('<b>'), 'session name markup is escaped');
+  assert.match(panel, /data-vault-revoke="g1"/);
+  assert.match(panel, /Vault ready \(me@example.com\)/);
 });
 
 test('an in-flight decision disables only that request', () => {
-  const view = decodeVaultOverview(wire);
-  const html = vaultSurfaceHtml(view, { now: NOW, busy: new Set(['r1']), expanded: true, notice: '' });
+  const html = vaultCardsHtml(decodeVaultOverview(wire).pending, { ...options, busy: new Set(['r1']), inSession: true });
   assert.equal((html.match(/data-vault-decision="[a-z-]+" disabled/g) || []).length, 3);
-});
-
-test('the collapsed surface is a pill counting open windows', () => {
-  const view = { ...decodeVaultOverview(wire), pending: [] };
-  assert.match(vaultSurfaceHtml(view, { now: NOW, busy: new Set(), expanded: false, notice: '' }), /1 vault window open/);
 });
 
 test('the listener line says why an approval would not release anything', () => {

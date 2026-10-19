@@ -5,6 +5,7 @@ export const APP_ACTION_NAMES = [
   'openRoutinesView',
   'openSettingsModal',
   'openFleetView',
+  'toggleVaultPanel',
   'refreshFleetView',
   'closeFleetView',
   'refreshSessions',

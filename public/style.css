@@ -3791,59 +3791,75 @@ body.sidebar-open {
 .ext-ui-toast.warning { border-left: 3px solid var(--warning); }
 .ext-ui-toast.error   { border-left: 3px solid var(--error); }
 
-/* Vault approvals: floats above every view on the front-door host. */
-.vault-approvals {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  z-index: 330;
-  max-width: 380px;
-  max-height: calc(100dvh - 32px);
-  overflow-y: auto;
-  font-size: 13px;
-  line-height: 1.4;
+/* Vault approvals: cards dock above the requesting session's composer like an
+   ask dialog; the sidebar header's lock button opens the global panel. */
+.vault-btn { position: relative; }
+.vault-btn.vault-waiting { color: var(--warning); }
+.vault-badge {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--text-on-accent);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
 }
-.vault-approvals[hidden] { display: none; }
-.vault-approvals.expanded {
-  width: 380px;
+.vault-btn.vault-waiting .vault-badge { background: var(--warning); }
+.vault-dock {
+  margin-bottom: 8px;
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+}
+.vault-dock .vault-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-left: 3px solid var(--warning);
   border-radius: 8px;
   padding: 10px 14px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
 }
-.vault-pill {
+.vault-panel {
+  position: fixed;
+  top: 56px;
+  left: 16px;
+  z-index: 330;
+  width: 380px;
+  max-height: calc(100dvh - 72px);
+  overflow-y: auto;
   background: var(--bg-card);
-  color: var(--text-bright);
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 6px 12px;
-  font: inherit;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+  font-size: 13px;
+  line-height: 1.4;
 }
+.vault-panel[hidden] { display: none; }
+.vault-panel h4 { margin: 10px 0 0; font-size: 12px; color: var(--text-muted); font-weight: 600; }
 .vault-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--text-bright); }
 .vault-status { margin: 4px 0 8px; color: var(--text-muted); font-size: 12px; }
 .vault-status.warn { color: var(--warning); }
-.vault-card { border-top: 1px solid var(--line); padding: 8px 0; }
+.vault-panel .vault-card { border-top: 1px solid var(--line); padding: 8px 0; }
 .vault-card header { display: flex; justify-content: space-between; gap: 8px; color: var(--text-bright); overflow-wrap: anywhere; }
 .vault-fields { color: var(--text-muted); font-size: 12px; }
-.vault-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 6px 0; }
+.vault-card dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 6px 0; font-size: 13px; }
 .vault-card dt { color: var(--text-muted); }
 .vault-card dt small { font-size: 10px; }
 .vault-card dd { margin: 0; overflow-wrap: anywhere; }
+.vault-link { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
 .vault-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .vault-actions .vault-approve { background: var(--success); }
 .vault-actions .vault-deny { background: none; color: var(--error); border: 1px solid var(--error-dim); }
 .vault-actions button:disabled { opacity: 0.5; cursor: default; }
-.vault-grants { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line); }
+.vault-grants { list-style: none; margin: 4px 0 0; padding: 0; }
 .vault-grants li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 0; }
 .vault-grants small, .vault-empty { color: var(--text-muted); }
 .vault-notice { color: var(--warning); margin: 6px 0 0; }
 @media (max-width: 768px) {
-  .vault-approvals { left: 8px; right: 8px; bottom: 8px; max-width: none; }
-  .vault-approvals.expanded { width: auto; }
+  .vault-panel { left: 8px; right: 8px; width: auto; }
   .vault-actions button { flex: 1 1 auto; padding: 9px 12px; }
 }
 

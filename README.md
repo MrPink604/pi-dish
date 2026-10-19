@@ -497,7 +497,7 @@ on each host pushes when one of its live sessions:
 - **waits for an answer**: an ask dialog became pending.
 
 A host running the vault listener also pushes each pending
-[vault approval](#vault-approvals-bitwarden); tapping it opens the approval card.
+[vault approval](#vault-approvals-bitwarden); tapping it opens the requesting session.
 
 Tapping a notification opens that session, in the existing window or a new
 one. Nothing is shown while a pi-dish window is focused, and sessions launched
@@ -893,10 +893,15 @@ node ~/.pi/agent/skills/pi-dish-vault/scripts/pi-dish-vault.js run \
   -- sh -c 'printf "%s\n" "$PW" | sudo -S pacman -S --needed rocprofiler'
 ```
 
-The card shows the item, fields, requesting host (verified by pairing) and
-the session and reason the agent reports. **Approve 15 min** also approves
-the same host, item, fields and session until the window ends; open windows
-are listed with **Revoke**. Pending requests and windows live in memory and
+The approval card docks above the requesting session's composer, like an ask
+dialog; while you view another session, a toast says that session is waiting
+for vault approval and opens it. The card shows the item, fields, requesting
+host (verified by pairing) and the reason the agent reports. **Approve 15 min**
+also approves the same host, item, fields and session until the window ends.
+The lock button in the sidebar header (shown once the host's listener reports)
+opens the vault panel: listener status, every pending request with a link to
+its session, and open windows with **Revoke**; its badge counts pending
+requests, else open windows. Pending requests and windows live in memory and
 vanish on restart.
 
 Agents discover what they can ask for with `pi-dish-vault.js search [text]`,

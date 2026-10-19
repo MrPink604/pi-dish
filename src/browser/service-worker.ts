@@ -61,9 +61,9 @@ worker.addEventListener('notificationclick', event => {
   event.notification.close();
   const data: unknown = event.notification.data;
   const target = data && typeof data === 'object' ? data as { hostId?: unknown; sessionId?: unknown; vaultRequestId?: unknown } : {};
-  // A vault request opens the approval surface; a session notification opens its session.
-  type OpenMessage = { type: 'pi-dish-open-vault' } | { type: 'pi-dish-open-session'; hostId: string; sessionId: string };
-  const open: OpenMessage | null = typeof target.vaultRequestId === 'string' ? { type: 'pi-dish-open-vault' }
+  // A vault request opens its requesting session (or the vault panel); a session notification opens its session.
+  type OpenMessage = { type: 'pi-dish-open-vault'; requestId: string } | { type: 'pi-dish-open-session'; hostId: string; sessionId: string };
+  const open: OpenMessage | null = typeof target.vaultRequestId === 'string' ? { type: 'pi-dish-open-vault', requestId: target.vaultRequestId }
     : typeof target.hostId === 'string' && typeof target.sessionId === 'string'
       ? { type: 'pi-dish-open-session', hostId: target.hostId, sessionId: target.sessionId } : null;
   event.waitUntil((async () => {
@@ -78,7 +78,7 @@ worker.addEventListener('notificationclick', event => {
       }
     }
     const url = new URL('./', worker.location.href);
-    if (open?.type === 'pi-dish-open-vault') url.searchParams.set('openVault', '1');
+    if (open?.type === 'pi-dish-open-vault') url.searchParams.set('openVault', open.requestId);
     else if (open?.type === 'pi-dish-open-session') { url.searchParams.set('openHost', open.hostId); url.searchParams.set('openSession', open.sessionId); }
     await worker.clients.openWindow(url.href);
   })());
