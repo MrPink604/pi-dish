@@ -2310,6 +2310,14 @@ and outside-click policy remain with the shell.
   dedupes consecutive, caps at 50). ArrowUp with the caret at position 0
   walks back; ArrowDown at the end walks forward and finally restores the
   stashed draft. Typing exits browsing (`historyIndex = -1` on input).
+  The history button (`#btnPromptHistory`, shown only when the visible
+  owner has prompts) opens `#promptHistoryPanel` (`src/browser/prompt-history.ts`):
+  newest first, captured owner, a tap merges via `restorePayload` only while
+  that owner is still visible; Copy uses `copyTextToClipboard` (execCommand
+  fallback on http). Settings → Sent prompts lists every `pi-dish-history-*`
+  key through `storedPromptHistories()`/`promptHistoryOwner()` in
+  composer-drafts; clears go through `composerDrafts.clearHistory()` so the
+  live ArrowUp list follows.
 - **Queue strip**: `renderQueueStatus(data)` renders `queue_update` into
   `#queuePanel` as an always-visible-when-non-empty strip above the composer —
   one row per pending steering/follow-up message (including ones typed in the

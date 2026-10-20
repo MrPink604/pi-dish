@@ -96,6 +96,7 @@
     "test/browser/thinking-selector.spec.ts",
     "test/browser/composer-speech.spec.ts",
     "test/browser/composer-drafts.spec.ts",
+    "test/browser/prompt-history.spec.ts",
     "test/browser/composer-ownership.spec.ts",
     "test/browser/composer-autocomplete.spec.ts",
     "test/browser/sidebar-controls.spec.ts",

@@ -357,6 +357,10 @@
               <span class="cp-value">↓</span>
             </button>
           </div>
+          <!-- Sent-prompt recall for touch devices (ArrowUp is the keyboard
+               path): the visible session's prompts, newest first. Rows are
+               built with textContent by prompt-history.ts. -->
+          <div class="prompt-history-panel" id="promptHistoryPanel" role="dialog" aria-label="Sent prompts"></div>
           <div class="queue-panel" id="queuePanel" style="display:none"></div>
           <!-- Ephemeral /btw side-question panel: never part of the
                transcript, dismissed by the user or a session switch. -->
@@ -399,6 +403,9 @@
                      context readout must not shift when a turn starts. -->
                 <button class="tool-btn tool-stop" id="btnStop" data-app-click="abortTurn" title="Stop (Esc)" aria-label="Stop">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>
+                </button>
+                <button class="tool-btn" id="btnPromptHistory" data-app-click="togglePromptHistory" style="display:none" title="Sent prompts" aria-label="Sent prompts" aria-haspopup="dialog" aria-expanded="false">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 4v4.5h4.5"/><path d="M12 7.5V12l3 2"/></svg>
                 </button>
               </div>
             </div>

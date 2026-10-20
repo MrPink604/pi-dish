@@ -47,6 +47,7 @@ import { createMessageRenderer } from './message-render';
 import { createLiveTools } from './live-tools';
 import { createMessageStream } from './message-stream';
 import { createComposerDrafts } from './composer-drafts';
+import { createPromptHistory, type PromptHistoryController } from './prompt-history';
 import { createComposerNotes } from './composer-notes';
 import { createComposerSpeech } from './composer-speech';
 import { createPromptDelivery } from './prompt-delivery';
@@ -710,6 +711,7 @@ const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDi
   persistFilters: (value, host) => persistSavedFilters([...value], host),
   metadataChanged: () => responseDetailsController.update(), contextChanged: () => renderSessions(), alert: message => alert(message),
   notifications: (container, signal) => pushNotifications.renderSettings(container, signal),
+  sentPrompts: (container, signal) => promptHistory.renderSettings(container, signal),
 });
 
 // Web Push registration and the service worker that makes the app installable.
@@ -927,6 +929,17 @@ const messageStreamController: ReturnType<typeof createMessageStream> = createMe
 const composerDrafts: ReturnType<typeof createComposerDrafts> = createComposerDrafts({
   document, storage: localStorage, keyForSession: keyForSessionId, currentSessionId: () => sessionState.currentSession?.id || null,
   autosize: input => autosizePromptInput(input), status: (message, type) => setStatus(message, type),
+  historyChanged: () => promptHistory.update(),
+});
+
+// Touch recall and settings management of sent prompts; rows capture their owner.
+const promptHistory: PromptHistoryController = createPromptHistory({
+  document, storage: localStorage, drafts: composerDrafts, copy: copyTextToClipboard, status: (message, type) => setStatus(message, type), confirm: text => confirm(text),
+  label: owner => {
+    if (owner.startsWith('spawn:')) return { name: null, detail: 'Pending new session' };
+    const { hostId, sessionId } = parseSessionKey(owner), host = hostId ? hostLabelFor(hostId) || hostId : hostLabelFor(null);
+    return { name: sessionState.findSession(sessionId, hostId)?.name || null, detail: [host, sessionId.slice(0, 8)].filter(Boolean).join(' · ') };
+  },
 });
 
 // Dictation retains the composer that requested permission and transcription.
@@ -1141,6 +1154,8 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); lightbox.remove();
   } else if (isSessionMenuOpen()) {
     e.preventDefault(); sidebarControls.closeMenu();
+  } else if (promptHistory.isOpen()) {
+    e.preventDefault(); promptHistory.close();
   } else if (anchoredCommentController.isListOpen()) {
     e.preventDefault(); anchoredCommentController.closeList();
   } else if ((document.getElementById('commentBubble') as HTMLElement).style.display !== 'none') {
@@ -1280,6 +1295,7 @@ const mainPane = createMainPane({
       models: () => sessionControls.closeModels(),
       thinking: () => sessionControls.closeThinking(),
       artifacts: () => sessionInfo.closeArtifacts(),
+      promptHistory: () => promptHistory.close(),
     },
     bounce: () => bounceController.close(),
   },
@@ -1364,4 +1380,5 @@ createAppBindings({ document, actions: {
   saveHarnessSettings: () => harnessSettingsController.save(),
   backdropCloseResponseDetails: (event, node) => { if (event.target === node) responseDetailsController.close(); },
   closeResponseDetails: () => responseDetailsController.close(),
+  togglePromptHistory: () => promptHistory.toggle(),
 } });

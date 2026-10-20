@@ -76,6 +76,7 @@ export const APP_ACTION_NAMES = [
   'saveHarnessSettings',
   'backdropCloseResponseDetails',
   'closeResponseDetails',
+  'togglePromptHistory',
 ] as const;
 export type AppAction = typeof APP_ACTION_NAMES[number];
 export type AppActions = Readonly<Record<AppAction, (event: Event, node: HTMLElement) => unknown>>;

@@ -4549,6 +4549,58 @@ button.badge-context {
 
 .composer-note-dismiss:hover { color: var(--text); }
 
+/* Sent-prompt sheet: anchored above the composer like the control panel.
+   Desktop keeps it beside Send; a phone spans the input area. Rows show a
+   few lines of each prompt; the whole row inserts, Copy stays separate. */
+.prompt-history-panel {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  right: max(24px, calc((100% - var(--content-max)) / 2));
+  width: min(560px, calc(100% - 16px));
+  max-height: min(60dvh, 480px);
+  margin-bottom: 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 60;
+  flex-direction: column;
+  overflow: hidden;
+}
+.prompt-history-panel.open { display: flex; }
+.prompt-history-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 12px 6px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.prompt-history-header small { color: var(--text-muted); font-size: 11px; }
+.prompt-history-list { list-style: none; margin: 0; padding: 4px; overflow-y: auto; overscroll-behavior: contain; }
+.prompt-history-item { display: flex; align-items: flex-start; gap: 6px; border-radius: 8px; }
+.prompt-history-item + .prompt-history-item { border-top: 1px solid var(--line); }
+.prompt-history-text {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 8px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+.prompt-history-clamp {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+}
+.prompt-history-text:hover, .prompt-history-text:active { background: var(--bg-hover); }
+.prompt-history-item .prompt-copy { flex: none; margin: 6px 4px 0 0; }
+.composer-box .tool-btn.active { color: var(--accent); }
+
 /* Desktop trims the rail a little further; the base sizes are touch-sized. */
 @media (min-width: 769px) {
   .composer-box .tool-btn {
@@ -4871,6 +4923,22 @@ img.msg-image {
 }
 .saved-filter-del { flex-shrink: 0; }
 .saved-filters-empty { color: var(--text-muted); }
+/* Sent prompts in settings: one collapsible group per session. */
+.sent-prompts-row { flex-wrap: wrap; }
+.sent-prompts-row > .sent-prompts-list { flex-basis: 100%; }
+.sent-prompts-list { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.sent-prompts-empty { color: var(--text-muted); }
+.sent-prompts-session { border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; }
+.sent-prompts-session summary { display: flex; align-items: baseline; gap: 8px; padding: 8px 0; cursor: pointer; min-width: 0; }
+.sent-prompts-session summary::before { content: '▸'; color: var(--text-muted); flex: none; }
+.sent-prompts-session[open] summary::before { content: '▾'; }
+.sent-prompts-session summary::-webkit-details-marker { display: none; }
+.sent-prompts-name { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sent-prompts-meta { color: var(--text-muted); font-size: 11px; flex: none; margin-left: auto; }
+.sent-prompts-clear { margin-bottom: 6px; }
+.sent-prompts-entries { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; }
+.sent-prompts-entry { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.sent-prompts-text { flex: 1; min-width: 0; font-size: 12px; line-height: 1.45; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 10.5em; overflow-y: auto; }
 /* Hosts section of the Fleet view — a short list plus one add form. */
 .hosts-list { display: flex; flex-direction: column; gap: 4px; min-width: 260px; }
 .host-row { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
@@ -5082,6 +5150,9 @@ img.msg-image {
   .settings-modal { width: 100vw; max-width: none; max-height: 95dvh; }
   .preference-row { align-items: flex-start; flex-direction: column; gap: 8px; }
   .toggle-row { flex-direction: row; }
+  .prompt-history-panel { left: 8px; right: 8px; width: auto; max-height: 60dvh; }
+  .sent-prompts-row > .sent-prompts-list { align-self: stretch; }
+  .sent-prompts-session summary { flex-wrap: wrap; }
 }
 
 /* Clickable file mentions (linkifyFilePaths) — read as text, hint at

@@ -324,6 +324,7 @@ test/browser/page-isolation.spec.js linguist-generated=true
 test/browser/prime-close.spec.js linguist-generated=true
 test/browser/production-composition.spec.js linguist-generated=true
 test/browser/prompt-delivery.spec.js linguist-generated=true
+test/browser/prompt-history.spec.js linguist-generated=true
 test/browser/queue-ownership.spec.js linguist-generated=true
 test/browser/recovery.spec.js linguist-generated=true
 test/browser/rich-text.spec.js linguist-generated=true

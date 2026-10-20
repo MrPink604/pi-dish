@@ -79,6 +79,7 @@ declare global {
     controlStorage: Map<string, string>;
     controlsLog: SidebarControlsLog;
     controlsState: ReturnType<typeof BrowserApi.createSessionState>;
+    copiedPrompt: string;
     copyCalls: string[];
     customLists: ReturnType<typeof BrowserApi.createSidebarLists>;
     customQuery: ReturnType<typeof BrowserApi.createSidebarQuery>;
@@ -224,6 +225,7 @@ declare global {
     resumeNavigations: unknown[];
     resumeResponses: ApiReply[];
     resumeStatuses: unknown[];
+    retainedHistoryRow: HTMLElement;
     retainedSelectionMessage: HTMLElement | null;
     retiredBounceCancel: HTMLElement | null;
     retiredBounceInput: HTMLInputElement | null;
