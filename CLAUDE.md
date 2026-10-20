@@ -1295,8 +1295,10 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   33330 every 15 min (persisted) when its content changed. The scheduler call
   is detached under `timeout 30` because termux-api hangs without the
   Termux:API app; only success writes the `scheduled` marker. The watchdog
-  only keeps sshd up (`sv up sshd` under termux-services, else pgrep/start):
-  the hub can only reach a phone whose sshd is listening.
+  only keeps sshd up: with an enabled termux-services sshd (no `down` file)
+  it starts the runit supervisor, which neither runner (not login shells)
+  has; otherwise pgrep/start a plain sshd. Never both, or runit's sshd loops
+  on the bound port. The hub can only reach a phone whose sshd is listening.
 - **Proxy**: `GET /api/hosts` = self entry + per-remote probe results
   (parallel, bounded ~3s). `/hosts/:name/api/*` streams both directions
   unbuffered (the only exception: the tiny JSON bodies the fleet-artifact

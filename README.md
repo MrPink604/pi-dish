@@ -574,10 +574,13 @@ runs, and Android may kill it. Each time the hub connects to a Termux host it
 installs (and after upgrades refreshes) `~/.pi/dish/satellite/watchdog`, links
 it into `~/.termux/boot/` for Termux:Boot, and schedules it with
 `termux-job-scheduler` to run about every 15 minutes, surviving reboots. The
-watchdog only starts `sshd` if it is not running; Android's JobScheduler
+watchdog only starts `sshd` if it is not running (or, after `sv-enable sshd`
+with termux-services, starts its supervisor); Android's JobScheduler
 restarts Termux to run it even after Termux was killed. Install the
 Termux:API and Termux:Boot apps for this. If the phone is unreachable before
 the hub's first successful connection, open Termux and run `sshd` once.
+`sv-enable` only works in a Termux session started after installing
+termux-services, since the supervisor starts from the login profile.
 
 ### Session recovery
 
