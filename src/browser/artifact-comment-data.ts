@@ -7,32 +7,24 @@ export interface TextAnchor {
 }
 export interface PageComment {
   readonly id: string;
-  readonly sessionId: string;
   readonly body: string;
-  readonly target: Readonly<{ anchor: TextAnchor }>;
+  readonly anchor: TextAnchor;
 }
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
-function comments(value: unknown): readonly unknown[] {
-  return record(value) && Array.isArray(value.comments) ? value.comments : [];
-}
-export function decodeCommentEntries(value: unknown): readonly Readonly<{ id: string; sessionId: string }>[] {
-  return comments(value).flatMap(entry => record(entry) && typeof entry.id === 'string'
-    && entry.id && typeof entry.sessionId === 'string' && entry.sessionId
-    ? [{ id: entry.id, sessionId: entry.sessionId }] : []);
-}
+/** Decodes the page-scoped list (`GET /api/page-comments/:token`). */
 export function decodePageComments(value: unknown): readonly PageComment[] {
-  return comments(value).flatMap(entry => {
+  const entries = record(value) && Array.isArray(value.comments) ? value.comments : [];
+  return entries.flatMap((entry: unknown) => {
     if (!record(entry) || typeof entry.id !== 'string' || !entry.id
-      || typeof entry.sessionId !== 'string' || !entry.sessionId || typeof entry.body !== 'string'
-      || !record(entry.target) || !record(entry.target.anchor)) return [];
-    const anchor = entry.target.anchor;
+      || typeof entry.body !== 'string' || !record(entry.anchor)) return [];
+    const anchor = entry.anchor;
     if (typeof anchor.quote !== 'string' || !anchor.quote) return [];
-    return [{ id: entry.id, sessionId: entry.sessionId, body: entry.body,
-      target: { anchor: { type: 'text' as const, quote: anchor.quote,
+    return [{ id: entry.id, body: entry.body,
+      anchor: { type: 'text' as const, quote: anchor.quote,
         prefix: typeof anchor.prefix === 'string' ? anchor.prefix : '',
-        suffix: typeof anchor.suffix === 'string' ? anchor.suffix : '' } } }];
+        suffix: typeof anchor.suffix === 'string' ? anchor.suffix : '' } }];
   });
 }
 export function responseError(value: unknown, status: number): string {

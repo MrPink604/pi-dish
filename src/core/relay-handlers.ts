@@ -5,6 +5,7 @@ import * as remoteHosts from './remote-hosts';
 import type { Remote, ProbeResult } from './remote-hosts';
 import type { ArtifactKind, FleetArtifactRecord, FleetArtifactStore } from './fleet-artifacts';
 import type { HostDescriptor, TransportRequest, TransportResponse, TransportHandler } from './access-handlers';
+import { isolateArtifact } from './artifact-isolation';
 
 /** Public fallback only; callers retain local-first artifact ownership. */
 export interface PublicArtifactRelay {
@@ -23,7 +24,7 @@ export interface RelayHandlers {
   listArtifacts: TransportHandler;
   removeArtifact: TransportHandler;
   hosts: TransportHandler;
-  comments: TransportHandler;
+  pageComments: TransportHandler;
   publicArtifacts: PublicArtifactRelay;
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean;
 }
@@ -500,6 +501,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
           }
           res.status(peerRes.statusCode!);
           copyRelayResponseHeaders(peerRes, res);
+          isolateArtifact(res, kind);
           peerRes.pipe(res);
           res.on('close', () => { try { peerRes.destroy(); } catch {} });
       },
@@ -541,31 +543,22 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   };
 
   // Feedback on a page this host merely fronts belongs to the host whose agent
-  // will read it. The overlay injected into a proxied page makes its calls
-  // relative, so they land here; every one of them names its page token, which
-  // is what routes them home. Anything without a token — or with one this host
-  // owns or has never mapped — takes the normal local path.
-  function fleetPageTokenFor(req: TransportRequest) {
-    const body = objectFields(req.body);
-    const candidates = [req.query?.pageToken, body.pageToken, objectFields(body.target).pageToken];
-    const token = candidates.find((value) => fleetArtifacts.isValidToken(value));
-    if (!token || ports.localPageExists(token)) return null;
+  // will read it. The overlay injected into a proxied page calls this host's
+  // page-scoped comment routes (mounted at /api/page-comments/:token); a token
+  // this host owns or has never mapped takes the normal local path.
+  const pageComments: TransportHandler = (req, res, next) => {
+    const token = req.params.token;
+    if (!fleetArtifacts.isValidToken(token) || ports.localPageExists(token)) return next();
     const mapping = fleetArtifacts.get(token);
-    return mapping && mapping.kind === 'page' ? mapping : null;
-  }
-
-  const comments: TransportHandler = (req, res, next) => {
-    const mapping = fleetPageTokenFor(req);
-    if (!mapping) return next();
-    const remote = remoteHosts.getRemote(mapping.host);
+    const remote = mapping?.kind === 'page' ? remoteHosts.getRemote(mapping.host) : null;
     if (!remote) return next();
-    proxyCommentToOwner(remote, req, res);
+    proxyCommentToOwner(remote, req, res, `/api/page-comments/${token}`);
   };
 
   // Comment payloads are small JSON both ways, and express has already parsed
   // the request body here — the same buffered exception the artifact creation
   // responses get, not a second byte relay.
-  function proxyCommentToOwner(remote: Remote, req: TransportRequest, res: TransportResponse) {
+  function proxyCommentToOwner(remote: Remote, req: TransportRequest, res: TransportResponse, peerBase: string) {
     const rest = req.url === '/' ? '' : req.url;
     const payload = req.method === 'GET' || req.method === 'HEAD' ? null : JSON.stringify(req.body ?? {});
     const headers: OutgoingHttpHeaders = { accept: 'application/json', 'accept-encoding': 'identity' };
@@ -575,7 +568,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     }
 
     relayFirstResponse(
-      remoteHosts.request(remote, { method: req.method, path: `/api/comments${rest}`, headers }),
+      remoteHosts.request(remote, { method: req.method, path: `${peerBase}${rest}`, headers }),
       PROXY_RESPONSE_TIMEOUT_MS,
       (upstream) => {
         if (payload !== null) upstream.write(payload);
@@ -664,5 +657,5 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
         teardown();
       });
   }
-  return { rawApi, registerArtifact, listArtifacts, removeArtifact, hosts, comments, publicArtifacts: { serve: serveFleetArtifact }, upgrade };
+  return { rawApi, registerArtifact, listArtifacts, removeArtifact, hosts, pageComments, publicArtifacts: { serve: serveFleetArtifact }, upgrade };
 }

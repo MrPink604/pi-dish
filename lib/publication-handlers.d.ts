@@ -38,6 +38,10 @@ export interface PublicationHandlers {
     revokePage: PublicationHandler;
     page: PublicationHandler;
     pageAsset: PublicationHandler;
+    listPageComments: PublicationHandler;
+    createPageComment: PublicationHandler;
+    updatePageComment: PublicationHandler;
+    deletePageComment: PublicationHandler;
     publicPage: PublicationHandler;
     publicPageAsset: PublicationHandler;
     fileStyles: PublicationHandler;

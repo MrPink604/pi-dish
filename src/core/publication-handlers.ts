@@ -11,6 +11,7 @@ import { registryIdentity, routeIdentity, routeSessionId } from './session-owner
 import { readFileForViewer } from './file-mention';
 import { renderFilePage } from './file-page';
 import { readOmpExportData } from './omp-export';
+import { isolateArtifact } from './artifact-isolation';
 import type { SessionSource, DiscoveryCandidate } from './session-source-contracts';
 import type { BridgeRegistryEntry } from './contracts';
 import type { SessionReadHandlers } from './session-read-handlers';
@@ -51,6 +52,10 @@ export interface PublicationHandlers {
   revokePage: PublicationHandler;
   page: PublicationHandler;
   pageAsset: PublicationHandler;
+  listPageComments: PublicationHandler;
+  createPageComment: PublicationHandler;
+  updatePageComment: PublicationHandler;
+  deletePageComment: PublicationHandler;
   publicPage: PublicationHandler;
   publicPageAsset: PublicationHandler;
   fileStyles: PublicationHandler;
@@ -91,6 +96,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     const share = shares.getShare(req.params.token);
     // A token this host doesn't own may still belong to a peer it fronts.
     if (!share) return ports.relay.serve(req, res, 'share');
+    isolateArtifact(res, 'share');
     if (share.kind === 'html') {
       const htmlPath = shares.getShareHtmlPath(req.params.token);
       if (!htmlPath) return res.status(404).type('text/plain').send('Not found');
@@ -330,9 +336,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     }
     return {
       id: comment.id,
-      // The page overlay reads the index with only a page token in hand and
-      // needs the session to fetch/edit/delete; /api is main-app only (the
-      // public share listener never mounts it), which is the trust boundary.
+      // The comments CLI routes get/ack/edit by the session it reads here.
       sessionId: comment.sessionId,
       createdAt: comment.createdAt,
       bodyPreview: commentPreview(comment.body, 'comment.body'),
@@ -345,13 +349,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   // Reading this index changes no comment state.
   const commentIndex: PublicationHandler = (req, res) => {
     const sessionId = shortString(req.query.sessionId, 512);
-    // A published page knows its own token but not the session behind it, so
-    // the overlay scopes the index that way instead.
-    const pageToken = shortString(req.query.pageToken, 256);
-    if (!sessionId && !pageToken) {
-      return res.status(400).json({ error: 'sessionId or pageToken required' });
-    }
-    const open = comments.listComments({ sessionId, pageToken, state: 'open' });
+    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    const open = comments.listComments({ sessionId, state: 'open' });
     res.json({ comments: open.map(commentIndexEntry), total: open.length });
   };
 
@@ -430,6 +429,91 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     }
     const comment = comments.acknowledgeComment(req.params.id);
     res.json(comment);
+  };
+
+  // =========================================================================
+  // Page-scoped comments (the published-page overlay)
+  // =========================================================================
+  //
+  // Published pages run in an opaque sandboxed origin (artifact-isolation), so
+  // the overlay injected into them cannot use the session-wide comment API.
+  // These routes take the page token as their whole scope: every read and
+  // write is limited to open comments anchored on that page, the session
+  // comes from the page registration, and responses carry only what the
+  // overlay renders. Page scripts share the overlay's document and so its
+  // capability — commenting on their own page — and nothing more. They stay
+  // under /api: the bearer gate applies, the public listener never mounts
+  // them, and access-handlers' pageCommentCors answers the opaque origin.
+
+  function pageCommentView(comment: comments.CommentDto | comments.CommentRecord) {
+    const anchor = fields(fields(comment.target).anchor);
+    return {
+      id: comment.id,
+      body: comment.body,
+      anchor: { type: anchor.type, quote: anchor.quote, prefix: anchor.prefix, suffix: anchor.suffix },
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+    };
+  }
+
+  function commentablePage(req: PublicationRequest, res: PublicationResponse) {
+    const page = pages.getPage(req.params.token);
+    if (page && page.renderer !== 'file') return page;
+    res.status(404).json({ error: 'page not found' });
+    return null;
+  }
+
+  function openPageComment(req: PublicationRequest, res: PublicationResponse) {
+    if (!commentablePage(req, res)) return null;
+    const existing = comments.getComment(req.params.id);
+    const target = fields(existing?.target);
+    if (!existing || target.kind !== 'page' || target.pageToken !== req.params.token) {
+      res.status(404).json({ error: 'comment not found' });
+      return null;
+    }
+    if (existing.acknowledgedAt) {
+      res.status(409).json({ error: 'comment already acknowledged' });
+      return null;
+    }
+    return existing;
+  }
+
+  const listPageComments: PublicationHandler = (req, res) => {
+    if (!commentablePage(req, res)) return;
+    const open = comments.listComments({ pageToken: req.params.token, state: 'open' });
+    res.json({ comments: open.map(pageCommentView) });
+  };
+
+  const createPageComment: PublicationHandler = (req, res) => {
+    const page = commentablePage(req, res);
+    if (!page) return;
+    const input = fields(req.body);
+    const body = typeof input.body === 'string' ? shortString(input.body.trim(), 10000) : null;
+    if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
+    const target = cleanCommentTarget({ kind: 'page', pageToken: req.params.token, anchor: input.anchor });
+    if (!target) return res.status(400).json({ error: 'a text anchor is required' });
+    const sessionId = page.sessionId || inferSessionForPath(page.root);
+    const knownSessionId = sessionId && canonicalKnownSessionId(sessionId);
+    if (!knownSessionId) return res.status(404).json({ error: 'target session not found' });
+    res.status(201).json(pageCommentView(comments.createComment({ sessionId: knownSessionId, body, target })));
+  };
+
+  const updatePageComment: PublicationHandler = (req, res) => {
+    if (!openPageComment(req, res)) return;
+    const rawBody = fields(req.body).body;
+    const body = typeof rawBody === 'string' ? shortString(rawBody.trim(), 10000) : null;
+    if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
+    const comment = comments.updateComment(req.params.id, body);
+    if (!comment) return res.status(409).json({ error: 'comment already acknowledged' });
+    res.json(pageCommentView(comment));
+  };
+
+  const deletePageComment: PublicationHandler = (req, res) => {
+    if (!openPageComment(req, res)) return;
+    if (!comments.deleteComment(req.params.id)) {
+      return res.status(409).json({ error: 'comment already acknowledged' });
+    }
+    res.json({ ok: true });
   };
 
   function pagePayload(token: unknown, entry: pages.PageDto) {
@@ -551,7 +635,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       return res.type(safeMime).sendFile(root, (err) => { if (err) notFound(); });
     }
     res.setHeader('Cache-Control', 'public, no-cache');
-    res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self' http: https:; base-uri 'none'; form-action 'none'");
+    // Appended to the sandbox servePage already set: both policies apply.
+    res.append('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self' http: https:; base-uri 'none'; form-action 'none'");
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.type('html').send(renderFilePage({
@@ -569,6 +654,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     // on the public listener, which asks the peer to leave it out (below).
     if (!entry) return ports.relay.serve(req, res, 'page', { annotate });
     if (req.headers[PAGE_COMMENTS_HEADER] === 'off') annotate = false;
+    isolateArtifact(res, 'page');
     const notFound = () => { if (!res.headersSent) res.status(404).type('text/plain').send('Not found'); };
     const root = entry.root;
     if (typeof root !== 'string') return notFound();
@@ -603,7 +689,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     importShare, createShare, revokeShare, getShare, serveSharedSession,
     createComment, commentIndex, commentCount, getComments, updateComment,
     deleteComment, acknowledgeComment, createPage, listPages, revokePage,
-    page, pageAsset,
+    page, pageAsset, listPageComments, createPageComment,
+    updatePageComment, deletePageComment,
     publicPage: (req, res) => servePage(req, res),
     publicPageAsset: (req, res) => {
       req.params[0] = '/' + (req.params[0] || '');

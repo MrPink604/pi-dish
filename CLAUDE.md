@@ -1210,6 +1210,28 @@ collects everything shared from the session — its pages plus the share
 link — in one modal (open/copy/revoke); `refreshArtifacts` re-fetches on
 session select, turn end, and every publish/revoke path.
 
+**Origin isolation.** Pages and share exports are untrusted documents on the
+app's own origin, which holds bearer tokens for fleet hosts and per-session
+prompt history in localStorage and drives agents through same-origin `/api`.
+Every `/page` and `/share` response therefore carries
+`Content-Security-Policy: sandbox allow-scripts allow-forms allow-popups
+allow-popups-to-escape-sandbox allow-modals allow-downloads` — deliberately
+without `allow-same-origin` (`src/core/artifact-isolation.ts`). The document
+gets an opaque origin: its scripts run, but storage access throws
+`SecurityError`, `/api` responses are unreadable cross-origin, service
+workers cannot register, and frames/popups of the app cannot be scripted.
+Applied to every file under a page root (any HTML or SVG asset is a
+navigable document), on the main app and the share listener, and re-applied
+by a hub after copying a relayed peer's headers, so an older peer is isolated
+too. Policies only accumulate: the file renderer keeps its stricter
+`default-src 'none'` policy alongside. Page responses also send
+`Access-Control-Allow-Origin: *`, because the opaque origin turns a page's
+own module scripts, fonts and `fetch('data.json')` into CORS requests.
+Consequence for authors: pages cannot use localStorage, sessionStorage,
+IndexedDB or cookies. A CSP sandbox was chosen over a separate artifact
+origin/port because it needs no extra listener, DNS or proxy configuration
+and covers the relay and share listener uniformly.
+
 ## Multi-host fleet (TASKS/multi-host.md; lib/host-identity.js, lib/remote-hosts.js)
 
 One pane of glass over several pi-dish hosts, t3code-shaped: **the client is
@@ -1538,12 +1560,16 @@ drives that route through the agent's *own* server's `/hosts/<hub>` proxy, so
 an agent never holds a hub address or credential.
 
 Comments on a fronted page are the gotcha: the overlay is injected by the
-owner but its relative `/api/comments*` calls land on the hub. Every overlay
-call carries its `pageToken` (create in the target, the rest as an additive
-body/query field), and the hub routes any `/api/comments*` request whose
-token is fleet-mapped — and not a local page — to the owner, so feedback
-files where the session's agent will read it. Requests without a token behave
-exactly as before. The public listener has no `/api` to answer, so it asks
+owner but its relative `/api/page-comments/<token>*` calls land on the hub.
+The hub routes any such call whose path token is fleet-mapped — and not a
+local page — to the owner, so feedback files where the session's agent will
+read it; the hub's own `pageCommentCors` answers the sandboxed page first.
+The session-wide `/api/comments*` routes are never relayed. A hub also
+re-applies the artifact sandbox to every relayed page/share response, so an
+older owner's unsandboxed page is still isolated on the hub (the overlay
+script is the hub's own; an older owner does not answer its page-scoped
+calls, so commenting there stays inert until it upgrades). The public
+listener has no `/api` to answer, so it asks
 the owner to skip the injection (`x-pi-dish-page-comments: off`) and keeps
 serving raw, non-commentable page HTML.
 
@@ -1582,10 +1608,20 @@ Clicking a mark reopens the composer in edit mode: `PATCH /api/comments/:id`
 and `DELETE /api/comments/:id` (JSON `{ sessionId }`, same 404/403 guards as
 ack, plus 409 once acknowledged — an acknowledged comment is the agent's
 record of what it was told and stays immutable). Deletion is a two-tap arm.
-`GET /api/comments/index` also accepts `pageToken` and every entry carries
-`sessionId`, which is how the page overlay — which knows only its own token —
-reaches `/api/comments/get` and the edit routes; that's safe because `/api` is
-main-app only (the public share listener never mounts it).
+The page overlay cannot use those session-wide routes: it runs inside the
+page's opaque sandboxed origin. It talks to page-scoped routes instead —
+`GET`/`POST /api/page-comments/:token` and `PATCH`/`DELETE
+/api/page-comments/:token/:id` — which only see open comments anchored on
+that page, take the session from the page registration (never the client),
+and return `{ id, body, anchor, createdAt, updatedAt }` without session id or
+filesystem target. `accessHandlers.pageCommentCors` answers `Origin: null`
+(credential-free) for these routes only, so no other API becomes readable to
+a page. Page scripts share the overlay's document and therefore its
+capability — commenting on their own page — and nothing more. The routes sit
+under `/api`, so the bearer gate applies (with a token configured the overlay
+stays inert, as before) and the public share listener never mounts them. A
+hub fronting a peer's page relays these calls to the owner by the path token
+(`relayHandlers.pageComments`).
 
 Main-server page responses inject generated `public/artifact-comments.js` into HTML
 (strict source: `src/browser/artifact-comments.ts`, rebuilt with `npm run build:browser`)

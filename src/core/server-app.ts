@@ -220,6 +220,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/vault/bridge/requests/:id', vaultHandlers.bridgeGet);
   app.delete('/api/vault/bridge/requests/:id', vaultHandlers.bridgeAbandon);
 
+  app.use('/api/page-comments', accessHandlers.pageCommentCors);
   app.use('/api', accessHandlers.apiGate);
   app.get('/api/host', accessHandlers.host);
   app.post('/api/auth/ticket', accessHandlers.ticket);
@@ -1303,7 +1304,13 @@ export function startServer(rootDirectory: string): Server {
   // it needs, and acknowledges completed items. Creating a comment never
   // prompts, steers, or starts an agent turn.
 
-  app.use('/api/comments', relayHandlers.comments);
+  // Published pages (opaque sandboxed origins) reach their own comments only
+  // through these page-scoped routes; a fronted peer's page relays home.
+  app.use('/api/page-comments/:token', relayHandlers.pageComments);
+  app.get('/api/page-comments/:token', publicationHandlers.listPageComments);
+  app.post('/api/page-comments/:token', publicationHandlers.createPageComment);
+  app.patch('/api/page-comments/:token/:id', publicationHandlers.updatePageComment);
+  app.delete('/api/page-comments/:token/:id', publicationHandlers.deletePageComment);
 
   app.post('/api/comments', publicationHandlers.createComment);
 

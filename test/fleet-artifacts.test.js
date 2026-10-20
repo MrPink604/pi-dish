@@ -365,9 +365,15 @@ test('the hub serves the peer\'s page, its assets and its trailing-slash redirec
     assert.equal(index.status, 200);
     const html = await index.text();
     assert.ok(html.includes('peer page body'), 'the page came from the peer\'s disk');
+    const sandbox = (index.headers.get('content-security-policy') ?? '').split(/[,;]/).map(part => part.trim())
+        .filter(part => part.startsWith('sandbox'));
+    assert.equal(sandbox.length, 1, 'the relayed document is sandboxed once');
+    assert.doesNotMatch((0, test_types_js_1.present)(sandbox[0]), /allow-same-origin/);
     const asset = await fetch(`${hub.base}/page/${pageToken}/style.css`);
     assert.equal(asset.status, 200);
     assert.ok((await asset.text()).includes('peer-asset-color'));
+    // The relay drops the peer's CORS headers; the hub restores its own.
+    assert.equal(asset.headers.get('access-control-allow-origin'), '*');
     // The bare token must still redirect, or the document's relative asset
     // URLs resolve outside the token.
     const bare = await fetch(`${hub.base}/page/${pageToken}`, { redirect: 'manual' });
@@ -473,42 +479,34 @@ test('a request carrying the hop header answers locally and contacts nobody', as
 });
 // --- comments on a fleet page --------------------------------------------
 test('a comment on a fleet page files on the peer, where its agent reads it', async () => {
-    const created = await fetch(`${hub.base}/api/comments`, {
+    const scoped = `${hub.base}/api/page-comments/${pageToken}`;
+    const created = await fetch(scoped, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            body: 'tighten this paragraph',
-            target: { kind: 'page', pageToken, anchor: { type: 'text', quote: 'peer page body' } },
-        }),
+        headers: { 'Content-Type': 'application/json', Origin: 'null' },
+        body: JSON.stringify({ body: 'tighten this paragraph', anchor: { type: 'text', quote: 'peer page body' } }),
     });
     const comment = await json(created);
     assert.equal(created.status, 201, JSON.stringify(comment).slice(0, 200));
-    assert.equal((0, test_types_js_1.record)(comment.target).pageToken, pageToken);
+    assert.equal(created.headers.get('access-control-allow-origin'), 'null', 'the hub answers the sandboxed overlay');
     const peerComments = (0, test_types_js_1.record)(JSON.parse(fs.readFileSync(path.join(peer.home, '.pi', 'dish', 'comments.json'), 'utf8')));
     const commentId = String(comment.id), storedComment = (0, test_types_js_1.record)(peerComments[commentId]);
     assert.ok(peerComments[commentId], 'the comment landed in the owning host\'s store');
     assert.equal(storedComment.body, 'tighten this paragraph');
+    assert.equal((0, test_types_js_1.record)(storedComment.target).pageToken, pageToken);
     assert.equal(fs.existsSync(path.join(hub.home, '.pi', 'dish', 'comments.json')), false, 'the hub keeps no copy of a peer\'s feedback');
     // The overlay's own read path routes the same way.
-    const index = await json(await fetch(`${hub.base}/api/comments/index?pageToken=${pageToken}`));
-    const indexedComments = (0, test_types_js_1.records)(index.comments);
-    assert.deepEqual(indexedComments.map(indexed => indexed.id), [comment.id]);
-    const full = await json(await fetch(`${hub.base}/api/comments/get`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: (0, test_types_js_1.present)(indexedComments[0]).sessionId, ids: [comment.id], pageToken }),
-    }));
-    assert.equal((0, test_types_js_1.present)((0, test_types_js_1.records)(full.comments)[0]).body, 'tighten this paragraph');
-    // …and so do the edit routes, which the overlay now tags with its token.
-    const patched = await json(await fetch(`${hub.base}/api/comments/${comment.id}`, {
+    const listed = await json(await fetch(scoped));
+    assert.deepEqual((0, test_types_js_1.records)(listed.comments).map(entry => entry.body), ['tighten this paragraph']);
+    // …and so does editing.
+    const patched = await json(await fetch(`${scoped}/${commentId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: comment.sessionId, body: 'tighten this paragraph, please', pageToken }),
+        body: JSON.stringify({ body: 'tighten this paragraph, please' }),
     }));
     assert.equal(patched.body, 'tighten this paragraph, please');
     const afterPatch = (0, test_types_js_1.record)(JSON.parse(fs.readFileSync(path.join(peer.home, '.pi', 'dish', 'comments.json'), 'utf8')));
     assert.equal((0, test_types_js_1.record)(afterPatch[commentId]).body, 'tighten this paragraph, please');
-    // A request naming no page keeps the hub's own (empty) local behavior.
+    // The session-wide comment API keeps the hub's own (empty) local behavior.
     const local = await fetch(`${hub.base}/api/comments/count?sessionId=${PEER_SESSION_ID}`);
     assert.equal(local.status, 200);
     assert.equal((await json(local)).total, 0);

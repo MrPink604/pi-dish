@@ -1764,6 +1764,51 @@ test('POST /api/pages publishes a file and /page/:token serves it live from disk
   assert.equal((await fetch(base + text(body.path))).status, 404);
 });
 
+// The sandbox directive of a response's enforced CSP list, or null.
+function sandboxDirective(response: Response): string | null {
+  const directives = (response.headers.get('content-security-policy') ?? '')
+    .split(/[,;]/).map(directive => directive.trim());
+  return directives.find(directive => /^sandbox(?:\s|$)/.test(directive)) ?? null;
+}
+function assertOpaqueOrigin(response: Response, label: string) {
+  const sandbox = sandboxDirective(response);
+  assert.ok(sandbox, `${label} carries a CSP sandbox`);
+  assert.match(sandbox, /\ballow-scripts\b/, `${label} keeps scripts runnable`);
+  assert.doesNotMatch(sandbox, /\ballow-same-origin\b/, `${label} must not share the app origin`);
+}
+
+test('published page documents and assets run in an opaque origin, not the app\'s', async () => {
+  const site = path.join(realCwd, 'isolated-site');
+  fs.mkdirSync(site, { recursive: true });
+  fs.writeFileSync(path.join(site, 'index.html'), '<script>localStorage.getItem("pi-dish-hosts")</script><p>isolated</p>');
+  fs.writeFileSync(path.join(site, 'other.html'), '<script>fetch("/api/sessions")</script>');
+  fs.writeFileSync(path.join(site, 'module.js'), 'export {};');
+  const single = path.join(realCwd, 'isolated.html');
+  fs.writeFileSync(single, '<p>single</p>');
+  const directory = await post('/api/pages', { path: site, sessionId: REAL_CWD_ID });
+  const file = await post('/api/pages', { path: single, sessionId: REAL_CWD_ID });
+  try {
+    const index = await fetch(`${base}/page/${directory.body.token}/`);
+    assert.equal(index.status, 200);
+    assert.match(await index.text(), /artifact-comments\.js/, 'the overlay is still injected');
+    assertOpaqueOrigin(index, 'the directory index');
+    // Any HTML under the root is a navigable document, not just index.html.
+    const other = await fetch(`${base}/page/${directory.body.token}/other.html`);
+    assert.equal(other.status, 200);
+    assertOpaqueOrigin(other, 'a sibling HTML asset');
+    // Module scripts and fetches from the opaque origin are CORS requests.
+    const asset = await fetch(`${base}/page/${directory.body.token}/module.js`, { headers: { Origin: 'null' } });
+    assert.equal(asset.status, 200);
+    assert.equal(asset.headers.get('access-control-allow-origin'), '*');
+    const single = await fetch(base + text(file.body.path));
+    assert.equal(single.status, 200);
+    assertOpaqueOrigin(single, 'a single-file page');
+  } finally {
+    await del(`/api/pages/${directory.body.token}`);
+    await del(`/api/pages/${file.body.token}`);
+  }
+});
+
 test('file-viewer pages render as standalone read-only documents', async () => {
   const viewedFile = path.join(realCwd, 'published-view.md');
   fs.writeFileSync(viewedFile, [
@@ -1792,6 +1837,7 @@ test('file-viewer pages render as standalone read-only documents', async () => {
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type') ?? '', /text\/html/);
   assert.match(response.headers.get('content-security-policy') ?? '', /default-src 'none'/);
+  assertOpaqueOrigin(response, 'the file renderer, whose own policy above still forbids scripts');
   const html = await response.text();
   assert.match(html, /<body class="standalone-file-page">/);
   assert.match(html, /<h1>Rendered file<\/h1>/);
@@ -2063,20 +2109,69 @@ test('published-page comments inherit the page session and artifact identity', a
 
   const selected = await post('/api/comments/get', { sessionId: REAL_CWD_ID, ids: [created.body.id] });
   assert.deepEqual(records(selected.body.comments).map((c) => c.id), [created.body.id]);
-
-  // The page overlay only knows its own token; the index scopes on it and
-  // hands back the session the overlay needs for get/edit/delete.
-  const byToken = await get(`/api/comments/index?pageToken=${page.body.token}`);
-  assert.equal(byToken.status, 200);
-  const pageComments = records(byToken.body.comments);
-  assert.deepEqual(pageComments.map(comment => comment.id), [created.body.id]);
-  assert.equal(present(pageComments[0]).sessionId, REAL_CWD_ID);
-  assert.equal((await get('/api/comments/index?pageToken=missing')).body.total, 0);
-
   await post(`/api/comments/${created.body.id}/ack`, { sessionId: REAL_CWD_ID });
-  assert.equal((await get(`/api/comments/index?pageToken=${page.body.token}`)).body.total, 0,
-    'the page index tracks open comments only');
   await del(`/api/pages/${page.body.token}`);
+});
+
+test('the page overlay reaches only its own page\'s open comments, from the opaque origin', async () => {
+  const artifact = path.join(realCwd, 'overlay-scope.html');
+  const otherArtifact = path.join(realCwd, 'overlay-other.html');
+  fs.writeFileSync(artifact, '<p>Scoped overlay prose</p>');
+  fs.writeFileSync(otherArtifact, '<p>Other page prose</p>');
+  const page = await post('/api/pages', { path: artifact, sessionId: REAL_CWD_ID });
+  const other = await post('/api/pages', { path: otherArtifact, sessionId: REAL_CWD_ID });
+  const scoped = `/api/page-comments/${page.body.token}`;
+  try {
+    // The sandboxed document's preflight is answered for these routes only.
+    const preflight = await fetch(base + scoped, { method: 'OPTIONS', headers: {
+      Origin: 'null', 'Access-Control-Request-Method': 'PATCH', 'Access-Control-Request-Headers': 'content-type',
+    } });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), 'null');
+    assert.match(preflight.headers.get('access-control-allow-methods') ?? '', /PATCH/);
+    const sessionApi = await fetch(`${base}/api/comments/index?sessionId=${REAL_CWD_ID}`, { headers: { Origin: 'null' } });
+    assert.equal(sessionApi.headers.get('access-control-allow-origin'), null, 'the session API stays unreadable to pages');
+
+    const anchor = { type: 'text', quote: 'overlay prose', prefix: 'Scoped ', suffix: '' };
+    const created = await post(scoped, { body: 'Say more here.', anchor });
+    assert.equal(created.status, 201);
+    assert.deepEqual(Object.keys(created.body).sort(), ['anchor', 'body', 'createdAt', 'id'],
+      'pages see the comment, not its session or filesystem target');
+    const elsewhere = await post(`/api/page-comments/${other.body.token}`, { body: 'Other page.', anchor });
+    const sessionComment = await post('/api/comments', {
+      sessionId: REAL_CWD_ID, body: 'File feedback.',
+      target: { kind: 'file', path: path.join(realCwd, 'README.md'), anchor: { type: 'text', quote: 'alpha' } },
+    });
+    // Filed in the page's session, where the agent's skill reads it.
+    const index = records((await get(`/api/comments/index?sessionId=${REAL_CWD_ID}`)).body.comments);
+    assert.equal(record(present(index.find(entry => entry.id === created.body.id)).target).pageToken, page.body.token);
+
+    const listed = await fetch(base + scoped, { headers: { Origin: 'null' } });
+    assert.equal(listed.headers.get('access-control-allow-origin'), 'null');
+    assert.deepEqual(records(responseObject(await listed.json()).comments).map(comment => comment.id), [created.body.id]);
+
+    const patched = await patch(`${scoped}/${created.body.id}`, { body: 'Say much more here.' });
+    assert.equal(patched.body.body, 'Say much more here.');
+    // Another page's token cannot touch this page's or the session's comments.
+    for (const id of [created.body.id, sessionComment.body.id]) {
+      assert.equal((await patch(`/api/page-comments/${other.body.token}/${id}`, { body: 'hijack' })).status, 404);
+      assert.equal((await del(`/api/page-comments/${other.body.token}/${id}`)).status, 404);
+    }
+    assert.equal((await post('/api/page-comments/missing', { body: 'x', anchor })).status, 404);
+    assert.equal((await post(scoped, { body: 'no anchor' })).status, 400);
+
+    await post(`/api/comments/${elsewhere.body.id}/ack`, { sessionId: REAL_CWD_ID });
+    assert.equal((await patch(`/api/page-comments/${other.body.token}/${elsewhere.body.id}`, { body: 'late' })).status, 409);
+    assert.deepEqual((await get(`/api/page-comments/${other.body.token}`)).body.comments, [],
+      'the overlay lists open comments only');
+
+    assert.deepEqual((await del(`${scoped}/${created.body.id}`)).body, { ok: true });
+    assert.deepEqual((await get(scoped)).body.comments, []);
+    await post(`/api/comments/${sessionComment.body.id}/ack`, { sessionId: REAL_CWD_ID });
+  } finally {
+    await del(`/api/pages/${page.body.token}`);
+    await del(`/api/pages/${other.body.token}`);
+  }
 });
 
 test('comments reject unanchored targets and unknown sessions/pages', async () => {
@@ -2097,6 +2192,8 @@ test('comments reject unanchored targets and unknown sessions/pages', async () =
   })).status, 400);
   assert.equal((await post('/api/comments/get', { sessionId: REAL_CWD_ID, ids: [] })).status, 400);
   assert.equal((await get('/api/comments/index')).status, 400, 'the index must be scoped');
+  assert.equal((await get('/api/comments/index?pageToken=missing')).status, 400,
+    'pages use their own scoped routes, not the session index');
 });
 
 test('encoded Pi aliases share the canonical raw Pi comment identity', async () => {
@@ -3986,6 +4083,7 @@ test('GET /share/:token renders the exported HTML inline; unknown token 404s', a
   const res = await fetch(`${base}/share/${body.token}`);
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type') || '', /text\/html/);
+  assertOpaqueOrigin(res, 'a shared session export');
   const html = await res.text();
   assert.ok(html.includes('<html'), 'body is the standalone export');
   const dataMatch = present(html.match(/id="session-data"[^>]*>([^<]+)</));
@@ -4190,6 +4288,7 @@ test('dedicated share listener serves shared sessions, pages, and standalone fil
 
     const pageRes = await fetch(`${shareBase}/page/${page.body.token}`);
     assert.equal(pageRes.status, 200);
+    assertOpaqueOrigin(pageRes, 'a page on the public share listener');
     assert.equal(await pageRes.text(), rawPage, 'share listener does not inject the comment overlay');
 
     const viewedRes = await fetch(`${shareBase}/page/${viewedPage.body.token}`);

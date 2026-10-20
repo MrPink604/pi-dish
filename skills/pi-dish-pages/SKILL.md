@@ -85,3 +85,7 @@ so and the local link still stands.
 - Anyone who can reach the pi-dish server (and, if configured, its public
   share listener or a hub fronting it) can view the page. Don't publish
   secrets.
+- Pages run sandboxed in an opaque origin. Scripts, forms, popups, relative
+  assets and `fetch()` of files under the page work; `localStorage`,
+  `sessionStorage`, IndexedDB and cookies throw, and the pi-dish API is not
+  callable from the page. Keep page state in memory or the URL.

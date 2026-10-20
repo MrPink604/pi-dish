@@ -1,4 +1,4 @@
-import { decodeCommentEntries, decodePageComments, responseError } from './artifact-comment-data';
+import { decodePageComments, responseError } from './artifact-comment-data';
 import type { PageComment, TextAnchor } from './artifact-comment-data';
 import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comment-anchors';
 
@@ -6,12 +6,15 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
  *
  * Injected only when a page is viewed through the main pi-dish server.  It
  * lives in a shadow root so generated artifacts cannot accidentally restyle
- * the controls (and these controls cannot restyle the artifact).
+ * the controls (and these controls cannot restyle the artifact).  The page
+ * runs in an opaque sandboxed origin, so every call goes to the page-scoped
+ * comment routes, which the page token alone addresses.
  */
 (() => {
   const script = document.currentScript;
   const pageToken = script instanceof HTMLScriptElement ? script.dataset.pageToken : undefined;
   if (!pageToken || window.top !== window.self) return;
+  const commentsUrl = `/api/page-comments/${encodeURIComponent(pageToken)}`;
 
   let selected: TextAnchor | null = null;
   let selectedRange: Range | null = null;
@@ -171,17 +174,15 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
     status.textContent = 'Saving…';
     try {
       const response = submittedEdit
-        ? await fetch(`/api/comments/${encodeURIComponent(submittedEdit.id)}`, {
+        ? await fetch(`${commentsUrl}/${encodeURIComponent(submittedEdit.id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          // pageToken travels on every call so a hub fronting this page can
-          // route it to the host that owns the comment (older servers ignore it).
-          body: JSON.stringify({ sessionId: submittedEdit.sessionId, body: commentBody, pageToken }),
+          body: JSON.stringify({ body: commentBody }),
         })
-        : await fetch('/api/comments', {
+        : await fetch(commentsUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ body: commentBody, target: { kind: 'page', pageToken, anchor: submittedSelection } }),
+          body: JSON.stringify({ body: commentBody, anchor: submittedSelection }),
         });
       const result: unknown = await response.json();
       if (!response.ok) throw new Error(responseError(result, response.status));
@@ -214,11 +215,7 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
     deleteButton.disabled = true;
     status.textContent = 'Deleting…';
     try {
-      const response = await fetch(`/api/comments/${encodeURIComponent(target.id)}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: target.sessionId, pageToken }),
-      });
+      const response = await fetch(`${commentsUrl}/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
       const result: unknown = await response.json();
       if (!response.ok) throw new Error(responseError(result, response.status));
       if (submittedVersion === draftVersion) close();
@@ -262,29 +259,18 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
 
   function renderMarks() {
     clearCommentMarks(document.documentElement, 'mark[data-pi-dish-comment]');
-    for (const comment of openComments) markCommentQuote(document.body, comment.target.anchor, comment.id, markPolicy);
+    for (const comment of openComments) markCommentQuote(document.body, comment.anchor, comment.id, markPolicy);
   }
 
-  // The page knows its own token, not the session behind it; the index
-  // hands back both. Any failure just leaves the artifact unmarked.
+  // Any failure just leaves the artifact unmarked.
   async function refreshComments() {
     const version = ++refreshVersion;
     try {
-      const indexRes = await fetch(`/api/comments/index?pageToken=${encodeURIComponent(pageToken || '')}`);
-      if (!indexRes.ok) return;
-      const index: unknown = await indexRes.json();
+      const response = await fetch(commentsUrl);
+      if (!response.ok) return;
+      const list: unknown = await response.json();
       if (version !== refreshVersion) return;
-      const entries = decodeCommentEntries(index);
-      if (!entries.length) { openComments = []; renderMarks(); return; }
-      const fullRes = await fetch('/api/comments/get', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: entries[0].sessionId, ids: entries.map((e) => e.id), pageToken }),
-      });
-      if (!fullRes.ok) return;
-      const full: unknown = await fullRes.json();
-      if (version !== refreshVersion) return;
-      openComments = decodePageComments(full);
+      openComments = decodePageComments(list);
       renderMarks();
     } catch { /* an unmarked page still renders */ }
   }
@@ -301,7 +287,7 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
     draftVersion += 1;
     disarmDelete();
     deleteButton.disabled = false;
-    quote.textContent = comment.target?.anchor?.quote || '';
+    quote.textContent = comment.anchor.quote;
     body.value = comment.body;
     status.textContent = '';
     sendButton.disabled = false;

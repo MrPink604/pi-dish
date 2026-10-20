@@ -6,15 +6,16 @@ const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
 const fs = require("node:fs");
 const path = require("node:path");
 const script = fs.readFileSync(path.resolve(__dirname, '../../public/artifact-comments.js'), 'utf8');
+const LIST = '/api/page-comments/page-fixture';
 async function setup(page, comments = [], html = '<p id="text">before <b>selected</b> text after</p>') {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
-    await page.addInitScript(() => {
+    await page.addInitScript((list) => {
         const request = window.fetch;
         window.artifactBodiesRead = 0;
         window.fetch = async (...args) => {
             const response = await request(...args);
-            if (response.url.includes('/api/comments/get')) {
+            if (new URL(response.url).pathname === list && (args[1]?.method ?? 'GET') === 'GET') {
                 const read = response.json.bind(response);
                 response.json = async () => { const value = await read(); window.artifactBodiesRead++; return value; };
             }
@@ -24,14 +25,12 @@ async function setup(page, comments = [], html = '<p id="text">before <b>selecte
         Element.prototype.attachShadow = function (init) {
             return original.call(this, { ...init, mode: 'open' });
         };
-    });
+    }, LIST);
     await page.route('http://artifact.test/**', async (route) => {
         const url = new URL(route.request().url());
         if (url.pathname === '/artifact-comments.js')
             return route.fulfill({ contentType: 'application/javascript', body: script });
-        if (url.pathname === '/api/comments/index')
-            return route.fulfill({ json: { comments } });
-        if (url.pathname === '/api/comments/get')
+        if (url.pathname === LIST)
             return route.fulfill({ json: { comments } });
         return route.fulfill({ contentType: 'text/html', body: `${html}<script src="/artifact-comments.js" data-page-token="page-fixture"></script>` });
     });
@@ -60,17 +59,21 @@ function requiredRoute(route) {
         throw new Error('Expected a held Playwright route');
     return route;
 }
-const comment = { id: 'comment-a', sessionId: 'session-a', body: 'original',
-    target: { anchor: { type: 'text', quote: 'selected text', prefix: 'before ', suffix: ' after' } } };
-(0, test_1.test)('published comments anchor across nodes, edit with page routing and confirm delete', async ({ page }) => {
+const comment = { id: 'comment-a', body: 'original',
+    anchor: { type: 'text', quote: 'selected text', prefix: 'before ', suffix: ' after' } };
+// The overlay's list and create calls share one URL; let creates fall through.
+function listOnly(handler) {
+    return (route) => route.request().method() === 'GET' ? handler(route) : route.fallback();
+}
+(0, test_1.test)('published comments anchor across nodes, edit with page-scoped routes and confirm delete', async ({ page }) => {
     const errors = await setup(page, [null, { id: {} }, comment]);
     await (0, test_1.expect)(page.locator('mark[data-pi-dish-comment="comment-a"]')).toHaveCount(2);
     await page.locator('mark').first().click();
     const body = page.locator('#pi-dish-comment-layer #body');
     await (0, test_1.expect)(body).toHaveValue('original');
     let patch;
-    await page.route('**/api/comments/comment-a', async (route) => {
-        const body = route.request().postDataJSON();
+    await page.route(`**${LIST}/comment-a`, async (route) => {
+        const body = route.request().postData() ? route.request().postDataJSON() : {};
         if (!(0, wire_protocol_js_1.isRecord)(body))
             throw new Error('Invalid comment request');
         patch = { method: route.request().method(), ...body };
@@ -79,18 +82,18 @@ const comment = { id: 'comment-a', sessionId: 'session-a', body: 'original',
     await body.fill('updated');
     await page.locator('#pi-dish-comment-layer #send').click();
     await (0, test_1.expect)(page.locator('#pi-dish-comment-layer #card')).toBeHidden();
-    (0, test_1.expect)(patch).toEqual({ method: 'PATCH', sessionId: 'session-a', body: 'updated', pageToken: 'page-fixture' });
+    (0, test_1.expect)(patch).toEqual({ method: 'PATCH', body: 'updated' });
     await page.locator('mark').first().click();
     const del = page.locator('#pi-dish-comment-layer #del');
     await del.click();
     await (0, test_1.expect)(del).toHaveText('Delete?');
     await del.click();
     await (0, test_1.expect)(page.locator('#pi-dish-comment-layer #card')).toBeHidden();
-    (0, test_1.expect)(patch).toEqual({ method: 'DELETE', sessionId: 'session-a', pageToken: 'page-fixture' });
+    (0, test_1.expect)(patch).toEqual({ method: 'DELETE' });
     (0, test_1.expect)(errors).toEqual([]);
 });
 (0, test_1.test)('published marks preserve exact context and exclude scripts, styles and the overlay on refresh', async ({ page }) => {
-    const exact = { ...comment, target: { anchor: { type: 'text', quote: ' selected text ', prefix: 'right', suffix: 'after' } } };
+    const exact = { ...comment, anchor: { type: 'text', quote: ' selected text ', prefix: 'right', suffix: 'after' } };
     const errors = await setup(page, [exact], '<p id="first">wrong <b>selected</b> text after</p><p id="chosen">right <b>selected</b><script type="application/json">ignored</script><style>/* ignored */</style> text after</p>');
     await (0, test_1.expect)(page.locator('#first mark')).toHaveCount(0);
     await (0, test_1.expect)(page.locator('#chosen mark')).toHaveCount(3);
@@ -108,7 +111,7 @@ const comment = { id: 'comment-a', sessionId: 'session-a', body: 'original',
         host.append(document.createTextNode('right selected text after'));
         document.body.prepend(host);
     });
-    await page.route('**/api/comments/comment-a', route => route.fulfill({ json: { ok: true } }));
+    await page.route(`**${LIST}/comment-a`, route => route.fulfill({ json: { ok: true } }));
     await page.locator('#pi-dish-comment-layer #send').click();
     await test_1.expect.poll(() => page.evaluate(() => window.artifactBodiesRead)).toBe(2);
     await (0, test_1.expect)(page.locator('#pi-dish-comment-layer mark')).toHaveCount(0);
@@ -119,7 +122,7 @@ const comment = { id: 'comment-a', sessionId: 'session-a', body: 'original',
     await page.setViewportSize({ width: 390, height: 460 });
     const errors = await setup(page);
     let held;
-    await page.route('**/api/comments', (route) => { held = route; });
+    await page.route(`**${LIST}`, (route) => route.request().method() === 'POST' ? held = route : route.fallback());
     await select(page);
     const layer = page.locator('#pi-dish-comment-layer');
     await layer.locator('#body').fill('first');
@@ -142,29 +145,30 @@ const comment = { id: 'comment-a', sessionId: 'session-a', body: 'original',
     (0, test_1.expect)(bounds.y + bounds.height).toBeLessThanOrEqual(460);
     (0, test_1.expect)(errors).toEqual([]);
 });
-(0, test_1.test)('an older full-comment response cannot restore marks after a newer empty index', async ({ page }) => {
+(0, test_1.test)('an older comment list cannot restore marks after a newer empty one', async ({ page }) => {
     const errors = await setup(page);
     let held;
-    await page.route('**/api/comments/get', (route) => { held = route; });
-    await page.route('**/api/comments/index?*', (route) => route.fulfill({ json: { comments: [comment] } }));
+    await page.route(`**${LIST}`, listOnly((route) => { held = route; }));
     await page.reload();
     await test_1.expect.poll(() => !!held).toBe(true);
-    await page.route('**/api/comments/index?*', (route) => route.fulfill({ json: { comments: [] } }));
-    await page.route('**/api/comments', (route) => route.fulfill({ json: { ok: true } }));
+    const stale = requiredRoute(held);
+    await page.route(`**${LIST}`, listOnly((route) => route.fulfill({ json: { comments: [] } })));
     await select(page);
     await page.locator('#pi-dish-comment-layer #body').fill('trigger refresh');
-    const fresh = page.waitForResponse(response => response.url().includes('/api/comments/index'));
+    const fresh = page.waitForResponse(response => new URL(response.url()).pathname === LIST
+        && response.request().method() === 'GET');
     await page.locator('#pi-dish-comment-layer #send').click();
     await fresh;
-    await requiredRoute(held).fulfill({ json: { comments: [comment] } });
     await test_1.expect.poll(() => page.evaluate(() => window.artifactBodiesRead)).toBe(1);
+    await stale.fulfill({ json: { comments: [comment] } });
+    await test_1.expect.poll(() => page.evaluate(() => window.artifactBodiesRead)).toBe(2);
     await (0, test_1.expect)(page.locator('mark[data-pi-dish-comment]')).toHaveCount(0);
     (0, test_1.expect)(errors).toEqual([]);
 });
 (0, test_1.test)('finishing an old delete cannot enable the button for a newer pending delete', async ({ page }) => {
     const errors = await setup(page, [comment]);
     const pending = [];
-    await page.route('**/api/comments/comment-a', (route) => { pending.push(route); });
+    await page.route(`**${LIST}/comment-a`, (route) => { pending.push(route); });
     const layer = page.locator('#pi-dish-comment-layer');
     await page.locator('mark').first().click();
     await layer.locator('#del').click();

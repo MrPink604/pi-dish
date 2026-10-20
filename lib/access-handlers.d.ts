@@ -21,6 +21,7 @@ export interface AccessHandlers {
     compression: TransportHandler;
     jsonBody: TransportHandler;
     cors: TransportHandler;
+    pageCommentCors: TransportHandler;
     apiGate: TransportHandler;
     hostsGate: TransportHandler;
     host: TransportHandler;

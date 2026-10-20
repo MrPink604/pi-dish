@@ -70,6 +70,7 @@
     "test/browser/spawn-targets.spec.ts",
     "test/browser/api-boundary.spec.ts",
     "test/browser/artifact-comments.spec.ts",
+    "test/browser/page-isolation.spec.ts",
     "test/browser/new-session-options.spec.ts",
     "test/browser/harness-settings.spec.ts",
     "test/browser/harness-discovery.spec.ts",

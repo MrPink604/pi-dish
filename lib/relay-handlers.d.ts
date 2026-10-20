@@ -22,7 +22,7 @@ export interface RelayHandlers {
     listArtifacts: TransportHandler;
     removeArtifact: TransportHandler;
     hosts: TransportHandler;
-    comments: TransportHandler;
+    pageComments: TransportHandler;
     publicArtifacts: PublicArtifactRelay;
     upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean;
 }

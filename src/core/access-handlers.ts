@@ -32,6 +32,7 @@ export interface AccessHandlers {
   compression: TransportHandler;
   jsonBody: TransportHandler;
   cors: TransportHandler;
+  pageCommentCors: TransportHandler;
   apiGate: TransportHandler;
   hostsGate: TransportHandler;
   host: TransportHandler;
@@ -160,6 +161,19 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     }
     next();
   };
+  // A published page's sandboxed document has an opaque origin, so its
+  // overlay's calls carry `Origin: null`. Only the page-scoped comment routes
+  // answer it — their page token, not the origin, is the capability — and
+  // only without credentials, so no other API becomes readable to pages.
+  const pageCommentCors: TransportHandler = (req, res, next) => {
+    if (req.headers.origin !== 'null') return next();
+    res.header('Access-Control-Allow-Origin', 'null');
+    res.header('Vary', 'Origin');
+    if (req.method !== 'OPTIONS') return next();
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.status(204).end();
+  };
   const apiGate: TransportHandler = (req, res, next) => {
     if (!authToken) return next();
     if (req.method === 'OPTIONS') return next();
@@ -184,5 +198,5 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (!authToken) { res.json({ ticket: null }); return; }
     res.json(mintTicket(purpose));
   };
-  return { compression: compressed, jsonBody, cors, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized };
+  return { compression: compressed, jsonBody, cors, pageCommentCors, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized };
 }
