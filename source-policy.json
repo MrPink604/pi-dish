@@ -241,6 +241,7 @@
     "extensions/pi-dish-bridge/login.ts",
     "extensions/pi-dish-bridge/pi-login.ts",
     "extensions/pi-dish-bridge/pi-private.ts",
+    "extensions/pi-dish-bridge/send-observer.ts",
     "extensions/pi-dish-bridge-omp/index.ts",
     "extensions/pi-dish-bridge-omp/login.ts",
     "extensions/pi-dish-bridge-omp/native-state.ts",

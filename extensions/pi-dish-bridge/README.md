@@ -123,6 +123,14 @@ compaction/command operations; it owns protocol handling and the compaction send
 buffer, not Pi's private session. Cancellation checks both aligned native queues
 before removing the selected index, preserving duplicate messages and images.
 
+Pi and OMP keep a `sendUserMessage()` rejection in their own TUI, so a prompt
+refused before the turn starts (signed-out provider, no model) used to look
+delivered. `send-observer.ts` wraps the host `AgentSession.sendUserMessage()`
+(patched by `pi-private.ts` and the OMP `native-state.ts`); the core waits up to
+10 s for agent/turn start, pre-prompt compaction, or the call to settle, and
+returns a refusal as the prompt's error. The web composer then restores the
+prompt text. Prime, which has no captured session, keeps the public result.
+
 Remote `/login` (`login.ts`) drives the host's own sign-in: Pi's private
 `modelRegistry.runtime` login (`pi-login.ts`) or OMP's
 `modelRegistry.authStorage.oauth.login` (`../pi-dish-bridge-omp/login.ts`). It

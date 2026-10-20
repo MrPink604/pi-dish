@@ -1,3 +1,5 @@
+import { observeSendUserMessage } from "../pi-dish-bridge/send-observer.js";
+
 export type OmpNativeProjection = {
   todos: unknown[];
   planMode: unknown | null;
@@ -265,6 +267,7 @@ function patchAgentSession(AgentSession: { prototype: HostSession }): void {
   capture("toggleAdvisorEnabled");
   capture("applyAdvisorConfigs");
   capture("subscribe");
+  observeSendUserMessage(AgentSession);
 }
 
 // Runtime plugin boundary: OMP's standalone executable provides this package,

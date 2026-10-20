@@ -19,7 +19,7 @@ async function waitFor(predicate, timeoutMs = 3000) {
     }
     throw new Error('condition timeout');
 }
-async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false, askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false, } = {}) {
+async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false, askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false, promptMode, } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
     const home = path.join(root, 'home');
     const socketDir = path.join(root, 'sockets');
@@ -58,6 +58,7 @@ async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsess
             FAKE_OMP_UI_RESTORE_RESULT: checkUiRestore ? uiRestoreResultFile : '',
             FAKE_OMP_NATIVE_PROJECTION: nativeProjection ? JSON.stringify(nativeProjection) : '',
             FAKE_OMP_LIFECYCLE_FILE: lifecycle ? lifecycleFile : '',
+            FAKE_OMP_PROMPT_MODE: promptMode ?? '',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -119,6 +120,36 @@ test('OMP lifecycle blocks pending background deliveries and fails closed on unk
         assert.equal(await backgroundWork({ ...empty, delivery: { queued: 0 } }), null, 'partial data is not evidence that background work finished');
         fs.writeFileSync(host.lifecycleFile, '{torn');
         assert.equal((0, test_types_js_1.record)((0, test_types_js_1.record)(await session.send('get_state')).lifecycle).backgroundWork, null, 'a failed runtime read does not permit maintenance');
+    }
+    finally {
+        session.close();
+        await host.close();
+    }
+});
+test('OMP bridge reports a prompt the host refuses before admitting it', async () => {
+    const host = await startFakeHost(false, { promptMode: 'signed-out' });
+    const session = new BridgeSession(host.claim);
+    try {
+        await session.connect();
+        // OMP's public sendUserMessage() keeps this rejection in its TUI; the
+        // caller must still learn the prompt never reached the session.
+        await assert.rejects(session.prompt('the prompt that must not vanish'), /Oh My Pi did not accept the message: No API key found for anthropic/);
+    }
+    finally {
+        session.close();
+        await host.close();
+    }
+});
+test('OMP bridge acknowledges an admitted prompt without waiting for its turn', async () => {
+    const host = await startFakeHost(false, { promptMode: 'admit' });
+    const session = new BridgeSession(host.claim);
+    try {
+        await session.connect();
+        const started = Date.now();
+        assert.deepEqual(await session.prompt('start working'), { queued: false });
+        // The turn never ends in this fixture; only admission may release the
+        // send, well before the bridge's fallback wait.
+        assert.ok(Date.now() - started < 5000, 'acknowledged on agent start');
     }
     finally {
         session.close();

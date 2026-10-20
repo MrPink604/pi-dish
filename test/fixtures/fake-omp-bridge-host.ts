@@ -49,6 +49,11 @@ const pi = {
   getThinkingLevel() { return 'minimal'; },
   setThinkingLevel() {},
   setSessionName() {},
+  // OMP's ExtensionAPI.sendUserMessage(): fire the AgentSession call and keep
+  // a rejection to the TUI (`.catch(showError)`), returning nothing.
+  sendUserMessage(content: unknown, options: unknown) {
+    nativeSession?.sendUserMessage(content, options).catch(() => {});
+  },
 };
 
 function createHandlerContext(ctx: FixtureContext): FixtureContext {
@@ -172,6 +177,16 @@ class FakeOmpAgentSession {
     opts.onTextDelta?.(text);
     return { replyText: text, assistantMessage: { role: 'assistant', content: [{ type: 'text', text }] } };
   }
+  // FAKE_OMP_PROMPT_MODE: 'signed-out' refuses in pre-flight like OMP's
+  // missing-credential check; 'admit' starts the agent and keeps the turn
+  // running, so the call's promise never settles while the test runs.
+  async sendUserMessage(_content: unknown, _options: unknown) {
+    if (process.env.FAKE_OMP_PROMPT_MODE === 'signed-out') {
+      throw new Error('No API key found for anthropic.\nUse /login, set an API key environment variable, or create agent.db');
+    }
+    await emit('agent_start', {}, ctx);
+    await new Promise<never>(() => {});
+  }
 }
 
 const stepFile = process.env.FAKE_OMP_NATIVE_STEP_FILE || '';
@@ -181,7 +196,7 @@ let subagentSession: FakeOmpAgentSession | null = null;
 // patched-accessor call publishes — OMP's status line does this constantly;
 // the fake calls subscribe() once instead. /btw tests need the capture even
 // without the projection step driver.
-if (stepFile || process.env.FAKE_OMP_HAS_BTW === '1') {
+if (stepFile || process.env.FAKE_OMP_HAS_BTW === '1' || process.env.FAKE_OMP_PROMPT_MODE) {
   patchOmpAgentSession(FakeOmpAgentSession);
   nativeSession = new FakeOmpAgentSession(ctx.sessionManager);
   nativeSession.subscribe();

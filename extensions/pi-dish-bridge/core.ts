@@ -3,6 +3,7 @@
 import type { ContextUsage, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PiPrivateOperations } from "./pi-private.js";
 import { createLoginController, type LoginAdapter } from "./login.js";
+import { captureSendUserMessage } from "./send-observer.js";
 import * as cp from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -917,6 +918,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let compactionGeneration = 0;
   const compactionQueue: UserContent[] = [];
   const COMPACTION_STUCK_MS = 6 * 60 * 1000;
+  // Pending sends waiting for the host to admit them (sendToHost).
+  const admissionWaiters = new Set<() => void>();
+  // Pre-flight refusals (sign-in, model) settle well inside this; a slower
+  // OAuth refresh or MCP warm-up falls back to the public API's "delivered".
+  const PROMPT_ADMISSION_MS = 10_000;
   // True once ensureSessionSubscription() is listening to the AgentSession's
   // real compaction_start/compaction_end events. While live, those drive the
   // gate and the wire broadcasts; the session_before_compact/session_compact
@@ -2023,8 +2029,37 @@ export function createBridge(descriptor: BridgeDescriptor) {
       broadcastQueue();
       return { queued: true };
     }
-    await callHost(pi, "sendUserMessage", content, delivery);
+    await sendToHost(content, delivery);
     return { queued: false };
+  }
+
+  // Hand a message to the host and report a refusal the host would otherwise
+  // show only in its TUI (send-observer.ts). A fresh prompt's promise settles
+  // only when its whole turn ends, so wait until the host admits it (agent or
+  // turn start, or the pre-prompt compaction check), the call settles, or
+  // PROMPT_ADMISSION_MS passes; past that the public API's answer stands.
+  async function sendToHost(content: UserContent, delivery: DeliveryOptions): Promise<void> {
+    let admit = () => {};
+    const admitted = new Promise<void>(resolve => { admit = resolve; });
+    admissionWaiters.add(admit);
+    const timer = setTimeout(admit, PROMPT_ADMISSION_MS);
+    try {
+      const { returned, promise } = captureSendUserMessage(() => callHost(pi, "sendUserMessage", content, delivery));
+      await returned;
+      if (promise) {
+        await Promise.race([promise, admitted]).catch((error: unknown) => {
+          throw new Error(`${descriptor.name} did not accept the message: ${errorText(error)}`);
+        });
+      }
+    } finally {
+      clearTimeout(timer);
+      admissionWaiters.delete(admit);
+    }
+  }
+
+  function admitPendingSends(): void {
+    for (const admit of admissionWaiters) admit();
+    admissionWaiters.clear();
   }
 
   // Drain messages buffered during compaction. Compaction just ended and no
@@ -2054,6 +2089,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // the AgentSession compaction_start event, and the session_before_compact
   // fallback can each fire first.
   function beginCompaction(): void {
+    admitPendingSends();
     if (compactionStuckTimer) clearTimeout(compactionStuckTimer);
     compactionStuckTimer = setTimeout(() => {
       console.error("[pi-dish-bridge] compaction end never observed; releasing queue gate");
@@ -2625,6 +2661,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       lastCtx = ctx ?? lastCtx;
       refreshModel(ctx);
       recoveryObserver.event(ev, event);
+      if (ev === "agent_start" || ev === "turn_start") admitPendingSends();
       if (ev === "turn_start") {
         turnInProgress = true;
         writeRegistry();

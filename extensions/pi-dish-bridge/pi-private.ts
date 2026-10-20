@@ -1,4 +1,5 @@
 import { AgentSession } from "@earendil-works/pi-coding-agent";
+import { observeSendUserMessage } from "./send-observer.js";
 
 // Pi's extension runner omits queue/private compaction events. Capture the live
 // receiver once; the global holder survives extension reloads on the same session.
@@ -37,6 +38,7 @@ try {
       };
     }
   }
+  observeSendUserMessage(AgentSession);
 } catch (e) {
   try { process.stderr.write(`[pi-dish-bridge] AgentSession capture patch failed (queue editing disabled): ${e}\n`); } catch {}
 }
