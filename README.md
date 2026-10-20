@@ -824,7 +824,6 @@ only serves existing tokens (`/page/<token>` is available there alongside
 file mention in a transcript) has a 🌐 button, and the stats modal lists a
 session's pages with revoke.
 
-In a multi-host fleet, one host can front the others' pages and share links:
 Published pages and share links are sandboxed: pi-dish serves them with a
 `Content-Security-Policy: sandbox` that omits `allow-same-origin`, so each
 document runs in an opaque origin of its own even though it shares the UI's
@@ -832,8 +831,11 @@ address. Page scripts, forms, popups, relative assets and `fetch()` of files
 under the page still work; localStorage, sessionStorage, IndexedDB and cookies
 do not, and a page cannot read the UI's stored host tokens or prompt history
 or call its API. The comment overlay uses page-scoped routes that reach only
-that page's own comments.
+that page's own comments. Behind Cloudflare Access those calls carry the
+Access session cookie, which needs the application's cookie SameSite setting
+left at its default, None; with Lax or Strict, commenting on pages fails.
 
+In a multi-host fleet, one host can front the others' pages and share links:
 publishing or sharing through its `/hosts/<name>` proxy (which is what the UI
 does when you're viewing a peer's session) records the token and hands back
 that host's own link, and `/share` + `/page` there stream the content from

@@ -1563,7 +1563,7 @@ Comments on a fronted page are the gotcha: the overlay is injected by the
 owner but its relative `/api/page-comments/<token>*` calls land on the hub.
 The hub routes any such call whose path token is fleet-mapped — and not a
 local page — to the owner, so feedback files where the session's agent will
-read it; the hub's own `pageCommentCors` answers the sandboxed page first.
+read it; the hub's own `pageCommentTransport` answers the sandboxed page first.
 The session-wide `/api/comments*` routes are never relayed. A hub also
 re-applies the artifact sandbox to every relayed page/share response, so an
 older owner's unsandboxed page is still isolated on the hub (the overlay
@@ -1610,14 +1610,26 @@ ack, plus 409 once acknowledged — an acknowledged comment is the agent's
 record of what it was told and stays immutable). Deletion is a two-tap arm.
 The page overlay cannot use those session-wide routes: it runs inside the
 page's opaque sandboxed origin. It talks to page-scoped routes instead —
-`GET`/`POST /api/page-comments/:token` and `PATCH`/`DELETE
-/api/page-comments/:token/:id` — which only see open comments anchored on
-that page, take the session from the page registration (never the client),
-and return `{ id, body, anchor, createdAt, updatedAt }` without session id or
-filesystem target. `accessHandlers.pageCommentCors` answers `Origin: null`
-(credential-free) for these routes only, so no other API becomes readable to
-a page. Page scripts share the overlay's document and therefore its
-capability — commenting on their own page — and nothing more. The routes sit
+`GET`/`POST /api/page-comments/:token`, `POST /api/page-comments/:token/:id`
+(edit) and `POST /api/page-comments/:token/:id/delete` — which only see open
+comments anchored on that page, take the session from the page registration
+(never the client), and return `{ id, body, anchor, createdAt, updatedAt }`
+without session id or filesystem target. The overlay's calls are
+cross-origin (`Origin: null`), so they must work behind an auth proxy such
+as Cloudflare Access: they send `credentials: 'include'` so the proxy's
+`CF_Authorization` cookie (SameSite=None by default) rides along, and they
+are never preflighted — only GETs and POSTs with a string (text/plain) body
+and no custom headers — because the proxy answers a cookie-less OPTIONS with
+its login redirect. `accessHandlers.pageCommentTransport` parses the
+text/plain body as JSON and answers `Origin: null` with credentials for
+these routes only, so no other API becomes readable to a page. The cost:
+any opaque-origin document that knows a page token can use the viewer's
+proxy session for that page's comments — the token remains the capability.
+An Access application whose cookie SameSite is Lax or Strict withholds the
+cookie from these calls, so commenting fails there. Keep any new overlay call
+within those rules; `test/browser/page-isolation.spec.js` checks the cookie
+and request shape. Page scripts share the overlay's document and therefore
+its capability — commenting on their own page — and nothing more. The routes sit
 under `/api`, so the bearer gate applies (with a token configured the overlay
 stays inert, as before) and the public share listener never mounts them. A
 hub fronting a peer's page relays these calls to the owner by the path token

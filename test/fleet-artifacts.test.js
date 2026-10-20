@@ -499,8 +499,9 @@ test('a comment on a fleet page files on the peer, where its agent reads it', as
     assert.deepEqual((0, test_types_js_1.records)(listed.comments).map(entry => entry.body), ['tighten this paragraph']);
     // …and so does editing.
     const patched = await json(await fetch(`${scoped}/${commentId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST',
+        // The overlay's own shape: a safelisted text/plain body the hub parses.
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8', Origin: 'null' },
         body: JSON.stringify({ body: 'tighten this paragraph, please' }),
     }));
     assert.equal(patched.body, 'tighten this paragraph, please');

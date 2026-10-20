@@ -37,8 +37,6 @@ async function selectProse(tab) {
 }
 (0, fixtures_js_1.test)('a published page runs its scripts, assets and comments without the app origin', async ({ page, fleet }) => {
     const { self } = fleet;
-    // The tab the fixture opened is the app: it owns this origin's storage.
-    await page.evaluate(() => localStorage.setItem('pi-dish-history-probe', JSON.stringify(['a lost prompt'])));
     const site = path.join(self.home, 'published-site');
     fs.mkdirSync(site);
     fs.writeFileSync(path.join(site, 'index.html'), INDEX);
@@ -54,14 +52,30 @@ async function selectProse(tab) {
         throw new Error(`Page publish failed: ${JSON.stringify(published)}`);
     }
     const tab = await page.context().newPage();
+    // Browse as `localhost`, a secure context, so the app origin can hold a
+    // stand-in for an auth proxy's session: Cloudflare Access sets
+    // CF_Authorization SameSite=None; Secure by default. The app origin also
+    // holds a prompt history the page must not read.
+    const app = self.base.replace('127.0.0.1', 'localhost');
+    await tab.goto(`${app}/api/host`);
+    await tab.evaluate(() => {
+        document.cookie = 'CF_Authorization=proxy-session; Path=/; SameSite=None; Secure';
+        localStorage.setItem('pi-dish-history-probe', JSON.stringify(['a lost prompt']));
+    });
     const errors = [];
     tab.on('pageerror', error => errors.push(error.message));
+    const overlayCalls = [];
+    tab.on('request', request => {
+        if (!new URL(request.url()).pathname.startsWith('/api/page-comments/'))
+            return;
+        overlayCalls.push(request.allHeaders().then(headers => `${request.method()} ${headers['content-type'] ?? '-'} ${headers.cookie ?? 'no cookie'}`));
+    });
     // The overlay's shadow root is closed; open it so locators can reach it.
     await tab.addInitScript(() => {
         const original = Element.prototype.attachShadow;
         Element.prototype.attachShadow = function (init) { return original.call(this, { ...init, mode: 'open' }); };
     });
-    await tab.goto(`${self.base}${published.path}/`);
+    await tab.goto(`${app}${published.path}/`);
     await (0, fixtures_js_1.expect)(tab.locator('#storage')).toHaveText('SecurityError');
     await (0, fixtures_js_1.expect)(tab.locator('#api')).toHaveText('blocked');
     await (0, fixtures_js_1.expect)(tab.locator('#asset')).toHaveText('loaded');
@@ -73,14 +87,23 @@ async function selectProse(tab) {
     await (0, fixtures_js_1.expect)(layer.locator('#card')).toBeVisible();
     await layer.locator('#body').fill('Name the sandbox flags.');
     await layer.locator('#send').click();
+    // An auth proxy answers a preflight with its login redirect: every call must
+    // be a safelisted GET or text/plain POST.
     await (0, fixtures_js_1.expect)(layer.locator('#toast')).toHaveText('Comment saved');
     await (0, fixtures_js_1.expect)(tab.locator('mark[data-pi-dish-comment]')).toHaveText('page prose');
+    const calls = await Promise.all(overlayCalls);
+    (0, fixtures_js_1.expect)(calls.length).toBeGreaterThanOrEqual(3);
+    for (const call of calls) {
+        (0, fixtures_js_1.expect)(call).toMatch(/^(GET -|POST text\/plain;charset=UTF-8) /);
+        (0, fixtures_js_1.expect)(call).toContain('CF_Authorization=proxy-session');
+    }
     const index = await (await fetch(`${self.base}/api/comments/index?sessionId=${fixtures_js_1.ROOT}`)).json();
     const entries = (0, wire_protocol_js_1.isRecord)(index) && Array.isArray(index.comments) ? index.comments : [];
     (0, fixtures_js_1.expect)(entries.map(entry => (0, wire_protocol_js_1.isRecord)(entry) && (0, wire_protocol_js_1.isRecord)(entry.target) ? entry.target.pageToken : null))
         .toEqual([published.token]);
-    // The app itself still reads its own storage.
-    (0, fixtures_js_1.expect)(await page.evaluate(() => localStorage.getItem('pi-dish-history-probe'))).toBe('["a lost prompt"]');
+    // The app origin still reads its own storage.
+    await tab.goto(`${app}/api/host`);
+    (0, fixtures_js_1.expect)(await tab.evaluate(() => localStorage.getItem('pi-dish-history-probe'))).toBe('["a lost prompt"]');
     (0, fixtures_js_1.expect)(errors).toEqual([]);
     await tab.close();
 });

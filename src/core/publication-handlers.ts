@@ -443,7 +443,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   // overlay renders. Page scripts share the overlay's document and so its
   // capability — commenting on their own page — and nothing more. They stay
   // under /api: the bearer gate applies, the public listener never mounts
-  // them, and access-handlers' pageCommentCors answers the opaque origin.
+  // them, and access-handlers' pageCommentTransport answers the opaque origin.
 
   function pageCommentView(comment: comments.CommentDto | comments.CommentRecord) {
     const anchor = fields(fields(comment.target).anchor);

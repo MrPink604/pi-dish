@@ -15,6 +15,13 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
   const pageToken = script instanceof HTMLScriptElement ? script.dataset.pageToken : undefined;
   if (!pageToken || window.top !== window.self) return;
   const commentsUrl = `/api/page-comments/${encodeURIComponent(pageToken)}`;
+  // The page's opaque origin makes these calls cross-origin. They carry the
+  // auth proxy's cookie (credentials) and stay CORS-safelisted: a string body
+  // is sent as text/plain and no custom header is set, so nothing is
+  // preflighted — a proxy would answer the cookie-less OPTIONS with a login
+  // redirect. The server parses the text/plain body as JSON.
+  const send = (path: string, payload: unknown) =>
+    fetch(commentsUrl + path, { method: 'POST', credentials: 'include', body: JSON.stringify(payload) });
 
   let selected: TextAnchor | null = null;
   let selectedRange: Range | null = null;
@@ -174,16 +181,8 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
     status.textContent = 'Saving…';
     try {
       const response = submittedEdit
-        ? await fetch(`${commentsUrl}/${encodeURIComponent(submittedEdit.id)}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ body: commentBody }),
-        })
-        : await fetch(commentsUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ body: commentBody, anchor: submittedSelection }),
-        });
+        ? await send(`/${encodeURIComponent(submittedEdit.id)}`, { body: commentBody })
+        : await send('', { body: commentBody, anchor: submittedSelection });
       const result: unknown = await response.json();
       if (!response.ok) throw new Error(responseError(result, response.status));
       if (submittedVersion === draftVersion
@@ -215,7 +214,7 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
     deleteButton.disabled = true;
     status.textContent = 'Deleting…';
     try {
-      const response = await fetch(`${commentsUrl}/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
+      const response = await send(`/${encodeURIComponent(target.id)}/delete`, {});
       const result: unknown = await response.json();
       if (!response.ok) throw new Error(responseError(result, response.status));
       if (submittedVersion === draftVersion) close();
@@ -266,7 +265,7 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
   async function refreshComments() {
     const version = ++refreshVersion;
     try {
-      const response = await fetch(commentsUrl);
+      const response = await fetch(commentsUrl, { credentials: 'include' });
       if (!response.ok) return;
       const list: unknown = await response.json();
       if (version !== refreshVersion) return;

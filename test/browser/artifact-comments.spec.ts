@@ -66,23 +66,27 @@ test('published comments anchor across nodes, edit with page-scoped routes and c
   const body = page.locator('#pi-dish-comment-layer #body');
   await expect(body).toHaveValue('original');
   let patch: Record<string, unknown> | undefined;
-  await page.route(`**${LIST}/comment-a`, async (route: Route) => {
-    const body: unknown = route.request().postData() ? route.request().postDataJSON() : {};
+  await page.route(`**${LIST}/comment-a{,/delete}`, async (route: Route) => {
+    const request = route.request();
+    const body: unknown = request.postDataJSON();
     if (!isRecord(body)) throw new Error('Invalid comment request');
-    patch = { method: route.request().method(), ...body };
+    // Safelisted: a cross-origin call from the sandboxed page is never
+    // preflighted, which an auth proxy would answer with a login redirect.
+    patch = { method: request.method(), type: request.headers()['content-type'],
+      path: new URL(request.url()).pathname.slice(LIST.length), ...body };
     await route.fulfill({ json: { ok: true } });
   });
   await body.fill('updated');
   await page.locator('#pi-dish-comment-layer #send').click();
   await expect(page.locator('#pi-dish-comment-layer #card')).toBeHidden();
-  expect(patch).toEqual({ method: 'PATCH', body: 'updated' });
+  expect(patch).toEqual({ method: 'POST', type: 'text/plain;charset=UTF-8', path: '/comment-a', body: 'updated' });
   await page.locator('mark').first().click();
   const del = page.locator('#pi-dish-comment-layer #del');
   await del.click();
   await expect(del).toHaveText('Delete?');
   await del.click();
   await expect(page.locator('#pi-dish-comment-layer #card')).toBeHidden();
-  expect(patch).toEqual({ method: 'DELETE' });
+  expect(patch).toEqual({ method: 'POST', type: 'text/plain;charset=UTF-8', path: '/comment-a/delete' });
   expect(errors).toEqual([]);
 });
 
@@ -164,7 +168,7 @@ test('an older comment list cannot restore marks after a newer empty one', async
 test('finishing an old delete cannot enable the button for a newer pending delete', async ({ page }) => {
   const errors = await setup(page, [comment]);
   const pending: Route[] = [];
-  await page.route(`**${LIST}/comment-a`, (route: Route) => { pending.push(route); });
+  await page.route(`**${LIST}/comment-a/delete`, (route: Route) => { pending.push(route); });
   const layer = page.locator('#pi-dish-comment-layer');
   await page.locator('mark').first().click();
   await layer.locator('#del').click();

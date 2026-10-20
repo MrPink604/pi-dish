@@ -220,7 +220,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/vault/bridge/requests/:id', vaultHandlers.bridgeGet);
   app.delete('/api/vault/bridge/requests/:id', vaultHandlers.bridgeAbandon);
 
-  app.use('/api/page-comments', accessHandlers.pageCommentCors);
+  app.use('/api/page-comments', accessHandlers.pageCommentTransport);
   app.use('/api', accessHandlers.apiGate);
   app.get('/api/host', accessHandlers.host);
   app.post('/api/auth/ticket', accessHandlers.ticket);
@@ -1306,11 +1306,13 @@ export function startServer(rootDirectory: string): Server {
 
   // Published pages (opaque sandboxed origins) reach their own comments only
   // through these page-scoped routes; a fronted peer's page relays home.
+  // Every route is a GET or POST so the overlay's cross-origin calls are never
+  // preflighted (see accessHandlers.pageCommentTransport).
   app.use('/api/page-comments/:token', relayHandlers.pageComments);
   app.get('/api/page-comments/:token', publicationHandlers.listPageComments);
   app.post('/api/page-comments/:token', publicationHandlers.createPageComment);
-  app.patch('/api/page-comments/:token/:id', publicationHandlers.updatePageComment);
-  app.delete('/api/page-comments/:token/:id', publicationHandlers.deletePageComment);
+  app.post('/api/page-comments/:token/:id', publicationHandlers.updatePageComment);
+  app.post('/api/page-comments/:token/:id/delete', publicationHandlers.deletePageComment);
 
   app.post('/api/comments', publicationHandlers.createComment);
 

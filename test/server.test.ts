@@ -2122,19 +2122,22 @@ test('the page overlay reaches only its own page\'s open comments, from the opaq
   const other = await post('/api/pages', { path: otherArtifact, sessionId: REAL_CWD_ID });
   const scoped = `/api/page-comments/${page.body.token}`;
   try {
-    // The sandboxed document's preflight is answered for these routes only.
-    const preflight = await fetch(base + scoped, { method: 'OPTIONS', headers: {
-      Origin: 'null', 'Access-Control-Request-Method': 'PATCH', 'Access-Control-Request-Headers': 'content-type',
-    } });
-    assert.equal(preflight.status, 204);
-    assert.equal(preflight.headers.get('access-control-allow-origin'), 'null');
-    assert.match(preflight.headers.get('access-control-allow-methods') ?? '', /PATCH/);
+    // The sandboxed overlay's calls arrive as credentialed, never-preflighted
+    // requests: Origin null, text/plain JSON bodies.
+    const overlay = (requestPath: string, payload: unknown) => fetch(base + requestPath, {
+      method: 'POST', headers: { Origin: 'null', 'Content-Type': 'text/plain;charset=UTF-8' },
+      body: JSON.stringify(payload),
+    });
     const sessionApi = await fetch(`${base}/api/comments/index?sessionId=${REAL_CWD_ID}`, { headers: { Origin: 'null' } });
     assert.equal(sessionApi.headers.get('access-control-allow-origin'), null, 'the session API stays unreadable to pages');
 
     const anchor = { type: 'text', quote: 'overlay prose', prefix: 'Scoped ', suffix: '' };
-    const created = await post(scoped, { body: 'Say more here.', anchor });
-    assert.equal(created.status, 201);
+    const createdRes = await overlay(scoped, { body: 'Say more here.', anchor });
+    assert.equal(createdRes.status, 201);
+    assert.equal(createdRes.headers.get('access-control-allow-origin'), 'null');
+    assert.equal(createdRes.headers.get('access-control-allow-credentials'), 'true',
+      'an auth proxy\'s session cookie may ride along');
+    const created = { body: responseObject(await createdRes.json()) };
     assert.deepEqual(Object.keys(created.body).sort(), ['anchor', 'body', 'createdAt', 'id'],
       'pages see the comment, not its session or filesystem target');
     const elsewhere = await post(`/api/page-comments/${other.body.token}`, { body: 'Other page.', anchor });
@@ -2150,22 +2153,22 @@ test('the page overlay reaches only its own page\'s open comments, from the opaq
     assert.equal(listed.headers.get('access-control-allow-origin'), 'null');
     assert.deepEqual(records(responseObject(await listed.json()).comments).map(comment => comment.id), [created.body.id]);
 
-    const patched = await patch(`${scoped}/${created.body.id}`, { body: 'Say much more here.' });
-    assert.equal(patched.body.body, 'Say much more here.');
+    const patched = await overlay(`${scoped}/${created.body.id}`, { body: 'Say much more here.' });
+    assert.equal(responseObject(await patched.json()).body, 'Say much more here.');
     // Another page's token cannot touch this page's or the session's comments.
     for (const id of [created.body.id, sessionComment.body.id]) {
-      assert.equal((await patch(`/api/page-comments/${other.body.token}/${id}`, { body: 'hijack' })).status, 404);
-      assert.equal((await del(`/api/page-comments/${other.body.token}/${id}`)).status, 404);
+      assert.equal((await post(`/api/page-comments/${other.body.token}/${id}`, { body: 'hijack' })).status, 404);
+      assert.equal((await post(`/api/page-comments/${other.body.token}/${id}/delete`, {})).status, 404);
     }
     assert.equal((await post('/api/page-comments/missing', { body: 'x', anchor })).status, 404);
     assert.equal((await post(scoped, { body: 'no anchor' })).status, 400);
 
     await post(`/api/comments/${elsewhere.body.id}/ack`, { sessionId: REAL_CWD_ID });
-    assert.equal((await patch(`/api/page-comments/${other.body.token}/${elsewhere.body.id}`, { body: 'late' })).status, 409);
+    assert.equal((await post(`/api/page-comments/${other.body.token}/${elsewhere.body.id}`, { body: 'late' })).status, 409);
     assert.deepEqual((await get(`/api/page-comments/${other.body.token}`)).body.comments, [],
       'the overlay lists open comments only');
 
-    assert.deepEqual((await del(`${scoped}/${created.body.id}`)).body, { ok: true });
+    assert.deepEqual(responseObject(await (await overlay(`${scoped}/${created.body.id}/delete`, {})).json()), { ok: true });
     assert.deepEqual((await get(scoped)).body.comments, []);
     await post(`/api/comments/${sessionComment.body.id}/ack`, { sessionId: REAL_CWD_ID });
   } finally {

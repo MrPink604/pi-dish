@@ -36,8 +36,6 @@ async function selectProse(tab: Page) {
 
 test('a published page runs its scripts, assets and comments without the app origin', async ({ page, fleet }) => {
   const { self } = fleet;
-  // The tab the fixture opened is the app: it owns this origin's storage.
-  await page.evaluate(() => localStorage.setItem('pi-dish-history-probe', JSON.stringify(['a lost prompt'])));
   const site = path.join(self.home, 'published-site');
   fs.mkdirSync(site);
   fs.writeFileSync(path.join(site, 'index.html'), INDEX);
@@ -54,14 +52,30 @@ test('a published page runs its scripts, assets and comments without the app ori
   }
 
   const tab = await page.context().newPage();
+  // Browse as `localhost`, a secure context, so the app origin can hold a
+  // stand-in for an auth proxy's session: Cloudflare Access sets
+  // CF_Authorization SameSite=None; Secure by default. The app origin also
+  // holds a prompt history the page must not read.
+  const app = self.base.replace('127.0.0.1', 'localhost');
+  await tab.goto(`${app}/api/host`);
+  await tab.evaluate(() => {
+    document.cookie = 'CF_Authorization=proxy-session; Path=/; SameSite=None; Secure';
+    localStorage.setItem('pi-dish-history-probe', JSON.stringify(['a lost prompt']));
+  });
   const errors: string[] = [];
   tab.on('pageerror', error => errors.push(error.message));
+  const overlayCalls: Promise<string>[] = [];
+  tab.on('request', request => {
+    if (!new URL(request.url()).pathname.startsWith('/api/page-comments/')) return;
+    overlayCalls.push(request.allHeaders().then(headers =>
+      `${request.method()} ${headers['content-type'] ?? '-'} ${headers.cookie ?? 'no cookie'}`));
+  });
   // The overlay's shadow root is closed; open it so locators can reach it.
   await tab.addInitScript(() => {
     const original = Element.prototype.attachShadow;
     Element.prototype.attachShadow = function (init) { return original.call(this, { ...init, mode: 'open' }); };
   });
-  await tab.goto(`${self.base}${published.path}/`);
+  await tab.goto(`${app}${published.path}/`);
   await expect(tab.locator('#storage')).toHaveText('SecurityError');
   await expect(tab.locator('#api')).toHaveText('blocked');
   await expect(tab.locator('#asset')).toHaveText('loaded');
@@ -74,15 +88,24 @@ test('a published page runs its scripts, assets and comments without the app ori
   await expect(layer.locator('#card')).toBeVisible();
   await layer.locator('#body').fill('Name the sandbox flags.');
   await layer.locator('#send').click();
+  // An auth proxy answers a preflight with its login redirect: every call must
+  // be a safelisted GET or text/plain POST.
   await expect(layer.locator('#toast')).toHaveText('Comment saved');
   await expect(tab.locator('mark[data-pi-dish-comment]')).toHaveText('page prose');
+  const calls = await Promise.all(overlayCalls);
+  expect(calls.length).toBeGreaterThanOrEqual(3);
+  for (const call of calls) {
+    expect(call).toMatch(/^(GET -|POST text\/plain;charset=UTF-8) /);
+    expect(call).toContain('CF_Authorization=proxy-session');
+  }
 
   const index: unknown = await (await fetch(`${self.base}/api/comments/index?sessionId=${ROOT}`)).json();
   const entries = isRecord(index) && Array.isArray(index.comments) ? index.comments : [];
   expect(entries.map(entry => isRecord(entry) && isRecord(entry.target) ? entry.target.pageToken : null))
     .toEqual([published.token]);
-  // The app itself still reads its own storage.
-  expect(await page.evaluate(() => localStorage.getItem('pi-dish-history-probe'))).toBe('["a lost prompt"]');
+  // The app origin still reads its own storage.
+  await tab.goto(`${app}/api/host`);
+  expect(await tab.evaluate(() => localStorage.getItem('pi-dish-history-probe'))).toBe('["a lost prompt"]');
   expect(errors).toEqual([]);
   await tab.close();
 });

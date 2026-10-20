@@ -72,24 +72,28 @@ function listOnly(handler) {
     const body = page.locator('#pi-dish-comment-layer #body');
     await (0, test_1.expect)(body).toHaveValue('original');
     let patch;
-    await page.route(`**${LIST}/comment-a`, async (route) => {
-        const body = route.request().postData() ? route.request().postDataJSON() : {};
+    await page.route(`**${LIST}/comment-a{,/delete}`, async (route) => {
+        const request = route.request();
+        const body = request.postDataJSON();
         if (!(0, wire_protocol_js_1.isRecord)(body))
             throw new Error('Invalid comment request');
-        patch = { method: route.request().method(), ...body };
+        // Safelisted: a cross-origin call from the sandboxed page is never
+        // preflighted, which an auth proxy would answer with a login redirect.
+        patch = { method: request.method(), type: request.headers()['content-type'],
+            path: new URL(request.url()).pathname.slice(LIST.length), ...body };
         await route.fulfill({ json: { ok: true } });
     });
     await body.fill('updated');
     await page.locator('#pi-dish-comment-layer #send').click();
     await (0, test_1.expect)(page.locator('#pi-dish-comment-layer #card')).toBeHidden();
-    (0, test_1.expect)(patch).toEqual({ method: 'PATCH', body: 'updated' });
+    (0, test_1.expect)(patch).toEqual({ method: 'POST', type: 'text/plain;charset=UTF-8', path: '/comment-a', body: 'updated' });
     await page.locator('mark').first().click();
     const del = page.locator('#pi-dish-comment-layer #del');
     await del.click();
     await (0, test_1.expect)(del).toHaveText('Delete?');
     await del.click();
     await (0, test_1.expect)(page.locator('#pi-dish-comment-layer #card')).toBeHidden();
-    (0, test_1.expect)(patch).toEqual({ method: 'DELETE' });
+    (0, test_1.expect)(patch).toEqual({ method: 'POST', type: 'text/plain;charset=UTF-8', path: '/comment-a/delete' });
     (0, test_1.expect)(errors).toEqual([]);
 });
 (0, test_1.test)('published marks preserve exact context and exclude scripts, styles and the overlay on refresh', async ({ page }) => {
@@ -168,7 +172,7 @@ function listOnly(handler) {
 (0, test_1.test)('finishing an old delete cannot enable the button for a newer pending delete', async ({ page }) => {
     const errors = await setup(page, [comment]);
     const pending = [];
-    await page.route(`**${LIST}/comment-a`, (route) => { pending.push(route); });
+    await page.route(`**${LIST}/comment-a/delete`, (route) => { pending.push(route); });
     const layer = page.locator('#pi-dish-comment-layer');
     await page.locator('mark').first().click();
     await layer.locator('#del').click();
