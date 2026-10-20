@@ -10,14 +10,22 @@ approval, Bitwarden Agent Access (`aac`) injects the requested fields into
 **one** command's environment. The value never appears in your output, the
 transcript, or the model context — keep it that way.
 
-Find the item first (names, ids and URIs only; no approval needed), then
-request it by id:
+Find the item first (names, ids, URIs and the fields it has; never values, no
+approval needed), then request it by id:
 
 ```bash
 VAULT=~/.pi/agent/skills/pi-dish-vault/scripts/pi-dish-vault.js
 node "$VAULT" search github          # id <tab> kind <tab> name <tab> URIs
+                                     #   fields: password, totp, field:api-key
 node "$VAULT" run --item <id> --env GH_TOKEN=password \
   --reason "push the release tag" -- gh release create v1.2.0
+```
+
+API keys usually live in a custom hidden field; request it by name:
+
+```bash
+node "$VAULT" run --item <id> --env KEY=field:api-key \
+  --reason "rotate the OpenCode key" -- ./rotate.sh
 ```
 
 sudo with the operator's password:
@@ -30,7 +38,9 @@ node "$VAULT" run --item fleet-sudo-desktop --env PW=password \
 
 - `--item`: Bitwarden item id (from `search`) or exact, unique name. `--env VAR=field` with field one
   of `username`, `password`, `totp`, `uri`, `notes` (secure-note bodies live
-  in `notes`); repeat for several fields of the same item.
+  in `notes`), or `field:<name>` for a custom text/hidden field exactly as
+  `search` lists it; repeat for several fields of the same item. Request only
+  fields `search` lists — anything else is refused after approval.
 - `--reason`: one short, honest line. The operator decides from it.
 - The command blocks until the decision (default 300 s, `--timeout`).
 

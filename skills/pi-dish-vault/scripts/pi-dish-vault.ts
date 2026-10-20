@@ -33,6 +33,12 @@ try {
 const fail = core.makeFail('pi-dish-vault');
 export const ENVELOPE_PREFIX = 'pidish-vault:v1:';
 export const FIELDS = ['username', 'password', 'totp', 'uri', 'notes'] as const;
+/** `field:<name>` requests a custom (text or hidden) field; the listener bundles those into `notes`. */
+const CUSTOM_FIELD_RE = /^field:[^\u0000-\u001f\u007f]{1,128}$/;
+const isField = (field: string) => (FIELDS as readonly string[]).includes(field) || CUSTOM_FIELD_RE.test(field);
+/** aac's slot that carries the custom-field bundle to the `__inject` step. */
+const BUNDLE_ENV = 'PI_DISH_VAULT_BUNDLE';
+const INJECT = '__inject';
 const DEFAULT_TIMEOUT_SEC = 300;
 const MAX_TIMEOUT_SEC = 600;
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -44,20 +50,23 @@ Usage: run --item <id-or-name> --env VAR=field [--env ...] [--reason <text>] [--
 
 Flags:
   --item NAME      Bitwarden item id or exact name
-  --env VAR=FIELD  inject FIELD (username, password, totp, uri, notes) as $VAR; repeatable
+  --env VAR=FIELD  inject FIELD as $VAR; repeatable. FIELD is username, password, totp,
+                   uri, notes, or field:<name> for a custom (text or hidden) field
   --reason TEXT    one short, honest line shown on the approval card
   --timeout SECS   how long to wait for the decision (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC})
   --session ID     this caller's session id, when discovery cannot infer it
 
 Example:
   run --item fleet-sudo-desktop --env PW=password --reason "install rocprofiler" \\
-    -- sh -c 'printf "%s\\n" "$PW" | sudo -S pacman -S --needed rocprofiler'`,
-  search: `search — list vault items you may request: names, ids and URIs, never values. No approval needed.
+    -- sh -c 'printf "%s\\n" "$PW" | sudo -S pacman -S --needed rocprofiler'
+  run --item opencode-api-key --env KEY=field:api-key --reason "rotate the OpenCode key" -- ./rotate.sh`,
+  search: `search — list vault items you may request: ids, kinds, names, URIs and the fields each
+item has (field:<name> for custom fields), never values. No approval needed.
 
 Usage: search [text...] [--json]
 
 Without text, lists every requestable item (up to 100). Request an item by its id
-with \`run --item <id>\`; names are not unique.`,
+with \`run --item <id>\`; names are not unique. A field the item lacks is refused.`,
   pair: `pair — pair this host with the hub's vault listener (once per host).
 
 Usage: pair <psk-token>
@@ -89,9 +98,11 @@ export function parseRunArgs(argv: readonly string[]): RunArgs {
       if (!Number.isInteger(seconds) || seconds < 10 || seconds > MAX_TIMEOUT_SEC) throw new Error(`--timeout must be 10-${MAX_TIMEOUT_SEC} seconds`);
       args.timeout = seconds;
     } else if (flag === '--env') {
-      const [name, field, extra] = value.split('=');
-      if (extra !== undefined || !ENV_NAME_RE.test(name) || !FIELDS.includes(field as typeof FIELDS[number])) {
-        throw new Error(`--env must be VAR=field with field one of ${FIELDS.join(', ')}`);
+      const split = value.indexOf('=');
+      const name = split < 0 ? '' : value.slice(0, split);
+      const field = split < 0 ? '' : value.slice(split + 1);
+      if (!ENV_NAME_RE.test(name) || name === BUNDLE_ENV || !isField(field)) {
+        throw new Error(`--env must be VAR=field with field one of ${FIELDS.join(', ')}, field:<name>`);
       }
       args.env.push(value);
       if (!args.fields.includes(field)) args.fields.push(field);
@@ -138,19 +149,63 @@ function aacArgv(argv: readonly string[]): string[] {
 
 const aacBin = () => process.env.AAC_BIN || 'aac';
 
+/**
+ * aac injects only its five built-in slots. With custom fields the listener
+ * returns them (and notes, if asked) as one JSON bundle in `notes`; aac puts
+ * that in BUNDLE_ENV for this script's `__inject` step, which sets the
+ * requested variables and runs the command. Only names cross argv.
+ */
+export function aacInvocation(args: Pick<RunArgs, 'env' | 'command'>, self: string): { env: string[]; command: string[] } {
+  const bundled = args.env.filter(mapping => {
+    const field = mapping.slice(mapping.indexOf('=') + 1);
+    return field === 'notes' || field.startsWith('field:');
+  });
+  if (!bundled.some(mapping => mapping.includes('=field:'))) return { env: args.env, command: args.command };
+  const direct = args.env.filter(mapping => !bundled.includes(mapping));
+  return {
+    env: [...direct, `${BUNDLE_ENV}=notes`],
+    command: [process.execPath, self, INJECT, JSON.stringify(bundled), '--', ...args.command],
+  };
+}
+
 async function run(argv: readonly string[]): Promise<void> {
   const args = parseRunArgs(argv);
   const envelope = encodeEnvelope({
     item: args.item.trim(), fields: args.fields, reason: args.reason?.trim() || null,
     session: await sessionClaim(args.session), timeoutSec: args.timeout,
   });
+  const invocation = aacInvocation(args, __filename);
   // aac logs its INFO status lines to stdout, mixed into the command's output; JSON mode logs only warnings.
   const aacArgs = aacArgv(['--output', 'json', 'run', '--domain', envelope, '--timeout', String(args.timeout),
-    ...args.env.flatMap(mapping => ['--env', mapping]), '--', ...args.command]);
+    ...invocation.env.flatMap(mapping => ['--env', mapping]), '--', ...invocation.command]);
   process.stderr.write(`pi-dish-vault: waiting for approval of ${args.item} in pi-dish (up to ${args.timeout}s)…\n`);
   const child = spawn(aacBin(), aacArgs, { stdio: 'inherit' });
   for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => child.kill(signal));
   child.on('error', error => fail(`could not run ${aacBin()}: ${error.message} (install aac v0.11.0 or set AAC_BIN)`));
+  child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 1));
+}
+
+/** The `__inject` step aac runs: unpack BUNDLE_ENV into the requested variables, then run the command. */
+function inject(argv: readonly string[]): void {
+  const split = argv.indexOf('--');
+  const mappings: unknown = JSON.parse(argv[0] ?? '[]');
+  const command = argv.slice(split + 1);
+  if (split !== 1 || !Array.isArray(mappings) || !command.length) return fail('internal: malformed inject step');
+  const bundle = core.record(JSON.parse(process.env[BUNDLE_ENV] || '{}'));
+  const custom = core.record(bundle.fields ?? {});
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env[BUNDLE_ENV];
+  for (const mapping of mappings) {
+    if (typeof mapping !== 'string') return fail('internal: malformed inject step');
+    const at = mapping.indexOf('=');
+    const name = mapping.slice(0, at), field = mapping.slice(at + 1);
+    const value = field === 'notes' ? bundle.notes : custom[field.slice('field:'.length)];
+    if (typeof value !== 'string') return fail(`the listener released no ${field} (is it up to date?)`);
+    env[name] = value;
+  }
+  const child = spawn(command[0]!, command.slice(1), { stdio: 'inherit', env });
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => child.kill(signal));
+  child.on('error', error => fail(`could not run ${command[0]}: ${error.message}`));
   child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 1));
 }
 
@@ -168,18 +223,19 @@ function pair(token: string | undefined): void {
 /** The listener answers this probe itself with item metadata as JSON in `notes`. */
 export const SEARCH_PREFIX = 'pidish-vault:search:';
 
-interface SearchEntry { id: string; name: string; kind: string; uris: string[] }
+interface SearchEntry { id: string; name: string; kind: string; uris: string[]; fields: string[] }
 
 /** The listing carried in an `aac --output json connect` reply. */
 export function decodeSearchReply(stdout: string): { results: SearchEntry[]; truncated: boolean } {
   const notes = core.record(core.record(JSON.parse(stdout)).credential ?? {}).notes;
   if (typeof notes !== 'string') throw new Error('the listener returned no listing (is it up to date?)');
   const listing = core.record(JSON.parse(notes));
+  const strings = (value: unknown) => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
   const results = Array.isArray(listing.results) ? listing.results.flatMap((entry: unknown) => {
     const row = core.record(entry ?? {});
     return typeof row.id === 'string' ? [{
       id: row.id, name: typeof row.name === 'string' ? row.name : '', kind: typeof row.kind === 'string' ? row.kind : '',
-      uris: Array.isArray(row.uris) ? row.uris.filter((uri): uri is string => typeof uri === 'string') : [],
+      uris: strings(row.uris), fields: strings(row.fields),
     }] : [];
   }) : [];
   return { results, truncated: listing.truncated === true };
@@ -194,7 +250,10 @@ function search(args: readonly string[]): void {
   if (result.status !== 0) return fail(`search failed (exit ${result.status}): ${(result.stderr || result.stdout || '').trim().split('\n').pop() || 'no output'}`);
   const listing = decodeSearchReply(result.stdout);
   if (json) return void process.stdout.write(JSON.stringify(listing, null, 2) + '\n');
-  for (const entry of listing.results) process.stdout.write(`${entry.id}\t${entry.kind}\t${entry.name}\t${entry.uris.join(' ')}\n`);
+  for (const entry of listing.results) {
+    process.stdout.write(`${entry.id}\t${entry.kind}\t${entry.name}\t${entry.uris.join(' ')}\n`);
+    if (entry.fields.length) process.stdout.write(`  fields: ${entry.fields.join(', ')}\n`);
+  }
   if (!listing.results.length) process.stdout.write('# No matching items.\n');
   if (listing.truncated) process.stdout.write('# More items match; narrow the search.\n');
 }
@@ -217,6 +276,7 @@ async function main(): Promise<void> {
   if (rest.includes('--help') && HELP[command] && !rest.includes('--')) return void process.stdout.write(HELP[command] + '\n');
   try {
     if (command === 'run') return await run(rest);
+    if (command === INJECT) return inject(rest);
     if (command === 'pair') return pair(rest[0]);
     if (command === 'search') return search(rest);
     if (command === 'status') return status();

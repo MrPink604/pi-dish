@@ -132,6 +132,8 @@ test('malformed requests are refused before anything is pending', () => {
   };
   assert.equal(status({ fields: ['password', 'password'] }), 400);
   assert.equal(status({ fields: ['ssn'] }), 400);
+  assert.equal(status({ fields: ['field:'] }), 400);
+  assert.equal(status({ fields: ['field:a\nb'] }), 400);
   assert.equal(status({ fields: [] }), 400);
   assert.equal(status({ item: '  ' }), 400);
   assert.equal(status({ expiresAt: T0 }), 400);
@@ -148,6 +150,7 @@ test('malformed requests are refused before anything is pending', () => {
 test('fields are reported in canonical order', () => {
   const { instance } = vault();
   assert.deepEqual(created(instance, { fields: ['totp', 'username', 'password'] }).fields, ['username', 'password', 'totp']);
+  assert.deepEqual(created(instance, { fields: ['field:api key', 'notes', 'field:Token'] }).fields, ['notes', 'field:api key', 'field:Token']);
 });
 
 test('the listener reads as stale without a heartbeat for 45 seconds', () => {

@@ -29,6 +29,21 @@ pub fn search_query(query: &CredentialQuery) -> Option<Result<String, String>> {
 }
 
 pub const FIELDS: [&str; 5] = ["username", "password", "totp", "uri", "notes"];
+/// `field:<name>` asks for the custom (text or hidden) field `<name>` of the item.
+pub const CUSTOM_PREFIX: &str = "field:";
+const MAX_CUSTOM_NAME: usize = 128;
+
+/// The custom field name of a `field:<name>` request; `None` for built-ins.
+pub fn custom_field(field: &str) -> Option<&str> {
+    field.strip_prefix(CUSTOM_PREFIX)
+}
+
+fn valid_field(field: &str) -> bool {
+    match custom_field(field) {
+        Some(name) => !name.is_empty() && name.chars().count() <= MAX_CUSTOM_NAME && !name.chars().any(char::is_control),
+        None => FIELDS.contains(&field),
+    }
+}
 /// Login fields released to a stock `aac` query that names no fields.
 const LOGIN_FIELDS: [&str; 4] = ["username", "password", "totp", "uri"];
 /// A bare aac query waits up to aac's own 120 s default; answer before it.
@@ -47,7 +62,7 @@ pub struct SessionClaim {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Envelope {
     pub item: String,
-    /// Canonical order, distinct, each one of [`FIELDS`].
+    /// Distinct: built-ins in [`FIELDS`] order, then `field:<name>` entries as requested.
     pub fields: Vec<String>,
     pub reason: Option<String>,
     pub session: Option<SessionClaim>,
@@ -66,9 +81,10 @@ struct Wire {
     timeout_sec: Option<u64>,
 }
 
-/// Distinct known fields in canonical order; `None` when empty or unknown.
+/// Distinct valid fields, built-ins in canonical order then custom fields as
+/// requested; `None` when empty, repeated or unknown.
 pub fn canonical_fields(fields: &[String]) -> Option<Vec<String>> {
-    if fields.is_empty() || fields.iter().any(|field| !FIELDS.contains(&field.as_str())) {
+    if fields.is_empty() || fields.iter().any(|field| !valid_field(field)) {
         return None;
     }
     let mut seen: Vec<String> = Vec::new();
@@ -78,7 +94,9 @@ pub fn canonical_fields(fields: &[String]) -> Option<Vec<String>> {
         }
         seen.push(field.clone());
     }
-    Some(FIELDS.iter().filter(|field| seen.iter().any(|s| s == *field)).map(|field| (*field).to_string()).collect())
+    let builtin = FIELDS.iter().filter(|field| seen.iter().any(|s| s == *field)).map(|field| (*field).to_string());
+    let custom = seen.iter().filter(|field| custom_field(field).is_some()).cloned();
+    Some(builtin.chain(custom).collect())
 }
 
 /// Decodes a request. A query without the pi-dish prefix (stock `aac`) asks
@@ -103,7 +121,7 @@ pub fn decode(query: &CredentialQuery) -> Result<Envelope, String> {
     if item.is_empty() {
         return Err("envelope names no item".to_string());
     }
-    let fields = canonical_fields(&wire.fields).ok_or_else(|| format!("fields must be distinct values from {}", FIELDS.join(", ")))?;
+    let fields = canonical_fields(&wire.fields).ok_or_else(|| format!("fields must be distinct values from {}, {CUSTOM_PREFIX}<name>", FIELDS.join(", ")))?;
     let reason = wire.reason.map(|reason| reason.trim().to_string()).filter(|reason| !reason.is_empty());
     let session = wire.session.filter(|session| !session.r#ref.trim().is_empty());
     let timeout_sec = wire.timeout_sec.unwrap_or(DEFAULT_TIMEOUT_SEC).clamp(10, MAX_TIMEOUT_SEC);
@@ -127,6 +145,12 @@ mod tests {
         assert_eq!(envelope.reason.as_deref(), Some("install"));
         assert_eq!(envelope.session.map(|s| s.r#ref), Some("desktop/01a0a845".to_string()));
         assert_eq!(envelope.timeout_sec, 300);
+    }
+
+    #[test]
+    fn custom_fields_follow_the_built_ins_in_request_order() {
+        let envelope = decode(&domain(r#"{"item":"x","fields":["field:api key","notes","field:Token","password"]}"#)).expect("valid envelope");
+        assert_eq!(envelope.fields, vec!["password", "notes", "field:api key", "field:Token"]);
     }
 
     #[test]
@@ -160,6 +184,9 @@ mod tests {
         assert!(decode(&domain(r#"{"item":" ","fields":["password"]}"#)).is_err());
         assert!(decode(&domain(r#"{"item":"x","fields":[]}"#)).is_err());
         assert!(decode(&domain(r#"{"item":"x","fields":["ssn"]}"#)).is_err());
+        assert!(decode(&domain(r#"{"item":"x","fields":["field:"]}"#)).is_err());
+        assert!(decode(&domain(r#"{"item":"x","fields":["field:a\nb"]}"#)).is_err());
+        assert!(decode(&domain(r#"{"item":"x","fields":["field:k","field:k"]}"#)).is_err());
         assert!(decode(&domain(r#"{"item":"x","fields":["password","password"]}"#)).is_err());
         assert!(decode(&CredentialQuery::Domain("  ".to_string())).is_err());
     }

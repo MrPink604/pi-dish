@@ -2,7 +2,8 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { PushPayload } from './push-notifications';
 export declare const VAULT_FIELDS: readonly ['username', 'password', 'totp', 'uri', 'notes'];
-export type VaultField = typeof VAULT_FIELDS[number];
+/** A built-in field, or `field:<name>` for a custom (text or hidden) field of the item. */
+export type VaultField = typeof VAULT_FIELDS[number] | `field:${string}`;
 export declare const BRIDGE_HEADER = "x-pi-dish-vault-bridge";
 export declare const GRANT_WINDOW_MS: number;
 export declare const LISTENER_STALE_MS: number;
@@ -82,7 +83,7 @@ export interface VaultApprovals {
     decide(id: string, decision: unknown): Result<VaultRequest>;
     revokeGrant(id: string): Result<VaultGrant>;
 }
-/** Unique, known field names in canonical order; null when empty or invalid. */
+/** Unique field names: built-ins in canonical order, then custom fields as requested; null when empty or invalid. */
 export declare function decodeFields(value: unknown): VaultField[] | null;
 /** Notification for a pending request; the reason is the agent's claim, so it follows the facts. */
 export declare function vaultPushPayload(request: VaultRequest): Omit<PushPayload, 'hostId'>;

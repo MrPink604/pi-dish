@@ -23,7 +23,9 @@ import type { NextFunction, Request, Response } from 'express';
 import type { PushPayload } from './push-notifications';
 
 export const VAULT_FIELDS = ['username', 'password', 'totp', 'uri', 'notes'] as const;
-export type VaultField = typeof VAULT_FIELDS[number];
+/** A built-in field, or `field:<name>` for a custom (text or hidden) field of the item. */
+export type VaultField = typeof VAULT_FIELDS[number] | `field:${string}`;
+const CUSTOM_FIELD_RE = /^field:[^\u0000-\u001f\u007f]{1,128}$/;
 export const BRIDGE_HEADER = 'x-pi-dish-vault-bridge';
 export const GRANT_WINDOW_MS = 15 * 60 * 1000;
 export const LISTENER_STALE_MS = 45 * 1000;
@@ -123,12 +125,18 @@ function decodeDevice(value: unknown): VaultDevice | null {
   return name && fingerprint ? { name, fingerprint } : null;
 }
 
-/** Unique, known field names in canonical order; null when empty or invalid. */
+/** Unique field names: built-ins in canonical order, then custom fields as requested; null when empty or invalid. */
 export function decodeFields(value: unknown): VaultField[] | null {
   if (!Array.isArray(value) || !value.length) return null;
   const wanted = new Set<unknown>(value);
-  if (wanted.size !== value.length || [...wanted].some(field => !VAULT_FIELDS.includes(field as VaultField))) return null;
-  return VAULT_FIELDS.filter(field => wanted.has(field));
+  if (wanted.size !== value.length) return null;
+  const custom: VaultField[] = [];
+  for (const field of wanted) {
+    if (VAULT_FIELDS.includes(field as typeof VAULT_FIELDS[number])) continue;
+    if (typeof field !== 'string' || !CUSTOM_FIELD_RE.test(field)) return null;
+    custom.push(field as `field:${string}`);
+  }
+  return [...VAULT_FIELDS.filter(field => wanted.has(field)), ...custom];
 }
 
 function decodeSession(value: unknown): VaultSessionClaim | null | undefined {
@@ -217,7 +225,7 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
       const item = boundedString(input?.item, 256);
       if (!item) return fail(400, 'item is required');
       const fields = decodeFields(input?.fields);
-      if (!fields) return fail(400, `fields must be distinct values from: ${VAULT_FIELDS.join(', ')}`);
+      if (!fields) return fail(400, `fields must be distinct values from: ${VAULT_FIELDS.join(', ')}, field:<name>`);
       const reason = optionalString(input?.reason, 500);
       if (reason === undefined) return fail(400, 'reason must be at most 500 characters');
       const session = decodeSession(input?.session);

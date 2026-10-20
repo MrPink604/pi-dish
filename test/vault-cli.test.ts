@@ -94,14 +94,45 @@ test('run refuses unknown fields, missing commands and out-of-range timeouts bef
 
 test('search sends the encoded text as a probe and prints only the listed metadata', async (t) => {
   const { home, aac, argvLog } = setup(t, false);
-  const listing = { results: [{ id: 'i-1', name: 'github.com', kind: 'login', uris: ['https://github.com'] }], truncated: true };
+  const listing = { results: [{ id: 'i-1', name: 'github.com', kind: 'login', uris: ['https://github.com'], fields: ['password', 'field:api-key'] }], truncated: true };
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, AAC_BIN: aac, AAC_STUB_STDOUT: JSON.stringify({ success: true, credential: { notes: JSON.stringify(listing) } }) };
   delete env.PI_DISH_VAULT_RELAY_URL;
   const { stdout } = await run(process.execPath, [cli, 'search', 'git', 'hub'], { env });
   const argv: string[] = JSON.parse(fs.readFileSync(argvLog, 'utf8'));
   assert.deepEqual(argv.slice(0, 4), ['--output', 'json', 'connect', '--domain']);
   assert.equal(Buffer.from(argv[4].slice('pidish-vault:search:'.length), 'base64url').toString('utf8'), 'git hub');
-  assert.equal(stdout, 'i-1\tlogin\tgithub.com\thttps://github.com\n# More items match; narrow the search.\n');
+  assert.equal(stdout, 'i-1\tlogin\tgithub.com\thttps://github.com\n  fields: password, field:api-key\n# More items match; narrow the search.\n');
   const json = await run(process.execPath, [cli, 'search', '--json'], { env });
   assert.deepEqual(JSON.parse(json.stdout), listing);
+});
+
+test('custom fields reach their variables through the notes bundle, alongside direct slots', async (t) => {
+  const { home } = setup(t, false);
+  const argvLog = path.join(home, 'aac-run-argv.json');
+  // Emulates aac run: --env VAR=slot pairs from AAC_STUB_CREDENTIAL, then the command.
+  const aac = path.join(home, 'aac-run');
+  fs.writeFileSync(aac, `#!${process.execPath}
+const argv = process.argv.slice(2); require('fs').writeFileSync(${JSON.stringify(argvLog)}, JSON.stringify(argv));
+const credential = JSON.parse(process.env.AAC_STUB_CREDENTIAL); const env = { ...process.env };
+for (let i = 0; i < argv.length; i++) if (argv[i] === '--env') { const [name, slot] = argv[i + 1].split('='); env[name] = credential[slot]; }
+const command = argv.slice(argv.indexOf('--') + 1);
+const child = require('child_process').spawnSync(command[0], command.slice(1), { env, stdio: 'inherit' });
+process.exit(child.status ?? 1);
+`, { mode: 0o755 });
+  const credential = { password: 'pw-1', notes: JSON.stringify({ fields: { 'api key': 'sk-1' }, notes: 'body' }) };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, AAC_BIN: aac, AAC_STUB_CREDENTIAL: JSON.stringify(credential), PI_DISH_URL: 'http://127.0.0.1:9', PI_DISH_SESSION_ID: '' };
+  delete env.PI_DISH_VAULT_RELAY_URL;
+  const { stdout } = await run(process.execPath, [cli, 'run', '--item', 'keys', '--env', 'KEY=field:api key', '--env', 'PW=password', '--env', 'BODY=notes',
+    '--', process.execPath, '-e', 'process.stdout.write(JSON.stringify([process.env.KEY, process.env.PW, process.env.BODY, process.env.PI_DISH_VAULT_BUNDLE ?? null]))'], { env });
+  assert.deepEqual(JSON.parse(stdout), ['sk-1', 'pw-1', 'body', null]);
+  const argv: string[] = JSON.parse(fs.readFileSync(argvLog, 'utf8'));
+  assert.deepEqual(decode(argv[4]).fields, ['field:api key', 'password', 'notes']);
+  assert.ok(!argv.some(arg => arg.includes('sk-1') || arg.includes('pw-1')), 'values never cross argv');
+});
+
+test('the inject step refuses a bundle missing a requested custom field', async (t) => {
+  const { home } = setup(t, false);
+  const env = { ...process.env, HOME: home, PI_DISH_VAULT_BUNDLE: JSON.stringify({ fields: {}, notes: null }) };
+  const failed = await run(process.execPath, [cli, '__inject', JSON.stringify(['KEY=field:api-key']), '--', 'true'], { env }).then(() => false, () => true);
+  assert.ok(failed);
 });

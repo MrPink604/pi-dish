@@ -25,6 +25,16 @@ export declare function encodeEnvelope(body: {
     session: SessionClaim | null;
     timeoutSec: number;
 }): string;
+/**
+ * aac injects only its five built-in slots. With custom fields the listener
+ * returns them (and notes, if asked) as one JSON bundle in `notes`; aac puts
+ * that in BUNDLE_ENV for this script's `__inject` step, which sets the
+ * requested variables and runs the command. Only names cross argv.
+ */
+export declare function aacInvocation(args: Pick<RunArgs, 'env' | 'command'>, self: string): {
+    env: string[];
+    command: string[];
+};
 /** aac v0.11.0 pairs non-interactively only alongside a request; the listener answers this probe itself. */
 export declare const PAIR_PROBE = "pidish-vault:pair";
 /** The listener answers this probe itself with item metadata as JSON in `notes`. */
@@ -34,6 +44,7 @@ interface SearchEntry {
     name: string;
     kind: string;
     uris: string[];
+    fields: string[];
 }
 /** The listing carried in an `aac --output json connect` reply. */
 export declare function decodeSearchReply(stdout: string): {
