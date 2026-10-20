@@ -85,6 +85,12 @@ export declare function sshArgv(remote: SshRemote, socketPath?: string, launch?:
  * silently dropped session left holding the port (matched by its bundle path
  * in /proc, never by pid alone) and execs the bundle. Host logs go to
  * ~/.pi/dish/host/host.log on the far side; stdout carries the ready line.
+ *
+ * On Termux it also refreshes the bundle's satellite watchdog in
+ * ~/.pi/dish/satellite/, links it into Termux:Boot, and (re)schedules it with
+ * termux-job-scheduler whenever its content changed. The scheduler call runs
+ * detached under a timeout, because termux-api blocks forever without the
+ * Termux:API app; only a successful call writes the `scheduled` marker.
  */
 export declare function hostLaunchScript(hash: string, port: number): string;
 /** Unpacks a bundle tarball from stdin into ~/.pi/dish/host/<hash>, marked complete only once whole. */

@@ -347,12 +347,21 @@ const TERMUX_ENV = [
   'fi;',
 ].join(' ');
 
+// Android JobScheduler id of the satellite watchdog; rescheduling the same id replaces it.
+const SATELLITE_JOB_ID = 33330;
+
 /**
  * The deployed host's ssh command. Exits EXIT_NEEDS_BUNDLE / EXIT_NEEDS_VAPID
  * / EXIT_NODE_MISSING before starting anything; otherwise replaces a host a
  * silently dropped session left holding the port (matched by its bundle path
  * in /proc, never by pid alone) and execs the bundle. Host logs go to
  * ~/.pi/dish/host/host.log on the far side; stdout carries the ready line.
+ *
+ * On Termux it also refreshes the bundle's satellite watchdog in
+ * ~/.pi/dish/satellite/, links it into Termux:Boot, and (re)schedules it with
+ * termux-job-scheduler whenever its content changed. The scheduler call runs
+ * detached under a timeout, because termux-api blocks forever without the
+ * Termux:API app; only a successful call writes the `scheduled` marker.
  */
 export function hostLaunchScript(hash: string, port: number): string {
   const script = [
@@ -370,6 +379,12 @@ export function hostLaunchScript(hash: string, port: number): string {
     'for s in "$D"/skills/*/SKILL.md; do s="${s%/SKILL.md}"; l "$s" "$HOME/.pi/agent/skills/${s##*/}"; done;',
     'if command -v omp >/dev/null 2>&1; then l "$D/extensions/pi-dish-bridge-omp" "$HOME/.omp/agent/extensions/pi-dish-bridge-omp";',
     'for s in "$D"/skills/*/SKILL.md; do s="${s%/SKILL.md}"; l "$s" "$HOME/.omp/agent/skills/${s##*/}"; done; fi;',
+    'if [ -d /data/data/com.termux/files/usr ]; then W="$HOME/.pi/dish/satellite"; mkdir -p "$W";',
+    'cmp -s "$D/satellite/watchdog" "$W/watchdog" || { cp "$D/satellite/watchdog" "$W/watchdog.new" && chmod 755 "$W/watchdog.new" && mv -f "$W/watchdog.new" "$W/watchdog"; rm -f "$W/scheduled"; };',
+    'l "$W/watchdog" "$HOME/.termux/boot/pi-dish-satellite";',
+    'if [ ! -f "$W/scheduled" ] && command -v termux-job-scheduler >/dev/null 2>&1; then',
+    `( timeout 30 termux-job-scheduler --job-id ${SATELLITE_JOB_ID} --script "$W/watchdog" --period-ms 900000`,
+    '--persisted true --battery-not-low false --network any && touch "$W/scheduled" ) </dev/null >/dev/null 2>&1 & fi; fi;',
     'P="$B/host.pid";',
     'if [ -f "$P" ]; then o=$(cat "$P"); if [ -n "$o" ] && grep -qa pi-dish-host "/proc/$o/cmdline" 2>/dev/null; then',
     'kill "$o" 2>/dev/null; i=0; while [ $i -lt 50 ] && kill -0 "$o" 2>/dev/null; do sleep 0.1; i=$((i+1)); done; fi; fi;',

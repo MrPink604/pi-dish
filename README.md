@@ -566,8 +566,18 @@ nodejs tmux openssh procps termux-api`, `npm install -g --ignore-scripts
 @earendil-works/pi-coding-agent`, log pi in once, add the hub's public key to
 `~/.ssh/authorized_keys`, run `sshd` (port 8022), set `"hostLabel"` in the
 phone's `~/.pi/dish/settings.json`, and exempt Termux from battery
-optimization. Termux:Boot can start `sshd` after a reboot. On the hub, an
-`~/.ssh/config` entry with `Port 8022` and the phone's tailnet name.
+optimization. On the hub, an `~/.ssh/config` entry with `Port 8022` and the
+phone's tailnet name.
+
+**Staying reachable:** the hub can only reach the phone while its `sshd`
+runs, and Android may kill it. Each time the hub connects to a Termux host it
+installs (and after upgrades refreshes) `~/.pi/dish/satellite/watchdog`, links
+it into `~/.termux/boot/` for Termux:Boot, and schedules it with
+`termux-job-scheduler` to run about every 15 minutes, surviving reboots. The
+watchdog only starts `sshd` if it is not running; Android's JobScheduler
+restarts Termux to run it even after Termux was killed. Install the
+Termux:API and Termux:Boot apps for this. If the phone is unreachable before
+the hub's first successful connection, open Termux and run `sshd` once.
 
 ### Session recovery
 

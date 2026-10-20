@@ -1289,6 +1289,14 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   turn or ask pending, and a closed forward is not a failure (no backoff),
   so the next request redeploys cold. Termux defaults (PREFIX, TMPDIR, PATH,
   termux-exec LD_PRELOAD) apply only when `/data/data/com.termux` exists.
+  There the launch also refreshes the bundle's `satellite/watchdog`
+  (generated in `host-bundle.ts`) into `~/.pi/dish/satellite/`, links it as
+  `~/.termux/boot/pi-dish-satellite`, and schedules it as JobScheduler job
+  33330 every 15 min (persisted) when its content changed. The scheduler call
+  is detached under `timeout 30` because termux-api hangs without the
+  Termux:API app; only success writes the `scheduled` marker. The watchdog
+  only keeps sshd up (`sv up sshd` under termux-services, else pgrep/start):
+  the hub can only reach a phone whose sshd is listening.
 - **Proxy**: `GET /api/hosts` = self entry + per-remote probe results
   (parallel, bounded ~3s). `/hosts/:name/api/*` streams both directions
   unbuffered (the only exception: the tiny JSON bodies the fleet-artifact

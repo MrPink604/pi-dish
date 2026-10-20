@@ -6,6 +6,7 @@
  *   lib/pi-dish-host.js   host-entry.ts with every npm dependency bundled
  *   lib/*.js              plain copies; bridge extensions import a few of them
  *   extensions/, skills/  loaded by spawned harnesses and the skills feature
+ *   satellite/watchdog    Termux keep-reachable script (remote-hosts.ts installs it)
  *   package.json          read for the version
  *
  * Native modules stay out: the web terminal (node-pty) is unavailable on a
@@ -27,6 +28,21 @@ export interface HostBundle {
 // loaded lazily, so a deployed host never needs it.
 const EXTERNALS = ['node-pty', '@ff-labs/fff-node', 'esbuild'];
 const COPIED_DIRS = ['extensions', 'skills'];
+
+/**
+ * Runs on the phone without the hub: Termux:Boot at boot, and Android's
+ * JobScheduler about every 15 minutes, which starts Termux again if Android
+ * killed it. It only keeps sshd up; the hub dials in and starts pi-dish itself.
+ */
+const SATELLITE_WATCHDOG = `#!/data/data/com.termux/files/usr/bin/sh
+# pi-dish satellite watchdog. Installed and refreshed by the pi-dish hub that
+# deploys this phone's host; local edits are overwritten on its next connection.
+if [ -d "$PREFIX/var/service/sshd" ] && command -v sv >/dev/null 2>&1; then
+  sv up sshd
+else
+  pgrep -x sshd >/dev/null 2>&1 || sshd
+fi
+`;
 
 let memo: { root: string; base: string; bundle: Promise<HostBundle> } | null = null;
 
@@ -65,6 +81,8 @@ async function build(root: string, base: string): Promise<HostBundle> {
     copyTree(path.join(root, 'lib'), path.join(staging, 'lib'), name => name.endsWith('.js'));
     for (const dir of COPIED_DIRS) copyTree(path.join(root, dir), path.join(staging, dir), () => true);
     fs.copyFileSync(path.join(root, 'package.json'), path.join(staging, 'package.json'));
+    fs.mkdirSync(path.join(staging, 'satellite'));
+    fs.writeFileSync(path.join(staging, 'satellite', 'watchdog'), SATELLITE_WATCHDOG, { mode: 0o755 });
     // Not a static import: the deployed host bundles this module but has no esbuild.
     const esbuild = await import('esbuild');
     await esbuild.build({
