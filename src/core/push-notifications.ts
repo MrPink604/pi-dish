@@ -259,11 +259,12 @@ export function createPushNotifier(ports: PushNotifierPorts): PushNotifier {
     if (kind === 'finished' && row.sessionFile) {
       try { detail = assistantPreview(ports.readMessages(row.sessionFile)); } catch {}
     }
-    const status = kind === 'waiting' ? 'Waiting for your answer' : 'Finished';
+    // The preview leads the body so a lock-screen line shows what happened;
+    // the host rides in the title, where it stays visible without crowding it.
     return {
       kind, hostId, sessionId: row.id,
-      title: row.name || 'pi-dish session',
-      body: detail ? `${status} on ${label}: ${detail}` : `${status} on ${label}`,
+      title: `${row.name || 'pi-dish session'} · ${label}`,
+      body: detail || (kind === 'waiting' ? 'Waiting for your answer' : 'Finished'),
       tag: `${hostId}:${row.id}`,
     };
   }

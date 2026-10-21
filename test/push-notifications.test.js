@@ -107,8 +107,8 @@ test('a finished session notifies every device with a preview; agent-launched pe
     await instance.sample();
     assert.deepEqual(sent.map(entry => entry.endpoint).sort(), ['https://push.example/laptop', 'https://push.example/phone']);
     assert.deepEqual(sent[0].payload, {
-        kind: 'finished', hostId: 'host-1', sessionId: 'a', title: 'a',
-        body: 'Finished on laptop: Done: all tests pass.', tag: 'host-1:a',
+        kind: 'finished', hostId: 'host-1', sessionId: 'a', title: 'a · laptop',
+        body: 'Done: all tests pass.', tag: 'host-1:a',
     });
 });
 test('a host-level notification reaches every device with a host-scoped tag', async () => {
