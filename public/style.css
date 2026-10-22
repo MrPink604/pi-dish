@@ -3319,30 +3319,6 @@ body.sidebar-open {
     font-size: 15px;
   }
 
-  /* Resume bar on mobile */
-  .resume-bar {
-    padding: 8px 10px;
-    padding-bottom: calc(env(safe-area-inset-bottom) + 8px);
-  }
-
-  .resume-info {
-    gap: 1px;
-  }
-
-  .resume-label {
-    font-size: 12px;
-  }
-
-  .resume-cwd {
-    font-size: 10px;
-  }
-
-  .resume-bar .btn-primary {
-    padding: 8px 14px;
-    font-size: 13px;
-    white-space: nowrap;
-  }
-
   /* Model and thinking dropdowns on mobile: full-width sheet under the
      header (their triggers now live top-right in the header) */
   .model-dropdown,
@@ -3403,6 +3379,7 @@ body.sidebar-open {
 /* Resume bar */
 .resume-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
@@ -3411,8 +3388,11 @@ body.sidebar-open {
   gap: 12px;
 }
 
+/* The label keeps a readable basis; when the actions no longer fit beside
+   it they wrap onto their own row, where the model picker absorbs the width. */
 .resume-info {
   display: flex;
+  flex: 1 1 220px;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -3420,22 +3400,30 @@ body.sidebar-open {
 
 .resume-actions {
   display: flex;
+  flex: 1 1 auto;
+  justify-content: flex-end;
   align-items: flex-end;
   gap: 8px;
-  flex-shrink: 0;
+  min-width: 0;
 }
 
 .resume-model {
   display: flex;
+  flex: 0 1 260px;
   flex-direction: column;
   gap: 3px;
+  min-width: 0;
   color: var(--text-muted);
   font-size: 10px;
 }
 
 .resume-model .ns-select {
-  max-width: 260px;
+  width: 100%;
   padding-block: 5px;
+}
+
+.resume-actions .btn {
+  white-space: nowrap;
 }
 
 .resume-label {
@@ -3451,6 +3439,35 @@ body.sidebar-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .resume-bar {
+    gap: 8px;
+    padding: 8px 10px;
+    padding-bottom: calc(env(safe-area-inset-bottom) + 8px);
+  }
+
+  .resume-info {
+    gap: 1px;
+  }
+
+  .resume-label {
+    font-size: 12px;
+  }
+
+  .resume-cwd {
+    font-size: 10px;
+  }
+
+  .resume-model {
+    flex-grow: 1;
+  }
+
+  .resume-bar .btn-primary {
+    padding: 8px 14px;
+    font-size: 13px;
+  }
 }
 
 .btn-stop {
