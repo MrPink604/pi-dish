@@ -26,6 +26,56 @@ async function select(fleet, page, host) {
     await fixtures_js_1.expect.poll(() => fleet.peer.commands.filter(command => command.command === 'extension_ui_response').map(command => command.value))
         .toEqual(['peer answer']);
 });
+(0, fixtures_js_1.test)('a re-issued reset prompt supersedes the pending request instead of stacking', async ({ page, fleet }) => {
+    await select(fleet, page, fleet.self);
+    fleet.self.emit('turn_start', {});
+    const options = ['Yes', 'No'];
+    const title = (remaining) => `Spend a saved rate-limit reset?\nalice: a saved reset expires in ${remaining} (weekly window 42% used).`;
+    fleet.self.emit('extension_ui_request', { method: 'select', id: 'reset-1', title: title('6d 23h'), options });
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-title')).toContainText('6d 23h');
+    // OMP's salvage sweep re-asks about the same credit while the first request
+    // is still pending; only the expiry detail changed.
+    fleet.self.emit('extension_ui_request', { method: 'select', id: 'reset-2', title: title('6d 22h'), options });
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-title')).toContainText('6d 22h');
+    await fixtures_js_1.expect.poll(() => responses(fleet.self)).toEqual([{ id: 'reset-1', value: undefined, cancelled: true }]);
+    // The superseded id resolving must not dismiss the card that now owns reset-2.
+    fleet.self.emit('extension_ui_resolved', { id: 'reset-1', source: 'web' });
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(1);
+    // A delayed replay of the older id must not win the prompt back either.
+    fleet.self.emit('extension_ui_request', { method: 'select', id: 'reset-1', title: title('6d 23h'), options });
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-title')).toContainText('6d 22h');
+    await page.locator('.ext-ui-dialog-option', { hasText: 'No' }).click();
+    await fixtures_js_1.expect.poll(() => responses(fleet.self).filter(response => response.id === 'reset-2'))
+        .toEqual([{ id: 'reset-2', value: 'No', cancelled: undefined }]);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(0);
+});
+(0, fixtures_js_1.test)('a re-emitted ask keeps its answered state and submits to the newest request', async ({ page, fleet }) => {
+    await select(fleet, page, fleet.self);
+    const questions = [{ id: 'q', question: 'Pick a channel', options: [{ label: 'Stable' }, { label: 'Beta' }] }];
+    fleet.self.emit('turn_start', {});
+    fleet.self.emit('extension_ui_request', { method: 'ask', id: 'ask-1', questions });
+    await page.locator('.ext-ui-ask-option[data-option-index="0"]').click();
+    fleet.self.emit('extension_ui_request', { method: 'ask', id: 'ask-2', questions });
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-ask-option.selected')).toHaveAttribute('data-option-index', '0');
+    await page.locator('[data-action="submit-ask"]').click();
+    await fixtures_js_1.expect.poll(() => responses(fleet.self)).toEqual([
+        { id: 'ask-1', value: undefined, cancelled: true },
+        { id: 'ask-2', cancelled: undefined, value: { kind: 'submit', results: [{ id: 'q', question: 'Pick a channel', options: ['Stable', 'Beta'], multi: false, selectedOptions: ['Stable'] }] } },
+    ]);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(0);
+});
+(0, fixtures_js_1.test)('dismissing a yes/no select answers No so the host stops re-asking', async ({ page, fleet }) => {
+    await select(fleet, page, fleet.self);
+    fleet.self.emit('turn_start', {});
+    fleet.self.emit('extension_ui_request', { method: 'select', id: 'early-reset',
+        title: 'Spend a saved rate-limit reset?\nalice: a saved reset expires in 6d 23h', options: ['Yes', 'No'] });
+    await page.locator('.ext-ui-dialog-close').click();
+    await fixtures_js_1.expect.poll(() => responses(fleet.self)).toEqual([{ id: 'early-reset', value: 'No', cancelled: undefined }]);
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(0);
+});
 (0, fixtures_js_1.test)('a resolved dialog and authoritative replay prune only their owning host', async ({ page, fleet }) => {
     for (const host of [fleet.self, fleet.peer]) {
         await select(fleet, page, host);

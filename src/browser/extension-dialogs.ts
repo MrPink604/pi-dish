@@ -10,7 +10,52 @@ export type ExtensionSession = Readonly<Pick<SelectionOwner, 'id' | 'host'>>;
 interface DialogEntry {
   readonly el: HTMLElement; readonly events: AbortController; readonly endpoint: Readonly<HostEndpoint>;
   owner: SelectionOwner | null; readonly sessionId: string; readonly hostId: string | null; readonly sessionKey: string;
-  readonly requestId: string; minimized: boolean; readonly sig: string; readonly loginId?: string; readonly authKind?: string;
+  /** Request ids answering the same decision; the newest one owns the answer. */
+  requestIds: string[]; requestId: string; minimized: boolean;
+  /** Ids already replaced by a newer re-issue; a delayed replay must not win them back. */
+  readonly supersededIds: Set<string>;
+  readonly identity: string | null; readonly loginId?: string; readonly authKind?: string;
+}
+/** Stable decision identity for a re-issued dialog, ignoring volatile detail text. */
+function dialogIdentity(req: ExtensionRequest): string | null {
+  // Hosts re-issue the same prompt while their earlier request is still
+  // pending (OMP's expiring-reset sweep does this every minute) and the detail
+  // line changes ("expires in 6d 23h" → "6d 22h"). Grouping by the question
+  // line plus the offered options keeps that a single pending decision.
+  const question = (req.title || req.message).split('\n')[0].trim();
+  switch (req.method) {
+    case 'select': return `select:${JSON.stringify([question, req.options.map(option => [option.label, option.description])])}`;
+    case 'confirm': return `confirm:${question}`;
+    case 'input': case 'editor': return `${req.method}:${question}`;
+    case 'ask': return `ask:${JSON.stringify(req.questions)}`;
+    default: return null;
+  }
+}
+function dialogTitle(req: ExtensionRequest): string {
+  if (req.method === 'ask') return req.questions.length === 1 ? 'Question' : `${req.questions.length} questions`;
+  const titles: Readonly<Record<string, string>> = { select: 'Select', confirm: 'Confirm', input: 'Input', editor: 'Editor' };
+  return req.title || titles[req.method] || 'Dialog';
+}
+function dialogCollapsedLabel(req: ExtensionRequest): string {
+  if (req.method === 'ask') {
+    return req.questions.length === 1
+      ? `Question pending: ${req.questions[0]?.question || ''}`
+      : `${req.questions.length} questions pending — click to answer`;
+  }
+  return `${dialogTitle(req)} pending — click to answer`;
+}
+/**
+ * Closing a select that offers Yes/No answers No. Hosts that only persist the
+ * choice when they receive one (OMP's expiring-reset sweep) otherwise re-ask on
+ * every sweep, so a dismissal that merely cancelled would never stop the loop.
+ */
+function dialogCloseResponse(req: ExtensionRequest): ExtensionResponse {
+  if (req.method === 'select') {
+    const yes = req.options.some(option => option.label.trim().toLowerCase() === 'yes');
+    const no = req.options.find(option => option.label.trim().toLowerCase() === 'no');
+    if (yes && no) return { value: no.label };
+  }
+  return { cancelled: true };
 }
 export function createExtensionDialogs(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
@@ -22,7 +67,6 @@ export function createExtensionDialogs(options: {
   // Values already answered per (session, loginId): never re-submit them from the clipboard.
   const authSubmitted = new Map<string, Set<string>>();
   function extDialogKey(requestId: string, sessionId: string, hostId: string | null) { return JSON.stringify([hostId, sessionId, requestId]); }
-  function extDialogSig(req: ExtensionRequest) { return req.method === 'ask' ? 'ask:' + JSON.stringify(req.questions) : `${req.method}:${JSON.stringify([req.title, req.message, req.options, req.placeholder, req.prefill])}`; }
   function matches(entry: DialogEntry) {
     const selected = sessionState.currentSession, host = options.host(entry.hostId);
     return !!selected && selected.id === entry.sessionId && (selected.host || null) === entry.hostId && !!host && host.base === entry.endpoint.base;
@@ -30,9 +74,17 @@ export function createExtensionDialogs(options: {
   function currentCard(key: string, card: HTMLElement) {
     const entry = openExtDialogs.get(key); return !disposed && !!entry && entry.el === card && card.isConnected && matches(entry) && sessionState.ownsSelection(entry.owner);
   }
-  function findDuplicateExtDialog(req: ExtensionRequest, session: ExtensionSession) {
-    const sig = extDialogSig(req), key = sessionKey(session.host, session.id);
-    return [...openExtDialogs.values()].find(entry => entry.sessionKey === key && entry.sig === sig && matches(entry)) || null;
+  function findSupersedingDialog(req: ExtensionRequest, session: ExtensionSession): [string, DialogEntry] | null {
+    const identity = dialogIdentity(req), key = sessionKey(session.host, session.id);
+    if (!identity) return null;
+    return [...openExtDialogs.entries()].find(([, entry]) =>
+      entry.sessionKey === key && entry.identity === identity && !entry.loginId && matches(entry)) || null;
+  }
+  /** The card that owns `requestId`, whether it is that card's active request or an older one. */
+  function entryForRequest(requestId: string, session: ExtensionSession): [string, DialogEntry] | null {
+    const key = sessionKey(session.host, session.id);
+    return [...openExtDialogs.entries()].find(([, entry]) =>
+      entry.sessionKey === key && entry.requestIds.includes(requestId)) || null;
   }
 function getExtDialogDock() {
   const inputArea = document.querySelector('.input-area');
@@ -75,14 +127,43 @@ function setExtDialogMinimized(requestId: string, minimized: boolean) {
   }
 }
 
+function postExtDialogResponse(entry: DialogEntry, requestId: string, response: ExtensionResponse, reportFailure = true) {
+  const host = options.host(entry.hostId); if (!host || host.base !== entry.endpoint.base) return;
+  const owner = entry.owner;
+  void sendJson(options.request, Object.freeze({ ...host }), `/api/sessions/${encodeURIComponent(entry.sessionId)}/ui-response`, { requestId, ...response })
+    .catch(error => { if (reportFailure && !disposed && sessionState.ownsSelection(owner)) options.status('Dialog response failed: ' + (error instanceof Error ? error.message : String(error)), 'error'); });
+}
+
 function sendExtDialogResponse(dialogKey: string, response: ExtensionResponse, card: HTMLElement) {
   const entry = openExtDialogs.get(dialogKey);
   if (!entry || !currentCard(dialogKey, card)) return;
-  const host = options.host(entry.hostId); if (!host || host.base !== entry.endpoint.base) return;
-  const owner = entry.owner;
-  void sendJson(options.request, Object.freeze({ ...host }), `/api/sessions/${encodeURIComponent(entry.sessionId)}/ui-response`, { requestId: entry.requestId, ...response })
-    .catch(error => { if (!disposed && sessionState.ownsSelection(owner)) options.status('Dialog response failed: ' + (error instanceof Error ? error.message : String(error)), 'error'); });
+  postExtDialogResponse(entry, entry.requestId, response);
   dismissExtDialog(dialogKey);
+}
+
+// A host may re-issue the same decision while its first request is still
+// pending (OMP's expiring-reset sweep does this on every usage tick). Keep the
+// existing card, cancel the superseded request so the host queue advances, and
+// move the answer to the newest request instead of stacking another prompt.
+function supersedeExtDialog(entry: DialogEntry, req: ExtensionRequest) {
+  const host = options.host(entry.hostId); if (!host || host.base !== entry.endpoint.base) return;
+  // A reconnect replay can arrive out of order or repeat an older id after it
+  // was replaced. Cancelling it again must not roll the card back to that id.
+  if (entry.supersededIds.has(req.id)) { postExtDialogResponse(entry, req.id, { cancelled: true }, false); return; }
+  for (const id of entry.requestIds.splice(0)) {
+    if (id === req.id) continue;
+    entry.supersededIds.add(id);
+    postExtDialogResponse(entry, id, { cancelled: true }, false);
+  }
+  entry.requestIds.push(req.id);
+  entry.requestId = req.id;
+  const title = entry.el.querySelector('.ext-ui-dialog-title');
+  if (title) title.textContent = dialogTitle(req);
+  const message = entry.el.querySelector('.ext-ui-dialog-message');
+  if (message && req.message) message.textContent = req.message;
+  const collapsed = entry.el.querySelector('.ext-ui-dialog-collapsed-label');
+  if (collapsed) collapsed.textContent = dialogCollapsedLabel(req);
+  dockExtDialog(entry);
 }
 
 function dismissExtDialog(requestId: string) {
@@ -135,9 +216,9 @@ function showExtAskDialog(req: ExtensionRequest, session: ExtensionSession) {
     dockExtDialog(existing);
     return;
   }
-  const duplicate = findDuplicateExtDialog(req, session);
-  if (duplicate) {
-    dockExtDialog(duplicate);
+  const superseding = findSupersedingDialog(req, session);
+  if (superseding) {
+    supersedeExtDialog(superseding[1], req);
     return;
   }
   const questions = req.questions;
@@ -148,10 +229,8 @@ function showExtAskDialog(req: ExtensionRequest, session: ExtensionSession) {
 
   const events = new AbortController();
   const card = buildExtDialogCard(dialogKey, events, {
-    title: questions.length === 1 ? 'Question' : `${questions.length} questions`,
-    collapsedLabel: questions.length === 1
-      ? `Question pending: ${questions[0].question || ''}`
-      : `${questions.length} questions pending — click to answer`,
+    title: dialogTitle(req),
+    collapsedLabel: dialogCollapsedLabel(req),
     onClose: () => sendExtDialogResponse(dialogKey, { cancelled: true }, card),
     bodyHtml: `
     <div class="ext-ui-ask-questions">
@@ -281,7 +360,7 @@ function showExtAskDialog(req: ExtensionRequest, session: ExtensionSession) {
     sendExtDialogResponse(dialogKey, { value: { kind: 'submit', results } }, card);
   }, { signal: events.signal });
 
-  const entry: DialogEntry = { el: card, events, endpoint: Object.freeze({ ...endpoint }), owner: sessionState.captureSelection(), sessionId, hostId, sessionKey: sessionKey(hostId, sessionId), requestId: req.id, minimized: false, sig: extDialogSig(req) };
+  const entry: DialogEntry = { el: card, events, endpoint: Object.freeze({ ...endpoint }), owner: sessionState.captureSelection(), sessionId, hostId, sessionKey: sessionKey(hostId, sessionId), requestIds: [req.id], requestId: req.id, minimized: false, supersededIds: new Set(), identity: dialogIdentity(req) };
   openExtDialogs.set(dialogKey, entry);
   dockExtDialog(entry);
   card.querySelector<HTMLElement>('.ext-ui-ask-option, .ext-ui-ask-custom')?.focus();
@@ -298,9 +377,9 @@ function showExtDialog(req: ExtensionRequest, session: ExtensionSession) {
     dockExtDialog(existing);
     return;
   }
-  const duplicate = findDuplicateExtDialog(req, session);
-  if (duplicate) {
-    dockExtDialog(duplicate);
+  const superseding = findSupersedingDialog(req, session);
+  if (superseding) {
+    supersedeExtDialog(superseding[1], req);
     return;
   }
 
@@ -336,14 +415,13 @@ function showExtDialog(req: ExtensionRequest, session: ExtensionSession) {
     </div>`;
   }
 
-  const titles: Readonly<Record<string, string>> = { select: 'Select', confirm: 'Confirm', input: 'Input', editor: 'Editor' };
-  const title = req.title || titles[req.method] || 'Dialog';
+  const title = dialogTitle(req);
   const events = new AbortController();
   const card = buildExtDialogCard(dialogKey, events, {
     title,
     bodyHtml,
-    collapsedLabel: `${title} pending — click to answer`,
-    onClose: () => sendExtDialogResponse(dialogKey, { cancelled: true }, card),
+    collapsedLabel: dialogCollapsedLabel(req),
+    onClose: () => sendExtDialogResponse(dialogKey, dialogCloseResponse(req), card),
   });
 
   card.querySelectorAll<HTMLButtonElement>('.ext-ui-dialog-option').forEach(btn => {
@@ -367,7 +445,7 @@ function showExtDialog(req: ExtensionRequest, session: ExtensionSession) {
     }, { signal: events.signal });
   });
 
-  const entry: DialogEntry = { el: card, events, endpoint: Object.freeze({ ...endpoint }), owner: sessionState.captureSelection(), sessionId, hostId, sessionKey: sessionKey(hostId, sessionId), requestId: req.id, minimized: false, sig: extDialogSig(req) };
+  const entry: DialogEntry = { el: card, events, endpoint: Object.freeze({ ...endpoint }), owner: sessionState.captureSelection(), sessionId, hostId, sessionKey: sessionKey(hostId, sessionId), requestIds: [req.id], requestId: req.id, minimized: false, supersededIds: new Set(), identity: dialogIdentity(req) };
   openExtDialogs.set(dialogKey, entry);
   dockExtDialog(entry);
   const field = card.querySelector<HTMLInputElement | HTMLTextAreaElement>('.ext-ui-dialog-input, .ext-ui-dialog-editor');
@@ -500,7 +578,7 @@ function showExtAuthDialog(req: ExtensionRequest, auth: ExtensionAuth, session: 
   }
 
   const entry: DialogEntry = { el: card, events, endpoint: Object.freeze({ ...endpoint }), owner: sessionState.captureSelection(), sessionId, hostId, sessionKey: key,
-    requestId: req.id, minimized: superseded?.minimized ?? false, sig: 'auth:' + req.id, loginId: auth.loginId, authKind: prompt?.kind || '' };
+    requestIds: [req.id], requestId: req.id, minimized: superseded?.minimized ?? false, supersededIds: new Set(), identity: null, loginId: auth.loginId, authKind: prompt?.kind || '' };
   let focus = !superseded;
   if (superseded && supersededKey) {
     const oldInput = superseded.el.querySelector<HTMLInputElement>('.ext-ui-auth-input');
@@ -526,11 +604,25 @@ function showExtAuthDialog(req: ExtensionRequest, auth: ExtensionAuth, session: 
       else showExtDialog(request, session);
     },
     detach() { for (const entry of openExtDialogs.values()) { entry.el.remove(); entry.owner = null; } updateExtDialogDock(); },
-    resolved(id: unknown, session: ExtensionSession) { if (typeof id === 'string') dismissExtDialog(extDialogKey(id, session.id, session.host)); },
+    resolved(id: unknown, session: ExtensionSession) {
+      if (typeof id !== 'string') return;
+      const entry = entryForRequest(id, session);
+      if (!entry) return;
+      // The active request was answered elsewhere (TUI or another client):
+      // the whole card is stale. An older coalesced request resolving only
+      // drops that id and leaves the currently active prompt in place.
+      if (id === entry[1].requestId) { dismissExtDialog(entry[0]); return; }
+      entry[1].requestIds = entry[1].requestIds.filter(requestId => requestId !== id);
+    },
     reconcile(value: unknown, session: ExtensionSession) {
       if (disposed || !record(value) || !Array.isArray(value.dialogs)) return;
       const pending = new Set(value.dialogs.filter((id): id is string => typeof id === 'string')), key = sessionKey(session.host, session.id);
-      for (const [id, entry] of openExtDialogs) if (entry.sessionKey === key && !pending.has(entry.requestId)) dismissExtDialog(id);
+      for (const [cardKey, entry] of openExtDialogs) {
+        if (entry.sessionKey !== key) continue;
+        entry.requestIds = entry.requestIds.filter(id => pending.has(id));
+        if (!entry.requestIds.length) { dismissExtDialog(cardKey); continue; }
+        if (!entry.requestIds.includes(entry.requestId)) entry.requestId = entry.requestIds[entry.requestIds.length - 1];
+      }
     },
     removeSession,
     dispose() { disposed = true; for (const id of [...openExtDialogs.keys()]) dismissExtDialog(id); },

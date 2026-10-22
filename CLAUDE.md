@@ -2652,9 +2652,14 @@ Lightboxes, copy feedback and deferred tasks retire on controller disposal.
 Extension requests enter `src/browser/extension-ui.ts` with the explicit stream
 host. `extension-ui-data.ts` narrows wire objects, `extension-display.ts` owns
 widget/status removal and toast timers, and `extension-dialogs.ts` owns cards by
-host/session/request. Stashing preserves edits; redocking renews the selection
-owner. Reconcile only the named host/session, ignore malformed authoritative lists,
-and abort retired card listeners. Credential refresh cannot change a captured base.
+host/session/request. A host may re-issue the same decision while its earlier
+request is pending (OMP's expiring-reset sweep does this per usage tick, with a
+changing expiry line): coalesce by question line/options, cancel the superseded
+id, and answer the newest one. Dismissing a Yes/No select answers No so a host
+that only persists an explicit choice stops re-asking. Stashing preserves edits;
+redocking renews the selection owner. Reconcile only the named host/session,
+ignore malformed authoritative lists, and abort retired card listeners.
+Credential refresh cannot change a captured base.
 
 File/diff takeovers live in `src/browser/file-views.ts`; their state is exposed as
 read-only snapshots for comment coordination. View generations and captured bases
