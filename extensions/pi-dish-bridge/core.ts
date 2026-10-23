@@ -2016,13 +2016,19 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // hand off to pi with the usual mid-turn steer default. Returns whether the
   // message was queued so callers can tell the client.
   async function deliverUserMessage(content: UserContent, deliverAs?: unknown): Promise<{ queued: boolean }> {
-    const delivery = deliverAsOptions(deliverAs);
-    // OMP expands ^model in prompt(), not in its steer/follow-up queues.
-    // Never acknowledge a mention that would arrive as inert literal text.
-    if (descriptor.harnessId === "omp" && (compacting || delivery?.deliverAs)
+    let delivery = deliverAsOptions(deliverAs);
+    if (descriptor.harnessId === "omp"
         && (typeof content === "string" ? /(?:^|\s)\^[^\s^]+(?=\s|$)/.test(content)
           : content.some(part => part.type === "text" && /(?:^|\s)\^[^\s^]+(?=\s|$)/.test(part.text)))) {
-      throw new Error("OMP model mentions require an idle session; send this prompt after the current turn finishes");
+      // OMP expands ^model only in prompt(). An omitted deliverAs reaches it
+      // with streamingBehavior "steer" (the TUI's own steer path); an explicit
+      // deliverAs, compaction buffering and follow-ups bypass the expansion.
+      // Never acknowledge a mention that would arrive as inert literal text.
+      if (compacting) throw new Error("OMP model mentions cannot wait for compaction; send this prompt after compaction finishes");
+      if (delivery?.deliverAs === "followUp") {
+        throw new Error("OMP model mentions cannot be queued as follow-ups; steer or send this prompt after the current turn finishes");
+      }
+      delivery = {};
     }
     if (compacting) {
       compactionQueue.push(content);

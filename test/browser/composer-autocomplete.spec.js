@@ -142,8 +142,23 @@ fixtures_js_1.test.use({ liveSessions: true });
     (0, fixtures_js_1.expect)(await page.evaluate(() => fixtureCurrentSession().model)).toBe(parentModel);
     (0, fixtures_js_1.expect)(modelChanges).toEqual([]);
     await page.evaluate(() => fixtureApp.features.sessionActivity.setTurn(true));
+    // OMP expands a mention carried by a steer, so Enter mid-turn sends it.
     await page.locator('#promptInput').fill('Ask ^opencode/deepseek-v4.1-flash again');
     await page.locator('#promptInput').press('Enter');
-    await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('Ask ^opencode/deepseek-v4.1-flash again');
-    (0, fixtures_js_1.expect)(sent).toHaveLength(1);
+    await fixtures_js_1.expect.poll(() => sent).toEqual(['Ask ^opencode/deepseek-v4.1-flash to review this change', 'Ask ^opencode/deepseek-v4.1-flash again']);
+    const steered = [];
+    await page.route('**/api/sessions/*/steer', route => {
+        const body = route.request().postDataJSON();
+        if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string')
+            steered.push(body.message);
+        return route.fulfill({ json: { success: true, result: {} } });
+    });
+    await page.locator('#promptInput').fill('Ask ^opencode/deepseek-v4.1-flash now');
+    await page.locator('#promptInput').press('Control+Enter');
+    await fixtures_js_1.expect.poll(() => steered).toEqual(['Ask ^opencode/deepseek-v4.1-flash now']);
+    // A queued follow-up bypasses the expansion; the composer keeps the text.
+    await page.locator('#promptInput').fill('Ask ^opencode/deepseek-v4.1-flash later');
+    await page.evaluate(() => fixtureApp.features.composerSubmit.sendFollowUp());
+    await (0, fixtures_js_1.expect)(page.locator('#promptInput')).toHaveValue('Ask ^opencode/deepseek-v4.1-flash later');
+    (0, fixtures_js_1.expect)(sent).toHaveLength(2);
 });

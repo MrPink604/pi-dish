@@ -254,8 +254,8 @@ the pi-dish composer and select a model from that session's catalog. For
 example, `Ask ^opencode/deepseek-v4.1-flash to review this change` registers
 OMP's session-local, general-purpose model agent; the parent session keeps its
 own model. The agent can reuse that model agent on later tasks without another
-mention. OMP expands model mentions only on a new user turn, not on steers or
-queued follow-ups, so wait for the current turn to finish before sending one.
+mention. Steers carry a mention, as in OMP's TUI; queued follow-ups and prompts
+held during compaction do not, so pi-dish refuses those instead of sending inert text.
 After OMP expands a mention, the transcript shows `^` plus the registered
 agent name in the user bubble instead of the internal `<model .../>` annotation.
 

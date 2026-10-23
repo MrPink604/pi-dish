@@ -113,12 +113,19 @@ function readOperations(host: FakeTreeHost): Record<string, unknown>[] {
   });
 }
 
-test('OMP bridge rejects model mentions in queued sends rather than sending inert text', { skip: !bunAvailable }, async () => {
+test('OMP bridge sends model-mention steers through the expanding prompt path and rejects follow-ups', { skip: !bunAvailable }, async () => {
   const host = await startHost('normal');
   try {
-    await assert.rejects(host.session.steer('Ask ^opencode/deepseek-v4.1-flash to review'), /model mentions require an idle session/);
-    await assert.rejects(host.session.prompt('Ask ^opencode/deepseek-v4.1-flash to review', { deliverAs: 'followUp' }), /model mentions require an idle session/);
-    await assert.rejects(host.session.prompt('Ask ^opencode/deepseek-v4.1-flash to review'), /sendUserMessage does not dispatch extension commands/);
+    const mention = 'Ask ^opencode/deepseek-v4.1-flash to review';
+    // The fake host's sendUserMessage always throws; its log shows the delivery.
+    await assert.rejects(host.session.steer(mention), /sendUserMessage does not dispatch extension commands/);
+    await assert.rejects(host.session.steer('plain steer'), /sendUserMessage does not dispatch extension commands/);
+    await assert.rejects(host.session.prompt(mention, { deliverAs: 'followUp' }), /cannot be queued as follow-ups/);
+    const sends = readOperations(host).filter(entry => entry.operation === 'sendUserMessage');
+    assert.deepEqual(sends.map(entry => [entry.content, entry.options]), [
+      [mention, {}],
+      ['plain steer', { deliverAs: 'steer' }],
+    ]);
   } finally {
     await host.stop();
   }

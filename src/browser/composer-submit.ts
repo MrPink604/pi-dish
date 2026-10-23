@@ -10,8 +10,8 @@ import type { createSessionActivity } from './session-activity';
 import type { createBtwPanel } from './btw-panel';
 import type { MessageBlock, RenderMessage } from './message-data';
 import type { createSessionReferences } from './session-references';
-// OMP expands ^model only for a new user turn; steers and queued follow-ups
-// bypass that registration and would leave a misleading literal token.
+// OMP expands ^model in prompt(), which also carries steers; queued follow-ups
+// and compaction-buffered prompts bypass it and would leave a literal token.
 const OMP_MODEL_MENTION = /(?:^|\s)\^[^\s^]+(?=\s|$)/;
 export function createComposerSubmit(options: {
   document: Document; sessionState: SessionState; drafts: ReturnType<typeof createComposerDrafts>; delivery: ReturnType<typeof createPromptDelivery>;
@@ -53,9 +53,8 @@ async function sendPrompt() {
     return;
   }
 
-  if (sessionState.currentSession.harnessId === 'omp' && OMP_MODEL_MENTION.test(message)
-      && (sessionActivity.turn || sessionActivity.compacting)) {
-    options.status('Wait for the OMP turn to finish before mentioning a model', 'error');
+  if (sessionState.currentSession.harnessId === 'omp' && OMP_MODEL_MENTION.test(message) && sessionActivity.compacting) {
+    options.status('Wait for compaction to finish before mentioning a model', 'error');
     return;
   }
   if (message === '/tree') { input.value = ''; options.openTree(); return; }
@@ -184,8 +183,9 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
     options.status('Wait for the current turn to finish stopping', 'working');
     return;
   }
-  if (sessionState.currentSession.harnessId === 'omp' && OMP_MODEL_MENTION.test(message)) {
-    options.status('OMP model mentions need a new turn; send after this turn finishes', 'error');
+  if (sessionState.currentSession.harnessId === 'omp' && OMP_MODEL_MENTION.test(message) && (!steer || sessionActivity.compacting)) {
+    options.status(steer ? 'Wait for compaction to finish before mentioning a model'
+      : 'OMP model mentions cannot be queued as follow-ups; steer or send after this turn', 'error');
     return;
   }
 

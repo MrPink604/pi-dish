@@ -108,9 +108,23 @@ test('OMP model mention selects a child agent without changing the parent model'
   expect(await page.evaluate(() => fixtureCurrentSession().model)).toBe(parentModel);
   expect(modelChanges).toEqual([]);
   await page.evaluate(() => fixtureApp.features.sessionActivity.setTurn(true));
+  // OMP expands a mention carried by a steer, so Enter mid-turn sends it.
   await page.locator('#promptInput').fill('Ask ^opencode/deepseek-v4.1-flash again');
   await page.locator('#promptInput').press('Enter');
-  await expect(page.locator('#promptInput')).toHaveValue('Ask ^opencode/deepseek-v4.1-flash again');
-  expect(sent).toHaveLength(1);
+  await expect.poll(() => sent).toEqual(['Ask ^opencode/deepseek-v4.1-flash to review this change', 'Ask ^opencode/deepseek-v4.1-flash again']);
+  const steered: string[] = [];
+  await page.route('**/api/sessions/*/steer', route => {
+    const body: unknown = route.request().postDataJSON();
+    if (body && typeof body === 'object' && 'message' in body && typeof body.message === 'string') steered.push(body.message);
+    return route.fulfill({ json: { success: true, result: {} } });
+  });
+  await page.locator('#promptInput').fill('Ask ^opencode/deepseek-v4.1-flash now');
+  await page.locator('#promptInput').press('Control+Enter');
+  await expect.poll(() => steered).toEqual(['Ask ^opencode/deepseek-v4.1-flash now']);
+  // A queued follow-up bypasses the expansion; the composer keeps the text.
+  await page.locator('#promptInput').fill('Ask ^opencode/deepseek-v4.1-flash later');
+  await page.evaluate(() => fixtureApp.features.composerSubmit.sendFollowUp());
+  await expect(page.locator('#promptInput')).toHaveValue('Ask ^opencode/deepseek-v4.1-flash later');
+  expect(sent).toHaveLength(2);
 });
 export {};

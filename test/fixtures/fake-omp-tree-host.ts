@@ -157,8 +157,12 @@ const fakePi = {
     });
   },
   // Match OMP 17.2.15: this public API forwards a user prompt with command
-  // expansion disabled, so it cannot invoke our own extension command.
-  sendUserMessage() { throw new Error('sendUserMessage does not dispatch extension commands'); },
+  // expansion disabled, so it cannot invoke our own extension command. The
+  // log records the delivery so tests can see which OMP path a send takes.
+  sendUserMessage(content: unknown, options?: unknown) {
+    logOperation({ operation: 'sendUserMessage', content, options: options ?? null });
+    throw new Error('sendUserMessage does not dispatch extension commands');
+  },
   getCommands: () => [...commands.values()],
   getThinkingLevel: () => 'minimal',
   setThinkingLevel: () => {},
