@@ -6,6 +6,13 @@ export interface LaunchProvenance {
     createdAt: number;
 }
 export declare function validId(value: unknown): value is string;
+export declare function isHostQualified(value: unknown): value is string;
+/**
+ * Strip this host's own qualifier from a caller id. Local sessions are keyed
+ * by bare id in the catalog, lineage and related views; a foreign-qualified
+ * id is returned unchanged.
+ */
+export declare function localizeCallerId(value: string): string;
 export declare function readLaunches(): Record<string, LaunchProvenance>;
 /** Record advisory launch provenance. It never grants authority. */
 export declare function recordLaunch(sessionId: unknown, sourceSessionId: unknown, operationId?: unknown): LaunchProvenance;

@@ -80,9 +80,16 @@ function mockServer() {
   return { server, requests };
 }
 
+// A fixed caller host: provenance is fleet-qualified from ~/.pi/dish/host-id.
+const CALLER_HOST_ID = 'cccccccc-3333-4333-8333-cccccccccccc';
+const callerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-session-cli-'));
+fs.mkdirSync(path.join(callerHome, '.pi', 'dish'), { recursive: true });
+fs.writeFileSync(path.join(callerHome, '.pi', 'dish', 'host-id'), `${CALLER_HOST_ID}\n`);
+test.after(() => fs.rmSync(callerHome, { recursive: true, force: true }));
+
 async function run(args: string[], base: string) {
   return execFileAsync(process.execPath, [cli, ...args, '--url', base], {
-    env: { ...process.env, PI_DISH_SESSION_ID: 'source-1' },
+    env: { ...process.env, HOME: callerHome, PI_DISH_SESSION_ID: 'source-1' },
   });
 }
 
@@ -94,10 +101,10 @@ test('peer-session CLI attributes spawn and uses semantic control routes', async
   const spawned = await run(['spawn', '--cwd', '/work', '--name', 'Peer', '--prompt', 'Investigate', '--json'], base);
   assert.equal(record(JSON.parse(spawned.stdout)).sessionId, 'peer-1');
   const create = present(requests.find(request => request.url === '/api/sessions/new')), createBody = present(create.body);
-  assert.equal(createBody.requestedBySessionId, 'source-1');
+  assert.equal(createBody.requestedBySessionId, `${CALLER_HOST_ID}:source-1`);
   assert.equal(createBody.cwd, '/work');
   assert.equal(createBody.harness, 'pi', 'a bare Pi caller id inherits the Pi harness');
-  assert.equal(create.source, 'source-1');
+  assert.equal(create.source, `${CALLER_HOST_ID}:source-1`);
   assert.ok(requests.some(request => request.url === '/api/sessions/peer-1/rename'));
   assert.ok(requests.some(request => request.url === '/api/sessions/peer-1/prompt' && request.body?.message === 'Investigate'));
 

@@ -1430,10 +1430,14 @@ Raw API, public artifact and parsed comment relays remain separate policies.
   and answer empty; positive host terms prune the fan-out instead.
 - **Agents**: the peer-sessions skill talks to its *own* server only —
   `hosts` lists the fleet, `--host <name>` prefixes `/hosts/<name>` on any
-  command, `PI_DISH_TOKEN` adds the bearer. Cross-host spawns attribute as
-  `<hostId>:<sessionId>`; the server accepts well-formed host-qualified
-  caller ids **without local validation** (advisory provenance grants
-  nothing), and the CLI strip-and-retries once for older servers.
+  command, `PI_DISH_TOKEN` adds the bearer. Spawns always attribute the
+  caller as `<hostId>:<sessionId>`, qualified with the caller machine's own
+  `~/.pi/dish/host-id`, so attribution is right even when `PI_DISH_URL` names
+  another host. The receiving server strips its own host id (in the route and
+  when reading the sidecar) and validates that id locally; it accepts a
+  foreign host-qualified id **without local validation** (advisory provenance
+  grants nothing). The CLI drops refused provenance once and spawns
+  unattributed, saying why on stderr.
 - Mixed content is planned around, not fought: an HTTPS entry point can't
   fetch plain-http hosts — either enter over http, put `tailscale serve`
   /cloudflared in front of each host, or use the `/hosts` proxy (same

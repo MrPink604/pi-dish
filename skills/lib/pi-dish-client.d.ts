@@ -171,6 +171,14 @@ declare function hostSupports(value: unknown, capability: string): boolean;
  *   <uuid>:<sessionId>    → { hostPart: uuid,    hostIdForm: true,  id: '<sessionId>' }
  */
 declare function parseRef(raw: unknown): ParsedRef;
+/**
+ * The calling session in the fleet-global provenance form
+ * (`<hostId>:<sessionId>`), qualified with the host id this machine's pi-dish
+ * persisted beside the bridge registry. Every server accepts it — this host
+ * strips its own qualifier — so the CLI need not know whether PI_DISH_URL or
+ * `--host` lands on its own host. Without a local host id the id stays bare.
+ */
+declare function fleetCallerId(sessionId: unknown): string;
 declare function hostLabelOf(value: unknown): {} | null;
 /**
  * Resolve a ref's host part against this server's fleet: remote name first,
@@ -211,4 +219,4 @@ declare function truncateResult(text: unknown, maxLines?: number, maxChars?: num
  * `session`) and `options`.
  */
 declare function renderTranscript(input: unknown, options?: TranscriptOptions): string;
-export { makeFail, print, parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit, fleetHosts, resetFleetCache, hostSupports, hostLabelOf, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, summarizeToolArgs, truncateResult, };
+export { makeFail, print, parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit, fleetHosts, resetFleetCache, hostSupports, hostLabelOf, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, summarizeToolArgs, truncateResult, };

@@ -21,9 +21,9 @@ self/019f9834         explicit local
   `GET /api/hosts`): fleet remote name first, then host uuid, then label
   (case-insensitive). Only hosts in this server's fleet map are reachable —
   a ref naming an unknown host fails with the known names.
-- The `hostId:sessionId` form is what launch provenance records for
-  cross-host spawns; the part before the first `:` must be the full host
-  uuid.
+- The `hostId:sessionId` form is how a spawn names its caller and what launch
+  provenance records for cross-host spawns; the part before the first `:`
+  must be the full host uuid.
 
 ## What a ref may name
 

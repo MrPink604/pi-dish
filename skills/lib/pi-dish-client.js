@@ -31,6 +31,7 @@ __export(pi_dish_client_exports, {
   errorBody: () => errorBody,
   errorMessage: () => errorMessage,
   errorStatus: () => errorStatus,
+  fleetCallerId: () => fleetCallerId,
   fleetHost: () => fleetHost,
   fleetHosts: () => fleetHosts,
   fleetRows: () => fleetRows,
@@ -424,6 +425,16 @@ function parseRef(raw) {
   }
   return { hostPart: null, hostIdForm: false, id: ref };
 }
+function fleetCallerId(sessionId) {
+  const id = String(sessionId);
+  if (parseRef(id).hostIdForm) return id;
+  let hostId = "";
+  try {
+    hostId = fs.readFileSync(path.join(os.homedir(), ".pi", "dish", "host-id"), "utf8").trim();
+  } catch {
+  }
+  return UUID_RE.test(hostId) ? `${hostId}:${id}` : id;
+}
 function hostLabelOf(value) {
   if (!value) return null;
   const entry = fleetHost(value);
@@ -712,6 +723,7 @@ function renderTranscript(input, options = {}) {
   errorBody,
   errorMessage,
   errorStatus,
+  fleetCallerId,
   fleetHost,
   fleetHosts,
   fleetRows,

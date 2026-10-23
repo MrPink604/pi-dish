@@ -49,11 +49,15 @@ capability; `docs` says so when a host can't serve docs).
 
 ## Cross-host spawns
 
-A cross-host spawn is an ordinary spawn on that host. The caller is recorded
-host-qualified (`hostId:sessionId`) in the target's advisory provenance
-sidecar — attribution for navigation, never authority. Session ids are
-host-local: keep the host with the id you got back (the CLI's `--json`
-output includes it).
+A cross-host spawn is an ordinary spawn on that host. The CLI always names
+its caller host-qualified (`hostId:sessionId`, using this machine's own host
+id), so the attribution is valid whichever host `--host` or `PI_DISH_URL`
+reaches; the caller's own host strips its qualifier and validates the id
+locally. The target records it in its advisory provenance sidecar —
+attribution for navigation, never authority. Session ids are host-local: keep
+the host with the id you got back (the CLI's `--json` output includes it).
+Calling `POST /api/sessions/new` directly, pass the same form as
+`requestedBySessionId`.
 
 ## Failure vocabulary
 

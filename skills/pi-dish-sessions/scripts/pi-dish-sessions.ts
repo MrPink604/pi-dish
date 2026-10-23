@@ -29,7 +29,7 @@ try {
 }
 
 const {
-  makeFail, print, defaultBase, discoverSession, request, api, jsonInit,
+  makeFail, print, defaultBase, discoverSession, fleetCallerId, request, api, jsonInit,
   requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef,
   mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef,
 } = core;
@@ -446,20 +446,14 @@ function writeSnippets(session: SessionRow) {
 // Spawn helpers
 // =========================================================================
 
-// Host-qualified caller identity (`<hostId>:<sessionId>`, TASKS/multi-host.md
-// block 6): still advisory, still just the existing provenance fields — the
-// qualifier only says which host the id belongs to.
+// The local server's identity, for the display ref of a cross-host peer
+// message sender (`<label>/<ref>`).
 async function localHostIdentity(base: string): Promise<{ id: string; label: string | null } | null> {
   try {
     const host = core.record((await request(base, '/api/host')).data ?? {});
     if (typeof host.hostId !== 'string' || !host.hostId) return null;
     return { id: host.hostId, label: typeof host.label === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(host.label) ? host.label : null };
   } catch { return null; }
-}
-
-async function qualifyCaller(base: string, sessionId: unknown): Promise<unknown> {
-  const hostId = (await localHostIdentity(base))?.id ?? null;
-  return hostId ? `${hostId}:${sessionId}` : sessionId;
 }
 
 // The identity stamped on a peer `send`/`follow-up` so the target's owning
@@ -522,16 +516,17 @@ async function resolveSpawnHarness(base: string, host: string | null, explicit: 
   return wanted;
 }
 
-async function createSpawn(base: string, host: string | null, body: SpawnBody, callerId: unknown): Promise<HttpResult> {
-  const init = () => jsonInit(body, { 'X-Pi-Dish-Session-Id': String(callerId) });
+async function createSpawn(base: string, host: string | null, body: SpawnBody, callerId: string): Promise<HttpResult> {
+  const init = () => jsonInit(body, { 'X-Pi-Dish-Session-Id': callerId });
   try {
     return await api(base, host, '/api/sessions/new', init());
   } catch (e) {
-    // A host resolves provenance ids against its own sessions, so a peer may
-    // refuse a foreign caller. Provenance is advisory: drop the attribution
-    // rather than fail the spawn.
-    if (!host || !/requestedBySessionId/i.test(core.errorMessage(e) || '')) throw e;
-    process.stderr.write(`pi-dish-sessions: ${host} did not accept cross-host launch provenance; spawning unattributed\n`);
+    // A server that predates fleet-qualified callers, or a --session it cannot
+    // find, refuses the attribution. Provenance is advisory: drop it rather
+    // than fail the spawn, and say why.
+    const reason = core.errorMessage(e) || '';
+    if (!/requestedBySessionId/i.test(reason)) throw e;
+    process.stderr.write(`pi-dish-sessions: ${host || base} did not accept launch provenance (${reason}); spawning unattributed\n`);
     const { requestedBySessionId, ...rest } = body;
     return api(base, host, '/api/sessions/new', jsonInit(rest));
   }
@@ -971,9 +966,9 @@ async function main() {
 
     if (spec.name === 'spawn') {
       const sourceSessionId = discoverSession(args.session, { noneMessage: 'no live pi-dish bridge sessions found; pass --session <id>' });
-      // Advisory launch provenance, unchanged: a cross-host spawn qualifies the
-      // caller with this host's id so the target's sidecar records who asked.
-      const callerId = hostFlag ? await qualifyCaller(base, sourceSessionId) : sourceSessionId;
+      // Advisory launch provenance always names the caller fleet-globally, so
+      // it is valid on whichever host PI_DISH_URL or --host reaches.
+      const callerId = fleetCallerId(sourceSessionId);
       const harness = await resolveSpawnHarness(base, hostFlag, args.harness, sourceSessionId);
       const body: SpawnBody = { async: true, requestedBySessionId: callerId, harness };
       if (args.cwd) body.cwd = args.cwd;

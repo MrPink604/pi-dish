@@ -257,6 +257,19 @@ test('a bogus local caller id is rejected, a host-qualified one is advisory-acce
     assert.ok((0, test_types_js_1.records)(related.body.relations).every(relation => (0, test_types_js_1.record)(relation.session).id !== sessionId), 'a foreign-host id must not resolve to a local session of the same name');
     await post(`/api/sessions/${encodeURIComponent(spawnedId)}/close`, {});
 });
+test('a caller qualified with this host id is recorded as the local session it names', async () => {
+    // Callers name themselves fleet-globally without knowing whether the server
+    // they reach is their own; this host strips its own qualifier.
+    const hostId = text((await get('/api/host')).body.hostId);
+    const rejected = await post('/api/sessions/new', { requestedBySessionId: `${hostId}:no-such-session` });
+    assert.equal(rejected.status, 400, 'a self-qualified id is still validated locally');
+    const spawned = await post('/api/sessions/new', { requestedBySessionId: `${hostId}:${sessionId}` });
+    assert.equal(spawned.status, 200, JSON.stringify(spawned.body));
+    const peerId = text(spawned.body.id);
+    const related = await get(`/api/sessions/${peerId}/related`);
+    assert.ok((0, test_types_js_1.records)(related.body.relations).some(relation => relation.kind === 'startedFrom' && (0, test_types_js_1.record)(relation.session).id === sessionId), 'the launch links to the local caller');
+    await post(`/api/sessions/${encodeURIComponent(peerId)}/close`, {});
+});
 test('source-aware spawn records advisory peer provenance', async () => {
     const spawned = await post('/api/sessions/new', { requestedBySessionId: sessionId });
     assert.equal(spawned.status, 200, JSON.stringify(spawned.body));

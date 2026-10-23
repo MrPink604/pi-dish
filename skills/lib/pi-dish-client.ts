@@ -426,6 +426,21 @@ function parseRef(raw: unknown): ParsedRef {
   return { hostPart: null, hostIdForm: false, id: ref };
 }
 
+/**
+ * The calling session in the fleet-global provenance form
+ * (`<hostId>:<sessionId>`), qualified with the host id this machine's pi-dish
+ * persisted beside the bridge registry. Every server accepts it — this host
+ * strips its own qualifier — so the CLI need not know whether PI_DISH_URL or
+ * `--host` lands on its own host. Without a local host id the id stays bare.
+ */
+function fleetCallerId(sessionId: unknown): string {
+  const id = String(sessionId);
+  if (parseRef(id).hostIdForm) return id;
+  let hostId = '';
+  try { hostId = fs.readFileSync(path.join(os.homedir(), '.pi', 'dish', 'host-id'), 'utf8').trim(); } catch {}
+  return UUID_RE.test(hostId) ? `${hostId}:${id}` : id;
+}
+
 function hostLabelOf(value: unknown) {
   if (!value) return null;
   const entry = fleetHost(value);
@@ -778,7 +793,7 @@ export {
   makeFail, print,
   // discovery
   parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId,
-  discoverSession, discoverSessionQuietly,
+  discoverSession, discoverSessionQuietly, fleetCallerId,
   // http
   TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit,
   // fleet + refs

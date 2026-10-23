@@ -2113,18 +2113,20 @@ export function startServer(rootDirectory: string): Server {
     // requestedBySessionId is the public provenance field; retain the earlier
     // sourceSessionId spelling as a compatibility alias. The header lets the
     // bundled CLI identify itself without making the claim authoritative.
-    const sourceSessionId = req.get('X-Pi-Dish-Session-Id')
+    const claimedSource = req.get('X-Pi-Dish-Session-Id')
       || optionalProperty(req.body, 'requestedBySessionId') || optionalProperty(req.body, 'sourceSessionId') || null;
-    // A host-qualified caller (`<hostId>:<sessionId>`, TASKS/multi-host.md
-    // block 6) names a session on another fleet host, which this host cannot
-    // verify — provenance is advisory and grants nothing, so a well-formed
-    // qualified id is recorded as-is while bare local ids stay validated.
-    const hostQualifiedSource = sourceSessionId
-      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:./i.test(sourceSessionId as string);
-    if (sourceSessionId && !hostQualifiedSource
+    // Callers may always name themselves fleet-globally (`<hostId>:<sessionId>`,
+    // TASKS/multi-host.md block 6), whichever host they reach. This host's own
+    // qualifier is stripped and the id validated locally; a session on another
+    // fleet host cannot be verified here — provenance is advisory and grants
+    // nothing, so a well-formed foreign id is recorded as-is.
+    const sourceSessionId = typeof claimedSource === 'string' ? sessionProvenance.localizeCallerId(claimedSource) : claimedSource;
+    if (sourceSessionId && !sessionProvenance.isHostQualified(sourceSessionId)
         && !getRegisteredSession(sourceSessionId) && !getRPCSession(sourceSessionId)?.alive
         && !findSessionFile(sourceSessionId, { exact: true })) {
-      return res.status(400).json({ error: 'requestedBySessionId must identify an existing session' });
+      return res.status(400).json({
+        error: 'requestedBySessionId must identify an existing session on this host; name a session on another fleet host as <hostId>:<sessionId>',
+      });
     }
     if (optionalProperty(req.body, 'async') === true) {
       const spawnId = sessionOperations.startSessionSpawn({

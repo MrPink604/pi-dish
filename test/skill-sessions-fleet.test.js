@@ -190,6 +190,17 @@ test('PI_DISH_TOKEN is what gets the CLI through a token-gated server', async ()
     assert.match((await runCli(['list', '--host', 'peer'])).stdout, new RegExp(PEER_SESSION_ID));
     await assert.rejects(runCli(['hosts'], { token: null }), (error) => { assert.match(String((0, test_types_js_1.record)(error).stderr ?? ''), /Unauthorized/); return true; });
 });
+// --- fleet-qualified launch provenance -----------------------------------
+//
+// A spawn's body names the caller, and a live spawn needs a real pi. A
+// reflecting server stands in for the hub so the request the CLI builds can
+// be read directly. It answers spawns both locally and behind /hosts/peer.
+const CALLER_HOST_ID = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+function callerHome() {
+    const home = makeHome();
+    fs.writeFileSync(path.join(home, '.pi', 'dish', 'host-id'), `${CALLER_HOST_ID}\n`);
+    return home;
+}
 function fakeHub({ rejectProvenance }) {
     const requests = [];
     const server = http.createServer((req, res) => {
@@ -203,9 +214,12 @@ function fakeHub({ rejectProvenance }) {
             catch { }
             requests.push({ url: req.url, body, caller: req.headers['x-pi-dish-session-id'] });
             res.setHeader('Content-Type', 'application/json');
+            // Deliberately not the caller's host: the CLI must not borrow the id of
+            // whichever server it happens to be talking to.
             if (req.url === '/api/host')
                 return res.end(JSON.stringify({ hostId: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', label: 'local', capabilities: {} }));
-            if (req.url === '/hosts/peer/api/sessions/new') {
+            const route = (req.url ?? '').replace(/^\/hosts\/peer/, '');
+            if (route === '/api/sessions/new') {
                 if (rejectProvenance && body?.requestedBySessionId) {
                     res.statusCode = 400;
                     return res.end(JSON.stringify({ error: 'requestedBySessionId must identify an existing session' }));
@@ -213,7 +227,7 @@ function fakeHub({ rejectProvenance }) {
                 res.statusCode = 202;
                 return res.end(JSON.stringify({ success: true, pending: true, spawnId: 'spawn-1' }));
             }
-            if (req.url === '/hosts/peer/api/session-spawns/spawn-1')
+            if (route === '/api/session-spawns/spawn-1')
                 return res.end(JSON.stringify({ status: 'ready', sessionId: 'peer-new-1' }));
             res.statusCode = 404;
             res.end(JSON.stringify({ error: 'not found' }));
@@ -221,15 +235,18 @@ function fakeHub({ rejectProvenance }) {
     });
     return { server, requests };
 }
-test('a cross-host spawn attributes the caller host-qualified', async (t) => {
-    const { server, requests } = fakeHub({ rejectProvenance: false });
+async function listenFakeHub(t, options) {
+    const { server, requests } = fakeHub(options);
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
     const address = server.address();
     if (!address || typeof address === 'string')
         throw new Error('Fake hub lacks TCP address');
-    const url = `http://127.0.0.1:${address.port}`;
-    const spawned = await runCli(['spawn', '--host', 'peer', '--cwd', '/work', '--json'], { url, token: null, home: os.tmpdir() });
+    return { url: `http://127.0.0.1:${address.port}`, requests };
+}
+test('a cross-host spawn attributes the caller host-qualified', async (t) => {
+    const { url, requests } = await listenFakeHub(t, { rejectProvenance: false });
+    const spawned = await runCli(['spawn', '--host', 'peer', '--cwd', '/work', '--json'], { url, token: null, home: callerHome() });
     const result = (0, test_types_js_1.record)(JSON.parse(spawned.stdout));
     assert.equal(result.sessionId, 'peer-new-1');
     assert.equal(result.host, 'peer');
@@ -237,21 +254,24 @@ test('a cross-host spawn attributes the caller host-qualified', async (t) => {
     const body = (0, test_types_js_1.present)(create.body);
     // Same advisory fields as a local spawn; the host id only says whose
     // session id this is (TASKS/multi-host.md block 6).
-    assert.equal(body.requestedBySessionId, 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa:caller-session');
+    assert.equal(body.requestedBySessionId, `${CALLER_HOST_ID}:caller-session`);
     assert.equal(create.caller, body.requestedBySessionId);
     assert.equal(body.cwd, '/work');
 });
-test('a peer that refuses foreign provenance still gets the session spawned', async (t) => {
-    const { server, requests } = fakeHub({ rejectProvenance: true });
-    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-    t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
-    const address = server.address();
-    if (!address || typeof address === 'string')
-        throw new Error('Fake hub lacks TCP address');
-    const url = `http://127.0.0.1:${address.port}`;
-    const spawned = await runCli(['spawn', '--host', 'peer', '--json'], { url, token: null, home: os.tmpdir() });
+test('a spawn through PI_DISH_URL pointing at another host still names the caller host', async (t) => {
+    // No --host: the server at PI_DISH_URL may be another fleet host's, which
+    // could never resolve a bare id from this machine.
+    const { url, requests } = await listenFakeHub(t, { rejectProvenance: false });
+    const spawned = await runCli(['spawn', '--json'], { url, token: null, home: callerHome() });
     assert.equal((0, test_types_js_1.record)(JSON.parse(spawned.stdout)).sessionId, 'peer-new-1');
-    assert.match(spawned.stderr, /did not accept cross-host launch provenance/);
+    const create = (0, test_types_js_1.present)(requests.find(request => request.url === '/api/sessions/new'));
+    assert.equal((0, test_types_js_1.present)(create.body).requestedBySessionId, `${CALLER_HOST_ID}:caller-session`);
+});
+test('a peer that refuses the provenance still gets the session spawned', async (t) => {
+    const { url, requests } = await listenFakeHub(t, { rejectProvenance: true });
+    const spawned = await runCli(['spawn', '--host', 'peer', '--json'], { url, token: null, home: callerHome() });
+    assert.equal((0, test_types_js_1.record)(JSON.parse(spawned.stdout)).sessionId, 'peer-new-1');
+    assert.match(spawned.stderr, /did not accept launch provenance/);
     const creates = requests.filter(request => request.url === '/hosts/peer/api/sessions/new');
     assert.equal(creates.length, 2);
     // Provenance is advisory: dropped, never fatal, and never re-invented.
