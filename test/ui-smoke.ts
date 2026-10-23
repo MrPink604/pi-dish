@@ -2457,7 +2457,8 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       !fixtureElement(document.querySelector('.input-area'), "document.querySelector('.input-area')").classList.contains('ext-dialog-takeover') &&
       getComputedStyle(fixtureElement(document.getElementById('promptInput'), '#promptInput')).display !== 'none'),
       'composer stays usable while the dialog is expanded');
-    // Re-emission of the same payload under a fresh id must not stack cards.
+    // Re-emission of the same payload under a fresh id must not stack cards;
+    // the newest request owns the answer and the superseded one is cancelled.
     emit('extension_ui_request', {
       method: 'ask', id: 'dlg-ask-1-reemit',
       questions: [{ id: 'release', question: 'Which release channel?', options: [{ label: 'Stable' }, { label: 'Beta' }] }],
@@ -2493,9 +2494,9 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     const uiResponse = record(lastUIResponse); const uiValue = record(uiResponse.value);
     const uiResults = records(uiValue.results); const firstUiResult = record(uiResults[0]);
     const selectedOptions = firstUiResult.selectedOptions;
-    check(uiResponse.requestId === 'dlg-ask-1' && uiValue.kind === 'submit'
+    check(uiResponse.requestId === 'dlg-ask-1-reemit' && uiValue.kind === 'submit'
       && Array.isArray(selectedOptions) && selectedOptions[0] === 'Beta',
-      `submit posts the picked option to the bridge (got ${JSON.stringify(lastUIResponse)})`);
+      `submit posts the picked option to the newest request (got ${JSON.stringify(lastUIResponse)})`);
     check(await desktop.evaluate(() =>
       getComputedStyle(fixtureElement(document.getElementById('promptInput'), '#promptInput')).display !== 'none'),
       'composer usable after submit');
