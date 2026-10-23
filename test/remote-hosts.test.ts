@@ -239,6 +239,21 @@ test('a deployed remote forwards to its own loopback host and runs it as the ses
   });
 });
 
+test('the Termux launch env exports TMUX_TMPDIR inside the Termux branch', () => {
+  // On Termux /tmp is not writable, so tmux's default /tmp/tmux-<uid> socket
+  // dir fails (EACCES mkdir) when the deployed host spawns agent sessions in
+  // tmux. The launch env must point TMUX_TMPDIR at the writable Termux tmp,
+  // after TMPDIR is set, and stay inside the Termux branch.
+  const script = remoteHosts.hostLaunchScript('deadbeefdeadbeefdeadbeef', 3390);
+  const termuxIf = script.indexOf('if [ -d /data/data/com.termux/files/usr ]; then');
+  assert.ok(termuxIf >= 0, 'launch script carries the Termux branch');
+  const tmpdirSet = script.indexOf(': "${TMPDIR:=$PREFIX/tmp}"');
+  const tmuxExport = script.indexOf(': "${TMUX_TMPDIR:=$TMPDIR}"; export PREFIX TMPDIR TMUX_TMPDIR;');
+  const pathCase = script.indexOf('case ":$PATH:"');
+  assert.ok(tmpdirSet > termuxIf, 'TMPDIR defaults inside the branch');
+  assert.ok(tmuxExport > tmpdirSet && tmuxExport < pathCase, 'TMUX_TMPDIR exports after TMPDIR, inside the branch');
+});
+
 test('ssh diagnostics are classified, never echoed', () => {
   const cases = [
     ['user@box: Permission denied (publickey).', 'ssh_auth_failed'],
