@@ -498,7 +498,7 @@ export async function branchSession(sessionPath: string, entryId: string, option
       const result = await sdk.generateBranchSummary(entries, {
         model,
         apiKey: auth.apiKey,
-        // SDK 0.85.1 declares string-only summary headers, but its implementation
+        // SDK 1.3.0 declares string-only summary headers, but its implementation
         // forwards them unchanged through completeSummarization to completeSimple.
         // Preserve ProviderHeaders nulls: they suppress provider default headers.
         headers: auth.headers as PiSDK.GenerateBranchSummaryOptions['headers'],

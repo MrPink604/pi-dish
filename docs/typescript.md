@@ -425,7 +425,7 @@ not guarantee finite sums, and overflow is not saturated. Persisted consumed
 nonnumeric/nonfinite counters are rejected. This is not the later R1 reducer
 refactor. M1 evidence records the before/after regression and review disposition.
 
-The bundled SDK's `ProviderHeaders` permits null tombstones, while its 0.85.1
+The bundled SDK's `ProviderHeaders` permits null tombstones, while its 1.3.0
 branch-summary option declaration omits null. The SDK adapter documents one narrow
 call-site assertion to that actual SDK option type after inspecting the runtime
 forwarding chain. The original header object and null suppression semantics are

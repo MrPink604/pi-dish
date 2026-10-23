@@ -674,6 +674,17 @@ test('/reload from the API: responds ok, re-evaluates extensions, session stays 
     assert.equal(rel.status, 200, JSON.stringify(rel.body));
     await waitFor(() => extLoadCount() > before, 15000, 'extension re-evaluation after /reload');
     // The re-loaded bridge re-registers the same session and it keeps working.
+    // The extension marker and the server's active list can both update before
+    // the new bridge binds, so wait for the fresh registration itself.
+    await waitFor(async () => {
+        try {
+            const fresh = await getBridgeSession((0, test_types_js_1.nativeId)(sessionId));
+            return fresh.alive && (0, test_types_js_1.record)((0, test_types_js_1.record)(await fresh.send('get_state')).lifecycle).idle === true;
+        }
+        catch {
+            return false;
+        }
+    }, 15000, 'bridge re-registered after reload');
     await waitFor(async () => {
         const { body } = await get('/api/sessions?active=1');
         return (0, test_types_js_1.records)(body.active).some(session => session.id === sessionId);

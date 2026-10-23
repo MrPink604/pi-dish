@@ -305,8 +305,8 @@ retain caps, ignored/binary behavior, both version comparisons and stale 409.
 
 Direct pinned **development** declarations now own Express **4.17.25** (runtime
 4.22.1), compression **1.8.1** (runtime 1.8.1), ws **8.18.1** (runtime 8.21.0),
-Node **22.20.2**, Pi TUI **0.85.1**, and TypeBox **1.3.7**. SDK runtime lock is
-`@earendil-works/pi-coding-agent@0.85.1`; its real CustomEditor/ExtensionAPI
+Node **22.20.2**, Pi TUI **1.3.0**, and TypeBox **1.3.27**. SDK runtime lock is
+`@earendil-works/pi-coding-agent@1.3.0`; its real CustomEditor/ExtensionAPI
 exports are the authority. TUI/TypeBox pins must move with that SDK's lock.
 Electron **33.4.11**, node-pty **1.1.0**, and the SDK supply their own declarations;
 no local ambient replacements. `skipLibCheck` skips third-party declaration
