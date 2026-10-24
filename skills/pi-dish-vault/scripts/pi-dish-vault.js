@@ -2,7 +2,7 @@
 // Generated edge from skills/pi-dish-vault/scripts/pi-dish-vault.ts; edit that source and run npm run build:edges.
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SEARCH_PREFIX = exports.PAIR_PROBE = exports.FIELDS = exports.ENVELOPE_PREFIX = void 0;
+exports.SYNC_PROBE = exports.SEARCH_PREFIX = exports.PAIR_PROBE = exports.FIELDS = exports.ENVELOPE_PREFIX = void 0;
 exports.parseRunArgs = parseRunArgs;
 exports.encodeEnvelope = encodeEnvelope;
 exports.aacInvocation = aacInvocation;
@@ -69,6 +69,12 @@ Usage: search [text...] [--json]
 
 Without text, lists every requestable item (up to 100). Request an item by its id
 with \`run --item <id>\`; names are not unique. A field the item lacks is refused.`,
+    sync: `sync — ask the vault listener to run \`bw sync\`, so items the operator just added or
+changed show up in search and requests. No approval needed.
+
+Usage: sync
+
+Fails while the vault is locked or Bitwarden is unreachable; the listener's window says which.`,
     pair: `pair — pair this host with the hub's vault listener (once per host).
 
 Usage: pair <psk-token>
@@ -272,6 +278,16 @@ function search(args) {
     if (listing.truncated)
         process.stdout.write('# More items match; narrow the search.\n');
 }
+/** The listener answers this probe itself: `bw sync`, then an empty credential. */
+exports.SYNC_PROBE = 'pidish-vault:sync';
+function sync() {
+    const result = (0, node_child_process_1.spawnSync)(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', exports.SYNC_PROBE, '--timeout', '60']), { encoding: 'utf8' });
+    if (result.error)
+        return fail(`could not run ${aacBin()}: ${result.error.message}`);
+    if (result.status !== 0)
+        return fail(`sync failed (exit ${result.status}): ${(result.stderr || result.stdout || '').trim().split('\n').pop() || 'no output'}`);
+    process.stdout.write('Vault synced.\n');
+}
 function status() {
     const result = (0, node_child_process_1.spawnSync)(aacBin(), ['connections', 'list'], { encoding: 'utf8' });
     if (result.error)
@@ -300,6 +316,8 @@ async function main() {
             return pair(rest[0]);
         if (command === 'search')
             return search(rest);
+        if (command === 'sync')
+            return sync();
         if (command === 'status')
             return status();
         fail(`unknown command: ${command} (run --help for the command list)`);

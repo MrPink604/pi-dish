@@ -51,4 +51,6 @@ export declare function decodeSearchReply(stdout: string): {
     results: SearchEntry[];
     truncated: boolean;
 };
+/** The listener answers this probe itself: `bw sync`, then an empty credential. */
+export declare const SYNC_PROBE = "pidish-vault:sync";
 export {};

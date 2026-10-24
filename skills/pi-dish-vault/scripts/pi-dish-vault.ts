@@ -67,6 +67,12 @@ Usage: search [text...] [--json]
 
 Without text, lists every requestable item (up to 100). Request an item by its id
 with \`run --item <id>\`; names are not unique. A field the item lacks is refused.`,
+  sync: `sync — ask the vault listener to run \`bw sync\`, so items the operator just added or
+changed show up in search and requests. No approval needed.
+
+Usage: sync
+
+Fails while the vault is locked or Bitwarden is unreachable; the listener's window says which.`,
   pair: `pair — pair this host with the hub's vault listener (once per host).
 
 Usage: pair <psk-token>
@@ -258,6 +264,16 @@ function search(args: readonly string[]): void {
   if (listing.truncated) process.stdout.write('# More items match; narrow the search.\n');
 }
 
+/** The listener answers this probe itself: `bw sync`, then an empty credential. */
+export const SYNC_PROBE = 'pidish-vault:sync';
+
+function sync(): void {
+  const result = spawnSync(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', SYNC_PROBE, '--timeout', '60']), { encoding: 'utf8' });
+  if (result.error) return fail(`could not run ${aacBin()}: ${result.error.message}`);
+  if (result.status !== 0) return fail(`sync failed (exit ${result.status}): ${(result.stderr || result.stdout || '').trim().split('\n').pop() || 'no output'}`);
+  process.stdout.write('Vault synced.\n');
+}
+
 function status(): void {
   const result = spawnSync(aacBin(), ['connections', 'list'], { encoding: 'utf8' });
   if (result.error) return fail(`aac is not installed (${result.error.message}); install aac v0.11.0 or set AAC_BIN`);
@@ -279,6 +295,7 @@ async function main(): Promise<void> {
     if (command === INJECT) return inject(rest);
     if (command === 'pair') return pair(rest[0]);
     if (command === 'search') return search(rest);
+    if (command === 'sync') return sync();
     if (command === 'status') return status();
     fail(`unknown command: ${command} (run --help for the command list)`);
   } catch (error) {

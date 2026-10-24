@@ -15,6 +15,10 @@ pub const PAIR_PROBE: &str = "pidish-vault:pair";
 /// listener answers it itself with item names, ids and URIs (never values),
 /// as JSON in the credential's `notes`.
 pub const SEARCH_PREFIX: &str = "pidish-vault:search:";
+/// `pi-dish-vault sync` sends this query. The listener answers it itself,
+/// without approval: `bw sync`, then an empty credential, or a refusal when
+/// the vault is locked or the sync fails.
+pub const SYNC_PROBE: &str = "pidish-vault:sync";
 
 /// The search text of a search probe; `None` for any other query.
 pub fn search_query(query: &CredentialQuery) -> Option<Result<String, String>> {

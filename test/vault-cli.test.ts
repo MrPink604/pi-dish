@@ -106,6 +106,19 @@ test('search sends the encoded text as a probe and prints only the listed metada
   assert.deepEqual(JSON.parse(json.stdout), listing);
 });
 
+test('sync sends the sync probe and fails when the listener refuses it', async (t) => {
+  const { home, aac, argvLog } = setup(t, false);
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, AAC_BIN: aac, AAC_STUB_STDOUT: JSON.stringify({ success: true, credential: {} }) };
+  delete env.PI_DISH_VAULT_RELAY_URL;
+  const { stdout } = await run(process.execPath, [cli, 'sync'], { env });
+  assert.deepEqual(JSON.parse(fs.readFileSync(argvLog, 'utf8')), ['--output', 'json', 'connect', '--domain', 'pidish-vault:sync', '--timeout', '60']);
+  assert.equal(stdout, 'Vault synced.\n');
+  delete env.AAC_STUB_STDOUT;
+  const refused = await run(process.execPath, [cli, 'sync'], { env }).then(() => null, (error: { code?: number; stderr?: string }) => error);
+  assert.equal(refused?.code, 1);
+  assert.match(refused?.stderr ?? '', /sync failed \(exit 7\)/);
+});
+
 test('custom fields reach their variables through the notes bundle, alongside direct slots', async (t) => {
   const { home } = setup(t, false);
   const argvLog = path.join(home, 'aac-run-argv.json');

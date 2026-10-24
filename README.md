@@ -933,7 +933,9 @@ Agents discover what they can ask for with `pi-dish-vault.js search [text]`,
 which lists item names, ids and URIs (never values or usernames) without an
 approval. Items in the Bitwarden folder `no-agents` (listener flag
 `--deny-folder`) are never listed and are refused before reaching pi-dish;
-move anything agents should not even see there.
+move anything agents should not even see there. `pi-dish-vault.js sync` asks
+the listener to run `bw sync` (also without an approval), so an item you have
+just added or changed shows up without visiting the listener window.
 
 Setup, on the host whose pi-dish your phone uses:
 

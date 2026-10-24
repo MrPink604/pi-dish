@@ -181,6 +181,12 @@ fn deny(reply: oneshot::Sender<CredentialRequestReply>) {
     let _ = reply.send(CredentialRequestReply { approved: false, credential: None, credential_id: None });
 }
 
+/// Answers a probe the listener handles itself; carries no secret.
+fn answer(reply: oneshot::Sender<CredentialRequestReply>, notes: Option<String>) {
+    let credential = CredentialData { username: None, password: None, totp: None, uri: None, notes, credential_id: None, domain: None };
+    let _ = reply.send(CredentialRequestReply { approved: true, credential: Some(credential), credential_id: None });
+}
+
 async fn handle_request(
     vault: Arc<Vault>,
     bridge: Arc<Bridge>,
@@ -196,9 +202,20 @@ async fn handle_request(
         .unwrap_or_else(|| format!("device {}", fingerprint.get(..8).unwrap_or(&fingerprint)));
     if query.search_string() == envelope::PAIR_PROBE {
         println!("Paired {device}.");
-        let empty = CredentialData { username: None, password: None, totp: None, uri: None, notes: None, credential_id: None, domain: None };
-        let _ = reply.send(CredentialRequestReply { approved: true, credential: Some(empty), credential_id: None });
-        return;
+        return answer(reply, None);
+    }
+    if query.search_string() == envelope::SYNC_PROBE {
+        let synced = if vault.is_unlocked() { vault.sync().await } else { Err("the vault is locked (type `unlock`)".to_string()) };
+        return match synced {
+            Ok(()) => {
+                println!("{device} synced the vault.");
+                answer(reply, None);
+            }
+            Err(error) => {
+                println!("Refused a sync from {device}: {error}");
+                deny(reply);
+            }
+        };
     }
     if let Some(search) = envelope::search_query(&query) {
         let listing = match search {
@@ -208,8 +225,7 @@ async fn handle_request(
         return match listing.and_then(|(text, found)| serde_json::to_string(&found).map(|json| (text, found.results.len(), json)).map_err(|e| e.to_string())) {
             Ok((text, count, json)) => {
                 println!("{device} searched {text:?}: {count} item(s) listed.");
-                let names = CredentialData { username: None, password: None, totp: None, uri: None, notes: Some(json), credential_id: None, domain: None };
-                let _ = reply.send(CredentialRequestReply { approved: true, credential: Some(names), credential_id: None });
+                answer(reply, Some(json));
             }
             Err(error) => {
                 println!("Refused a search from {device}: {error}");
@@ -384,4 +400,43 @@ async fn run(options: Options, session: Option<SecretString>) -> Result<(), Stri
     vault.lock();
     report(&vault, &bridge, &options.state_dir).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A `bw` that logs its arguments beside itself and fails while a `fail` file exists.
+    fn stub_bw(dir: &Path) -> String {
+        let bw = dir.join("bw");
+        std::fs::write(&bw, "#!/bin/sh\ndir=$(dirname \"$0\")\necho \"$*\" >> \"$dir/calls\"\n[ ! -e \"$dir/fail\" ] || { echo 'sync failed' >&2; exit 1; }\n").expect("write stub");
+        std::fs::set_permissions(&bw, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
+        bw.to_string_lossy().into_owned()
+    }
+
+    async fn sync_probe(vault: Vault, dir: &Path) -> bool {
+        let (reply, answer) = oneshot::channel();
+        let bridge = Arc::new(Bridge::new("http://127.0.0.1:9".to_string(), dir.join("bridge.token")));
+        let query = CredentialQuery::Domain(envelope::SYNC_PROBE.to_string());
+        handle_request(Arc::new(vault), bridge, dir.to_path_buf(), query, IdentityFingerprint([7; 32]), reply).await;
+        answer.await.expect("a reply").approved
+    }
+
+    #[tokio::test]
+    async fn a_sync_probe_runs_bw_sync_only_while_unlocked() {
+        let dir = std::env::temp_dir().join(format!("pi-dish-vault-sync-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let bw = stub_bw(&dir);
+        let unlocked = || Vault::new(bw.clone(), DEFAULT_DENY_FOLDER.to_string(), Some(SecretString::from("session-key")));
+        let calls = || std::fs::read_to_string(dir.join("calls")).unwrap_or_default();
+
+        assert!(!sync_probe(Vault::new(bw.clone(), DEFAULT_DENY_FOLDER.to_string(), None), &dir).await, "locked: refused");
+        assert_eq!(calls(), "", "locked: bw never runs");
+        assert!(sync_probe(unlocked(), &dir).await, "unlocked: approved");
+        assert_eq!(calls(), "sync\n");
+        std::fs::write(dir.join("fail"), "").expect("fail marker");
+        assert!(!sync_probe(unlocked(), &dir).await, "a failed sync is refused");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

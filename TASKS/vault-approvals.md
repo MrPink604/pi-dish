@@ -72,6 +72,10 @@ never values or usernames. Before any request reaches pi-dish the listener looks
 item up (`bw get item`): items in the deny folder (`--deny-folder`, default `no-agents`)
 are refused and never listed, and the card shows the item's Bitwarden name.
 
+`pidish-vault:sync` is the sync probe (`pi-dish-vault sync`). The listener answers it
+itself, without approval: while unlocked it runs `bw sync` and replies with an empty
+credential; while locked, or when the sync fails, it refuses the request.
+
 The wrapper runs `aac --output json run …`: aac otherwise logs INFO status lines to
 stdout, into the command's own output.
 
@@ -117,3 +121,5 @@ the reason; tag `<hostId>:vault:<id>`; click opens the app with the approval car
 - Agents may list item metadata without approval (operator decision, 2026-10-19): names
   and URIs reveal which services exist, which the operator accepts for discoverability;
   the deny folder hides anything that should not be visible at all.
+- Agents may request `bw sync` without approval: it releases nothing and only refreshes
+  the listener's local copy of the vault.

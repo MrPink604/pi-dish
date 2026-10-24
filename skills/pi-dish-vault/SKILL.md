@@ -36,6 +36,13 @@ node "$VAULT" run --item fleet-sudo-desktop --env PW=password \
   -- sh -c 'printf "%s\n" "$PW" | sudo -S pacman -S --needed rocprofiler'
 ```
 
+An item the operator just added or changed is missing from `search` or
+stale? Refresh the listener's copy (no approval), then search again:
+
+```bash
+node "$VAULT" sync
+```
+
 - `--item`: Bitwarden item id (from `search`) or exact, unique name. `--env VAR=field` with field one
   of `username`, `password`, `totp`, `uri`, `notes` (secure-note bodies live
   in `notes`), or `field:<name>` for a custom text/hidden field exactly as
