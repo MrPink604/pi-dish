@@ -267,4 +267,24 @@ test('context overlays follow the current model window without mutating cached m
   assert.equal('contextPercent' in raw ? raw.contextPercent : undefined, undefined);
 });
 
+test('catalog rows mark transcripts inside a private root and leave ordinary rows unflagged', () => {
+  const harnesses = new Map(options.harnesses);
+  harnesses.set('pi', { ...registry.pi, privateRootPath: () => '/private-root' });
+  const privateSrc = source('pi', checkedNativeId('private-one'),
+    { file: '/private-root/2026-01-01_private-one.jsonl' });
+  const ordinarySrc = source('pi', checkedNativeId('ordinary-one'),
+    { file: '/catalog-fixture/ordinary-one.jsonl' });
+  const privateRow = buildHistoricalSession(history(privateSrc), { ...options, harnesses });
+  assert.equal(privateRow.private, true);
+  const ordinaryRow = buildHistoricalSession(history(ordinarySrc), { ...options, harnesses });
+  assert.equal(ordinaryRow.private, undefined);
+
+  const captured = registeredSessionObservation({ sessionFile: '/private-root/2026-01-01_private-one.jsonl' },
+    context(privateSrc, null, { source: null }));
+  assert.equal(buildActiveSession(captured, { ...options, harnesses }).private, true);
+  // A live claim with no file yet cannot prove containment.
+  const pending = registeredSessionObservation({}, context(privateSrc, null, { source: null }));
+  assert.equal(buildActiveSession(pending, { ...options, harnesses }).private, undefined);
+});
+
 export {};

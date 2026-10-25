@@ -45,7 +45,7 @@ export interface SessionCatalogInput {
     readonly activeOnly: boolean;
 }
 export interface SessionCatalogOptions {
-    readonly harnesses: ReadonlyMap<SessionIdentity['harnessId'], Readonly<Pick<HarnessDescriptor, 'id' | 'label' | 'layout'>>>;
+    readonly harnesses: ReadonlyMap<SessionIdentity['harnessId'], Readonly<Pick<HarnessDescriptor, 'id' | 'label' | 'layout' | 'privateRootPath'>>>;
     /** Existing model-window lookup policy, invoked at composition time, never persisted. */
     readonly contextWindowForModel: (model: string | null | undefined) => number;
     /** Read-only probes keep path derivation in the catalog, without duplicating it in adapters. */

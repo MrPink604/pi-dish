@@ -28,6 +28,8 @@ export interface NewSessionLaunchOptions {
     descriptor: HarnessDescriptor;
     name?: string | null;
     target?: HarnessLaunchTarget | null;
+    /** Keep the transcript in the harness's private root (outside fleet backups). */
+    private?: boolean;
 }
 export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
     descriptor: HarnessDescriptor;

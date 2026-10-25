@@ -66,6 +66,13 @@ OMP from OMP), so it has the same tools and skills you do. Pass
 `--harness pi|omp|prime` to cross over deliberately; the spawn result names
 the harness it launched.
 
+`spawn --private` keeps the transcript under the host's private session root
+(`$XDG_STATE_HOME/pi-dish/private-sessions/<harness>`, defaulting under
+`~/.local/state`) instead of the ordinary session store, so the fleet session
+backup never captures it. Pi and OMP support it; Prime does not. The session
+lists and resumes normally, and its row reports `private: true`. Private
+transcripts are never auto-expired or cleaned up.
+
 Search treats the session corpus as long-term memory: before re-deriving a
 fix, config, or investigation, check whether a prior session already did it.
 If a first query misses, reformulate with terms you'd expect *in the

@@ -241,6 +241,27 @@ OMP and Prime use the shared public-extension bridge and never start or fall
 back to native RPC. Their history is discovered from `~/.omp/agent/sessions/`
 and `~/.prime/agent/sessions/` respectively.
 
+### Private sessions
+
+`POST /api/sessions/new` accepts `private: true` (and `pi-dish-sessions spawn
+--private` forwards it) to keep a new transcript out of the ordinary session
+store. Pi and OMP write it under
+
+```
+$XDG_STATE_HOME/pi-dish/private-sessions/<harness>/   # defaults to ~/.local/state
+```
+
+with the root created `0700`. The fleet's hourly session backup only copies
+the normal harness session directories, so this root is never captured while
+it stays outside those paths. The files are otherwise ordinary harness JSONLs:
+they list, open, search, resume, restart and auto-recover like any other
+session, and OMP subagents of a private parent stay beside it in that root.
+Sessions whose file is inside a private root carry `private: true` on the
+session row, and `GET /api/harnesses` reports `privateSessions` per harness
+(Prime is unsupported: its RLM artifacts live in the backed-up
+`~/.prime/agent/session-artifacts`). Private transcripts are never
+auto-expired or cleaned up; deleting one is a manual filesystem operation.
+
 OMP's `ask` tool uses the same UI context OMP gives extensions, so the wrapper
 races its browser form against the local TUI form and the first answer wins.
 OMP's exported `AgentSession` getters drive bridge-owned `Todos`, `planmode`,

@@ -24,6 +24,8 @@ export interface CreateSessionOptions {
     cwd?: unknown;
     target?: HarnessLaunchTarget | null;
     sourceSessionId?: string | null;
+    /** HTTP `private` flag; only harnesses with a private root support it. */
+    private?: boolean;
 }
 export interface ResumeSessionOptions {
     model?: unknown;

@@ -41,6 +41,8 @@ export interface CreateSessionOptions {
   cwd?: unknown;
   target?: HarnessLaunchTarget | null;
   sourceSessionId?: string | null;
+  /** HTTP `private` flag; only harnesses with a private root support it. */
+  private?: boolean;
 }
 
 export interface ResumeSessionOptions {
@@ -203,10 +205,13 @@ export function createSessionOperations(observations: SessionOperationObservatio
     return ownership.sessionSources.resolve({ route: sessionId, exact: false, live: ownership.liveSourceObservations(sessionId) });
   }
 
-  async function createSession({ harness = 'pi', name, model, thinking, cwd, target }: CreateSessionOptions): Promise<string> {
+  async function createSession({ harness = 'pi', name, model, thinking, cwd, target, private: privateSession = false }: CreateSessionOptions): Promise<string> {
     const descriptor = getHarness(harness);
     if (!descriptor) throw new SessionOperationError(400, `Unknown harness: ${harness}`);
-    const outcome = await launch.launchNewSession({ descriptor, name, model, thinking, cwd, target });
+    if (privateSession && !descriptor.privateRootPath) {
+      throw new SessionOperationError(400, `${descriptor.label} does not support private sessions.`);
+    }
+    const outcome = await launch.launchNewSession({ descriptor, name, model, thinking, cwd, target, private: privateSession });
     if (outcome.kind !== 'ready') throw outcome.error;
     const id = outcome.id;
     // Naming happens after registration. A naming error must not imply launch never happened.

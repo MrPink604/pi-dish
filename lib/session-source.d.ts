@@ -4,6 +4,7 @@ import type { SessionSource, SessionSourceResolver } from './session-source-cont
 interface ResolverOptions {
     readonly descriptors?: readonly HarnessDescriptor[];
     readonly roots?: Partial<Record<HarnessId, string>>;
+    readonly privateRoots?: Partial<Record<HarnessId, string>>;
 }
 /** Construct a read descriptor from an explicit observed identity, including a
  * claimed file which has not been created yet. This grants no lifecycle rights. */

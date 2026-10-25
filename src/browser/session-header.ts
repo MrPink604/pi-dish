@@ -71,6 +71,14 @@ function updateSessionHeader() {
   }
   // The tree has no header button any more (type /tree in the composer); the
   // mobile control panel keeps its row, so it still follows harness support.
+  const privateEl = element('sessionPrivate');
+  if (privateEl) {
+    const isPrivate = !!current.private;
+    privateEl.style.display = isPrivate ? '' : 'none';
+    privateEl.textContent = isPrivate ? 'private' : '';
+    privateEl.title = 'Private session — stored outside backed-up session folders';
+    privateEl.setAttribute('aria-label', isPrivate ? 'Private session' : '');
+  }
   const cpTree = element('cpTreeRow');
   if (cpTree) cpTree.style.display = sessionSupports(current, 'tree') ? '' : 'none';
   // Phone parity for the header badge: same modal from the control panel.

@@ -14,6 +14,7 @@ interface Result {
 }
 interface HarnessDiscoveryOptions extends DiscoveryOptions {
     roots?: Partial<Record<HarnessId, string>>;
+    privateRoots?: Partial<Record<HarnessId, string>>;
 }
 interface FindOptions extends DiscoveryOptions {
     allowPartial?: boolean;
@@ -26,7 +27,11 @@ declare function safeHeaderSessionId(value: unknown): NativeSessionId | null;
  * identity; generic/nested session files use validated header ids.
  */
 declare function discoverSessionCandidates(rootDir: string, options?: DiscoveryOptions): Result;
-/** Discover configured harness roots while retaining per-harness identity. */
+/**
+ * Discover configured harness roots while retaining per-harness identity.
+ * The ordinary root precedes the private root, so if both somehow hold one
+ * native id, the ordinary store keeps the route (first wins).
+ */
 declare function discoverHarnessSessions(descriptors?: readonly HarnessDescriptor[], options?: HarnessDiscoveryOptions): Result;
 declare function findSessionCandidate(rootDir: string, sessionId: string, options?: FindOptions): {
     candidate: Candidate | null;

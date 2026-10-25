@@ -11,6 +11,7 @@ export interface SessionSpawnInput {
   readonly thinking?: string;
   readonly target?: SpawnTarget | null;
   readonly harness?: string;
+  readonly private?: boolean;
   readonly draft?: string | null;
   readonly ownsView: () => boolean;
   readonly onAccepted?: () => void;
@@ -117,7 +118,7 @@ export function createSessionSpawns(options: {
     const label = options.harnessLabel(harness);
     const data = await sendJson(options.request, host, '/api/sessions/new', {
       name: name || undefined, cwd: cwd || undefined, model: model || undefined,
-      thinking: thinking || undefined, target, harness, async: true,
+      thinking: thinking || undefined, target, harness, async: true, private: input.private === true || undefined,
     });
     const spawnId = decodeSpawnId(data);
     const key = sessionSpawnKey(host.hostId || null, spawnId);

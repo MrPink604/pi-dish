@@ -337,6 +337,21 @@ route aliases and header-cache invalidation. Registered/RPC claims enter explici
 no path-to-source side map establishes identity. Cached header-derived identities,
 including OMP named children, are revalidated against ambiguity on route access.
 
+Private sessions (`private: true` on `POST /api/sessions/new`, `spawn --private`)
+are ordinary harness JSONLs written under
+`$XDG_STATE_HOME/pi-dish/private-sessions/<harness>/` (default
+`~/.local/state`), a root outside every fleet-backed-up session path.
+`src/core/private-sessions.ts` owns the root formula, 0700 creation and the
+realpath containment test; the descriptor exposes it as `privateRootPath`
+(pi and omp only — Prime's RLM artifacts are backed up, so it is unsupported).
+Discovery walks that root as a single workspace (`walk(root, basename(root), 0)`),
+which is what gives a flat `<ts>_<id>.jsonl` its basename identity while OMP's
+sibling `<id>/<agent>.jsonl` subagents keep their parent edge; session-source
+id lookup and recovery validation accept either root and still refuse a file
+outside both. A discovered or live row whose file is inside the root carries
+`SessionFields.private = true` (client-visible; deliberately not in
+`ClientPrivateField`, so `view=client` keeps it).
+
 `src/core/session-catalog.ts` composes active, historical and live-child rows and
 their relationship/routine hints from captured observations. The server retains
 registry grouping, live-child exit checks and existing process/tmux capability

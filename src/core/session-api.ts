@@ -55,6 +55,8 @@ export interface SessionFields<Timestamp = string | number> {
   searchSnippet?: string;
   searchScore?: number;
   hibernation?: HibernationState | null;
+  /** Transcript lives in the harness's private root, outside fleet backups. */
+  private?: boolean;
 }
 /** Legacy wire helper compatibility; authoritative browser state uses SessionRow. */
 export interface SessionMetadata extends Record<string, unknown>,
@@ -147,7 +149,7 @@ const fieldDecoders: FieldDecoders = {
   subagentLive: optionalBoolean, parentId: nullableString, parentSource: nullableString,
   familyParentId: nullableString, routine: optionalString, routineId: optionalString,
   routineInvocationId: optionalString, searchSnippet: optionalString, searchScore: optionalNumber,
-  hibernation: optionalHibernation,
+  hibernation: optionalHibernation, private: optionalBoolean,
 };
 function decodeCapabilities(value: unknown): SessionFields['capabilities'] {
   if (value === undefined) return undefined;

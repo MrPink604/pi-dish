@@ -2098,6 +2098,13 @@ export function startServer(rootDirectory: string): Server {
       ? (property(req.body, 'name') as string).trim() : optionalProperty(req.body, 'name');
     const descriptor = getHarness(harness);
     if (!descriptor) return res.status(400).json({ error: `Unknown harness: ${harness}` });
+    const isPrivate = optionalProperty(req.body, 'private');
+    if (isPrivate !== undefined && typeof isPrivate !== 'boolean') {
+      return res.status(400).json({ error: 'private must be a boolean' });
+    }
+    if (isPrivate === true && !descriptor.privateRootPath) {
+      return res.status(400).json({ error: `${descriptor.label} does not support private sessions.` });
+    }
     if (name !== undefined && (typeof name !== 'string' || !name)) {
       return res.status(400).json({ error: 'Name must be a non-empty string' });
     }
@@ -2133,6 +2140,7 @@ export function startServer(rootDirectory: string): Server {
         harness, name, model, thinking, cwd,
         target: target as HarnessLaunchTarget | null | undefined,
         sourceSessionId: sourceSessionId as string | null,
+        private: isPrivate === true,
       });
       return res.status(202).json({ success: true, pending: true, spawnId });
     }
@@ -2144,6 +2152,7 @@ export function startServer(rootDirectory: string): Server {
     try {
       const id = await sessionOperations.createSession({
         harness, name, model, thinking, cwd, target: target as HarnessLaunchTarget | null | undefined,
+        private: isPrivate === true,
       });
       const operationId = sourceSessionId ? sessionOperations.recordSessionLaunch(id, sourceSessionId as string) : null;
       res.json({ success: true, id, ...(operationId ? { operationId } : {}) });

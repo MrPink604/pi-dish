@@ -7,7 +7,7 @@ import os = require('node:os');
 import path = require('node:path');
 
 const {
-  discoverSessionCandidates, discoverSubsessionCandidates, findSessionCandidate, readSessionHeader,
+  discoverSessionCandidates, discoverSubsessionCandidates, findSessionCandidate, readSessionHeader, discoverHarnessSessions,
 }: typeof import('../lib/session-discovery') = require('../lib/session-discovery')
 const { registry }: typeof import('../lib/harnesses') = require('../lib/harnesses')
 const { encodeSessionKey }: typeof import('../lib/session-key') = require('../lib/session-key')
@@ -65,6 +65,43 @@ test('discovers OMP sibling-directory subsessions without loosening Pi discovery
   const pi = discoverSessionCandidates(sessions, { descriptor: registry.pi });
   assert.deepEqual(pi.candidates.map((candidate: DiscoveryCandidate) => candidate.nativeSessionId), ['root-session'],
     'arbitrarily named nested JSONLs remain excluded from Pi');
+});
+
+test('private roots are walked as one workspace, flagged private, and keep OMP parent edges', () => {
+  const normal = path.join(root, 'private-walk-normal');
+  const normalOmp = path.join(root, 'private-walk-normal-omp');
+  const privatePi = path.join(root, 'private-walk-pi');
+  const privateOmp = path.join(root, 'private-walk-omp');
+  write(path.join(normal, 'workspace', 'ordinary.jsonl'), { type: 'session', id: 'ordinary', cwd: '/workspace' });
+  const piFile = path.join(privatePi, '2026-01-01_private-pi.jsonl');
+  write(piFile, { type: 'session', id: 'private-pi', cwd: '/workspace' });
+  const ompParent = path.join(privateOmp, '2026-01-01_private-parent.jsonl');
+  const ompChild = path.join(privateOmp, '2026-01-01_private-parent', 'Explore.jsonl');
+  write(ompParent, { type: 'session', id: 'private-parent', cwd: '/workspace' });
+  write(ompChild, { type: 'session', id: 'private-child', cwd: '/workspace' });
+
+  const result = discoverHarnessSessions([registry.pi, registry.omp], {
+    roots: { pi: normal, omp: normalOmp }, privateRoots: { pi: privatePi, omp: privateOmp },
+  });
+  const byFile = new Map<string, DiscoveryCandidate>(
+    result.candidates.map(candidate => [candidate.file, candidate] as const));
+  const ordinary = present(byFile.get(path.join(normal, 'workspace', 'ordinary.jsonl')));
+  assert.equal(ordinary.private, undefined, 'the ordinary root never gains the flag');
+  assert.equal(ordinary.identitySource, 'basename');
+
+  const flatPi = present(byFile.get(piFile));
+  assert.equal(flatPi.private, true);
+  assert.equal(flatPi.nativeSessionId, '2026-01-01_private-pi', 'flat private files use basename identity');
+  assert.equal(flatPi.identitySource, 'basename');
+
+  const flatOmp = present(byFile.get(ompParent));
+  assert.equal(flatOmp.private, true);
+  assert.equal(flatOmp.nativeSessionId, '2026-01-01_private-parent');
+
+  const child = present(byFile.get(ompChild));
+  assert.equal(child.private, true);
+  assert.equal(child.nativeSessionId, 'private-child', 'nested private subagents use their header identity');
+  assert.equal(child.parentSession, ompParent, 'the sibling-directory parent edge survives the private walk');
 });
 
 test('discovery revalidates shared parent headers and same-size replaced child identities', () => {

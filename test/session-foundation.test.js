@@ -16,6 +16,12 @@ test('harness descriptors keep alternate launches tmux-only and load thin wrappe
     assert.deepEqual(harnesses_1.registry.pi.argv.new({ model: 'provider/model', thinking: 'high' }), [
         '--model', 'provider/model', '--thinking', 'high',
     ]);
+    assert.deepEqual(harnesses_1.registry.pi.argv.new({ model: 'provider/model', thinking: 'high', sessionDir: '/tmp/private' }), [
+        '--model', 'provider/model', '--thinking', 'high', '--session-dir', '/tmp/private',
+    ]);
+    assert.equal(typeof harnesses_1.registry.pi.privateRootPath, 'function');
+    assert.equal(typeof harnesses_1.registry.omp.privateRootPath, 'function');
+    assert.equal(harnesses_1.registry.prime.privateRootPath, undefined, 'Prime cannot keep a private transcript');
     assert.equal(harnesses_1.registry.omp.closeMode, 'owned-pane');
     assert.equal(harnesses_1.registry.prime.closeMode, 'owned-agent');
     for (const id of ['omp', 'prime']) {
@@ -32,6 +38,10 @@ test('harness descriptors keep alternate launches tmux-only and load thin wrappe
             '--extension', descriptor.wrapperEntrypoint, '--resume', '/tmp/session.jsonl',
         ]);
     }
+    assert.deepEqual(harnesses_1.registry.omp.argv.new({ model: 'provider/model', thinking: 'high', sessionDir: '/tmp/private' }), [
+        '--extension', harnesses_1.registry.omp.wrapperEntrypoint, '--model', 'provider/model', '--thinking', 'high',
+        '--session-dir', '/tmp/private',
+    ]);
     assert.deepEqual(harnesses_1.registry.omp.argv.resume({ file: '/tmp/session.jsonl', model: 'zai/glm-4.7-flash' }), [
         '--extension', harnesses_1.registry.omp.wrapperEntrypoint, '--resume', '/tmp/session.jsonl',
         '--model', 'zai/glm-4.7-flash',

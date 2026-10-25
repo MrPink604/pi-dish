@@ -139,6 +139,7 @@
             <div class="session-meta session-meta-desktop">
               <span class="badge host-badge" id="sessionHost" style="display:none"></span>
               <span class="badge harness-badge" id="sessionHarness" style="display:none" data-app-click="openSessionHarnessSettings"></span>
+              <span class="badge private-badge" id="sessionPrivate" style="display:none"></span>
               <div class="model-selector" id="modelSelector">
                 <button class="badge badge-model" id="sessionModel" title="Change model">model ▾</button>
               </div>
@@ -586,6 +587,14 @@
               </select>
               <div class="ns-hidden-note" id="nsThinkingNote"></div>
             </div>
+          </div>
+
+          <div class="ns-section ns-private-section" id="nsPrivateRow" style="display:none">
+            <label class="ns-private-toggle" for="nsPrivateToggle">
+              <input type="checkbox" id="nsPrivateToggle">
+              <span>Private session</span>
+            </label>
+            <div class="ns-hidden-note">Stored outside backed-up session folders</div>
           </div>
 
           <div class="ns-config-readout" id="nsHarnessConfig" style="display:none">

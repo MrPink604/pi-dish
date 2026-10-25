@@ -5874,6 +5874,23 @@ body.standalone-file-page {
 .ns-select:focus { border-color: var(--accent); }
 .ns-select:disabled { opacity: .55; cursor: not-allowed; }
 .ns-hidden-note { font-size: 11px; color: var(--text-muted); }
+/* Private-session opt-in: the same native checkbox the harness settings rows
+   use, sized for the takeover's 13px option controls. */
+.ns-private-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.ns-private-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .ns-config-readout {
   padding: 10px 12px;
   border: 1px solid var(--line);
@@ -7619,6 +7636,27 @@ mark.comment-mark {
   font-size: 9px;
   line-height: 14px;
   white-space: nowrap;
+}
+
+/* Private session: its transcript lives outside every backed-up folder.
+   Cyan separates it from the routine (yellow) and hibernation (blue) chips
+   it sits beside, and marks configuration rather than runtime state. */
+.private-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 40%, transparent);
+  background: color-mix(in srgb, var(--cyan) 8%, transparent);
+  border-radius: 8px;
+  color: color-mix(in srgb, var(--cyan) 55%, var(--text-muted));
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.private-badge {
+  color: color-mix(in srgb, var(--cyan) 80%, var(--text-muted));
+  background: color-mix(in srgb, var(--cyan) 14%, transparent);
 }
 
 /* Routines on phones: one column at a time. Lives after the base rules so

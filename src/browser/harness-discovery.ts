@@ -3,6 +3,8 @@ export interface HarnessRow {
   readonly id: string;
   readonly label?: string;
   readonly available?: unknown;
+  /** The host can launch this harness with its session dir outside backups. */
+  readonly privateSessions?: boolean;
   readonly pilotConfig?: unknown;
   readonly [field: string]: unknown;
 }
@@ -25,7 +27,8 @@ function decodeRows(data: unknown): HarnessRow[] {
   return rows.flatMap(value => {
     if (!value || typeof value !== 'object' || !('id' in value) || typeof value.id !== 'string' || !value.id) return [];
     const row: HarnessRow = { ...value, id: value.id,
-      label: 'label' in value && typeof value.label === 'string' ? value.label : undefined };
+      label: 'label' in value && typeof value.label === 'string' ? value.label : undefined,
+      privateSessions: 'privateSessions' in value && value.privateSessions === true };
     return [row];
   });
 }

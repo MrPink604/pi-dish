@@ -8,6 +8,7 @@ import { harnessLaunchSpec } from './harness-launch-spec';
 import { createRPCSession, resumeRPCSession } from './rpc-session';
 import { REGISTRY_DIR, getRegisteredSessionByNativeId, invalidateRegistryCache, pruneRegisteredSession, sameRegistryClaim, validRegistryClaimShape } from './bridge-session';
 import { primeWorkerTarget } from './prime-lifecycle';
+import { ensurePrivateRoot, privateRootFor } from './private-sessions';
 import { LifecycleInterruption, proveBridgeRegistryClaim, registryIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
 import type { BeforeLifecycleAction } from './session-ownership';
 import { formatModelRef, parseModelId } from './helper-models';
@@ -43,6 +44,8 @@ export interface NewSessionLaunchOptions {
   descriptor: HarnessDescriptor;
   name?: string | null;
   target?: HarnessLaunchTarget | null;
+  /** Keep the transcript in the harness's private root (outside fleet backups). */
+  private?: boolean;
 }
 
 export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
@@ -531,11 +534,16 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     }
   }
 
-  async function launchNewSession({ descriptor, name, model, thinking, cwd, target }: NewSessionLaunchOptions): Promise<LaunchOutcome> {
+  async function launchNewSession({ descriptor, name, model, thinking, cwd, target, private: privateSession = false }: NewSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
       // Original dynamic calls own malformed-cwd failures; the assertions do not validate cwd.
       if (cwd && (cwd as string).startsWith('~')) cwd = path.join(process.env.HOME!, (cwd as string).slice(1).replace(/^\//, ''));
-      const args = descriptor.argv.new({ model: model ?? undefined, thinking: thinking ?? undefined });
+      const sessionDir = privateSession ? privateRootFor(descriptor) : null;
+      if (privateSession && !sessionDir) throw new LaunchError(`${descriptor.label} does not support private sessions.`, 400);
+      if (sessionDir) ensurePrivateRoot(sessionDir);
+      const args = descriptor.argv.new({
+        model: model ?? undefined, thinking: thinking ?? undefined, ...(sessionDir ? { sessionDir } : {}),
+      });
       if (target?.type === 'tmux') return await spawnHarnessInTmux({ descriptor, target, args, cwd, name });
       if (headlessTmuxEnabled(descriptor)) {
         const outcome = await spawnHarnessHeadlessTmux({ descriptor, args, cwd, name });
@@ -544,7 +552,10 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
         console.error('Headless tmux spawn failed — falling back to an RPC child:', errorMessage(outcome.error));
       }
       if (!descriptor.rpcFallback) return forbidden(new LaunchError(`${descriptor.label} requires tmux and does not support RPC fallback.`, 400));
-      const rpc = await createRPCSession({ model: model ?? undefined, thinking: thinking ?? undefined, cwd: cwd ?? undefined });
+      const rpc = await createRPCSession({
+        model: model ?? undefined, thinking: thinking ?? undefined, cwd: cwd ?? undefined,
+        ...(sessionDir ? { sessionDir } : {}),
+      });
       return { kind: 'ready', id: rpc.id };
     } catch (error) { return forbidden(error); }
   }

@@ -91,7 +91,7 @@ const COMMANDS = [
     },
     {
         name: 'spawn',
-        usage: 'spawn [--cwd DIR] [--name NAME] [--harness ID] [--model REF] [--prompt TEXT] [--no-wait] [--host NAME] [--json]',
+        usage: 'spawn [--cwd DIR] [--name NAME] [--harness ID] [--model REF] [--prompt TEXT] [--private] [--no-wait] [--host NAME] [--json]',
         summary: 'Start an ordinary, durable session (not a subagent) and optionally give it its first prompt.',
         flags: [
             ['--cwd DIR', 'working directory for the new session'],
@@ -99,6 +99,7 @@ const COMMANDS = [
             ['--harness ID', 'coding agent to run (default: the harness this session itself runs on)'],
             ['--model REF', 'canonical provider/id model ref (default: the host default)'],
             ['--prompt TEXT', 'first prompt, sent once the session is ready'],
+            ['--private', 'keep the transcript outside the fleet session backup (pi/omp only)'],
             ['--no-wait', 'return the spawn id immediately instead of waiting for readiness'],
         ],
         example: 'spawn --cwd ~/work/api --name "index audit" --prompt "Audit the session index caps"',
@@ -283,7 +284,7 @@ const VALUE_FLAGS = new Map([
     ['--host', 'host'], ['--before', 'before'],
 ]);
 const BOOL_FLAGS = new Map([
-    ['--json', 'json'], ['--active', 'active'], ['--no-wait', 'no_wait'],
+    ['--json', 'json'], ['--active', 'active'], ['--no-wait', 'no_wait'], ['--private', 'private'],
     ['--thinking', 'thinking'], ['--all-hosts', 'all_hosts'],
 ]);
 function parseArgs(argv) {
@@ -941,6 +942,8 @@ async function main() {
                 body.cwd = args.cwd;
             if (args.model)
                 body.model = args.model;
+            if (args.private)
+                body.private = true;
             const { data } = await createSpawn(base, hostFlag, body, callerId);
             if (args.no_wait)
                 return print({ ...core.record(data ?? {}), harness }, args.json);

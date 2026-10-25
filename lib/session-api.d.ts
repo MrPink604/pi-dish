@@ -53,6 +53,8 @@ export interface SessionFields<Timestamp = string | number> {
     searchSnippet?: string;
     searchScore?: number;
     hibernation?: HibernationState | null;
+    /** Transcript lives in the harness's private root, outside fleet backups. */
+    private?: boolean;
 }
 /** Legacy wire helper compatibility; authoritative browser state uses SessionRow. */
 export interface SessionMetadata extends Record<string, unknown>, Pick<SessionFields, 'name' | 'model' | 'harnessId' | 'thinkingLevel' | 'isActive' | 'capabilities'> {

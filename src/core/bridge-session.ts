@@ -22,6 +22,7 @@ import { processIdentity, processIdentityAlive } from './process-identity';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { createExtensionUIState, reduceExtensionUIState } from './extension-ui-state';
 import { listHarnesses } from './harnesses';
+import { privateRootFor } from './private-sessions';
 
 import { validSessionId } from './session-key';
 import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, RunningToolCall } from './contracts';
@@ -110,14 +111,19 @@ function registryHarnessId(input: unknown): unknown {
 // cover wrapper profile trees like ~/.omp/profiles/<p>/agent/sessions.
 const FOREIGN_CONFIG_ROOTS = listHarnesses()
   .filter((descriptor) => descriptor.id !== 'pi')
-  .map((descriptor) => {
+  .flatMap((descriptor) => {
+    const roots: string[] = [];
     try {
       // rootPath is <configRoot>/<agent>/sessions; the config root is two
       // levels up.
-      return path.dirname(path.dirname(descriptor.rootPath()));
-    } catch { return null; }
+      roots.push(path.dirname(path.dirname(descriptor.rootPath())));
+    } catch { /* Unresolvable host config leaves the pid/file check. */ }
+    // A private root is directly a sessions directory, not a config tree.
+    const privateRoot = privateRootFor(descriptor);
+    if (privateRoot) roots.push(privateRoot);
+    return roots;
   })
-  .filter((root): root is string => typeof root === 'string' && root !== path.sep);
+  .filter((root) => root !== path.sep);
 
 function underAnyRoot(file: unknown, roots: string[]) {
   if (typeof file !== 'string' || !path.isAbsolute(file)) return false;

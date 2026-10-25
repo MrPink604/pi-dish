@@ -110,6 +110,7 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
         session.askPending ? 1 : 0, session.compacting ? 1 : 0,
         sessionSupports(session, 'close') ? 1 : 0, session.closeMode,
         session.contextPercent, session.contextTokens, session.cwd, session.routine, session.routineId,
+        session.private ? 1 : 0,
         session.parentId, session.parentSource, session.familyParentId, session.searchScore,
         session.searchSnippet, session.lastActivity, relativeTimeFingerprint(session.lastActivity, now),
         cacheExpiryFingerprint(session.cacheExpiry, now), options.unread(session) ? 1 : 0,
@@ -234,6 +235,11 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const hibernationChip = session.hibernation
     ? `<span class="hibernation-chip" title="${escapeHtml(hibernationSummary(session.hibernation))}">hibernated</span>`
     : '';
+  // The transcript lives outside every backed-up session folder; the chip is
+  // the only on-row signal of that, since privacy is a launch decision.
+  const privateChip = session.private
+    ? '<span class="private-chip" title="Private session — stored outside backed-up session folders">private</span>'
+    : '';
   // Rows in the pinned section get a drag handle (reorder); pinned and
   // Recent-view rows get a cwd hint — they've left their workspace group,
   // so the group label isn't there.
@@ -275,7 +281,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
         ${cacheHtml}<span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
       </div>
       <div class="session-item-tags${hostChip ? ' with-host' : ''}">
-        ${hostChip}${harnessBadge}${routineChip}${hibernationChip}${cwdHint}
+        ${hostChip}${harnessBadge}${routineChip}${hibernationChip}${privateChip}${cwdHint}
       </div>
       ${snippetLine}
     </div>

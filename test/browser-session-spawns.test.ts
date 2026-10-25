@@ -50,7 +50,7 @@ test('submitted spawns copy their host, target and draft before acceptance and k
   const f = fixture(), endpoint = { ...host };
   const target: { type: 'tmux'; socket: string; tmuxSession: string } = { type: 'tmux', socket: '/sock', tmuxSession: 'original' };
   let owned = true;
-  const input = { host: endpoint, cwd: '/old', draft: 'old draft', target, ownsView: () => owned };
+  const input = { host: endpoint, cwd: '/old', draft: 'old draft', target, ownsView: () => owned, private: true };
   const submit = f.controller.submit(input);
   endpoint.base = '/changed'; endpoint.token = 'changed'; target.tmuxSession = 'changed'; input.draft = 'new draft'; owned = false;
   present(f.reads[0]).resolve(response({ spawnId: 'op' })); const key = await submit;
@@ -58,7 +58,9 @@ test('submitted spawns copy their host, target and draft before acceptance and k
   assert.equal(typeof statusRead.host === 'object' && statusRead.host ? statusRead.host.base : undefined, '/a');
   assert.equal(typeof statusRead.host === 'object' && statusRead.host ? statusRead.host.token : undefined, 'fixture');
   if (typeof kickoff.init?.body !== 'string') throw new Error('Spawn kickoff lacks JSON body');
-  assert.equal(plain(JSON.parse(kickoff.init.body)).target.tmuxSession, 'original');
+  const body = plain(JSON.parse(kickoff.init.body));
+  assert.equal(body.target.tmuxSession, 'original');
+  assert.equal(body.private, true);
   assert.equal(f.drafts.get(key), 'old draft'); assert.ok(!f.events.some(event => event[0] === 'show'));
   statusRead.resolve(response({ status: 'ready', sessionId: 'session' })); await settle();
   assert.equal(f.controller.has(key), false);
@@ -69,6 +71,7 @@ test('submitted spawns copy their host, target and draft before acceptance and k
 test('identical operation ids from different hosts remain distinct and readiness selects only the current one', async () => {
   const f = fixture();
   const first = f.controller.submit({ host, ownsView: () => true });
+  assert.equal(JSON.parse(String(present(f.reads[0]).init?.body)).private, undefined);
   present(f.reads[0]).resolve(response({ spawnId: 'same' })); const a = await first;
   const second = f.controller.submit({ host: { hostId: 'b', base: '/b' }, ownsView: () => true });
   present(f.reads[2]).resolve(response({ spawnId: 'same' })); const b = await second;

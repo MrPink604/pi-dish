@@ -244,6 +244,7 @@ if (harnessId === 'prime' && !process.env.PI_FIXTURE_PRIME_WORKER) {
 
 const sessionFlag = harnessId === 'pi' ? '--session' : '--resume';
 const sessionIdx = args.indexOf(sessionFlag);
+const sessionDirIdx = args.indexOf('--session-dir');
 let sessionFile;
 let sessionId;
 if (sessionIdx >= 0 && args[sessionIdx + 1]) {
@@ -251,9 +252,12 @@ if (sessionIdx >= 0 && args[sessionIdx + 1]) {
   sessionId = path.basename(sessionFile, '.jsonl');
 } else {
   sessionId = '2026-07-09T00-00-00-' + (token.slice(0, 8) || 'newsess1');
-  sessionFile = harnessId === 'prime'
-    ? path.join(home, '.prime', 'agent', 'sessions', sessionId + '.jsonl')
-    : path.join(home, harnessId === 'omp' ? '.omp' : '.pi', 'agent', 'sessions', 'proj', sessionId + '.jsonl');
+  // A private launch writes a flat <ts>_<uuid>.jsonl into the alternate dir.
+  sessionFile = sessionDirIdx >= 0 && args[sessionDirIdx + 1]
+    ? path.join(args[sessionDirIdx + 1], sessionId + '.jsonl')
+    : harnessId === 'prime'
+      ? path.join(home, '.prime', 'agent', 'sessions', sessionId + '.jsonl')
+      : path.join(home, harnessId === 'omp' ? '.omp' : '.pi', 'agent', 'sessions', 'proj', sessionId + '.jsonl');
 }
 
 // Never register — exercises the server's 30s spawn timeout path.

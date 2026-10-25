@@ -22,6 +22,7 @@ const path = require("node:path");
 const net = require("node:net");
 const node_child_process_1 = require("node:child_process");
 const { encodeSessionKey, VERSION: SESSION_KEY_VERSION } = require('../lib/session-key');
+const { privateRootPath } = require('../lib/private-sessions');
 const { createLineSplitter } = require('../lib/line-splitter');
 const { processIdentityAlive } = require('../lib/process-identity');
 function processEvidence(value) {
@@ -225,6 +226,39 @@ test('POST /api/sessions/new with a tmux target spawns and returns the registere
     assert.equal(current, '0', `session's current window unchanged (got ${current})`);
     const panes = tmuxCmd(['list-panes', '-s', '-t', 'work', '-F', '#{pane_id}']).trim().split('\n');
     assert.ok(panes.includes(spawn.paneId), 'pi pane exists in the session');
+});
+test('POST /api/sessions/new with private:true writes under the private root and lists the row as private', { skip: !tmuxOk }, async () => {
+    const { status, body } = await post('/api/sessions/new', {
+        private: true,
+        target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+    });
+    assert.equal(status, 200, JSON.stringify(body));
+    const privateRoot = privateRootPath('pi');
+    const registry = (0, test_types_js_1.record)(JSON.parse(fs.readFileSync(path.join(tmpHome, '.pi', 'dish', 'sessions', `${text(body.id)}.json`), 'utf8')));
+    assert.ok(Array.isArray(registry.launchArgs), 'registry records the launch argv');
+    const launchArgs = registry.launchArgs.map(String);
+    const dirIndex = launchArgs.indexOf('--session-dir');
+    assert.ok(dirIndex >= 0, `private spawn passes --session-dir: ${JSON.stringify(launchArgs)}`);
+    assert.equal(launchArgs[dirIndex + 1], privateRoot);
+    assert.equal(path.dirname(String(registry.sessionFile)), privateRoot, 'the transcript lands in the private root');
+    assert.equal(fs.statSync(privateRoot).mode & 0o777, 0o700, 'the private root is owner-only');
+    let row;
+    for (let i = 0; i < 10 && !row; i++) {
+        const list = await get('/api/sessions?active=1');
+        row = (0, test_types_js_1.records)(list.body.active).find(session => session.id === body.id);
+        if (!row)
+            await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    assert.ok(row, 'private session is listed as active');
+    assert.equal(row.private, true, 'the live-registry-only row carries the private flag');
+});
+test('POST /api/sessions/new rejects private for an unsupported harness and non-boolean input', async () => {
+    const unsupported = await post('/api/sessions/new', { harness: 'prime', private: true });
+    assert.equal(unsupported.status, 400);
+    assert.equal(unsupported.body.error, 'Prime Agent does not support private sessions.');
+    const malformed = await post('/api/sessions/new', { private: 'yes' });
+    assert.equal(malformed.status, 400);
+    assert.equal(malformed.body.error, 'private must be a boolean');
 });
 test('OMP spawn omits the launch wrapper when the discovery bridge is installed', { skip: !tmuxOk }, async () => {
     // install.sh links the bridge into OMP's extension discovery dir; a spawn

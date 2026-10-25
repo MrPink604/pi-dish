@@ -4,6 +4,7 @@ import type { HarnessDescriptor, HarnessId, ResumeFileOptions, ResumeOptions } f
 import os = require('os');
 import path = require('path');
 import { runtimeResourcePath } from './runtime-resources';
+import { privateRootPath } from './private-sessions';
 
 // Deliberately data-only: launch/RPC modules consume this registry, never the
 // reverse, which keeps harness selection free of the rpc-session dependency.
@@ -32,13 +33,17 @@ function primeResume({ file, model }: ResumeOptions = {}): (string | undefined)[
 const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
   pi: {
     id: 'pi', label: 'Pi', wrapperEntrypoint: null, eventProfile: 'pi-v3', profileId: 'pi-v3', profileVersion: 1,
-    rootPath: () => path.join(os.homedir(), '.pi', 'agent', 'sessions'), layout: 'nested', commandEnv: 'PI_DISH_PI_COMMAND',
+    rootPath: () => path.join(os.homedir(), '.pi', 'agent', 'sessions'),
+    privateRootPath: () => privateRootPath('pi'), layout: 'nested', commandEnv: 'PI_DISH_PI_COMMAND',
     command: 'pi', rpcFallback: true, modelCatalog: 'pi-sdk', closeMode: 'logical',
-    argv: { new: ({ model, thinking } = {}) => [...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : [])], resume: piResume, models: ['--list-models'] },
+    // `--session-dir` is appended last: the launch wrapper replaces the argv
+    // entry equal to wrapperEntrypoint and must keep `--extension` adjacent.
+    argv: { new: ({ model, thinking, sessionDir } = {}) => [...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : []), ...(sessionDir ? ['--session-dir', sessionDir] : [])], resume: piResume, models: ['--list-models'] },
   },
   omp: {
     id: 'omp', label: 'Oh My Pi', wrapperEntrypoint: bridge('omp'), eventProfile: 'omp-v1', profileId: 'omp-v1', profileVersion: 1,
     rootPath: () => path.join(os.homedir(), '.omp', 'agent', 'sessions'), layout: 'nested', nestedSubsessions: true,
+    privateRootPath: () => privateRootPath('omp'),
     // OMP's SESSION_EXIT_CUSTOM_TYPE (session/exit-diagnostics): a `custom`
     // entry it appends when a session is disposed — including when a kept
     // alive subagent is parked. A subagent JSONL whose *last* entry is this
@@ -172,7 +177,7 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
       requireArgs: true,
     }],
     argv: {
-      new: ({ model, thinking } = {}) => ['--extension', bridge('omp'), ...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : [])],
+      new: ({ model, thinking, sessionDir } = {}) => ['--extension', bridge('omp'), ...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : []), ...(sessionDir ? ['--session-dir', sessionDir] : [])],
       resume: ompResume,
       export: ({ file, output }) => ['--export', file, output],
       models: ['models', '--json'],

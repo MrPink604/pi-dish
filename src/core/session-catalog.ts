@@ -4,6 +4,7 @@ import type { ServedCacheExpiry } from './cache-lifetime';
 import { loadCacheRetentionConfig } from './cache-retention';
 import { hasPendingAskDialog } from './extension-ui-state';
 import { canonicalSessionId, encodeSessionKey } from './session-key';
+import { isPrivateSessionFile } from './private-sessions';
 import { isRecord } from './wire-protocol';
 import type { HarnessId, NativeSessionId, SessionId } from './contracts';
 import type { SessionInfo } from './session-metadata-contracts';
@@ -141,6 +142,7 @@ function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalo
   const model = registered ? fields.model || info?.model : fields.model;
   const percent = registered ? fields.contextPercent ?? info?.contextPercent : fields.contextPercent;
   const parentSession = live.info?.parentSession || (registered ? live.source?.parentSession : null) || null;
+  const harness = options.harnesses.get(live.harnessId);
   return {
     ...identityFields(live.harnessId, live.nativeSessionId, options),
     capabilities: { ...live.advice.capabilities }, closeMode: live.advice.closeMode,
@@ -160,6 +162,7 @@ function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalo
     parentSession,
     parentSessionSource: registered && !live.info?.parentSession && live.source?.parentSession ? 'omp-subsession-layout' : null,
     pid: live.pid || null,
+    ...(isPrivateSessionFile(harness, live.claimedFile || live.source?.file) ? { private: true } : {}),
   };
 }
 
@@ -181,6 +184,7 @@ function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advic
     ...(liveChild ? { subagentLive: true } : {}),
     cwd, sessionFile: source.file, parentSession: info.parentSession || source.parentSession || null,
     parentSessionSource: !info.parentSession && source.parentSession ? 'omp-subsession-layout' : null,
+    ...(isPrivateSessionFile(options.harnesses.get(source.harnessId), source.file) ? { private: true } : {}),
   };
 }
 function buildSourceSession(source: SessionSource, info: Readonly<SessionInfo>, advice: CatalogAdvice,

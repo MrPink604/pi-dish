@@ -9,6 +9,7 @@ import { inspectProcessAncestry, processIdentity, processIdentityAlive } from '.
 import { primeWorkerTarget } from './prime-lifecycle';
 import { encodeSessionKey, resolveSessionRoute, validSessionId, VERSION } from './session-key';
 import { createSessionSourceResolver } from './session-source';
+import { sessionRootsFor } from './private-sessions';
 import { discoverSubsessionCandidates, findSessionCandidate, readSessionHeader } from './session-discovery';
 import type { DiscoveryCandidate, LiveSourceObservation, SessionSource, SessionSourceResolver } from './session-source-contracts';
 import { record } from './helper-values';
@@ -248,19 +249,28 @@ export function validateRecoveryRecord(saved: RecoveryRecord): SessionSource {
     throw new OwnershipRefusal('Recovery requires an absolute saved transcript and original working directory.');
   }
   let file: string;
-  let root: string;
   try {
     file = fs.realpathSync(saved.sessionFile);
-    root = fs.realpathSync(descriptor.rootPath());
     if (!fs.statSync(saved.cwd).isDirectory()) throw new Error('not a directory');
     if (!fs.statSync(file).isFile()) throw new Error('not a file');
   } catch {
     throw new OwnershipRefusal('The saved transcript or original working directory is missing or unreadable; recovery does not fall back to HOME.');
   }
-  if (!file.startsWith(root + path.sep)) throw new OwnershipRefusal('The saved transcript is outside this harness session store.');
-  const discovery = findSessionCandidate(descriptor.rootPath(), saved.nativeSessionId, { descriptor, allowPartial: false });
-  const source = discovery.candidate;
-  if (discovery.truncated || !source || fs.realpathSync(source.file) !== file || !readSessionHeader(file, descriptor.profileId)) {
+  const roots = sessionRootsFor(descriptor);
+  const contained = roots.some(({ root }) => {
+    try { return file.startsWith(fs.realpathSync(root) + path.sep); } catch { return false; }
+  });
+  if (!contained) throw new OwnershipRefusal('The saved transcript is outside this harness session store.');
+  let source: DiscoveryCandidate | null = null;
+  for (const { root, singleWorkspace, private: privateRoot } of roots) {
+    const discovery = findSessionCandidate(root, saved.nativeSessionId, {
+      descriptor, allowPartial: false, singleWorkspace, private: privateRoot,
+    });
+    // A truncated scan cannot prove the exact identity either way.
+    if (discovery.truncated) throw new OwnershipRefusal('The exact saved transcript identity cannot be verified unambiguously.');
+    if (discovery.candidate) { source = discovery.candidate; break; }
+  }
+  if (!source || fs.realpathSync(source.file) !== file || !readSessionHeader(file, descriptor.profileId)) {
     throw new OwnershipRefusal('The exact saved transcript identity cannot be verified unambiguously.');
   }
   if (descriptor.nestedSubsessions && (source.parentSession || fs.existsSync(`${path.dirname(file)}.jsonl`))) {

@@ -278,6 +278,8 @@ export const harnesses: Handler = (_req, res) => {
       available: harnessCommandAvailable(descriptor),
       rpcFallback: descriptor.rpcFallback,
       closeMode: descriptor.closeMode,
+      // Can this harness keep a transcript outside the fleet session backup?
+      privateSessions: typeof descriptor.privateRootPath === 'function',
       // Does this harness have a settings view at all: pilot defaults plus
       // model roles, and (OMP only so far) the task-agent hub.
       pilotConfig: !!descriptor.pilotConfig,

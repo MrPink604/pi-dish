@@ -11,11 +11,13 @@ const { registry } = require('../lib/harnesses');
 const { encodeSessionKey } = require('../lib/session-key');
 const { discoverHarnessSessions, readSessionHeader } = require('../lib/session-discovery');
 const { createSessionSourceResolver, sourceForIdentity } = require('../lib/session-source');
-function fixture(t) {
+const { validateRecoveryRecord, OwnershipRefusal } = require('../lib/session-ownership');
+const { bootId } = require('../lib/session-recovery');
+function fixture(t, overrides = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dish-source-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const roots = Object.fromEntries(['pi', 'omp', 'prime'].map(id => [id, path.join(dir, id)]));
-    const resolver = createSessionSourceResolver({ roots });
+    const resolver = createSessionSourceResolver({ roots, ...overrides });
     t.after(() => resolver.clear());
     const write = (file, id) => {
         fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -182,4 +184,63 @@ test('route invalidation retires canonical and partial aliases while retaining u
         fs.openSync = originalOpen;
         fs.opendirSync = originalOpenDir;
     }
+});
+test('cold lookup resolves flat private-root files for pi and omp', t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dish-source-private-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const privateRoots = { pi: path.join(dir, 'pi'), omp: path.join(dir, 'omp') };
+    const resolver = createSessionSourceResolver({
+        roots: Object.fromEntries(['pi', 'omp', 'prime'].map(id => [id, path.join(dir, 'unused-' + id)])),
+        privateRoots,
+    });
+    t.after(() => resolver.clear());
+    const write = (file, id) => {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({ type: 'session', id, cwd: '/workspace' }) + '\n');
+        return file;
+    };
+    const piFile = write(path.join(privateRoots.pi, '2026-01-01_private-pi.jsonl'), 'private-pi');
+    const ompFile = write(path.join(privateRoots.omp, '2026-01-01_private-omp.jsonl'), 'private-omp');
+    // Basename identity is what the private walk assigns to flat files.
+    assert.equal((0, test_types_js_1.present)(resolver.resolve({ route: '2026-01-01_private-pi', live: [] })).file, piFile);
+    assert.equal((0, test_types_js_1.present)(resolver.resolve({
+        route: encodeSessionKey('omp', (0, test_types_js_1.nativeId)('2026-01-01_private-omp')), live: [],
+    })).file, ompFile);
+    assert.equal(resolver.resolve({ route: '2026-01-01_private-missing', live: [] }), null);
+});
+test('recovery validation accepts a private-root transcript and refuses an outside file', { skip: bootId() === null }, t => {
+    const realHome = process.env.HOME;
+    const realStateHome = process.env.XDG_STATE_HOME;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dish-recovery-private-'));
+    t.after(() => {
+        process.env.HOME = realHome;
+        if (realStateHome === undefined)
+            delete process.env.XDG_STATE_HOME;
+        else
+            process.env.XDG_STATE_HOME = realStateHome;
+        fs.rmSync(home, { recursive: true, force: true });
+    });
+    process.env.HOME = home;
+    delete process.env.XDG_STATE_HOME;
+    const privateRoot = path.join(home, '.local', 'state', 'pi-dish', 'private-sessions', 'pi');
+    const cwd = path.join(home, 'work');
+    fs.mkdirSync(privateRoot, { recursive: true });
+    fs.mkdirSync(cwd);
+    const id = 'private-recovery';
+    const file = path.join(privateRoot, `${id}.jsonl`);
+    fs.writeFileSync(file, JSON.stringify({ type: 'session', id, cwd }) + '\n');
+    const checkpoint = () => {
+        const stat = fs.statSync(file);
+        return { size: stat.size, mtimeMs: stat.mtimeMs };
+    };
+    const record = {
+        version: 1, harnessId: 'pi', nativeSessionId: id, sessionFile: file, cwd,
+        name: null, model: null, thinkingLevel: null, pid: 999999, startTime: '1', instanceId: 'fixture',
+        activity: 'idle', runId: null, shutdown: false, bootId: bootId(), checkpoint: checkpoint(),
+        observationId: 'observation', updatedAt: new Date().toISOString(),
+    };
+    assert.equal(validateRecoveryRecord(record).file, file, 'a private-root transcript is a valid recovery source');
+    const outside = path.join(home, 'outside.jsonl');
+    fs.writeFileSync(outside, fs.readFileSync(file));
+    assert.throws(() => validateRecoveryRecord({ ...record, sessionFile: outside }), OwnershipRefusal, 'an outside file is refused even with a valid header and checkpoint');
 });

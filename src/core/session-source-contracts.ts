@@ -15,6 +15,8 @@ export interface DiscoveryCandidate extends SessionSource {
   readonly dirName: string;
   readonly depth: number;
   readonly identitySource: 'basename' | 'header';
+  /** Present and true only for a transcript inside the harness's private root. */
+  readonly private?: boolean;
 }
 export interface DiscoveryResult {
   readonly candidates: readonly DiscoveryCandidate[];
@@ -30,6 +32,14 @@ export interface DiscoveryOptions {
   readonly maxFiles?: number;
   readonly maxEntries?: number;
   readonly excludeIds?: ReadonlySet<NativeSessionId> | readonly NativeSessionId[];
+  /**
+   * Walk `root` itself as one workspace (`walk(root, basename(root), 0)`)
+   * instead of treating its children as workspace directories. Private roots
+   * hold flat `<ts>_<id>.jsonl` files even for nested-layout harnesses.
+   */
+  readonly singleWorkspace?: boolean;
+  /** The walked root is a private root: every candidate from it is private. */
+  readonly private?: boolean;
 }
 export interface LiveSourceObservation {
   readonly kind: 'registered' | 'rpc';

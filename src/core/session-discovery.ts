@@ -2,6 +2,7 @@ import fs = require('fs');
 import path = require('path');
 import { encodeSessionKey, canonicalSessionId, validSessionId } from './session-key';
 import { getHarness, listHarnesses } from './harnesses';
+import { isPrivateSessionFile, sessionRootsFor } from './private-sessions';
 import { isRecord } from './wire-protocol';
 import type { HarnessDescriptor, HarnessId, NativeSessionId } from './contracts';
 import type { DiscoveryCandidate, DiscoveryOptions } from './session-source-contracts';
@@ -14,7 +15,10 @@ interface CandidateHint {
   identitySource: 'basename' | 'header'; parentSession?: string;
 }
 interface Result { candidates: Candidate[]; truncated: boolean; skipped: number; }
-interface HarnessDiscoveryOptions extends DiscoveryOptions { roots?: Partial<Record<HarnessId, string>>; }
+interface HarnessDiscoveryOptions extends DiscoveryOptions {
+  roots?: Partial<Record<HarnessId, string>>;
+  privateRoots?: Partial<Record<HarnessId, string>>;
+}
 interface FindOptions extends DiscoveryOptions { allowPartial?: boolean; }
 
 
@@ -126,6 +130,7 @@ function decorateCandidate(candidate: CandidateHint, descriptor: HarnessDescript
     sessionKey,
     routeId: canonicalSessionId(sessionKey),
     parentSession: candidate.parentSession ?? null,
+    ...(options.private || isPrivateSessionFile(descriptor, candidate.file) ? { private: true } : {}),
   };
 }
 
@@ -290,7 +295,9 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
     });
   };
 
-  if (descriptor.layout === 'flat') {
+  if (options.singleWorkspace) {
+    walk(rootDir, path.basename(rootDir), 0);
+  } else if (descriptor.layout === 'flat') {
     eachEntry(rootDir, (entry) => {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) return;
       if (filesSeen >= maxFiles) { truncated = true; return; }
@@ -336,18 +343,28 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
   return { candidates, truncated, skipped };
 }
 
-/** Discover configured harness roots while retaining per-harness identity. */
+/**
+ * Discover configured harness roots while retaining per-harness identity.
+ * The ordinary root precedes the private root, so if both somehow hold one
+ * native id, the ordinary store keeps the route (first wins).
+ */
 function discoverHarnessSessions(descriptors: readonly HarnessDescriptor[] = listHarnesses(), options: HarnessDiscoveryOptions = {}): Result {
-  const candidates: Candidate[] = [];
+  const byKey = new Map<string, Candidate>();
   let truncated = false;
   let skipped = 0;
   for (const descriptor of descriptors) {
-    const root = options.roots?.[descriptor.id] || descriptor.rootPath();
-    const result = discoverSessionCandidates(root, { ...options, descriptor });
-    candidates.push(...result.candidates);
-    truncated ||= result.truncated;
-    skipped += result.skipped;
+    for (const sessionRoot of sessionRootsFor(descriptor, options)) {
+      const result = discoverSessionCandidates(sessionRoot.root, {
+        ...options, descriptor, singleWorkspace: sessionRoot.singleWorkspace, private: sessionRoot.private,
+      });
+      for (const candidate of result.candidates) {
+        if (!byKey.has(candidate.sessionKey)) byKey.set(candidate.sessionKey, candidate);
+      }
+      truncated ||= result.truncated;
+      skipped += result.skipped;
+    }
   }
+  const candidates = [...byKey.values()];
   candidates.sort((a, b) => a.sessionKey.localeCompare(b.sessionKey));
   return { candidates, truncated, skipped };
 }

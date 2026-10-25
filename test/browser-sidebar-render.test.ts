@@ -95,6 +95,17 @@ test('server content search stays authoritative while scopes and automation rema
   assert.match(scoped.html, /1 hidden by scopes/);
 });
 
+test('sidebar chips a private session and rebuilds when privacy changes', () => {
+  const row = (isPrivate?: boolean) => ({ id: 's', name: 'Session', cwd: '/repo', private: isPrivate });
+  const memo = {};
+  const plain = renderSidebar(options({ previous: [row()] }), memo);
+  assert.doesNotMatch(plain.html, /private-chip/);
+  const secret = renderSidebar(options({ previous: [row(true)] }), memo);
+  assert.notEqual(secret, plain, 'a privacy change rebuilds the projection');
+  assert.match(secret.html, /<span class="private-chip" title="Private session — stored outside backed-up session folders">private<\/span>/);
+  assert.equal(renderSidebar(options({ previous: [row(true)] }), memo), secret);
+});
+
 test('debounced ranking preserves metadata tie order under equal stale server scores', () => {
   const previous = [
     { id: 'metadata', name: 'Other', cwd: '/work', searchScore: 10, lastActivity: 1000 },

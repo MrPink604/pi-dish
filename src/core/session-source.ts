@@ -3,12 +3,14 @@ import path = require('path');
 import { getHarness, listHarnesses } from './harnesses';
 import { canonicalSessionId, encodeSessionKey, resolveSessionRoute, VERSION } from './session-key';
 import { clearSessionHeaders, findSessionCandidate, invalidateSessionHeader } from './session-discovery';
+import { sessionRootsFor } from './private-sessions';
 import type { HarnessDescriptor, HarnessId, NativeSessionId } from './contracts';
 import type { DiscoveryCandidate, SessionSource, SessionSourceResolver } from './session-source-contracts';
 
 interface ResolverOptions {
   readonly descriptors?: readonly HarnessDescriptor[];
   readonly roots?: Partial<Record<HarnessId, string>>;
+  readonly privateRoots?: Partial<Record<HarnessId, string>>;
 }
 
 function sourceWithDescriptor(descriptor: HarnessDescriptor, nativeSessionId: NativeSessionId, file: string): SessionSource {
@@ -35,7 +37,17 @@ function sourceForIdentity(harnessId: HarnessId, nativeSessionId: NativeSessionI
 function createSessionSourceResolver(options: ResolverOptions = {}): SessionSourceResolver {
   const descriptors = new Map((options.descriptors ?? listHarnesses()).map(descriptor => [descriptor.id, descriptor]));
   const routes = new Map<string, DiscoveryCandidate>();
-  const rootFor = (descriptor: HarnessDescriptor) => options.roots?.[descriptor.id] || descriptor.rootPath();
+  const rootsFor = (descriptor: HarnessDescriptor) => sessionRootsFor(descriptor, options);
+  const findInRoots = (descriptor: HarnessDescriptor, sessionId: NativeSessionId,
+    find: { allowPartial?: boolean; profileId?: string; profileVersion?: number } = {}) => {
+    for (const sessionRoot of rootsFor(descriptor)) {
+      const found = findSessionCandidate(sessionRoot.root, sessionId, {
+        descriptor, ...find, singleWorkspace: sessionRoot.singleWorkspace, private: sessionRoot.private,
+      }).candidate;
+      if (found) return found;
+    }
+    return null;
+  };
   const invalidate = (file: string): void => {
     for (const [key, candidate] of routes) if (candidate.file === file) routes.delete(key);
     invalidateSessionHeader(file);
@@ -72,19 +84,19 @@ function createSessionSourceResolver(options: ResolverOptions = {}): SessionSour
         if (cached.identitySource === 'basename') return cached;
         // Every header-derived candidate needs corpus collision revalidation,
         // including OMP's named nested files, not just generic session.jsonl.
-        const current = findSessionCandidate(rootFor(descriptor), cached.nativeSessionId, {
-          descriptor, allowPartial: false,
+        const current = findInRoots(descriptor, cached.nativeSessionId, {
+          allowPartial: false,
           profileId: cached.profileId, profileVersion: cached.profileVersion,
-        }).candidate;
+        });
         for (const [alias, candidate] of routes) if (candidate.file === cached.file) routes.delete(alias);
         if (!current) return null;
         routes.set(key, current);
         return current;
       }
       if (cached) invalidate(cached.file);
-      const candidate = findSessionCandidate(rootFor(descriptor), identity.nativeSessionId, {
-        descriptor, allowPartial: !exact,
-      }).candidate;
+      const candidate = findInRoots(descriptor, identity.nativeSessionId, {
+        allowPartial: !exact,
+      });
       if (!candidate) return null; // Never cache misses: a file may appear later.
       if (routes.size >= 500) routes.clear();
       routes.set(key, candidate);

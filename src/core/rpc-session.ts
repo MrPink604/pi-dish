@@ -470,6 +470,7 @@ async function createRPCSession(opts: RPCLaunchOptions = {}) {
   const args: unknown[] = ['--mode', 'rpc'];
   if (opts.model) args.push('--model', opts.model);
   if (opts.thinking) args.push('--thinking', opts.thinking);
+  if (opts.sessionDir) args.push('--session-dir', opts.sessionDir);
 
   const cwd = opts.cwd || process.env.HOME;
   const proc = spawnPi(args, cwd);

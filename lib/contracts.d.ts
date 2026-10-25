@@ -58,6 +58,8 @@ export interface ProcessAncestry {
 export interface LaunchOptions {
     model?: unknown;
     thinking?: unknown;
+    /** Alternate session directory (`--session-dir`); private roots only. */
+    sessionDir?: string;
 }
 /** Missing file remains representable: the legacy argv builders accept an empty options object. */
 export interface ResumeOptions {
@@ -92,6 +94,12 @@ export interface HarnessDescriptor {
     profileId: string;
     profileVersion: number;
     rootPath: () => string;
+    /**
+     * Alternate session directory that the fleet session backup never captures.
+     * Present only for harnesses whose CLI accepts `--session-dir`; resolved per
+     * call so tests can swap HOME. See src/core/private-sessions.ts.
+     */
+    privateRootPath?: () => string;
     layout: 'nested' | 'flat';
     commandEnv: string;
     command: string;
