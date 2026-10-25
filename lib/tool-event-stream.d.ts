@@ -1,5 +1,5 @@
 // Generated from src/core/tool-event-stream.ts; edit that source and run npm run build:core.
-/** Tool panels consume content, not harness-native task traces in result.details. */
+/** Tool panels consume content plus projected details, not harness-native traces in result.details. */
 export declare function projectToolEvent(event: string, value: unknown): unknown;
 export interface ToolEventStream {
     push(event: string, data: unknown): void;

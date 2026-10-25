@@ -1795,7 +1795,9 @@ per `toolCallId`, with a 50ms window implemented in `src/core/tool-event-stream.
 The bridge applies it **before** serializing to its Unix socket; SSE applies it
 again for RPC producers and older running bridges. Tool frames carry panel fields
 and result `content` (including images), not harness-native result `details` such
-as complete task-worker traces. Starts and completions remain immediate; pending
+as complete task-worker traces. The only details forwarded are an allow-list for
+OMP `bash` (wall time, exit code, timeout, background job id) and `wait` (job
+rows, output capped at 8000 chars). Starts and completions remain immediate; pending
 latest output flushes before completion/run-end, and session switches/disposal
 cancel old timers. Transcript JSONL is unchanged. Bridge-side reductions take
 effect when the harness next loads the updated extension; server-only updates
@@ -2416,7 +2418,13 @@ recognition errors are the user's to fix before the agent sees them.
   (`removeDuplicatedLiveContent`). `eval` (OMP) and `ipython` (Prime) open
   with the cell source while they run — title or first code line in the
   header, not the language argument — and keep that source above streamed
-  output. A start event that only carries `intent` uses that label instead
+  output. `bash` does the same with its command; the call block shows the
+  command plus cwd/timeout/background options and the result header carries
+  OMP's wall time, exit code and background job id
+  (`src/browser/tool-format.ts`). A backgrounded bash result stamps
+  `data-job-id`/`data-job-timeout-ms`; a running OMP `wait` reads it to show
+  each job's time left and the soonest return (first job deadline or OMP's
+  30-minute wait cap), ticking each second. A start event that only carries `intent` uses that label instead
   of a blank cursor. Gotchas: the older-messages scroll anchor
   must be a *top-level* child (elements inside a closed group have no box),
   and in-session search opens the enclosing group before scrolling to a match.

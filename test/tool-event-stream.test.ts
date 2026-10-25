@@ -80,3 +80,14 @@ test('tool projection keeps eval intent and code without reading result details'
     toolCallId: 'e', toolName: 'eval', args: { language: 'py', code: 'print(1)' }, intent: 'print one', startedAt: 1,
   });
 });
+
+test('bash and wait results keep only the timing, exit and job fields their panels format', () => {
+  const bash = projectToolEvent('tool_execution_end', { toolCallId: 'b', toolName: 'bash', isError: false, result: { content: [],
+    details: { wallTimeMs: 12.5, exitCode: 2, timeoutSeconds: 1800, wallTimeNoticeEmitted: false, meta: { big: true }, async: { state: 'running', jobId: 'bg_1', type: 'bash' } } } });
+  assert.deepEqual(JSON.parse(JSON.stringify(bash)).result.details, { wallTimeMs: 12.5, exitCode: 2, timeoutSeconds: 1800, async: { jobId: 'bg_1' } });
+  const wait = projectToolEvent('tool_execution_update', { toolCallId: 'w', toolName: 'wait', isError: false, partialResult: { content: [],
+    details: { op: 'wait', meta: { source: 'report' }, jobs: [{ id: 'bg_1', type: 'bash', status: 'running', label: 'npm test', durationMs: 5, widget: { blocks: [] }, resultText: 'x'.repeat(9000) }, 'bad'] } } });
+  const jobs = JSON.parse(JSON.stringify(wait)).partialResult.details.jobs;
+  assert.deepEqual(jobs.map((job: Record<string, unknown>) => Object.keys(job)), [['id', 'type', 'status', 'label', 'durationMs', 'resultText']]);
+  assert.equal(jobs[0].resultText.length, 8000);
+});

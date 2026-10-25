@@ -3,7 +3,8 @@ import type { Timestamp, RefContextEntry } from '../core/helper-types';
 import type { RenderMessage, MessageBlock, AdvisorNote } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { escapeHtml, truncate } from '../core/helper-format';
-import { formatTime, formatDuration, formatThinkingPreview, formatToolArguments } from './helper-format';
+import { formatTime, formatDuration, formatThinkingPreview } from './helper-format';
+import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary } from './tool-format';
 import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
 import { splitSessionRefContext } from '../core/helper-refs';
 export function createMessageRenderer(options: {
@@ -218,14 +219,14 @@ function renderThinkingBlock(thinking: string) {
 function renderToolCall(block: MessageBlock) {
   const args = block.arguments || {};
   const summary = getToolSummary(block.name || '', args);
-  const bodyHtml = `<pre><code>${escapeHtml(formatToolArguments(block.name, args))}</code></pre>`;
+  const bodyHtml = toolCallBodyHtml(block.name, args);
 
   return `<details class="tool-call">
     <summary class="tool-call-header">
       <span class="tool-call-icon">⚡</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
       ${summary ? `<span class="tool-call-summary">${escapeHtml(summary)}</span>` : ''}
     </summary>
-    <div class="tool-call-content">${bodyHtml}</div>
+    ${bodyHtml ? `<div class="tool-call-content">${bodyHtml}</div>` : ''}
   </details>`;
 }
 
@@ -241,28 +242,40 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
     content = parsed.output;
     if (parsed.exitCode !== 0) exitBadge = `<span class="tool-result-meta error-badge">exit ${parsed.exitCode}</span>`;
   }
+  const chip = (text: string, cls = '', title = '') =>
+    `<span class="tool-result-meta${cls ? ' ' + cls : ''}"${title ? ` title="${escapeHtml(title)}"` : ''}>${escapeHtml(text)}</span>`;
+  const details = msg.toolDetails;
+  const bashChips = details?.kind === 'bash' ? bashResultChipsHtml(details, chip) : '';
+  const statusShown = !!exitBadge || (details?.kind === 'bash' && ((details.exitCode ?? 0) !== 0 || details.timedOut));
+  const waitJobs = details?.kind === 'wait' && details.jobs.length ? details.jobs : null;
   const lines = content.split('\n');
   const lineCount = lines.length;
-  const preview = truncate(lines[0], 80);
+  const preview = waitJobs ? waitStatusSummary(waitJobs) : truncate(lines[0], 80);
+  const showLines = lineCount > 5 && !waitJobs;
   // A tool result carrying an image (e.g. a `read` on a PNG) opens by default
   // regardless of line count — seeing the image is the point — and flags it in
   // the header meta so it's discoverable when collapsed.
   const images = extractImageBlocks(msg.content);
   const imageCount = images.length;
   const imagesHtml = imageBlocksHtml(msg.content, 'tool result image');
+  // A wait snapshot reads as job rows (status, run time, output) instead of
+  // the model-facing markdown dump of the same data.
+  const bodyHtml = waitJobs
+    ? waitJobsHtml(waitJobs)
+    : `<pre>${escapeHtml(truncate(content, 2000))}</pre>`;
 
-  return `<div${attrs} class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}">
-    <details class="tool-result-details" ${(lineCount <= 5 || imageCount) ? 'open' : ''}>
+  return `<div${attrs} class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}"${details?.kind === 'bash' ? bashJobAttrs(details) : ''}>
+    <details class="tool-result-details" ${((lineCount <= 5 && !waitJobs) || imageCount) ? 'open' : ''}>
       <summary class="tool-result-header">
         <span class="tool-result-icon">${isError ? '✗' : '✓'}</span>
         <span class="tool-result-name">${escapeHtml(msg.toolName || 'result')}</span>
-        ${lineCount > 5 ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
+        ${showLines ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
         ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? 'image' : imageCount + ' images'}</span>` : ''}
-        ${exitBadge}
-        ${isError ? '<span class="tool-result-meta error-badge">error</span>' : ''}
-        ${lineCount > 5 ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
+        ${exitBadge}${bashChips}
+        ${isError && !statusShown ? '<span class="tool-result-meta error-badge">error</span>' : ''}
+        ${showLines || waitJobs ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
       </summary>
-      <div class="tool-result-content"><pre>${escapeHtml(truncate(content, 2000))}</pre>${imagesHtml}</div>
+      <div class="tool-result-content">${bodyHtml}${imagesHtml}</div>
     </details>
   </div>`;
 }

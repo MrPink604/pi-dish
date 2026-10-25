@@ -2,16 +2,21 @@ import type { SessionState, SelectionOwner } from './session-state';
 import { record, finite } from '../core/helper-values';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { parseIpythonResult, getToolSummary, getToolOutputText } from '../core/helper-content';
-interface ToolEvent { toolCallId: string; toolName?: string; args?: unknown; intent?: string; startedAt?: string | number; partialResult?: { content?: unknown }; result?: { content?: unknown }; isError: boolean }
+import { decodeToolDetails, toolSourceText, bashResultChipsHtml, bashJobAttrs, jobTimeoutMs, waitJobsHtml, formatSpan, WAIT_SAFETY_CAP_MS } from './tool-format';
+import type { ToolDetails, WaitJob } from './tool-format';
+interface ToolResultData { content?: unknown; details?: unknown }
+interface ToolEvent { toolCallId: string; toolName?: string; args?: unknown; intent?: string; startedAt?: string | number; partialResult?: ToolResultData; result?: ToolResultData; isError: boolean }
 function decode(value: unknown): ToolEvent | null {
   if (!record(value) || typeof value.toolCallId !== 'string' || !value.toolCallId) return null;
   return { toolCallId: value.toolCallId, toolName: typeof value.toolName === 'string' ? value.toolName : undefined, args: value.args,
     intent: typeof value.intent === 'string' && value.intent ? value.intent : undefined,
     startedAt: typeof value.startedAt === 'string' || finite(value.startedAt) ? value.startedAt : undefined,
-    partialResult: record(value.partialResult) ? { content: value.partialResult.content } : undefined,
-    result: record(value.result) ? { content: value.result.content } : undefined, isError: value.isError === true };
+    partialResult: record(value.partialResult) ? { content: value.partialResult.content, details: value.partialResult.details } : undefined,
+    result: record(value.result) ? { content: value.result.content, details: value.result.details } : undefined, isError: value.isError === true };
 }
-interface ToolPanel { owner: SelectionOwner; el: HTMLDetailsElement; startTime: number | null; toolName: string; args: unknown; intent?: string }
+/** Latest wait snapshot and when it arrived, so clocks advance between progress frames. */
+interface WaitSnapshot { jobs: readonly WaitJob[]; receivedAt: number }
+interface ToolPanel { owner: SelectionOwner; el: HTMLDetailsElement; startTime: number | null; toolName: string; args: unknown; intent?: string; wait?: WaitSnapshot }
 export function createLiveTools(options: {
   document: Document; sessionState: SessionState; started: (id: string, name: string) => void; finished: (id: string) => void;
   pinned: (root: HTMLElement) => boolean; scroll: (root: HTMLElement) => void; jump: (root: HTMLElement) => void;
@@ -20,6 +25,7 @@ export function createLiveTools(options: {
   const { document, sessionState } = options; let disposed = false;
   const liveToolPanels = new Map<string, ToolPanel>(), retained = new WeakMap<HTMLDetailsElement, ToolPanel>();
   const owns = (owner: SelectionOwner) => !disposed && sessionState.ownsSelection(owner);
+  let waitTicker: ReturnType<typeof setInterval> | undefined;
   function lookup(id: string): ToolPanel | null {
     const owner = sessionState.captureSelection(), container = document.getElementById('messages'); if (disposed || !owner || !container) return null;
     const matches = (entry: ToolPanel | undefined) => !!entry && entry.owner.id === owner.id && entry.owner.host === owner.host && container.contains(entry.el);
@@ -28,16 +34,15 @@ export function createLiveTools(options: {
     if (!entry || !matches(entry)) return null;
     entry.owner = owner; liveToolPanels.set(id, entry); return entry;
   }
-function kernelSource(toolName: string, args: unknown, intent?: string) {
-  if (toolName !== 'eval' && toolName !== 'ipython') return '';
-  if (record(args) && typeof args.code === 'string' && args.code) return args.code;
-  return typeof intent === 'string' && intent.trim() ? intent.trim() : '';
-}
 function kernelSummary(toolName: string, args: unknown, intent?: string) {
   const summary = getToolSummary(toolName, args);
   if (summary) return summary;
   if ((toolName !== 'eval' && toolName !== 'ipython') || typeof intent !== 'string') return '';
   return intent.trim() ? truncate(intent.trim(), 60) : '';
+}
+function sourceBlockHtml(toolName: string, source: string) {
+  const command = toolName === 'bash' || toolName === 'Bash';
+  return '<div class="live-tool-code' + (command ? ' command' : '') + '"><pre>' + escapeHtml(truncate(source, 8000)) + '</pre></div>';
 }
 function syncKernelPreview(el: HTMLDetailsElement, toolName: string, args: unknown, intent?: string) {
   const summary = kernelSummary(toolName, args, intent);
@@ -49,17 +54,16 @@ function syncKernelPreview(el: HTMLDetailsElement, toolName: string, args: unkno
     }
     if (summaryEl) summaryEl.textContent = summary;
   }
-  const source = kernelSource(toolName, args, intent);
+  const source = toolSourceText(toolName, args, intent);
   if (!source) return;
-  let codeEl = el.querySelector('.live-tool-code');
-  if (!codeEl) {
-    codeEl = document.createElement('div');
-    codeEl.className = 'live-tool-code';
+  const html = sourceBlockHtml(toolName, source);
+  const codeEl = el.querySelector('.live-tool-code');
+  if (codeEl) codeEl.outerHTML = html;
+  else {
     const outputEl = el.querySelector('.live-tool-output');
-    if (outputEl) outputEl.before(codeEl);
-    else el.appendChild(codeEl);
+    if (outputEl) outputEl.insertAdjacentHTML('beforebegin', html);
+    else el.insertAdjacentHTML('beforeend', html);
   }
-  codeEl.innerHTML = '<pre>' + escapeHtml(truncate(source, 8000)) + '</pre>';
   el.setAttribute('open', '');
 }
 function liveToolOutputHtml(output: string) {
@@ -67,31 +71,93 @@ function liveToolOutputHtml(output: string) {
   return escapeHtml(truncate(parsed ? parsed.output : output, 8000));
 }
 
-function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown, output: string, isError: boolean, isComplete: boolean, durationMs: number | null = null, imagesHtml = '', intent?: string) {
+/**
+ * Clocks for a live wait: each running job's elapsed time and the time left
+ * before its bash timeout kills it, plus the soonest moment the wait itself
+ * must return (first job deadline or OMP's safety cap).
+ */
+function waitClock(entry: ToolPanel, now: number) {
+  const container = document.getElementById('messages');
+  const drift = entry.wait ? now - entry.wait.receivedAt : 0;
+  let soonest = entry.startTime != null ? entry.startTime + WAIT_SAFETY_CAP_MS - now : null;
+  const clocks = new Map<string, { elapsedMs: number; leftMs: number | null; noDeadline: boolean }>();
+  for (const job of entry.wait?.jobs || []) {
+    if (job.status !== 'running') continue;
+    const elapsedMs = (job.durationMs ?? 0) + drift;
+    const timeoutMs = jobTimeoutMs(container, job.id);
+    const leftMs = timeoutMs ? Math.max(0, timeoutMs - elapsedMs) : null;
+    if (leftMs != null && (soonest == null || leftMs < soonest)) soonest = leftMs;
+    clocks.set(job.id, { elapsedMs, leftMs, noDeadline: timeoutMs === 0 });
+  }
+  return { clocks, soonest: soonest == null ? null : Math.max(0, soonest) };
+}
+function renderWait(entry: ToolPanel) {
+  const el = entry.el, { clocks, soonest } = waitClock(entry, Date.now());
+  let chip = el.querySelector<HTMLElement>('.live-tool-status.wait-left');
+  if (soonest != null) {
+    if (!chip) {
+      el.querySelector('.live-tool-status.running-label')?.insertAdjacentHTML('afterend', '<span class="live-tool-status wait-left"></span>');
+      chip = el.querySelector<HTMLElement>('.live-tool-status.wait-left');
+    }
+    if (chip) {
+      chip.textContent = '⏱ ' + formatSpan(soonest) + ' left';
+      chip.title = 'Latest return: the first watched job deadline or the 30-minute wait cap';
+      chip.classList.toggle('soon', soonest < 60_000);
+    }
+  } else chip?.remove();
+  if (!entry.wait?.jobs.length) return;
+  const html = waitJobsHtml(entry.wait.jobs, job => clocks.get(job.id) ?? null);
+  const jobsEl = el.querySelector('.live-wait-jobs');
+  if (jobsEl) jobsEl.innerHTML = html;
+  else { el.insertAdjacentHTML('beforeend', '<div class="live-wait-jobs">' + html + '</div>'); el.setAttribute('open', ''); }
+}
+function runningWaits() {
+  return [...liveToolPanels.values()].filter(entry => entry.toolName === 'wait' && owns(entry.owner) && entry.el.isConnected && entry.el.classList.contains('running'));
+}
+function tickWaits() {
+  const waits = runningWaits();
+  if (!waits.length || disposed) { clearInterval(waitTicker); waitTicker = undefined; return; }
+  for (const entry of waits) renderWait(entry);
+}
+function syncWait(entry: ToolPanel) {
+  if (entry.toolName !== 'wait' || !entry.el.classList.contains('running')) return;
+  renderWait(entry);
+  waitTicker ??= setInterval(tickWaits, 1000);
+}
+
+function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown, output: string, isError: boolean, isComplete: boolean, durationMs: number | null = null, imagesHtml = '', intent?: string, details?: ToolDetails) {
   const stateClass = isComplete ? (isError ? 'error' : 'complete') : 'running';
   const summary = kernelSummary(toolName, args, intent);
-  const source = kernelSource(toolName, args, intent);
-  const openAttr = (output || imagesHtml || source) ? ' open' : '';
+  const source = toolSourceText(toolName, args, intent);
+  const waitJobs = details?.kind === 'wait' && details.jobs.length ? details.jobs : null;
+  const openAttr = (output || imagesHtml || source || waitJobs) ? ' open' : '';
 
   let statusHtml = '';
   if (isComplete) {
-    if (isError) {
-      statusHtml = '<span class="live-tool-status error-label">✗ error</span>';
-    } else {
-      const dur = durationMs != null ? (durationMs / 1000).toFixed(1) + 's' : '';
-      statusHtml = '<span class="live-tool-status success-label">✓</span>' +
-        (dur ? '<span class="live-tool-status duration">' + dur + '</span>' : '');
+    const chip = (text: string, cls = '', title = '') =>
+      '<span class="live-tool-status' + (cls ? ' ' + cls : '') + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + escapeHtml(text) + '</span>';
+    statusHtml = isError ? chip('✗ error', 'error-label') : chip('✓', 'success-label');
+    // OMP's measured wall time beats the client clock (which also counts
+    // event delivery); without either, no duration is invented.
+    if (details?.kind === 'bash' && (details.wallTimeMs != null || details.jobId)) statusHtml += bashResultChipsHtml(details, chip);
+    else {
+      if (durationMs != null) statusHtml += chip(formatSpan(durationMs), 'duration');
+      if (details?.kind === 'bash') statusHtml += bashResultChipsHtml(details, chip);
     }
   } else {
     statusHtml = '<span class="live-tool-status running-label">running</span>';
   }
 
   const cursorHtml = isComplete ? '' : '<span class="live-tool-cursor"></span>';
-  const outputHtml = output
-    ? '<div class="live-tool-output">' + liveToolOutputHtml(output) + cursorHtml + '</div>'
-    : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
+  // A settled wait reads as job rows; its text content is the model-facing dump of them.
+  const outputHtml = waitJobs
+    ? '<div class="live-wait-jobs">' + waitJobsHtml(waitJobs) + '</div>'
+    : output
+      ? '<div class="live-tool-output">' + liveToolOutputHtml(output) + cursorHtml + '</div>'
+      : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
 
-  return '<details class="live-tool-panel ' + stateClass + '" data-tool-call-id="' + escapeHtml(toolCallId) + '"' + openAttr + '>' +
+  return '<details class="live-tool-panel ' + stateClass + '" data-tool-call-id="' + escapeHtml(toolCallId) + '"' +
+    (details?.kind === 'bash' ? bashJobAttrs(details) : '') + openAttr + '>' +
     '<summary class="live-tool-header">' +
       '<span class="live-tool-icon">⚡</span>' +
       '<span class="live-tool-name">' + escapeHtml(toolName) + '</span>' +
@@ -99,7 +165,7 @@ function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown,
       statusHtml +
       '<span class="live-tool-status-dot"></span>' +
     '</summary>' +
-    (source ? '<div class="live-tool-code"><pre>' + escapeHtml(truncate(source, 8000)) + '</pre></div>' : '') +
+    (source ? sourceBlockHtml(toolName, source) : '') +
     outputHtml +
     imagesHtml +
   '</details>';
@@ -146,6 +212,7 @@ function appendLiveToolPanel(data: ToolEvent, { completionOnly = false } = {}): 
     intent,
   };
   liveToolPanels.set(toolCallId, entry); retained.set(el, entry);
+  if (!completionOnly) syncWait(entry);
   if (wasPinned) options.scroll(container); else options.jump(container);
   return entry;
 }
@@ -169,6 +236,13 @@ function updateLiveToolPanel(data: ToolEvent) {
   const resolvedArgs = data.args ?? entry.args;
   syncKernelPreview(entry.el, resolvedName, resolvedArgs, intent);
   entry.toolName = resolvedName; entry.args = resolvedArgs; entry.intent = intent;
+
+  const details = decodeToolDetails(resolvedName, partialResult?.details);
+  if (details?.kind === 'wait') {
+    entry.wait = { jobs: details.jobs, receivedAt: Date.now() };
+    entry.el.querySelector('.live-tool-output')?.remove();
+    syncWait(entry);
+  }
 
   const output = getToolOutputText(partialResult);
   // Images derive idempotently from the latest partial result — the whole
@@ -228,9 +302,10 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   const output = getToolOutputText(result);
   const imagesHtml = options.images(result && result.content, 'tool result image');
   const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
+  const details = decodeToolDetails(resolvedName, result?.details);
 
   // Rebuild the panel in its final state
-  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, imagesHtml, intent);
+  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, imagesHtml, intent, details);
   const tmp = document.createElement('div');
   tmp.innerHTML = newHtml;
   const newEl = tmp.firstElementChild as HTMLDetailsElement;
@@ -240,6 +315,7 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   entry.toolName = resolvedName;
   entry.args = resolvedArgs;
   entry.intent = intent;
+  entry.wait = undefined;
 
   // Keep in map for dedup — will be cleaned up on turn_end
 }
@@ -250,9 +326,11 @@ function finalizeLiveToolPanel(data: ToolEvent) {
       if (!owns(entry.owner) || !entry.el.classList.contains('running')) continue;
       entry.el.classList.remove('running'); entry.el.classList.add('complete');
       const dot = entry.el.querySelector<HTMLElement>('.live-tool-status-dot'); if (dot) dot.style.display = 'none'; entry.el.querySelector('.live-tool-cursor')?.remove();
+      entry.el.querySelector('.live-tool-status.wait-left')?.remove();
     }
   }
   return { append(value: unknown, options?: { completionOnly?: boolean }) { const data = decode(value); return data ? appendLiveToolPanel(data, options) : null; },
     update(value: unknown) { const data = decode(value); if (data) updateLiveToolPanel(data); }, finish(value: unknown) { const data = decode(value); if (data) finalizeLiveToolPanel(data); },
-    clear, finishRunning, get count() { return liveToolPanels.size; }, dispose() { if (disposed) return; disposed = true; liveToolPanels.clear(); } };
+    clear, finishRunning, get count() { return liveToolPanels.size; },
+    dispose() { if (disposed) return; disposed = true; liveToolPanels.clear(); clearInterval(waitTicker); waitTicker = undefined; } };
 }

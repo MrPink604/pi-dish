@@ -2465,6 +2465,136 @@ body.sidebar-open {
   word-wrap: break-word;
 }
 
+/* Bash command block (tool call and live panel): the shell line, prompt-marked,
+   with its execution options underneath; output lives in the result block. */
+.tool-call-content pre.tool-command,
+.wait-jobs pre.tool-command {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text-bright);
+}
+
+.tool-command code::before,
+.live-tool-code.command pre::before {
+  content: '$ ';
+  color: var(--success);
+  user-select: none;
+}
+
+.tool-command-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 12px 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--line);
+}
+
+.tool-command-meta code {
+  font-family: var(--font-mono);
+}
+
+.tool-meta-sep {
+  opacity: 0.5;
+}
+
+.tool-call-intent {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tool-result-meta.duration,
+.tool-result-meta.job {
+  font-family: var(--font-mono);
+  opacity: 0.85;
+}
+
+.tool-result-meta.warning-badge,
+.live-tool-status.warning-badge {
+  color: var(--warning);
+  opacity: 1;
+}
+
+/* Wait snapshot: one row per watched background job. */
+.wait-jobs {
+  display: flex;
+  flex-direction: column;
+}
+
+.wait-job + .wait-job {
+  border-top: 1px solid var(--line);
+}
+
+.wait-job-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wait-job-id {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wait-job-type {
+  font-family: var(--font-mono);
+  opacity: 0.7;
+}
+
+.wait-job-status {
+  font-weight: 600;
+}
+
+.wait-job.status-running .wait-job-status { color: var(--accent); }
+.wait-job.status-completed .wait-job-status { color: var(--success); }
+.wait-job.status-failed .wait-job-status,
+.wait-job.status-cancelled .wait-job-status,
+.wait-job-exit { color: var(--error); }
+
+.wait-job-time,
+.wait-job-left {
+  font-family: var(--font-mono);
+}
+
+.wait-job-left {
+  margin-left: auto;
+  color: var(--text);
+}
+
+.wait-job-left.soon,
+.live-tool-status.wait-left.soon {
+  color: var(--warning);
+}
+
+.wait-jobs pre.wait-job-label,
+.wait-jobs pre.wait-job-output {
+  margin: 0;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-darker);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.wait-jobs pre.wait-job-output {
+  border-top: 1px solid var(--line);
+  max-height: 240px;
+  overflow-y: auto;
+  color: var(--text);
+}
+
+.wait-jobs pre.wait-job-output.error {
+  color: var(--error);
+}
+
 /* Input */
 .input-area {
   padding: 16px max(24px, calc((100% - var(--content-max)) / 2));
@@ -7006,6 +7136,24 @@ mark.comment-mark {
   line-height: 1.5;
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+.live-tool-code.command {
+  color: var(--text-bright);
+}
+
+.live-tool-status.wait-left {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text);
+}
+
+.live-wait-jobs {
+  border-top: 1px solid var(--line);
+}
+
+.live-tool-status.error-badge {
+  color: var(--error);
 }
 
 .live-tool-panel.running .live-tool-output {

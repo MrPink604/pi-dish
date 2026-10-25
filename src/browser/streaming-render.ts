@@ -1,6 +1,7 @@
 import type { SessionState, SelectionOwner } from './session-state';
 import type { RenderMessage, MessageBlock } from './message-data';
-import { formatTime, formatThinkingPreview, formatToolArguments } from './helper-format';
+import { formatTime, formatThinkingPreview } from './helper-format';
+import { toolCallBodyHtml } from './tool-format';
 import { getToolSummary, messageHasVisibleText } from '../core/helper-content';
 
 /** How far a streamed markdown block's source has been finalized. */
@@ -154,7 +155,7 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
               <span class="tool-call-icon">⚡</span><span class="tool-call-name"></span>
               <span class="tool-call-summary"></span>
             </summary>
-            <div class="tool-call-content"><pre><code></code></pre></div>
+            <div class="tool-call-content"></div>
           </details>`);
         blockEl = el.querySelector<HTMLElement>(`[data-block-index="${i}"]`);
       }
@@ -164,7 +165,8 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
         sources.set(blockEl, signature);
         blockEl.querySelector('.tool-call-name')!.textContent = block.name || 'tool';
         blockEl.querySelector('.tool-call-summary')!.textContent = getToolSummary(block.name || '', args);
-        blockEl.querySelector('.tool-call-content code')!.textContent = formatToolArguments(block.name, args);
+        const content = blockEl.querySelector<HTMLElement>('.tool-call-content')!, body = toolCallBodyHtml(block.name, args);
+        content.innerHTML = body; content.hidden = !body;
       }
     }
   });

@@ -78,6 +78,30 @@ test('a running eval panel shows the cell instead of a blank cursor', async ({ p
     output: '3', codeAfter: 'print(len(files))\nprint(1)',
   });
 });
+test('a live wait counts down to the backgrounded bash job deadline and the bash panel keeps command and output apart', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  await page.clock.install();
+  const result = await page.evaluate(() => {
+    const root = fixtureElement(document.getElementById('messages'), '#messages'); root.replaceChildren();
+    root.insertAdjacentHTML('beforeend', fixtureApp.features.messageRenderer.message(PiDishBrowser.decodeRenderMessage({ role: 'toolResult', index: 1, toolName: 'bash', content: [{ type: 'text', text: 'Backgrounded' }],
+      details: { async: { state: 'running', jobId: 'bg_1', type: 'bash' }, timeoutSeconds: 600 } })));
+    const live = fixtureApp.features.liveToolsController;
+    live.append({ toolCallId: 'cmd', toolName: 'bash', args: { command: 'make test' } });
+    live.finish({ toolCallId: 'cmd', toolName: 'bash', isError: true, result: { content: [{ type: 'text', text: 'ok' }], details: { wallTimeMs: 2500, exitCode: 3 } } });
+    live.append({ toolCallId: 'wait', toolName: 'wait', args: {}, startedAt: Date.now() });
+    live.update({ toolCallId: 'wait', toolName: 'wait', partialResult: { content: [{ type: 'text', text: '' }], details: { op: 'wait', jobs: [
+      { id: 'bg_1', type: 'bash', status: 'running', label: 'npm test', durationMs: 60_000 },
+      { id: 'bg_2', type: 'bash', status: 'running', label: 'unknown deadline', durationMs: 1000 },
+    ] } } });
+    const cmd = fixtureElement(document.querySelector('[data-tool-call-id="cmd"]'), 'bash panel'), wait = fixtureElement(document.querySelector('[data-tool-call-id="wait"]'), 'wait panel');
+    return { code: cmd.querySelector('.live-tool-code')?.textContent, output: cmd.querySelector('.live-tool-output')?.textContent,
+      chips: [...cmd.querySelectorAll('.live-tool-status')].map(el => el.textContent),
+      header: wait.querySelector('.wait-left')?.textContent, left: [...wait.querySelectorAll('.wait-job')].map(el => el.querySelector('.wait-job-left')?.textContent ?? null) };
+  });
+  expect(result).toEqual({ code: 'make test', output: 'ok', chips: ['✗ error', '2.5s', 'exit 3'], header: '⏱ 9m 00s left', left: ['9m 00s left', null] });
+  await page.clock.runFor(2000);
+  await expect(page.locator('[data-tool-call-id="wait"] .wait-left')).toHaveText('⏱ 8m 58s left');
+});
 test('same-id tool completion on a newer host cannot replace the older retained panel', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   const result = await page.evaluate(({ id, host }) => {

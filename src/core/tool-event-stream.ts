@@ -1,11 +1,46 @@
 import { record } from './helper-values';
 
-/** Tool panels consume content, not harness-native task traces in result.details. */
+const BASH_DETAIL_KEYS = ['wallTimeMs', 'exitCode', 'timedOut', 'timeoutSeconds', 'timeoutDisabled'] as const;
+const WAIT_JOB_KEYS = ['id', 'type', 'status', 'label', 'durationMs', 'exitCode'] as const;
+const WAIT_JOB_TEXT_LIMIT = 8000;
+
+/**
+ * The few result details the browser formats: OMP bash timing/exit/deadline
+ * and wait job rows. Everything else in result.details (task traces, widgets)
+ * stays on the server.
+ */
+function projectToolDetails(toolName: unknown, details: unknown): Record<string, unknown> | undefined {
+  if (!record(details)) return undefined;
+  if (toolName === 'bash') {
+    const out: Record<string, unknown> = {};
+    for (const key of BASH_DETAIL_KEYS) if (details[key] !== undefined) out[key] = details[key];
+    if (record(details.async) && typeof details.async.jobId === 'string') out.async = { jobId: details.async.jobId };
+    return Object.keys(out).length ? out : undefined;
+  }
+  if (toolName === 'wait' && Array.isArray(details.jobs)) {
+    return { jobs: details.jobs.flatMap((job: unknown) => {
+      if (!record(job)) return [];
+      const out: Record<string, unknown> = {};
+      for (const key of WAIT_JOB_KEYS) if (job[key] !== undefined) out[key] = job[key];
+      for (const key of ['resultText', 'errorText'] as const) {
+        if (typeof job[key] === 'string') out[key] = job[key].slice(0, WAIT_JOB_TEXT_LIMIT);
+      }
+      return [out];
+    }) };
+  }
+  return undefined;
+}
+
+/** Tool panels consume content plus projected details, not harness-native traces in result.details. */
 export function projectToolEvent(event: string, value: unknown): unknown {
   if (!event.startsWith('tool_execution_') || !record(value)) return value;
   const { toolCallId, toolName, args, startedAt, isError } = value;
   const intent = typeof value.intent === 'string' && value.intent ? value.intent : undefined;
-  const result = (value: unknown) => record(value) ? { content: value.content } : value;
+  const result = (value: unknown) => {
+    if (!record(value)) return value;
+    const details = projectToolDetails(toolName, value.details);
+    return details ? { content: value.content, details } : { content: value.content };
+  };
   return {
     toolCallId, toolName, args, startedAt, isError,
     ...(intent ? { intent } : {}),

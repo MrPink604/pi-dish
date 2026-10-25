@@ -1,6 +1,7 @@
 import { record, finite } from '../core/helper-values';
 import type { RefContextEntry, Timestamp } from '../core/helper-types';
 import type { CacheExpiryProjection } from '../core/session-api';
+import { decodeToolDetails, type ToolDetails } from './tool-format';
 export interface MessageBlock { readonly type: string; readonly text?: string; readonly thinking?: string; readonly name?: string; readonly id?: string; readonly arguments?: Readonly<Record<string, unknown>>; readonly url?: string; readonly data?: string; readonly mimeType?: string }
 export interface MessageUsage { readonly input?: number; readonly output?: number; readonly reasoning?: number; readonly cacheRead?: number; readonly cacheWrite?: number; readonly cacheWrite1h?: number; readonly cost?: { readonly input?: number | null; readonly output?: number | null; readonly cacheRead?: number | null; readonly cacheWrite?: number | null; readonly total?: number | null } }
 export interface AdvisorNote { readonly note: string; readonly severity?: string; readonly advisor?: string }
@@ -10,6 +11,8 @@ export interface RenderMessage {
   readonly model?: string; readonly responseModel?: string; readonly provider?: string; readonly stopReason?: string; readonly errorMessage?: string;
   readonly toolName?: string; readonly toolCallId?: string; readonly isError?: boolean; readonly customType?: string; readonly display?: boolean;
   readonly usage?: MessageUsage; readonly cacheExpiry?: CacheExpiryProjection; readonly durationMs?: number; readonly outputTokens?: number; readonly sessionRefs?: readonly RefContextEntry[]; readonly details?: MessageDetails;
+  /** Formatted tool-result details (OMP bash timing, wait job rows). */
+  readonly toolDetails?: ToolDetails;
 }
 const string = (value: unknown) => typeof value === 'string' ? value : undefined;
 const number = (value: unknown) => finite(value) ? value : undefined;
@@ -39,6 +42,7 @@ export function decodeRenderMessage(value: unknown): RenderMessage {
     timestamp: row.timestamp instanceof Date ? new Date(row.timestamp.getTime()) : typeof row.timestamp === 'string' || finite(row.timestamp) ? row.timestamp : undefined,
     content: decodeMessageContent(row.content), model: string(row.model), responseModel: string(row.responseModel), provider: string(row.provider), stopReason: string(row.stopReason), errorMessage: string(row.errorMessage),
     toolName: string(row.toolName), toolCallId: string(row.toolCallId), isError: row.isError === true, customType: string(row.customType), display: typeof row.display === 'boolean' ? row.display : undefined,
+    toolDetails: row.role === 'toolResult' ? decodeToolDetails(string(row.toolName), row.details) : undefined,
     usage: decodeMessageUsage(row.usage), cacheExpiry: decodeCacheExpiry(row.cacheExpiry), durationMs: number(row.durationMs), outputTokens: number(row.outputTokens),
     sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry: unknown): RefContextEntry[] => record(entry) && typeof entry.ref === 'string' ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : undefined,
     details: details ? { notes: Array.isArray(details.notes) ? details.notes.flatMap((note: unknown): AdvisorNote[] => typeof note === 'string' ? [{ note }] : record(note) && typeof note.note === 'string' ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : undefined,
