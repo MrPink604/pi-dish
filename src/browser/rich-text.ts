@@ -204,7 +204,7 @@ function applyHighlight(el?: ParentNode | null) {
   const root = el || document.getElementById('messages');
   if (disposed || !root) return;
   const pendingHighlight: { code: HTMLElement; source: string }[] = [];
-  root.querySelectorAll<HTMLElement>('.markdown-body pre code').forEach(code => {
+  root.querySelectorAll<HTMLElement>('.markdown-body pre code, pre.tool-code code').forEach(code => {
     const pre = code.closest('pre');
     if (pre && !pre.parentElement?.classList.contains('code-block')) {
       const wrap = document.createElement('div');

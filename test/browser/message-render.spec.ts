@@ -59,6 +59,22 @@ test('OMP model annotations render as readable mentions in persisted user prompt
   expect(rendered.code).toBe('<model agent="m1" name="Example"/>');
   expect(rendered.tags).toBe(0);
 });
+test('a persisted eval result carries its title, timing, cell code and host-tool activity', async ({ page, fleet }) => {
+  await fleet.select(fleet.self);
+  const rendered = await page.evaluate(() => {
+    const template = document.createElement('template');
+    template.innerHTML = fixtureApp.features.messageRenderer.message(PiDishBrowser.decodeRenderMessage({ role: 'toolResult', index: 1, toolName: 'eval', isError: true,
+      content: [{ type: 'text', text: 'KeyError\n\nCommand exited with code 1' }], details: { cells: [{ index: 0, title: 'Deploy <pages>', code: 'deploy()', language: 'python',
+        status: 'error', exitCode: 1, durationMs: 1174, statusEvents: [{ op: 'read', path: 'a.log', chars: 1200, preview: 'hidden' }, { op: 'pip', args: 'install x', error: 'failed' }] }] } }));
+    const result = fixtureElement(template.content.querySelector('.message.tool-result'), 'eval result');
+    return { title: result.querySelector('.tool-result-title')?.textContent, chips: [...result.querySelectorAll('.tool-result-meta')].map(el => el.textContent),
+      code: result.querySelector('pre.tool-code code.language-python')?.textContent,
+      events: [...result.querySelectorAll('.eval-event')].map(el => [el.querySelector('.eval-event-op')?.textContent, el.querySelector('.eval-event-text')?.textContent, el.classList.contains('error')]),
+      output: result.querySelector('.tool-result-content > pre:not(.tool-code)')?.textContent };
+  });
+  expect(rendered).toEqual({ title: 'Deploy <pages>', chips: ['1.2s', 'exit 1'], code: 'deploy()',
+    events: [['read', 'a.log', false], ['pip', 'install x', true]], output: 'KeyError\n\nCommand exited with code 1' });
+});
 
 test('transcript image resources and share controls use the selected owning host', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);

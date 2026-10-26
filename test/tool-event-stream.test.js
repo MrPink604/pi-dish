@@ -77,7 +77,7 @@ test('tool projection keeps eval intent and code without reading result details'
         toolCallId: 'e', toolName: 'eval', args: { language: 'py', code: 'print(1)' }, intent: 'print one', startedAt: 1,
     });
 });
-test('bash and wait results keep only the timing, exit and job fields their panels format', () => {
+test('bash, wait and eval results keep only the timing, exit, job and cell fields their panels format', () => {
     const bash = (0, tool_event_stream_js_1.projectToolEvent)('tool_execution_end', { toolCallId: 'b', toolName: 'bash', isError: false, result: { content: [],
             details: { wallTimeMs: 12.5, exitCode: 2, timeoutSeconds: 1800, wallTimeNoticeEmitted: false, meta: { big: true }, async: { state: 'running', jobId: 'bg_1', type: 'bash' } } } });
     assert.deepEqual(JSON.parse(JSON.stringify(bash)).result.details, { wallTimeMs: 12.5, exitCode: 2, timeoutSeconds: 1800, async: { jobId: 'bg_1' } });
@@ -86,4 +86,10 @@ test('bash and wait results keep only the timing, exit and job fields their pane
     const jobs = JSON.parse(JSON.stringify(wait)).partialResult.details.jobs;
     assert.deepEqual(jobs.map((job) => Object.keys(job)), [['id', 'type', 'status', 'label', 'durationMs', 'resultText']]);
     assert.equal(jobs[0].resultText.length, 8000);
+    const evalCell = { index: 0, title: 't', code: 'print(1)', output: '1', status: 'complete', exitCode: 0, durationMs: 9,
+        statusEvents: [{ op: 'read', path: 'p'.repeat(400), chars: 5, preview: 'large', matches: ['a'] }] };
+    const single = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_end', { toolCallId: 'e', toolName: 'eval', isError: false, result: { content: [], details: { cells: [evalCell], jsonOutputs: [{}] } } })));
+    assert.deepEqual(single.result.details, { cells: [{ index: 0, title: 't', status: 'complete', exitCode: 0, durationMs: 9, statusEvents: [{ op: 'read', path: 'p'.repeat(300), chars: 5 }] }] });
+    const split = JSON.parse(JSON.stringify((0, tool_event_stream_js_1.projectToolEvent)('tool_execution_end', { toolCallId: 'e', toolName: 'eval', isError: false, result: { content: [], details: { cells: [evalCell, evalCell] } } })));
+    assert.equal(split.result.details.cells[1].output, '1');
 });

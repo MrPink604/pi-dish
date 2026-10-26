@@ -2595,6 +2595,115 @@ body.sidebar-open {
   color: var(--error);
 }
 
+/* Eval: highlighted cell code, host-tool activity, then output. The result
+   header keeps the cell title visible because the call often renders apart. */
+.tool-result-title {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.tool-call-content .code-block,
+.tool-result-content .code-block {
+  margin: 0;
+}
+
+pre.tool-code code.hljs {
+  background: transparent;
+  padding: 0;
+}
+
+.tool-result-content pre.tool-code {
+  max-height: 240px;
+  color: var(--text-bright);
+}
+
+.tool-result-content .code-block + .eval-activity,
+.tool-result-content .code-block + pre,
+.tool-result-content .eval-activity + pre {
+  border-top: 1px solid var(--line);
+}
+
+.eval-activity {
+  max-height: 160px;
+  overflow-y: auto;
+  padding: 4px 0;
+  font-size: 11px;
+}
+
+.eval-event {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 1px 12px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.eval-event-op {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+
+.eval-event-text {
+  font-family: var(--font-mono);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.eval-event-facts {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.eval-event-error {
+  color: var(--error);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eval-cell + .eval-cell {
+  border-top: 1px solid var(--line);
+}
+
+.eval-cell-title {
+  color: var(--text);
+}
+
+.eval-cell.status-running .wait-job-status { color: var(--accent); }
+.eval-cell.status-complete .wait-job-status { color: var(--success); }
+.eval-cell.status-error .wait-job-status { color: var(--error); }
+
+.eval-cells pre.eval-cell-output {
+  margin: 0;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-darker);
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.live-eval {
+  border-top: 1px solid var(--line);
+}
+
+.live-eval:empty {
+  display: none;
+}
+
 /* Input */
 .input-area {
   padding: 16px max(24px, calc((100% - var(--content-max)) / 2));

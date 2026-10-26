@@ -4,7 +4,7 @@ import type { RenderMessage, MessageBlock, AdvisorNote } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { formatTime, formatDuration, formatThinkingPreview } from './helper-format';
-import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary } from './tool-format';
+import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, evalTitle, evalBodyHtml } from './tool-format';
 import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
 import { splitSessionRefContext } from '../core/helper-refs';
 export function createMessageRenderer(options: {
@@ -245,9 +245,15 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   const chip = (text: string, cls = '', title = '') =>
     `<span class="tool-result-meta${cls ? ' ' + cls : ''}"${title ? ` title="${escapeHtml(title)}"` : ''}>${escapeHtml(text)}</span>`;
   const details = msg.toolDetails;
-  const bashChips = details?.kind === 'bash' ? bashResultChipsHtml(details, chip) : '';
-  const statusShown = !!exitBadge || (details?.kind === 'bash' && ((details.exitCode ?? 0) !== 0 || details.timedOut));
+  const resultChips = details?.kind === 'bash' ? bashResultChipsHtml(details, chip)
+    : details?.kind === 'eval' ? evalResultChipsHtml(details, chip) : '';
+  const statusShown = !!exitBadge || (details?.kind === 'bash' && ((details.exitCode ?? 0) !== 0 || details.timedOut)) ||
+    (details?.kind === 'eval' && details.cells.some(cell => (cell.exitCode ?? 0) !== 0));
   const waitJobs = details?.kind === 'wait' && details.jobs.length ? details.jobs : null;
+  // An eval call often renders inside a prose message, away from its result;
+  // the result carries its title and cell code so it reads on its own.
+  const evalDetails = details?.kind === 'eval' && details.cells.length ? details : null;
+  const title = evalDetails ? evalTitle(evalDetails) : '';
   const lines = content.split('\n');
   const lineCount = lines.length;
   const preview = waitJobs ? waitStatusSummary(waitJobs) : truncate(lines[0], 80);
@@ -260,20 +266,22 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   const imagesHtml = imageBlocksHtml(msg.content, 'tool result image');
   // A wait snapshot reads as job rows (status, run time, output) instead of
   // the model-facing markdown dump of the same data.
-  const bodyHtml = waitJobs
-    ? waitJobsHtml(waitJobs)
-    : `<pre>${escapeHtml(truncate(content, 2000))}</pre>`;
+  const outputHtml = `<pre>${escapeHtml(truncate(content, 2000))}</pre>`;
+  const bodyHtml = waitJobs ? waitJobsHtml(waitJobs)
+    : evalDetails ? evalBodyHtml(evalDetails, outputHtml, true)
+    : outputHtml;
 
   return `<div${attrs} class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}"${details?.kind === 'bash' ? bashJobAttrs(details) : ''}>
     <details class="tool-result-details" ${((lineCount <= 5 && !waitJobs) || imageCount) ? 'open' : ''}>
       <summary class="tool-result-header">
         <span class="tool-result-icon">${isError ? '✗' : '✓'}</span>
         <span class="tool-result-name">${escapeHtml(msg.toolName || 'result')}</span>
+        ${title ? `<span class="tool-result-title">${escapeHtml(title)}</span>` : ''}
         ${showLines ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
         ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? 'image' : imageCount + ' images'}</span>` : ''}
-        ${exitBadge}${bashChips}
+        ${exitBadge}${resultChips}
         ${isError && !statusShown ? '<span class="tool-result-meta error-badge">error</span>' : ''}
-        ${showLines || waitJobs ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
+        ${(showLines && !title) || waitJobs ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
       </summary>
       <div class="tool-result-content">${bodyHtml}${imagesHtml}</div>
     </details>

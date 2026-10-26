@@ -2,12 +2,16 @@ import { record } from './helper-values';
 
 const BASH_DETAIL_KEYS = ['wallTimeMs', 'exitCode', 'timedOut', 'timeoutSeconds', 'timeoutDisabled'] as const;
 const WAIT_JOB_KEYS = ['id', 'type', 'status', 'label', 'durationMs', 'exitCode'] as const;
-const WAIT_JOB_TEXT_LIMIT = 8000;
+const OUTPUT_TEXT_LIMIT = 8000;
+const EVAL_CELL_KEYS = ['index', 'title', 'language', 'status', 'exitCode', 'durationMs'] as const;
+const EVAL_EVENT_KEYS = ['op', 'detail', 'path', 'cmd', 'args', 'key', 'action', 'chars', 'bytes', 'count', 'error', 'exit_code'] as const;
+const EVAL_EVENT_LIMIT = 50;
+const EVAL_EVENT_TEXT_LIMIT = 300;
 
 /**
- * The few result details the browser formats: OMP bash timing/exit/deadline
- * and wait job rows. Everything else in result.details (task traces, widgets)
- * stays on the server.
+ * The few result details the browser formats: OMP bash timing/exit/deadline,
+ * wait job rows and eval cell status/activity. Everything else in
+ * result.details (task traces, widgets, previews) stays on the server.
  */
 function projectToolDetails(toolName: unknown, details: unknown): Record<string, unknown> | undefined {
   if (!record(details)) return undefined;
@@ -23,7 +27,30 @@ function projectToolDetails(toolName: unknown, details: unknown): Record<string,
       const out: Record<string, unknown> = {};
       for (const key of WAIT_JOB_KEYS) if (job[key] !== undefined) out[key] = job[key];
       for (const key of ['resultText', 'errorText'] as const) {
-        if (typeof job[key] === 'string') out[key] = job[key].slice(0, WAIT_JOB_TEXT_LIMIT);
+        if (typeof job[key] === 'string') out[key] = job[key].slice(0, OUTPUT_TEXT_LIMIT);
+      }
+      return [out];
+    }) };
+  }
+  if (toolName === 'eval' && Array.isArray(details.cells)) {
+    const multi = details.cells.length > 1;
+    return { cells: details.cells.flatMap((cell: unknown) => {
+      if (!record(cell)) return [];
+      const out: Record<string, unknown> = {};
+      for (const key of EVAL_CELL_KEYS) if (cell[key] !== undefined) out[key] = cell[key];
+      // A single cell's output is the result content already; only split cells need their own.
+      if (multi && typeof cell.output === 'string') out.output = cell.output.slice(0, OUTPUT_TEXT_LIMIT);
+      if (Array.isArray(cell.statusEvents)) {
+        out.statusEvents = cell.statusEvents.slice(0, EVAL_EVENT_LIMIT).flatMap((event: unknown) => {
+          if (!record(event)) return [];
+          const kept: Record<string, unknown> = {};
+          for (const key of EVAL_EVENT_KEYS) {
+            const value = event[key];
+            if (typeof value === 'string') kept[key] = value.slice(0, EVAL_EVENT_TEXT_LIMIT);
+            else if (typeof value === 'number' || typeof value === 'boolean') kept[key] = value;
+          }
+          return [kept];
+        });
       }
       return [out];
     }) };

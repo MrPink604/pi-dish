@@ -2,7 +2,7 @@ import type { SessionState, SelectionOwner } from './session-state';
 import { record, finite } from '../core/helper-values';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { parseIpythonResult, getToolSummary, getToolOutputText } from '../core/helper-content';
-import { decodeToolDetails, toolSourceText, bashResultChipsHtml, bashJobAttrs, jobTimeoutMs, waitJobsHtml, formatSpan, WAIT_SAFETY_CAP_MS } from './tool-format';
+import { decodeToolDetails, toolSourceText, bashResultChipsHtml, bashJobAttrs, jobTimeoutMs, waitJobsHtml, formatSpan, evalBodyHtml, evalDurationMs, evalResultChipsHtml, WAIT_SAFETY_CAP_MS } from './tool-format';
 import type { ToolDetails, WaitJob } from './tool-format';
 interface ToolResultData { content?: unknown; details?: unknown }
 interface ToolEvent { toolCallId: string; toolName?: string; args?: unknown; intent?: string; startedAt?: string | number; partialResult?: ToolResultData; result?: ToolResultData; isError: boolean }
@@ -137,24 +137,25 @@ function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown,
     const chip = (text: string, cls = '', title = '') =>
       '<span class="live-tool-status' + (cls ? ' ' + cls : '') + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + escapeHtml(text) + '</span>';
     statusHtml = isError ? chip('✗ error', 'error-label') : chip('✓', 'success-label');
-    // OMP's measured wall time beats the client clock (which also counts
-    // event delivery); without either, no duration is invented.
-    if (details?.kind === 'bash' && (details.wallTimeMs != null || details.jobId)) statusHtml += bashResultChipsHtml(details, chip);
-    else {
-      if (durationMs != null) statusHtml += chip(formatSpan(durationMs), 'duration');
-      if (details?.kind === 'bash') statusHtml += bashResultChipsHtml(details, chip);
-    }
+    // OMP's measured time (bash wall time, eval cell time) beats the client
+    // clock, which also counts event delivery; without either, no duration is invented.
+    const measured = (details?.kind === 'bash' && (details.wallTimeMs != null || details.jobId != null)) ||
+      (details?.kind === 'eval' && evalDurationMs(details) != null);
+    if (!measured && durationMs != null) statusHtml += chip(formatSpan(durationMs), 'duration');
+    if (details?.kind === 'bash') statusHtml += bashResultChipsHtml(details, chip);
+    else if (details?.kind === 'eval') statusHtml += evalResultChipsHtml(details, chip);
   } else {
     statusHtml = '<span class="live-tool-status running-label">running</span>';
   }
 
   const cursorHtml = isComplete ? '' : '<span class="live-tool-cursor"></span>';
   // A settled wait reads as job rows; its text content is the model-facing dump of them.
-  const outputHtml = waitJobs
-    ? '<div class="live-wait-jobs">' + waitJobsHtml(waitJobs) + '</div>'
-    : output
-      ? '<div class="live-tool-output">' + liveToolOutputHtml(output) + cursorHtml + '</div>'
-      : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
+  const textHtml = output
+    ? '<div class="live-tool-output">' + liveToolOutputHtml(output) + cursorHtml + '</div>'
+    : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
+  const outputHtml = waitJobs ? '<div class="live-wait-jobs">' + waitJobsHtml(waitJobs) + '</div>'
+    : details?.kind === 'eval' && details.cells.length ? '<div class="live-eval">' + evalBodyHtml(details, '', false) + '</div>' + (details.cells.length > 1 ? '' : textHtml)
+    : textHtml;
 
   return '<details class="live-tool-panel ' + stateClass + '" data-tool-call-id="' + escapeHtml(toolCallId) + '"' +
     (details?.kind === 'bash' ? bashJobAttrs(details) : '') + openAttr + '>' +
@@ -243,8 +244,21 @@ function updateLiveToolPanel(data: ToolEvent) {
     entry.el.querySelector('.live-tool-output')?.remove();
     syncWait(entry);
   }
+  // Split eval cells stream their own rows; the aggregate tail would repeat them.
+  const multiCell = details?.kind === 'eval' && details.cells.length > 1;
+  if (details?.kind === 'eval' && details.cells.length) {
+    let evalEl = entry.el.querySelector('.live-eval');
+    if (!evalEl) {
+      const anchor = entry.el.querySelector('.live-tool-output');
+      if (anchor) anchor.insertAdjacentHTML('beforebegin', '<div class="live-eval"></div>');
+      else entry.el.insertAdjacentHTML('beforeend', '<div class="live-eval"></div>');
+      evalEl = entry.el.querySelector('.live-eval');
+    }
+    if (evalEl) evalEl.innerHTML = evalBodyHtml(details, '', false);
+    if (multiCell) entry.el.querySelector('.live-tool-output')?.remove();
+  }
 
-  const output = getToolOutputText(partialResult);
+  const output = multiCell ? '' : getToolOutputText(partialResult);
   // Images derive idempotently from the latest partial result — the whole
   // `.msg-images` row is replaced each update so images never accumulate.
   const imagesHtml = options.images(partialResult && partialResult.content, 'tool result image');

@@ -81,6 +81,7 @@ test('a running eval panel shows the cell instead of a blank cursor', async ({ p
 test('a live wait counts down to the backgrounded bash job deadline and the bash panel keeps command and output apart', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
   const result = await page.evaluate(() => {
     const root = fixtureElement(document.getElementById('messages'), '#messages'); root.replaceChildren();
     root.insertAdjacentHTML('beforeend', fixtureApp.features.messageRenderer.message(PiDishBrowser.decodeRenderMessage({ role: 'toolResult', index: 1, toolName: 'bash', content: [{ type: 'text', text: 'Backgrounded' }],

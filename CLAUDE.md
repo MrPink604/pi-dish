@@ -1811,8 +1811,9 @@ The bridge applies it **before** serializing to its Unix socket; SSE applies it
 again for RPC producers and older running bridges. Tool frames carry panel fields
 and result `content` (including images), not harness-native result `details` such
 as complete task-worker traces. The only details forwarded are an allow-list for
-OMP `bash` (wall time, exit code, timeout, background job id) and `wait` (job
-rows, output capped at 8000 chars). Starts and completions remain immediate; pending
+OMP `bash` (wall time, exit code, timeout, background job id), `wait` (job
+rows, output capped at 8000 chars) and `eval` (cell status/timing and up to 50
+host-tool status events of short scalar fields). Starts and completions remain immediate; pending
 latest output flushes before completion/run-end, and session switches/disposal
 cancel old timers. Transcript JSONL is unchanged. Bridge-side reductions take
 effect when the harness next loads the updated extension; server-only updates
@@ -2439,7 +2440,11 @@ recognition errors are the user's to fix before the agent sees them.
   (`src/browser/tool-format.ts`). A backgrounded bash result stamps
   `data-job-id`/`data-job-timeout-ms`; a running OMP `wait` reads it to show
   each job's time left and the soonest return (first job deadline or OMP's
-  30-minute wait cap), ticking each second. A start event that only carries `intent` uses that label instead
+  30-minute wait cap), ticking each second. `eval` calls render highlighted
+  cell code with language/timeout/reset; eval results carry the cell title,
+  OMP's cell time, the code, host-tool activity (browser/read/write… status
+  events) and output, since the call often renders inside a prose message away
+  from its result. A start event that only carries `intent` uses that label instead
   of a blank cursor. Gotchas: the older-messages scroll anchor
   must be a *top-level* child (elements inside a closed group have no box),
   and in-session search opens the enclosing group before scrolling to a match.

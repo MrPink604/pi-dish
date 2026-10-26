@@ -94,6 +94,7 @@ const fixtures_js_1 = require("./fixtures.js");
 (0, fixtures_js_1.test)('a live wait counts down to the backgrounded bash job deadline and the bash panel keeps command and output apart', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
     await page.clock.install();
+    await page.clock.pauseAt(new Date(Date.now() + 1000));
     const result = await page.evaluate(() => {
         const root = fixtureElement(document.getElementById('messages'), '#messages');
         root.replaceChildren();

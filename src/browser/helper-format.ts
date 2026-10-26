@@ -21,11 +21,6 @@ export function formatThinkingPreview(thinking: string): string {
   return thinking.substring(0, 80).replace(/\n/g, ' ') + '…';
 }
 
-export function formatToolArguments(name: string | undefined, args: Readonly<Record<string, unknown>>): string {
-  if ((name === 'ipython' || name === 'eval') && typeof args.code === 'string') return args.code;
-  return JSON.stringify(args, null, 2);
-}
-
 
 export function formatTokens(tokens?: number | null) {
   if (!tokens || tokens === 0) return '0';
