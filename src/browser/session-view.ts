@@ -38,7 +38,7 @@ export function createSessionView(options: {
   stream: SessionViewStream; resume: SessionViewResume; spawn: (id: string) => PendingSessionSpawn | null | undefined;
   closeViews: (keepBounce: boolean) => void; resetSearch: () => void; cancelStreaming: () => void; stopFollowing: () => void;
   closeTerminal: () => void; clearExtension: () => void; clearRelations: () => void; closeControls: () => void; hideAutocomplete: () => void;
-  retireModels: () => void; retireCommands: () => void; queue: (value: null) => void; closeBtw: () => void; resetArtifacts: () => void;
+  retireModels: () => void; retireCommands: () => void; queue: (value: null) => void; resetSideChat: () => void; resetArtifacts: () => void;
   thinking: () => void; terminal: () => void; mic: () => void; mood: (description: string, face: string) => void; status: (message: string, type?: string) => void;
   render: () => void; cancelRecording: () => void; hideNote: () => void; reveal: (id: string, host?: string | null) => void;
   seen: (session: SessionEntry) => void; artifacts: (owner: SelectionOwner) => unknown; header: () => void; relations: (owner: SelectionOwner) => unknown;
@@ -77,7 +77,7 @@ function retireSessionResources() {
 
 function resetSelectionActivity(current: SessionEntry | null) {
   options.queue(null);
-  options.closeBtw();
+  options.resetSideChat();
   options.activity.setCompacting(!!current?.isActive && !!current.compacting);
   options.activity.setTurn(!!current?.isActive && !!current.turnInProgress);
   options.resetArtifacts();

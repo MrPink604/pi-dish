@@ -53,7 +53,7 @@ export interface FixtureFactories {
   composerSpeech: typeof import('../../src/browser/composer-speech.js').createComposerSpeech;
   promptDelivery: typeof import('../../src/browser/prompt-delivery.js').createPromptDelivery;
   sessionActivity: typeof import('../../src/browser/session-activity.js').createSessionActivity;
-  btwPanel: typeof import('../../src/browser/btw-panel.js').createBtwPanel;
+  sideChat: typeof import('../../src/browser/side-chat.js').createSideChat;
   composerSubmit: typeof import('../../src/browser/composer-submit.js').createComposerSubmit;
   pendingSessionSpawns: typeof import('../../src/browser/session-spawns.js').createSessionSpawns;
   newSessionController: typeof import('../../src/browser/new-session.js').createNewSession;
@@ -122,7 +122,7 @@ export interface FixtureFeatures {
   composerSpeech: ReturnType<typeof import('../../src/browser/composer-speech.js').createComposerSpeech>;
   promptDelivery: ReturnType<typeof import('../../src/browser/prompt-delivery.js').createPromptDelivery>;
   sessionActivity: ReturnType<typeof import('../../src/browser/session-activity.js').createSessionActivity>;
-  btwPanel: ReturnType<typeof import('../../src/browser/btw-panel.js').createBtwPanel>;
+  sideChat: ReturnType<typeof import('../../src/browser/side-chat.js').createSideChat>;
   composerSubmit: ReturnType<typeof import('../../src/browser/composer-submit.js').createComposerSubmit>;
   pendingSessionSpawns: ReturnType<typeof import('../../src/browser/session-spawns.js').createSessionSpawns>;
   newSessionController: ReturnType<typeof import('../../src/browser/new-session.js').createNewSession>;
@@ -271,7 +271,7 @@ export const FEATURE_FACTORY_NAMES = {
   composerSpeech: 'createComposerSpeech',
   promptDelivery: 'createPromptDelivery',
   sessionActivity: 'createSessionActivity',
-  btwPanel: 'createBtwPanel',
+  sideChat: 'createSideChat',
   composerSubmit: 'createComposerSubmit',
   pendingSessionSpawns: 'createSessionSpawns',
   newSessionController: 'createNewSession',
@@ -292,7 +292,7 @@ export const FEATURE_FACTORY_NAMES = {
   appBindings: 'createAppBindings',
 } as const satisfies Record<keyof FixtureFeatures, string>;
 
-export const FIXTURE_FEATURE_NAMES = ['hostView', 'hostDirectory', 'apiTransport', 'sessionApi', 'hostConnections', 'hostDiscovery', 'hostPresentation', 'sessionState', 'responseDetailsController', 'appChrome', 'sessionReferences', 'composerAutocomplete', 'sidebarActivity', 'sidebarQuery', 'sidebarLists', 'sidebarControls', 'sessionView', 'sessionResume', 'modelCatalog', 'appModels', 'sessionRelationsController', 'sessionHeader', 'sessionControls', 'sessionSearch', 'displayPreferences', 'pushNotifications', 'vaultApprovals', 'recoveryController', 'hostSettings', 'fleetController', 'searchViewController', 'skillsController', 'usageController', 'sessionInfo', 'fileViews', 'anchoredCommentController', 'transcriptController', 'messageRenderer', 'subagentsController', 'liveToolsController', 'messageStreamController', 'composerDrafts', 'promptHistory', 'composerNotes', 'composerSpeech', 'promptDelivery', 'sessionActivity', 'btwPanel', 'composerSubmit', 'pendingSessionSpawns', 'newSessionController', 'harnessSettingsController', 'streamingRenderer', 'moodController', 'extensionUI', 'browserAssets', 'diagramRenderer', 'richText', 'transcriptTree', 'themesController', 'terminalController', 'panelResize', 'routinesController', 'bounceController', 'mainPane', 'appBindings'] as const satisfies readonly (keyof FixtureFeatures)[];
+export const FIXTURE_FEATURE_NAMES = ['hostView', 'hostDirectory', 'apiTransport', 'sessionApi', 'hostConnections', 'hostDiscovery', 'hostPresentation', 'sessionState', 'responseDetailsController', 'appChrome', 'sessionReferences', 'composerAutocomplete', 'sidebarActivity', 'sidebarQuery', 'sidebarLists', 'sidebarControls', 'sessionView', 'sessionResume', 'modelCatalog', 'appModels', 'sessionRelationsController', 'sessionHeader', 'sessionControls', 'sessionSearch', 'displayPreferences', 'pushNotifications', 'vaultApprovals', 'recoveryController', 'hostSettings', 'fleetController', 'searchViewController', 'skillsController', 'usageController', 'sessionInfo', 'fileViews', 'anchoredCommentController', 'transcriptController', 'messageRenderer', 'subagentsController', 'liveToolsController', 'messageStreamController', 'composerDrafts', 'promptHistory', 'composerNotes', 'composerSpeech', 'promptDelivery', 'sessionActivity', 'sideChat', 'composerSubmit', 'pendingSessionSpawns', 'newSessionController', 'harnessSettingsController', 'streamingRenderer', 'moodController', 'extensionUI', 'browserAssets', 'diagramRenderer', 'richText', 'transcriptTree', 'themesController', 'terminalController', 'panelResize', 'routinesController', 'bounceController', 'mainPane', 'appBindings'] as const satisfies readonly (keyof FixtureFeatures)[];
 
 export const FIXTURE_PORT_NAMES = ['appBindings', 'appModels', 'composerDrafts', 'composerSubmit', 'hostDiscovery', 'messageStreamController', 'newSessionController', 'routinesController', 'sessionControls', 'sessionState', 'sidebarControls', 'transcriptController', 'usageController'] as const satisfies readonly (keyof FixturePorts)[];
 

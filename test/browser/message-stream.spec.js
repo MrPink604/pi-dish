@@ -41,7 +41,7 @@ async function setup(page, fleet) {
                 window.streamSources.push(source);
                 return source;
             },
-            activity: fixtureApp.features.sessionActivity, renderer: fixtureApp.features.messageRenderer, streaming: fixtureApp.features.streamingRenderer, tools: fixtureApp.features.liveToolsController, delivery: fixtureApp.features.promptDelivery, extensionUI: fixtureApp.features.extensionUI,
+            activity: fixtureApp.features.sessionActivity, renderer: fixtureApp.features.messageRenderer, streaming: fixtureApp.features.streamingRenderer, tools: fixtureApp.features.liveToolsController, delivery: fixtureApp.features.promptDelivery, extensionUI: fixtureApp.features.extensionUI, sideChat: { apply() { } },
             status: (...args) => { window.streamStatus.push(args); }, catchup() { }, refresh() { }, artifacts() { }, pinned: () => false, follow: () => false, scroll() { }, jump() { }, highlight() { },
             select: (...args) => { window.streamSelections.push(args); }, deleteCached() { }, loadSessions: () => new Promise(resolve => { window.streamLoads.push(resolve); }),
         });

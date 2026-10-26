@@ -7,7 +7,7 @@ import type { SessionState } from './session-state';
 import type { createComposerDrafts } from './composer-drafts';
 import type { createPromptDelivery } from './prompt-delivery';
 import type { createSessionActivity } from './session-activity';
-import type { createBtwPanel } from './btw-panel';
+import type { SideChatController } from './side-chat';
 import type { MessageBlock, RenderMessage } from './message-data';
 import type { createSessionReferences } from './session-references';
 // OMP expands ^model in prompt(), which also carries steers; queued follow-ups
@@ -15,18 +15,49 @@ import type { createSessionReferences } from './session-references';
 const OMP_MODEL_MENTION = /(?:^|\s)\^[^\s^]+(?=\s|$)/;
 export function createComposerSubmit(options: {
   document: Document; sessionState: SessionState; drafts: ReturnType<typeof createComposerDrafts>; delivery: ReturnType<typeof createPromptDelivery>;
-  activity: ReturnType<typeof createSessionActivity>; btw: ReturnType<typeof createBtwPanel>; request: ApiRequest; endpoint: (host: string | null) => HostEndpoint;
+  activity: ReturnType<typeof createSessionActivity>; sideChat: SideChatController; request: ApiRequest; endpoint: (host: string | null) => HostEndpoint;
   spawnId: () => string | null; spawnPending: () => boolean; refs: ReturnType<typeof createSessionReferences>['hints'];
   status: (text: string, type?: string) => void; openTree: () => void; hideAutocomplete: () => void; refresh: () => unknown;
   /** The prompt resumed a hibernated session: reload the list and attach its live stream. */
   woke: (id: string, host: string | null) => unknown;
   follow: () => void; scroll: (container: HTMLElement) => void; renderUser: (message: RenderMessage, time: string, attrs: string) => string;
 }) {
-  const { document, sessionState, delivery, drafts: composerDrafts, activity: sessionActivity, btw: btwPanel } = options;
+  const { document, sessionState, delivery, drafts: composerDrafts, activity: sessionActivity, sideChat } = options;
   let disposed = false, feedbackSequence = 0;
   async function send(endpoint: HostEndpoint, path: string, body?: unknown) {
     const value = await sendJson(options.request, endpoint, path, body), data = record(value) ? value : {};
-    return { info: typeof data.info === 'string' ? data.info : '', answer: typeof data.answer === 'string' ? data.answer : '', result: { queued: record(data.result) && data.result.queued === true } };
+    return { info: typeof data.info === 'string' ? data.info : '', result: { queued: record(data.result) && data.result.queued === true } };
+  }
+  /** `/btw <q>` starts a side chat; plain text continues an open one. */
+  function sideChatQuestion(message: string): { question: string; fresh: boolean } | 'usage' | null {
+    const btw = /^\/btw(?:\s+([\s\S]*))?$/.exec(message);
+    if (btw) {
+      const question = (btw[1] || '').trim();
+      return question ? { question, fresh: true } : 'usage';
+    }
+    if (message.startsWith('/')) return null;
+    const chat = sideChat.active();
+    return chat ? { question: message, fresh: false } : null;
+  }
+  async function askInSideChat(route: { question: string; fresh: boolean }, message: string, input: HTMLTextAreaElement, ownerKey: string, owns: () => boolean) {
+    if (composerDrafts.images.current().length) {
+      options.status('Side chat messages cannot include images', 'error');
+      return;
+    }
+    input.value = '';
+    input.style.height = '';
+    composerDrafts.record(message, ownerKey);
+    composerDrafts.clearDraft(ownerKey);
+    options.hideAutocomplete();
+    options.status(route.fresh ? 'Asking in side chat...' : 'Sending to side chat...', 'working');
+    try {
+      await sideChat.ask(route.question, { fresh: route.fresh });
+      if (owns()) options.status('Asked in side chat');
+    } catch (error) {
+      if (disposed) return;
+      composerDrafts.restorePayload(ownerKey, message, null);
+      if (owns()) options.status(`Side chat: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
   }
 async function sendPrompt() {
   const input = document.getElementById('promptInput') as HTMLTextAreaElement;
@@ -52,6 +83,11 @@ async function sendPrompt() {
     options.status('Wait for the current turn to finish stopping', 'working');
     return;
   }
+  // The side chat is independent of the main turn: /btw and follow-ups must
+  // never be delivered as a prompt, steer, or slash command.
+  const route = sideChatQuestion(message);
+  if (route === 'usage') { options.status('usage: /btw <question>', 'error'); return; }
+  if (route) { await askInSideChat(route, message, input, ownerKey, owns); return; }
 
   if (sessionState.currentSession.harnessId === 'omp' && OMP_MODEL_MENTION.test(message) && sessionActivity.compacting) {
     options.status('Wait for compaction to finish before mentioning a model', 'error');
@@ -74,23 +110,14 @@ async function sendPrompt() {
     composerDrafts.record(message, ownerKey);
     composerDrafts.clearDraft(ownerKey);
     options.status('Running ' + message.split(' ')[0] + '...', 'working');
-    // /btw's answer rides the command response, not the transcript: show the
-    // question panel immediately so a long side turn has visible pending UI.
-    const btwQuestion = message.match(/^\/btw\s+([\s\S]*)$/)?.[1]?.trim();
-    const btwOwner = btwQuestion ? btwPanel.show(btwQuestion) : null;
     try {
       const data = await send(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/command`, { message });
       if (disposed || !sessionState.ownsSelection(owner) || options.endpoint(owner.host).base !== endpoint.base) return;
-      if (btwQuestion) {
-        if (typeof data.answer === 'string' && data.answer) btwPanel.resolve(data.answer, btwOwner);
-        else btwPanel.fail('(no answer)', btwOwner);
-      }
       if (owns()) options.status(data.info || 'Done');
       options.refresh();
     } catch (error) {
     if (disposed) return; const e = { message: error instanceof Error ? error.message : String(error) };
       composerDrafts.restorePayload(ownerKey, message, null);
-      if (btwQuestion && options.endpoint(owner.host).base === endpoint.base) btwPanel.fail(e.message, btwOwner);
       if (owns()) {
         options.status(`${message.split(' ')[0]}: ${e.message}`, 'error');
       }
@@ -183,6 +210,12 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
     options.status('Wait for the current turn to finish stopping', 'working');
     return;
   }
+  // Both Steer and Follow-up use this path, so an open side chat (or /btw)
+  // must claim the text here before it becomes a steer or queued prompt.
+  const route = sideChatQuestion(message);
+  if (route === 'usage') { options.status('usage: /btw <question>', 'error'); return; }
+  if (route) { await askInSideChat(route, message, input, ownerKey, owns); return; }
+
   if (sessionState.currentSession.harnessId === 'omp' && OMP_MODEL_MENTION.test(message) && (!steer || sessionActivity.compacting)) {
     options.status(steer ? 'Wait for compaction to finish before mentioning a model'
       : 'OMP model mentions cannot be queued as follow-ups; steer or send after this turn', 'error');

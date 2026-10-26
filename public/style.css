@@ -4804,27 +4804,33 @@ button.badge-context {
 
 .queue-item-edit:hover { color: var(--text); border-color: var(--accent); }
 
-/* Ephemeral /btw side question: a dismissible Q&A card above the composer.
-   Never in the transcript — mirrors the TUI's btw panel. */
-.btw-panel {
+/* Ephemeral side chat: a bounded, scrollable multi-turn Q&A card above the
+   composer. Turns never enter the transcript. */
+.side-chat {
   margin-top: 4px;
-  padding: 6px 8px;
+  padding: 0 10px 8px;
   background: var(--bg-darker);
   border: 1px solid var(--line);
   border-radius: 6px;
-  max-height: 240px;
+  max-height: 280px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   font-size: 13px;
 }
 
-.btw-panel-header {
+/* Sticky so Stop/Close stay reachable while a long answer scrolls. */
+.side-chat-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   gap: 8px;
   align-items: center;
-  margin-bottom: 4px;
+  padding: 8px 0 6px;
+  background: var(--bg-darker);
 }
 
-.btw-panel-tag {
+.side-chat-tag {
   flex: none;
   font-size: 10px;
   text-transform: uppercase;
@@ -4832,22 +4838,17 @@ button.badge-context {
   color: var(--accent);
 }
 
-.btw-panel-question {
+.side-chat-hint {
   flex: 1;
   min-width: 0;
+  font-size: 11px;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  cursor: pointer;
 }
 
-.btw-panel-question.expanded {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.btw-panel-btn {
+.side-chat-btn {
   flex: none;
   font-size: 11px;
   padding: 3px 8px;
@@ -4859,14 +4860,45 @@ button.badge-context {
   cursor: pointer;
 }
 
-.btw-panel-btn:hover { color: var(--text); border-color: var(--accent); }
+.side-chat-btn:hover { color: var(--text); border-color: var(--accent); }
+.side-chat-btn:disabled { opacity: 0.6; cursor: default; }
 
-.btw-panel-answer {
-  color: var(--text);
+.side-chat-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.btw-panel.pending .btw-panel-answer { color: var(--text-muted); font-style: italic; }
-.btw-panel.error .btw-panel-answer { color: var(--error, #e06c75); font-style: normal; }
+.side-chat-turn {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.side-chat-turn:first-child { padding-top: 0; border-top: 0; }
+
+.side-chat-question {
+  display: inline-block;
+  max-width: 100%;
+  margin-bottom: 5px;
+  padding: 3px 8px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.side-chat-answer { color: var(--text); overflow-wrap: anywhere; }
+.side-chat-answer-body.pending { color: var(--text-muted); font-style: italic; }
+.side-chat-answer-body.stopped { color: var(--text-muted); font-style: italic; }
+.side-chat-answer-body.error { color: var(--error, #e06c75); }
+.side-chat-copy { margin-top: 6px; }
+
+@media (max-width: 768px) {
+  .side-chat { max-height: 45vh; padding: 0 8px 6px; }
+  .side-chat-header { padding: 6px 0 4px; }
+  .side-chat-hint { display: none; }
+  .side-chat-tag { flex: 1; }
+}
 
 /* Composer note: a quiet strip above the prompt box for a composer-side
    failure worth explaining (mic permission, an insecure origin, a

@@ -140,7 +140,7 @@ class FakeOmpAgentSession {
     { enabled: false, active: false, advisors: [] };
   // AgentSession's /fast surface (OMP ≥ 17.x): the model object carries the
   // fields the bridge's eligibility mirror reads.
-  model: unknown = { provider: 'anthropic', id: 'claude-fake' };
+  model: unknown = { api: 'anthropic-messages', provider: 'anthropic', id: 'claude-fake' };
   fastModeEnabled = false;
   fastModeActive = false;
   fastModeSettable = true;
@@ -166,15 +166,52 @@ class FakeOmpAgentSession {
   }
   subscribe() { return () => {}; }
   // /btw's backing API on the real AgentSession. The bridge mirrors OMP's
-  // embedded btw-user template into promptText; the test asserts the question
-  // arrived and that nothing touched the session file.
-  async runEphemeralTurn(opts: { promptText?: string; onTextDelta?: (delta: string) => void } = {}) {
-    if (process.env.FAKE_OMP_BTW_CALL) {
-      fs.writeFileSync(process.env.FAKE_OMP_BTW_CALL, JSON.stringify({ promptText: opts.promptText ?? null }));
+  // embedded btw-user template into promptText and replays the chat's earlier
+  // turns as `history`. Calls are appended so a follow-up can be asserted
+  // against the first turn; nothing here ever touches the session file.
+  async runEphemeralTurn(opts: {
+    promptText?: string;
+    history?: unknown[];
+    conversationKey?: string;
+    onTextDelta?: (delta: string) => void;
+    signal?: AbortSignal;
+  } = {}) {
+    const callFile = process.env.FAKE_OMP_BTW_CALL;
+    if (callFile) {
+      const prior: unknown[] = fs.existsSync(callFile) ? JSON.parse(fs.readFileSync(callFile, 'utf8')) : [];
+      prior.push({
+        promptText: opts.promptText ?? null,
+        history: opts.history ?? [],
+        conversationKey: opts.conversationKey ?? null,
+      });
+      fs.writeFileSync(callFile, JSON.stringify(prior));
+    }
+    // FAKE_OMP_BTW_DELAY_MS holds the turn open so a cancel can arrive first;
+    // an abort rejects immediately instead of waiting out the delay.
+    const delayMs = Number(process.env.FAKE_OMP_BTW_DELAY_MS || 0);
+    if (delayMs > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const signal = opts.signal;
+        if (signal?.aborted) {
+          reject(Object.assign(new Error('ephemeral turn aborted'), { name: 'AbortError' }));
+          return;
+        }
+        const onAbort = () => {
+          clearTimeout(timer);
+          reject(Object.assign(new Error('ephemeral turn aborted'), { name: 'AbortError' }));
+        };
+        const timer = setTimeout(() => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        }, delayMs);
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
     }
     if (process.env.FAKE_OMP_BTW_ERROR) throw new Error(process.env.FAKE_OMP_BTW_ERROR);
     const text = process.env.FAKE_OMP_BTW_ANSWER || 'fake btw answer';
-    opts.onTextDelta?.(text);
+    const splitAt = Math.max(1, Math.ceil(text.length / 2));
+    opts.onTextDelta?.(text.slice(0, splitAt));
+    if (splitAt < text.length) opts.onTextDelta?.(text.slice(splitAt));
     return { replyText: text, assistantMessage: { role: 'assistant', content: [{ type: 'text', text }] } };
   }
   // FAKE_OMP_PROMPT_MODE: 'signed-out' refuses in pre-flight like OMP's

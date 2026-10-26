@@ -363,9 +363,10 @@
                built with textContent by prompt-history.ts. -->
           <div class="prompt-history-panel" id="promptHistoryPanel" role="dialog" aria-label="Sent prompts"></div>
           <div class="queue-panel" id="queuePanel" style="display:none"></div>
-          <!-- Ephemeral /btw side-question panel: never part of the
-               transcript, dismissed by the user or a session switch. -->
-          <div class="btw-panel" id="btwPanel" style="display:none"></div>
+          <!-- Ephemeral side chat: never part of the transcript, closed by the
+               user (or reset on a session switch). Turns arrive over the
+               session stream and are rendered by side-chat.ts. -->
+          <div class="side-chat" id="sideChat" style="display:none"></div>
           <!-- Quiet one-line explanations for composer-side failures the user
                can act on (mic permission, an insecure origin, a transcription
                error). Filled with textContent only. -->

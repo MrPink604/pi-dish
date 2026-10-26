@@ -1,6 +1,10 @@
 import { formatDuration } from './helper-format';
-import type { SelectionOwner, createSessionState } from './session-state';
-export function createSessionActivity(options: { document: Document; sessionState: ReturnType<typeof createSessionState>; clearQueue: () => void; status: (message: string) => void }) {
+import type { SelectionOwner, SessionState } from './session-state';
+export function createSessionActivity(options: {
+  document: Document; sessionState: SessionState; clearQueue: () => void; status: (message: string) => void;
+  /** An open side chat makes Send the composer action even during a main turn. */
+  sideChatActive: () => boolean;
+}) {
 const { document, sessionState } = options;
 let turnInProgress = false, disposed = false;
 let owner: SelectionOwner | null = null;
@@ -74,6 +78,20 @@ function syncActivityIndicator() {
   updateWorkingIndicator();
 }
 
+// Send stays available while a side chat is open even mid-turn: the side
+// conversation is independent of the main turn, and composer-submit routes
+// the text there. Steer/follow-up would deliver to the wrong conversation.
+function syncComposerButtons() {
+  if (disposed) return;
+  const sideChat = !!options.sideChatActive(), steering = turnInProgress && !sideChat;
+  const btnSteer = document.getElementById('btnSteer');
+  const btnFollowUp = document.getElementById('btnFollowUp');
+  const btnSend = document.getElementById('btnSend');
+  if (btnSteer) btnSteer.style.display = steering ? '' : 'none';
+  if (btnFollowUp) btnFollowUp.style.display = steering ? '' : 'none';
+  if (btnSend) btnSend.style.display = turnInProgress && !sideChat ? 'none' : '';
+}
+
 function setTurnInProgress(active: boolean) {
   if (disposed) return; owner = sessionState.captureSelection();
   const starting = active && !turnInProgress;
@@ -90,12 +108,7 @@ function setTurnInProgress(active: boolean) {
   if (sessionState.currentSession && !!sessionState.currentSession.turnInProgress !== !!active) {
     sessionState.patchSessionActivity(sessionState.currentSession.id, { turnInProgress: !!active }, owner?.host);
   }
-  var btnSteer = document.getElementById('btnSteer');
-  var btnFollowUp = document.getElementById('btnFollowUp');
-  var btnSend = document.getElementById('btnSend');
-  if (btnSteer) btnSteer.style.display = active ? '' : 'none';
-  if (btnFollowUp) btnFollowUp.style.display = active ? '' : 'none';
-  if (btnSend) btnSend.style.display = active ? 'none' : '';
+  syncComposerButtons();
   // A turn ending mid-compaction (manual /compact aborts the agent first;
   // auto-compaction holds queued sends) must not wipe the compaction badge,
   // the held-message strip, or the status line.
@@ -125,6 +138,6 @@ const aborts = new Map<string, symbol>();
 function beginAbort(key: string) { if (disposed || aborts.has(key)) return null; const token = Symbol(); aborts.set(key, token); return token; }
 function endAbort(key: string, token?: symbol) { if (token === undefined || aborts.get(key) === token) aborts.delete(key); }
 function dispose() { if (disposed) return; disposed = true; if (workingTicker) clearInterval(workingTicker); workingTicker = null; runningTools.clear(); aborts.clear(); }
-return { setTurn: setTurnInProgress, setCompacting, update: updateWorkingIndicator, toolStarted, toolFinished, beginAbort, endAbort, isAborting: (key: string) => aborts.has(key), dispose,
+return { setTurn: setTurnInProgress, setCompacting, update: updateWorkingIndicator, toolStarted, toolFinished, beginAbort, endAbort, isAborting: (key: string) => aborts.has(key), syncComposerButtons, dispose,
   get turn() { return turnInProgress; }, get compacting() { return compactingNow; } };
 }

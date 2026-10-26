@@ -17,7 +17,7 @@ import { EventEmitter } from 'events';
 import { isDeepStrictEqual } from 'util';
 import { createLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
-import { decodeBridgeFrame, isRecord, type ProtocolRecord } from './wire-protocol';
+import { decodeBridgeFrame, decodeSideChat, isRecord, type ProtocolRecord } from './wire-protocol';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { createExtensionUIState, reduceExtensionUIState } from './extension-ui-state';
@@ -25,7 +25,7 @@ import { listHarnesses } from './harnesses';
 import { privateRootFor } from './private-sessions';
 
 import { validSessionId } from './session-key';
-import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, RunningToolCall } from './contracts';
+import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, RunningToolCall, SideChatState } from './contracts';
 
 type BridgeRequest = Promise<unknown> & { readonly requestId?: number };
 interface PromptOptions { deliverAs?: 'steer' | 'followUp'; images?: unknown[]; }
@@ -40,6 +40,22 @@ function isRegistryEntry(value: unknown): value is BridgeRegistryEntry {
 function requireNativeId(value: unknown): NativeSessionId {
   if (!validSessionId(value)) throw new TypeError('Invalid bridge session identity');
   return value;
+}
+
+/**
+ * Append one streamed delta to the running turn it belongs to. A delta for a
+ * closed/replaced chat, a stale turn, or a turn that already finished is
+ * dropped — the next `side_chat` snapshot is authoritative.
+ */
+function withSideChatDelta(state: SideChatState, input: unknown): SideChatState {
+  const data = asRecord(input);
+  if (!state || data.chatId !== state.id || typeof data.turnId !== 'string' || typeof data.delta !== 'string') return state;
+  const turn = state.turns[state.turns.length - 1];
+  // Only the last turn may be running (wire invariant), so matching it is the
+  // whole lookup.
+  if (!turn || turn.id !== data.turnId || turn.status !== 'running') return state;
+  const updated = { ...turn, answer: turn.answer + data.delta, updatedAt: Date.now() };
+  return { ...state, turns: [...state.turns.slice(0, -1), updated] };
 }
 
 const ROOT = path.join(os.homedir(), '.pi', 'dish');
@@ -353,6 +369,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   declare turnInProgress: boolean;
   declare compacting: boolean;
   declare queueState: unknown;
+  declare sideChat: SideChatState;
   declare runningToolCalls: Map<string, RunningToolCall>;
   declare extUIState: ExtensionUIState;
   declare treeLeafUnsupported?: boolean;
@@ -385,6 +402,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     this.turnInProgress = !!registryEntry.turnInProgress;
     this.compacting = !!registryEntry.compacting;
     this.queueState = null; // populated from the bridge hello / queue_update
+    this.sideChat = null; // populated from the bridge hello / side_chat
     this.runningToolCalls = new Map();
     // Populate this inside _handle(), before connect() resolves, so bridge
     // state replay cannot outrun server-side listeners on the first socket.
@@ -520,6 +538,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
       // just (re)connected — the bridge only pushes hello when our socket
       // connects, which is once per session.
       this.queueState = msg.queue || null;
+      this.sideChat = decodeSideChat(msg.sideChat);
       this.emit('hello', msg);
       return;
     }
@@ -546,6 +565,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
       else if (ev === 'compaction_start') this.compacting = true;
       else if (ev === 'compaction_end') this.compacting = false;
       else if (ev === 'queue_update') this.queueState = frame.data;
+      else if (ev === 'side_chat') this.sideChat = decodeSideChat(data.sideChat);
+      else if (ev === 'side_chat_delta') this.sideChat = withSideChatDelta(this.sideChat, frame.data);
       if (ev === 'session_switch') {
         // The preserved socket now controls a different logical session.
         // Clear session-owned live state before listeners re-key server state;
@@ -554,6 +575,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
         this.turnInProgress = false;
         this.compacting = false;
         this.queueState = null;
+        this.sideChat = null;
         this.runningToolCalls.clear();
       }
       reduceExtensionUIState(this.extUIState, ev, frame.data);
@@ -646,10 +668,15 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   getShareSnapshot() { return this.send('share_snapshot'); }
   setThinkingLevel(level: string) { return this.send('set_thinking_level', { level }); }
   setFastMode(enabled: boolean) { return this.send('set_fast_mode', { enabled }); }
-  // /btw awaits a full ephemeral provider turn inside the run_command call, so
-  // the caller passes a prompt-scale timeout; everything else keeps 30s.
-  runCommand(message: string, deliverAs?: 'steer' | 'followUp', opts: { timeout?: number } = {}) {
-    return this.send('run_command', { message, deliverAs }, opts);
+  // Asks return immediately: the answer streams through `side_chat` /
+  // `side_chat_delta` events, so the default socket timeout is plenty.
+  sideChatAsk(question: string, chatId?: string) {
+    return this.send('side_chat_ask', chatId ? { question, chatId } : { question });
+  }
+  sideChatCancel(chatId: string) { return this.send('side_chat_cancel', { chatId }); }
+  sideChatClose(chatId: string) { return this.send('side_chat_close', { chatId }); }
+  runCommand(message: string, deliverAs?: 'steer' | 'followUp') {
+    return this.send('run_command', { message, deliverAs });
   }
   readTree() { return this.send('tree_read', {}, { timeout: 10000 }); }
   // Leaf id only — the transcript route needs just the live leaf, and

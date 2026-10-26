@@ -52,7 +52,7 @@ import { createComposerNotes } from './composer-notes';
 import { createComposerSpeech } from './composer-speech';
 import { createPromptDelivery } from './prompt-delivery';
 import { createSessionActivity } from './session-activity';
-import { createBtwPanel } from './btw-panel';
+import { createSideChat, type SideChatController } from './side-chat';
 import { createComposerSubmit } from './composer-submit';
 import { createSessionSpawns } from './session-spawns';
 import { createNewSession } from './new-session';
@@ -371,7 +371,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     // While dictating, Escape cancels the recording (handled by the document
     // listener) — it must not also abort the turn.
-    if (e.key === 'Escape' && !composerAutocomplete.visible && !composerSpeech.isRecording() && sessionActivity.turn) { e.preventDefault(); composerSubmit.abortTurn(); }
+    if (e.key === 'Escape' && !composerAutocomplete.visible && !composerSpeech.isRecording()) {
+      if (sideChat.active()) { e.preventDefault(); void sideChat.close(); return; }
+      if (sessionActivity.turn) { e.preventDefault(); composerSubmit.abortTurn(); }
+    }
   });
 
   // Global Ctrl+C to abort
@@ -647,7 +650,7 @@ const sessionView: ReturnType<typeof createSessionView> = createSessionView({ do
   spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => streamingRenderer.cancel(), stopFollowing: () => { appChrome.stopFollowing(); },
   closeViews: keepBounce => mainPane.beforeSelection(keepBounce),
   closeTerminal: () => terminalController.close(), clearExtension: () => extensionUI.clear(), clearRelations: () => sessionRelationsController.clear(), closeControls: () => appChrome.closePanel(), hideAutocomplete: () => composerAutocomplete.hide(),
-  retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => promptDelivery.render(data), closeBtw: () => btwPanel.close(), resetArtifacts: () => sessionInfo.resetArtifacts(),
+  retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => promptDelivery.render(data), resetSideChat: () => sideChat.reset(), resetArtifacts: () => sessionInfo.resetArtifacts(),
   thinking: () => sessionControls.updateThinking(), terminal: () => terminalController.updateButtons(), mic: () => composerSpeech.updateButton(), mood: (description, face) => moodController.set(description, face), status: (message, type) => setStatus(message, type),
   render: () => renderSessions(), cancelRecording: () => composerSpeech.cancel(), hideNote: () => composerNotes.hide(), reveal: (id, host) => sidebarControls.reveal(id, host),
   seen: session => sidebarActivity.mark(session), artifacts: owner => sessionInfo.refreshArtifacts(owner), header: () => sessionHeader.update(), relations: owner => sessionRelationsController.load(owner), models: (id, harness) => appModels.load(id, harness), commands: id => composerAutocomplete.loadCommands(id),
@@ -926,7 +929,7 @@ const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools(
 // =========================================================================
 
 const messageStreamController: ReturnType<typeof createMessageStream> = createMessageStream({ document, sessionState, endpoint: (...args) => hostDirectory.resolveHost(...args), ticket: host => mintHostTicket(host, 'stream'),
-  get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; },
+  get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
   status: (message, type) => setStatus(message, type), catchup: owner => transcriptController.catchup(owner), refresh: () => sidebarLists.refresh(), artifacts: owner => sessionInfo.refreshArtifacts(owner),
   pinned: (...args) => appChrome.pinned(...args), follow: () => appChrome.following, scroll: (...args) => appChrome.scroll(...args), jump: (...args) => appChrome.jump(...args), highlight: root => richText.highlight(root),
   select: (id, options) => sessionView.select(id, options), deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => sidebarLists.load(query, options),
@@ -967,17 +970,25 @@ const promptDelivery: ReturnType<typeof createPromptDelivery> = createPromptDeli
 
 function consumePendingSelfEcho(id: string, content: unknown) { return promptDelivery.consume(keyForSessionId(id), content); }
 
-const sessionActivity: ReturnType<typeof createSessionActivity> = createSessionActivity({ document, sessionState, clearQueue: () => promptDelivery.render(null), status: message => setStatus(message) });
+const sessionActivity: ReturnType<typeof createSessionActivity> = createSessionActivity({ document, sessionState, clearQueue: () => promptDelivery.render(null), status: message => setStatus(message),
+  sideChatActive: () => !!sideChat.active() });
 
 // ---------------------------------------------------------------------------
-// /btw panel — ephemeral side question (OMP). The answer never lands in the
-// transcript; it lives in this dismissible card above the composer, mirroring
-// the TUI's btw panel. A new question replaces the panel; a session switch
-// drops it (see the two selection reset points).
+// Side chat — ephemeral multi-turn conversation forked from this session.
+// Turns never enter the transcript; the bridge owns the state and streams
+// snapshots, so a reload or another device shows the same conversation.
+// Selection changes reset the panel; the new stream replays its state.
 // ---------------------------------------------------------------------------
-const btwPanel: ReturnType<typeof createBtwPanel> = createBtwPanel({ document, sessionState, markdown: text => richText.format(text), copy: text => copyTextToClipboard(text) });
+function syncComposerMode(active: boolean) {
+  sessionActivity.syncComposerButtons();
+  const input = document.getElementById('promptInput') as HTMLTextAreaElement | null;
+  if (input) input.placeholder = active ? 'Ask a follow-up in the side chat…' : 'Send a message...';
+}
+const sideChat: SideChatController = createSideChat({ document, sessionState, markdown: text => richText.format(text), copy: text => copyTextToClipboard(text),
+  request: (...args) => apiTransport.request(...args), endpoint: (...args) => hostDirectory.resolveHost(...args), status: (message, type) => setStatus(message, type),
+  onChange: syncComposerMode });
 
-const composerSubmit: ReturnType<typeof createComposerSubmit> = createComposerSubmit({ document, sessionState, drafts: composerDrafts, delivery: promptDelivery, activity: sessionActivity, btw: btwPanel,
+const composerSubmit: ReturnType<typeof createComposerSubmit> = createComposerSubmit({ document, sessionState, drafts: composerDrafts, delivery: promptDelivery, activity: sessionActivity, sideChat,
   request: (...args) => apiTransport.request(...args), endpoint: (...args) => hostDirectory.resolveHost(...args), spawnId: () => sessionView.spawnId, spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
   refs: message => sessionReferences.hints(message), status: (message, type) => setStatus(message, type), openTree: () => transcriptTree.open(), hideAutocomplete: () => composerAutocomplete.hide(),
   refresh: () => sidebarLists.refresh(), follow: () => { appChrome.follow(); }, scroll: (...args) => appChrome.scroll(...args), renderUser: (message, time, attrs) => messageRenderer.user(message, time, attrs),

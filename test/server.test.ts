@@ -2475,27 +2475,32 @@ test('OMP /compact is denied when the live bridge does not advertise it', async 
   }
 });
 
-test('OMP /btw requires the advertised capability and passes the bridge answer through', async () => {
-  const nativeId = 'omp-btw-route';
+test('OMP side chat is asynchronous, capability-gated, and forwards bridge state', async () => {
+  const nativeId = 'omp-side-chat-route';
   const routeId = encodeSessionKey('omp', checkedNativeId(nativeId));
   const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
-  const socketPath = path.join(tmpHome, 'omp-btw-route.sock');
+  const socketPath = path.join(tmpHome, 'omp-side-chat-route.sock');
   fs.mkdirSync(registryDir, { recursive: true });
   const identity = present(processIdentity(process.pid))
-  const claim = {
+  const claim: TestRecord = {
     protocolVersion: 2,
     wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
     harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId,
     bridgeInstanceId: nativeId, instanceId: nativeId,
     sessionFile: ompSessionFile, socketPath, cwd: ompCwd,
     pid: identity.pid, startTime: identity.startTime, spawnToken: null,
-    capabilities: { commands: true, btw: true },
+    capabilities: { commands: true, sideChat: true },
   };
+  const chatState = (question: unknown) => ({
+    id: 'chat-1', createdAt: 1000,
+    turns: [{ id: 'turn-1', question: String(question), answer: '', status: 'running', startedAt: 1001, updatedAt: 1001 }],
+  });
   const received: TestRecord[] = [];
   const bridgeSockets = new Set<net.Socket>();
   const bridge = net.createServer(sock => {
     bridgeSockets.add(sock);
     sock.on('close', () => bridgeSockets.delete(sock));
+    sock.on('error', () => {});
     sock.write(JSON.stringify({ type: 'hello', ...claim }) + '\n');
     let buffered = '';
     sock.on('data', chunk => {
@@ -2507,7 +2512,9 @@ test('OMP /btw requires the advertised capability and passes the bridge answer t
         if (!line) continue;
         const command = record(JSON.parse(line));
         received.push(command);
-        const data = command.command === 'run_command' ? { answer: 'side answer' } : {};
+        const data = command.command === 'side_chat_ask'
+          ? { sideChat: chatState(command.question) }
+          : { sideChat: null };
         sock.write(JSON.stringify({ type: 'response', id: command.id, success: true, data }) + '\n');
       }
     });
@@ -2516,28 +2523,143 @@ test('OMP /btw requires the advertised capability and passes the bridge answer t
   const registryPath = path.join(registryDir, `${nativeId}.json`);
   fs.writeFileSync(registryPath, JSON.stringify(claim));
   invalidateRegistryCache();
+  const route = `/api/sessions/${encodeURIComponent(routeId)}/side-chat`;
 
   try {
-    const bare = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/btw' });
-    assert.equal(bare.status, 400, JSON.stringify(bare.body));
-    assert.match(text(bare.body.error), /usage: \/btw/);
-    assert.equal(received.length, 0, 'a bare /btw never reaches the bridge socket');
+    const initial = await get(route);
+    assert.equal(initial.status, 200, JSON.stringify(initial.body));
+    assert.equal(initial.body.sideChat, null);
+    assert.equal(received.length, 0, 'reading the side chat does not touch the bridge socket');
 
-    const asked = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/btw why sky blue?' });
+    for (const body of [{}, { question: '' }, { question: '   ' }, { question: 42 }]) {
+      const blank = await post(route, body);
+      assert.equal(blank.status, 400, JSON.stringify(blank.body));
+      assert.match(text(blank.body.error), /usage: \/btw/);
+    }
+    assert.equal(received.length, 0, 'a blank question never reaches the bridge socket');
+
+    const asked = await post(route, { question: '  why sky blue?  ' });
     assert.equal(asked.status, 200, JSON.stringify(asked.body));
-    assert.equal(asked.body.answer, 'side answer');
-    assert.ok(received.some(command => command.command === 'run_command' && command.message === '/btw why sky blue?'));
+    assert.deepEqual(record(asked.body.sideChat), chatState('why sky blue?'));
+    const askCommand = present(received.find(command => command.command === 'side_chat_ask'));
+    assert.equal(askCommand.question, 'why sky blue?');
+    assert.equal('chatId' in askCommand, false, 'a new side chat ask carries no chatId');
 
-    // Old wrappers predate the capability: fail closed before the socket.
-    claim.capabilities = { commands: true, btw: false };
+    const followUp = await post(route, { question: 'and at night?', chatId: 'chat-1' });
+    assert.equal(followUp.status, 200, JSON.stringify(followUp.body));
+    const followUpCommand = present(received.filter(command => command.command === 'side_chat_ask').pop());
+    assert.equal(followUpCommand.question, 'and at night?');
+    assert.equal(followUpCommand.chatId, 'chat-1');
+
+    // /command '/btw q' starts a new chat too, and the blocking answer is gone.
+    const beforeCommand = received.length;
+    const command = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/btw summarize this' });
+    assert.equal(command.status, 200, JSON.stringify(command.body));
+    assert.equal(command.body.info, 'Asked in side chat');
+    assert.deepEqual(record(command.body.sideChat), chatState('summarize this'));
+    assert.equal('answer' in command.body, false, 'the old blocking answer field is gone');
+    const commandAsk = present(received.slice(beforeCommand).find(item => item.command === 'side_chat_ask'));
+    assert.equal(commandAsk.question, 'summarize this');
+    assert.equal('chatId' in commandAsk, false);
+
+    for (const action of ['cancel', 'close'] as const) {
+      const missing = await post(`${route}/${action}`, {});
+      assert.equal(missing.status, 400, JSON.stringify(missing.body));
+      const done = await post(`${route}/${action}`, { chatId: 'chat-1' });
+      assert.equal(done.status, 200, JSON.stringify(done.body));
+      assert.deepEqual(done.body, { success: true, sideChat: null });
+      const forwarded = present(received.filter(item => item.command === `side_chat_${action}`).pop());
+      assert.equal(forwarded.chatId, 'chat-1');
+    }
+
+    // Old wrappers predate the capability (some still advertise `btw: true`):
+    // the read stays truthful and every mutating route fails closed before the
+    // socket.
+    claim.capabilities = { commands: true, btw: true };
     fs.writeFileSync(registryPath, JSON.stringify(claim));
     invalidateRegistryCache();
-    const before = received.length;
-    const unsupported = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/btw q' });
-    assert.equal(unsupported.status, 409, JSON.stringify(unsupported.body));
-    assert.match(text(unsupported.body.error), /does not support \/btw/i);
-    assert.equal(received.length, before, 'unsupported /btw never reaches the bridge socket');
+    const beforeUnsupported = received.length;
+    const unsupportedRead = await get(route);
+    assert.equal(unsupportedRead.status, 200, JSON.stringify(unsupportedRead.body));
+    assert.equal(unsupportedRead.body.sideChat, null, 'a capability-less bridge has no side chat');
+    const unsupportedAsk = await post(route, { question: 'q' });
+    assert.equal(unsupportedAsk.status, 409, JSON.stringify(unsupportedAsk.body));
+    assert.match(text(unsupportedAsk.body.error), /older pi-dish bridge; restart it to use side chats/);
+    const unsupportedCancel = await post(`${route}/cancel`, { chatId: 'chat-1' });
+    assert.equal(unsupportedCancel.status, 409, JSON.stringify(unsupportedCancel.body));
+    const unsupportedCommand = await post(`/api/sessions/${encodeURIComponent(routeId)}/command`, { message: '/btw q' });
+    assert.equal(unsupportedCommand.status, 409, JSON.stringify(unsupportedCommand.body));
+    assert.match(text(unsupportedCommand.body.error), /older pi-dish bridge; restart it to use side chats/);
+    assert.equal(received.length, beforeUnsupported, 'unsupported side-chat routes never reach the bridge socket');
   } finally {
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+    for (const sock of bridgeSockets) sock.destroy();
+    await new Promise<void>((resolve, reject) => bridge.close(error => error ? reject(error) : resolve()));
+  }
+});
+
+test('OMP side chat replays its snapshot and coalesces streamed deltas', async () => {
+  const nativeId = 'omp-side-chat-stream';
+  const routeId = encodeSessionKey('omp', checkedNativeId(nativeId));
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const socketPath = path.join(tmpHome, 'omp-side-chat-stream.sock');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const identity = present(processIdentity(process.pid))
+  const runningChat = {
+    id: 'chat-stream', createdAt: 1000,
+    turns: [{ id: 'turn-stream', question: 'why sky blue?', answer: '', status: 'running', startedAt: 1001, updatedAt: 1001 }],
+  };
+  const claim: TestRecord = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId,
+    bridgeInstanceId: nativeId, instanceId: nativeId,
+    sessionFile: ompSessionFile, socketPath, cwd: ompCwd,
+    pid: identity.pid, startTime: identity.startTime, spawnToken: null,
+    capabilities: { sideChat: true },
+  };
+  const bridgeSockets = new Set<net.Socket>();
+  let socket: net.Socket | null = null;
+  const bridge = net.createServer(sock => {
+    socket = sock;
+    bridgeSockets.add(sock);
+    sock.on('close', () => bridgeSockets.delete(sock));
+    sock.on('error', () => {});
+    sock.write(JSON.stringify({ type: 'hello', ...claim, sideChat: null }) + '\n');
+  });
+  await new Promise<void>((resolve, reject) => { bridge.once('error', reject); bridge.listen(socketPath, resolve); });
+  const registryPath = path.join(registryDir, `${nativeId}.json`);
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+  const stream = sseReader(`${base}/api/sessions/${encodeURIComponent(routeId)}/stream`);
+  const chatTurns = (event: unknown) => {
+    if (eventName(event) !== 'side_chat') return [] as TestRecord[];
+    const state = eventData(event).sideChat;
+    return state === null ? [] : records(record(state).turns);
+  };
+  const turnAnswer = (event: unknown) => {
+    const turns = chatTurns(event);
+    return turns.length === 1 ? String(turns[0].answer) : null;
+  };
+  try {
+    const initial = await stream.waitFor((event: unknown) => eventName(event) === 'side_chat');
+    assert.equal(eventData(initial).sideChat, null, 'a fresh stream replays the empty side chat');
+
+    const bridgeSocket: net.Socket = present(socket as net.Socket | null);
+    bridgeSocket.write(JSON.stringify({ type: 'event', event: 'side_chat', data: { sideChat: runningChat } }) + '\n');
+    const running = await stream.waitFor((event: unknown) => turnAnswer(event) === '');
+    assert.equal(record(chatTurns(running)[0]).status, 'running');
+
+    bridgeSocket.write(
+      JSON.stringify({ type: 'event', event: 'side_chat_delta', data: { chatId: 'chat-stream', turnId: 'turn-stream', delta: 'Hel' } }) + '\n'
+      + JSON.stringify({ type: 'event', event: 'side_chat_delta', data: { chatId: 'chat-stream', turnId: 'turn-stream', delta: 'lo' } }) + '\n');
+    const coalesced = await stream.waitFor((event: unknown) => turnAnswer(event) === 'Hello');
+    assert.equal(turnAnswer(coalesced), 'Hello');
+    assert.equal(stream.events.some((event: unknown) => turnAnswer(event) === 'Hel'), false,
+      'both deltas coalesce into one snapshot');
+  } finally {
+    stream.close();
     fs.rmSync(registryPath, { force: true });
     invalidateRegistryCache();
     for (const sock of bridgeSockets) sock.destroy();

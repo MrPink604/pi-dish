@@ -125,6 +125,8 @@ declare global {
     joinedPage: Promise<unknown>;
     joinedSettled: boolean;
     lateExport: ReturnType<FixtureFeatures['sessionControls']['export']>;
+    lateAsk: ReturnType<FixtureFeatures['composerSubmit']['sendPrompt']>;
+    lateReplies: Array<(value: Response) => void>;
     limitReads: number;
     listCalls: number;
     listRefreshes: number;
@@ -135,7 +137,6 @@ declare global {
     modelBodyWaiting: boolean;
     modelLoads: unknown[];
     newAdd: ReturnType<FixtureFeatures['hostSettings']['addFromForm']>;
-    newBtw: ReturnType<FixtureFeatures['btwPanel']['show']>;
     newCatchup: Promise<unknown>;
     newDiscovery: Promise<unknown>;
     newIdentity: ReturnType<FixtureFeatures['hostDiscovery']['identify']>;
@@ -143,7 +144,6 @@ declare global {
     newTail: Promise<unknown>;
     oldAdd: ReturnType<FixtureFeatures['hostSettings']['addFromForm']>;
     oldBranch: HTMLElement | null;
-    oldBtw: ReturnType<FixtureFeatures['btwPanel']['show']>;
     oldCatchup: Promise<unknown>;
     oldCommands: ReturnType<FixtureFeatures['composerAutocomplete']['loadCommands']>;
     oldComments: ReturnType<FixtureFeatures['anchoredCommentController']['refresh']>;
@@ -175,7 +175,7 @@ declare global {
     oldRow: HTMLElement | null;
     oldScopeButton: HTMLElement | null;
     oldSettings: ReturnType<FixtureFeatures['harnessSettingsController']['open']>;
-    oldSideClose: HTMLElement | null;
+    oldSideCopy: HTMLElement | null;
     oldSpawn: ReturnType<FixtureFeatures['newSessionController']['spawn']>;
     oldPage: ReturnType<ReturnType<typeof BrowserApi.createTranscript>['loadOlder']>;
     oldTail: Promise<unknown>;
@@ -245,7 +245,9 @@ declare global {
     secondStreamStart: Promise<unknown>;
     selfAbort: ReturnType<FixtureFeatures['composerSubmit']['abortTurn']>;
     shareCopy: ReturnType<FixtureFeatures['sessionInfo']['copyMessage']>;
-    sideQuestion: ReturnType<typeof BrowserApi.createBtwPanel>;
+    sideChatOwner: { id: string; host: string | null };
+    sideChatPanel: ReturnType<typeof BrowserApi.createSideChat>;
+    sideChatReplies: Array<{ path: string; resolve: (value: Response) => void }>;
     staleSelection: ReturnType<FixtureFeatures['sessionState']['captureSelection']>;
     streamEndpoint: import('../../src/browser/api-client.js').HostEndpoint;
     streamLoads: Array<() => void>;

@@ -8,7 +8,27 @@ export type HarnessId = 'pi' | 'omp' | 'prime';
 export type BridgeCapability = 'prompt' | 'steer' | 'followUp' | 'abort' | 'compact'
   | 'models' | 'setModel' | 'setThinking' | 'rename' | 'commands' | 'reload'
   | 'queueRead' | 'queueCancel' | 'treeRead' | 'treeNavigation' | 'extensionUI'
-  | 'shareSnapshot' | 'guardedReload' | 'btw' | 'fastMode' | 'login';
+  | 'shareSnapshot' | 'guardedReload' | 'sideChat' | 'fastMode' | 'login';
+
+/** One asynchronous answer inside the ephemeral side chat (never the transcript). */
+export type SideChatTurnStatus = 'running' | 'complete' | 'error' | 'cancelled';
+export interface SideChatTurn {
+  id: string;
+  question: string;
+  answer: string;
+  status: SideChatTurnStatus;
+  /** Present only when `status` is `error`. */
+  error?: string;
+  startedAt: number;
+  updatedAt: number;
+}
+export interface SideChat {
+  id: string;
+  createdAt: number;
+  turns: SideChatTurn[];
+}
+/** A bridge session owns at most one side chat; JSON `null` means none is open. */
+export type SideChatState = SideChat | null;
 
 /** Registry/wire values are unvalidated; policy checks exact booleans. */
 export type AdvertisedCapabilities = Partial<Record<BridgeCapability, unknown>>;

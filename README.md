@@ -287,7 +287,7 @@ Current alternative-harness support is capability-detected:
 | Prompts, steering, follow-ups, abort, model/thinking controls | Supported through the bridge | Supported through the bridge |
 | Fast mode (priority service tier) | Supported through the bridge on eligible models; session pricing prefers OMP's tier-adjusted reported cost | Unavailable |
 | Compaction | Supported on live capable bridges | Unavailable |
-| Ephemeral side questions (`/btw`) | Supported on live capable bridges; the answer renders in a dismissible composer panel, never in the transcript | Unavailable |
+| Side chats (`/btw`) | Supported on live capable bridges: `/btw <question>` opens an ephemeral side chat forked from the live context; answers stream into a composer panel, follow-ups go to the side chat until it is closed (✕ or Esc), and nothing enters the transcript. The main turn keeps running. Follow-ups carry earlier side turns on OMP ≥ 18.6 | Unavailable |
 | Provider sign-in (`/login`) | Supported on live capable bridges | Unavailable |
 | Tree navigation | Supported live, with a reachable tmux pane for command-context handoff | Unavailable |
 | Harness queue listing/cancellation | Unavailable | Unavailable |

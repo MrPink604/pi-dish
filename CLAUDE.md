@@ -2766,8 +2766,11 @@ markers in chronological order through grouping, eviction and cache restoration;
 only genuinely absent indices become paging gaps. Hidden markers never serve as
 viewport anchors or create a visible thinking-only group.
 
-Browser activity/abort gates and `/btw` panels use typed owners. Keep per-question
-response tokens separate from the session identity and dispose clipboard timers.
+Browser activity/abort gates and the side chat (`side-chat.ts`) use typed owners.
+Side chat state belongs to the bridge (one per session, cleared on a session switch);
+asks return at once and answers arrive only as `side_chat` SSE snapshots. Never
+reintroduce a request that waits for a provider turn: hub relays and fronting
+proxies time out first. Requests capture selection and endpoint; dispose clipboard timers.
 
 Prompt delivery uses the typed optimistic ledger; queue rows capture raw text and
 endpoint identity. Do not mutate ledger internals from callers or tests.

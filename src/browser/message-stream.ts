@@ -38,11 +38,15 @@ export interface MessageStreamExtensionUI {
   reconcile(value: unknown, session: ExtensionSession): void;
   end(session: ExtensionSession): void;
 }
+export interface MessageStreamSideChat {
+  /** Apply a snapshot emitted by this stream's session; foreign sessions ignore it. */
+  apply(value: unknown, session: { id: string; host: string | null }): void;
+}
 function parseRecord(text: string): Record<string, unknown> { const value: unknown = JSON.parse(text); return record(value) ? value : {}; }
 export function createMessageStream(options: {
   document: Document; sessionState: SessionState; endpoint: (host: string | null) => HostEndpoint; ticket: (host: HostEndpoint) => Promise<string>; source?: (url: string) => EventSource;
   activity: MessageStreamActivity; renderer: MessageStreamRenderer; streaming: MessageStreamRendering;
-  tools: MessageStreamTools; delivery: MessageStreamDelivery; extensionUI: MessageStreamExtensionUI;
+  tools: MessageStreamTools; delivery: MessageStreamDelivery; extensionUI: MessageStreamExtensionUI; sideChat: MessageStreamSideChat;
   status: (message: string, type?: string) => void; catchup: (owner: SelectionOwner) => unknown; refresh: () => unknown; artifacts: (owner: SelectionOwner) => unknown;
   pinned: (container: HTMLElement) => boolean; follow: () => boolean; scroll: (container: HTMLElement) => void; jump: (container: HTMLElement) => void; highlight: (root: Element) => void;
   select: (id: string, options: { forceTranscriptReload: boolean; host: string | null }) => unknown;
@@ -267,6 +271,10 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
 
     addOwnedListener('queue_update', (e) => {
       try { options.delivery.render(JSON.parse(e.data)); } catch {}
+    });
+
+    addOwnedListener('side_chat', (e) => {
+      try { options.sideChat.apply(parseRecord(e.data).sideChat, { id: sessionId, host: hostId }); } catch {}
     });
 
     // Dialog answered elsewhere (TUI or another browser) — dismiss ours.

@@ -71,12 +71,12 @@ test('metadata patches preserve presence and permit only their assigned writers'
 
 test('client projection preserves feature hints and wire ingress validates control fields', () => {
   const row = { id: 'omp:session', name: null, model: 'provider/model', isActive: true,
-    capabilities: { prompt: true, btw: true, futureCapability: false },
+    capabilities: { prompt: true, sideChat: true, futureCapability: false },
     parentId: 'parent', routine: 'routine', sessionFile: '/private', pid: 42, nativeSessionId: 'native' };
   const projected = sessionForClient(row);
   assert.equal(projected.parentId, 'parent');
   assert.equal(projected.routine, 'routine');
-  assert.equal(projected.capabilities.btw, true);
+  assert.equal(projected.capabilities.sideChat, true);
   assert.ok(!('sessionFile' in projected) && !('pid' in projected) && !('nativeSessionId' in projected));
   assert.equal(row.sessionFile, '/private');
   for (const value of [null, [], {}, { id: 2 }, { id: 'x', isActive: 'false' }, { id: 'x', capabilities: { close: 'true' } }]) {

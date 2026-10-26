@@ -118,7 +118,7 @@ export { createTranscriptCache } from './transcript-cache';
 export { decodeTranscriptPage } from './transcript-data';
 
 export { createSessionActivity } from './session-activity';
-export { createBtwPanel } from './btw-panel';
+export { createSideChat } from './side-chat';
 
 export { createPromptDelivery, decodeQueueData } from './prompt-delivery';
 export { createComposerSubmit } from './composer-submit';

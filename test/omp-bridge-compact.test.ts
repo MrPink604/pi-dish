@@ -415,7 +415,23 @@ test('OMP bridge keeps context-bound and unknown commands out of slash emulation
     await assert.rejects(session.runCommand('/reload'), /unavailable/);
     assert.equal(commands.some(command => command.name === 'btw'), true,
       'the host hook advertises btw independently of the captured session');
-    await assert.rejects(session.runCommand('/btw a question'), /no captured OMP session/);
+    // The ask is asynchronous: it only reports the missing capture through the
+    // side chat's turn state.
+    const failedTurn = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('side chat never reported the capture failure')), 5000);
+      session.on('side_chat', (data: unknown) => {
+        const state = record(data).sideChat;
+        if (!state) return;
+        const turns = records(record(state).turns);
+        const turn = record(turns[turns.length - 1]);
+        if (turn.status !== 'error') return;
+        clearTimeout(timer);
+        resolve(turn);
+      });
+    });
+    const asked = record(await session.runCommand('/btw a question'));
+    assert.equal(asked.info, 'Asked in side chat');
+    assert.match(String(record(await failedTurn).error), /no captured OMP session/);
     for (const name of ['tree', 'settings', 'new', 'export', 'not-a-command']) {
       await assert.rejects(session.runCommand(`/${name}`), /unknown or unsupported command/);
     }

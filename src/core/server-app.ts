@@ -1529,19 +1529,17 @@ export function startServer(rootDirectory: string): Server {
             throw error;
           }
         }
-        // /btw awaits the ephemeral side turn inside the bridge call (unlike
-        // /compact's fire-and-forget), so it rides run_command with a
-        // prompt-scale timeout and returns the answer for the client to panel.
+        // /btw starts a NEW side chat and returns immediately; the answer
+        // streams over the session's side_chat events, never the transcript.
         const btwMatch = (message as string).match(/^\/btw(?:\s+([\s\S]*))?\s*$/);
         if (btwMatch) {
-          if (!liveSessionSupports(sess, 'btw')) {
-            return res.status(409).json({ error: 'This session does not support /btw.' });
-          }
-          if (!btwMatch[1]?.trim()) {
+          if (!sideChatSupported(sess, res)) return;
+          const question = btwMatch[1]?.trim();
+          if (!question) {
             return res.status(400).json({ error: 'usage: /btw <question>' });
           }
-          const data = await sess.runCommand(message as string, undefined, { timeout: 180000 });
-          return res.json({ success: true, info: optionalProperty(data, 'info'), answer: optionalProperty(data, 'answer') });
+          const data = await sess.sideChatAsk(question);
+          return res.json({ success: true, info: 'Asked in side chat', sideChat: optionalProperty(data, 'sideChat') ?? null });
         }
         if (/^\/login(\s|$)/.test(message as string) && !liveSessionSupports(sess, 'login')) {
           return res.status(409).json({ error: `This ${descriptor?.label ?? 'harness'} session does not support signing in from pi-dish.` });
@@ -1558,6 +1556,91 @@ export function startServer(rootDirectory: string): Server {
       }
       const result = await runRpcSlashCommand(sess, message as string);
       res.json({ success: true, info: result.info });
+    } catch (e) {
+      res.status((property(e, 'statusCode') || 400) as number).json({ error: property(e, 'message') });
+    }
+  });
+
+  // Ephemeral side chat (replaces the blocking /btw request). Asking returns
+  // immediately; the bridge streams deltas over the session's SSE stream and
+  // every response carries the current snapshot. Bridge-only, and every
+  // mutating route fails closed on the advertised capability before its
+  // socket sees a side-chat command.
+  async function sideChatBridge(req: ApplicationRequest, res: ApplicationResponse) {
+    const sess = await getLiveSession(req.params.id);
+    if (!sess) { res.status(404).json({ error: 'Session not active' }); return null; }
+    if (!(sess instanceof BridgeSession)) {
+      res.status(409).json({ error: 'This session does not support side chats.' });
+      return null;
+    }
+    return sess;
+  }
+
+  function sideChatSupported(sess: InstanceType<typeof BridgeSession>, res: ApplicationResponse) {
+    if (liveSessionSupports(sess, 'sideChat')) return true;
+    // A harness started before side chats still runs the old blocking /btw
+    // bridge; only a restart loads the new extension.
+    const error = property(sess.capabilities, 'btw') === true
+      ? 'This session runs an older pi-dish bridge; restart it to use side chats.'
+      : 'This session does not support side chats.';
+    res.status(409).json({ error });
+    return false;
+  }
+
+  app.get('/api/sessions/:id/side-chat', async (req: ApplicationRequest, res: ApplicationResponse) => {
+    try {
+      const sess = await sideChatBridge(req, res);
+      if (!sess) return;
+      res.json({ sideChat: sess.sideChat ?? null });
+    } catch (e) {
+      res.status((property(e, 'statusCode') || 400) as number).json({ error: property(e, 'message') });
+    }
+  });
+
+  app.post('/api/sessions/:id/side-chat', async (req: ApplicationRequest, res: ApplicationResponse) => {
+    try {
+      const sess = await sideChatBridge(req, res);
+      if (!sess) return;
+      if (!sideChatSupported(sess, res)) return;
+      const body = req.body || {};
+      const question = property(body, 'question');
+      if (typeof question !== 'string' || !question.trim()) {
+        return res.status(400).json({ error: 'usage: /btw <question>' });
+      }
+      const chatId = property(body, 'chatId');
+      if (chatId !== undefined && chatId !== null && typeof chatId !== 'string') {
+        return res.status(400).json({ error: 'chatId must be a string' });
+      }
+      const data = await sess.sideChatAsk(question.trim(), typeof chatId === 'string' && chatId ? chatId : undefined);
+      return res.json({ success: true, sideChat: optionalProperty(data, 'sideChat') ?? null });
+    } catch (e) {
+      res.status((property(e, 'statusCode') || 400) as number).json({ error: property(e, 'message') });
+    }
+  });
+
+  app.post('/api/sessions/:id/side-chat/cancel', async (req: ApplicationRequest, res: ApplicationResponse) => {
+    try {
+      const sess = await sideChatBridge(req, res);
+      if (!sess) return;
+      if (!sideChatSupported(sess, res)) return;
+      const chatId = property(req.body || {}, 'chatId');
+      if (typeof chatId !== 'string' || !chatId) return res.status(400).json({ error: 'chatId required' });
+      const data = await sess.sideChatCancel(chatId);
+      return res.json({ success: true, sideChat: optionalProperty(data, 'sideChat') ?? null });
+    } catch (e) {
+      res.status((property(e, 'statusCode') || 400) as number).json({ error: property(e, 'message') });
+    }
+  });
+
+  app.post('/api/sessions/:id/side-chat/close', async (req: ApplicationRequest, res: ApplicationResponse) => {
+    try {
+      const sess = await sideChatBridge(req, res);
+      if (!sess) return;
+      if (!sideChatSupported(sess, res)) return;
+      const chatId = property(req.body || {}, 'chatId');
+      if (typeof chatId !== 'string' || !chatId) return res.status(400).json({ error: 'chatId required' });
+      const data = await sess.sideChatClose(chatId);
+      return res.json({ success: true, sideChat: optionalProperty(data, 'sideChat') ?? null });
     } catch (e) {
       res.status((property(e, 'statusCode') || 400) as number).json({ error: property(e, 'message') });
     }
@@ -2370,6 +2453,9 @@ export function startServer(rootDirectory: string): Server {
   // slow (phone) connections, so we coalesce per connection: forward immediately
   // when idle, otherwise remember the latest and flush it after the window.
   const MESSAGE_UPDATE_COALESCE_MS = 50;
+  // Side-chat deltas are token-sized; one snapshot per connection per window
+  // keeps a fast answer from flooding slow phone streams.
+  const SIDE_CHAT_COALESCE_MS = 100;
 
   app.get('/api/sessions/:id/stream', async (req: ApplicationRequest, res: ApplicationResponse) => {
     const sessionId = req.params.id;
@@ -2563,12 +2649,34 @@ export function startServer(rootDirectory: string): Server {
     // for the next queue_update. RPCSessions have no queueState (fine).
     if (optionalProperty(sess, 'queueState')) send('queue_update', optionalProperty(sess, 'queueState'));
     sub('queue_update', (data) => send('queue_update', data));
+    // Side chat: clients only ever consume whole snapshots. A structural
+    // `side_chat` snapshot goes out immediately (replacing any pending
+    // coalesced flush); streamed deltas are already reduced into the session
+    // state, so one delayed snapshot carries all of them.
+    let sideChatTimer: NodeJS.Timeout | null = null;
+    const clearSideChatTimer = () => {
+      if (sideChatTimer) { clearTimeout(sideChatTimer); sideChatTimer = null; }
+    };
+    sub('side_chat', () => {
+      clearSideChatTimer();
+      send('side_chat', { sideChat: optionalProperty(sess, 'sideChat') ?? null });
+    });
+    sub('side_chat_delta', () => {
+      if (sideChatTimer) return;
+      sideChatTimer = setTimeout(() => {
+        sideChatTimer = null;
+        send('side_chat', { sideChat: optionalProperty(sess, 'sideChat') ?? null });
+      }, SIDE_CHAT_COALESCE_MS);
+    });
+    // Replay the current chat so a reconnecting/reloaded client can render it
+    // (the bridge only pushes state on change).
+    if (sess instanceof BridgeSession) send('side_chat', { sideChat: sess.sideChat ?? null });
     sub('compaction_start', (data) => send('compaction_start', data));
     sub('compaction_end', (data) => send('compaction_end', data));
     sub('auto_retry_start', (data) => send('auto_retry_start', data));
     sub('auto_retry_end', (data) => send('auto_retry_end', data));
 
-    const onClose = () => { clearPendingUpdate(); toolEvents.clear(); send('session_ended', {}); };
+    const onClose = () => { clearPendingUpdate(); clearSideChatTimer(); toolEvents.clear(); send('session_ended', {}); };
     if (typeof optionalProperty(sess, 'once') === 'function') {
       (sess as { once(event: string, listener: (data: unknown) => void): unknown }).once('close', onClose);
       offs.push(() => sess.off('close', onClose));
@@ -2578,6 +2686,7 @@ export function startServer(rootDirectory: string): Server {
 
     req.on('close', () => {
       clearPendingUpdate();
+      clearSideChatTimer();
       toolEvents.clear();
       for (const off of offs) { try { off(); } catch {} }
     });

@@ -380,11 +380,25 @@ async function testOmp() {
     assert.equal(fastOffState.active, false, `real OMP fast mode active after /fast off: ${JSON.stringify(fastOff.body)}`);
     const plainTurn = await runStreamedTurn(id, 'pi-dish managed OMP standard-tier canary');
     assert.notEqual(plainTurn.providerServiceTier, 'priority', 'fast mode must be gone from the provider payload after /fast off');
-    // /btw runs an ephemeral side turn against the same fake provider: the
-    // answer comes back over the command response and nothing is persisted.
-    const btw = await post(`/api/sessions/${encodeURIComponent(id)}/command`, { message: '/btw summarize this session' });
-    assert.equal(btw.status, 200, JSON.stringify(btw.body));
-    assert.match(text(btw.body.answer), /^pi-dish fake provider response \d+$/, 'real OMP /btw answer');
+    // /btw starts an asynchronous side chat: the ask returns immediately and the
+    // answer streams into the side chat state, never the transcript.
+    const sideChatAsk = await post(`/api/sessions/${encodeURIComponent(id)}/side-chat`, { question: 'summarize this session' });
+    assert.equal(sideChatAsk.status, 200, JSON.stringify(sideChatAsk.body));
+    const sideChat = await waitFor(async () => {
+        const state = await get(`/api/sessions/${encodeURIComponent(id)}/side-chat`);
+        assert.equal(state.status, 200, JSON.stringify(state.body));
+        if (state.body.sideChat == null)
+            return null;
+        const chat = record(state.body.sideChat);
+        const turns = records(chat.turns);
+        const last = turns[turns.length - 1];
+        if (last?.status === 'error')
+            throw new Error(`real OMP side chat failed: ${text(last.error)}`);
+        return last?.status === 'complete' ? chat : null;
+    }, 'real OMP side chat answer', 30000);
+    const sideChatTurns = records(sideChat.turns);
+    const sideChatAnswer = text(sideChatTurns[sideChatTurns.length - 1].answer);
+    assert.match(sideChatAnswer, /^pi-dish fake provider response \d+$/, 'real OMP side chat answer');
     const tree = await get(`/api/sessions/${encodeURIComponent(id)}/tree`);
     assert.equal(tree.status, 200, JSON.stringify(tree.body));
     assert.ok(records(tree.body.nodes).some(node => node.role === 'assistant' && node.text === plainTurn.assistantText && node.active), 'the real OMP live tree includes the persisted assistant response on its active path');
@@ -438,7 +452,7 @@ async function testOmp() {
         closeStatus: close.status,
         resumeSameRoute: resumed.body.id === resumeId,
         historyMessageRead: true,
-        btwAnswer: btw.body.answer,
+        sideChatAnswer,
     };
 }
 async function findPrimeClaim(spawnValue) {
@@ -683,7 +697,7 @@ async function cleanup() {
         const result = {};
         for (const id of selected)
             result[id] = await (id === 'omp' ? testOmp() : testPrime());
-        // OMP: two streamed turns (fast on, then off) plus one ephemeral /btw side turn.
+        // OMP: two streamed turns (fast on, then off) plus one side-chat turn.
         const expectedCalls = (selected.includes('omp') ? 3 : 0) + (selected.includes('prime') ? 8 : 0);
         assert.equal(fakeRequestCount, expectedCalls, 'each streamed turn must use the local fake provider');
         result.fakeProviderRequests = fakeRequestCount;

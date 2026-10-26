@@ -145,7 +145,7 @@ import type { ModelChangeRequest } from '../../lib/session-api';
 const apiModel = decodeModelCatalog([])[0]!;
 const apiProvider: string = apiModel.provider;
 const apiSession = decodeSessionMetadata({ id: 'a' });
-const apiControl: boolean | undefined = apiSession.capabilities?.btw;
+const apiControl: boolean | undefined = apiSession.capabilities?.sideChat;
 const apiLevel: string = decodeThinkingResult({ success: true, level: 'high' }).level;
 const apiChange: ModelChangeRequest = { modelId: apiProvider + '/model' };
 // @ts-expect-error Unknown feature fields require narrowing.

@@ -255,7 +255,7 @@ type EmulatedBuiltin = {
   capability?: string;
   listing: EmulationGate;
   execution: EmulationGate;
-  requiresBtw?: boolean;
+  requiresSideTurn?: boolean;
 };
 const EMULATED_BUILTINS: readonly EmulatedBuiltin[] = [
   { command: EMULATED_COMMAND_METADATA.compact, capability: "compact", listing: "runtime", execution: "runtime" },
@@ -264,16 +264,41 @@ const EMULATED_BUILTINS: readonly EmulatedBuiltin[] = [
   { command: EMULATED_COMMAND_METADATA.thinking, capability: "setThinking", listing: "runtime", execution: "descriptor" },
   { command: EMULATED_COMMAND_METADATA.abort, capability: "abort", listing: "runtime", execution: "descriptor" },
   { command: EMULATED_COMMAND_METADATA.reload, listing: "selfPrime", execution: "selfPrime" },
-  { command: EMULATED_COMMAND_METADATA.btw, capability: "btw", listing: "runtime", execution: "runtime", requiresBtw: true },
+  { command: EMULATED_COMMAND_METADATA.btw, capability: "sideChat", listing: "runtime", execution: "runtime", requiresSideTurn: true },
   { command: EMULATED_COMMAND_METADATA.login, capability: "login", listing: "runtime", execution: "runtime" },
 ];
 
-// Host-specific slash emulations too host-bound for this shared module: the
-// wrapper supplies the implementation, core owns parsing/gating/response
-// shape. OMP uses this for /btw (AgentSession.runEphemeralTurn — a TUI-only
+export type SideChatTurnStatus = "running" | "complete" | "error" | "cancelled";
+export type SideChatTurn = {
+  id: string;
+  question: string;
+  answer: string;
+  status: SideChatTurnStatus;
+  error?: string;
+  startedAt: number;
+  updatedAt: number;
+};
+export type SideChat = { id: string; createdAt: number; turns: SideChatTurn[] };
+// At most one side chat per bridge session, and at most one running turn —
+// its last turn.
+export type SideChatState = SideChat | null;
+
+/**
+ * One side-chat provider turn. `history` carries this chat's earlier COMPLETE
+ * turns (oldest first) so a follow-up keeps its context; the turn itself is
+ * ephemeral and never enters the session transcript.
+ */
+export interface SideTurnInput {
+  question: string;
+  history: ReadonlyArray<{ question: string; answer: string }>;
+  conversationKey: string;
+  signal: AbortSignal;
+  onTextDelta: (delta: string) => void;
+}
+// Host-supplied provider turn (OMP: AgentSession.runEphemeralTurn, a TUI-only
 // built-in its RPC/socket layer never dispatches). `sessionManager` is the
 // bridge's ctx.sessionManager, identifying which host session to run against.
-export type BtwRunner = (question: string, sessionManager: unknown) => Promise<string>;
+export type SideTurnRunner = (input: SideTurnInput, sessionManager: unknown) => Promise<string>;
 
 // --- Prompt template arg substitution (mirrors pi's prompt-templates.ts) ---
 
@@ -379,7 +404,7 @@ export type BridgeDescriptor = {
   // — where it must not register, because the wrapper's own dedicated bridge
   // owns the session and a second generic-pi claim shows it twice in pi-dish.
   standDownUnderForeignHost?: boolean;
-  runBtw?: BtwRunner;
+  runSideTurn?: SideTurnRunner;
   // Remote /login: adapts the host's provider login to `auth` dialog steps.
   login?: LoginAdapter;
 };
@@ -897,7 +922,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   const capabilities: Record<string, boolean> = { ...descriptor.capabilities, guardedReload: descriptor.selfPrime === true };
 
   function emulationAvailable(builtin: EmulatedBuiltin, phase: "listing" | "execution"): boolean {
-    if (builtin.requiresBtw && !descriptor.runBtw) return false;
+    if (builtin.requiresSideTurn && !descriptor.runSideTurn) return false;
     const source = builtin[phase];
     if (source === "selfPrime") return !!descriptor.selfPrime;
     const available = source === "runtime" ? capabilities : descriptor.capabilities;
@@ -1032,6 +1057,152 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   function broadcastQueue(): void {
     broadcast({ type: "event", event: "queue_update", data: mergedQueue() });
+  }
+
+  // --- Side chat (asynchronous, multi-turn /btw replacement) ---
+  // The provider turn is ephemeral: it never enters the transcript and its
+  // answer only ever reaches socket/SSE clients. State lives here so a reload
+  // or a second device replays the same chat through stateSnapshot/hello.
+  let sideChat: SideChatState = null;
+  // Identity of the turn currently allowed to publish. A cancelled, replaced,
+  // closed or switched-away turn fails this check, so a late completion can
+  // never overwrite newer state.
+  let sideTurn: { chatId: string; turnId: string; controller: AbortController } | null = null;
+
+  function broadcastSideChat(): void {
+    broadcast({ type: "event", event: "side_chat", data: { sideChat } });
+  }
+
+  function currentSideChat(chatId: unknown): SideChat | null {
+    return typeof chatId === "string" && sideChat && sideChat.id === chatId ? sideChat : null;
+  }
+
+  function sideChatTurnOf(chat: SideChat | null, turnId: string): SideChatTurn | undefined {
+    return chat?.turns.find(turn => turn.id === turnId);
+  }
+
+  function abortSideTurn(): void {
+    if (!sideTurn) return;
+    const { controller } = sideTurn;
+    sideTurn = null;
+    try { controller.abort(); } catch {}
+  }
+
+  // Clear the chat and any running turn. `notify` broadcasts the empty state;
+  // shutdown clears sockets instead, so it passes false.
+  function clearSideChat(notify: boolean): void {
+    const hadState = sideChat !== null || sideTurn !== null;
+    abortSideTurn();
+    sideChat = null;
+    if (notify && hadState) broadcastSideChat();
+  }
+
+  async function runSideChatTurn(chatId: string, turnId: string, question: string): Promise<void> {
+    const chat = currentSideChat(chatId);
+    const runner = descriptor.runSideTurn;
+    if (!chat || !runner) return;
+    const turn = sideChatTurnOf(chat, turnId);
+    if (!turn || turn.status !== "running") return;
+    // Earlier complete turns only: the running turn is always the last one,
+    // so no answer of theirs can still be streaming into the history.
+    const history = chat.turns
+      .filter(earlier => earlier.id !== turnId && earlier.status === "complete")
+      .map(earlier => ({ question: earlier.question, answer: earlier.answer }));
+    const controller = new AbortController();
+    sideTurn = { chatId, turnId, controller };
+    const isCurrent = () => sideTurn?.chatId === chatId && sideTurn.turnId === turnId;
+    try {
+      const answer = await runner({
+        question,
+        history,
+        conversationKey: `side:${chatId}`,
+        signal: controller.signal,
+        onTextDelta: (delta: string) => {
+          if (!isCurrent() || typeof delta !== "string" || !delta) return;
+          const live = sideChatTurnOf(currentSideChat(chatId), turnId);
+          if (!live || live.status !== "running") return;
+          live.answer += delta;
+          live.updatedAt = Date.now();
+          broadcast({ type: "event", event: "side_chat_delta", data: { chatId, turnId, delta } });
+        },
+      }, field(lastCtx, "sessionManager"));
+      if (!isCurrent()) return;
+      sideTurn = null;
+      const settled = sideChatTurnOf(currentSideChat(chatId), turnId);
+      if (!settled) return;
+      const finalAnswer = typeof answer === "string" ? answer : String(answer ?? "");
+      // The runner's reply is authoritative (deltas may have been missed);
+      // keep the accumulated text when a host returns nothing extra.
+      if (finalAnswer) settled.answer = finalAnswer;
+      settled.status = "complete";
+      settled.updatedAt = Date.now();
+      broadcastSideChat();
+    } catch (e: unknown) {
+      if (!isCurrent()) return;
+      sideTurn = null;
+      const failed = sideChatTurnOf(currentSideChat(chatId), turnId);
+      if (!failed) return;
+      failed.status = "error";
+      failed.error = errorText(e);
+      failed.updatedAt = Date.now();
+      broadcastSideChat();
+    }
+  }
+
+  // `/btw <q>` and side_chat_ask share this entry point. Returns an error
+  // string for refused requests; on success the turn runs asynchronously and
+  // the response carries the fresh snapshot.
+  function askSideChat(question: unknown, chatId?: unknown): { ok: true } | { ok: false; error: string } {
+    const text = typeof question === "string" ? question.trim() : "";
+    if (!text) return { ok: false, error: "usage: /btw <question>" };
+    if (!descriptor.runSideTurn) {
+      return { ok: false, error: `/${EMULATED_COMMAND_METADATA.btw.name} is unavailable in the ${descriptor.name} public bridge profile.` };
+    }
+    let chat: SideChat;
+    if (chatId === undefined || chatId === null || chatId === "") {
+      // A new ask starts a new chat; any previous chat/turn is discarded.
+      abortSideTurn();
+      chat = { id: crypto.randomUUID(), createdAt: Date.now(), turns: [] };
+      sideChat = chat;
+    } else {
+      const existing = currentSideChat(chatId);
+      if (!existing) return { ok: false, error: "That side chat was closed." };
+      if (existing.turns.some(turn => turn.status === "running")) {
+        return { ok: false, error: "The side chat is still answering; stop it or wait." };
+      }
+      chat = existing;
+    }
+    const now = Date.now();
+    const turn: SideChatTurn = {
+      id: crypto.randomUUID(), question: text, answer: "", status: "running", startedAt: now, updatedAt: now,
+    };
+    chat.turns.push(turn);
+    broadcastSideChat();
+    // Deferred one microtask so the response frame leaves before the first
+    // provider delta; the turn itself never blocks the socket request.
+    queueMicrotask(() => { void runSideChatTurn(chat.id, turn.id, text); });
+    return { ok: true };
+  }
+
+  function cancelSideChat(chatId: unknown): void {
+    const chat = currentSideChat(chatId);
+    if (!chat) return;
+    if (!sideTurn || sideTurn.chatId !== chat.id) return;
+    const turn = sideChatTurnOf(chat, sideTurn.turnId);
+    abortSideTurn();
+    if (turn && turn.status === "running") {
+      turn.status = "cancelled";
+      turn.updatedAt = Date.now();
+    }
+    broadcastSideChat();
+  }
+
+  function closeSideChat(chatId: unknown): void {
+    const chat = currentSideChat(chatId);
+    if (!chat) return;
+    abortSideTurn();
+    sideChat = null;
+    broadcastSideChat();
   }
 
   // Subscribe to the live AgentSession's own event stream once. Idempotent
@@ -1618,6 +1789,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   function cleanup() {
     toolEvents.clear();
+    clearSideChat(false);
     recoveryObserver.dispose();
     for (const [id, resolve] of pendingDialogs) {
       try { resolve({ cancelled: true }); } catch {}
@@ -1747,6 +1919,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       spawnToken: effectiveSpawnToken,
       queue: mergedQueue(),
       lifecycle: lifecycleSnapshot(),
+      sideChat,
     };
   }
 
@@ -1792,7 +1965,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
    * - Extension commands: NOT supported (pi's extension API has no way to
    *   invoke another extension's command handler) — returns a clear error.
    */
-  async function executeSlashCommand(text: string, deliverAs?: unknown): Promise<{ ok: boolean; error?: string; info?: string; answer?: string }> {
+  async function executeSlashCommand(text: string, deliverAs?: unknown): Promise<{ ok: boolean; error?: string; info?: string }> {
     const spaceIdx = text.indexOf(" ");
     const name = (spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx)).trim();
     const args = spaceIdx === -1 ? "" : text.slice(spaceIdx + 1).trim();
@@ -1802,19 +1975,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
 
     if (name === "btw") {
-      // Keep the callable guard beside the host-specific operation as well.
-      if (!descriptor.runBtw) {
-        return { ok: false, error: `/${name} is unavailable in the ${descriptor.name} public bridge profile.` };
-      }
-      if (!args) return { ok: false, error: "usage: /btw <question>" };
-      // Awaiting the whole side turn (vs fire-and-forget like /compact) is
-      // the point: the answer only ever reaches the caller, never the
-      // transcript. The socket timeout for this request lives server-side.
-      try {
-        return { ok: true, answer: await descriptor.runBtw(args, field(lastCtx, "sessionManager")) };
-      } catch (e: unknown) {
-        return { ok: false, error: errorText(e) };
-      }
+      // Same entry point as side_chat_ask: the answer streams through the
+      // side_chat events, so this request returns as soon as the turn starts.
+      const asked = askSideChat(args);
+      return asked.ok ? { ok: true, info: "Asked in side chat" } : { ok: false, error: asked.error };
     }
     if (name === "login") {
       if (!loginController || !lastCtx) {
@@ -2156,6 +2320,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
         tree_navigate: "treeNavigation",
         branch: "treeNavigation",
         set_session_name: "rename",
+        side_chat_ask: "sideChat",
+        side_chat_cancel: "sideChat",
+        side_chat_close: "sideChat",
         guarded_reload: "guardedReload",
       };
       const requiredCapability = typeof cmd.command === "string" ? commandCapabilities[cmd.command] : undefined;
@@ -2380,8 +2547,29 @@ export function createBridge(descriptor: BridgeDescriptor) {
             return respond(false, undefined, "message must start with /");
           }
           const result = await executeSlashCommand(String(cmd.message), cmd.deliverAs);
-          if (result.ok) respond(true, { info: result.info, answer: result.answer });
+          if (result.ok) respond(true, { info: result.info });
           else respond(false, undefined, result.error);
+          return;
+        }
+
+        // Side chats answer asynchronously: the ask responds with the fresh
+        // snapshot and the provider turn reports through side_chat events.
+        case "side_chat_ask": {
+          const asked = askSideChat(cmd.question, cmd.chatId);
+          if (!asked.ok) return respond(false, undefined, asked.error);
+          respond(true, { sideChat });
+          return;
+        }
+
+        case "side_chat_cancel": {
+          cancelSideChat(cmd.chatId);
+          respond(true, { sideChat });
+          return;
+        }
+
+        case "side_chat_close": {
+          closeSideChat(cmd.chatId);
+          respond(true, { sideChat });
           return;
         }
 
@@ -2635,6 +2823,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
     // registry above is useful, but a wire event would make the browser bounce
     // and reload an unchanged transcript.
     if (!previousSessionId || sessionId === previousSessionId) return;
+    // The side chat was forked from the previous session's context; its
+    // answers must not reappear under the new identity. Broadcast the empty
+    // state before the switch so clients clear the panel first.
+    clearSideChat(true);
     toolEvents.clear();
     broadcast({
       type: "event",

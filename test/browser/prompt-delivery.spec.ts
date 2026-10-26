@@ -41,32 +41,33 @@ test('queue rows retain endpoint ownership and disposal retires response effects
   await page.evaluate(() => { window.ownedDelivery.render({ followUp: ['second'] }); window.deliveryEdit = window.ownedDelivery.edit(fixtureElement(document.querySelector<HTMLElement>('.queue-item-edit'), '.queue-item-edit')); window.ownedDelivery.dispose(); fixtureElement(window.deliveryCalls[0], 'delivery call').resolve(new Response('{}')); return window.deliveryEdit; });
   expect(await page.evaluate(() => window.deliveryRestores)).toEqual([]);
 });
-test('late side-command success cannot replace a newer answer or status', async ({ page, fleet }) => {
+test('a late side-chat ask cannot replace a newer snapshot or status', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
-  await page.evaluate(() => window.fixtureSessionListPatch(fixtureCurrentSession().id, { capabilities: { queueCancel: true } }));
   await page.evaluate(() => {
-    window.commandReplies = []; fixtureApp.features.apiTransport.request = (...args) => new Promise(resolve => window.commandReplies.push({ args, resolve }));
-    fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')").value = '/btw first'; window.firstCommand = fixtureApp.features.composerSubmit.sendPrompt();
-    fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')").value = '/btw second'; window.secondCommand = fixtureApp.features.composerSubmit.sendPrompt();
-    fixtureElement(window.commandReplies[1], 'second command reply').resolve(new Response(JSON.stringify({ answer: 'second answer', info: 'second finished' })));
+    window.sideChatReplies = [];
+    fixtureApp.features.apiTransport.request = (...args) => new Promise(resolve => window.sideChatReplies.push({ path: String(args[1]), resolve }));
+    const input = fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')");
+    input.value = '/btw first'; window.firstCommand = fixtureApp.features.composerSubmit.sendPrompt();
+    input.value = '/btw second'; window.secondCommand = fixtureApp.features.composerSubmit.sendPrompt();
+    fixtureElement(window.sideChatReplies[1], 'second side-chat reply').resolve(new Response(JSON.stringify({ success: true, sideChat: { id: 'chat-second', createdAt: 1, turns: [{ id: 'turn-second', question: 'second question', answer: 'second answer', status: 'complete', startedAt: 1, updatedAt: 2 }] } })));
   });
   await page.evaluate(() => window.secondCommand);
-  await page.evaluate(() => { fixtureElement(window.commandReplies[0], 'first command reply').resolve(new Response(JSON.stringify({ answer: 'old answer', info: 'old finished' }))); return window.firstCommand; });
-  await expect(page.locator('.btw-panel-answer')).toHaveText('second answer');
-  expect(await page.evaluate(() => fixtureElement(document.getElementById('status'), "document.getElementById('status')").textContent)).toBe('second finished');
+  await page.evaluate(() => { fixtureElement(window.sideChatReplies[0], 'first side-chat reply').resolve(new Response(JSON.stringify({ success: true, sideChat: { id: 'chat-first', createdAt: 1, turns: [{ id: 'turn-first', question: 'first question', answer: 'first answer', status: 'complete', startedAt: 1, updatedAt: 2 }] } }))); return window.firstCommand; });
+  await expect(page.locator('.side-chat-question')).toHaveText('second question');
+  expect(await page.evaluate(() => fixtureElement(document.getElementById('status'), "document.getElementById('status')").textContent)).toBe('Asked in side chat');
 });
-test('disposing submit retires late command effects while preserving the next composer', async ({ page, fleet }) => {
+test('disposing submit retires late side-chat effects while preserving the next composer', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
-  await page.evaluate(() => window.fixtureSessionListPatch(fixtureCurrentSession().id, { capabilities: { queueCancel: true } }));
   await page.evaluate(() => {
     fixtureApp.features.apiTransport.request = () => new Promise<Response>(resolve => { window.finishDisposedCommand = resolve; });
-    fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')").value = '/btw question'; window.disposedCommand = fixtureApp.features.composerSubmit.sendPrompt();
-    fixtureApp.features.composerSubmit.dispose(); fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')").value = 'later draft';
-    window.finishDisposedCommand(new Response(JSON.stringify({ answer: 'disposed answer', info: 'disposed status' })));
+    const input = fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')");
+    input.value = '/btw question'; window.disposedCommand = fixtureApp.features.composerSubmit.sendPrompt();
+    fixtureApp.features.composerSubmit.dispose(); input.value = 'later draft';
+    window.finishDisposedCommand(new Response(JSON.stringify({ success: true, sideChat: { id: 'chat-disposed', createdAt: 1, turns: [{ id: 'turn-disposed', question: 'question', answer: 'disposed answer', status: 'complete', startedAt: 1, updatedAt: 2 }] } })));
   });
   await page.evaluate(() => window.disposedCommand);
   await expect(page.locator('#promptInput')).toHaveValue('later draft');
-  await expect(page.locator('.btw-panel-answer')).toHaveText('Asking…');
+  expect(await page.evaluate(() => fixtureElement(document.getElementById('status'), "document.getElementById('status')").textContent)).toBe('Asking in side chat...');
 });
 
 export {};

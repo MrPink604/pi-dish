@@ -166,7 +166,7 @@ tracked separately in the checkpoint log.
 | `message-data.ts`, `message-render.ts`, `response-details.ts`, `message-groups.ts` | Narrowed message projection, retained response telemetry and deterministic tool groups |
 | `live-tools.ts`, `streaming-render.ts`, `mood.ts` | Live tool lifecycle, coalesced owned frames and mood projection |
 | `transcript.ts`, `transcript-data.ts`, `transcript-cache.ts` | Tail/older/catch-up request ownership, pagination cursors and retained DOM |
-| `session-activity.ts`, `btw-panel.ts` | Turn/compaction timers, abort gate ownership and ephemeral side-question views |
+| `session-activity.ts`, `side-chat.ts` | Turn/compaction timers, abort gate ownership and side chat views |
 | `composer-submit.ts`, `prompt-delivery.ts` | Captured prompt/command/abort requests, optimistic ledger and owned queue rows |
 | `message-stream.ts` | Captured stream tickets, event ownership, deduplication and reconnect timing |
 | `session-view.ts`, `session-resume.ts`, `session-header.ts` | Selection/provisional view ownership, resume requests and narrowed header metadata |

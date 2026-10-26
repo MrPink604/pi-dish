@@ -3,7 +3,7 @@ import net = require('net');
 import { EventEmitter } from 'events';
 import { PendingRequests } from './pending-requests';
 import { type ProtocolRecord } from './wire-protocol';
-import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, RunningToolCall } from './contracts';
+import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, RunningToolCall, SideChatState } from './contracts';
 type BridgeRequest = Promise<unknown> & {
     readonly requestId?: number;
 };
@@ -61,6 +61,7 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     turnInProgress: boolean;
     compacting: boolean;
     queueState: unknown;
+    sideChat: SideChatState;
     runningToolCalls: Map<string, RunningToolCall>;
     extUIState: ExtensionUIState;
     treeLeafUnsupported?: boolean;
@@ -93,9 +94,10 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     getShareSnapshot(): BridgeRequest;
     setThinkingLevel(level: string): BridgeRequest;
     setFastMode(enabled: boolean): BridgeRequest;
-    runCommand(message: string, deliverAs?: 'steer' | 'followUp', opts?: {
-        timeout?: number;
-    }): BridgeRequest;
+    sideChatAsk(question: string, chatId?: string): BridgeRequest;
+    sideChatCancel(chatId: string): BridgeRequest;
+    sideChatClose(chatId: string): BridgeRequest;
+    runCommand(message: string, deliverAs?: 'steer' | 'followUp'): BridgeRequest;
     readTree(): BridgeRequest;
     readTreeLeaf(): BridgeRequest;
     navigateTree(targetId: string, opts?: TreeOptions): BridgeRequest;

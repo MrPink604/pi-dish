@@ -32,7 +32,7 @@
     "test/pi-bridge.integration.test.ts",
     "test/omp-web-pilot.test.ts",
     "test/tmux.test.ts",
-    "test/omp-bridge-btw.test.ts",
+    "test/omp-bridge-side-chat.test.ts",
     "test/bridge-login.test.ts",
     "test/session-api.test.ts",
     "test/session-source.test.ts",

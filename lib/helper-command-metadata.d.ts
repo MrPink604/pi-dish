@@ -31,7 +31,7 @@ export declare const EMULATED_COMMAND_METADATA: {
     };
     readonly btw: {
         readonly name: 'btw';
-        readonly description: 'Ask an ephemeral side question using the current session context';
+        readonly description: 'Ask a side question in an ephemeral side chat (follow-ups stay in the side chat)';
     };
     readonly login: {
         readonly name: 'login';
