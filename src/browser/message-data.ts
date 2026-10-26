@@ -5,7 +5,7 @@ import { decodeToolDetails, type ToolDetails } from './tool-format';
 export interface MessageBlock { readonly type: string; readonly text?: string; readonly thinking?: string; readonly name?: string; readonly id?: string; readonly arguments?: Readonly<Record<string, unknown>>; readonly url?: string; readonly data?: string; readonly mimeType?: string }
 export interface MessageUsage { readonly input?: number; readonly output?: number; readonly reasoning?: number; readonly cacheRead?: number; readonly cacheWrite?: number; readonly cacheWrite1h?: number; readonly cost?: { readonly input?: number | null; readonly output?: number | null; readonly cacheRead?: number | null; readonly cacheWrite?: number | null; readonly total?: number | null } }
 export interface AdvisorNote { readonly note: string; readonly severity?: string; readonly advisor?: string }
-export interface MessageDetails { readonly notes?: readonly AdvisorNote[]; readonly jobs?: readonly { readonly label?: string; readonly jobId?: string; readonly type?: string; readonly status?: string; readonly durationMs?: number }[]; readonly from?: string; readonly message?: string }
+export interface MessageDetails { readonly notes?: readonly AdvisorNote[]; readonly jobs?: readonly { readonly label?: string; readonly jobId?: string; readonly type?: string; readonly status?: string; readonly agentId?: string; readonly durationMs?: number }[]; readonly from?: string; readonly message?: string }
 export interface RenderMessage {
   readonly role: string; readonly id?: string; readonly index?: number; readonly timestamp?: Timestamp; readonly content?: string | readonly (MessageBlock | string)[];
   readonly model?: string; readonly responseModel?: string; readonly provider?: string; readonly stopReason?: string; readonly errorMessage?: string;
@@ -46,6 +46,6 @@ export function decodeRenderMessage(value: unknown): RenderMessage {
     usage: decodeMessageUsage(row.usage), cacheExpiry: decodeCacheExpiry(row.cacheExpiry), durationMs: number(row.durationMs), outputTokens: number(row.outputTokens),
     sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry: unknown): RefContextEntry[] => record(entry) && typeof entry.ref === 'string' ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : undefined,
     details: details ? { notes: Array.isArray(details.notes) ? details.notes.flatMap((note: unknown): AdvisorNote[] => typeof note === 'string' ? [{ note }] : record(note) && typeof note.note === 'string' ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : undefined,
-      jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job: unknown) => record(job) ? [{ label: string(job.label), jobId: string(job.jobId), type: string(job.type), status: string(job.status), durationMs: number(job.durationMs) }] : []) : undefined,
+      jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job: unknown) => record(job) ? [{ label: string(job.label), jobId: string(job.jobId), type: string(job.type), status: string(job.status), agentId: string(job.agentId), durationMs: number(job.durationMs) }] : []) : undefined,
       from: string(details.from), message: string(details.message) } : undefined };
 }

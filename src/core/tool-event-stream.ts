@@ -1,7 +1,7 @@
 import { record } from './helper-values';
 
 const BASH_DETAIL_KEYS = ['wallTimeMs', 'exitCode', 'timedOut', 'timeoutSeconds', 'timeoutDisabled'] as const;
-const WAIT_JOB_KEYS = ['id', 'type', 'status', 'label', 'durationMs', 'exitCode'] as const;
+const WAIT_JOB_KEYS = ['id', 'type', 'status', 'label', 'durationMs', 'exitCode', 'agentUrlId'] as const;
 const OUTPUT_TEXT_LIMIT = 8000;
 const EVAL_CELL_KEYS = ['index', 'title', 'language', 'status', 'exitCode', 'durationMs'] as const;
 const EVAL_EVENT_KEYS = ['op', 'detail', 'path', 'cmd', 'args', 'key', 'action', 'chars', 'bytes', 'count', 'error', 'exit_code'] as const;

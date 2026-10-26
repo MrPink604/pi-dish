@@ -420,9 +420,8 @@ function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
     // carved out of the delivery notice the model received.
     const ids = jobs.map((job, i) => job.jobId || job.label || `job ${i + 1}`);
     const outputs = jobDeliveryOutputs(extractTextContent(msg.content), ids);
-    const rows: WaitJob[] = jobs.map((job, i) => ({ id: ids[i], type: job.type, status: job.status || 'completed',
-      // Task labels repeat the agent id; only a command label adds anything.
-      label: job.label && job.label !== ids[i] ? job.label : undefined, durationMs: job.durationMs, resultText: outputs.get(ids[i]) || undefined }));
+    const rows: WaitJob[] = jobs.map((job, i) => ({ id: ids[i], type: job.type, status: job.status || 'completed', label: job.label,
+      durationMs: job.durationMs, resultText: outputs.get(ids[i]) || undefined, agentId: job.agentId || (job.type === 'task' ? job.jobId : undefined) }));
     const failed = rows.some(row => row.status === 'failed');
     const names = jobs.map(job => job.label || job.jobId).filter(Boolean);
     const duration = jobs.length === 1 && jobs[0].durationMs !== undefined ? formatSpan(jobs[0].durationMs) : '';

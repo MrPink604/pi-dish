@@ -2447,7 +2447,10 @@ recognition errors are the user's to fix before the agent sees them.
   from its result. OMP `async-result` deliveries render as a collapsible
   card of the same job rows, splitting the `<system-notice>` text per job
   (`── Job <id> (…) ──` rules, task `<output>` bodies) via
-  `jobDeliveryOutputs`. A start event that only carries `intent` uses that label instead
+  `jobDeliveryOutputs`. Job rows are one line each (id, type, status,
+  truncated command, time); a task job's id is a `.job-agent-link` that opens
+  the subagents view focused on that run — the lineage summary carries
+  `agentId`, the stem of OMP's `<parent>/<AgentId>.jsonl` file. A start event that only carries `intent` uses that label instead
   of a blank cursor. Gotchas: the older-messages scroll anchor
   must be a *top-level* child (elements inside a closed group have no box),
   and in-session search opens the enclosing group before scrolling to a match.

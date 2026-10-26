@@ -2,7 +2,7 @@ import type { Route } from '@playwright/test';
 import { isRecord } from '../../lib/wire-protocol.js';
 import { test, expect, ROOT, CHILD, requiredRoute } from './fixtures.js';
 interface FixtureLineageSession {
-  id: string; name: string; isActive?: boolean; lastActivity?: string;
+  id: string; name: string; isActive?: boolean; lastActivity?: string; agentId?: string;
   capabilities?: { prompt: boolean; steer: boolean; followUp: boolean };
 }
 interface FixtureLineageNode {
@@ -43,7 +43,23 @@ test('retained lineage link and tree rows cannot retarget a same-id peer or a re
   await expect(fleet.row(fleet.peer, ROOT)).toHaveClass(/\bactive\b/);
   await expect(page.locator('#subagentsDetailEmpty')).toBeVisible();
 });
-
+test('a task job id opens the family view with that subagent selected', async ({ page, fleet }) => {
+  const agent = lineageNode(CHILD, 'Related child');
+  agent.session.agentId = 'Scout';
+  const payload = { session: { id: ROOT, name: 'Current' }, tree: lineageNode(ROOT, 'Root', [agent]), members: 2 };
+  await page.route('**/api/sessions/*/lineage', route => route.fulfill({ json: payload }));
+  await fleet.select(fleet.self);
+  await page.evaluate(() => {
+    const root = fixtureElement(document.getElementById('messages'), '#messages'); root.replaceChildren();
+    root.insertAdjacentHTML('beforeend', fixtureApp.features.messageRenderer.message(PiDishBrowser.decodeRenderMessage({ role: 'custom', customType: 'async-result', display: true,
+      details: { jobs: [{ jobId: 'Scout', agentId: 'Scout', type: 'task', status: 'completed', label: 'Scout', durationMs: 1000 }] },
+      content: '<system-notice>\nBackground job Scout has completed. Resume your work using the result below.\n<task-result id="Scout">\n<output>\ndone\n</output>\n</task-result>\n</system-notice>' })));
+  });
+  await page.locator('#messages .job-agent-link[data-agent-id="Scout"]').click();
+  await expect(page.locator('.main')).toHaveClass(/\bsubagents-open\b/);
+  await expect(page.locator('#subagentsDetailName')).toContainText('Related child');
+  await expect(page.locator(`.lineage-row[data-session-id="${CHILD}"]`)).toHaveClass(/\blineage-selected\b/);
+});
 
 test('peeking at a relative reads its trace without switching the selected session', async ({ page, fleet }) => {
   const payload = lineagePayload();

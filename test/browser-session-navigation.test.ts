@@ -10,7 +10,7 @@ assertBrowserApiContext(context);
 const { decodeSessionLineage, decodeSessionSearch } = context.PiDishBrowser;
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 test('session lineage narrows nested identities and decodes the tree recursively', () => {
-  const node = (id: unknown, children: unknown = [], edge: unknown = null) => ({ session: { id, name: [], isActive: 'true', subagentLive: 1, lastActivity: false, harnessId: 9, model: {} }, children, edge });
+  const node = (id: unknown, children: unknown = [], edge: unknown = null) => ({ session: { id, name: [], isActive: 'true', subagentLive: 1, lastActivity: false, harnessId: 9, model: {}, agentId: 7 }, children, edge });
   const mutableChild = node('child', [node('gc')], { kind: 'child', source: {} });
   const wire = {
     session: { id: 'current', name: 'Current' },
@@ -24,15 +24,15 @@ test('session lineage narrows nested identities and decodes the tree recursively
   const result = decodeSessionLineage(wire);
   mutableChild.session.id = 'mutated';
   assert.deepEqual(plain(result), {
-    session: { id: 'current', name: 'Current', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null },
+    session: { id: 'current', name: 'Current', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null, agentId: '' },
     tree: {
-      session: { id: 'root', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null },
+      session: { id: 'root', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null, agentId: '' },
       edge: null,
       children: [{
-        session: { id: 'child', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null },
+        session: { id: 'child', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null, agentId: '' },
         edge: { kind: 'child', source: '' },
         children: [{
-          session: { id: 'gc', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null },
+          session: { id: 'gc', name: '', cwd: '', harnessId: '', model: '', isActive: false, subagentLive: false, turnInProgress: false, capabilities: null, lastActivity: null, agentId: '' },
           edge: null,
           children: [],
         }],

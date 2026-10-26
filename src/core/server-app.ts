@@ -120,6 +120,8 @@ interface CatalogRelationSummary extends Pick<CatalogSession, 'id' | 'sessionKey
   subagentLive: boolean;
   turnInProgress: boolean;
   capabilities: NonNullable<CatalogSession['capabilities']> | null;
+  /** OMP task subagent id (its `<parent>/<AgentId>.jsonl` stem), the id job and wait rows carry. */
+  agentId?: string;
 }
 
 interface CatalogRelation {
@@ -738,7 +740,18 @@ export function startServer(rootDirectory: string): Server {
     try { return fs.realpathSync(file); } catch { return path.resolve(file); }
   }
 
+  // OMP files a task subagent beside its parent as `<parent-stem>/<AgentId>.jsonl`;
+  // that stem is the id background-job and wait rows name it by.
+  function nativeAgentId(session: CatalogSession): string | null {
+    if (!session.sessionFile || !session.parentSession) return null;
+    const parentFile = path.isAbsolute(session.parentSession) ? session.parentSession
+      : path.resolve(path.dirname(session.sessionFile), session.parentSession);
+    return path.resolve(path.dirname(session.sessionFile)) === path.resolve(parentFile).replace(/\.jsonl$/, '')
+      ? path.basename(session.sessionFile, '.jsonl') : null;
+  }
+
   function relationSessionSummary(session: CatalogSession): CatalogRelationSummary {
+    const agentId = nativeAgentId(session);
     return {
       id: session.id,
       sessionKey: session.sessionKey,
@@ -755,6 +768,7 @@ export function startServer(rootDirectory: string): Server {
       turnInProgress: !!session.turnInProgress,
       capabilities: session.capabilities || null,
       lastActivity: session.lastActivity,
+      ...(agentId ? { agentId } : {}),
     };
   }
 

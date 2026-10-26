@@ -9,6 +9,8 @@ export interface BashToolDetails {
 export interface WaitJob {
   readonly id: string; readonly type?: string; readonly status: string; readonly label?: string;
   readonly durationMs?: number; readonly exitCode?: number; readonly resultText?: string; readonly errorText?: string;
+  /** Subagent id of a task job; the row's id opens that run in the subagents view. */
+  readonly agentId?: string;
 }
 /** OMP wait result details: one row per watched background job. */
 export interface WaitToolDetails { readonly kind: 'wait'; readonly jobs: readonly WaitJob[] }
@@ -60,6 +62,7 @@ export function decodeToolDetails(toolName: string | undefined, value: unknown):
     return { kind: 'wait', jobs: value.jobs.flatMap((job: unknown): WaitJob[] => record(job) && string(job.id) ? [{
       id: String(job.id), type: string(job.type), status: string(job.status) || 'unknown', label: string(job.label),
       durationMs: number(job.durationMs), exitCode: number(job.exitCode), resultText: string(job.resultText), errorText: string(job.errorText),
+      agentId: string(job.agentUrlId) ?? (job.type === 'task' ? string(job.id) : undefined),
     }] : []) };
   }
   if (toolName === 'eval' && Array.isArray(value.cells)) {
@@ -218,6 +221,11 @@ export function jobTimeoutMs(root: ParentNode | null | undefined, jobId: string)
 /** A job row's live clock: elapsed and remaining time measured at one instant. */
 export interface WaitJobClock { readonly elapsedMs: number; readonly leftMs: number | null; readonly noDeadline: boolean }
 
+/**
+ * One line per job: id (a subagent-run link for task jobs), type, status,
+ * exit, the command or label when it adds to the id, then run time and time
+ * left; output, when present, follows underneath.
+ */
 export function waitJobsHtml(jobs: readonly WaitJob[], clock?: (job: WaitJob) => WaitJobClock | null) {
   return '<div class="wait-jobs">' + jobs.map(job => {
     const running = job.status === 'running';
@@ -228,11 +236,15 @@ export function waitJobsHtml(jobs: readonly WaitJob[], clock?: (job: WaitJob) =>
     else if (running && time?.noDeadline) timing += '<span class="wait-job-left" title="Started with timeout: 0">no deadline</span>';
     const exit = job.exitCode != null && job.exitCode !== 0 ? `<span class="wait-job-exit">exit ${job.exitCode}</span>` : '';
     const output = job.errorText || job.resultText;
+    const id = job.agentId
+      ? `<button type="button" class="wait-job-id job-agent-link" data-agent-id="${escapeHtml(job.agentId)}" title="Open the subagent run">${escapeHtml(job.id)}</button>`
+      : `<span class="wait-job-id">${escapeHtml(job.id)}</span>`;
+    const label = job.label && job.label !== job.id
+      ? `<span class="wait-job-label${job.type === 'bash' ? ' command' : ''}" title="${escapeHtml(job.label)}">${escapeHtml(job.label)}</span>` : '';
     return `<div class="wait-job status-${escapeHtml(job.status)}">` +
-      `<div class="wait-job-head"><span class="wait-job-id">${escapeHtml(job.id)}</span>` +
+      `<div class="wait-job-head">${id}` +
       (job.type ? `<span class="wait-job-type">${escapeHtml(job.type)}</span>` : '') +
-      `<span class="wait-job-status">${escapeHtml(job.status)}</span>${exit}${timing}</div>` +
-      (job.label ? `<pre class="tool-command wait-job-label"><code>${escapeHtml(job.label)}</code></pre>` : '') +
+      `<span class="wait-job-status">${escapeHtml(job.status)}</span>${exit}${label}${timing}</div>` +
       (output ? `<pre class="wait-job-output${job.errorText ? ' error' : ''}">${escapeHtml(truncate(output, OUTPUT_LIMIT))}</pre>` : '') +
       '</div>';
   }).join('') + '</div>';

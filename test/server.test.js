@@ -820,6 +820,7 @@ test('lineage endpoint assembles the recursive family tree', async () => {
         assert.equal(children.length, 1);
         const child = (0, test_types_js_1.present)(children[0]), grandchildren = (0, test_types_js_1.records)(child.children);
         assert.equal((0, test_types_js_1.record)(child.session).id, childId);
+        assert.equal('agentId' in (0, test_types_js_1.record)(child.session), false, 'a sibling file is not a named subagent');
         assert.deepEqual(child.edge, { kind: 'child', source: 'pi-session-header' });
         assert.equal((0, test_types_js_1.record)((0, test_types_js_1.present)(grandchildren[0]).session).id, gcId, 'grandchild nests under the child');
         assert.equal((0, test_types_js_1.record)(child.session).turnInProgress, false, 'summaries carry busy state for the signal UI');
@@ -836,6 +837,34 @@ test('lineage endpoint assembles the recursive family tree', async () => {
     finally {
         for (const file of [rootFile, childFile, gcFile])
             fs.rmSync(file, { force: true });
+        await get('/api/sessions');
+    }
+});
+test('lineage names an OMP task subagent by its job id', async () => {
+    const ompDir = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project');
+    const parentId = 'omp-lineage-parent', agentSessionId = 'omp-lineage-agent';
+    const parentFile = path.join(ompDir, `${parentId}.jsonl`);
+    // OMP files a task subagent as <parent-stem>/<AgentId>.jsonl.
+    const agentFile = path.join(ompDir, parentId, 'Scout.jsonl');
+    const write = (file, id, parentSession) => fs.writeFileSync(file, [
+        { type: 'session', version: 3, id, cwd: '/home/user/proj', ...(parentSession ? { parentSession } : {}) },
+        { type: 'message', id: `${id}-u1`, parentId: null, message: { role: 'user', content: [{ type: 'text', text: `${id} prompt` }] } },
+    ].map((value) => JSON.stringify(value)).join('\n') + '\n');
+    fs.mkdirSync(path.dirname(agentFile), { recursive: true });
+    write(parentFile, parentId);
+    write(agentFile, agentSessionId, parentFile);
+    try {
+        const parentKey = encodeSessionKey('omp', (0, test_types_js_1.nativeId)(parentId));
+        const res = await get(`/api/sessions/${parentKey}/lineage`);
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        const children = (0, test_types_js_1.records)((0, test_types_js_1.record)(res.body.tree).children);
+        assert.equal(children.length, 1);
+        assert.equal((0, test_types_js_1.record)((0, test_types_js_1.present)(children[0]).session).agentId, 'Scout');
+        assert.equal('agentId' in (0, test_types_js_1.record)((0, test_types_js_1.record)(res.body.tree).session), false, 'the parent is not a named subagent');
+    }
+    finally {
+        fs.rmSync(parentFile, { force: true });
+        fs.rmSync(path.dirname(agentFile), { recursive: true, force: true });
         await get('/api/sessions');
     }
 });

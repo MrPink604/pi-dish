@@ -39,6 +39,8 @@ export function createSubagentsView(options: {
   let lineageSeq = 0, loadInFlight = false, lastIndexing = false;
   const collapsed = new Set<string>();
   let selectedId: string | null = null;
+  // A job row asked for this OMP subagent; selected once the lineage lists it.
+  let pendingAgentId: string | null = null;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let indexingTimer: ReturnType<typeof setTimeout> | undefined;
   let treeEvents = new AbortController();
@@ -67,24 +69,36 @@ export function createSubagentsView(options: {
   const owns = () => !disposed && !!viewOwner && sessionState.ownsSelection(viewOwner) && sameEndpoint(viewOwner.host, viewEndpoint);
   const isOpen = () => !disposed && options.root.classList.contains('subagents-open');
 
-  function findNode(node: LineageNode | null, id: string): LineageNode | null {
+  function findNode(node: LineageNode | null, match: (session: LineageSession) => boolean): LineageNode | null {
     if (!node) return null;
-    if (node.session.id === id) return node;
-    for (const child of node.children) { const hit = findNode(child, id); if (hit) return hit; }
+    if (match(node.session)) return node;
+    for (const child of node.children) { const hit = findNode(child, match); if (hit) return hit; }
     return null;
   }
 
-  function open(owner: SelectionOwner, endpoint: HostEndpoint, initial: SessionLineage) {
+  /** Select the requested subagent once a lineage load includes it; report it missing once loading settles. */
+  function focusPendingAgent() {
+    if (!pendingAgentId) return;
+    const agentId = pendingAgentId;
+    const node = findNode(lineage.tree, session => session.agentId === agentId);
+    if (node) { pendingAgentId = null; selectNode(node.session.id); return; }
+    if (!loadInFlight && !lastIndexing) { pendingAgentId = null; options.status(`Subagent run ${agentId} is not indexed yet`, 'error'); }
+  }
+
+  function open(owner: SelectionOwner, endpoint: HostEndpoint, initial: SessionLineage, focusAgentId?: string) {
     if (disposed || !sessionState.ownsSelection(owner)) return;
     close(); options.closeOtherViews();
     viewOwner = owner; viewEndpoint = Object.freeze({ ...endpoint });
     lineage = initial.tree ? initial : decodeSessionLineage(null);
     lastIndexing = false; selectedId = null; peekTarget = null; peekLastIndex = null;
+    pendingAgentId = focusAgentId || null;
     collapsed.clear();
     element('subagentsViewNote').textContent = lineage.session?.name ? `Family of ${lineage.session.name}` : '';
     options.root.classList.add('subagents-open');
     renderTree(); renderDetail();
+    // Starting the load first keeps an uncached subagent pending until it lands.
     void loadLineage();
+    focusPendingAgent();
     // Repoll while the viewed session can still gain relatives (active or the
     // catalog is still indexing) — the rule the tree view has always had.
     pollTimer = setInterval(() => {
@@ -101,7 +115,7 @@ export function createSubagentsView(options: {
     clearInterval(peekTimer); peekTimer = undefined;
     clearTimeout(indexingTimer);
     treeEvents.abort();
-    viewOwner = null; viewEndpoint = null; peekTarget = null; selectedId = null;
+    viewOwner = null; viewEndpoint = null; peekTarget = null; selectedId = null; pendingAgentId = null;
     options.root.classList.remove('subagents-open');
   }
 
@@ -122,7 +136,7 @@ export function createSubagentsView(options: {
       // Refresh the detail pane against fresh summaries (capabilities flip as
       // sessions start/stop) without disturbing the trace's paging state.
       if (selectedId) {
-        const node = findNode(lineage.tree, selectedId);
+        const node = findNode(lineage.tree, session => session.id === selectedId);
         peekTarget = node?.session || null;
         renderDetail();
         syncPeekTimer();
@@ -133,6 +147,7 @@ export function createSubagentsView(options: {
     } finally {
       if (current()) loadInFlight = false;
       else loadInFlight = false;
+      if (current()) focusPendingAgent();
     }
   }
 
@@ -252,7 +267,7 @@ export function createSubagentsView(options: {
   function selectNode(id: string) {
     if (!owns()) return;
     selectedId = id;
-    peekTarget = findNode(lineage.tree, id)?.session || null;
+    peekTarget = findNode(lineage.tree, session => session.id === id)?.session || null;
     renderTree(); renderDetail();
     void loadPeek(true);
     syncPeekTimer();

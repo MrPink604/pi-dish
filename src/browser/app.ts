@@ -435,6 +435,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (btn) sessionInfo.copyMessage(btn);
   });
 
+  // A task job's id (wait rows, background-job cards) opens that subagent's
+  // run in the family view, selected once the lineage lists it.
+  document.addEventListener('click', (e) => {
+    const link = e.target instanceof Element ? e.target.closest<HTMLElement>('.job-agent-link') : null;
+    const agentId = link?.dataset.agentId;
+    if (!agentId) return;
+    e.preventDefault();
+    const owner = sessionState.captureSelection(), endpoint = owner ? hostEntryFor(owner.host) : null;
+    if (owner && endpoint) subagentsController.open(owner, endpoint, sessionRelationsController.data, agentId);
+  });
+
 
   sidebarControls.mount();
 

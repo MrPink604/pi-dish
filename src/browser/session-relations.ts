@@ -12,6 +12,8 @@ export interface LineageSession {
   readonly isActive: boolean; readonly subagentLive: boolean;
   readonly turnInProgress: boolean; readonly capabilities: LineageCapabilities | null;
   readonly lastActivity: string | number | null;
+  /** OMP task subagent id, matching the id its background-job rows show ('' otherwise). */
+  readonly agentId: string;
 }
 export interface LineageEdge { readonly kind: string; readonly source: string; }
 export interface LineageNode {
@@ -39,6 +41,7 @@ function decodeLineageSession(value: unknown): LineageSession | null {
       followUp: value.capabilities.followUp === true,
     } : null,
     lastActivity: typeof value.lastActivity === 'string' || typeof value.lastActivity === 'number' ? value.lastActivity : null,
+    agentId: text(value.agentId),
   };
 }
 

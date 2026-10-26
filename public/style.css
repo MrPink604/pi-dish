@@ -2520,8 +2520,7 @@ body.sidebar-open {
 
 /* Bash command block (tool call and live panel): the shell line, prompt-marked,
    with its execution options underneath; output lives in the result block. */
-.tool-call-content pre.tool-command,
-.wait-jobs pre.tool-command {
+.tool-call-content pre.tool-command {
   white-space: pre-wrap;
   word-wrap: break-word;
   color: var(--text-bright);
@@ -2582,23 +2581,66 @@ body.sidebar-open {
 
 .wait-job-head {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
+  min-width: 0;
+  padding: 4px 12px;
   font-size: 11px;
   color: var(--text-muted);
 }
 
 .wait-job-id {
+  flex-shrink: 0;
   font-family: var(--font-mono);
   font-weight: 600;
   color: var(--text);
 }
 
+/* Task job ids open the subagent run. */
+button.job-agent-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+button.job-agent-link::after {
+  content: ' ↗';
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+button.job-agent-link:hover {
+  text-decoration: underline;
+}
+
+/* Command or label inline, truncated; the full text is the title. */
+.wait-job-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--text-bright);
+}
+
+.wait-job-label.command::before {
+  content: '$ ';
+  color: var(--success);
+}
+
 .wait-job-type {
   font-family: var(--font-mono);
   opacity: 0.7;
+}
+
+/* Only the label/title may shrink; every chip keeps its one-line width. */
+.wait-job-head > :not(.wait-job-label):not(.eval-cell-title) {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .wait-job-status {
@@ -2626,7 +2668,6 @@ body.sidebar-open {
   color: var(--warning);
 }
 
-.wait-jobs pre.wait-job-label,
 .wait-jobs pre.wait-job-output {
   margin: 0;
   padding: 6px 12px;
@@ -2730,6 +2771,10 @@ pre.tool-code code.hljs {
 }
 
 .eval-cell-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text);
 }
 
