@@ -90,6 +90,21 @@ const fixtures_js_1 = require("./fixtures.js");
     (0, fixtures_js_1.expect)(rendered).toEqual({ title: 'Deploy <pages>', chips: ['1.2s', 'exit 1'], code: 'deploy()',
         events: [['read', 'a.log', false], ['pip', 'install x', true]], output: 'KeyError\n\nCommand exited with code 1' });
 });
+(0, fixtures_js_1.test)('a background-job delivery splits its notice into per-job rows with status, command and output', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const rendered = await page.evaluate(() => {
+        const render = (message) => { const template = document.createElement('template'); template.innerHTML = fixtureApp.features.messageRenderer.message(PiDishBrowser.decodeRenderMessage(message)); return fixtureElement(template.content.querySelector('.async-result'), 'async result'); };
+        const rows = (card) => [...card.querySelectorAll('.wait-job')].map(row => [row.querySelector('.wait-job-id')?.textContent, row.querySelector('.wait-job-status')?.textContent,
+            row.querySelector('.wait-job-label')?.textContent ?? null, row.querySelector('.wait-job-output')?.textContent]);
+        const split = render({ role: 'custom', customType: 'async-result', display: true, details: { jobs: [{ jobId: 'bg_8', type: 'bash', status: 'completed', label: 'grep a (x)', durationMs: 5 }, { jobId: 'bg_9', type: 'bash', label: 'grep b', durationMs: 6 }] },
+            content: '<system-notice>\n2 background jobs have completed. Resume your work using the results below.\n\n── Job bg_8 (grep a (x)) ──\nfirst\n\n── Job bg_9 (grep b) ──\nsecond\nthird\n</system-notice>' });
+        const task = render({ role: 'custom', customType: 'async-result', display: true, details: { jobs: [{ jobId: 'Scout', type: 'task', status: 'failed', label: 'Scout', durationMs: 1033 }] },
+            content: '<system-notice>\nBackground job Scout has completed. Resume your work using the result below.\n<task-result id="Scout" status="failed (exit 1)">\n\n<output>\nkey expired\n</output>\n</task-result>\n\nScout is now idle\n</system-notice>' });
+        return { split: rows(split), task: rows(task), failed: task.classList.contains('failed'), label: task.querySelector('.custom-message-label')?.textContent };
+    });
+    (0, fixtures_js_1.expect)(rendered).toEqual({ split: [['bg_8', 'completed', 'grep a (x)', 'first'], ['bg_9', 'completed', 'grep b', 'second\nthird']],
+        task: [['Scout', 'failed', null, 'key expired']], failed: true, label: 'Background job failed' });
+});
 (0, fixtures_js_1.test)('transcript image resources and share controls use the selected owning host', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
     const html = await page.evaluate(() => fixtureApp.features.messageRenderer.message({ role: 'user', id: 'entry', content: [{ type: 'image', url: '/api/image', mimeType: 'image/png' }] }));

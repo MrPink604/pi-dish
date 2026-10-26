@@ -3,8 +3,9 @@ import type { Timestamp, RefContextEntry } from '../core/helper-types';
 import type { RenderMessage, MessageBlock, AdvisorNote } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { escapeHtml, truncate } from '../core/helper-format';
-import { formatTime, formatDuration, formatThinkingPreview } from './helper-format';
-import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, evalTitle, evalBodyHtml } from './tool-format';
+import { formatTime, formatThinkingPreview } from './helper-format';
+import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, evalTitle, evalBodyHtml, jobDeliveryOutputs, formatSpan } from './tool-format';
+import type { WaitJob } from './tool-format';
 import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
 import { splitSessionRefContext } from '../core/helper-refs';
 export function createMessageRenderer(options: {
@@ -415,12 +416,23 @@ function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
 
   if (customType === 'async-result') {
     const jobs = msg.details?.jobs || [];
+    // Each job becomes a wait-style row (status, run time, command, output)
+    // carved out of the delivery notice the model received.
+    const ids = jobs.map((job, i) => job.jobId || job.label || `job ${i + 1}`);
+    const outputs = jobDeliveryOutputs(extractTextContent(msg.content), ids);
+    const rows: WaitJob[] = jobs.map((job, i) => ({ id: ids[i], type: job.type, status: job.status || 'completed',
+      // Task labels repeat the agent id; only a command label adds anything.
+      label: job.label && job.label !== ids[i] ? job.label : undefined, durationMs: job.durationMs, resultText: outputs.get(ids[i]) || undefined }));
+    const failed = rows.some(row => row.status === 'failed');
     const names = jobs.map(job => job.label || job.jobId).filter(Boolean);
-    const duration = jobs.length === 1 && jobs[0].durationMs !== undefined
-      ? formatDuration(jobs[0].durationMs) : '';
+    const duration = jobs.length === 1 && jobs[0].durationMs !== undefined ? formatSpan(jobs[0].durationMs) : '';
     const meta = [names.join(', '), duration].filter(Boolean).join(' · ');
-    return `<div${attrs} class="message custom-message async-result" data-timestamp="${escapeHtml(String(timestamp))}">
-      <span class="custom-message-icon">✓</span><span class="custom-message-label">Background job${jobs.length > 1 ? 's' : ''} finished</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ''}${time ? `<span class="message-time">${time}</span>` : ''}
+    const outputLines = rows.reduce((n, row) => n + (row.resultText ? row.resultText.split('\n').length : 0), 0);
+    return `<div${attrs} class="message custom-message async-result${failed ? ' failed' : ''}" data-timestamp="${escapeHtml(String(timestamp))}">
+      <details class="async-result-details"${rows.length && outputLines <= 5 ? ' open' : ''}>
+        <summary class="async-result-header"><span class="custom-message-icon">${failed ? '✗' : '✓'}</span><span class="custom-message-label">Background job${jobs.length > 1 ? 's' : ''} ${failed ? 'failed' : 'finished'}</span>${meta ? `<span class="custom-message-meta">${escapeHtml(meta)}</span>` : ''}${time ? `<span class="message-time">${time}</span>` : ''}</summary>
+        ${rows.length ? `<div class="async-result-body">${waitJobsHtml(rows)}</div>` : ''}
+      </details>
     </div>`;
   }
 

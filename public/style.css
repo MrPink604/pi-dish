@@ -2079,6 +2079,59 @@ body.sidebar-open {
 .message.custom-message .message-time { margin-left: auto; }
 .message.custom-message.generic { opacity: 0.75; }
 
+/* Background job delivery: a collapsible card whose rows reuse the wait
+   job layout (status, run time, command, output). */
+.message.custom-message.async-result {
+  display: block;
+  padding: 0;
+}
+
+.async-result-details {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.async-result-details[open] {
+  border-color: var(--line);
+}
+
+.async-result-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.async-result-header::-webkit-details-marker {
+  display: none;
+}
+
+.async-result-header::before {
+  content: '▶';
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+
+.async-result-details[open] > .async-result-header::before {
+  transform: rotate(90deg);
+}
+
+.async-result-details[open] .custom-message-meta {
+  display: none;
+}
+
+.message.custom-message.async-result.failed .custom-message-icon {
+  color: var(--error);
+}
+
+.async-result-body {
+  border-top: 1px solid var(--line);
+}
+
 .message.custom-message.interrupted {
   padding-inline: 0;
   color: var(--warning);

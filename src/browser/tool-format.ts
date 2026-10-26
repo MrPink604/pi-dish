@@ -244,3 +244,25 @@ export function waitStatusSummary(jobs: readonly WaitJob[]) {
   for (const job of jobs) counts.set(job.status, (counts.get(job.status) || 0) + 1);
   return [...counts].map(([status, n]) => `${n} ${status}`).join(' · ');
 }
+
+/**
+ * Split an OMP background-job delivery notice into per-job output. The notice
+ * wraps everything in <system-notice>, opens with a "has completed" line, and
+ * separates several jobs with "── Job <id> (<label>) ──" rules; task jobs
+ * wrap their answer in <task-result><output>…</output>.
+ */
+export function jobDeliveryOutputs(text: string, jobIds: readonly string[]): Map<string, string> {
+  const body = text.replace(/^\s*<system-notice>\s*\n?/, '').replace(/\n?\s*<\/system-notice>\s*$/, '')
+    .replace(/^(?:Background job \S+ has completed|\d+ background jobs have completed)\.[^\n]*\n?/, '');
+  const sections = new Map<string, string>();
+  if (jobIds.length === 1) sections.set(jobIds[0], body);
+  else {
+    const marks = [...body.matchAll(/^── Job (\S+) \(.*\) ──$/gm)];
+    marks.forEach((mark, i) => sections.set(mark[1], body.slice((mark.index ?? 0) + mark[0].length, marks[i + 1]?.index ?? body.length)));
+  }
+  for (const [id, section] of sections) {
+    const task = /<output>\n?([\s\S]*?)\n?<\/output>/.exec(section);
+    sections.set(id, (task ? task[1] : section).trim());
+  }
+  return sections;
+}

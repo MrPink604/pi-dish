@@ -2444,7 +2444,10 @@ recognition errors are the user's to fix before the agent sees them.
   cell code with language/timeout/reset; eval results carry the cell title,
   OMP's cell time, the code, host-tool activity (browser/read/write… status
   events) and output, since the call often renders inside a prose message away
-  from its result. A start event that only carries `intent` uses that label instead
+  from its result. OMP `async-result` deliveries render as a collapsible
+  card of the same job rows, splitting the `<system-notice>` text per job
+  (`── Job <id> (…) ──` rules, task `<output>` bodies) via
+  `jobDeliveryOutputs`. A start event that only carries `intent` uses that label instead
   of a blank cursor. Gotchas: the older-messages scroll anchor
   must be a *top-level* child (elements inside a closed group have no box),
   and in-session search opens the enclosing group before scrolling to a match.
