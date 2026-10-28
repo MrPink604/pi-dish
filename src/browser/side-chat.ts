@@ -1,5 +1,5 @@
 import { record } from '../core/helper-values';
-import { sendJson } from './api-client';
+import { ApiHttpError, sendJson } from './api-client';
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 
@@ -107,6 +107,17 @@ export function createSideChat(options: {
       && options.endpoint(captured.owner.host).base === captured.endpoint.base;
   }
   function sessionPath(owner: SelectionOwner) { return `/api/sessions/${encodeURIComponent(owner.id)}/side-chat`; }
+  // A host still on a pre-side-chat pi-dish has no route at all.
+  async function post(captured: { owner: SelectionOwner; endpoint: Readonly<HostEndpoint> }, suffix: string, body: unknown) {
+    try {
+      return await sendJson(options.request, captured.endpoint, sessionPath(captured.owner) + suffix, body);
+    } catch (error) {
+      if (error instanceof ApiHttpError && error.status === 404 && !/not active/i.test(error.message)) {
+        throw new Error('This host runs an older pi-dish without side chats; update its pi-dish to use them.');
+      }
+      throw error;
+    }
+  }
 
   function cacheBody(view: TurnView, key: string, update: () => void) {
     if (view.rendered === key) return;
@@ -258,7 +269,7 @@ export function createSideChat(options: {
     if (!captured) return false;
     const chatId = askOptions.fresh ? null : active()?.id || null;
     const token = ++sequence;
-    const value = await sendJson(options.request, captured.endpoint, sessionPath(captured.owner), chatId ? { question, chatId } : { question });
+    const value = await post(captured, '', chatId ? { question, chatId } : { question });
     if (token !== sequence || !owns(captured)) return false;
     setState(decodeSideChat(record(value) ? value.sideChat : null), captured.owner);
     return true;
@@ -271,7 +282,7 @@ export function createSideChat(options: {
     if (!captured) return;
     const token = ++sequence;
     try {
-      const value = await sendJson(options.request, captured.endpoint, `${sessionPath(captured.owner)}/${kind}`, { chatId: chat.id });
+      const value = await post(captured, `/${kind}`, { chatId: chat.id });
       if (token !== sequence || !owns(captured)) return;
       setState(decodeSideChat(record(value) ? value.sideChat : null), captured.owner);
     } catch (error) {
