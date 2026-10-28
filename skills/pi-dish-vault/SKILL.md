@@ -1,6 +1,6 @@
 ---
 name: pi-dish-vault
-description: Get one credential from the operator's Bitwarden vault, approved by the operator in pi-dish, injected into a single command's environment. Use when a task needs a password, API key, token, TOTP code or sudo password the operator keeps in Bitwarden.
+description: Get one credential from the operator's Bitwarden vault, approved by the operator in pi-dish, injected into a single command's environment. Use BEFORE asking the operator for any secret — passwords for web UIs/admin panels/devices (e.g. glkvm, router, NAS), logins, API keys, tokens, TOTP codes, sudo passwords. This is the sanctioned Bitwarden path; "never touch Bitwarden" rules mean raw `bw`/BW_SESSION, not this skill.
 ---
 
 # Bitwarden items, approved in pi-dish
