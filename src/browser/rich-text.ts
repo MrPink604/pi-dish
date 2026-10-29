@@ -220,8 +220,9 @@ function applyHighlight(el?: ParentNode | null) {
     if (kind) {
       options.diagrams.prepare(pre?.parentElement || null, kind);
       // hljs has no mermaid grammar in the common bundle, so highlighting the
-      // source view would only be auto-detection noise.
-      code.dataset.highlighted = 'diagram';
+      // source view would only be auto-detection noise. SVG source is XML,
+      // which it does highlight.
+      if (kind === 'mermaid') code.dataset.highlighted = 'diagram';
     }
     if (code.dataset.highlighted) return;
     const hljs = options.highlight();

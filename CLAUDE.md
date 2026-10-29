@@ -189,6 +189,20 @@ reported it "collected" (Playwright's "Execution context was destroyed, most
 likely because of a navigation" with no navigation) while the app's own chain
 completed fine. Keep the task boundary.
 
+SVG fences (```` ```svg ````, or an untagged/plaintext fence holding exactly one
+`<svg>…</svg>` document) go through the same diagram block and controls but
+need no bundle: `renderSvgBlock()` shows the source as a `data:` URL `<img>`,
+never inlined. An SVG image document runs no script, fetches nothing and
+cannot touch the app DOM, so agent markup needs no sanitizer. Page CSS does
+not reach inside it, so `svgImageUrl()` declares a missing `xmlns`, writes the
+agent-facing tokens (`--fg`, `--muted`, `--border`, `--surface`, `--bg`,
+`--accent`, `--success`, `--warning`, `--error`, `--c1`…`--c6`, mapped in
+`SVG_THEME_TOKENS`) into a `<style>` as resolved hex, defaults the root's
+`color`/`fill` to the theme foreground (unpainted SVG is black), and sizes a
+viewBox-only drawing to its viewBox. Theme changes re-render these like
+mermaid diagrams. The file viewer runs the same pass, so a `.svg` file renders
+there too.
+
 `mermaid` and the xterm packages are build-time inputs in `devDependencies`;
 the running server uses their checked-in `public/vendor` outputs. They are absent
 from the production dependency graph, so the large browser-only source trees are

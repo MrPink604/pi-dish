@@ -5168,7 +5168,7 @@ img.msg-image {
   text-align: center;
 }
 
-.diagram-render svg { max-width: 100%; height: auto; }
+.diagram-render svg, .diagram-render img { max-width: 100%; height: auto; }
 
 .diagram-error {
   color: var(--warning);
@@ -5241,7 +5241,7 @@ img.msg-image {
   padding: 12px;
 }
 
-.diagram-stage svg { display: block; margin: 0 auto; }
+.diagram-stage svg, .diagram-stage img { display: block; margin: 0 auto; max-width: none; max-height: none; border-radius: 0; }
 
 /* Stats modal */
 .stats-modal { max-width: 560px; width: 100%; }

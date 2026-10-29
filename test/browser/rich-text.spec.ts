@@ -194,6 +194,33 @@ test('diagram growth carries a still-pinned feed after measuring before SVG inse
   await expect.poll(() => page.evaluate(() => window.diagramScrolls)).toBe(1);
 });
 
+test('svg fences render as inert, theme-colored images without the diagram bundle', async ({ page, fleet }) => {
+  const vendor: string[] = [];
+  page.on('request', request => { if (/vendor\/mermaid\./.test(request.url())) vendor.push(request.url()); });
+  // No xmlns, as agents often write it; a script must stay inert.
+  const drawing = '<svg viewBox="0 0 120 60"><rect width="120" height="60" fill="var(--accent)"/><script>window.svgInjected = 1</script></svg>';
+  const markdown = `Mockup:\n\n\`\`\`svg\n${drawing}\n\`\`\`\n\n\`\`\`svg\n<svg><rect></svg>\n\`\`\``;
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({ json: { messages: [{ role: 'assistant', index: 0, content: markdown }], session: {} } }));
+  await page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host, forceTranscriptReload: true }), { id: ROOT, host: fleet.self.hostId });
+  const image = page.locator('#messages .diagram-block[data-diagram-state="rendered"] .diagram-render img');
+  await expect(image).toHaveCount(1);
+  await expect(page.locator('#messages .diagram-block').first().locator('pre')).toBeHidden();
+  await expect(page.locator('#messages .diagram-block').last()).toHaveAttribute('data-diagram-state', 'error');
+  await expect(page.locator('#messages .diagram-block').last().locator('.diagram-error')).toHaveText('⚠ invalid SVG');
+  const painted = await image.evaluate(node => {
+    const img = node as HTMLImageElement, canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+    const context = fixtureElement(canvas.getContext('2d'), 'canvas context'); context.drawImage(img, 0, 0);
+    const [r, g, b] = context.getImageData(60, 30, 1, 1).data;
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    return { size: [img.naturalWidth, img.naturalHeight], pixel: `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')}`, accent };
+  });
+  expect(painted.size).toEqual([120, 60]);
+  expect(painted.pixel).toBe(painted.accent);
+  expect(await page.evaluate(() => Reflect.get(globalThis, 'svgInjected'))).toBeUndefined();
+  expect(vendor).toEqual([]);
+});
+
 test('a math-free transcript never requests the KaTeX bundle', async ({ page, fleet }) => {
   const vendor: string[] = [];
   page.on('request', request => { if (/vendor\/katex\./.test(request.url())) vendor.push(request.url()); });

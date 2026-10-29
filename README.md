@@ -131,7 +131,7 @@ Rules of thumb:
   in the diff to leave anchored comments for the agent (below).
 - **Rich content** — markdown with syntax highlighting, KaTeX-typeset
   `$…$`/`$$…$$` math in the transcript and in published/rendered file pages,
-  and Mermaid fenced diagrams rendered to theme-matched SVG with source and
+  Mermaid and SVG fenced diagrams rendered theme-matched with source and
   zoom controls — all from locally vendored assets.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control
   panel, touch-sized everything. Installable as an app with push

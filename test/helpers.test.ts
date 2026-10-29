@@ -2415,6 +2415,19 @@ test('diagramKindForFence leaves code and prose fences alone', () => {
   assert.equal(H.diagramKindForFence('', ''), null);
 });
 
+test('diagramKindForFence renders svg fences and sniffs only whole SVG documents', () => {
+  const svg = '<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="var(--accent)"/></svg>';
+  assert.equal(H.diagramKindForFence('svg', svg), 'svg');
+  assert.equal(H.diagramKindForFence('SVG', 'not svg'), 'svg', 'a tagged fence is taken at its word');
+  assert.equal(H.diagramKindForFence('', svg), 'svg');
+  assert.equal(H.diagramKindForFence('text', `<?xml version="1.0"?>\n<!-- mockup -->\n${svg}\n`), 'svg');
+  // Code that merely contains or starts an SVG stays code.
+  assert.equal(H.diagramKindForFence('html', svg), null);
+  assert.equal(H.diagramKindForFence('xml', svg), null);
+  assert.equal(H.diagramKindForFence('', `${svg}\n<p>after</p>`), null);
+  assert.equal(H.diagramKindForFence('', '<svgfoo></svgfoo>'), null);
+});
+
 test('mermaidDeclarationLine skips front matter, directives and comments', () => {
   assert.equal(H.mermaidDeclarationLine('---\ntitle: x\n---\n\nflowchart LR'), 'flowchart LR');
   assert.equal(H.mermaidDeclarationLine('%% a comment\n%%{init: {}}%%\nerDiagram'), 'erDiagram');

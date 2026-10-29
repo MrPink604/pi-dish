@@ -29,9 +29,12 @@ export function sanitizeMarkdownUrl(url: unknown) {
  * parse", because the renderer is a lazily loaded ~1MB vendor script: a prose
  * fence must not pull it in. A false positive still degrades safely — the
  * render fails and the code block stays on screen.
+ *
+ * Agents also draw mockups as ```svg fences (themed through `var(--fg)`-style
+ * tokens). Those render as an image, so the same tag-or-sniff rule applies:
+ * an untagged fence is SVG only when it is one whole `<svg>…</svg>` document.
  */
 export const MERMAID_FENCE_LANGS = new Set(['mermaid', 'mmd']);
-
 
 export const DIAGRAM_SNIFF_LANGS = new Set(['', 'text', 'txt', 'plain', 'plaintext', 'diagram', 'uml']);
 
@@ -70,11 +73,19 @@ export function looksLikeMermaid(text: unknown) {
   return !!decl && MERMAID_DECLARATIONS.some((re) => re.test(decl));
 }
 
-/** 'mermaid' when this fence should render as a diagram, else null. */
+/** One whole SVG document: optional XML declaration/comments, then `<svg …>` through a closing `</svg>`. */
+export function looksLikeSvg(text: unknown) {
+  const source = String(text == null ? '' : text).trim().replace(/^<\?xml[^>]*\?>\s*/, '').replace(/^(?:<!--[\s\S]*?-->\s*)+/, '');
+  return /^<svg[\s>]/.test(source) && /<\/svg>$/.test(source);
+}
+
+/** 'mermaid' or 'svg' when this fence should render as a diagram, else null. */
 export function diagramKindForFence(lang: unknown, source: unknown) {
   const tag = String(lang == null ? '' : lang).trim().toLowerCase().split(/[\s,:;]/)[0];
   if (MERMAID_FENCE_LANGS.has(tag)) return 'mermaid';
+  if (tag === 'svg') return 'svg';
   if (!DIAGRAM_SNIFF_LANGS.has(tag)) return null;
+  if (looksLikeSvg(source)) return 'svg';
   return looksLikeMermaid(source) ? 'mermaid' : null;
 }
 

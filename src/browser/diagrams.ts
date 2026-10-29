@@ -2,6 +2,18 @@ import type { MermaidRuntime, MermaidConfig } from './rich-text-vendors';
 import type { createBrowserAssets } from './browser-assets';
 import { resolveColorToHex } from './host-presentation';
 import { isDarkColorHex } from './helper-markdown';
+const SVG_NS = 'http://www.w3.org/2000/svg';
+/**
+ * The theme tokens agents are told to color SVG with (omp's rendering
+ * contract), mapped to this app's own tokens.
+ */
+const SVG_THEME_TOKENS: Readonly<Record<string, string>> = {
+  '--fg': '--text', '--muted': '--text-muted', '--border': '--border', '--surface': '--bg-card', '--bg': '--bg-darker',
+  '--accent': '--accent', '--success': '--success', '--warning': '--warning', '--error': '--error',
+  '--c1': '--chart-1', '--c2': '--chart-2', '--c3': '--chart-3', '--c4': '--chart-4', '--c5': '--chart-5', '--c6': '--success',
+};
+/** A fence that is not an SVG document: its message is shown as the render error. */
+class SvgSourceError extends Error {}
 export function createDiagrams(options: {
   document: Document; assets: ReturnType<typeof createBrowserAssets>; runtime: () => MermaidRuntime | null;
   retainedRoots: () => readonly ParentNode[]; isPinned: (feed: HTMLElement) => boolean; scrollBottom: (feed: HTMLElement) => void;
@@ -16,6 +28,9 @@ export function createDiagrams(options: {
   function owns(block: HTMLElement, owner: RenderOwner) { return !disposed && owner.generation === themeGeneration && renders.get(block) === owner && block.querySelector('pre code')?.textContent === owner.source; }
 
 let mermaidPromise: Promise<MermaidRuntime> | null = null;
+// Theme generation mermaid was last initialized for; a theme change makes the
+// next render pass re-initialize before rendering.
+let mermaidGeneration = -1;
 let diagramSeq = 0;
 
 function loadMermaid() {
@@ -25,7 +40,6 @@ function loadMermaid() {
     const mermaid = options.runtime();
     if (!mermaid) throw new Error('mermaid did not load');
     if (disposed) throw new Error('Diagrams disposed');
-    mermaid.initialize(mermaidConfig());
     return mermaid;
   }).catch((err) => {
     mermaidPromise = null; // a dropped LAN connection must not be permanent
@@ -143,47 +157,126 @@ function renderDiagrams(root: ParentNode) {
   // chain completed fine. A task boundary separates the two.
   const timer = setTimeout(() => {
     tasks.delete(timer); if (disposed) return;
+    for (const { block, owner } of pending) if (block.dataset.diagram === 'svg' && owns(block, owner)) void renderSvgBlock(block, owner);
+    // SVG fences need no renderer: only mermaid blocks pull the bundle in.
+    const mermaidBlocks = pending.filter(({ block }) => block.dataset.diagram === 'mermaid');
+    if (!mermaidBlocks.length) return;
     loadMermaid().then(
-      m => { for (const { block, owner } of pending) if (owns(block, owner)) void renderDiagramBlock(m, block, owner); },
-      () => { for (const { block, owner } of pending) if (owns(block, owner)) setDiagramError(block, 'diagram renderer unavailable'); },
+      m => {
+        if (disposed) return;
+        if (mermaidGeneration !== themeGeneration) { m.initialize(mermaidConfig()); mermaidGeneration = themeGeneration; }
+        for (const { block, owner } of mermaidBlocks) if (owns(block, owner)) void renderDiagramBlock(m, block, owner);
+      },
+      () => { for (const { block, owner } of mermaidBlocks) if (owns(block, owner)) setDiagramError(block, 'diagram renderer unavailable'); },
     );
   }, 0); tasks.add(timer);
+}
+
+/** Whether `block` sits in the live feed while it is pinned to the bottom. */
+function pinnedFeed(block: HTMLElement) {
+  const feed = document.getElementById('messages');
+  return feed && feed.contains(block) && options.isPinned(feed) ? feed : null;
+}
+
+/**
+ * Put a finished render in front of the source. The render is taller than its
+ * source, so a reader sitting at the bottom of a live feed (measured before
+ * the render started and again now) must be carried down with it.
+ */
+function showRender(block: HTMLElement, pinned: HTMLElement | null, fill: (figure: Element) => void) {
+  const stillPinned = pinned && pinned.contains(block) && options.isPinned(pinned);
+  let figure = block.querySelector('.diagram-render');
+  if (!figure) {
+    figure = document.createElement('div');
+    figure.className = 'diagram-render';
+    block.insertBefore(figure, block.querySelector('pre'));
+  }
+  fill(figure);
+  block.querySelector('.diagram-error')?.remove();
+  block.classList.remove('diagram-failed');
+  block.dataset.diagramState = 'rendered';
+  if (stillPinned) options.scrollBottom(pinned);
 }
 
 async function renderDiagramBlock(m: MermaidRuntime, block: HTMLElement, owner: RenderOwner) {
   const code = block.querySelector('pre code');
   if (!code) { block.dataset.diagramState = 'error'; return; }
-  // The SVG is taller than its source, so a reader sitting at the bottom of a
-  // live feed must be carried down with it.
-  const feed = document.getElementById('messages');
-  const pinned = feed && feed.contains(block) && options.isPinned(feed);
+  const pinned = pinnedFeed(block);
   try {
     // mermaid measures text in a throwaway element it appends to <body>, so
     // this works for a block inside a closed tool group or a cached
     // (detached) transcript fragment.
     const { svg } = await m.render(`pi-dish-diagram-${++diagramSeq}`, owner.source);
     if (!owns(block, owner)) return;
-    const stillPinned = pinned && feed.contains(block) && options.isPinned(feed);
-    let figure = block.querySelector('.diagram-render');
-    if (!figure) {
-      figure = document.createElement('div');
-      figure.className = 'diagram-render';
-      block.insertBefore(figure, block.querySelector('pre'));
-    }
     // mermaid sanitized this string (securityLevel strict). Diagram `click`
     // interactions are deliberately left unbound — bindFunctions() would wire
     // diagram-authored callbacks and link navigation into the app.
-    figure.innerHTML = svg;
-    block.querySelector('.diagram-error')?.remove();
-    block.classList.remove('diagram-failed');
-    block.dataset.diagramState = 'rendered';
-    if (stillPinned) options.scrollBottom(feed);
+    showRender(block, pinned, figure => { figure.innerHTML = svg; });
   } catch (err) {
     // mermaid's message is a multi-line parser dump; its first line ("Parse
     // error on line 2:") is the only part worth a quiet note.
     if (!owns(block, owner)) return;
     setDiagramError(block, String(err instanceof Error ? err.message : err).split('\n')[0].replace(/:\s*$/, ''));
   }
+}
+
+/**
+ * An agent-authored ```svg fence. It is shown through an <img>, never inlined:
+ * an SVG image document runs no script, loads nothing external and cannot
+ * reach the app's DOM, so the source needs no sanitizer. The price is that
+ * the page's CSS doesn't reach inside, so the theme tokens agents draw with
+ * (`var(--fg)`, `--muted`, `--accent`, `--c1`…) are written into the image as
+ * concrete colors at render time — which is why a theme change re-renders it.
+ */
+async function renderSvgBlock(block: HTMLElement, owner: RenderOwner) {
+  const pinned = pinnedFeed(block);
+  const img = document.createElement('img');
+  img.className = 'diagram-image';
+  img.alt = 'SVG diagram';
+  try {
+    img.src = svgImageUrl(owner.source);
+    await img.decode();
+  } catch (err) {
+    if (owns(block, owner)) setDiagramError(block, err instanceof SvgSourceError ? err.message : 'SVG did not render');
+    return;
+  }
+  if (owns(block, owner)) showRender(block, pinned, figure => { figure.replaceChildren(img); });
+}
+
+/** The fence as a self-contained, theme-resolved `data:` image URL. */
+function svgImageUrl(source: string) {
+  // An image document needs the SVG namespace declared; agents often omit it.
+  const open = /<svg(?=[\s>])[^>]*>/.exec(source);
+  if (!open) throw new SvgSourceError('invalid SVG: no <svg> element');
+  const declare = [
+    /\sxmlns\s*=/.test(open[0]) ? '' : ` xmlns="${SVG_NS}"`,
+    /xlink:/.test(source) && !/\sxmlns:xlink\s*=/.test(open[0]) ? ' xmlns:xlink="http://www.w3.org/1999/xlink"' : '',
+  ].join('');
+  const text = declare ? source.slice(0, open.index + 4) + declare + source.slice(open.index + 4) : source;
+  const doc = new window.DOMParser().parseFromString(text, 'image/svg+xml');
+  const root = doc.documentElement;
+  if (doc.getElementsByTagName('parsererror').length || root.namespaceURI !== SVG_NS || root.localName !== 'svg') throw new SvgSourceError('invalid SVG');
+  const css = window.getComputedStyle(document.documentElement);
+  const resolved = (token: string) => resolveColorToHex(css.getPropertyValue(token).trim(), document);
+  const vars = Object.entries(SVG_THEME_TOKENS).flatMap(([name, token]) => { const hex = resolved(token); return hex ? [`${name}:${hex}`] : []; });
+  const style = doc.createElementNS(SVG_NS, 'style');
+  style.textContent = `:root{${vars.join(';')}}`;
+  root.insertBefore(style, root.firstChild);
+  // Unpainted shapes and text default to black, unreadable on a dark theme:
+  // the theme's foreground stands in, unless the drawing sets its own.
+  const fg = resolved(SVG_THEME_TOKENS['--fg']);
+  if (fg && !root.hasAttribute('color')) root.setAttribute('color', fg);
+  if (!root.hasAttribute('fill')) root.setAttribute('fill', 'currentColor');
+  if (!root.hasAttribute('font-family')) root.setAttribute('font-family', window.getComputedStyle(document.body).fontFamily);
+  // Without an absolute size an <img> falls back to 300×150; the viewBox is
+  // the drawing's own scale.
+  const box = (root.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  const relative = (name: string) => !root.hasAttribute(name) || /%\s*$/.test(root.getAttribute(name) || '');
+  if (box.length === 4 && box[2] > 0 && box[3] > 0 && relative('width') && relative('height')) {
+    root.setAttribute('width', String(box[2]));
+    root.setAttribute('height', String(box[3]));
+  }
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new window.XMLSerializer().serializeToString(doc))}`;
 }
 
 /** Keep the source visible and say why it stayed source. */
@@ -216,13 +309,19 @@ function toggleDiagramSource(block: HTMLElement) {
  * a fixed overlay is not dependable.
  */
 function openDiagramLightbox(block: HTMLElement) {
-  const svg = block.querySelector<SVGSVGElement>('.diagram-render svg');
-  if (disposed || !svg) return;
+  const media = block.querySelector<SVGSVGElement | HTMLImageElement>('.diagram-render svg, .diagram-render img');
+  if (disposed || !media) return;
   closeLightbox();
-  const box = svg.viewBox && svg.viewBox.baseVal;
-  const rect = svg.getBoundingClientRect();
-  const baseW = (box && box.width) || rect.width || 800;
-  const baseH = (box && box.height) || rect.height || 600;
+  let baseW: number, baseH: number;
+  if ('naturalWidth' in media) {
+    baseW = media.naturalWidth || 800;
+    baseH = media.naturalHeight || 600;
+  } else {
+    const box = media.viewBox && media.viewBox.baseVal;
+    const rect = media.getBoundingClientRect();
+    baseW = (box && box.width) || rect.width || 800;
+    baseH = (box && box.height) || rect.height || 600;
+  }
 
   const overlay = document.createElement('div');
   overlay.className = 'lightbox-overlay diagram-lightbox';
@@ -232,7 +331,7 @@ function openDiagramLightbox(block: HTMLElement) {
   bar.className = 'diagram-zoom-bar';
   const stage = document.createElement('div');
   stage.className = 'diagram-stage';
-  const clone = svg.cloneNode(true) as SVGSVGElement;
+  const clone = media.cloneNode(true) as SVGSVGElement | HTMLImageElement;
   clone.removeAttribute('style'); // mermaid's own max-width fights the zoom
   clone.removeAttribute('width');
   clone.removeAttribute('height');
@@ -271,25 +370,21 @@ function openDiagramLightbox(block: HTMLElement) {
 }
 
 /**
- * Theme change: diagram colors are baked into each SVG at render time, so
- * re-initialize mermaid and re-render what's on screen — plus the retained
- * transcripts, which are restored without another applyHighlight pass.
+ * Theme change: diagram colors are baked into each render (mermaid's config,
+ * an SVG fence's resolved tokens), so re-render what's on screen — plus the
+ * retained transcripts, which are restored without another applyHighlight
+ * pass. Mermaid re-initializes on its next render pass.
  */
 function refreshDiagramTheme() {
-  if (disposed || !mermaidPromise) return; // nothing rendered yet; the next load reads the new tokens
-  const generation = ++themeGeneration;
-  mermaidPromise.then((m) => {
-    if (disposed || generation !== themeGeneration) return;
-    m.initialize(mermaidConfig());
-    const roots = [document, ...options.retainedRoots()];
-    for (const root of roots) {
-      root.querySelectorAll<HTMLElement>('.diagram-block[data-diagram-state]').forEach((block) => {
-        block.querySelector('.diagram-render')?.remove();
-        delete block.dataset.diagramState;
-      });
-      renderDiagrams(root);
-    }
-  }).catch(() => {});
+  if (disposed) return;
+  themeGeneration++;
+  for (const root of [document, ...options.retainedRoots()]) {
+    root.querySelectorAll<HTMLElement>('.diagram-block[data-diagram-state]').forEach((block) => {
+      block.querySelector('.diagram-render')?.remove();
+      delete block.dataset.diagramState;
+    });
+    renderDiagrams(root);
+  }
 }
 
   return { prepare: prepareDiagramBlock, render: renderDiagrams, toggleSource: toggleDiagramSource, openLightbox: openDiagramLightbox,

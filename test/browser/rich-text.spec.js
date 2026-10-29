@@ -206,6 +206,35 @@ async function diagrams(page) {
     await page.evaluate(() => { window.diagramRequireBeforeSvg = true; fixtureElement(window.diagramCalls[0], 'diagram render').resolve({ svg: '<svg><text>Taller diagram</text></svg>' }); });
     await fixtures_js_1.expect.poll(() => page.evaluate(() => window.diagramScrolls)).toBe(1);
 });
+(0, fixtures_js_1.test)('svg fences render as inert, theme-colored images without the diagram bundle', async ({ page, fleet }) => {
+    const vendor = [];
+    page.on('request', request => { if (/vendor\/mermaid\./.test(request.url()))
+        vendor.push(request.url()); });
+    // No xmlns, as agents often write it; a script must stay inert.
+    const drawing = '<svg viewBox="0 0 120 60"><rect width="120" height="60" fill="var(--accent)"/><script>window.svgInjected = 1</script></svg>';
+    const markdown = `Mockup:\n\n\`\`\`svg\n${drawing}\n\`\`\`\n\n\`\`\`svg\n<svg><rect></svg>\n\`\`\``;
+    await page.route(`${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/messages?**`, route => route.fulfill({ json: { messages: [{ role: 'assistant', index: 0, content: markdown }], session: {} } }));
+    await page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host, forceTranscriptReload: true }), { id: fixtures_js_1.ROOT, host: fleet.self.hostId });
+    const image = page.locator('#messages .diagram-block[data-diagram-state="rendered"] .diagram-render img');
+    await (0, fixtures_js_1.expect)(image).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(page.locator('#messages .diagram-block').first().locator('pre')).toBeHidden();
+    await (0, fixtures_js_1.expect)(page.locator('#messages .diagram-block').last()).toHaveAttribute('data-diagram-state', 'error');
+    await (0, fixtures_js_1.expect)(page.locator('#messages .diagram-block').last().locator('.diagram-error')).toHaveText('⚠ invalid SVG');
+    const painted = await image.evaluate(node => {
+        const img = node, canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const context = fixtureElement(canvas.getContext('2d'), 'canvas context');
+        context.drawImage(img, 0, 0);
+        const [r, g, b] = context.getImageData(60, 30, 1, 1).data;
+        const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+        return { size: [img.naturalWidth, img.naturalHeight], pixel: `#${[r, g, b].map(v => v.toString(16).padStart(2, '0')).join('')}`, accent };
+    });
+    (0, fixtures_js_1.expect)(painted.size).toEqual([120, 60]);
+    (0, fixtures_js_1.expect)(painted.pixel).toBe(painted.accent);
+    (0, fixtures_js_1.expect)(await page.evaluate(() => Reflect.get(globalThis, 'svgInjected'))).toBeUndefined();
+    (0, fixtures_js_1.expect)(vendor).toEqual([]);
+});
 (0, fixtures_js_1.test)('a math-free transcript never requests the KaTeX bundle', async ({ page, fleet }) => {
     const vendor = [];
     page.on('request', request => { if (/vendor\/katex\./.test(request.url()))
