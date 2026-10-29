@@ -88,9 +88,12 @@ Rules of thumb:
   service tier, as a lightning bolt beside the context readout that fills
   when engaged), session rename, response performance and
   estimated-spend details, HTML export via pi's own exporter, session tree for
-  branching — with optional branch summaries (pi's `/tree` summarize flow):
-  jump back to an earlier point and inject an LLM summary of the branch you're
-  abandoning, so explored dead-ends still inform the conversation.
+  branching — a branch map beside one conversation path at a time, with
+  `‹ 2/3 ›` switchers at each fork, defaulting to user/assistant messages —
+  and "branch from here" on any message (⑂ beside 🔗, or the ⋯ menu on
+  touch screens). Optional branch summaries (pi's `/tree` summarize flow)
+  inject an LLM summary of the branch you're abandoning, so explored
+  dead-ends still inform the conversation.
 - **Fleet view** — the boat button in the sidebar header opens one card per
   host: live, working and waiting session counts plus coarse CPU, memory and
   home-disk use, refreshed every 10s only while the view is open. It also

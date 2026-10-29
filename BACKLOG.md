@@ -174,8 +174,8 @@ tracked separately in the checkpoint log.
 | `rich-text.ts` | Markdown configuration, final highlighting, file links and copy controls |
 | `diagrams.ts` | Diagram rendering/theme generations and lightbox controls |
 | `clipboard.ts` | Native clipboard and insecure-context textarea fallback |
-| `transcript-tree-data.ts` | Transcript tree nodes, tool calls and active paths |
-| `transcript-tree.ts` | Tree loading/filtering/rendering and branch request ownership |
+| `transcript-tree-data.ts` | Transcript tree nodes, filtered projection, branches and path/descent helpers |
+| `transcript-tree.ts` | Tree modal (branch map, path pane, switchers), message-header branch actions and branch request ownership |
 | `session-info-data.ts` | Session statistics, share and published page payloads |
 | `session-info.ts` | Stats/process/share controls and artifact discovery ownership |
 | `routines-data.ts` | Routine definitions, prompt versions and invocation payloads |

@@ -740,21 +740,26 @@
         <h3>Session Tree</h3>
         <div class="tree-controls">
           <input type="text" class="tree-search" id="treeSearch" placeholder="Search...">
-          <select class="tree-filter" id="treeFilter">
-            <option value="default">Default</option>
-            <option value="no-tools">No Tools</option>
-            <option value="user-only">User Only</option>
-            <option value="all">All</option>
-          </select>
+          <div class="tree-filter" id="treeFilter" role="radiogroup" aria-label="Tree detail">
+            <button type="button" role="radio" data-filter="conversation" title="User prompts and assistant replies">Conversation</button>
+            <button type="button" role="radio" data-filter="tools" title="Also tool calls and results">+ Tools</button>
+            <button type="button" role="radio" data-filter="all" title="Every entry, including model and label changes">All</button>
+          </div>
           <button class="btn-icon" data-app-click="closeTreeModal" title="Close (Esc)">✕</button>
         </div>
       </div>
-      <div class="tree-body" id="treeBody">
-        <!-- Tree nodes rendered here -->
+      <!-- Phones: the branch map folds into this strip and opens as a sheet. -->
+      <button type="button" class="tree-strip" id="treeStrip" aria-label="Show branches"></button>
+      <div class="tree-layout">
+        <nav class="tree-map" id="treeMap" aria-label="Branches"></nav>
+        <div class="tree-map-scrim" id="treeMapScrim"></div>
+        <div class="tree-body" id="treeBody">
+          <!-- The selected branch's path renders here -->
+        </div>
       </div>
       <div class="modal-footer">
         <div class="tree-status" id="treeStatus"></div>
-        <span class="tree-hint">Click a node to branch from that point</span>
+        <span class="tree-hint">Select a message to branch from it</span>
       </div>
     </div>
   </div>

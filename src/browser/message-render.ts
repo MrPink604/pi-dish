@@ -4,6 +4,7 @@ import type { RenderMessage, MessageBlock, AdvisorNote } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { formatTime, formatThinkingPreview } from './helper-format';
+import { sessionSupports } from './helper-identity';
 import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, evalTitle, evalBodyHtml, jobDeliveryOutputs, formatSpan } from './tool-format';
 import type { WaitJob } from './tool-format';
 import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
@@ -69,6 +70,19 @@ function messageLinkBtnHtml(msg: RenderMessage) {
     </svg></button>`;
 }
 
+// Branch from a message: ⑂ sits beside 🔗 on hover layouts; touch layouts
+// fold both into one ⋯ menu instead of two 17px targets side by side.
+function messageActionsHtml(msg: RenderMessage, role: 'user' | 'assistant' | null) {
+  const link = messageLinkBtnHtml(msg);
+  const branch = role && msg.id && !inPeek && sessionSupports(options.sessionState.currentSession, 'tree')
+    ? `<button type="button" class="msg-branch-btn" data-entry-id="${escapeHtml(msg.id)}" data-role="${role}" title="${role === 'user' ? 'Edit &amp; resend from here' : 'Continue from here'}">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>
+    </svg></button>` : '';
+  if (!link && !branch) return '';
+  return branch + link + '<button type="button" class="msg-more-btn" title="Message actions" aria-label="Message actions">⋯</button>';
+}
+
 // The <session-refs> block the send routes append is context for the model,
 // not for the reader: the transcript hides it and shows one chip per ref,
 // which opens the session it names. Optimistic bubbles carry the same entries
@@ -123,7 +137,7 @@ function renderIrcMessage(msg: RenderMessage, time: string, attrs: string, times
         <span class="irc-label">IRC</span>
         ${from ? `<span class="irc-from">${escapeHtml(from)}</span>` : ''}
         ${time ? `<span class="message-time">${time}</span>` : ''}
-        ${messageLinkBtnHtml(msg)}
+        ${messageActionsHtml(msg, null)}
       </div>
       ${body ? `<div class="irc-body"><div class="markdown-body">${options.markdown(body)}</div></div>` : ''}
     </div>
@@ -158,7 +172,7 @@ function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
   const imagesHtml = imageBlocksHtml(msg.content, 'attached image');
   const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
   return `<div${attrs} class="message user">
-    <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}${messageLinkBtnHtml(msg)}</div>
+    <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}${messageActionsHtml(msg, 'user')}</div>
     <div class="message-content user-content">${text ? `<div class="markdown-body">${displayModelMentions(options.markdown(text))}</div>` : ''}${imagesHtml}${chipsHtml}</div>
   </div>`;
 }
@@ -202,7 +216,7 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
       ${opts.streaming ? '<span class="badge streaming">●</span>' : ''}
       ${speedHtml}
       ${time ? `<span class="message-time">${time}</span>` : ''}
-      ${messageLinkBtnHtml(msg)}
+      ${messageActionsHtml(msg, 'assistant')}
     </div>
     ${thinkingHtml}${toolCallsHtml}
     ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ''}

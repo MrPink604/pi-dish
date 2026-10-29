@@ -66,7 +66,7 @@ export { createSessionInfo } from './session-info';
 export { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './session-info-data';
 
 export { createTranscriptTree } from './transcript-tree';
-export { decodeTranscriptTree } from './transcript-tree-data';
+export { decodeTranscriptTree, projectTranscriptTree, transcriptTreeDescend, transcriptTreePath } from './transcript-tree-data';
 
 export { createBrowserAssets } from './browser-assets';
 export { createRichText } from './rich-text';

@@ -1187,7 +1187,7 @@ with the main server. `PI_DISH_SHARE_BASE_URL` (trailing slash trimmed) makes
 the API return an absolute `url`; else `url` is null and the client builds it
 from `location.origin`. UI is a section in the stats modal (create / copy /
 revoke; copy goes through `copyTextToClipboard`). Per-message deep links: the
-hover 🔗 in a turn header copies `<share url>?targetId=<entry id>` — pi's
+hover 🔗 in a turn header (⋯ → *Copy share link* on touch layouts) copies `<share url>?targetId=<entry id>` — pi's
 export HTML scrolls to that entry on load (`navigateTo` in its template). It
 reuses the session's share; with none it confirms before creating one (a
 share exposes the whole session, not just the message).
@@ -2547,6 +2547,36 @@ recognition errors are the user's to fix before the agent sees them.
 The tree modal has no session-header button: `/tree` typed in the composer
 opens it (`sendPrompt` intercepts the command), and the mobile control panel
 keeps a row — `#cpTreeRow`, gated on harness `tree` support.
+
+**Modal layout** (`src/browser/transcript-tree.ts`, pure model in
+`transcript-tree-data.ts`). The server's preorder flattening is only input:
+`projectTranscriptTree` re-parents every visible entry onto its nearest
+visible ancestor, so a fork that happened at a hidden row (a tool result, a
+tool-only or failed assistant turn) stays a fork, then groups fork-free runs
+into branches. The left pane is the branch map (one row per branch: first
+user prompt, where it ended, entry count, recency, ★ on the leaf's branch);
+the right pane is one path, root → tip, never the whole tree. A fork row in
+the path carries a `‹ i/n ›` switcher; switching or picking a map branch
+moves the tip with `transcriptTreeDescend` (through the active path to the
+leaf, else the newest alternative). A tip off the active path shows "Switch
+to this branch", which is ordinary selection of the tip entry. Search lists
+matches across every branch and dims non-matching map rows; picking a match
+opens its path. Detail is `Conversation` (default: user prompts, assistant
+entries with text/error/abort, branch summaries, compactions, the leaf),
+`+ Tools`, or `All`, persisted in `pi-dish-tree-filter`. The map hides when
+nothing forked. At ≤768px the path pane is the modal; the map folds into
+`#treeStrip` and opens as a bottom sheet.
+
+**Branch from a message.** Entry-backed user and assistant headers carry
+`.msg-branch-btn` (⑂, gated on `sessionSupports(…, 'tree')`, never in peek)
+beside the 🔗 share button. It opens a confirm popover (`#messageActionMenu`,
+context-menu chrome) labeled by role — user: *Edit & resend from here*,
+assistant: *Continue from here* — with the same summarize option. On
+`(hover: none)` layouts both icons are hidden and `.msg-more-btn` (⋯) opens a
+menu of the header's actions plus *Show in tree*, which opens the modal at
+that entry. The popover and the modal share `runBranch`: one operation
+generation, the same draft hand-off and forced transcript reload; a live
+session mid-turn surfaces the server's refusal and re-enables the button.
 
 `POST /api/sessions/:id/branch` drives pi's `/tree` remotely: move the leaf
 to `entryId`, optionally (`summarize: true`) generating an LLM summary of the

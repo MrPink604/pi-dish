@@ -432,10 +432,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     fileViews.openFile(link.dataset.filePath || (link.textContent || '').trim());
   });
 
-  // Per-message share link (the hover 🔗 in turn headers).
+  // Per-message header actions: share link 🔗, branch ⑂, and the touch ⋯ menu.
   document.addEventListener('click', (e) => {
-    const btn = (e.target instanceof Element ? e.target.closest<HTMLElement>('.msg-link-btn') : null);
-    if (btn) sessionInfo.copyMessage(btn);
+    const target = e.target instanceof Element ? e.target : null;
+    const link = target?.closest<HTMLElement>('.msg-link-btn');
+    if (link) { sessionInfo.copyMessage(link); return; }
+    const branch = target?.closest<HTMLElement>('.msg-branch-btn');
+    if (branch) { transcriptTree.messageBranch(branch); return; }
+    const more = target?.closest<HTMLElement>('.msg-more-btn');
+    if (more) transcriptTree.messageMenu(more);
   });
 
   // A task job's id (wait rows, background-job cards) opens that subagent's
@@ -1159,6 +1164,7 @@ function copyTextToClipboard(text: string) { return copyTextToClipboardBase(text
 const transcriptTree: ReturnType<typeof createTranscriptTree> = createTranscriptTree({
   document, storage: localStorage, sessionState, request: (host, path, options) => apiTransport.request(host, path, options), host: hostEntryFor,
   status: (message, type) => setStatus(message, type), selectSession: (id, options) => sessionView.select(id, options),
+  copyMessageLink: button => sessionInfo.copyMessage(button),
   saveEditorDraft: (owner, text) => {
     try { const key = composerDrafts.draftKey(sessionRefKey(owner)); if (!(localStorage.getItem(key) || '').trim()) localStorage.setItem(key, text); } catch {}
   },
