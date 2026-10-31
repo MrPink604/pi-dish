@@ -2,7 +2,7 @@
 // Generated edge from skills/pi-dish-vault/scripts/pi-dish-vault.ts; edit that source and run npm run build:edges.
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SYNC_PROBE = exports.SEARCH_PREFIX = exports.PAIR_PROBE = exports.FIELDS = exports.ENVELOPE_PREFIX = void 0;
+exports.SYNC_PROBE = exports.SEARCH_PREFIX = exports.PAIR_PROBE = exports.CHECK_PREFIX = exports.FIELDS = exports.ENVELOPE_PREFIX = void 0;
 exports.parseRunArgs = parseRunArgs;
 exports.encodeEnvelope = encodeEnvelope;
 exports.aacInvocation = aacInvocation;
@@ -182,6 +182,10 @@ function aacInvocation(args, self) {
         command: [process.execPath, self, INJECT, JSON.stringify(bundled), '--', ...args.command],
     };
 }
+/** aac's exit code for a refused credential request; a command that exits 4 itself is indistinguishable. */
+const AAC_REFUSED = 4;
+/** The listener answers `CHECK_PREFIX` + the request payload itself, without approval: `{"ok":true}` or `{"error":"<why>"}`. */
+exports.CHECK_PREFIX = 'pidish-vault:check:';
 async function run(argv) {
     const args = parseRunArgs(argv);
     const envelope = encodeEnvelope({
@@ -193,11 +197,34 @@ async function run(argv) {
     const aacArgs = aacArgv(['--output', 'json', 'run', '--domain', envelope, '--timeout', String(args.timeout),
         ...invocation.env.flatMap(mapping => ['--env', mapping]), '--', ...invocation.command]);
     process.stderr.write(`pi-dish-vault: waiting for approval of ${args.item} in pi-dish (up to ${args.timeout}s)…\n`);
+    const started = Date.now();
     const child = (0, node_child_process_1.spawn)(aacBin(), aacArgs, { stdio: 'inherit' });
     for (const signal of ['SIGINT', 'SIGTERM'])
         process.on(signal, () => child.kill(signal));
     child.on('error', error => fail(`could not run ${aacBin()}: ${error.message} (install aac v0.11.0 or set AAC_BIN)`));
-    child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 1));
+    child.on('exit', (code, signal) => {
+        if (code === AAC_REFUSED)
+            process.stderr.write(`pi-dish-vault: ${explainRefusal(envelope, args.timeout, (Date.now() - started) / 1000)}\n`);
+        process.exit(signal ? 1 : code ?? 1);
+    });
+}
+/** aac says only "Request denied"; ask the listener whether it refused the request before approval, and why. */
+function explainRefusal(envelope, timeoutSec, elapsedSec) {
+    const probe = exports.CHECK_PREFIX + envelope.slice(exports.ENVELOPE_PREFIX.length);
+    const result = (0, node_child_process_1.spawnSync)(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', '30']), { encoding: 'utf8' });
+    let verdict = {};
+    try {
+        const notes = core.record(core.record(JSON.parse(result.stdout)).credential ?? {}).notes;
+        if (typeof notes === 'string')
+            verdict = core.record(JSON.parse(notes));
+    }
+    catch { }
+    if (typeof verdict.error === 'string')
+        return `refused before approval: ${verdict.error}`;
+    // The listener answers 5 s before the requester's own timeout.
+    if (elapsedSec >= timeoutSec - 10)
+        return `no decision in pi-dish within ${timeoutSec}s`;
+    return 'denied in pi-dish, or approved but not released (the listener window says why), unless the command itself exited 4';
 }
 /** The `__inject` step aac runs: unpack BUNDLE_ENV into the requested variables, then run the command. */
 function inject(argv) {

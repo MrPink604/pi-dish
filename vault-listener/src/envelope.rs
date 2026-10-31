@@ -19,6 +19,10 @@ pub const SEARCH_PREFIX: &str = "pidish-vault:search:";
 /// without approval: `bw sync`, then an empty credential, or a refusal when
 /// the vault is locked or the sync fails.
 pub const SYNC_PROBE: &str = "pidish-vault:sync";
+/// `pi-dish-vault run` sends `pidish-vault:check:` + the request's base64url
+/// JSON after aac reports a refusal. The listener answers it itself, without
+/// approval, with `{"ok":true}` or `{"error":"<why>"}` as JSON in `notes`.
+pub const CHECK_PREFIX: &str = "pidish-vault:check:";
 
 /// The search text of a search probe; `None` for any other query.
 pub fn search_query(query: &CredentialQuery) -> Option<Result<String, String>> {
@@ -119,6 +123,15 @@ pub fn decode(query: &CredentialQuery) -> Result<Envelope, String> {
             timeout_sec: DEFAULT_TIMEOUT_SEC,
         });
     };
+    decode_wire(encoded)
+}
+
+/// The request a check probe asks about; `None` for any other query.
+pub fn check_query(query: &CredentialQuery) -> Option<Result<Envelope, String>> {
+    query.search_string().trim().strip_prefix(CHECK_PREFIX).map(decode_wire)
+}
+
+fn decode_wire(encoded: &str) -> Result<Envelope, String> {
     let bytes = URL_SAFE_NO_PAD.decode(encoded.trim_end_matches('=')).map_err(|e| format!("bad envelope encoding: {e}"))?;
     let wire: Wire = serde_json::from_slice(&bytes).map_err(|e| format!("bad envelope JSON: {e}"))?;
     let item = wire.item.trim().to_string();
@@ -202,5 +215,13 @@ mod tests {
         assert_eq!(search_query(&CredentialQuery::Domain(SEARCH_PREFIX.to_string())), Some(Ok(String::new())));
         assert!(matches!(search_query(&CredentialQuery::Domain(format!("{SEARCH_PREFIX}!!!"))), Some(Err(_))));
         assert_eq!(search_query(&CredentialQuery::Domain("github.com".to_string())), None);
+    }
+
+    #[test]
+    fn check_probes_carry_a_request() {
+        let probe = CredentialQuery::Domain(format!("{CHECK_PREFIX}{}", URL_SAFE_NO_PAD.encode(r#"{"item":"hf","fields":["password"]}"#)));
+        let request = check_query(&probe).expect("a check probe").expect("valid request");
+        assert_eq!((request.item.as_str(), request.fields), ("hf", vec!["password".to_string()]));
+        assert!(check_query(&domain(r#"{"item":"hf","fields":["password"]}"#)).is_none());
     }
 }

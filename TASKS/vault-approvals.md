@@ -69,12 +69,22 @@ listener answers it with an empty credential without involving pi-dish.
 itself, without approval, with JSON `{ results: [{ id, name, kind, uris }], truncated }`
 (at most 100, from `bw list items --search`) in the credential's `notes`: metadata only,
 never values or usernames. Before any request reaches pi-dish the listener looks the
-item up (`bw get item`): items in the deny folder (`--deny-folder`, default `no-agents`)
-are refused and never listed, and the card shows the item's Bitwarden name.
+item up (`bw get item`): a locked vault, a missing or ambiguous item, a requested field
+the item lacks, and items in the deny folder (`--deny-folder`, default `no-agents`) are
+refused there, and deny-folder items are never listed. The card shows the item's
+Bitwarden name.
 
 `pidish-vault:sync` is the sync probe (`pi-dish-vault sync`). The listener answers it
 itself, without approval: while unlocked it runs `bw sync` and replies with an empty
 credential; while locked, or when the sync fails, it refuses the request.
+
+`pidish-vault:check:` + the envelope's base64url JSON is the check probe. aac reports
+every refusal as `Request denied` (exit 4), so after that exit `pi-dish-vault run` asks
+the listener why. It answers itself, without approval, with `{"ok":true}` or
+`{"error":"<why>"}` in `notes`, e.g. `"huggingface-read" has no password; it has
+field:key`. A deny-folder item reads as a missing item, and an ambiguous name omits the
+matching ids. `ok` (or no answer) leaves a denial in pi-dish, a timeout, or a release
+failure, which only the listener window distinguishes.
 
 The wrapper runs `aac --output json run …`: aac otherwise logs INFO status lines to
 stdout, into the command's own output.

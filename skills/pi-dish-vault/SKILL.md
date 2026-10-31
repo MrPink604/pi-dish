@@ -47,7 +47,7 @@ node "$VAULT" sync
   of `username`, `password`, `totp`, `uri`, `notes` (secure-note bodies live
   in `notes`), or `field:<name>` for a custom text/hidden field exactly as
   `search` lists it; repeat for several fields of the same item. Request only
-  fields `search` lists — anything else is refused after approval.
+  fields `search` lists — anything else is refused before the operator is asked.
 - `--reason`: one short, honest line. The operator decides from it.
 - The command blocks until the decision (default 300 s, `--timeout`).
 
@@ -58,7 +58,10 @@ node "$VAULT" sync
   argument (arguments are visible in `ps`); read it inside the command, as
   above.
 - Never call `bw`, read `BW_SESSION`, or look for vault files.
-- Denied or timed out: stop and ask the operator; do not retry on your own.
+- `refused before approval: <why>` means the operator was never asked. A
+  missing item or field: fix the request (`search` lists ids and fields) and
+  run it again. A locked vault: ask the operator to unlock it. Any other
+  denial or a timeout: stop and ask the operator; do not retry on your own.
 - `aac: not found` or no cached connection (`status`): tell the operator this
   host needs `aac` v0.11.0 and a one-time `pair <token>`.
 

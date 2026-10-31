@@ -66,6 +66,36 @@ test('run hands aac an envelope naming the item, fields, reason and calling sess
   });
 });
 
+test('a refused run asks the listener why and prints the reason, keeping aac exit 4', async (t) => {
+  const { home } = setup(t, false);
+  const probes = path.join(home, 'probes.json');
+  // `run` exits 4 like a refused aac request; `connect` answers a check probe with AAC_STUB_VERDICT.
+  const aac = path.join(home, 'aac-refuse');
+  fs.writeFileSync(aac, `#!${process.execPath}
+const argv = process.argv.slice(2);
+if (argv.includes('run')) process.exit(4);
+require('fs').writeFileSync(${JSON.stringify(probes)}, JSON.stringify(argv));
+if (!process.env.AAC_STUB_VERDICT) process.exit(4);
+process.stdout.write(JSON.stringify({ success: true, credential: { notes: process.env.AAC_STUB_VERDICT } }));
+`, { mode: 0o755 });
+  const refuse = (verdict: string | null) => run(process.execPath, [cli, 'run', '--item', 'hf', '--env', 'T=password', '--', 'true'], {
+    env: { ...process.env, HOME: home, AAC_BIN: aac, PI_DISH_URL: 'http://127.0.0.1:9', PI_DISH_SESSION_ID: '', AAC_STUB_VERDICT: verdict ?? '' },
+  }).then(() => assert.fail('a refused run fails'), (error: { code?: number; stderr?: string }) => error);
+
+  const missing = await refuse(JSON.stringify({ error: '"huggingface-read" has no password; it has field:key' }));
+  assert.equal(missing.code, 4);
+  assert.match(missing.stderr ?? '', /refused before approval: "huggingface-read" has no password; it has field:key/);
+  const probe: string[] = JSON.parse(fs.readFileSync(probes, 'utf8'));
+  const domain = probe[probe.indexOf('--domain') + 1]!;
+  assert.ok(domain.startsWith('pidish-vault:check:'));
+  assert.deepEqual(decode(PREFIX + domain.slice('pidish-vault:check:'.length)), { item: 'hf', fields: ['password'], timeoutSec: 300 });
+
+  // A listener that cannot check (older, or unreachable) leaves the generic explanation.
+  for (const verdict of [JSON.stringify({ ok: true }), null]) {
+    assert.match((await refuse(verdict)).stderr ?? '', /denied in pi-dish, or approved but not released/);
+  }
+});
+
 test('outside a pi-dish session the envelope carries no session claim', async (t) => {
   const { home, aac, argvLog } = setup(t, false);
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, AAC_BIN: aac, PI_DISH_URL: 'http://127.0.0.1:9', PI_DISH_SESSION_ID: '' };

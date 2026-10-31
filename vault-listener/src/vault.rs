@@ -191,20 +191,25 @@ impl Vault {
     }
 
     /// Looks an item up before asking the operator: its display name, and a
-    /// refusal when it sits in the deny folder. The document stays in memory
-    /// only until the request is answered.
-    pub async fn prepare(&self, item: &str) -> Result<Prepared, String> {
+    /// refusal when it is missing, ambiguous, in the deny folder or lacks a
+    /// requested field. The document stays in memory only until the request
+    /// is answered.
+    pub async fn prepare(&self, item: &str, fields: &[String]) -> Result<Prepared, Refusal> {
         if !self.is_unlocked() {
-            return Err("the vault is locked".to_string());
+            return Err(Refusal::plain("the vault is locked (the operator types `unlock` in the listener window)"));
         }
-        let document = Zeroizing::new(self.run(&["get", "item", item]).await?);
-        let summary: BwSummary = serde_json::from_slice(&document).map_err(|e| format!("unexpected bw output: {e}"))?;
-        if let (Some(folder), Some(denied)) = (summary.folder_id.as_deref(), self.denied_folder().await?) {
+        let document = Zeroizing::new(self.run(&["get", "item", item]).await.map_err(|error| lookup_refusal(item, error))?);
+        let summary: BwSummary = serde_json::from_slice(&document).map_err(|e| Refusal::plain(format!("unexpected bw output: {e}")))?;
+        if let (Some(folder), Some(denied)) = (summary.folder_id.as_deref(), self.denied_folder().await.map_err(Refusal::plain)?) {
             if folder == denied {
-                return Err(format!("the item is in the \"{}\" folder", self.deny_folder));
+                // Search hides these items; the requester sees a missing item.
+                return Err(Refusal { log: format!("the item is in the \"{}\" folder", self.deny_folder), requester: no_item(item) });
             }
         }
-        let name = summary.name.unwrap_or_else(|| item.to_string());
+        let name = summary.name.clone().unwrap_or_else(|| item.to_string());
+        if let Some(error) = missing_fields(&name, &summary, fields) {
+            return Err(Refusal::plain(error));
+        }
         Ok(Prepared { id: summary.id.unwrap_or_else(|| item.to_string()), name, document })
     }
 
@@ -217,6 +222,47 @@ impl Vault {
         };
         credential_from_item(&prepared.document, fields, totp)
     }
+}
+
+/// Why a request was refused before approval: the listener window's line and
+/// what the requester is told, which omits deny-folder items and their ids.
+#[derive(Debug)]
+pub struct Refusal {
+    pub log: String,
+    pub requester: String,
+}
+
+impl Refusal {
+    pub fn plain(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
+        Self { log: reason.clone(), requester: reason }
+    }
+}
+
+fn no_item(item: &str) -> String {
+    format!("no item {item:?}; find its id with `search`")
+}
+
+/// `bw get item` failures in requester terms; the ambiguity list may name deny-folder ids, so it is dropped.
+fn lookup_refusal(item: &str, error: String) -> Refusal {
+    if error.starts_with("Not found") {
+        Refusal { log: error, requester: no_item(item) }
+    } else if error.starts_with("More than one result") {
+        Refusal { log: error, requester: format!("several items match {item:?}; request one by its id from `search`") }
+    } else {
+        Refusal::plain(error)
+    }
+}
+
+/// The refusal for requested fields the item cannot supply, naming the ones it has.
+fn missing_fields(name: &str, item: &BwSummary, fields: &[String]) -> Option<String> {
+    let available = requestable_fields(item);
+    let missing: Vec<&str> = fields.iter().filter(|field| !available.contains(field)).map(String::as_str).collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let has = if available.is_empty() { "no requestable fields".to_string() } else { available.join(", ") };
+    Some(format!("{name:?} has no {}; it has {has}", missing.join(", ")))
 }
 
 pub const SEARCH_LIMIT: usize = 100;
@@ -396,5 +442,25 @@ mod tests {
         let capped = search_results(listing.as_bytes(), None, 2).expect("valid listing");
         assert_eq!(capped.results.len(), 2);
         assert!(capped.truncated);
+    }
+
+    #[test]
+    fn missing_fields_are_named_beside_the_available_ones() {
+        let note: BwSummary = serde_json::from_str(r#"{"id":"n1","name":"huggingface-read","type":2,"login":null,
+          "fields":[{"name":"key","value":"hf_secret","type":1}]}"#).expect("summary");
+        assert_eq!(missing_fields("huggingface-read", &note, &fields(&["field:key"])), None);
+        assert_eq!(
+            missing_fields("huggingface-read", &note, &fields(&["password", "field:key", "field:token"])).as_deref(),
+            Some(r#""huggingface-read" has no password, field:token; it has field:key"#),
+        );
+        let empty: BwSummary = serde_json::from_str(r#"{"id":"e","name":"empty","type":2}"#).expect("summary");
+        assert_eq!(missing_fields("empty", &empty, &fields(&["notes"])).as_deref(), Some(r#""empty" has no notes; it has no requestable fields"#));
+    }
+
+    #[test]
+    fn lookup_failures_hide_ids_from_the_requester() {
+        assert_eq!(lookup_refusal("hf", "Not found.".to_string()).requester, r#"no item "hf"; find its id with `search`"#);
+        let ambiguous = lookup_refusal("hf", "More than one result was found. Try getting a specific object by `id` instead. The following objects were found:\nsecret-id".to_string());
+        assert!(ambiguous.log.contains("secret-id") && !ambiguous.requester.contains("secret-id"));
     }
 }

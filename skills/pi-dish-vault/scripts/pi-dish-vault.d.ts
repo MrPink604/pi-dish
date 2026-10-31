@@ -35,6 +35,8 @@ export declare function aacInvocation(args: Pick<RunArgs, 'env' | 'command'>, se
     env: string[];
     command: string[];
 };
+/** The listener answers `CHECK_PREFIX` + the request payload itself, without approval: `{"ok":true}` or `{"error":"<why>"}`. */
+export declare const CHECK_PREFIX = "pidish-vault:check:";
 /** aac v0.11.0 pairs non-interactively only alongside a request; the listener answers this probe itself. */
 export declare const PAIR_PROBE = "pidish-vault:pair";
 /** The listener answers this probe itself with item metadata as JSON in `notes`. */

@@ -233,6 +233,23 @@ async fn handle_request(
             }
         };
     }
+    if let Some(check) = envelope::check_query(&query) {
+        let (item, verdict) = match check {
+            Ok(request) => {
+                let verdict = vault.prepare(&request.item, &request.fields).await.map(drop);
+                (request.item, verdict)
+            }
+            Err(error) => ("a malformed request".to_string(), Err(vault::Refusal::plain(error))),
+        };
+        let reply_json = match verdict {
+            Ok(()) => serde_json::json!({ "ok": true }),
+            Err(refusal) => {
+                println!("{device} checked {item}: {}", refusal.log);
+                serde_json::json!({ "error": refusal.requester })
+            }
+        };
+        return answer(reply, Some(reply_json.to_string()));
+    }
     let request = match envelope::decode(&query) {
         Ok(request) => request,
         Err(error) => {
@@ -240,15 +257,12 @@ async fn handle_request(
             return deny(reply);
         }
     };
-    if !vault.is_unlocked() {
-        println!("Denied {} for {device}: the vault is locked (type `unlock`).", request.item);
-        return deny(reply);
-    }
-    // Resolve the item before asking: the card names it, and deny-folder items never reach pi-dish.
-    let prepared = match vault.prepare(&request.item).await {
+    // Resolve the item before asking: the card names it, and refusals (locked
+    // vault, missing item or field, deny folder) never reach pi-dish.
+    let prepared = match vault.prepare(&request.item, &request.fields).await {
         Ok(prepared) => prepared,
-        Err(error) => {
-            println!("Denied {} for {device}: {error}", request.item);
+        Err(refusal) => {
+            println!("Denied {} for {device}: {}", request.item, refusal.log);
             return deny(reply);
         }
     };
@@ -437,6 +451,34 @@ mod tests {
         assert_eq!(calls(), "sync\n");
         std::fs::write(dir.join("fail"), "").expect("fail marker");
         assert!(!sync_probe(unlocked(), &dir).await, "a failed sync is refused");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_check_probe_explains_a_refusal_without_asking_pi_dish() {
+        use base64::Engine;
+        let dir = std::env::temp_dir().join(format!("pi-dish-vault-check-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let bw = dir.join("bw");
+        let note = r#"{"id":"n1","name":"huggingface-read","type":2,"folderId":null,"fields":[{"name":"key","value":"hf_x","type":1}]}"#;
+        std::fs::write(&bw, format!("#!/bin/sh\ncase \"$1 $2 $3\" in\n'list folders '*) echo '[]';;\n'get item n1') echo '{note}';;\n*) echo 'Not found.' >&2; exit 1;;\nesac\n")).expect("write stub");
+        std::fs::set_permissions(&bw, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
+        let vault = Arc::new(Vault::new(bw.to_string_lossy().into_owned(), DEFAULT_DENY_FOLDER.to_string(), Some(SecretString::from("session-key"))));
+        let bridge = Arc::new(Bridge::new("http://127.0.0.1:9".to_string(), dir.join("bridge.token")));
+        let check = |json: &str| {
+            let query = CredentialQuery::Domain(format!("{}{}", envelope::CHECK_PREFIX, base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)));
+            let (vault, bridge, dir) = (vault.clone(), bridge.clone(), dir.clone());
+            async move {
+                let (reply, answer) = oneshot::channel();
+                handle_request(vault, bridge, dir, query, IdentityFingerprint([7; 32]), reply).await;
+                let reply = answer.await.expect("a reply");
+                assert!(reply.approved, "a check is always answered");
+                serde_json::from_str::<serde_json::Value>(&reply.credential.and_then(|c| c.notes).expect("verdict")).expect("JSON verdict")
+            }
+        };
+        assert_eq!(check(r#"{"item":"n1","fields":["field:key"]}"#).await, serde_json::json!({ "ok": true }));
+        assert_eq!(check(r#"{"item":"n1","fields":["password"]}"#).await["error"], r#""huggingface-read" has no password; it has field:key"#);
+        assert_eq!(check(r#"{"item":"hf","fields":["password"]}"#).await["error"], r#"no item "hf"; find its id with `search`"#);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
