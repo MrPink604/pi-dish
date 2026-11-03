@@ -73,6 +73,34 @@ export interface SpawnPlacement extends PaneTarget, Record<string, unknown> {
   bridgeInstanceId?: unknown;
   paneProcess?: unknown;
   wrapperPath?: unknown;
+  /** Prime daemon transport: the root agent this pane's launch created or resumed. */
+  primeAgent?: unknown;
+}
+
+/**
+ * A Prime root agent as recorded by a pi-dish launch: the daemon that owns it
+ * and the exact root/worker identity observed at registration time.
+ */
+export interface PrimeAgentPlacement {
+  daemonSocket: string;
+  activeSessionId: string;
+  workerInstanceId: string | null;
+  sessionFile: string;
+}
+
+/** Persisted evidence only: callers re-read the live roster before acting on it. */
+export function primeAgentPlacement(value: unknown): PrimeAgentPlacement | null {
+  if (!record(value)) return null;
+  const { daemonSocket, activeSessionId, sessionFile, workerInstanceId } = value;
+  if (typeof daemonSocket !== 'string' || !daemonSocket) return null;
+  if (typeof activeSessionId !== 'string' || !activeSessionId) return null;
+  if (typeof sessionFile !== 'string' || !path.isAbsolute(sessionFile)) return null;
+  if (workerInstanceId != null && typeof workerInstanceId !== 'string') return null;
+  return { daemonSocket, activeSessionId, workerInstanceId: workerInstanceId || null, sessionFile };
+}
+
+export function spawnPrimeAgent(spawn: SpawnPlacement | null | undefined): PrimeAgentPlacement | null {
+  return spawn ? primeAgentPlacement(spawn.primeAgent) : null;
 }
 
 export interface PaneProcessState {
@@ -518,11 +546,31 @@ function isPlacement(value: unknown): value is SpawnPlacement {
   return record(value) && typeof value.socket === 'string' && typeof value.paneId === 'string';
 }
 
-export function recordSpawn(sessionId: string, { socket, paneId, spawnToken, bridgeInstanceId, paneProcess, wrapperPath }: PaneTarget & {
+/** Persisted placements by route id. Evidence only: callers re-read live state before acting. */
+export function listSpawns(): Record<string, SpawnPlacement> {
+  const out: Record<string, SpawnPlacement> = {};
+  for (const [sessionId, value] of Object.entries(readSpawns())) {
+    if (isPlacement(value)) out[sessionId] = value;
+  }
+  return out;
+}
+
+function samePrimeAgentEvidence(left: unknown, right: unknown): boolean {
+  if (left == null && right == null) return true;
+  const a = primeAgentPlacement(left), b = primeAgentPlacement(right);
+  return !!a && !!b
+    && a.daemonSocket === b.daemonSocket
+    && a.activeSessionId === b.activeSessionId
+    && a.workerInstanceId === b.workerInstanceId
+    && a.sessionFile === b.sessionFile;
+}
+
+export function recordSpawn(sessionId: string, { socket, paneId, spawnToken, bridgeInstanceId, paneProcess, wrapperPath, primeAgent }: PaneTarget & {
   spawnToken?: unknown;
   bridgeInstanceId?: unknown;
   paneProcess?: ProcessIdentityInput | null;
   wrapperPath?: unknown;
+  primeAgent?: unknown;
 }): void {
   const spawns = readSpawns();
   spawns[sessionId] = {
@@ -533,6 +581,7 @@ export function recordSpawn(sessionId: string, { socket, paneId, spawnToken, bri
     ...(bridgeInstanceId ? { bridgeInstanceId } : {}),
     ...(paneProcess?.pid && paneProcess?.startTime ? { paneProcess } : {}),
     ...(wrapperPath ? { wrapperPath } : {}),
+    ...(primeAgent ? { primeAgent } : {}),
   };
   writeSpawns(spawns);
 }
@@ -552,7 +601,8 @@ function sameSpawnRecord(left: unknown, right: unknown): boolean {
     && (left.spawnToken || null) === (right.spawnToken || null)
     && (left.bridgeInstanceId || null) === (right.bridgeInstanceId || null)
     && (leftProcess?.pid || null) === (rightProcess?.pid || null)
-    && (leftProcess?.startTime || null) === (rightProcess?.startTime || null);
+    && (leftProcess?.startTime || null) === (rightProcess?.startTime || null)
+    && samePrimeAgentEvidence(left.primeAgent, right.primeAgent);
 }
 
 export function removeSpawn(sessionId: string, expected: SpawnPlacement | null = null): boolean {

@@ -48,7 +48,22 @@ export interface SpawnPlacement extends PaneTarget, Record<string, unknown> {
     bridgeInstanceId?: unknown;
     paneProcess?: unknown;
     wrapperPath?: unknown;
+    /** Prime daemon transport: the root agent this pane's launch created or resumed. */
+    primeAgent?: unknown;
 }
+/**
+ * A Prime root agent as recorded by a pi-dish launch: the daemon that owns it
+ * and the exact root/worker identity observed at registration time.
+ */
+export interface PrimeAgentPlacement {
+    daemonSocket: string;
+    activeSessionId: string;
+    workerInstanceId: string | null;
+    sessionFile: string;
+}
+/** Persisted evidence only: callers re-read the live roster before acting on it. */
+export declare function primeAgentPlacement(value: unknown): PrimeAgentPlacement | null;
+export declare function spawnPrimeAgent(spawn: SpawnPlacement | null | undefined): PrimeAgentPlacement | null;
 export interface PaneProcessState {
     paneExists: boolean;
     knownProcesses: ProcessIdentity[];
@@ -113,11 +128,14 @@ export declare function paneAttachedClients(socket: string, paneId: string): Pro
 export declare function attachPaneArgv(socket: string, paneId: string): Promise<string[] | null>;
 /** Server prefix key, or null when unavailable. */
 export declare function getPrefixKey(socket: string): Promise<string | null>;
-export declare function recordSpawn(sessionId: string, { socket, paneId, spawnToken, bridgeInstanceId, paneProcess, wrapperPath }: PaneTarget & {
+/** Persisted placements by route id. Evidence only: callers re-read live state before acting. */
+export declare function listSpawns(): Record<string, SpawnPlacement>;
+export declare function recordSpawn(sessionId: string, { socket, paneId, spawnToken, bridgeInstanceId, paneProcess, wrapperPath, primeAgent }: PaneTarget & {
     spawnToken?: unknown;
     bridgeInstanceId?: unknown;
     paneProcess?: ProcessIdentityInput | null;
     wrapperPath?: unknown;
+    primeAgent?: unknown;
 }): void;
 export declare function getSpawn(sessionId: string): SpawnPlacement | null;
 export declare function removeSpawn(sessionId: string, expected?: SpawnPlacement | null): boolean;

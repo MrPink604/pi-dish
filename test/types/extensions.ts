@@ -5,19 +5,16 @@ import piBridge from '../../extensions/pi-dish-bridge/index.js';
 import { createBridge, type BridgeDescriptor } from '../../extensions/pi-dish-bridge/core.js';
 import { piPrivate } from '../../extensions/pi-dish-bridge/pi-private.js';
 import ompBridge, { bridgeDescriptor as ompDescriptor, createHarnessBridge as createOmpBridge } from '../../extensions/pi-dish-bridge-omp/index.js';
-import primeBridge, { bridgeDescriptor as primeDescriptor, createHarnessBridge as createPrimeBridge } from '../../extensions/pi-dish-bridge-prime/index.js';
 import { getOmpNativeSession, patchOmpAgentSession, subscribeOmpNativeProjection } from '../../extensions/pi-dish-bridge-omp/native-state.js';
 
 // Pi entrypoints consume the real installed SDK; alternate factories accept an
 // opaque host and perform runtime narrowing, not an assignment/cast to Pi's API.
 const piExtensions: readonly ((pi: ExtensionAPI) => void)[] = [mood, piBridge];
-const nativeExtensions: readonly ((host: unknown) => void)[] = [ompBridge, primeBridge];
-const descriptors: readonly BridgeDescriptor[] = [ompDescriptor, primeDescriptor];
+const nativeExtensions: readonly ((host: unknown) => void)[] = [ompBridge];
+const descriptors: readonly BridgeDescriptor[] = [ompDescriptor];
 const hostConstructors: readonly unknown[] = [null, {}, { prototype: null }, class EmptyHost {}];
 for (const constructor of hostConstructors) patchOmpAgentSession(constructor);
 createOmpBridge('launch-token', hostConstructors[3]);
-createPrimeBridge('launch-token');
-createBridge({ ...primeDescriptor, spawnToken: 'adopted-token' });
 
 const unsubscribe: () => void = subscribeOmpNativeProjection({}, projection => {
   const todos: unknown[] = projection.todos;

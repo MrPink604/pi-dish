@@ -60,7 +60,7 @@ function createSessionSourceResolver(options: ResolverOptions = {}): SessionSour
       if (!descriptor) return null;
       // The adapter supplies only an unambiguous registered claim. Order the
       // observations here, independent of their order in the caller's snapshot.
-      for (const kind of ['registered', 'rpc'] as const) {
+      for (const kind of ['prime-daemon', 'registered', 'rpc'] as const) {
         if (kind === 'rpc' && identity.harnessId !== 'pi') continue;
         const live = input.live.find(observation => observation.kind === kind
           && observation.harnessId === identity.harnessId

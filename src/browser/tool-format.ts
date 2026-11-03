@@ -109,8 +109,8 @@ export function toolCallBodyHtml(name: string | undefined, args: Readonly<Record
     return `<pre class="tool-command"><code>${escapeHtml(args.command)}</code></pre>` +
       (meta.length ? `<div class="tool-command-meta">${meta.join('<span class="tool-meta-sep">·</span>')}</div>` : '');
   }
-  if ((name === 'eval' || name === 'ipython') && typeof args.code === 'string') {
-    const language = name === 'ipython' ? 'python' : string(args.language);
+  if ((name === 'eval' || name === 'ipython' || name === 'python_repl') && typeof args.code === 'string') {
+    const language = name === 'eval' ? string(args.language) : 'python';
     const meta: string[] = [];
     if (language) meta.push(escapeHtml(language));
     if (args.timeout === 0) meta.push('no timeout');
@@ -128,7 +128,7 @@ export function toolCallBodyHtml(name: string | undefined, args: Readonly<Record
 /** Source block a live panel shows above its output (eval cells, bash commands). */
 export function toolSourceText(name: string, args: unknown, intent?: string) {
   if (name === 'bash' || name === 'Bash') return record(args) && typeof args.command === 'string' ? args.command : '';
-  if (name !== 'eval' && name !== 'ipython') return '';
+  if (name !== 'eval' && name !== 'ipython' && name !== 'python_repl') return '';
   if (record(args) && typeof args.code === 'string' && args.code) return args.code;
   return typeof intent === 'string' && intent.trim() ? intent.trim() : '';
 }

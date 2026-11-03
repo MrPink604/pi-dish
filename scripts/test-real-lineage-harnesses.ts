@@ -24,10 +24,10 @@ import assert = require('node:assert/strict');
 import crypto = require('node:crypto');
 import fs = require('node:fs');
 import http = require('node:http');
+import net = require('node:net');
 import os = require('node:os');
 import path = require('node:path');
 import { execFileSync } from 'node:child_process';
-import { pathToFileURL } from 'node:url';
 const sessionKeys: typeof import('../lib/session-key') = require('../lib/session-key');
 const checkedNativeId = (value: unknown) => {
   if (!sessionKeys.validSessionId(value)) throw new TypeError('Invalid fixture session id');
@@ -77,7 +77,6 @@ if (selected.includes('omp')) {
   }
   fs.accessSync(path.join(bunBinDir, 'bun'), fs.constants.X_OK);
 }
-const repoRoot = path.resolve(__dirname, '..');
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-lineage-real-'));
 const home = path.join(root, 'home');
 const tmuxDir = path.join(root, 'tmux');
@@ -114,16 +113,6 @@ if (selected.includes('prime')) {
     shellWord(primeBin), '--offline', '--daemon-socket', shellWord(primeDaemon),
     '--no-skills', '--no-prompt-templates', '--no-context-files',
   ].join(' ');
-  // Mirror install.sh: link the wrapper plus the shared core into the
-  // isolated home's discovery directory. This deliberately leaves discovery
-  // enabled for managed clients (no --no-extensions here) so the canary
-  // exercises pi-dish's own discovery suppression on token-wrapper launches.
-  const primeExtensions = path.join(home, '.prime', 'agent', 'extensions');
-  fs.mkdirSync(primeExtensions, { recursive: true });
-  fs.symlinkSync(path.join(repoRoot, 'extensions', 'pi-dish-bridge-prime'),
-    path.join(primeExtensions, 'pi-dish-bridge-prime'));
-  fs.symlinkSync(path.join(repoRoot, 'extensions', 'pi-dish-bridge'),
-    path.join(primeExtensions, 'pi-dish-bridge'));
 }
 
 const { encodeSessionKey }: typeof import('../lib/session-key') = require('../lib/session-key')
@@ -237,9 +226,13 @@ async function waitFor<T>(check: () => T | null | undefined | false | Promise<T 
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-async function runStreamedTurn(sessionId: string, prompt: string) {
-  const requestCountBefore = fakeRequestCount;
-  const expectedAssistantText = `pi-dish fake provider response ${requestCountBefore + 1}`;
+interface SessionStream {
+  events: string[];
+  payloads: Array<{ event: string; data: TestRecord }>;
+  close: () => Promise<void>;
+}
+
+async function openSessionStream(sessionId: string): Promise<SessionStream> {
   const abort = new AbortController();
   const response = await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/stream`, { signal: abort.signal });
   assert.equal(response.status, 200);
@@ -247,7 +240,7 @@ async function runStreamedTurn(sessionId: string, prompt: string) {
   if (!reader) throw new Error('Stream response has no body');
   const decoder = new TextDecoder();
   const events: string[] = [];
-  const eventPayloads: TestRecord[] = [];
+  const payloads: Array<{ event: string; data: TestRecord }> = [];
   let buffer = '';
   const pump = (async () => {
     while (true) {
@@ -264,7 +257,7 @@ async function runStreamedTurn(sessionId: string, prompt: string) {
           events.push(event);
           const data = lines.find(line => line.startsWith('data: '))?.slice(6);
           if (data) {
-            try { eventPayloads.push({ event, data: record(JSON.parse(data)) }); } catch {}
+            try { payloads.push({ event, data: record(JSON.parse(data)) }); } catch {}
           }
         }
       }
@@ -272,16 +265,31 @@ async function runStreamedTurn(sessionId: string, prompt: string) {
   })().catch((error: unknown) => {
     if (!(abort.signal.aborted && error instanceof Error && error.name === 'AbortError')) throw error;
   });
+  return {
+    events,
+    payloads,
+    close: async () => {
+      abort.abort();
+      try { await reader.cancel(); } catch {}
+      await pump;
+    },
+  };
+}
+
+async function runStreamedTurn(sessionId: string, prompt: string) {
+  const requestCountBefore = fakeRequestCount;
+  const expectedAssistantText = `pi-dish fake provider response ${requestCountBefore + 1}`;
+  const stream = await openSessionStream(sessionId);
   try {
-    await waitFor(() => events.includes('init'), 'SSE init');
+    await waitFor(() => stream.events.includes('init'), 'SSE init');
     const accepted = await post(`/api/sessions/${encodeURIComponent(sessionId)}/prompt`, { message: prompt });
     assert.equal(accepted.status, 200, JSON.stringify(accepted.body));
-    await waitFor(() => events.includes('turn_start'), 'bridge turn_start', 30000);
-    await waitFor(() => events.includes('message_update') || events.includes('turn_end') || events.includes('agent_end'),
+    await waitFor(() => stream.events.includes('turn_start'), 'bridge turn_start', 30000);
+    await waitFor(() => stream.events.includes('message_update') || stream.events.includes('turn_end') || stream.events.includes('agent_end'),
       'bridge message_update or terminal event', 30000);
-    assert.ok(events.includes('message_update'), 'turn ended without a bridge message_update');
-    await waitFor(() => events.includes('message_end'), 'bridge message_end', 30000);
-    await waitFor(() => events.includes('turn_end') || events.includes('agent_end'), 'bridge turn completion', 30000);
+    assert.ok(stream.events.includes('message_update'), 'turn ended without a bridge message_update');
+    await waitFor(() => stream.events.includes('message_end'), 'bridge message_end', 30000);
+    await waitFor(() => stream.events.includes('turn_end') || stream.events.includes('agent_end'), 'bridge turn completion', 30000);
     const transcript = await waitFor(async () => {
       const messages = await get(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
       return fakeRequestCount > requestCountBefore
@@ -289,36 +297,17 @@ async function runStreamedTurn(sessionId: string, prompt: string) {
         ? messages : null;
     }, 'persisted streamed assistant message', 30000);
     return {
-      events: [...new Set(events)],
+      events: [...new Set(stream.events)],
       transcript,
       providerRequestSequence: requestCountBefore + 1,
       providerServiceTier: fakeServiceTiers[requestCountBefore] ?? null,
       assistantText: expectedAssistantText,
     };
   } catch (error) {
-    const details = `events: ${events.join(', ') || 'none'}; payloads: ${JSON.stringify(eventPayloads.slice(-8))}; fake requests: ${fakeRequests.join(', ') || 'none'}`;
+    const details = `events: ${stream.events.join(', ') || 'none'}; payloads: ${JSON.stringify(stream.payloads.slice(-8))}; fake requests: ${fakeRequests.join(', ') || 'none'}`;
     throw new Error(`${error instanceof Error ? error.message : String(error)} (${details})`, { cause: error });
   } finally {
-    abort.abort();
-    try { await reader.cancel(); } catch {}
-    await pump;
-  }
-}
-
-async function shutdownPrime(daemonSocket = primeDaemon) {
-  if (!selected.includes('prime') || !fs.existsSync(daemonSocket)) return { success: true };
-  // Prime's public `shutdown` command discovers every daemon and cannot
-  // be scoped to a socket. Use the installed protocol client so this canary
-  // stops only the isolated supervisor it created.
-  const packageRoot = path.resolve(path.dirname(fs.realpathSync(String(primeBin))), '..', '..');
-  const clientModule = path.join(packageRoot, 'dist', 'modes', 'daemon', 'daemon-client.js');
-  const { DaemonClient } = await import(pathToFileURL(clientModule).href);
-  const client = new DaemonClient(daemonSocket);
-  await client.connect();
-  try {
-    return await client.request({ type: 'shutdown', force: true }, 20000);
-  } finally {
-    client.close();
+    await stream.close();
   }
 }
 
@@ -450,24 +439,72 @@ async function testOmp() {
   };
 }
 
-async function findPrimeClaim(spawnValue: unknown) {
-  const spawn = record(spawnValue);
-  const registryDir = path.join(home, '.pi', 'dish', 'sessions');
-  return waitFor(() => {
-    let names: string[];
-    try { names = fs.readdirSync(registryDir); } catch { return null; }
-    for (const name of names) {
-      try {
-        const file = path.join(registryDir, name);
-        const claim = record(JSON.parse(fs.readFileSync(file, 'utf8')));
-        if (record(claim.wrapper).harnessId === 'prime' && claim.spawnToken === spawn.spawnToken) {
-          return { file, claim };
+function primeDaemonRequest(socketPath: string, command: TestRecord, timeoutMs = 20000): Promise<TestRecord> {
+  return new Promise<TestRecord>((resolve, reject) => {
+    const socket = net.connect(socketPath);
+    const id = `pi-dish-canary-${String(command.type)}`;
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`Prime daemon ${String(command.type)} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    let buffer = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      buffer += chunk;
+      let newline;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        let message: TestRecord;
+        try { message = record(JSON.parse(line)); } catch { continue; }
+        if (message.type === 'daemon_hello') {
+          socket.write(JSON.stringify({
+            type: 'command', id,
+            protocol: { name: 'prime-agent.daemon', version: 7 },
+            clientId: 'pi-dish-canary',
+            command: { ...command, id },
+          }) + '\n');
+        } else if (message.type === 'response' && message.id === id) {
+          clearTimeout(timer);
+          socket.end();
+          if (message.success !== true) {
+            reject(new Error(`Prime daemon ${String(command.type)} failed: ${JSON.stringify(message.error)}`));
+            return;
+          }
+          resolve(record(message.data ?? {}));
         }
-      } catch {}
-    }
-    return null;
-  }, 'Prime generated-wrapper registry claim');
+      }
+    });
+    socket.on('error', (error: Error) => { clearTimeout(timer); reject(error); });
+  });
 }
+
+/**
+ * Stop only the isolated daemon this canary started. The public
+ * `prime-agent shutdown` command stops every agent on its daemon and requires
+ * --force outside a terminal; this speaks the daemon protocol (v7 `shutdown`)
+ * over the canary's own socket instead: no extra process, one supervisor.
+ */
+async function shutdownPrime(daemonSocket = primeDaemon) {
+  if (!selected.includes('prime') || !fs.existsSync(daemonSocket)) return { success: true };
+  const data = await primeDaemonRequest(daemonSocket, { type: 'shutdown' });
+  return { success: true, ...data };
+}
+
+/** Roster rows from the isolated daemon's own CLI, scoped by env socket. */
+function primeDaemonRoster(): TestRecord[] {
+  const output = execFileSync(String(primeBin), ['list', '--json'], {
+    encoding: 'utf8',
+    timeout: 20000,
+    env: { ...process.env, HOME: home, PRIME_AGENT_DAEMON_SOCKET: primeDaemon },
+  });
+  return records(record(JSON.parse(output)).sessions);
+}
+
+function rosterHasAgent(predicate: (row: TestRecord) => boolean): boolean {
+  return primeDaemonRoster().some(predicate);
+}
+
 async function testPrime() {
   const created = await post('/api/sessions/new', { harness: 'prime', model: 'openai/gpt-4o-mini', target: target() });
   assert.equal(created.status, 200, JSON.stringify(created.body));
@@ -479,145 +516,163 @@ async function testPrime() {
   }, 'real Prime active session');
   assert.equal(active.harnessId, 'prime');
   const capabilities = record(active.capabilities);
-  assert.equal(capabilities.close, true, 'owned Prime roots can stop through their supervisor');
+  // Prime 0.10's daemon exposes the full session command surface; the
+  // extension-era capability holes are gone.
+  assert.equal(capabilities.close, true, 'owned Prime roots can stop through their daemon');
   assert.equal(capabilities.restart, true);
-  assert.equal(capabilities.queueCancel, false);
+  assert.equal(capabilities.compact, true);
+  assert.equal(capabilities.tree, true);
+  assert.equal(capabilities.queueCancel, true);
 
-  const commands = await getArray(`/api/commands?sessionId=${encodeURIComponent(id)}`);
-  const models = await getArray(`/api/models?sessionId=${encodeURIComponent(id)}`);
-  assert.ok(commands.body.length > 0);
-  assert.ok(models.body.some(model => model.provider === 'openai' && model.id === 'gpt-4o-mini'));
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/rename`, { name: 'Prime managed real canary' })).status, 200);
   assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/thinking`, { level: 'low' })).status, 200);
-  assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/command`, { message: '/dish-push' })).status, 200);
-  const turn = await runStreamedTurn(id, 'pi-dish managed Prime integration canary');
+  const models = await getArray(`/api/models?sessionId=${encodeURIComponent(id)}`);
+  assert.equal(models.status, 200, JSON.stringify(models.body));
+  assert.ok(models.body.some(model => model.provider === 'openai' && model.id === 'gpt-4o-mini'));
 
-  const spawn = record(present(tmuxApi().getSpawn(id)));
-  assert.ok(spawn.wrapperPath && fs.existsSync(text(spawn.wrapperPath)));
-  assert.ok(spawn.spawnToken && record(spawn.paneProcess).startTime);
-  const first = await findPrimeClaim(spawn);
-  assert.notEqual(Number(first.claim.pid), Number(record(spawn.paneProcess).pid), 'Prime worker and client pane must differ');
-  process.kill(Number(first.claim.pid), 0);
+  const turn = await runStreamedTurn(id, 'pi-dish managed Prime integration canary');
+  const tree = await get(`/api/sessions/${encodeURIComponent(id)}/tree`);
+  assert.equal(tree.status, 200, JSON.stringify(tree.body));
+  assert.ok(records(tree.body.nodes).some(node => node.role === 'assistant' && node.text === turn.assistantText && node.active),
+    'the real Prime live tree includes the persisted assistant response on its active path');
+
+  // A held provider turn is Prime-busy: queue a follow-up, prove it shows up
+  // in the SSE queue_update, cancel it through the queue route, then abort.
+  const heldText = 'pi-dish queued follow-up for the Prime canary';
+  const held = await openSessionStream(id);
+  let queueUpdateSeen = false;
+  let queueCancelSeen = false;
+  try {
+    await waitFor(() => held.events.includes('init'), 'Prime held-turn SSE init');
+    const beforeHold = fakeRequestCount;
+    holdNextResponse = true;
+    assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/prompt`,
+      { message: 'Keep this turn open for the queue canary' })).status, 200);
+    await waitFor(() => fakeRequestCount > beforeHold && held.events.includes('turn_start'), 'Prime held turn started', 30000);
+    await waitFor(() => held.events.includes('message_update'), 'Prime held turn first delta', 30000);
+    assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/follow-up`, { message: heldText })).status, 200);
+    await waitFor(() => held.payloads.some(({ event, data }) =>
+      event === 'queue_update' && Array.isArray(data.followUp) && data.followUp.includes(heldText)),
+    'queued follow-up in the Prime SSE queue_update', 15000);
+    queueUpdateSeen = true;
+    const cancelled = await post(`/api/sessions/${encodeURIComponent(id)}/queue/cancel`,
+      { kind: 'followUp', index: 0, text: heldText });
+    assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+    await waitFor(() => held.payloads.some(({ event, data }) =>
+      event === 'queue_update' && Array.isArray(data.followUp) && !data.followUp.includes(heldText)),
+    'cancelled follow-up leaving the Prime SSE queue_update', 15000);
+    queueCancelSeen = true;
+    assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/abort`, {})).status, 200);
+    await waitFor(() => held.events.includes('agent_end') || held.events.includes('turn_end'), 'aborted Prime turn boundary', 30000);
+  } finally {
+    await held.close();
+  }
 
   const peer = await post('/api/sessions/new', { harness: 'prime', model: 'openai/gpt-4o-mini', target: target() });
+  assert.equal(peer.status, 200, JSON.stringify(peer.body));
   const peerId = text(peer.body.id);
-  const peerSpawn = record(present(tmuxApi().getSpawn(peerId)));
-  const peerClaim = await findPrimeClaim(peerSpawn);
-  const { processIdentityAlive }: typeof import('../lib/process-identity') = require('../lib/process-identity')
-  const originalLocation = await tmuxApi().paneLocation(text(spawn.socket), text(spawn.paneId));
+  assert.notEqual(peerId, id);
+  await waitFor(async () => {
+    const list = await get('/api/sessions?active=1');
+    return records(list.body.active).find(session => session.id === peerId);
+  }, 'real Prime peer active session');
+
+  const spawnBefore = record(present(tmuxApi().getSpawn(id)));
+  const agentBefore = record(spawnBefore.primeAgent);
+  assert.ok(agentBefore.activeSessionId, 'the Prime spawn record names its daemon agent');
+  assert.ok(agentBefore.sessionFile, 'the Prime spawn record names its transcript');
+  const paneLocationBefore = await tmuxApi().paneLocation(text(spawnBefore.socket), text(spawnBefore.paneId));
   const restarted = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
   assert.equal(restarted.status, 200, JSON.stringify(restarted.body));
-  assert.equal(processIdentityAlive(first.claim), false, 'restart exits the worker, not just the client');
-  assert.equal(processIdentityAlive(peerClaim.claim), true, 'restart leaves other roots alive');
-  const restartedSpawn = record(present(tmuxApi().getSpawn(id)));
-  const restartedClaim = await findPrimeClaim(restartedSpawn);
-  assert.notEqual(restartedSpawn.spawnToken, spawn.spawnToken);
-  assert.equal(restartedClaim.claim.sessionFile, first.claim.sessionFile);
-  assert.deepEqual(await tmuxApi().paneLocation(text(restartedSpawn.socket), text(restartedSpawn.paneId)), originalLocation);
+  const spawnAfter = record(present(tmuxApi().getSpawn(id)));
+  const agentAfter = record(spawnAfter.primeAgent);
+  assert.equal(spawnAfter.paneId, spawnBefore.paneId, 'restart keeps the original client pane');
+  assert.deepEqual(await tmuxApi().paneLocation(text(spawnAfter.socket), text(spawnAfter.paneId)), paneLocationBefore,
+    'restart keeps the pane where it was');
+  assert.notEqual(agentAfter.activeSessionId, agentBefore.activeSessionId, 'restart starts a new Prime agent');
+  assert.equal(agentAfter.sessionFile, agentBefore.sessionFile, 'restart resumes the same transcript');
   const restartedTurn = await runStreamedTurn(id, 'Prime answers after same-pane restart');
-  assert.ok(records(restartedTurn.transcript.body.messages).some(message => JSON.stringify(message.content).includes(turn.assistantText)),
-    'pre-restart transcript survives');
+  assert.ok(records(restartedTurn.transcript.body.messages).some(message =>
+    JSON.stringify(message.content).includes(turn.assistantText)), 'pre-restart transcript survives');
   await runStreamedTurn(peerId, 'Prime peer still answers after another root restarts');
 
+  const peerSpawn = record(present(tmuxApi().getSpawn(peerId)));
+  const peerAgent = record(peerSpawn.primeAgent);
+  assert.ok(peerAgent.activeSessionId, 'the peer spawn record names its daemon agent');
   const closed = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
   assert.equal(closed.status, 200, JSON.stringify(closed.body));
-  assert.equal(processIdentityAlive(restartedClaim.claim), false);
-  assert.equal(await tmuxApi().paneExists(text(spawn.socket), text(spawn.paneId)), false);
-  assert.equal(processIdentityAlive(peerClaim.claim), true);
+  assert.equal(await tmuxApi().paneExists(text(spawnAfter.socket), text(spawnAfter.paneId)), false,
+    'close removes the Prime client pane');
+  await waitFor(() => !rosterHasAgent(row =>
+    row.activeSessionId === agentAfter.activeSessionId || row.sessionFile === agentAfter.sessionFile),
+  'closed Prime agent leaving the isolated daemon roster', 20000);
+  assert.equal(rosterHasAgent(row => row.activeSessionId === peerAgent.activeSessionId), true,
+    'closing one root leaves the peer agent running');
   await runStreamedTurn(peerId, 'Prime peer still answers after another root closes');
-  const inactiveList = await get('/api/sessions?active=1');
-  assert.ok(!records(inactiveList.body.active).some(session => session.id === id));
 
   const resumed = await post(`/api/sessions/${encodeURIComponent(id)}/resume`, { target: target() });
   assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
+  assert.equal(resumed.body.id, id);
   const resumedSpawn = record(present(tmuxApi().getSpawn(id)));
-  const second = await findPrimeClaim(resumedSpawn);
-  assert.notEqual(Number(second.claim.pid), Number(record(resumedSpawn.paneProcess).pid));
+  assert.equal(record(resumedSpawn.primeAgent).sessionFile, agentBefore.sessionFile,
+    'resume reopens the closed transcript');
   const messages = await get(`/api/sessions/${encodeURIComponent(id)}/messages`);
+  assert.equal(messages.status, 200, JSON.stringify(messages.body));
   assert.equal(record(messages.body.session).harnessId, 'prime');
   const resumedTurn = await runStreamedTurn(id, 'pi-dish managed Prime post-resume integration canary');
   assert.ok(resumedTurn.providerRequestSequence > turn.providerRequestSequence);
   assert.ok(records(resumedTurn.transcript.body.messages).some(message =>
+    JSON.stringify(message.content).includes(turn.assistantText)), 'resume keeps the earlier transcript');
+  assert.ok(records(resumedTurn.transcript.body.messages).some(message =>
     JSON.stringify(message.content).includes(resumedTurn.assistantText)));
 
-  holdNextResponse = true;
-  const beforeBusyTurn = fakeRequestCount;
-  assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/prompt`, { message: 'Keep this turn open for the close canary' })).status, 200);
-  await waitFor(async () => fakeRequestCount > beforeBusyTurn
-    && records((await get('/api/sessions?active=1')).body.active).some(row => row.id === id && row.turnInProgress), 'Prime turn in progress');
-  const busyRestart = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
-  assert.equal(busyRestart.status, 200, JSON.stringify(busyRestart.body));
-  assert.equal(processIdentityAlive(second.claim), false);
-  const busyReplacement = await findPrimeClaim(tmuxApi().getSpawn(id));
-  await runStreamedTurn(id, 'Prime answers after restarting during a turn');
-
-  holdNextResponse = true;
-  const beforeBusyClose = fakeRequestCount;
-  assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/prompt`, { message: 'Keep this turn open for close' })).status, 200);
-  await waitFor(async () => fakeRequestCount > beforeBusyClose
-    && records((await get('/api/sessions?active=1')).body.active).some(row => row.id === id && row.turnInProgress), 'Prime turn before close');
-  assert.equal((await post(`/api/sessions/${encodeURIComponent(id)}/close`)).status, 200);
-  assert.equal(processIdentityAlive(busyReplacement.claim), false);
-  assert.equal(processIdentityAlive(peerClaim.claim), true);
-
-  const manualDaemon = path.join(root, 'prime-manual-daemon.sock');
-  execFileSync('tmux', ['-S', tmuxSocket, 'new-session', '-d', '-s', 'prime-manual', [
-    'env', `HOME=${shellWord(home)}`, `PI_DISH_SOCKET_DIR=${shellWord(socketDir)}`,
-    shellWord(primeBin), '--offline', '--daemon-socket', shellWord(manualDaemon),
+  // A manually started TUI on the same isolated daemon socket must appear as
+  // an unowned Prime row: prompts work, close/restart are refused.
+  const manualWork = path.join(root, 'prime-manual-work');
+  fs.mkdirSync(manualWork, { recursive: true });
+  const beforeManual = new Set(records((await get('/api/sessions?active=1')).body.active).map(row => text(row.id)));
+  execFileSync('tmux', ['-S', tmuxSocket, 'new-session', '-d', '-s', 'prime-manual', '-c', manualWork, [
+    'env', `HOME=${shellWord(home)}`, `PRIME_AGENT_DAEMON_SOCKET=${shellWord(primeDaemon)}`,
+    shellWord(primeBin), '--offline', '--daemon-socket', shellWord(primeDaemon),
+    '--no-skills', '--no-prompt-templates', '--no-context-files',
     '--model', 'openai/gpt-4o-mini',
   ].join(' ')], { stdio: 'ignore' });
+  let manualId = '';
   try {
-    await waitFor(() => {
-      let names: string[];
-      try { names = fs.readdirSync(path.join(home, '.pi', 'dish', 'sessions')); } catch { return null; }
-      for (const name of names) {
-        try {
-          const claim = record(JSON.parse(fs.readFileSync(path.join(home, '.pi', 'dish', 'sessions', name), 'utf8')));
-          if (record(claim.wrapper).harnessId === 'prime' && !claim.spawnToken) return claim;
-        } catch {}
-      }
-      return null;
-    }, 'tokenless discovery registration from a manual prime TUI', 30000);
-    const manualList = await get('/api/sessions?active=1');
-    const primeSessions = records(manualList.body.active).filter(session => session.harnessId === 'prime');
-    assert.ok(primeSessions.length >= 2);
-    const manual = present(primeSessions.find(session => session.id !== peerId));
-    assert.equal(record(manual.capabilities).close, false);
-    assert.equal((await post(`/api/sessions/${encodeURIComponent(text(manual.id))}/close`)).status, 409);
+    const manual = await waitFor(async () => {
+      const list = await get('/api/sessions?active=1');
+      return records(list.body.active).find(row => row.harnessId === 'prime' && !beforeManual.has(text(row.id)));
+    }, 'manually started Prime TUI as an active row', 30000);
+    manualId = text(manual.id);
+    assert.equal(record(manual.capabilities).close, false, 'a manual Prime session is not closeable');
+    assert.equal((await post(`/api/sessions/${encodeURIComponent(manualId)}/close`)).status, 409,
+      'pi-dish refuses to close a Prime session it did not launch');
+    await runStreamedTurn(manualId, 'pi-dish can prompt a manually started Prime TUI');
   } finally {
     try { execFileSync('tmux', ['-S', tmuxSocket, 'kill-session', '-t', 'prime-manual'], { stdio: 'ignore' }); } catch {}
-    try { await shutdownPrime(manualDaemon); } catch {}
   }
-
-  await tmuxApi().killPane(text(peerSpawn.socket), text(peerSpawn.paneId));
-  await waitFor(async () => !processIdentityAlive(record(peerSpawn.paneProcess))
-    && !await tmuxApi().paneExists(text(peerSpawn.socket), text(peerSpawn.paneId)), 'Prime client exit after pane removal');
-  const headlessClose = await post(`/api/sessions/${encodeURIComponent(peerId)}/close`);
-  assert.equal(headlessClose.status, 200, JSON.stringify(headlessClose.body));
-  assert.equal(processIdentityAlive(peerClaim.claim), false);
 
   return {
     version: execFileSync(String(primeBin), ['--version'], { encoding: 'utf8', timeout: 10000 }).trim(),
     routeNamespace: id.slice(0, 5),
-    commands: commands.body.length,
     models: models.body.length,
     streamedTurnEvents: turn.events,
     persistedAssistantMessage: true,
-    wrapperTokenClaimed: true,
-    workerClientSplit: true,
+    liveTreeRead: true,
+    queueUpdateVisible: queueUpdateSeen,
+    queueCancelAccepted: queueCancelSeen,
     ownedRootClosed: true,
-    busyRootClosed: true,
+    daemonRosterRemoval: true,
     samePaneRestarted: true,
-    busyRootRestarted: true,
+    newAgentOnRestart: true,
     postRestartPersistedAssistantMessage: true,
     otherRootSurvivedAndAnswered: true,
-    closeAfterClientExit: true,
-    manualDiscoveryRegistered: true,
-    manualCloseRefused: true,
     postResumePersistedAssistantMessage: true,
+    manualRowDiscovered: true,
+    manualCloseRefused: true,
+    manualPromptWorks: true,
   };
 }
-
 async function cleanup() {
   try { await shutdownPrime(); } catch {}
   const activeServer = server;
@@ -675,7 +730,9 @@ async function cleanup() {
     const result: TestRecord = {};
     for (const id of selected) result[id] = await (id === 'omp' ? testOmp() : testPrime());
     // OMP: two streamed turns (fast on, then off) plus one side-chat turn.
-    const expectedCalls = (selected.includes('omp') ? 3 : 0) + (selected.includes('prime') ? 8 : 0);
+    // Prime: the managed turn, the held/aborted turn, restart, two peer turns,
+    // the post-resume turn and the manual TUI prompt.
+    const expectedCalls = (selected.includes('omp') ? 3 : 0) + (selected.includes('prime') ? 7 : 0);
     assert.equal(fakeRequestCount, expectedCalls, 'each streamed turn must use the local fake provider');
     result.fakeProviderRequests = fakeRequestCount;
     console.log(JSON.stringify(result, null, 2));

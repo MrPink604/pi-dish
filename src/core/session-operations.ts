@@ -2,15 +2,16 @@ import fs = require('fs');
 import path = require('path');
 import crypto = require('crypto');
 import { setTimeout as delay } from 'timers/promises';
-import type { ProcessIdentity } from './contracts';
+import type { BridgeRegistryEntry, ProcessIdentity } from './contracts';
 import { BridgeSession, invalidateRegistryCache, listRegisteredSessions, pruneRegisteredSession } from './bridge-session';
 import { getHarness } from './harnesses';
+import { formatModelRef } from './helper-models';
+import { getPrimeDaemon } from './prime-daemon';
 import { processIdentityAlive } from './process-identity';
-import { stopPrimeWorker } from './prime-lifecycle';
 import { canonicalSessionId } from './session-key';
 import { sourceForIdentity } from './session-source';
 import type { SessionSource } from './session-source-contracts';
-import { LifecycleInterruption, OwnershipRefusal, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity, validateRecoveryRecord } from './session-ownership';
+import { LifecycleInterruption, OwnershipRefusal, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity, sameTranscriptFile, validateRecoveryRecord } from './session-ownership';
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import { HEADLESS_TMUX_SERVER } from './session-launch';
 import type { CleanupEvidence, HarnessLaunchTarget, ResumeUncertainty, SessionLaunch } from './session-launch';
@@ -307,35 +308,33 @@ export function createSessionOperations(observations: SessionOperationObservatio
     if (descriptor.closeMode === 'owned-agent') {
       let capture;
       try {
-        capture = ownership.capturePrimeClose(routeSessionId(route.harnessId, route.nativeSessionId), descriptor);
+        capture = await ownership.capturePrimeClose(routeSessionId(route.harnessId, route.nativeSessionId), descriptor);
       } catch (error) {
         if (error instanceof OwnershipRefusal) return noAction(error.status, error.message, error);
         throw error;
       }
-      const { sessionId: routeId, placement: spawn, registry } = capture;
+      const { sessionId: routeId, placement: spawn } = capture;
       let stopped = false;
       try {
-        await stopPrimeWorker(registry, () => ownership.preparePrimeClose(capture, keepPrimePane, beforeAction),
+        await capture.daemon.stop(capture.agent,
+          () => ownership.preparePrimeClose(capture, keepPrimePane, beforeAction),
           { timeout: Number(process.env.PI_DISH_CLOSE_TIMEOUT_MS) || 10000 });
         stopped = true;
-        if (keepPrimePane) {
-          pruneRegisteredSession(registry);
-          return { kind: 'stopped' };
-        }
+        // A restart keeps the spawn record: the respawn replaces it in place.
+        if (keepPrimePane) return { kind: 'stopped' };
         if (await ownership.checkPrimeClosePane(capture, keepPrimePane)) {
           await tmux.killPane(spawn.socket, spawn.paneId);
           const deadline = Date.now() + 3000;
           while (Date.now() < deadline && await tmux.paneExists(spawn.socket, spawn.paneId)) await delay(100);
-          if (await tmux.paneExists(spawn.socket, spawn.paneId)) throw new Error('Prime stopped, but its client pane did not exit');
+          if (await tmux.paneExists(spawn.socket, spawn.paneId)) throw new Error(`${descriptor.label} stopped, but its client pane did not exit`);
         }
         tmux.removeSpawn(routeId, spawn);
-        pruneRegisteredSession(registry);
         return { kind: 'stopped' };
       } catch (error) {
         if (error instanceof LifecycleInterruption) throw error;
         const preserve = stopped || objectFields(error)?.stopRequested === true;
         const failure: OperationFailure = {
-          status: preserve ? 500 : 409, error: `Failed to stop Prime: ${errorMessage(error)}`, cause: error,
+          status: preserve ? 500 : 409, error: `Failed to stop ${descriptor.label}: ${errorMessage(error)}`, cause: error,
           closeIntent: { preserve, stopped },
         };
         if (stopped) return { ...failure, kind: 'cleanup-failed', stopped: true };
@@ -437,8 +436,13 @@ export function createSessionOperations(observations: SessionOperationObservatio
     finally { if (closeFlights.get(id) === flight) closeFlights.delete(id); }
   }
 
+  /** A live Prime root for this route, from the polled daemon roster cache. */
+  function primeRootFor(sessionId: unknown): { sessionFile?: string } | null {
+    const identity = routeIdentity(sessionId);
+    return identity?.harnessId === 'prime' ? getPrimeDaemon().byNativeId(identity.nativeSessionId) : null;
+  }
   function sessionIsActive(sessionId: string): boolean {
-    return !!ownership.getRegisteredSession(sessionId) || !!ownership.getRPCSession(sessionId)?.alive;
+    return !!primeRootFor(sessionId) || !!ownership.getRegisteredSession(sessionId) || !!ownership.getRPCSession(sessionId)?.alive;
   }
   function clearResumeQuarantines(sessionFile: string): void {
     failedResumeCleanups.delete(sessionFile);
@@ -447,8 +451,9 @@ export function createSessionOperations(observations: SessionOperationObservatio
   function activeSessionClearsQuarantine(sessionId: unknown): boolean {
     const registered = ownership.getRegisteredSession(sessionId);
     const rpc = ownership.getRPCSession(sessionId);
-    if (!registered && !rpc?.alive) return false;
-    const activeFile = registered?.sessionFile || rpc?.sessionFile || rpc?.state?.sessionFile;
+    const prime = primeRootFor(sessionId);
+    if (!registered && !rpc?.alive && !prime) return false;
+    const activeFile = registered?.sessionFile || rpc?.sessionFile || rpc?.state?.sessionFile || prime?.sessionFile;
     if (activeFile) {
       try { clearResumeQuarantines(fs.realpathSync(filePath(activeFile))); } catch {}
     }
@@ -466,6 +471,13 @@ export function createSessionOperations(observations: SessionOperationObservatio
     }
     const identity = routeIdentity(sessionId);
     if (!identity) return;
+    if (getHarness(identity.harnessId)?.liveTransport === 'prime-daemon') {
+      for (const root of getPrimeDaemon().list()) {
+        if (routeSessionId('prime', root.nativeSessionId) === sessionId || sameTranscriptFile(root.sessionFile, sessionFile)) {
+          throw new SessionOperationError(409, 'A live Prime agent claims this transcript; refusing to start another writer.');
+        }
+      }
+    }
     const boot = recoveryStore.bootId();
     const control = recoveryStore.getControl(identity.harnessId, identity.nativeSessionId);
     const savedLaunch = objectFields(control.attempt?.launch);
@@ -653,30 +665,47 @@ export function createSessionOperations(observations: SessionOperationObservatio
         if (error instanceof OwnershipRefusal) return noAction(error.status, error.message, error);
         throw error;
       }
-      let registry = restartCapture.registry;
       const spawn = restartCapture.placement;
-      let sessionSource: SessionSource | null | undefined;
-      try {
-        sessionSource = registry.sessionFile
-          ? sourceForIdentity(route.harnessId, route.nativeSessionId, filePath(registry.sessionFile))
-          : findSessionSource(sessionId);
-      } catch {}
+      let registry: BridgeRegistryEntry | null = restartCapture.kind === 'pane-restart' ? restartCapture.registry : null;
       let sessionFile: string;
-      try { sessionFile = fs.realpathSync(filePath(sessionSource?.file || registry.sessionFile)); }
-      catch { return noAction(409, 'The active agent has no resumable session file.'); }
-      let cwd = observedCwd(observations.readSessionCwd(sourceForIdentity(route.harnessId, route.nativeSessionId, sessionFile)));
-      if (!cwd || !fs.existsSync(cwd)) cwd = process.env.HOME;
-      try {
-        const proved = await ownership.preparePaneRestart(restartCapture);
-        registry = ownership.revalidatePaneRestart(restartCapture, proved);
-      } catch (error) {
-        if (error instanceof OwnershipRefusal) return noAction(error.status, error.message, error);
-        throw error;
+      let cwd: string | undefined;
+      let resumeModel: string | undefined;
+      let windowName: string | null;
+      if (restartCapture.kind === 'prime-restart') {
+        sessionFile = restartCapture.sessionFile;
+        const agentCwd = restartCapture.summary.cwd;
+        cwd = agentCwd && fs.existsSync(agentCwd) ? agentCwd : process.env.HOME;
+        resumeModel = formatModelRef(restartCapture.summary.model) || undefined;
+        windowName = restartCapture.summary.sessionName;
+      } else {
+        const bridgeRegistry = restartCapture.registry;
+        let sessionSource: SessionSource | null | undefined;
+        try {
+          sessionSource = bridgeRegistry.sessionFile
+            ? sourceForIdentity(route.harnessId, route.nativeSessionId, filePath(bridgeRegistry.sessionFile))
+            : findSessionSource(sessionId);
+        } catch {}
+        try { sessionFile = fs.realpathSync(filePath(sessionSource?.file || bridgeRegistry.sessionFile)); }
+        catch { return noAction(409, 'The active agent has no resumable session file.'); }
+        cwd = observedCwd(observations.readSessionCwd(sourceForIdentity(route.harnessId, route.nativeSessionId, sessionFile)));
+        if (!cwd || !fs.existsSync(cwd)) cwd = process.env.HOME;
+        resumeModel = observedText(bridgeRegistry.model) || undefined;
+        windowName = observedText(bridgeRegistry.name) || null;
+        registry = bridgeRegistry;
+      }
+      if (restartCapture.kind === 'pane-restart') {
+        try {
+          const proved = await ownership.preparePaneRestart(restartCapture);
+          registry = ownership.revalidatePaneRestart(restartCapture, proved);
+        } catch (error) {
+          if (error instanceof OwnershipRefusal) return noAction(error.status, error.message, error);
+          throw error;
+        }
       }
       let workerStopped = false;
       try {
-        let beforeRespawn = beforeAction;
-        if (descriptor.closeMode === 'owned-agent') {
+        let beforeRespawn: BeforeLifecycleAction | null = beforeAction;
+        if (restartCapture.kind === 'prime-restart') {
           const stopped = await performSessionClose(sessionId, {
             keepPrimePane: true,
             beforeAction: () => ownership.preparePrimeRestartStop(restartCapture, beforeAction),
@@ -689,9 +718,9 @@ export function createSessionOperations(observations: SessionOperationObservatio
         const outcome = await launch.spawnHarnessInTmux({
           descriptor,
           target: { socket: spawn.socket },
-          args: descriptor.argv.resume({ file: sessionFile, model: observedText(registry.model) || undefined }),
+          args: descriptor.argv.resume({ file: sessionFile, model: resumeModel }),
           cwd,
-          name: observedText(registry.name) || null,
+          name: windowName,
           hidden: path.resolve(spawn.socket) === path.resolve(path.join(tmux.tmuxTmpdir(), HEADLESS_TMUX_SERVER)),
           restartPane: {
             sessionId, paneId: spawn.paneId,

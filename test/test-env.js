@@ -22,6 +22,7 @@ exports.applyTestEnv = applyTestEnv;
  * pinned to an ephemeral loopback port.
  */
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 // Kept because they point the suite at real host tooling or turn a suite off;
 // nothing here can retarget or rebind the server under test.
@@ -77,6 +78,11 @@ function sanitizeTestEnv(env = process.env) {
     }
     for (const key of DROP)
         delete next[key];
+    // Prime 0.10+ live rows come from a resident daemon socket outside HOME. Pin
+    // a nonexistent path inside a private temp dir so no test process ever
+    // attaches to the developer's real daemon (or lists their live agents as
+    // fixtures). A suite that needs a fake daemon sets its own path after this.
+    next.PRIME_AGENT_DAEMON_SOCKET = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dish-prime-daemon-')), 'daemon.sock');
     // Loopback + ephemeral: a test listener must never be reachable off-box and
     // must never contend for the deployment's port.
     next.HOST = '127.0.0.1';

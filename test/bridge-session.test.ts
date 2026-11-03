@@ -131,7 +131,7 @@ test('registry scan rejects contradictory alternate wrapper identity', () => {
   fs.writeFileSync(socketPath, 'socket placeholder');
   const registryPath = writeRegistryEntry('contradictory-wrapper', alternateClaim(socketPath, {
     harnessId: 'omp',
-    wrapper: { harnessId: 'prime', name: 'Prime Agent', wrapperVersion: 'test' },
+    wrapper: { harnessId: 'acme', name: 'Acme Agent', wrapperVersion: 'test' },
   }));
 
   assert.equal(
@@ -287,8 +287,8 @@ test('protocol-v2 connections reject a hello from a different registry claim', a
 
   const sess = new BridgeSession(bridgeEntry({
     protocolVersion: 2,
-    wrapper: { harnessId: 'prime' },
-    harnessId: 'prime',
+    wrapper: { harnessId: 'acme' },
+    harnessId: 'acme',
     nativeSessionId: nativeId('expected-session'),
     sessionId: nativeId('expected-session'),
     bridgeInstanceId: 'expected-bridge',
@@ -299,7 +299,7 @@ test('protocol-v2 connections reject a hello from a different registry claim', a
     capabilities: { prompt: false },
   }));
   await assert.rejects(sess.connect(), /does not match the selected registry claim/);
-  assert.equal(sess.harnessId, 'prime', 'untrusted hello cannot replace claim identity');
+  assert.equal(sess.harnessId, 'acme', 'untrusted hello cannot replace claim identity');
   assert.equal(sess.capabilities.prompt, false, 'untrusted hello cannot elevate capabilities');
 
   await closeServer(server);
@@ -311,7 +311,7 @@ test('alternate protocol-v2 connections reject every changed static claim field'
     ['wrapper identity', claim => ({ wrapper: { ...claim.wrapper, wrapperVersion: 'different' } })],
     ['capabilities', claim => ({ capabilities: { ...claim.capabilities, reload: true } })],
     ['socket path', claim => ({ socketPath: `${claim.socketPath}.different` })],
-    ['contradictory outer harness', () => ({ harnessId: 'prime' })],
+    ['contradictory outer harness', () => ({ harnessId: 'acme' })],
   ];
   for (const [name, change] of cases) {
     await t.test(name, async () => {

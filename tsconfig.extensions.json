@@ -19,7 +19,6 @@
     "extensions/pi-dish-bridge-omp/index.ts",
     "extensions/pi-dish-bridge-omp/login.ts",
     "extensions/pi-dish-bridge-omp/native-state.ts",
-    "extensions/pi-dish-bridge-prime/index.ts",
     "test/fixtures/session-recovery-bridge.ts",
     "test/fixtures/fake-omp-bridge-host.ts",
     "test/fixtures/fake-login-host.ts",

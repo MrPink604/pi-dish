@@ -2,10 +2,13 @@
 import type { BridgeCapability, BridgeRegistryEntry, HarnessDescriptor, HarnessId, NativeSessionId, ProcessIdentity, SessionIdentity } from './contracts';
 import { BridgeSession } from './bridge-session';
 import { RPCSession } from './rpc-session';
+import { PrimeDaemonSession } from './prime-daemon';
+import type { PrimeAgentSummary, PrimeDaemon } from './prime-daemon';
 import type { DiscoveryCandidate, LiveSourceObservation, SessionSource, SessionSourceResolver } from './session-source-contracts';
 import * as tmux from './tmux';
 import type { RecoveryRecord } from './session-recovery';
-export type LiveSession = InstanceType<typeof BridgeSession> | InstanceType<typeof RPCSession>;
+/** The three live transports: bridge extension, Pi RPC child, Prime daemon root. */
+export type LiveSession = InstanceType<typeof BridgeSession> | InstanceType<typeof RPCSession> | PrimeDaemonSession;
 export interface OwnershipObservations {
     /** Presentation listeners only; the selected transport cannot be replaced. */
     onLive(session: LiveSession): void;
@@ -37,8 +40,10 @@ export interface OwnedPaneCloseCapture {
 export interface PrimeCloseCapture {
     readonly kind: 'owned-agent';
     readonly sessionId: string;
-    readonly registry: BridgeRegistryEntry;
+    readonly descriptor: HarnessDescriptor;
     readonly placement: tmux.SpawnPlacement;
+    readonly agent: tmux.PrimeAgentPlacement;
+    readonly daemon: PrimeDaemon;
 }
 export interface LogicalCloseCapture {
     readonly kind: 'logical';
@@ -59,6 +64,18 @@ export interface PaneRestartCapture {
     readonly registry: BridgeRegistryEntry;
     readonly placement: tmux.SpawnPlacement;
 }
+/** Prime restart authority comes from the spawn record plus the live roster, not a bridge claim. */
+export interface PrimeRestartCapture {
+    readonly kind: 'prime-restart';
+    readonly sessionId: string;
+    readonly descriptor: HarnessDescriptor;
+    readonly placement: tmux.SpawnPlacement;
+    readonly agent: tmux.PrimeAgentPlacement;
+    readonly daemon: PrimeDaemon;
+    readonly summary: PrimeAgentSummary;
+    readonly sessionFile: string;
+}
+export type RestartCapture = PaneRestartCapture | PrimeRestartCapture;
 interface BounceIdentity {
     readonly sessionId: string;
     readonly harnessId: HarnessId;
@@ -108,16 +125,16 @@ export interface SessionOwnership {
     captureRpcClose(sessionId: string): RpcCloseCapture | null;
     captureOwnedPaneClose(sessionId: string, descriptor: HarnessDescriptor): Promise<OwnedPaneCloseCapture>;
     revalidateOwnedPaneClose(capture: OwnedPaneCloseCapture): void;
-    capturePrimeClose(sessionId: string, descriptor: HarnessDescriptor): PrimeCloseCapture;
+    capturePrimeClose(sessionId: string, descriptor: HarnessDescriptor): Promise<PrimeCloseCapture>;
     checkPrimeClosePane(capture: PrimeCloseCapture, keepPane: boolean): Promise<boolean>;
     preparePrimeClose(capture: PrimeCloseCapture, keepPane: boolean, beforeAction: BeforeLifecycleAction | null): Promise<void>;
     captureLogicalClose(sessionId: string, registry: BridgeRegistryEntry): Promise<LogicalCloseCapture>;
     revalidateLogicalClose(capture: LogicalCloseCapture): LogicalCloseProof;
-    capturePaneRestart(sessionId: string, descriptor: HarnessDescriptor): Promise<PaneRestartCapture>;
+    capturePaneRestart(sessionId: string, descriptor: HarnessDescriptor): Promise<RestartCapture>;
     preparePaneRestart(capture: PaneRestartCapture): Promise<BridgeRegistryEntry>;
     revalidatePaneRestart(capture: PaneRestartCapture, proved: BridgeRegistryEntry): BridgeRegistryEntry;
-    preparePrimeRestartStop(capture: PaneRestartCapture, beforeAction: BeforeLifecycleAction | null): Promise<() => undefined>;
-    preparePrimeReplacement(capture: PaneRestartCapture, sessionFile: string): Promise<() => undefined>;
+    preparePrimeRestartStop(capture: PrimeRestartCapture, beforeAction: BeforeLifecycleAction | null): Promise<() => undefined>;
+    preparePrimeReplacement(capture: PrimeRestartCapture, sessionFile: string): Promise<() => undefined>;
     captureBounceAuthority(row: {
         id: string;
         harnessId?: unknown;
@@ -135,6 +152,27 @@ export declare function spawnMatchesRegistryClaim(spawn: tmux.SpawnPlacement | n
 export declare function proveBridgeRegistryClaim(entry: BridgeRegistryEntry): Promise<void>;
 /** Synchronous observations, not an authorization that survives an await. */
 export declare function spawnAllowsOwnedPaneClose(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined): boolean;
+export declare function primeAgentMatchesSummary(agent: tmux.PrimeAgentPlacement, summary: PrimeAgentSummary): boolean;
+/**
+ * The same resident worker. A Prime `/new` moves the agent to a new transcript
+ * while `activeSessionId` and `workerInstanceId` survive, so transcript equality
+ * is not part of worker identity.
+ */
+export declare function primeAgentSameWorker(agent: tmux.PrimeAgentPlacement, summary: PrimeAgentSummary): boolean;
+/** Compare transcripts through their real paths without inventing a match on failure. */
+export declare function sameTranscriptFile(left: unknown, right: unknown): boolean;
+export interface PrimeLaunchAuthority {
+    readonly closeAllowed: boolean;
+    readonly restartAllowed: boolean;
+}
+/**
+ * Prime launch authority for one route id: a recorded launch must name the
+ * same resident worker as the roster summary, even when the route key moved.
+ * Synchronous by design; callers refresh the roster before projecting a row.
+ */
+export declare function primeLaunchAuthority(sessionId: string, summary: PrimeAgentSummary | null): PrimeLaunchAuthority;
+/** Resolve the cached roster root for a Prime route, then apply primeLaunchAuthority. */
+export declare function primeLaunchAuthorityForRoute(sessionId: string): PrimeLaunchAuthority;
 export declare function spawnAllowsManagedClose(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined, closeMode: HarnessDescriptor['closeMode']): boolean;
 export declare function spawnAllowsRestart(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined, closeMode: HarnessDescriptor['closeMode']): boolean;
 export declare function liveSessionSupports(session: LiveSession, capability: BridgeCapability): boolean;

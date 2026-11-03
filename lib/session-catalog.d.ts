@@ -19,6 +19,10 @@ declare function registeredSessionObservation(value: unknown, context: Registere
 /** RPC state and model objects enter as unknown, not as a handwritten signature
  * asserting that another module already validated their presentation fields. */
 declare function rpcSessionObservation(value: unknown, context: ObservationContext): CatalogLiveObservation;
+/** A live Prime daemon root: the roster supplies identity, model, activity and
+ * busy state, while the transcript (when it exists) supplies history counters.
+ * Only root agents reach here; RLM children stay silent helper semantics. */
+declare function primeSessionObservation(value: unknown, context: ObservationContext): CatalogLiveObservation;
 /** Validate advisory store snapshots without migrating or granting authority to
  * those stores. Invalid records are ignored individually. */
 declare function decodeLaunchParents(value: unknown): ReadonlyMap<SessionId, SessionId>;
@@ -44,6 +48,7 @@ declare function composeSessionCatalog(input: SessionCatalogInput, options: Sess
 declare const _default: {
     registeredSessionObservation: typeof registeredSessionObservation;
     rpcSessionObservation: typeof rpcSessionObservation;
+    primeSessionObservation: typeof primeSessionObservation;
     decodeLaunchParents: typeof decodeLaunchParents;
     decodeRoutineAnnotations: typeof decodeRoutineAnnotations;
     withSessionContext: typeof withSessionContext;

@@ -40,28 +40,45 @@ function runInstall(dirs) {
         encoding: 'utf8',
     });
 }
-test('installer links the correct bridge and every skill into Pi and OMP', t => {
+test('installer links the correct bridge and every skill into Pi, OMP and Prime', t => {
     const dirs = isolatedAgentDirs(t);
     const result = runInstall(dirs);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(fs.readlinkSync(path.join(dirs.pi, 'extensions', 'pi-dish-bridge')), path.join(ROOT, 'extensions', 'pi-dish-bridge'));
     assert.equal(fs.readlinkSync(path.join(dirs.omp, 'extensions', 'pi-dish-bridge-omp')), path.join(ROOT, 'extensions', 'pi-dish-bridge-omp'));
-    assert.equal(fs.readlinkSync(path.join(dirs.prime, 'extensions', 'pi-dish-bridge-prime')), path.join(ROOT, 'extensions', 'pi-dish-bridge-prime'));
-    // Prime resolves the wrapper's ../pi-dish-bridge/core.js import from the
-    // symlink path, so the shared core must sit beside it; that stock bridge
-    // stands down under prime hosts.
-    assert.equal(fs.readlinkSync(path.join(dirs.prime, 'extensions', 'pi-dish-bridge')), path.join(ROOT, 'extensions', 'pi-dish-bridge'));
-    for (const agentDir of [dirs.pi, dirs.omp]) {
+    // Prime 0.10 has no extension loader, so the installer must not plant a
+    // Prime bridge link at all.
+    assert.ok(!fs.existsSync(path.join(dirs.prime, 'extensions', 'pi-dish-bridge-prime')));
+    assert.ok(!fs.existsSync(path.join(dirs.prime, 'extensions', 'pi-dish-bridge')));
+    for (const agentDir of [dirs.pi, dirs.omp, dirs.prime]) {
         for (const skill of SKILLS) {
             assert.equal(fs.readlinkSync(path.join(agentDir, 'skills', skill)), path.join(ROOT, 'skills', skill));
         }
         assert.ok(!fs.existsSync(path.join(agentDir, 'skills', 'lib')), 'the shared CLI core (skills/lib) must not be linked as a skill');
     }
-    // Skills stay linked into Pi and OMP only: the pi-dish skills are Pi/OMP
-    // tooling and Prime's skill loading is not part of this integration.
-    assert.ok(!fs.existsSync(path.join(dirs.prime, 'skills')));
     const repeated = runInstall(dirs);
     assert.equal(repeated.status, 0, repeated.stderr);
+});
+test('installer removes stale Prime bridge links that resolve into this checkout only', t => {
+    const dirs = isolatedAgentDirs(t);
+    const extensions = path.join(dirs.prime, 'extensions');
+    fs.mkdirSync(extensions, { recursive: true });
+    fs.symlinkSync(path.join(ROOT, 'extensions', 'pi-dish-bridge-prime'), path.join(extensions, 'pi-dish-bridge-prime'));
+    fs.symlinkSync(path.join(ROOT, 'extensions', 'pi-dish-bridge'), path.join(extensions, 'pi-dish-bridge'));
+    // A user's own file, a user link to somewhere else, and a directory named
+    // like the retired wrapper must all survive.
+    fs.writeFileSync(path.join(extensions, 'owned.txt'), 'keep\n');
+    const userTarget = path.join(dirs.prime, 'user-extension');
+    fs.mkdirSync(userTarget);
+    fs.symlinkSync(userTarget, path.join(extensions, 'my-extension'));
+    fs.mkdirSync(path.join(extensions, 'pi-dish-bridge-user'));
+    const result = runInstall(dirs);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(fs.existsSync(path.join(extensions, 'pi-dish-bridge-prime')), false);
+    assert.equal(fs.existsSync(path.join(extensions, 'pi-dish-bridge')), false);
+    assert.equal(fs.readFileSync(path.join(extensions, 'owned.txt'), 'utf8'), 'keep\n');
+    assert.equal(fs.readlinkSync(path.join(extensions, 'my-extension')), userTarget);
+    assert.ok(fs.existsSync(path.join(extensions, 'pi-dish-bridge-user')));
 });
 test('installer refuses to replace an existing non-symlink', t => {
     const dirs = isolatedAgentDirs(t);

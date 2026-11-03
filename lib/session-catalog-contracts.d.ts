@@ -12,7 +12,8 @@ export interface CatalogAdvice {
     readonly liveInstanceCount: number;
 }
 export interface CatalogLiveObservation extends Readonly<SessionIdentity> {
-    readonly kind: 'registered' | 'rpc';
+    /** `prime`: a root agent read from Prime's daemon roster (no bridge registry row). */
+    readonly kind: 'registered' | 'rpc' | 'prime';
     /** Reported even before the JSONL exists. This is not a resolved read source. */
     readonly claimedFile: string | null;
     readonly source: SessionSource | null;

@@ -40,13 +40,27 @@ test('active projections distinguish absent flags from explicit denials', () => 
     for (const key of ['prompt', 'tree', 'rename'])
         assert.equal(deniedPi[key], false);
 });
-test('OMP tree requires both live read and navigation; Prime never advertises a tree', () => {
+test('OMP tree requires both live read and navigation; Prime navigates through treeNavigation', () => {
     for (const treeRead of [false, true])
         for (const treeNavigation of [false, true]) {
             const flags = { treeRead, treeNavigation };
             assert.equal((0, session_capabilities_js_1.sessionCapabilities)('omp', flags, { active: true }).tree, treeRead && treeNavigation);
-            assert.equal((0, session_capabilities_js_1.sessionCapabilities)('prime', flags, { active: true }).tree, false);
+            assert.equal((0, session_capabilities_js_1.sessionCapabilities)('prime', flags, { active: true }).tree, treeNavigation);
         }
+    assert.equal((0, session_capabilities_js_1.sessionCapabilities)('prime', { treeRead: true, treeNavigation: true }).tree, false, 'an inactive Prime transcript has no live tree');
+});
+test('a live Prime daemon root reaches its transport capabilities without a bridge', () => {
+    const flags = { ...session_capabilities_js_1.PRIME_DAEMON_CAPABILITIES };
+    const live = (0, session_capabilities_js_1.sessionCapabilities)('prime', flags, { active: true, closeAllowed: true, restartAllowed: true });
+    expectEnabled(live, ['prompt', 'steer', 'followUp', 'abort', 'compact', 'models', 'setModel',
+        'setThinking', 'rename', 'commands', 'queueCancel', 'tree', 'close', 'restart']);
+    assert.equal(live.fastMode, false, 'Prime has no service tier control');
+    assert.equal(live.export, false, 'the HTML export route stays file-based for Pi and OMP');
+    assert.equal(live.resume, false);
+    // Ownership still decides lifecycle: an unowned manual root is controllable but not closeable.
+    const unowned = (0, session_capabilities_js_1.sessionCapabilities)('prime', flags, { active: true });
+    expectEnabled(unowned, ['prompt', 'steer', 'followUp', 'abort', 'compact', 'models', 'setModel',
+        'setThinking', 'rename', 'commands', 'queueCancel', 'tree']);
 });
 test('fast mode is an OMP bridge feature: exact true on an active session only', () => {
     assert.equal((0, session_capabilities_js_1.sessionCapabilities)('omp', { fastMode: true }, { active: true }).fastMode, true);

@@ -3,10 +3,11 @@ import path = require('path');
 import type { BridgeCapability, BridgeRegistryEntry, HarnessDescriptor, HarnessId, NativeSessionId, ProcessIdentity, ProcessIdentityInput, SessionIdentity } from './contracts';
 import { BridgeSession, getBridgeSession as getBridgeSessionForClaim, getRegisteredSessionByNativeId, invalidateRegistryCache, listRegisteredSessions, pruneRegisteredSession, pruneUnreachableRegisteredSession, sameRegistryClaim } from './bridge-session';
 import { getRPCSession as getRawRPCSession, RPCSession } from './rpc-session';
-import { bridgeSupports } from './session-capabilities';
+import { getPrimeDaemon, PrimeDaemonSession } from './prime-daemon';
+import type { PrimeAgentSummary, PrimeDaemon } from './prime-daemon';
+import { bridgeSupports, PRIME_DAEMON_CAPABILITIES } from './session-capabilities';
 import { getHarness } from './harnesses';
 import { inspectProcessAncestry, processIdentity, processIdentityAlive } from './process-identity';
-import { primeWorkerTarget } from './prime-lifecycle';
 import { encodeSessionKey, resolveSessionRoute, validSessionId, VERSION } from './session-key';
 import { createSessionSourceResolver } from './session-source';
 import { sessionRootsFor } from './private-sessions';
@@ -17,7 +18,8 @@ import * as tmux from './tmux';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryRecord } from './session-recovery';
 
-export type LiveSession = InstanceType<typeof BridgeSession> | InstanceType<typeof RPCSession>;
+/** The three live transports: bridge extension, Pi RPC child, Prime daemon root. */
+export type LiveSession = InstanceType<typeof BridgeSession> | InstanceType<typeof RPCSession> | PrimeDaemonSession;
 
 export interface OwnershipObservations {
   /** Presentation listeners only; the selected transport cannot be replaced. */
@@ -52,8 +54,10 @@ export interface OwnedPaneCloseCapture {
 export interface PrimeCloseCapture {
   readonly kind: 'owned-agent';
   readonly sessionId: string;
-  readonly registry: BridgeRegistryEntry;
+  readonly descriptor: HarnessDescriptor;
   readonly placement: tmux.SpawnPlacement;
+  readonly agent: tmux.PrimeAgentPlacement;
+  readonly daemon: PrimeDaemon;
 }
 export interface LogicalCloseCapture {
   readonly kind: 'logical';
@@ -74,6 +78,18 @@ export interface PaneRestartCapture {
   readonly registry: BridgeRegistryEntry;
   readonly placement: tmux.SpawnPlacement;
 }
+/** Prime restart authority comes from the spawn record plus the live roster, not a bridge claim. */
+export interface PrimeRestartCapture {
+  readonly kind: 'prime-restart';
+  readonly sessionId: string;
+  readonly descriptor: HarnessDescriptor;
+  readonly placement: tmux.SpawnPlacement;
+  readonly agent: tmux.PrimeAgentPlacement;
+  readonly daemon: PrimeDaemon;
+  readonly summary: PrimeAgentSummary;
+  readonly sessionFile: string;
+}
+export type RestartCapture = PaneRestartCapture | PrimeRestartCapture;
 interface BounceIdentity {
   readonly sessionId: string;
   readonly harnessId: HarnessId;
@@ -118,16 +134,16 @@ export interface SessionOwnership {
   captureRpcClose(sessionId: string): RpcCloseCapture | null;
   captureOwnedPaneClose(sessionId: string, descriptor: HarnessDescriptor): Promise<OwnedPaneCloseCapture>;
   revalidateOwnedPaneClose(capture: OwnedPaneCloseCapture): void;
-  capturePrimeClose(sessionId: string, descriptor: HarnessDescriptor): PrimeCloseCapture;
+  capturePrimeClose(sessionId: string, descriptor: HarnessDescriptor): Promise<PrimeCloseCapture>;
   checkPrimeClosePane(capture: PrimeCloseCapture, keepPane: boolean): Promise<boolean>;
   preparePrimeClose(capture: PrimeCloseCapture, keepPane: boolean, beforeAction: BeforeLifecycleAction | null): Promise<void>;
   captureLogicalClose(sessionId: string, registry: BridgeRegistryEntry): Promise<LogicalCloseCapture>;
   revalidateLogicalClose(capture: LogicalCloseCapture): LogicalCloseProof;
-  capturePaneRestart(sessionId: string, descriptor: HarnessDescriptor): Promise<PaneRestartCapture>;
+  capturePaneRestart(sessionId: string, descriptor: HarnessDescriptor): Promise<RestartCapture>;
   preparePaneRestart(capture: PaneRestartCapture): Promise<BridgeRegistryEntry>;
   revalidatePaneRestart(capture: PaneRestartCapture, proved: BridgeRegistryEntry): BridgeRegistryEntry;
-  preparePrimeRestartStop(capture: PaneRestartCapture, beforeAction: BeforeLifecycleAction | null): Promise<() => undefined>;
-  preparePrimeReplacement(capture: PaneRestartCapture, sessionFile: string): Promise<() => undefined>;
+  preparePrimeRestartStop(capture: PrimeRestartCapture, beforeAction: BeforeLifecycleAction | null): Promise<() => undefined>;
+  preparePrimeReplacement(capture: PrimeRestartCapture, sessionFile: string): Promise<() => undefined>;
   captureBounceAuthority(row: { id: string; harnessId?: unknown; conflicted?: unknown }): BounceAuthority | null;
   bounceIdentityFailure(authority: BounceAuthority): string | null;
 }
@@ -192,21 +208,138 @@ export function spawnAllowsOwnedPaneClose(spawn: tmux.SpawnPlacement | null | un
     && ancestry.processes.some(ancestor => sameProcessIdentity(ancestor, spawn.paneProcess));
 }
 
+export function primeAgentMatchesSummary(agent: tmux.PrimeAgentPlacement, summary: PrimeAgentSummary): boolean {
+  return agent.activeSessionId === summary.activeSessionId
+    && agent.workerInstanceId === (summary.workerInstanceId || null)
+    && agent.sessionFile === summary.sessionFile;
+}
+
+/**
+ * The same resident worker. A Prime `/new` moves the agent to a new transcript
+ * while `activeSessionId` and `workerInstanceId` survive, so transcript equality
+ * is not part of worker identity.
+ */
+export function primeAgentSameWorker(agent: tmux.PrimeAgentPlacement, summary: PrimeAgentSummary): boolean {
+  return agent.activeSessionId === summary.activeSessionId
+    && agent.workerInstanceId === (summary.workerInstanceId || null);
+}
+
+interface PrimeSpawnRecord {
+  readonly spawnKey: string;
+  readonly placement: tmux.SpawnPlacement;
+  readonly agent: tmux.PrimeAgentPlacement;
+}
+
+/**
+ * The recorded Prime launch for this route, falling back to the spawn record
+ * whose worker matches the roster when the route key moved while pi-dish was
+ * down (a TUI `/new` pi-dish never observed).
+ */
+function findPrimeSpawn(sessionId: string, summary: PrimeAgentSummary | null): PrimeSpawnRecord | null {
+  if (!summary) return null;
+  const direct = tmux.getSpawn(sessionId);
+  const directAgent = tmux.spawnPrimeAgent(direct);
+  if (direct?.socket && direct.paneId && directAgent && primeAgentSameWorker(directAgent, summary)) {
+    return { spawnKey: sessionId, placement: direct, agent: directAgent };
+  }
+  let fallback: PrimeSpawnRecord | null = null;
+  for (const [spawnKey, placement] of Object.entries(tmux.listSpawns())) {
+    if (spawnKey === sessionId || !placement.socket || !placement.paneId) continue;
+    const agent = tmux.spawnPrimeAgent(placement);
+    if (!agent || !primeAgentSameWorker(agent, summary)) continue;
+    if (processIdentityAlive(processEvidence(placement.paneProcess))) return { spawnKey, placement, agent };
+    fallback ??= { spawnKey, placement, agent };
+  }
+  return fallback;
+}
+
+/**
+ * Adopt a route key whose launch record still names the same worker: re-key
+ * the record and refresh its agent evidence to the live roster row.
+ */
+function adoptPrimeSpawn(sessionId: string, found: PrimeSpawnRecord, summary: PrimeAgentSummary): tmux.SpawnPlacement {
+  const agent: tmux.PrimeAgentPlacement = {
+    daemonSocket: found.agent.daemonSocket,
+    activeSessionId: summary.activeSessionId,
+    workerInstanceId: summary.workerInstanceId || null,
+    sessionFile: summary.sessionFile,
+  };
+  if (found.spawnKey === sessionId && primeAgentMatchesSummary(found.agent, summary)) return found.placement;
+  if (found.spawnKey !== sessionId && !tmux.rekeySpawn(found.spawnKey, sessionId, found.placement)) {
+    throw new OwnershipRefusal('The Prime launch record changed while adopting this session; retry.');
+  }
+  tmux.recordSpawn(sessionId, {
+    socket: found.placement.socket,
+    paneId: found.placement.paneId,
+    paneProcess: processEvidence(found.placement.paneProcess),
+    primeAgent: agent,
+  });
+  return tmux.getSpawn(sessionId) ?? { ...found.placement, primeAgent: agent };
+}
+
+/** Compare transcripts through their real paths without inventing a match on failure. */
+export function sameTranscriptFile(left: unknown, right: unknown): boolean {
+  if (typeof left !== 'string' || typeof right !== 'string' || !left || !right) return false;
+  try { return fs.realpathSync(left) === fs.realpathSync(right); } catch { return false; }
+}
+
+export interface PrimeLaunchAuthority {
+  readonly closeAllowed: boolean;
+  readonly restartAllowed: boolean;
+}
+
+/**
+ * Prime launch authority for one route id: a recorded launch must name the
+ * same resident worker as the roster summary, even when the route key moved.
+ * Synchronous by design; callers refresh the roster before projecting a row.
+ */
+export function primeLaunchAuthority(sessionId: string, summary: PrimeAgentSummary | null): PrimeLaunchAuthority {
+  const found = findPrimeSpawn(sessionId, summary);
+  const currentDaemon = getPrimeDaemon().socketPath;
+  const closeAllowed = !!found && path.resolve(found.agent.daemonSocket) === path.resolve(currentDaemon);
+  const paneProcess = found && record(found.placement.paneProcess) ? found.placement.paneProcess : null;
+  return {
+    closeAllowed,
+    restartAllowed: closeAllowed && !!paneProcess && processIdentityAlive(paneProcess),
+  };
+}
+
+/** Resolve the cached roster root for a Prime route, then apply primeLaunchAuthority. */
+export function primeLaunchAuthorityForRoute(sessionId: string): PrimeLaunchAuthority {
+  const identity = routeIdentity(sessionId);
+  const summary = identity?.harnessId === 'prime'
+    ? getPrimeDaemon().byNativeId(identity.nativeSessionId)?.summary ?? null
+    : null;
+  return primeLaunchAuthority(sessionId, summary);
+}
+
 export function spawnAllowsManagedClose(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined, closeMode: HarnessDescriptor['closeMode']): boolean {
   if (closeMode === 'owned-pane') return spawnAllowsOwnedPaneClose(spawn, registryEntry);
-  if (closeMode === 'owned-agent') return spawnMatchesRegistryClaim(spawn, registryEntry) && !!primeWorkerTarget(registryEntry);
-  return false;
+  if (closeMode !== 'owned-agent') return false;
+  const agent = tmux.spawnPrimeAgent(spawn);
+  if (!agent || !spawn?.socket || !spawn.paneId) return false;
+  const root = getPrimeDaemon().byActiveSessionId(agent.activeSessionId);
+  return !!root && primeAgentSameWorker(agent, root.summary);
 }
 
 export function spawnAllowsRestart(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined, closeMode: HarnessDescriptor['closeMode']): boolean {
   return closeMode === 'owned-agent'
-    ? spawnAllowsManagedClose(spawn, registryEntry, closeMode) && processIdentityAlive(processEvidence(spawn?.paneProcess))
+    ? spawnAllowsManagedClose(spawn, registryEntry, closeMode) && !!record(spawn?.paneProcess) && processIdentityAlive(spawn!.paneProcess)
     : spawnAllowsOwnedPaneClose(spawn, registryEntry);
 }
 
 export function liveSessionSupports(session: LiveSession, capability: BridgeCapability): boolean {
+  // A Prime daemon root has no bridge advertisement: the transport itself fixes
+  // which commands exist (no extension UI, side chat, fast mode or share snapshot).
+  if (session instanceof PrimeDaemonSession) return PRIME_DAEMON_CAPABILITIES[capability] === true;
   if (!(session instanceof BridgeSession)) return true;
   return bridgeSupports(session.harnessId, session.capabilities, capability);
+}
+
+/** A Prime route's live root. Prime 0.10+ never registers with the bridge. */
+function primeDaemonSessionFor(identity: SessionIdentity): PrimeDaemonSession | null {
+  return getHarness(identity.harnessId)?.liveTransport === 'prime-daemon'
+    ? getPrimeDaemon().byNativeId(identity.nativeSessionId) : null;
 }
 
 export function sessionIdentityFields(harnessId: HarnessId, nativeSessionId: NativeSessionId) {
@@ -219,8 +352,8 @@ export function sessionIdentityFields(harnessId: HarnessId, nativeSessionId: Nat
 
 export function sessionSwitchRouteData(session: LiveSession, input: unknown) {
   if (!record(input) || !input.sessionId || !input.previousSessionId) return null;
-  const harnessId = session instanceof BridgeSession ? session.harnessId || 'pi' : 'pi';
-  const descriptor = getHarness(harnessId);
+  const descriptor = session instanceof PrimeDaemonSession ? getHarness('prime')
+    : session instanceof BridgeSession ? getHarness(session.harnessId || 'pi') : getHarness('pi');
   if (!descriptor || !validSessionId(input.sessionId) || !validSessionId(input.previousSessionId)) return null;
   return {
     ...input,
@@ -295,7 +428,8 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
   const runtimeCache = new Map<string, { pid: unknown; at: number; value: RuntimeDescription }>();
   const RUNTIME_CACHE_TTL_MS = 60_000;
 
-  async function capturePaneRestart(sessionId: string, descriptor: HarnessDescriptor): Promise<PaneRestartCapture> {
+  async function capturePaneRestart(sessionId: string, descriptor: HarnessDescriptor): Promise<RestartCapture> {
+    if (descriptor.closeMode === 'owned-agent') return capturePrimeRestart(sessionId, descriptor);
     const registry = getRegisteredSession(sessionId);
     if (!registry) throw new OwnershipRefusal('Session not active', 404);
     const placement = tmux.getSpawn(sessionId);
@@ -307,6 +441,40 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
       throw new OwnershipRefusal('The recorded tmux pane no longer proves ownership of this agent, so pi-dish will not restart it.');
     }
     return { kind: 'pane-restart', sessionId, descriptor, registry, placement };
+  }
+
+  async function capturePrimeRestart(sessionId: string, descriptor: HarnessDescriptor): Promise<PrimeRestartCapture> {
+    const identity = routeIdentity(sessionId);
+    if (!identity || identity.harnessId !== 'prime') {
+      throw new OwnershipRefusal(`Restart is available only for ${descriptor.label} sessions pi-dish launched into a tmux pane.`);
+    }
+    const daemon = getPrimeDaemon();
+    const root = (await daemon.refresh()).find(session => session.nativeSessionId === identity.nativeSessionId);
+    const found = findPrimeSpawn(sessionId, root?.summary ?? null);
+    if (!found) {
+      const direct = tmux.getSpawn(sessionId);
+      throw new OwnershipRefusal(direct?.socket && direct.paneId && tmux.spawnPrimeAgent(direct)
+        ? 'The recorded Prime launch no longer matches this live agent, so pi-dish will not restart it.'
+        : `Restart is available only for ${descriptor.label} sessions pi-dish launched into a tmux pane.`);
+    }
+    if (path.resolve(daemon.socketPath) !== path.resolve(found.agent.daemonSocket)) {
+      throw new OwnershipRefusal('The Prime daemon socket changed since this session was launched, so pi-dish will not restart it.');
+    }
+    if (!root) throw new OwnershipRefusal('The recorded Prime launch no longer matches this live agent, so pi-dish will not restart it.');
+    const paneProcess = await tmux.paneProcessIdentity(found.placement.socket, found.placement.paneId);
+    if (!sameProcessIdentity(paneProcess, found.placement.paneProcess)
+        || !record(found.placement.paneProcess) || !processIdentityAlive(found.placement.paneProcess)) {
+      throw new OwnershipRefusal('The recorded tmux pane no longer proves ownership of this agent, so pi-dish will not restart it.');
+    }
+    const placement = adoptPrimeSpawn(sessionId, found, root.summary);
+    let sessionFile: string;
+    try { sessionFile = fs.realpathSync(root.summary.sessionFile); }
+    catch { throw new OwnershipRefusal('The active agent has no resumable session file.'); }
+    return {
+      kind: 'prime-restart', sessionId, descriptor, placement, daemon, summary: root.summary, sessionFile,
+      agent: { daemonSocket: found.agent.daemonSocket, activeSessionId: root.summary.activeSessionId,
+        workerInstanceId: root.summary.workerInstanceId || null, sessionFile: root.summary.sessionFile },
+    };
   }
 
   async function preparePaneRestart(capture: PaneRestartCapture): Promise<BridgeRegistryEntry> {
@@ -334,33 +502,39 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     return registry;
   }
 
-  function checkPrimeRestartLaunch(capture: PaneRestartCapture): void {
+  function checkPrimeRestartLaunch(capture: PrimeRestartCapture): void {
     const current = tmux.getSpawn(capture.sessionId);
-    if (!current || current.spawnToken !== capture.placement.spawnToken
-        || current.socket !== capture.placement.socket || current.paneId !== capture.placement.paneId
-        || !sameProcessIdentity(current.paneProcess, capture.placement.paneProcess)) {
+    const agent = tmux.spawnPrimeAgent(current);
+    if (!current || current.socket !== capture.placement.socket || current.paneId !== capture.placement.paneId
+        || !sameProcessIdentity(current.paneProcess, capture.placement.paneProcess)
+        || !agent || !primeAgentMatchesSummary(agent, capture.summary)) {
       throw new Error('Prime launch ownership changed during restart');
     }
   }
 
-  async function preparePrimeRestartStop(capture: PaneRestartCapture, beforeAction: BeforeLifecycleAction | null): Promise<() => undefined> {
+  async function preparePrimeRestartStop(capture: PrimeRestartCapture, beforeAction: BeforeLifecycleAction | null): Promise<() => undefined> {
     const finalCheck = beforeAction ? await beforeAction() : null;
     return () => {
       checkPrimeRestartLaunch(capture);
-      const current = refreshRegisteredSession(capture.sessionId);
-      if (!current || !sameRegistryClaim(current, capture.registry)) throw new Error('Prime worker changed during restart');
+      // The daemon re-reads the roster immediately before this check runs;
+      // the cached root must still be the exact worker we captured.
+      const root = capture.daemon.byActiveSessionId(capture.agent.activeSessionId);
+      if (!root || !primeAgentMatchesSummary(capture.agent, root.summary)) throw new Error('Prime worker changed during restart');
       if (finalCheck) finalCheck();
     };
   }
 
-  async function preparePrimeReplacement(capture: PaneRestartCapture, sessionFile: string): Promise<() => undefined> {
+  async function preparePrimeReplacement(capture: PrimeRestartCapture, sessionFile: string): Promise<() => undefined> {
+    // Never launch a second writer while the roster still lists the transcript.
+    await capture.daemon.refresh();
+    if (capture.daemon.list().some(session => sameTranscriptFile(session.summary.sessionFile, sessionFile))) {
+      throw new Error('A live Prime agent still claims this transcript; refusing another writer');
+    }
     return () => {
       checkPrimeRestartLaunch(capture);
-      invalidateRegistryCache();
-      if (processIdentityAlive(processEvidence(capture.registry)) || listRegisteredSessions().some(entry => {
-        try { return typeof entry.sessionFile === 'string' && fs.realpathSync(entry.sessionFile) === sessionFile; }
-        catch { return false; }
-      })) throw new Error('A live worker still claims this transcript; refusing another writer');
+      if (capture.daemon.list().some(session => sameTranscriptFile(session.summary.sessionFile, sessionFile))) {
+        throw new Error('A live Prime agent still claims this transcript; refusing another writer');
+      }
     };
   }
 
@@ -452,17 +626,29 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     }
   }
 
-  function capturePrimeClose(sessionId: string, descriptor: HarnessDescriptor): PrimeCloseCapture {
-    const registry = getRegisteredSession(sessionId);
-    if (!registry) throw new OwnershipRefusal(`${descriptor.label} has no single unambiguous live bridge instance to close.`);
-    const placement = tmux.getSpawn(sessionId);
-    if (!placement?.socket || !placement.paneId) {
-      throw new OwnershipRefusal(`This ${descriptor.label} session was not launched by pi-dish, so it cannot be closed remotely.`);
+  async function capturePrimeClose(sessionId: string, descriptor: HarnessDescriptor): Promise<PrimeCloseCapture> {
+    const daemon = getPrimeDaemon();
+    const identity = routeIdentity(sessionId);
+    const root = identity?.harnessId === 'prime'
+      ? (await daemon.refresh()).find(session => session.nativeSessionId === identity.nativeSessionId)
+      : null;
+    const found = findPrimeSpawn(sessionId, root?.summary ?? null);
+    if (!found) {
+      const direct = tmux.getSpawn(sessionId);
+      throw new OwnershipRefusal(direct?.socket && direct.paneId && tmux.spawnPrimeAgent(direct)
+        ? 'The recorded Prime launch no longer matches this live agent.'
+        : `This ${descriptor.label} session was not launched by pi-dish, so it cannot be closed remotely.`);
     }
-    if (!spawnMatchesRegistryClaim(placement, registry)) {
-      throw new OwnershipRefusal('The recorded Prime launch no longer matches this live agent.');
+    if (path.resolve(daemon.socketPath) !== path.resolve(found.agent.daemonSocket)) {
+      throw new OwnershipRefusal('The Prime daemon socket changed since this session was launched, so pi-dish will not close it.');
     }
-    return { kind: 'owned-agent', sessionId, registry, placement };
+    if (!root) throw new OwnershipRefusal('The recorded Prime launch no longer matches this live agent.');
+    return {
+      kind: 'owned-agent', sessionId, descriptor, daemon,
+      placement: adoptPrimeSpawn(sessionId, found, root.summary),
+      agent: { daemonSocket: found.agent.daemonSocket, activeSessionId: root.summary.activeSessionId,
+        workerInstanceId: root.summary.workerInstanceId || null, sessionFile: root.summary.sessionFile },
+    };
   }
 
   async function checkPrimeClosePane(capture: PrimeCloseCapture, keepPane: boolean): Promise<boolean> {
@@ -477,16 +663,18 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
   }
 
   async function preparePrimeClose(capture: PrimeCloseCapture, keepPane: boolean, beforeAction: BeforeLifecycleAction | null): Promise<void> {
-    await proveBridgeRegistryClaim(capture.registry);
     await checkPrimeClosePane(capture, keepPane);
     const finalCheck = beforeAction ? await beforeAction() : null;
-    const fresh = refreshRegisteredSession(capture.sessionId);
     const placement = tmux.getSpawn(capture.sessionId);
-    if (!fresh || !sameRegistryClaim(fresh, capture.registry)
-        || !placement || placement.spawnToken !== capture.placement.spawnToken
-        || placement.socket !== capture.placement.socket || placement.paneId !== capture.placement.paneId
-        || !sameProcessIdentity(placement.paneProcess, capture.placement.paneProcess)) {
-      throw new Error('Prime bridge or launch ownership changed before close');
+    const agent = tmux.spawnPrimeAgent(placement);
+    const root = capture.daemon.byActiveSessionId(capture.agent.activeSessionId);
+    if (!placement || placement.socket !== capture.placement.socket || placement.paneId !== capture.placement.paneId
+        || !sameProcessIdentity(placement.paneProcess, capture.placement.paneProcess)
+        || !agent
+        || agent.daemonSocket !== capture.agent.daemonSocket || agent.activeSessionId !== capture.agent.activeSessionId
+        || agent.workerInstanceId !== capture.agent.workerInstanceId || agent.sessionFile !== capture.agent.sessionFile
+        || !root || !primeAgentMatchesSummary(capture.agent, root.summary)) {
+      throw new Error('Prime launch ownership changed before close');
     }
     if (finalCheck) finalCheck();
   }
@@ -561,6 +749,12 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
   function liveSourceObservations(sessionId: unknown): LiveSourceObservation[] {
     const identity = routeIdentity(sessionId);
     if (!identity) return [];
+    // Prime's roster is the only live source for its routes: an old-style
+    // registry claim for a 0.10+ agent cannot prove a daemon worker.
+    if (getHarness(identity.harnessId)?.liveTransport === 'prime-daemon') {
+      const live = primeDaemonSessionFor(identity);
+      return live ? [{ kind: 'prime-daemon', ...identity, file: typeof live.sessionFile === 'string' ? live.sessionFile || null : null }] : [];
+    }
     const registered = getRegisteredSession(sessionId);
     const rpc = identity.harnessId === 'pi' ? getRPCSession(sessionId) : null;
     const out: LiveSourceObservation[] = [];
@@ -577,6 +771,11 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
   }
 
   function liveSessionHistoryPending(sessionId: string): boolean {
+    const identity = routeIdentity(sessionId);
+    if (identity && getHarness(identity.harnessId)?.liveTransport === 'prime-daemon') {
+      const prime = primeDaemonSessionFor(identity);
+      return !!prime && (!prime.sessionFile || !fs.existsSync(prime.sessionFile));
+    }
     const registered = getRegisteredSession(sessionId);
     if (registered) return typeof registered.sessionFile !== 'string' || !registered.sessionFile || !fs.existsSync(registered.sessionFile);
     const rpc = getRPCSession(sessionId);
@@ -590,6 +789,17 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
   }
 
   async function getLiveSession(sessionId: unknown): Promise<LiveSession | null> {
+    const identity = routeIdentity(sessionId);
+    if (identity && getHarness(identity.harnessId)?.liveTransport === 'prime-daemon') {
+      const daemon = getPrimeDaemon();
+      const cached = daemon.byNativeId(identity.nativeSessionId);
+      if (cached) return track(cached);
+      // The roster may be cold (first request after start, or an agent that has
+      // not been polled yet): read it once more before declaring the route dead.
+      await daemon.refresh();
+      const fresh = daemon.byNativeId(identity.nativeSessionId);
+      return fresh ? track(fresh) : null;
+    }
     const registered = getRegisteredSession(sessionId);
     if (registered) {
       let bridgeError: unknown;
@@ -635,6 +845,7 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
   async function describeRuntime(sessionId: string): Promise<RuntimeDescription | null> {
     const rpc = getRPCSession(sessionId);
     if (rpc?.alive) return { kind: 'rpc', pid: rpc.proc?.pid ?? null };
+    if (routeIdentity(sessionId)?.harnessId === 'prime') return describePrimeRuntime(sessionId);
     const reg = getRegisteredSession(sessionId);
     if (!reg) return null;
     const cached = runtimeCache.get(sessionId);
@@ -642,6 +853,32 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     const value = await resolveRuntime(sessionId, reg);
     if (runtimeCache.size >= 200) runtimeCache.clear();
     runtimeCache.set(sessionId, { pid: reg.pid ?? null, at: Date.now(), value });
+    return value;
+  }
+
+  /** Prime has no bridge entry: the pane comes from the spawn record, the pid from the roster. */
+  async function describePrimeRuntime(sessionId: string): Promise<RuntimeDescription | null> {
+    const placement = tmux.getSpawn(sessionId);
+    const agent = tmux.spawnPrimeAgent(placement);
+    const root = agent ? getPrimeDaemon().byActiveSessionId(agent.activeSessionId) : null;
+    const pid = root?.summary.workerPid ?? (placement && record(placement.paneProcess) ? observedPid(placement.paneProcess.pid) : null) ?? null;
+    const cached = runtimeCache.get(sessionId);
+    if (cached && cached.pid === pid && Date.now() - cached.at < RUNTIME_CACHE_TTL_MS) return cached.value;
+    let loc: tmux.PaneLocation | null = null;
+    let server: string | null = null;
+    if (placement?.socket && placement.paneId) {
+      loc = await tmux.paneLocation(placement.socket, placement.paneId);
+      server = path.basename(placement.socket);
+    }
+    if (!loc) {
+      const pane = await tmux.findPaneByPid(pid);
+      if (pane) { loc = pane; server = path.basename(pane.socket); }
+    }
+    const value: RuntimeDescription = loc && server
+      ? { kind: 'tmux', pid, server, tmuxSession: loc.tmuxSession ?? null, windowIndex: loc.windowIndex ?? null, windowName: loc.windowName ?? null }
+      : { kind: 'terminal', pid };
+    if (runtimeCache.size >= 200) runtimeCache.clear();
+    runtimeCache.set(sessionId, { pid, at: Date.now(), value });
     return value;
   }
 
@@ -669,6 +906,15 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
 
   /** Weak location advice for terminal/send-keys; never a destructive ownership capture. */
   async function locatePiPane(sessionId: string): Promise<tmux.PaneTarget | null> {
+    if (routeIdentity(sessionId)?.harnessId === 'prime') {
+      const placement = tmux.getSpawn(sessionId);
+      if (placement?.socket && placement.paneId && await tmux.paneExists(placement.socket, placement.paneId)) {
+        return { socket: placement.socket, paneId: placement.paneId };
+      }
+      const agent = tmux.spawnPrimeAgent(placement);
+      const root = agent ? getPrimeDaemon().byActiveSessionId(agent.activeSessionId) : null;
+      return root?.summary.workerPid ? tmux.findPaneByPid(root.summary.workerPid) : null;
+    }
     const reg = getRegisteredSession(sessionId);
     if (!reg) return null;
     const candidates: tmux.PaneTarget[] = [];

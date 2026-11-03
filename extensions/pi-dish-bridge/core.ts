@@ -392,8 +392,8 @@ export type BridgeDescriptor = {
   // OMP stores subagents at `<parent>/<agent>.jsonl`. Their local agent
   // filename is not the globally unique session identity in the header.
   nestedSubsessions?: boolean;
-  // Resident harness daemons may not forward arbitrary client environment
-  // variables. Launch-specific wrappers inject this value directly instead.
+  // A launch-specific wrapper can inject this value directly instead of
+  // relying on an inherited environment variable.
   spawnToken?: string;
   // Accepted values for set_thinking_level / the /thinking command. Pi hosts
   // keep the default six; wrapper hosts pass their own vocabulary (OMP adds
@@ -427,12 +427,6 @@ function foreignWrapperHost(): string | null {
     const entry = process.argv[1] || "";
     const base = path.basename(entry).replace(/\.exe$/, "").toLowerCase();
     if (process.versions.bun && (base === "omp" || entry.includes("@oh-my-pi/"))) return "omp";
-    // Prime's stock-bridge sibling link (install.sh links the shared core as
-    // ~/.prime/agent/extensions/pi-dish-bridge so the prime wrapper's relative
-    // import resolves) makes this bridge discovery-load in every prime
-    // process. Its CLI, daemon, and workers all live under a `prime-agent`
-    // path segment (the npm package name), which no Pi install shares.
-    if (base === "prime-agent" || /(^|[\\/])prime-agent([\\/]|$)/.test(entry)) return "prime";
     for (const sym of Object.getOwnPropertySymbols(globalThis)) {
       const key = Symbol.keyFor(sym);
       if (typeof key === "string" && key.startsWith("omp.")) return "omp";
@@ -611,38 +605,16 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // socket — whichever loads last wins, and a stale winner silently downgrades
   // the protocol. First load claims the process; pi's /reload emits
   // session_shutdown before re-evaluating extensions, which releases the claim.
-  //
-  // Prime discovery-loads this bridge into every worker, so a pi-dish-managed
-  // launch's token wrapper can arrive as a *second* copy. The launch token
-  // cannot ride the environment into a resident worker, so the arriving
-  // wrapper hands it to the already-claimed copy instead of loading a
-  // duplicate bridge: the surviving instance's registry claim then carries
-  // the correlation token pi-dish is polling for. All extension factories run
-  // before session_start, so adoption lands before the first registry write;
-  // writeRegistry also re-runs on every turn/message event as a late-adoption
-  // backstop.
   const LOAD_SENTINEL = Symbol.for(`pi-dish-bridge.loaded.${descriptor.harnessId}`);
   const g = globalThis as { [key: symbol]: unknown };
-  let effectiveSpawnToken: string | null = descriptor.spawnToken ?? SPAWN_TOKEN ?? null;
-  const existingClaim = g[LOAD_SENTINEL];
-  if (existingClaim) {
-    if (descriptor.spawnToken && isHostMethod(field(existingClaim, "adopt"))) {
-      callHost(existingClaim, "adopt", descriptor.spawnToken);
-      try {
-        process.stderr.write("[pi-dish-bridge] launch token adopted by the already-loaded bridge copy — this wrapper stays inactive.\n");
-      } catch {}
-      return;
-    }
+  const effectiveSpawnToken: string | null = descriptor.spawnToken ?? SPAWN_TOKEN ?? null;
+  if (g[LOAD_SENTINEL]) {
     try {
       process.stderr.write("[pi-dish-bridge] duplicate bridge extension load detected — this copy stays inactive. Remove the extra pi-dish-bridge install.\n");
     } catch {}
     return;
   }
-  g[LOAD_SENTINEL] = {
-    adopt: (token: string) => {
-      if (!effectiveSpawnToken && typeof token === "string" && token) effectiveSpawnToken = token;
-    },
-  };
+  g[LOAD_SENTINEL] = true;
 
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
 
@@ -1666,8 +1638,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       // All extension factories run before session_start. A dedicated wrapper
       // owns observations even when its host also loaded the stock Pi bridge.
       canWrite: () => {
-        if (descriptor.harnessId === "pi" &&
-          (g[Symbol.for("pi-dish-bridge.loaded.omp")] || g[Symbol.for("pi-dish-bridge.loaded.prime")])) {
+        if (descriptor.harnessId === "pi" && g[Symbol.for("pi-dish-bridge.loaded.omp")]) {
           recoverySuppressedByWrapper = true;
         }
         return !recoverySuppressedByWrapper;

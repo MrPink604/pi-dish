@@ -2,6 +2,21 @@ import type { HarnessId, BridgeCapability, AdvertisedCapabilities, SessionCapabi
 import { getHarness } from './harnesses';
 
 /**
+ * What the Prime daemon transport (src/core/prime-daemon.ts) can carry for one
+ * live root agent. Prime 0.10+ loads no extensions, so this is not a bridge
+ * claim: it mirrors the session commands `PrimeDaemonSession` exposes
+ * (prompt/steer/follow_up/abort/compact/model/name/thinking/queue/tree/reload).
+ * Deliberately absent: extensionUI (no in-process UI), sideChat, fastMode,
+ * login, guardedReload, shareSnapshot, and branch — Prime has no `/branch`.
+ */
+const PRIME_DAEMON_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
+  prompt: true, steer: true, followUp: true, abort: true, compact: true,
+  models: true, setModel: true, setThinking: true, rename: true, commands: true,
+  queueRead: true, queueCancel: true, treeRead: true, treeNavigation: true,
+  reload: true,
+});
+
+/**
  * Legacy Pi permits missing flags; alternative wrappers must explicitly opt in.
  * This is policy only, not harness-id validation. Unknown wrapper observations
  * retain the same explicit-opt-in rule; no synthetic harness identity is needed.
@@ -38,11 +53,13 @@ function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities: Advertise
     fastMode: harnessId === 'omp' && advertised('fastMode'),
     commands: active ? advertised('commands') : pi,
     queueCancel: advertised('queueCancel'),
+    // Prime's daemon tree commands cover read and navigation together; OMP
+    // advertises them separately; Pi keeps its legacy bridge default.
     tree: pi
       ? (active ? advertised('treeNavigation') : true)
       : harnessId === 'omp' && active
         ? advertised('treeRead') && advertised('treeNavigation')
-        : false,
+        : harnessId === 'prime' ? advertised('treeNavigation') : false,
     export: pi || harnessId === 'omp',
     // Managed harnesses may only close/detach the exact client pi-dish owns.
     close: active && (closeMode === 'logical'
@@ -52,4 +69,4 @@ function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities: Advertise
   };
 }
 
-export = { bridgeSupports, sessionCapabilities };
+export = { bridgeSupports, sessionCapabilities, PRIME_DAEMON_CAPABILITIES };

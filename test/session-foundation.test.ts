@@ -8,7 +8,7 @@ import { registry, getHarness, resolveLaunchSpec } from '../lib/harnesses';
 import { discoverSessionCandidates, discoverHarnessSessions } from '../lib/session-discovery';
 import { getSessionInfo } from '../lib/session-files';
 
-test('harness descriptors keep alternate launches tmux-only and load thin wrappers explicitly', () => {
+test('harness descriptors keep alternate launches tmux-only and declare their live transport', () => {
   assert.equal(registry.pi.rpcFallback, true);
   assert.equal(registry.pi.closeMode, 'logical');
   assert.deepEqual(registry.pi.argv.new({ model: 'provider/model', thinking: 'high' }), [
@@ -22,8 +22,8 @@ test('harness descriptors keep alternate launches tmux-only and load thin wrappe
   assert.equal(registry.prime.privateRootPath, undefined, 'Prime cannot keep a private transcript');
   assert.equal(registry.omp.closeMode, 'owned-pane');
   assert.equal(registry.prime.closeMode, 'owned-agent');
-  for (const id of ['omp', 'prime']) {
-    assert.ok(id === 'omp' || id === 'prime');
+  for (const id of ['omp']) {
+    assert.ok(id === 'omp');
     const descriptor = registry[id];
     assert.ok(typeof descriptor.wrapperEntrypoint === 'string');
     assert.equal(descriptor.rpcFallback, false);
@@ -36,6 +36,19 @@ test('harness descriptors keep alternate launches tmux-only and load thin wrappe
       '--extension', descriptor.wrapperEntrypoint, '--resume', '/tmp/session.jsonl',
     ]);
   }
+  // Prime 0.10 (Rust) loads no TypeScript extensions: no wrapper, no spawn
+  // token, no discovery directory; live sessions come from its daemon.
+  assert.equal(registry.prime.wrapperEntrypoint, null);
+  assert.equal(registry.prime.liveTransport, 'prime-daemon');
+  assert.equal(registry.prime.spawnTokenMode, undefined);
+  assert.equal(registry.prime.discoveryExtensionsDir, undefined);
+  assert.equal(registry.prime.rpcFallback, false);
+  assert.deepEqual(registry.prime.argv.new({ model: 'provider/model', thinking: 'high' }), [
+    '--model', 'provider/model', '--thinking', 'high',
+  ]);
+  assert.deepEqual(registry.prime.argv.resume({ file: '/tmp/session.jsonl', model: 'zai/glm-4.7-flash' }), [
+    '--resume', '/tmp/session.jsonl', '--model', 'zai/glm-4.7-flash',
+  ]);
   assert.deepEqual(registry.omp.argv.new({ model: 'provider/model', thinking: 'high', sessionDir: '/tmp/private' }), [
     '--extension', registry.omp.wrapperEntrypoint, '--model', 'provider/model', '--thinking', 'high',
     '--session-dir', '/tmp/private',

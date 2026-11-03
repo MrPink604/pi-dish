@@ -71,6 +71,27 @@ test('registered sources precede Pi RPC, then history, and live-only lookup neve
   }), null, 'RPC fallback belongs only to Pi');
 });
 
+test('a Prime daemon observation resolves the live roster file before any scan', t => {
+  const { dir, roots, write, resolve, resolved } = fixture(t);
+  const history = write(path.join(roots.prime, 'native.jsonl'), 'native');
+  const live = write(path.join(dir, 'prime-live.jsonl'), 'native');
+  const primeObservation = { kind: 'prime-daemon', harnessId: 'prime', nativeSessionId: nativeId('native'), file: live };
+  const route = encodeSessionKey('prime', nativeId('native'));
+
+  assert.equal(resolved(route, { live: [primeObservation] }).file, live, 'the roster file beats discovery');
+  assert.equal(resolved(route, { live: [{ ...primeObservation, file: null }] }).file, history,
+    'a roster row without a file falls back to the transcript store');
+  const originalOpen = fs.opendirSync;
+  let opens = 0;
+  fs.opendirSync = (...args) => { opens += 1; return originalOpen(...args); };
+  try {
+    assert.equal(resolve(route, { live: [primeObservation], discover: false })?.file, live);
+  } finally { fs.opendirSync = originalOpen; }
+  assert.equal(opens, 0, 'a live Prime observation never triggers discovery');
+  assert.equal(resolve(encodeSessionKey('omp', nativeId('native')), { live: [primeObservation], discover: false }), null,
+    'a Prime roster row cannot resolve another harness route');
+});
+
 test('same-native harness collisions and encoded Pi aliases retain exact lookup after a partial cache hit', t => {
   const { roots, write, resolve, resolved, resolver, discover } = fixture(t);
   const pi = write(path.join(roots.pi, 'ws', 'prefix-native-suffix.jsonl'), 'ignored');

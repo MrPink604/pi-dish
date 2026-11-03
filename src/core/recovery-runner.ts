@@ -2,6 +2,7 @@ import fs = require('fs');
 import readline = require('readline');
 import crypto = require('crypto');
 import { BridgeSession } from './bridge-session';
+import { PrimeDaemonSession } from './prime-daemon';
 import { formatModelRef } from './helper-models';
 import { processIdentity } from './process-identity';
 import { SessionOperationError } from './session-operations';
@@ -336,7 +337,9 @@ export function createRecoveryRuntime({ operations, ownership, getMode, now, log
       const model = ['pi', 'omp'].includes(record.harnessId) ? formatModelRef(record.model) || undefined : undefined;
       const result = await operations.resumeSessionById(recoveryRouteId(record), { model, recovery: record });
       const session = await operations.probeRecoveryLive(record);
-      const pid = session instanceof BridgeSession ? ownership.getRegisteredSession(result.id)?.pid : session?.proc?.pid;
+      const pid = session instanceof BridgeSession ? ownership.getRegisteredSession(result.id)?.pid
+        : session instanceof PrimeDaemonSession ? session.summary.workerPid
+        : session?.proc?.pid;
       const identity = processIdentity(typeof pid === 'number' || typeof pid === 'string' || pid === undefined ? pid : Number(pid));
       const control = recoveryStore.getControl(record.harnessId, record.nativeSessionId);
       recoveryStore.patchControl(record.harnessId, record.nativeSessionId, {

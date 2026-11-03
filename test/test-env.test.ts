@@ -46,6 +46,10 @@ test('sanitizeTestEnv pins the bind target and drops the operator deployment', (
   assert.equal(env.PI_DISH_SKIP_INTEGRATION, '1');
   assert.equal(env.HOME, '/home/operator', 'unrelated variables pass through');
   assert.equal(env.PATH, '/usr/bin');
+  // Prime live rows are read from a daemon socket outside HOME; a test process
+  // must never attach to the operator's resident daemon.
+  assert.ok(path.isAbsolute(env.PRIME_AGENT_DAEMON_SOCKET ?? ''));
+  assert.equal(fs.existsSync(env.PRIME_AGENT_DAEMON_SOCKET!), false, 'the pinned daemon socket does not exist');
   assert.equal(OPERATOR_ENV.HOST, '100.70.163.97', 'the input env is not mutated');
 });
 

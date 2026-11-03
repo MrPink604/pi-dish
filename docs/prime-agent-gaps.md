@@ -1,5 +1,18 @@
 # Prime Agent: native TUI/CLI vs pi-dish — gap report
 
+> **Historical (Prime 0.9.4).** This catalogue was written against Prime
+> 0.9.4's TypeScript extension API and the pi-dish bridge. Prime 0.10 is a
+> native Rust binary that loads no extensions, so the extension-API items
+> here are obsolete; pi-dish now drives Prime through its resident daemon
+> (see [prime-agent.md](prime-agent.md)). The daemon transport resolves
+> compaction, tree read/navigation, queue read/cancel, models for a live
+> session, and owned-root close/restart, and removes the extension UI surface
+> entirely. The items that remain open are the model catalog for the
+> new-session picker, Prime TUI-only slash commands, schedule/heartbeat/goal
+> UI, first-run kernel/trace-onboarding friction, and bulk Bounce. Treat the
+> extension-source references below (`types.d.ts`, `ctx.compact`, …) as
+> 0.9.4 archaeology.
+
 Fact-finding pass over Prime Agent support, 2026-09-10, against **Prime 0.9.4**
 and pi-dish `957c6b3`. Companion pages: [prime-agent.md](prime-agent.md)
 (verified status) and [TASKS/pi-lineage-harness-support.md](../TASKS/pi-lineage-harness-support.md)

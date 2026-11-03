@@ -1,10 +1,23 @@
 # Task: Pi-Lineage Harness Support
 
 **Priority:** P1
-**Status:** Implemented and real-host verified — harness-specific wrappers, namespaced identity, mixed history, and tmux-only alternative-harness launch/resume
+**Status:** Implemented and real-host verified — harness-specific wrappers (OMP), Prime's resident-daemon transport, namespaced identity, mixed history, and tmux-only alternative-harness launch/resume
 **Affects:** `extensions/pi-dish-bridge/index.ts`, live transport/session aggregation,
 session discovery/read/index modules, `lib/pi-sdk.js`, session-keyed sidecar stores,
 `server.js`, browser session state and routes, session-list/new-session UI, tests
+
+## Current status (2026-11-03)
+
+Prime Agent 0.10 is a native Rust binary with no TypeScript extension loader.
+The Prime wrapper, its discovery links, spawn-token claims, and
+`/proc` supervisor discovery described below are 0.9.4 history. pi-dish now
+integrates Prime as a client of its resident daemon (`prime-agent.daemon`
+protocol v7): live roots come from the daemon roster, control uses daemon
+session commands, and close/restart use the daemon's agent identity plus the
+managed pane. See [docs/prime-agent.md](../docs/prime-agent.md) for the
+current design, capability matrix, verification, and gaps. OMP still uses its
+thin public-extension bridge; Pi keeps bridge/RPC. The matrix below is updated
+for the current transports, while the spike notes remain 0.9.4 evidence.
 
 ## Goal
 
@@ -212,30 +225,30 @@ canary; **no** = unsafe or unavailable through the current implementation.
 
 | Capability | Upstream Pi | OMP | Prime Agent | Policy |
 |---|---:|---:|---:|---|
-| Load harness wrapper and register live session | yes | yes | yes | Thin wrapper over generic core |
-| Explicit configured live harness namespace | Pi wrapper | OMP wrapper | Prime wrapper | Wrapper binding, not runtime heuristics |
-| Agent/message/tool event streaming | yes | partial | partial | Public event adapter + real-turn canary per host |
-| Prompt / steer / follow-up | yes | yes | yes | Public extension API |
-| Abort | yes | yes | yes | Public extension API |
-| Model list through bridge | yes | yes, observed | yes, observed | Public context API |
-| Set model / thinking / name | yes | yes | yes | Public extension API; tested for thinking/name |
-| Serializable extension UI/dialogs | yes | partial | partial | Public UI subset; bridge is the sole alternative-harness UI source |
-| Queue read | yes, private canary | no current mapping | no current mapping | Capability-gated host quirk |
-| Cancel one queued item | yes, private canary | no | no | Never generic; requires a stable host API |
-| Compact | yes | no baseline | no baseline | Disabled until host lifecycle events are verified |
-| Tree read | yes | no | no | Upstream Pi SDK only |
-| Live tree navigation | yes, private priming | no | no | Upstream Pi private profile only |
+| Load harness wrapper and register live session | yes | yes | n/a (daemon roster) | Thin wrapper for OMP; Prime roots come from the daemon |
+| Explicit configured live harness namespace | Pi wrapper | OMP wrapper | Prime daemon transport | Wrapper binding for OMP; descriptor `liveTransport` for Prime |
+| Agent/message/tool event streaming | yes | partial | yes | Public event adapter plus daemon `attach` events |
+| Prompt / steer / follow-up | yes | yes | yes | Extension API (Pi/OMP) or daemon commands (Prime) |
+| Abort | yes | yes | yes | Same |
+| Model list through the live transport | yes | yes, observed | yes (`get_available_models`, `get_model_catalog`) | Host API |
+| Set model / thinking / name | yes | yes | yes | Host API |
+| Serializable extension UI/dialogs | yes | partial | no | Prime 0.10 loads no extensions |
+| Queue read | yes, private canary | no current mapping | yes (`get_queue`, roster actions) | Capability-gated host API |
+| Cancel one queued item | yes, private canary | no | yes (`mutate_queued_message`) | Capability-gated host API |
+| Compact | yes | no baseline | yes (`compact`) | Host API |
+| Tree read | yes | no | yes (`get_session_tree`) | Host API |
+| Live tree navigation | yes, private priming | no | yes (`navigate_tree`) | Host API |
 | Historical transcript read | yes | yes | yes | Harness session profile |
 | Historical discovery | yes | yes | yes | Harness paths/layout |
-| Inactive rename/model mutation | yes via bundled Pi SDK | no | unsafe with daemon ownership | Host adapter or resume-first; never generic JSONL writes |
-| Inactive branch + summary | yes via bundled Pi SDK | no | unsafe with daemon ownership | Host adapter or disable |
-| New managed session | existing tmux/RPC | `omp` in tmux | `prime-agent` TUI in tmux; worker is resident | Harness tmux launch profile + wrapper token |
-| Resume managed session | existing `--session` | `omp --resume` in tmux | `prime-agent --resume` in tmux | Harness tmux launch profile; no alternative RPC fallback |
-| Commands | bridge or Pi RPC | bridge | bridge | Wrapper/bridge capability only for alternative harnesses |
-| Model-list CLI | `--list-models` | `models --json` | unavailable | Optional descriptor command; never a session transport |
+| Inactive rename/model mutation | yes via bundled Pi SDK | no | no (daemon owns live transcripts) | Host adapter or resume-first; never generic JSONL writes |
+| Inactive branch + summary | yes via bundled Pi SDK | no | no | Host adapter or disable |
+| New managed session | existing tmux/RPC | `omp` in tmux | `prime-agent` TUI in tmux on the managed daemon socket; roster root adopted | Harness tmux launch profile; daemon identity for ownership |
+| Resume managed session | existing `--session` | `omp --resume` in tmux | `prime-agent --resume` in tmux; roster root matched by `sessionFile` | Harness tmux launch profile; no alternative RPC fallback |
+| Commands | bridge or Pi RPC | bridge | daemon `get_commands` (TUI-only commands not executable remotely) | Live transport capability |
+| Model-list CLI | `--list-models` | `models --json` | `model list` | Optional descriptor command; never a session transport |
 | Native RPC session transport | retained | out of scope | out of scope | Do not generalize `lib/rpc-session.js` to alternative harnesses |
-| Close pi-dish-managed work | existing owned process | owned pane/process tree only | client pane only; logical worker close unsupported | Never equate Prime TUI exit with worker termination |
-| Prime RLM children / A2A graph | n/a | n/a | no | Explicitly later/out of scope |
+| Close pi-dish-managed work | existing owned process | owned pane/process tree only | daemon `kill` for the owned agent id, then remove the verified pane | Ownership record must match the live roster |
+| Prime RLM children / A2A graph | n/a | n/a | partial: history discovery only | Explicitly later/out of scope |
 
 The RPC observations justify not building a generic RPC dialect: unknown
 commands can hang, command names already diverge, and Prime hides daemon

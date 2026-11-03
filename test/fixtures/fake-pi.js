@@ -3,19 +3,28 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 /**
- * Test fixture standing in for the `pi` binary when spawned inside tmux by the
- * tmux.test.js suite. Reads PI_DISH_SPAWN_TOKEN (set via tmux `-e`), then —
- * unless PI_FIXTURE_NOREGISTER is set — writes a pi-dish-bridge-style registry
- * entry stamped with that token (plus a listening Unix socket and a dummy
- * session JSONL), exactly as the real bridge extension would. Then it sleeps so
- * its pid stays alive and its tmux pane stays open.
+ * Test fixture standing in for `pi`, `omp` and `prime-agent` when spawned
+ * inside tmux by tmux.test.ts. Bridge-lineage harnesses read
+ * PI_DISH_SPAWN_TOKEN (set via tmux `-e`), then — unless PI_FIXTURE_NOREGISTER
+ * is set — write a pi-dish-bridge-style registry entry stamped with that token
+ * (plus a listening Unix socket and a dummy session JSONL), exactly as the real
+ * bridge extension would.
+ *
+ * Prime 0.10 has no extension loader: with PI_FIXTURE_HARNESS=prime this
+ * fixture behaves like its TUI client. It connects to the daemon socket named
+ * by --daemon-socket, asks the test daemon to add a roster row for this
+ * launch's cwd and session file, and then stays alive like a TUI (a daemon kill
+ * drops the agent row while this client keeps its process). Either way it
+ * sleeps so its pid stays alive and its tmux pane stays open.
  */
 const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const node_child_process_1 = require("node:child_process");
 const { processIdentity } = require('../../lib/process-identity');
+const { createLineSplitter } = require('../../lib/line-splitter');
 function main() {
     const home = process.env.HOME || os.homedir();
     const args = process.argv.slice(2);
@@ -224,37 +233,6 @@ function main() {
         catch { }
     }
     const token = wrapperToken || process.env.PI_DISH_SPAWN_TOKEN || '';
-    // Prime's launcher/client is not its resident worker. Reproduce that split with
-    // a short-lived broker so the worker is genuinely reparented outside the tmux
-    // client tree. Descendant mode reproduces a first client's daemon ancestry.
-    if (harnessId === 'prime' && !process.env.PI_FIXTURE_PRIME_WORKER) {
-        const workerEnv = {
-            ...process.env, PI_FIXTURE_PRIME_WORKER: '1',
-            ...(process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET ? {
-                PRIME_AGENT_INTERNAL_DAEMON_WORKER: '1',
-                PRIME_AGENT_INTERNAL_DAEMON_WORKER_ACTIVE_SESSION_ID: `prime-${token}`,
-                PRIME_AGENT_INTERNAL_DAEMON_SUPERVISOR_SOCKET: process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET,
-            } : {}),
-        };
-        // A warm Prime daemon forwards the extension path but not arbitrary client
-        // environment. The generated wrapper must carry the correlation token.
-        delete workerEnv.PI_DISH_SPAWN_TOKEN;
-        const childEnv = process.env.PI_FIXTURE_PRIME_BROKER
-            ? workerEnv
-            : process.env.PI_FIXTURE_PRIME_DESCENDANT_WORKER
-                ? workerEnv
-                : { ...process.env, PI_FIXTURE_PRIME_BROKER: '1' };
-        const worker = (0, node_child_process_1.spawn)(process.execPath, [__filename, ...args], {
-            detached: true,
-            stdio: 'ignore',
-            env: childEnv,
-        });
-        worker.unref();
-        if (process.env.PI_FIXTURE_PRIME_BROKER)
-            return;
-        setInterval(() => { }, 1 << 30);
-        return;
-    }
     const sessionFlag = harnessId === 'pi' ? '--session' : '--resume';
     const sessionIdx = args.indexOf(sessionFlag);
     const sessionDirIdx = args.indexOf('--session-dir');
@@ -265,13 +243,21 @@ function main() {
         sessionId = path.basename(sessionFile, '.jsonl');
     }
     else {
-        sessionId = '2026-07-09T00-00-00-' + (token.slice(0, 8) || 'newsess1');
+        sessionId = '2026-07-09T00-00-00-' + (harnessId === 'prime'
+            ? crypto.randomBytes(4).toString('hex')
+            : token.slice(0, 8) || 'newsess1');
         // A private launch writes a flat <ts>_<uuid>.jsonl into the alternate dir.
         sessionFile = sessionDirIdx >= 0 && args[sessionDirIdx + 1]
             ? path.join(args[sessionDirIdx + 1], sessionId + '.jsonl')
             : harnessId === 'prime'
                 ? path.join(home, '.prime', 'agent', 'sessions', sessionId + '.jsonl')
                 : path.join(home, harnessId === 'omp' ? '.omp' : '.pi', 'agent', 'sessions', 'proj', sessionId + '.jsonl');
+    }
+    // Prime 0.10's TUI is a daemon client, not a bridge host: register through the
+    // daemon and never write a pi-dish registry claim.
+    if (harnessId === 'prime') {
+        runPrimeTui(args, sessionFile, sessionId);
+        return;
     }
     // Never register — exercises the server's 30s spawn timeout path.
     if (process.env.PI_FIXTURE_NOREGISTER) {
@@ -415,5 +401,64 @@ function main() {
             register();
         setInterval(() => { }, 1 << 30);
     }
+}
+/**
+ * Prime TUI stand-in: announce this launch to the test daemon so it can add a
+ * roster row for the session file and cwd, then stay alive. `--daemon-socket`
+ * wins over PRIME_AGENT_DAEMON_SOCKET, like the real launcher.
+ * PI_FIXTURE_PRIME_NO_REGISTER keeps the client alive without a roster row
+ * (a replacement that never becomes ready); PI_FIXTURE_PRIME_REGISTER_DELAY_MS
+ * delays the announcement.
+ */
+function runPrimeTui(args, sessionFile, sessionId) {
+    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+    if (!fs.existsSync(sessionFile)) {
+        fs.writeFileSync(sessionFile, `${JSON.stringify({ type: 'session', version: 3, id: sessionId, cwd: process.cwd() })}\n`);
+    }
+    // A real TUI never exits when pi-dish kills its agent; its pane only ends
+    // when pi-dish closes the client, so stdin logging mirrors the bridge fixture.
+    try {
+        process.stdin.on('data', (chunk) => {
+            fs.appendFileSync(`${sessionFile}.keys`, chunk.toString());
+        });
+    }
+    catch { }
+    setInterval(() => { }, 1 << 30);
+    const flag = args.indexOf('--daemon-socket');
+    const daemonSocket = (flag >= 0 ? args[flag + 1] : null) || process.env.PRIME_AGENT_DAEMON_SOCKET
+        || process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET || '';
+    if (!daemonSocket || process.env.PI_FIXTURE_PRIME_NO_REGISTER || process.env.PI_FIXTURE_NOREGISTER)
+        return;
+    const socket = net.createConnection(daemonSocket);
+    socket.on('error', () => { });
+    socket.on('close', () => { });
+    socket.on('data', createLineSplitter(line => {
+        let message;
+        try {
+            message = JSON.parse(line);
+        }
+        catch {
+            return;
+        }
+        if (!message || typeof message !== 'object' || !('type' in message) || message.type !== 'daemon_hello')
+            return;
+        const register = {
+            type: 'command', id: 'register', protocol: { name: 'prime-agent.daemon', version: 7 },
+            clientId: `fake-prime-tui-${process.pid}`,
+            command: {
+                type: 'register', id: 'register', sessionId, sessionFile, cwd: process.cwd(),
+                workerPid: process.pid, startTime: processIdentity(process.pid)?.startTime,
+            },
+        };
+        const send = () => { try {
+            socket.write(JSON.stringify(register) + '\n');
+        }
+        catch { } };
+        const registerDelay = Number(process.env.PI_FIXTURE_PRIME_REGISTER_DELAY_MS) || 0;
+        if (registerDelay > 0)
+            setTimeout(send, registerDelay);
+        else
+            send();
+    }));
 }
 main();

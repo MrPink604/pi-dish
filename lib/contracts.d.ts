@@ -139,7 +139,13 @@ export interface HarnessDescriptor {
     blobsPath?: () => string;
     spawnTokenMode?: 'wrapper';
     discoveryExtensionsDir?: (env?: HarnessEnvironment) => string;
-    wrapperTokenRequired?: boolean;
+    /**
+     * Where live sessions come from. Absent: the pi-dish bridge extension
+     * registry (plus Pi's RPC fallback). `'prime-daemon'`: the harness loads
+     * no extensions; live root agents are read from its resident daemon roster
+     * and controlled over the daemon socket (src/core/prime-daemon.ts).
+     */
+    liveTransport?: 'prime-daemon';
     spawnEnv?: Record<string, string>;
     pilotConfig?: Record<string, string>;
     /**

@@ -37,7 +37,7 @@ export function createLiveTools(options: {
 function kernelSummary(toolName: string, args: unknown, intent?: string) {
   const summary = getToolSummary(toolName, args);
   if (summary) return summary;
-  if ((toolName !== 'eval' && toolName !== 'ipython') || typeof intent !== 'string') return '';
+  if ((toolName !== 'eval' && toolName !== 'ipython' && toolName !== 'python_repl') || typeof intent !== 'string') return '';
   return intent.trim() ? truncate(intent.trim(), 60) : '';
 }
 function sourceBlockHtml(toolName: string, source: string) {

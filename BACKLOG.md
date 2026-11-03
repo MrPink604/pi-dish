@@ -426,7 +426,10 @@ work queue. Check current code and tests before treating an old gap as open work
 
 ## Product limitations outside the migration
 
-- OMP/Prime do not expose the bridge queue-list/cancellation capabilities.
+- OMP does not expose bridge queue-list/cancellation. Prime exposes both over
+  its daemon (queue state in the session row, queued follow-up cancellation).
+- Prime 0.10 has no extension UI and no model catalog for the new-session
+  picker; [docs/prime-agent.md](docs/prime-agent.md) lists the remaining gaps.
 - General terminal component factories and custom tool/message renderers have
   no browser serialization path; see [the historical scoping](EXTENSION_WEB_UI_SCOPING.md).
 - Additional OMP host commands need individual evaluation; a command that opens

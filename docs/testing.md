@@ -17,7 +17,7 @@ pull requests, and manual dispatch. All jobs use Ubuntu 24.04 x64 and `npm ci`.
 | Bun 1.3.14 | OMP bridge fixture execution in backend jobs |
 | Bundled Pi from the lockfile | Real Pi bridge canary in every backend job |
 | OMP 18.5.0 | Opt-in real CLI canary, including fast-mode on/off provider payloads, verified locally on 2026-10-04 |
-| Prime Agent 0.9.4 | Opt-in real CLI canary, including owned-root close/resume and idle/busy same-pane restart, verified locally on 2026-09-10; see [prime-agent.md](prime-agent.md) |
+| Prime Agent 0.10.2 | Opt-in real CLI canary over the resident daemon: managed launch, streaming, queue update/cancel, abort, tree, same-pane restart, roster-proven close, resume, and manual-TUI ownership refusal (daemon protocol verified live on 2026-11-03); see [prime-agent.md](prime-agent.md) |
 
 Linux is the automated baseline. Other operating systems are outside this
 matrix. Node's `>=22.19.0` engine declaration does not imply

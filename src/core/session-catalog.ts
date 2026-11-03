@@ -83,6 +83,23 @@ function rpcSessionObservation(value: unknown, context: ObservationContext): Cat
   }, number(record(value.proc).pid) ?? null, context);
 }
 
+/** A live Prime daemon root: the roster supplies identity, model, activity and
+ * busy state, while the transcript (when it exists) supplies history counters.
+ * Only root agents reach here; RLM children stay silent helper semantics. */
+function primeSessionObservation(value: unknown, context: ObservationContext): CatalogLiveObservation {
+  if (!isRecord(value)) throw new TypeError('Invalid Prime daemon session observation');
+  const state = record(value.state);
+  const usage = record(record(value.lastStats).contextUsage);
+  return observation('prime', 'prime', string(value.sessionFile), {
+    name: string(state.sessionName) || string(state.name),
+    model: modelRef(state.model), thinkingLevel: string(state.thinkingLevel),
+    contextTokens: number(usage.tokens), contextPercent: number(usage.percent), contextWindow: number(usage.contextWindow),
+    lastActivity: timestamp(value.lastActivityAt),
+    turnInProgress: value.turnInProgress === true, askPending: false, compacting: value.compacting === true,
+    cwd: string(value.cwd),
+  }, number(record(value.summary).workerPid) ?? null, context);
+}
+
 /** Validate advisory store snapshots without migrating or granting authority to
  * those stores. Invalid records are ignored individually. */
 function decodeLaunchParents(value: unknown): ReadonlyMap<SessionId, SessionId> {
@@ -137,7 +154,9 @@ function identityFields(harnessId: HarnessId, nativeSessionId: NativeSessionId, 
 
 function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalogOptions): CatalogSession {
   const fields = live.fields;
-  const registered = live.kind === 'registered';
+  // Roster rows (bridge registry, Prime daemon) carry current name/model/busy
+  // state; RPC children report their own state object instead.
+  const registered = live.kind === 'registered' || live.kind === 'prime';
   const info = live.info ? withSessionContext(live.info, options.contextWindowForModel, options.cacheRetention) : null;
   const model = registered ? fields.model || info?.model : fields.model;
   const percent = registered ? fields.contextPercent ?? info?.contextPercent : fields.contextPercent;
@@ -208,7 +227,7 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
   const seen = new Set<SessionId>();
   // A registered row owns the logical session even when the RPC snapshot was
   // collected first. Conflicted rows remain visible; advice already disables control.
-  for (const kind of ['registered', 'rpc'] as const) {
+  for (const kind of ['registered', 'prime', 'rpc'] as const) {
     for (const live of input.active) {
       if (live.kind !== kind || seen.has(live.id)) continue;
       const row = buildActiveSession(live, options);
@@ -257,6 +276,6 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
 }
 
 export = {
-  registeredSessionObservation, rpcSessionObservation, decodeLaunchParents, decodeRoutineAnnotations,
+  registeredSessionObservation, rpcSessionObservation, primeSessionObservation, decodeLaunchParents, decodeRoutineAnnotations,
   withSessionContext, subsessionLabel, buildActiveSession, buildSourceSession, buildHistoricalSession, composeSessionCatalog,
 };

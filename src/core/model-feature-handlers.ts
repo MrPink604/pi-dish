@@ -2,6 +2,7 @@ import fs = require('node:fs');
 import path = require('node:path');
 import * as piSDK from './pi-sdk';
 import { BridgeSession } from './bridge-session';
+import { PrimeDaemonSession } from './prime-daemon';
 import { getHarness } from './harnesses';
 import { isModelEnabled } from './helper-models';
 import { EMULATED_COMMAND_METADATA } from './helper-command-metadata';
@@ -54,6 +55,20 @@ function filterBridgeCommands(sess: InstanceType<typeof BridgeSession>, commands
   return commandList(commands).filter(command => commandField(command, 'supported') === true
     || (BRIDGE_COMMAND_CAPABILITIES[String(commandField(command, 'name'))]
       && liveSessionSupports(sess, BRIDGE_COMMAND_CAPABILITIES[String(commandField(command, 'name'))])));
+}
+
+/** Commands pi-dish cannot drive on a Prime root: /new would switch the daemon
+ * agent's transcript under the route, and Prime has no /branch. */
+const PRIME_UNSUPPORTED_COMMANDS: Readonly<Record<string, true>> = { new: true, branch: true };
+
+function primeCommandRows(sess: PrimeDaemonSession, commands: unknown): unknown {
+  return commandList(commands).filter(command => {
+    const name = String(commandField(command, 'name'));
+    if (Object.hasOwn(PRIME_UNSUPPORTED_COMMANDS, name)) return false;
+    const capability = BRIDGE_COMMAND_CAPABILITIES[name];
+    return commandField(command, 'supported') === true
+      || !capability || liveSessionSupports(sess, capability);
+  });
 }
 
 async function appendHostBuiltins(ports: FeaturePorts, sessionId: string, sess: InstanceType<typeof BridgeSession>, commands: unknown): Promise<unknown> {
@@ -178,6 +193,13 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
               const filtered = filterBridgeCommands(sess, listed);
               return res.json(await appendHostBuiltins(ports, sessionId as string, sess, filtered));
             }
+          } else if (sess instanceof PrimeDaemonSession) {
+            if (!liveSessionSupports(sess, 'commands')) {
+              return res.status(409).json({ error: 'This session does not support command discovery.' });
+            }
+            const data = await sess.getCommands();
+            const listed = responseCommands(data);
+            if (listed) return res.json(primeCommandRows(sess, listed));
           } else if (sess) {
             const data = await sess.getCommands();
             const listed = responseCommands(data) || [];

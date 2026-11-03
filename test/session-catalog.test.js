@@ -10,7 +10,7 @@ const { sessionCapabilities } = require('../lib/session-capabilities');
 const { encodeSessionKey } = require('../lib/session-key');
 const { sourceForIdentity } = require('../lib/session-source');
 const { sessionForClient } = require('../lib/session-api');
-const { registeredSessionObservation, rpcSessionObservation, decodeLaunchParents, decodeRoutineAnnotations, withSessionContext, buildActiveSession, buildSourceSession, buildHistoricalSession, composeSessionCatalog, } = require('../lib/session-catalog');
+const { registeredSessionObservation, rpcSessionObservation, primeSessionObservation, decodeLaunchParents, decodeRoutineAnnotations, withSessionContext, buildActiveSession, buildSourceSession, buildHistoricalSession, composeSessionCatalog, } = require('../lib/session-catalog');
 const options = {
     harnesses: new Map([registry.pi, registry.omp, registry.prime].map(harness => [harness.id, harness])),
     contextWindowForModel: () => 1000,
@@ -128,6 +128,35 @@ test('RPC projection keeps state/model authority instead of inheriting historica
     assert.equal(fallback.model, 'fallback/model');
     assert.equal(fallback.contextTokens, 0);
     assert.equal(fallback.contextWindow, 0);
+});
+test('Prime projection takes roster name/model/busy state and keeps transcript counters', () => {
+    const src = source('prime', (0, test_types_js_1.nativeId)('prime-native'));
+    const metadata = info({ name: 'Prime history name', model: 'prime/old' });
+    const captured = primeSessionObservation({
+        sessionFile: src.file, cwd: '/prime-workspace', turnInProgress: true, compacting: false,
+        lastActivityAt: new Date('2026-03-03T00:00:00Z'),
+        state: { sessionName: 'Prime live name', model: { provider: 'prime', id: 'prime-live' }, thinkingLevel: 'max' },
+        summary: { workerPid: 4242 },
+        lastStats: { contextUsage: { tokens: 50, percent: 0.4, contextWindow: 2000 } },
+    }, context(src, metadata));
+    const row = buildActiveSession(captured, options);
+    assert.equal(row.id, encodeSessionKey('prime', (0, test_types_js_1.nativeId)('prime-native')));
+    assert.equal(row.harnessId, 'prime');
+    assert.equal(row.name, 'Prime live name');
+    assert.equal(row.model, 'prime/prime-live');
+    assert.equal(row.thinkingLevel, 'max');
+    assert.equal(row.turnInProgress, true);
+    assert.equal(row.compacting, false);
+    assert.equal(row.contextTokens, 50);
+    assert.equal(row.contextPercent, 0.4);
+    assert.equal(row.contextWindow, 2000);
+    assert.equal(row.messageCount, 5);
+    assert.equal(row.cwd, '/prime-workspace');
+    assert.equal(row.pid, 4242);
+    assert.equal(row.sessionFile, src.file);
+    assert.equal(row.lastActivity, metadata.lastActivity);
+    // A Prime observation still refuses a source that claims another identity.
+    assert.throws(() => primeSessionObservation({ sessionFile: '/elsewhere.jsonl' }, context(src)), /does not match/);
 });
 test('unknown live fields are narrowed once and cannot inject row identity or advice', () => {
     const src = source();

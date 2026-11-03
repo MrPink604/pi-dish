@@ -219,6 +219,9 @@ test('getToolSummary surfaces prime ipython shell work and code lines', () => {
   assert.equal(H.getToolSummary('ipython', { code: "df = pandas.read_csv('a.csv')\ndf.head()" }), "df = pandas.read_csv('a.csv')");
   assert.equal(H.getToolSummary('ipython', {}), '');
   assert.equal(H.getToolSummary('ipython', null), '');
+  // Prime 0.10 (Rust) renamed the kernel tool to python_repl with the same {code} args.
+  assert.equal(H.getToolSummary('python_repl', { code: "print(6*7)\nx = 1" }), 'print(6*7)');
+  assert.equal(H.getToolSummary('python_repl', { code: "await bash('ls -la')" }), 'ls -la');
 });
 
 test('getToolSummary surfaces eval cell title or code, not the language', () => {

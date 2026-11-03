@@ -7,7 +7,8 @@ import type { BridgeRegistryEntry, HarnessDescriptor, HarnessEnvironment, Harnes
 import { harnessLaunchSpec } from './harness-launch-spec';
 import { createRPCSession, resumeRPCSession } from './rpc-session';
 import { REGISTRY_DIR, getRegisteredSessionByNativeId, invalidateRegistryCache, pruneRegisteredSession, sameRegistryClaim, validRegistryClaimShape } from './bridge-session';
-import { primeWorkerTarget } from './prime-lifecycle';
+import { getPrimeDaemon } from './prime-daemon';
+import type { PrimeAgentSummary, PrimeDaemon } from './prime-daemon';
 import { ensurePrivateRoot, privateRootFor } from './private-sessions';
 import { LifecycleInterruption, proveBridgeRegistryClaim, registryIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
 import type { BeforeLifecycleAction } from './session-ownership';
@@ -226,8 +227,8 @@ function materializeLaunchWrapper(descriptor: HarnessDescriptor, token: string):
   }
   if ((stat.mode & 0o777) !== 0o700) fs.chmodSync(dir, 0o700);
   const wrapperPath = path.join(dir, `${descriptor.id}-${token}.ts`);
-  // Prime retains this entry for resident-worker recovery. OMP rewrites bare host
-  // imports only in this wrapper's tree, so its host import must remain here.
+  // OMP rewrites bare host imports only in this wrapper's tree, so its host
+  // import must remain here.
   const hostImport = descriptor.wrapperHostPackage ? [
     'let hostAgentSession;',
     `try { hostAgentSession = (await import(${JSON.stringify(descriptor.wrapperHostPackage)})).AgentSession; } catch {}`,
@@ -284,10 +285,53 @@ function remainingProcesses(error: unknown): ProcessIdentity[] {
     record(value) && typeof value.pid === 'number' && typeof value.startTime === 'string');
 }
 
-function realSessionFile(entry: Record<string, unknown> | null): string {
-  const file = entry?.sessionFile;
-  if (typeof file !== 'string') throw new TypeError('The session file path must be a string');
-  return fs.realpathSync(file);
+/** Resolved-path identity for a transcript or working directory; never a bare prefix match. */
+function samePath(left: unknown, right: unknown): boolean {
+  if (typeof left !== 'string' || !left || typeof right !== 'string' || !right) return false;
+  try { return fs.realpathSync(left) === fs.realpathSync(right); }
+  catch { return path.resolve(left) === path.resolve(right); }
+}
+
+function launchResumeFile(args: readonly unknown[]): string | null {
+  for (let index = 0; index < args.length; index++) {
+    const word = args[index];
+    if (typeof word !== 'string') continue;
+    if (word === '--resume') return typeof args[index + 1] === 'string' && args[index + 1] ? String(args[index + 1]) : null;
+    if (word.startsWith('--resume=')) return word.slice('--resume='.length) || null;
+  }
+  return null;
+}
+
+function hasDaemonSocketArg(argv: readonly unknown[]): boolean {
+  return argv.some(word => typeof word === 'string' && (word === '--daemon-socket' || word.startsWith('--daemon-socket=')));
+}
+
+interface PrimeLaunchContext {
+  daemon: PrimeDaemon;
+  /** Root ids that predate this launch; only new roots can belong to it. */
+  snapshot: Set<string>;
+}
+
+type PrimeRootObservation = { kind: 'single'; summary: PrimeAgentSummary } | { kind: 'ambiguous'; count: number } | null;
+
+/**
+ * Identify the root agent a Prime launch produced. Resume matches the
+ * transcript; a new session is the single new root in the launch directory.
+ */
+async function waitForPrimeRoot(daemon: PrimeDaemon, { cwd, resumeFile, snapshot, timeout }: {
+  cwd: string; resumeFile: string | null; snapshot: ReadonlySet<string>; timeout: number;
+}): Promise<PrimeRootObservation> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const roots = await daemon.refresh();
+    const matches = roots.filter(session => resumeFile
+      ? samePath(session.summary.sessionFile, resumeFile)
+      : !snapshot.has(session.activeSessionId) && samePath(session.summary.cwd, cwd));
+    if (matches.length === 1) return { kind: 'single', summary: matches[0].summary };
+    if (matches.length > 1) return { kind: 'ambiguous', count: matches.length };
+    if (Date.now() >= deadline) return null;
+    await delay(Math.min(200, Math.max(1, deadline - Date.now())));
+  }
 }
 
 function sanitizeTmuxSessionName(rawName: string | null | undefined): string | null {
@@ -341,7 +385,23 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     return fs.existsSync(path.join(home, '.pi', 'agent', 'extensions', 'pi-dish-bridge'));
   }
 
-  async function performTmuxLaunch({ descriptor, target, args, cwd, name, hidden, restartPane = null }: SpawnHarnessOptions): Promise<LaunchOutcome> {
+  // pi-dish serializes its own Prime launches so new-session identification
+  // never races another root it is starting.
+  let primeLaunchChain: Promise<unknown> = Promise.resolve();
+
+  function withPrimeLaunch<T>(action: () => Promise<T>): Promise<T> {
+    const run = primeLaunchChain.then(action, action);
+    primeLaunchChain = run.then(() => {}, () => {});
+    return run;
+  }
+
+  async function performTmuxLaunch(options: SpawnHarnessOptions): Promise<LaunchOutcome> {
+    if (options.descriptor.liveTransport !== 'prime-daemon') return runTmuxLaunch(options, null);
+    const daemon = getPrimeDaemon();
+    return withPrimeLaunch(() => runTmuxLaunch(options, { daemon, snapshot: new Set() }));
+  }
+
+  async function runTmuxLaunch({ descriptor, target, args, cwd, name, hidden, restartPane = null }: SpawnHarnessOptions, prime: PrimeLaunchContext | null): Promise<LaunchOutcome> {
     if (!tmux.isTmuxAvailable()) throw new LaunchError('tmux is not available on this host', 400);
     const socket = target.socket;
     if (!tmux.isSocketAllowed(socket)) throw new LaunchError('Invalid tmux socket', 400);
@@ -354,25 +414,34 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     // assignments win, including an explicitly empty socket override.
     if (!Object.hasOwn(env, 'HOME')) env.HOME = process.env.HOME || os.homedir();
     if (process.env.PI_DISH_URL) env.PI_DISH_URL = process.env.PI_DISH_URL;
-    if (!Object.hasOwn(env, 'PI_DISH_SOCKET_DIR')) env.PI_DISH_SOCKET_DIR = process.env.PI_DISH_SOCKET_DIR || '';
-    validateBridgeSocketConfig(env);
-    const token = crypto.randomBytes(16).toString('hex');
-    env.PI_DISH_SPAWN_TOKEN = token;
-    const discoveryInstalled = discoveryBridgeInstalled(descriptor, { ...process.env, ...env });
-    // Prime's worker cannot inherit its client's env token. Keep its wrapper
-    // and discovery enabled; the daemon captures discovery policy at birth.
-    const tokenRidesEnv = descriptor.wrapperTokenRequired !== true;
-    const wrapperPath = discoveryInstalled && tokenRidesEnv ? null : materializeLaunchWrapper(descriptor, token);
-    const command = [...spec.argv, ...(discoveryInstalled && tokenRidesEnv
-      ? stripLaunchWrapperArgs(descriptor, args)
-      : injectLaunchWrapper(descriptor, args, wrapperPath))];
+    const launchCwd = cwd ? String(cwd) : env.HOME!;
+    let spawnToken = '';
+    let wrapperPath: string | null = null;
+    let command: readonly unknown[];
+    if (prime) {
+      // Prime's TUI is a client of the resident daemon: no wrapper, no spawn
+      // token. The explicit socket keeps pi-dish watching the daemon its own
+      // client uses even when the configured command names one.
+      command = [...spec.argv, ...(hasDaemonSocketArg(spec.argv) ? args : ['--daemon-socket', prime.daemon.socketPath, ...args])];
+      for (const session of await prime.daemon.refresh()) prime.snapshot.add(session.activeSessionId);
+    } else {
+      if (!Object.hasOwn(env, 'PI_DISH_SOCKET_DIR')) env.PI_DISH_SOCKET_DIR = process.env.PI_DISH_SOCKET_DIR || '';
+      validateBridgeSocketConfig(env);
+      spawnToken = crypto.randomBytes(16).toString('hex');
+      env.PI_DISH_SPAWN_TOKEN = spawnToken;
+      const discoveryInstalled = discoveryBridgeInstalled(descriptor, { ...process.env, ...env });
+      wrapperPath = discoveryInstalled ? null : materializeLaunchWrapper(descriptor, spawnToken);
+      command = [...spec.argv, ...(discoveryInstalled
+        ? stripLaunchWrapperArgs(descriptor, args)
+        : injectLaunchWrapper(descriptor, args, wrapperPath))];
+    }
     let paneId: string;
     let restartedPaneProcess: ProcessIdentity | null = null;
     try {
       if (restartPane) {
         paneId = restartPane.paneId;
         await tmux.respawnPane({
-          socket, paneId, cwd: cwd || env.HOME, command, env,
+          socket, paneId, cwd: launchCwd, command, env,
           expectedProcess: restartPane.paneProcess,
           beforeAction: restartPane.beforeAction,
         });
@@ -385,7 +454,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
           tmuxSession: target.tmuxSession,
           newTmuxSessionName: target.newTmuxSession,
           windowName: name || target.windowName || null,
-          cwd: cwd || env.HOME,
+          cwd: launchCwd,
           command,
           env,
         }));
@@ -399,7 +468,31 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     const timeoutMs = Number(process.env.PI_DISH_SPAWN_TIMEOUT_MS) || 30000;
     const timeoutLabel = timeoutMs < 1000 ? `${timeoutMs}ms` : `${Math.round(timeoutMs / 1000)}s`;
     const deadline = Date.now() + timeoutMs;
+    const timeoutReason = prime
+      ? `${descriptor.label} did not appear in its daemon roster within ${timeoutLabel}`
+      : `${descriptor.label} did not register within ${timeoutLabel}`;
+    const resumeFile = prime ? launchResumeFile(args) : null;
     let registrationError: LaunchError | null = null;
+    const acceptPrimeRoot = async (summary: PrimeAgentSummary): Promise<LaunchOutcome> => {
+      const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
+      if (restartPane && (!restartedPaneProcess || !sameProcessIdentity(paneProcess, restartedPaneProcess))) {
+        throw new Error('Prime client pane changed before replacement registration');
+      }
+      if (restartPane && (!resumeFile || !samePath(summary.sessionFile, resumeFile))) {
+        throw new Error('Prime replacement did not resume the original transcript');
+      }
+      const routeId = routeSessionId('prime', summary.nativeSessionId);
+      tmux.recordSpawn(routeId, {
+        socket, paneId, paneProcess,
+        primeAgent: {
+          daemonSocket: prime!.daemon.socketPath,
+          activeSessionId: summary.activeSessionId,
+          workerInstanceId: summary.workerInstanceId,
+          sessionFile: summary.sessionFile,
+        },
+      });
+      return { kind: 'ready', id: routeId };
+    };
     const acceptRegistration = async ({ entry, identity }: SpawnRegistration): Promise<LaunchOutcome> => {
       let accepted = entry;
       if (descriptor.id !== 'pi') {
@@ -414,20 +507,9 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       const acceptedIdentity = registryIdentity(accepted);
       if (!acceptedIdentity) throw new Error(`${descriptor.label} registry identity is unavailable`);
       const routeId = routeSessionId(acceptedIdentity.harnessId, acceptedIdentity.nativeSessionId);
-      if (restartPane && descriptor.closeMode === 'owned-agent'
-          && (routeId !== restartPane.sessionId
-            || realSessionFile(accepted) !== realSessionFile(restartPane.registry)
-            || sameProcessIdentity(accepted, restartPane.registry)
-            || !primeWorkerTarget(accepted))) {
-        throw new Error('Prime replacement did not prove a new worker for the original transcript');
-      }
       const paneProcess = await tmux.paneProcessIdentity(socket, paneId);
-      if (restartPane && descriptor.closeMode === 'owned-agent'
-          && !sameProcessIdentity(paneProcess, restartedPaneProcess)) {
-        throw new Error('Prime client pane changed before replacement registration');
-      }
       tmux.recordSpawn(routeId, {
-        socket, paneId, spawnToken: token,
+        socket, paneId, spawnToken,
         bridgeInstanceId: accepted.bridgeInstanceId || accepted.instanceId || null,
         paneProcess, wrapperPath,
       });
@@ -435,38 +517,51 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       if (descriptor.id === 'pi') tmux.sendKeys(socket, paneId, '/dish-prime').catch(() => {});
       return { kind: 'ready', id: routeId };
     };
-    while (Date.now() < deadline) {
-      const scanStartedAt = Date.now();
-      const observation = findSessionBySpawnToken(token, descriptor.id);
-      if (observation?.kind === 'conflict') {
-        registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
-        break;
-      }
-      if (observation?.kind === 'single') {
-        try { return await acceptRegistration(observation.registration); } catch (error) {
-          registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
-          break;
+    if (prime) {
+      const observation = await waitForPrimeRoot(prime.daemon, {
+        cwd: launchCwd, resumeFile, snapshot: prime.snapshot, timeout: timeoutMs,
+      });
+      if (observation?.kind === 'ambiguous') {
+        registrationError = new LaunchError(`${descriptor.label} produced ${observation.count} daemon roots for one launch; refusing to select one.`, 409);
+      } else if (observation?.kind === 'single') {
+        try { return await acceptPrimeRoot(observation.summary); } catch (error) {
+          registrationError = new LaunchError(`${descriptor.label} daemon identity proof failed: ${errorMessage(error)}`, 500);
         }
       }
-      // Detect cheap registrations promptly; pace larger registry scans toward
-      // the old 300ms cadence rather than repeatedly parsing every claim at 20ms.
-      const interval = Math.min(REGISTRY_POLL_MAX_MS, Math.max(REGISTRY_POLL_MIN_MS, (Date.now() - scanStartedAt) * 20));
-      await delay(Math.min(interval, Math.max(1, deadline - Date.now())));
-    }
-    // A registration arriving in the final sleep must win over timeout cleanup.
-    const deadlineEntry = registrationError ? null : findSessionBySpawnToken(token, descriptor.id);
-    if (deadlineEntry?.kind === 'conflict') {
-      registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
-    }
-    if (!registrationError && deadlineEntry?.kind === 'single') {
-      try { return await acceptRegistration(deadlineEntry.registration); } catch (error) {
-        registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
+    } else {
+      while (Date.now() < deadline) {
+        const scanStartedAt = Date.now();
+        const observation = findSessionBySpawnToken(spawnToken, descriptor.id);
+        if (observation?.kind === 'conflict') {
+          registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
+          break;
+        }
+        if (observation?.kind === 'single') {
+          try { return await acceptRegistration(observation.registration); } catch (error) {
+            registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
+            break;
+          }
+        }
+        // Detect cheap registrations promptly; pace larger registry scans toward
+        // the old 300ms cadence rather than repeatedly parsing every claim at 20ms.
+        const interval = Math.min(REGISTRY_POLL_MAX_MS, Math.max(REGISTRY_POLL_MIN_MS, (Date.now() - scanStartedAt) * 20));
+        await delay(Math.min(interval, Math.max(1, deadline - Date.now())));
+      }
+      // A registration arriving in the final sleep must win over timeout cleanup.
+      const deadlineEntry = registrationError ? null : findSessionBySpawnToken(spawnToken, descriptor.id);
+      if (deadlineEntry?.kind === 'conflict') {
+        registrationError = new LaunchError(`${descriptor.label} produced multiple bridge registrations for one launch token; refusing to select one.`, 409);
+      }
+      if (!registrationError && deadlineEntry?.kind === 'single') {
+        try { return await acceptRegistration(deadlineEntry.registration); } catch (error) {
+          registrationError = new LaunchError(`${descriptor.label} bridge identity proof failed: ${errorMessage(error)}`, 500);
+        }
       }
     }
     if (restartPane && descriptor.closeMode === 'owned-agent') {
       // A resident replacement can outlive its client; pane exit cannot prove
       // that another transcript writer is safe to launch.
-      const error = new LaunchError(`${registrationError?.message || `Prime did not register within ${timeoutLabel}`} — the tmux pane was left open for inspection; no second replacement was launched.`, registrationError?.status || 500);
+      const error = new LaunchError(`${registrationError?.message || `${timeoutReason} — the tmux pane was left open for inspection; no second replacement was launched.`}`, registrationError?.status || 500);
       return { kind: 'detached-replacement-uncertain', error, status: error.status,
         placement: { socket, paneId, detachedWorker: true, knownProcesses: [] } };
     }
@@ -478,18 +573,20 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
         const message = registrationError
           ? `${registrationError.message}, and tmux cleanup failed: ${errorMessage(cleanupError)}`
           : descriptor.rpcFallback
-            ? `${descriptor.label} did not register within ${timeoutLabel}, and hidden tmux cleanup failed; refusing to start an RPC fallback that could write the same session file: ${errorMessage(cleanupError)}`
-            : `${descriptor.label} did not register within ${timeoutLabel}, and tmux cleanup failed: ${errorMessage(cleanupError)}`;
+            ? `${timeoutReason}, and hidden tmux cleanup failed; refusing to start an RPC fallback that could write the same session file: ${errorMessage(cleanupError)}`
+            : `${timeoutReason}, and tmux cleanup failed: ${errorMessage(cleanupError)}`;
         const error = new LaunchError(message, 500);
         return { kind: 'cleanup-incomplete', error, status: error.status,
           cleanup: { socket, paneId, knownProcesses: remainingProcesses(cleanupError), timeout: cleanupTimeoutMs } };
       }
     }
     if (registrationError) return forbidden(registrationError);
-    const wrapperHint = descriptor.wrapperEntrypoint
-      ? `Ensure ${descriptor.label} can load ${descriptor.wrapperEntrypoint}.`
-      : 'Ensure the pi-dish-bridge extension is installed in Pi’s global extensions.';
-    const error = new LaunchError(`${descriptor.label} did not register within ${timeoutLabel} — ${shouldCleanup ? 'the tmux window was closed' : 'the tmux window was left open for inspection'}. ${wrapperHint}`, 500);
+    const wrapperHint = prime
+      ? `Ensure the Prime daemon socket ${prime.daemon.socketPath} is reachable.`
+      : descriptor.wrapperEntrypoint
+        ? `Ensure ${descriptor.label} can load ${descriptor.wrapperEntrypoint}.`
+        : 'Ensure the pi-dish-bridge extension is installed in Pi’s global extensions.';
+    const error = new LaunchError(`${timeoutReason} — ${shouldCleanup ? 'the tmux window was closed' : 'the tmux window was left open for inspection'}. ${wrapperHint}`, 500);
     if (!shouldCleanup) {
       const state = await tmux.paneProcessState(socket, paneId);
       if (state.paneExists || state.knownProcesses.length) {

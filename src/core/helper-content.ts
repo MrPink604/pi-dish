@@ -26,9 +26,10 @@ export function extractTextBlocks(content: unknown) {
 }
 
 /**
- * Prime's single built-in tool: a stateful Python kernel whose shell access
- * is wrapped in bash('...') calls. Surface the wrapped command when present,
- * otherwise the first line of the code — mirroring the Bash/read summaries.
+ * Prime's single built-in tool (`ipython` up to 0.9, `python_repl` from the
+ * 0.10 Rust build): a stateful Python kernel whose shell access is wrapped in
+ * bash('...') calls. Surface the wrapped command when present, otherwise the
+ * first line of the code — mirroring the Bash/read summaries.
  */
 export function ipythonCodeSummary(code: unknown) {
   if (typeof code !== 'string' || !code) return '';
@@ -41,7 +42,7 @@ export function ipythonCodeSummary(code: unknown) {
 export function getToolSummary(toolName: string, args: unknown) {
   if (!record(args)) return '';
   if (toolName === 'Bash' || toolName === 'bash') return typeof args.command === 'string' && args.command ? truncate(args.command.split('\n')[0], 60) : '';
-  if (toolName === 'ipython') return ipythonCodeSummary(args.code);
+  if (toolName === 'ipython' || toolName === 'python_repl') return ipythonCodeSummary(args.code);
   // OMP eval args lead with language ("py"), which is not the work. Prefer the
   // cell title, then the same first-line/bash summary Prime's ipython uses.
   if (toolName === 'eval') {

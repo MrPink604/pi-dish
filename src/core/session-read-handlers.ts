@@ -3,9 +3,12 @@ import os = require('node:os');
 import path = require('node:path');
 import type { RequestHandler } from 'express';
 import { BridgeSession } from './bridge-session';
+import { PrimeDaemonSession } from './prime-daemon';
 import type { BridgeRegistryEntry } from './contracts';
 import { getHarness } from './harnesses';
 import { record as isRecord } from './helper-values';
+import { extractTextContent, getToolSummary } from './helper-content.js';
+import { collectActivePath, walkBranchTree } from './helper-tree';
 import { refreshHarnessPricing } from './harness-pricing';
 import * as piSDK from './pi-sdk';
 import { subsessionLabel, withSessionContext } from './session-catalog';
@@ -24,6 +27,8 @@ export interface SessionReadPorts {
   liveSessionHistoryPending(id: string): boolean;
   getRegisteredSession(id: string): BridgeRegistryEntry | null;
   getRPCSession(id: string): unknown;
+  /** Any transport: bridge registry, pi-dish RPC child, or Prime daemon root. */
+  isLive(id: string): boolean;
   getLiveSession(id: string): Promise<LiveSession | null>;
   liveTreeLeafId(session: InstanceType<typeof BridgeSession>): Promise<unknown>;
   getLiveContextUsage(id: string): unknown;
@@ -84,9 +89,83 @@ function imageBlockBytes(session: SessionSource, data: string): Buffer | null {
   try { return fs.readFileSync(path.join(blobsPath, ref[1])); } catch { return null; }
 }
 
+/**
+ * Prime's `get_session_tree` answers `{ flatNodes: [{ entry }], leafId }`, where
+ * each entry is a Pi-v3 session entry. The tree routes and the browser expect
+ * the projected node shape pi's `getSessionTree` already serves; build exactly
+ * those fields from the daemon's in-memory entries (the file can lag the leaf).
+ */
+function primeSessionTree(value: unknown): piSDK.SessionTree {
+  const source = record(value);
+  const flatNodes = Array.isArray(source.flatNodes) ? source.flatNodes : [];
+  interface PrimeTreeNode { entry: Record<string, unknown>; label: string | null; children: PrimeTreeNode[] }
+  const byId = new Map<string, PrimeTreeNode>();
+  const ordered: PrimeTreeNode[] = [];
+  for (const flat of flatNodes) {
+    const entry = record(record(flat).entry);
+    if (typeof entry.id !== 'string' || !entry.id || byId.has(entry.id)) continue;
+    const label = record(flat).label;
+    const node = { entry, label: typeof label === 'string' && label ? label : null, children: [] };
+    byId.set(entry.id, node);
+    ordered.push(node);
+  }
+  const roots: PrimeTreeNode[] = [];
+  for (const node of ordered) {
+    const parent = typeof node.entry.parentId === 'string' ? byId.get(node.entry.parentId) : undefined;
+    (parent ? parent.children : roots).push(node);
+  }
+  const leafId = typeof source.leafId === 'string' && byId.has(source.leafId) ? source.leafId : null;
+  const activePathIds = collectActivePath(leafId, id => {
+    const parentId = byId.get(id)?.entry.parentId;
+    return typeof parentId === 'string' ? parentId : null;
+  });
+  const preview = (content: unknown) => extractTextContent(content).replace(/[\n\t]/g, ' ').trim().slice(0, 120);
+  const nodes: piSDK.SessionTreeNode[] = [];
+  // Same flattening as pi's getSessionTree: depth grows only at branch points.
+  walkBranchTree(roots, (node, depth) => {
+    const entry = node.entry;
+    const id = String(entry.id);
+    const result: piSDK.SessionTreeNode = {
+      id, parentId: typeof entry.parentId === 'string' ? entry.parentId : null,
+      type: entry.type as piSDK.SessionTreeNode['type'], timestamp: String(entry.timestamp ?? ''),
+      depth, active: activePathIds.has(id), isLeaf: id === leafId, label: node.label, childCount: node.children.length,
+    };
+    if (entry.type === 'message') {
+      const message = record(entry.message);
+      result.role = typeof message.role === 'string' ? message.role : undefined;
+      if (message.role === 'user' || message.role === 'assistant') result.text = preview(message.content);
+      if (message.role === 'assistant') {
+        result.model = typeof message.model === 'string' ? message.model : undefined;
+        result.stopReason = typeof message.stopReason === 'string' ? message.stopReason : undefined;
+        result.errorMessage = typeof message.errorMessage === 'string' ? message.errorMessage : undefined;
+        result.toolCalls = Array.isArray(message.content) ? message.content.flatMap((block: unknown) => {
+          const call = record(block);
+          return call.type === 'toolCall' && typeof call.id === 'string'
+            ? [{ id: call.id, name: String(call.name ?? ''), args: getToolSummary(String(call.name ?? ''), call.arguments) }]
+            : [];
+        }) : [];
+      } else if (message.role === 'toolResult') {
+        result.toolName = typeof message.toolName === 'string' ? message.toolName : undefined;
+        result.toolCallId = typeof message.toolCallId === 'string' ? message.toolCallId : undefined;
+        result.isError = message.isError === true;
+      }
+    } else if (entry.type === 'compaction') {
+      result.tokensBefore = typeof entry.tokensBefore === 'number' ? entry.tokensBefore : undefined;
+    } else if (entry.type === 'model_change') {
+      result.modelId = typeof entry.modelId === 'string' ? entry.modelId : undefined;
+      result.provider = typeof entry.provider === 'string' ? entry.provider : undefined;
+    } else if (entry.type === 'branch_summary') {
+      result.summary = typeof entry.summary === 'string' ? entry.summary.slice(0, 120) : undefined;
+    }
+    nodes.push(result);
+    return node.children;
+  });
+  return { nodes, leafId, activePathIds: [...activePathIds] };
+}
+
 export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadHandlers {
   const {
-    findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession,
+    findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession, isLive,
     getLiveSession, liveTreeLeafId, getLiveContextUsage, getContextWindow, describeRuntime,
   } = ports;
 
@@ -139,7 +218,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
 
   const messages: ReadHandler = async (req, res) => {
     const sessionId = req.params.id;
-    const isActive = !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId);
+    const isActive = isLive(sessionId);
     const source = findSessionSource(sessionId);
     if (!source) {
       res.json({ messages: [], session: { id: sessionId, isActive }, totalMessages: 0,
@@ -292,6 +371,20 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
           }
           throw error;
         }
+      }
+      if (identity.harnessId === 'prime') {
+        // The daemon is the only authority on the live leaf; map its flat Pi
+        // entries into the projected node shape the tree UI consumes.
+        let sess: LiveSession | null = null;
+        try { sess = await getLiveSession(req.params.id); } catch { sess = null; }
+        if (!(sess instanceof PrimeDaemonSession)) {
+          res.status(409).json({ error: 'Reading the tree of an inactive Prime Agent session is not supported.' }); return;
+        }
+        if (!liveSessionSupports(sess, 'treeRead')) {
+          res.status(409).json({ error: 'This Prime Agent session does not support live tree reads.' }); return;
+        }
+        res.json(primeSessionTree(await sess.readTree()));
+        return;
       }
       if (identity.harnessId !== 'pi') {
         res.status(409).json({ error: 'Session tree reads are not supported for this harness.' }); return;

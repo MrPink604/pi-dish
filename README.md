@@ -178,11 +178,13 @@ loader. See the [runtime build guide](docs/typescript.md#native-extensions-and-s
 
 ## Setup
 
-pi-dish discovers running sessions through bridge extensions that register
-each agent and expose a control socket. The installer reconciles the runtime
-dependencies, the Pi, OMP, and Prime bridges, and every bundled skill. When
-the Prime CLI is installed but uv (required by Prime's Python kernel for its
-first tool run) is missing, the installer installs uv to `~/.local/bin`:
+pi-dish discovers Pi and OMP sessions through bridge extensions that register
+each agent and expose a control socket, and Prime sessions through Prime's
+resident daemon (Prime 0.10+ is a native binary with no extension loader). The
+installer reconciles the runtime dependencies, the Pi and OMP bridges, and
+every bundled skill. When the Prime CLI is installed but uv (required by
+Prime's Python kernel for its first tool run) is missing, the installer
+installs uv to `~/.local/bin`:
 
 ```bash
 git clone https://github.com/MrPink604/pi-dish
@@ -190,16 +192,17 @@ cd pi-dish
 ./install.sh
 ```
 
-The bridge links land in `~/.pi/agent/extensions/pi-dish-bridge`,
-`~/.omp/agent/extensions/pi-dish-bridge-omp`, and
-`~/.prime/agent/extensions/pi-dish-bridge-prime` (plus the shared bridge core
-beside it — see the alternative-harness section below). Every bundled skill
-directory — each one containing a `SKILL.md`, which excludes the shared
-`skills/lib` CLI core — is linked into the Pi and OMP agents' default
-`skills/` directories.
+The bridge links land in `~/.pi/agent/extensions/pi-dish-bridge` and
+`~/.omp/agent/extensions/pi-dish-bridge-omp`. Every bundled skill directory —
+each one containing a `SKILL.md`, which excludes the shared `skills/lib` CLI
+core — is linked into the Pi, OMP, and Prime agents' default `skills/`
+directories. Prime 0.10 discovers user skills under
+`~/.prime/agent/skills/`, so a Prime session can run the pi-dish CLIs.
 `PI_AGENT_DIR`, `OMP_AGENT_DIR`, and `PRIME_AGENT_DIR` override those
 destinations for an isolated install, and `./install.sh --links-only` skips
-`npm ci`.
+`npm ci`. Rerunning the installer also removes the retired Prime extension
+links from `~/.prime/agent/extensions/` when they still point into this
+checkout.
 
 `pi-dish-pages` teaches agents to publish HTML artifacts,
 `pi-dish-comments` gives them a small CLI-backed inbox for anchored feedback,
@@ -217,32 +220,32 @@ the current one can race for the session socket.
 
 ### Oh My Pi and Prime Agent
 
-The new-session picker can also launch OMP and Prime in tmux. Their permanent
-thin wrappers are:
+The new-session picker can also launch OMP and Prime in tmux.
 
-- `extensions/pi-dish-bridge-omp/index.ts`
-- `extensions/pi-dish-bridge-prime/index.ts`
+OMP's permanent thin wrapper is `extensions/pi-dish-bridge-omp/index.ts`. It
+loads automatically in OMP sessions started outside pi-dish because the
+installer links it into OMP's extension discovery directory
+(`~/.omp/agent/extensions/`). Managed launches pass a generated module under
+`~/.pi/dish/launch-wrappers/` that imports the same thin wrapper and embeds
+the one-launch correlation token; the host package imports live there because
+OMP resolves bare specifiers only inside the importing extension's own tree.
+OMP uses the shared public-extension bridge and never starts or falls back to
+native RPC.
 
-Both bridges load automatically in sessions started outside pi-dish: the
-installer links each wrapper into its harness's extension discovery directory
-(`~/.omp/agent/extensions/`, `~/.prime/agent/extensions/`). Prime resolves
-extension imports from the symlink path, so the installer also links the
-shared bridge core as a sibling (`~/.prime/agent/extensions/pi-dish-bridge`);
-the stock Pi bridge that directory exposes stands down under OMP and Prime
-hosts. Managed launches do not use the discovery link: they pass a generated
-module under `~/.pi/dish/launch-wrappers/` that imports the same thin wrapper
-and embeds the one-launch correlation token. This matters for Prime because
-its resident daemon forwards extension paths to workers but does not forward
-arbitrary client environment variables — the token can only ride the module.
-When the discovery link has already loaded a tokenless bridge copy into the
-same worker, the generated wrapper adopts into it through the bridge's load
-sentinel instead of loading a duplicate bridge, so the launch's correlation
-claim still lands on the surviving instance. Generated modules are retained
-so a resident worker can reload or recover its extension later.
-
-OMP and Prime use the shared public-extension bridge and never start or fall
-back to native RPC. Their history is discovered from `~/.omp/agent/sessions/`
-and `~/.prime/agent/sessions/` respectively.
+Prime Agent 0.10 is a native Rust binary with no TypeScript extension loader,
+so there is no Prime bridge. pi-dish becomes another client of Prime's
+resident daemon (protocol `prime-agent.daemon` v7, the same transport
+`prime-agent attach` uses): it reads live root agents from the daemon roster
+and drives prompt, steer, follow-up, abort, compaction, model/thinking,
+rename, tree and queue operations over the daemon's Unix socket. Managed
+launches still run the Prime TUI in a pi-dish tmux pane, so the terminal view,
+`prime-agent list`, and `prime-agent attach` keep working. Ownership uses the
+daemon's own identity: a launch is recognized by its new roster root in the
+launch cwd and recorded with that root's agent id, worker instance and
+transcript; close and restart refuse without a matching record and a
+verified pane process. Manual Prime sessions stay controllable but
+uncloseable. History is discovered from `~/.prime/agent/sessions/`. See
+[docs/prime-agent.md](docs/prime-agent.md) for the full status and gaps.
 
 ### Private sessions
 
@@ -287,13 +290,13 @@ Current alternative-harness support is capability-detected:
 
 | Feature | OMP | Prime Agent |
 |---|---|---|
-| Prompts, steering, follow-ups, abort, model/thinking controls | Supported through the bridge | Supported through the bridge |
+| Prompts, steering, follow-ups, abort, model/thinking controls | Supported through the bridge | Supported through the daemon |
+| Compaction | Supported on live capable bridges | Supported through the daemon |
+| Tree read and navigation | Supported live, with a reachable tmux pane for command-context handoff | Supported through the daemon |
+| Harness queue list/cancellation | Unavailable | Read-only queue state in the session row; queued follow-ups can be cancelled |
 | Fast mode (priority service tier) | Supported through the bridge on eligible models; session pricing prefers OMP's tier-adjusted reported cost | Unavailable |
-| Compaction | Supported on live capable bridges | Unavailable |
 | Side chats (`/btw`) | Supported on live capable bridges: `/btw <question>` opens an ephemeral side chat forked from the live context; answers stream into a composer panel, follow-ups go to the side chat until it is closed (✕ or Esc), and nothing enters the transcript. The main turn keeps running. Follow-ups carry earlier side turns on OMP ≥ 18.6 | Unavailable |
 | Provider sign-in (`/login`) | Supported on live capable bridges | Unavailable |
-| Tree navigation | Supported live, with a reachable tmux pane for command-context handoff | Unavailable |
-| Harness queue listing/cancellation | Unavailable | Unavailable |
 | Read-only HTML export and sharing | Supported | Unavailable |
 | Inactive JSONL mutation through Pi's SDK | Unavailable | Unavailable |
 
@@ -303,19 +306,19 @@ revalidates its launch token and exact tmux pane process identity, proves the
 live OMP process belongs to that pane, then kills the pane and waits for its
 captured process tree to exit. OMP sessions launched outside pi-dish remain
 uncloseable. For Prime, **Close session** stops the pi-dish-owned root agent
-and its children through Prime's supervisor (the operation behind
-`prime-agent stop`), waits for worker exit, then closes only the verified
-client pane. Other roots and the shared daemon remain running; the transcript
-stays resumable. This also works if the original client pane has already gone.
-Prime's launch token, worker birth identity, exact daemon/root identity and
-live roster must agree; missing evidence or a replaced pane fails closed.
-The implementation is verified on Linux with Prime 0.9.4's daemon protocol 7;
-manual sessions and unsupported runtimes remain uncloseable. **Restart agent**
-uses the same verified worker stop, then resumes the root in its original live
-tmux pane with fresh launch ownership. It aborts in-progress work and stops
-children; other roots keep running. A missing pane remains Close-only, and
-Prime remains excluded from bulk Bounce. Older remote Dish hosts still show their client-only
-“Detach client” operation.
+through Prime's daemon (`kill` on that agent id), waits until the daemon
+roster drops it, then closes only the verified client pane. Other roots and
+the shared daemon remain running; the transcript stays resumable. This also
+works if the original client pane has already gone. The spawn record's agent
+id, worker instance and transcript must match the live roster row, and the
+pane process must still be the recorded client; missing evidence or a
+replaced pane fails closed. The implementation is verified on Linux with
+Prime 0.10.2's daemon protocol 7; manual sessions remain uncloseable.
+**Restart agent** uses the same verified daemon stop, then resumes the
+transcript in its original live tmux pane with fresh ownership. It aborts
+in-progress work; other roots keep running. A missing pane remains Close-only,
+and Prime remains excluded from bulk Bounce. Older remote Dish hosts still
+show their client-only “Detach client” operation.
 
 Use `PI_DISH_OMP_COMMAND` or `PI_DISH_PRIME_COMMAND` when a CLI is not on
 `PATH`, analogous to `PI_DISH_PI_COMMAND` for Pi.
@@ -344,7 +347,7 @@ its persisted OMP records natively, but cannot reconstruct runtime-only prompt
 or tool state that OMP did not write to the file.
 
 The current real-host compatibility canary is pinned to OMP 18.5.0 (run with
-Bun 1.3.14) and Prime Agent 0.9.4. See Development for the isolated install
+Bun 1.3.14) and Prime Agent 0.10.2. See Development for the isolated install
 and test command.
 
 After that, any `pi` you launch (TUI in tmux, headless, spawned from
@@ -981,8 +984,8 @@ accidental use and keeps secrets out of transcripts; it is not containment.
 
 ## Slash command support
 
-The table below describes Pi. OMP and Prime use their capability-gated bridge
-commands; see the alternative-harness section above.
+The table below describes Pi. OMP uses its capability-gated bridge commands and
+Prime its daemon command surface; see the alternative-harness section above.
 
 | Command type | TUI session (bridge) | pi-dish-spawned session (RPC) |
 |---|---|---|
@@ -1156,11 +1159,7 @@ npm install --prefix "$PREFIX/bun" --no-audit --no-fund bun@1.3.14
 BUN="$PREFIX/bun/node_modules/.bin/bun"
 BUN_INSTALL="$PREFIX/omp" "$BUN" install -g @oh-my-pi/pi-coding-agent@18.5.0
 curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | \
-  env PRIME_AGENT_BOOTSTRAP_KERNEL_ON_INSTALL=0 \
-      PRIME_AGENT_INSTALLER_PLAIN=1 \
-      npm_config_prefix="$PREFIX/prime" \
-      PATH="$PREFIX/bun/node_modules/.bin:$PATH" \
-      sh -s -- 0.9.4
+  env PRIME_AGENT_RUST_PREFIX="$PREFIX/prime" PRIME_AGENT_VERSION=0.10.2 sh
 
 PI_DISH_REAL_OMP_BIN="$PREFIX/omp/bin/omp" \
 PI_DISH_REAL_PRIME_BIN="$PREFIX/prime/bin/prime-agent" \
@@ -1186,15 +1185,20 @@ requires both sets of paths. The output reports the actual CLI versions.
 
 The canary covers real wrapper registration, model/command discovery, a live
 streamed turn and persisted transcript, canonical history routes, OMP live
-and inactive tree capability checks, owned-pane close and resume, plus Prime's
-worker/client split, idle/busy root close, another root surviving and answering,
-close after client exit, manual-close refusal, and a persisted turn after
-resume. The OMP path also checks that fast mode sends `service_tier: "priority"`
+and inactive tree capability checks, and owned-pane close and resume. For
+Prime it covers the daemon transport: managed launch, model/thinking/rename,
+a streamed turn, a held turn whose queued follow-up appears in the SSE
+`queue_update` and is cancelled through the queue route, abort, tree read,
+same-pane restart with a new agent and a preserved transcript, another root
+surviving and answering, close proven against the isolated daemon roster and
+the removed pane, resume plus a persisted post-resume turn, and a manually
+started TUI on the same socket appearing as an uncloseable but promptable
+row. The OMP path also checks that fast mode sends `service_tier: "priority"`
 to the local provider when enabled and stops sending it when disabled; it was
-verified with OMP 18.5.0 on 2026-10-04. Prime 0.9.4 close/resume and idle/busy
-same-pane restart were verified on 2026-09-10. Both remain opt-in checks requiring
-their own installations. See [docs/prime-agent.md](docs/prime-agent.md)
-for Prime's verified coverage and outstanding gaps.
+verified with OMP 18.5.0 on 2026-10-04. Prime 0.10.2's daemon protocol was
+verified live on 2026-11-03; the canary exercises the full transport. Both
+remain opt-in checks requiring their own installations. See [docs/prime-agent.md](docs/prime-agent.md) for Prime's
+verified coverage and outstanding gaps.
 
 Start with [AGENTS.md](AGENTS.md) for contributor commands and invariants.
 [CLAUDE.md](CLAUDE.md) documents the architecture in detail, and

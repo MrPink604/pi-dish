@@ -6,20 +6,23 @@ Load exactly one wrapper in the host's extension configuration:
 
 * Pi: `--extension /path/to/pi-dish/extensions/pi-dish-bridge/index.ts`
 * OMP: `--extension /path/to/pi-dish/extensions/pi-dish-bridge-omp/index.ts`
-* Prime: `--extension /path/to/pi-dish/extensions/pi-dish-bridge-prime/index.ts`
 
-The OMP and Prime wrappers use only the public extension API and require no
-pi-dish RPC process. They intentionally do not expose queue inspection or
-queue cancellation. Pi retains its private, feature-detected queue integration.
+The OMP wrapper uses only the public extension API and requires no pi-dish
+RPC process. It intentionally does not expose queue inspection or queue
+cancellation. Pi retains its private, feature-detected queue integration.
 
-For a managed OMP/Prime launch, pi-dish generates a tiny per-launch module in
+Prime Agent 0.10+ is a native Rust binary with no TypeScript extension
+loader, so there is no Prime wrapper. pi-dish controls Prime sessions as a
+client of Prime's resident daemon instead; see
+[docs/prime-agent.md](../../docs/prime-agent.md).
+
+For a managed OMP launch, pi-dish generates a tiny per-launch module in
 `~/.pi/dish/launch-wrappers/`. It imports the wrapper above and embeds the
 correlation token instead of relying on inherited environment variables. The
-file is retained because Prime's resident worker can reload or recover the
-extension after its original tmux client is gone. For OMP, the generated module
-also imports `@oh-my-pi/pi-ai` and passes it to the wrapper. OMP resolves that
-package only for a literal specifier inside the importing extension's own
-directory tree. Remote `/login` uses the package to list providers.
+generated module also imports `@oh-my-pi/pi-ai` and passes it to the wrapper.
+OMP resolves that package only for a literal specifier inside the importing
+extension's own directory tree. Remote `/login` uses the package to list
+providers.
 
 The bridge forwards a *subset* of pi's `ctx.ui` surface to web clients. The
 TUI renders everything either way, so an incompatible call is **silently
@@ -129,7 +132,7 @@ delivered. `send-observer.ts` wraps the host `AgentSession.sendUserMessage()`
 (patched by `pi-private.ts` and the OMP `native-state.ts`); the core waits up to
 10 s for agent/turn start, pre-prompt compaction, or the call to settle, and
 returns a refusal as the prompt's error. The web composer then restores the
-prompt text. Prime, which has no captured session, keeps the public result.
+prompt text.
 
 Remote `/login` (`login.ts`) drives the host's own sign-in: Pi's private
 `modelRegistry.runtime` login (`pi-login.ts`) or OMP's

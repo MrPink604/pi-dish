@@ -185,12 +185,12 @@ test('peer-session CLI reports the canonical route for an alternative registry e
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const registry = path.join(home, '.pi', 'dish', 'sessions');
   fs.mkdirSync(registry, { recursive: true });
-  fs.writeFileSync(path.join(registry, 'prime-worker.json'), JSON.stringify({
+  fs.writeFileSync(path.join(registry, 'omp-worker.json'), JSON.stringify({
     protocolVersion: 2,
-    wrapper: { harnessId: 'prime' },
-    harnessId: 'prime',
-    nativeSessionId: 'prime-native',
-    sessionId: 'prime-native',
+    wrapper: { harnessId: 'omp' },
+    harnessId: 'omp',
+    nativeSessionId: 'omp-native',
+    sessionId: 'omp-native',
     pid: process.pid,
     cwd: process.cwd(),
     updatedAt: new Date().toISOString(),
@@ -198,7 +198,7 @@ test('peer-session CLI reports the canonical route for an alternative registry e
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
   delete env.PI_DISH_SESSION_ID;
   const result = await execFileAsync(process.execPath, [cli, 'session'], { env });
-  assert.equal(result.stdout.trim(), encodeSessionKey('prime', checkedNativeId('prime-native')));
+  assert.equal(result.stdout.trim(), encodeSessionKey('omp', checkedNativeId('omp-native')));
 });
 test('peer-session CLI attach command lists active tmux entries with --json', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-session-attach-'));

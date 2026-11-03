@@ -17,13 +17,13 @@ import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
 import net = require('node:net');
+import { setTimeout as delay } from 'node:timers/promises';
 import { execFileSync } from 'node:child_process';
 const { encodeSessionKey, VERSION: SESSION_KEY_VERSION }: typeof import('../lib/session-key') = require('../lib/session-key');
 const { privateRootPath }: typeof import('../lib/private-sessions') = require('../lib/private-sessions');
 const { createLineSplitter }: typeof import('../lib/line-splitter') = require('../lib/line-splitter');
-const { processIdentityAlive }: typeof import('../lib/process-identity') = require('../lib/process-identity');
 import type { ProcessIdentity } from '../lib/contracts.js';
-import type { PaneProcessState, SpawnPlacement } from '../lib/tmux.js';
+import type { PaneProcessState } from '../lib/tmux.js';
 
 function processEvidence(value: unknown): ProcessIdentity {
   const evidence = record(value);
@@ -31,19 +31,6 @@ function processEvidence(value: unknown): ProcessIdentity {
     throw new Error('Expected process identity evidence');
   }
   return { pid: evidence.pid, startTime: evidence.startTime };
-}
-
-function placement(value: TestRecord): SpawnPlacement {
-  if (typeof value.socket !== 'string' || typeof value.paneId !== 'string') {
-    throw new Error('Expected tmux spawn placement');
-  }
-  return { ...value, socket: value.socket, paneId: value.paneId };
-}
-function recordablePlacement(value: SpawnPlacement) {
-  return {
-    ...value,
-    paneProcess: value.paneProcess == null ? undefined : processEvidence(value.paneProcess),
-  };
 }
 
 // Short temp dirs — Unix socket paths have a ~108 char limit.
@@ -56,7 +43,6 @@ process.env.PORT = '0';
 const TMUX_SOCKET = path.join(tmuxTmp, 's');
 // listServers probes every socket in TMUX_TMPDIR with tmux's binary protocol.
 // Keep the JSON supervisor outside that discovery root, like a separate service.
-process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET = path.join(tmpHome, 'prime.sock');
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-pi.js');
 const PRUNE_DRIVER = path.join(__dirname, 'fixtures', 'tmux-prune-driver.js');
 const SURVIVOR_HOST = path.join(__dirname, 'fixtures', 'tmux-survivor-host.js');
@@ -87,48 +73,72 @@ const bridgeRegistry: typeof import('../lib/bridge-session') = require('../lib/b
 const sessionOwnership: typeof import('../lib/session-ownership') = require('../lib/session-ownership');
 const sessionFiles: typeof import('../lib/session-files') = require('../lib/session-files');
 
+// Prime 0.10's TUI is a client of a resident daemon. This fake daemon owns the
+// roster: the fixture's prime mode registers a root over this socket (cwd plus
+// session file), pi-dish lists/attaches/stops through the same protocol, and a
+// kill drops the agent while the client process keeps running.
+process.env.PRIME_AGENT_DAEMON_SOCKET = path.join(tmpHome, 'prime.sock');
+process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET = process.env.PRIME_AGENT_DAEMON_SOCKET;
+
+let primeRows: TestRecord[] = [];
+let primeRowSeq = 0;
 let primeRosterTransform: (rows: TestRecord[]) => unknown = rows => rows;
 let primeStopMode = 'stop';
 let primeProtocolVersion = 7;
 let primeAfterList: () => void = () => {};
 let primeAfterKill: () => void = () => {};
+let primeAfterRegister: () => void = () => {};
+let primeKillResponseDelayMs = 0;
 const primeKills: unknown[] = [];
+const primeSessionCommands: TestRecord[] = [];
 let primeConnections = 0;
-function primeClaims(): TestRecord[] {
-  const dir = path.join(tmpHome, '.pi', 'dish', 'sessions');
-  return fs.readdirSync(dir).flatMap(name => {
-    try {
-      const claim = record(JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')));
-      return claim.harnessId === 'prime' && processIdentityAlive(claim) ? [claim] : [];
-    } catch { return []; }
-  });
+
+function primeRow(activeSessionId: unknown): TestRecord | null {
+  return primeRows.find(row => row.activeSessionId === activeSessionId) ?? null;
 }
+
 const primeDaemon = net.createServer(socket => {
   primeConnections++;
   socket.on('error', () => {});
-  socket.write(JSON.stringify({ type: 'daemon_hello', protocol: { name: 'prime-agent.daemon', version: primeProtocolVersion } }) + '\n');
+  const write = (message: TestRecord) => { try { socket.write(JSON.stringify(message) + '\n'); } catch {} };
+  write({ type: 'daemon_hello', protocol: { name: 'prime-agent.daemon', version: primeProtocolVersion }, serverCapabilities: ['supervisor', 'sessions', 'events'] });
   socket.on('data', createLineSplitter((line: string) => {
     const envelope = record(JSON.parse(line));
     assert.equal(envelope.type, 'command');
     assert.deepEqual(envelope.protocol, { name: 'prime-agent.daemon', version: 7 });
     const command = record(envelope.command);
-    const response: TestRecord = { id: envelope.id, type: 'response', command: command.type, success: true };
-    if (command.type === 'list') {
-      response.data = { sessions: primeRosterTransform(primeClaims().map(claim => ({
-        activeSessionId: `prime-${claim.spawnToken}`, sessionFile: claim.sessionFile,
-        workerPid: claim.pid, runtimeKind: 'top-level',
-      }))) };
-      primeAfterList();
-    } else {
-      assert.equal(command.type, 'kill', 'never use daemon shutdown');
-      primeKills.push(command.activeSessionId);
-      const claim = primeClaims().find(entry => `prime-${entry.spawnToken}` === command.activeSessionId);
-      assert.ok(claim, 'stop targets an exact live root');
-      if (primeStopMode !== 'hang') process.kill(Number(claim.pid), 'SIGTERM');
-      primeAfterKill();
-      if (primeStopMode === 'lost-response') { socket.destroy(); return; }
-    }
-    socket.write(JSON.stringify(response) + '\n');
+    const response: TestRecord = { id: envelope.id, type: 'response', command: command.type, success: true, data: {} };
+    void (async () => {
+      if (command.type === 'register') {
+        primeRowSeq++;
+        const row: TestRecord = {
+          activeSessionId: `prime-root-${primeRowSeq}`, workerInstanceId: `prime-worker-${primeRowSeq}`,
+          sessionId: command.sessionId, sessionFile: command.sessionFile, cwd: command.cwd,
+          workerPid: command.workerPid, workerStartTime: command.startTime,
+          runtimeKind: 'top-level', lifecycle: 'live', isStreaming: false, isCompacting: false, attachedClients: 0,
+          sessionName: `Prime ${primeRowSeq}`, model: { provider: 'anthropic', id: 'claude-opus-4' },
+          sessionActions: { steering: [], followUps: [] },
+        };
+        primeRows.push(row);
+        response.data = { activeSessionId: row.activeSessionId, workerInstanceId: row.workerInstanceId };
+        primeAfterRegister();
+      } else if (command.type === 'list') {
+        response.data = { sessions: primeRosterTransform([...primeRows]) };
+        primeAfterList();
+      } else if (command.type === 'attach') {
+        response.data = { snapshot: { state: { isStreaming: false, isCompacting: false, sessionActions: { steering: [], followUps: [] } } } };
+      } else if (command.type === 'kill') {
+        primeKills.push(command.activeSessionId);
+        const index = primeRows.findIndex(row => row.activeSessionId === command.activeSessionId);
+        assert.ok(index >= 0, 'stop targets an exact live root');
+        if (primeStopMode !== 'hang') primeRows.splice(index, 1);
+        if (primeKillResponseDelayMs) await delay(primeKillResponseDelayMs);
+        primeAfterKill();
+        if (primeStopMode === 'lost-response') { socket.destroy(); return; }
+      } else if (command.activeSessionId) primeSessionCommands.push(command);
+      // Session commands (prompt/get_state/…) succeed against the live root.
+      write(response);
+    })().catch(error => write({ ...response, success: false, error: String(error) }));
   }));
 });
 
@@ -136,7 +146,7 @@ let base = '';
 test.before(async () => {
   await new Promise<void>((resolve, reject) => {
     primeDaemon.once('error', reject);
-    primeDaemon.listen(process.env.PI_FIXTURE_PRIME_DAEMON_SOCKET, resolve);
+    primeDaemon.listen(process.env.PRIME_AGENT_DAEMON_SOCKET, resolve);
   });
   if (!server.listening) await new Promise<void>(resolve => server.once('listening', resolve));
   const address = server.address();
@@ -597,212 +607,270 @@ test('alternate launch rejects incomplete claims and mismatched socket hello ide
   }
 });
 
-test('Prime close stops the owned worker and pane, refusing a replaced pane first', { skip: !tmuxOk }, async () => {
+function primeAgent(spawn: TestRecord): TestRecord {
+  const agent = record(present(spawn.primeAgent));
+  for (const field of ['daemonSocket', 'activeSessionId', 'workerInstanceId', 'sessionFile']) {
+    assert.equal(typeof agent[field], 'string', `Prime launch lacks ${field}`);
+  }
+  return agent;
+}
+
+function recordPrimeSpawn(id: string, spawn: TestRecord, agent: TestRecord, paneProcess = spawn.paneProcess) {
+  tmux.recordSpawn(id, {
+    socket: String(spawn.socket), paneId: String(spawn.paneId),
+    paneProcess: processEvidence(paneProcess), primeAgent: agent,
+  });
+}
+
+function primeSessionId(agent: TestRecord): string {
+  return path.basename(String(agent.sessionFile), '.jsonl');
+}
+
+/**
+ * Model a Prime TUI `/new` that happened while pi-dish was down: the daemon
+ * keeps the same worker (`activeSessionId`) but reports a new transcript and
+ * JSONL identity, so only the recorded spawn route key is stale.
+ */
+function switchPrimeSession(row: TestRecord): string {
+  const switchedNative = '2026-07-09T00-00-00-switched1';
+  const sessionFile = path.join(tmpHome, '.prime', 'agent', 'sessions', `${switchedNative}.jsonl`);
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(sessionFile, `${JSON.stringify({ type: 'session', version: 3, id: switchedNative, cwd: tmpHome })}\n`);
+  row.sessionId = switchedNative;
+  row.sessionFile = sessionFile;
+  return encodeSessionKey('prime', checkedNativeId(switchedNative));
+}
+
+test('Prime managed launch identifies the daemon root agent and records ownership', { skip: !tmuxOk }, async t => {
   const created = await post('/api/sessions/new', {
     harness: 'prime',
     target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
   });
   assert.equal(created.status, 200, JSON.stringify(created.body));
-  assert.ok(text(created.body.id).startsWith(SESSION_KEY_VERSION));
-  const spawn = present(tmux.getSpawn(text(created.body.id)));
-  if (typeof spawn.wrapperPath !== 'string') throw new Error('Prime launch lacks its wrapper path');
-  assert.ok(fs.existsSync(spawn.wrapperPath),
-    'Prime launch retains its tokenized wrapper for resident-worker recovery');
+  const id = text(created.body.id);
+  assert.ok(id.startsWith(SESSION_KEY_VERSION), 'Prime routes are encoded session keys');
+  const spawn = present(tmux.getSpawn(id));
+  const agent = primeAgent(spawn);
+  const row = present(primeRow(agent.activeSessionId));
   const paneProcess = processEvidence(spawn.paneProcess);
-  assert.ok(paneProcess.pid && paneProcess.startTime,
-    'Prime client ownership records an exact pane process identity');
+  t.after(async () => {
+    primeRows = [];
+    if (await tmux.paneExists(String(spawn.socket), String(spawn.paneId))) {
+      await tmux.killPane(String(spawn.socket), String(spawn.paneId));
+    }
+  });
 
-  const regDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
-  const regFile = fs.readdirSync(regDir).find(name => name.startsWith('prime-') &&
-    JSON.parse(fs.readFileSync(path.join(regDir, name), 'utf8')).spawnToken);
-  assert.ok(regFile, 'Prime worker registry exists');
-  const registry = record(JSON.parse(fs.readFileSync(path.join(regDir, regFile), 'utf8')));
-  const registryProcess = processEvidence(registry);
-  const panePid = Number(tmuxCmd(['display-message', '-p', '-t', spawn.paneId, '#{pane_pid}']).trim());
-  assert.notEqual(registryProcess.pid, panePid, 'registry PID belongs to the resident worker, not the client pane');
+  assert.equal(spawn.spawnToken, undefined, 'Prime launches carry no bridge spawn token');
+  assert.equal(spawn.wrapperPath, undefined, 'Prime launches materialize no wrapper');
+  assert.equal(path.resolve(String(agent.daemonSocket)), path.resolve(String(process.env.PRIME_AGENT_DAEMON_SOCKET)));
+  assert.equal(row.sessionFile, agent.sessionFile, 'the recorded root owns the launch transcript');
+  assert.equal(path.resolve(String(row.cwd)), path.resolve(tmpHome), 'the registered root reports the launch directory');
+  assert.equal(row.workerInstanceId, agent.workerInstanceId);
+  assert.equal(paneProcess.pid, row.workerPid, 'the recorded pane process is the TUI client that registered');
+  assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), true);
 
   const list = await get('/api/sessions?active=1');
-  const session = records(list.body.active).find((entry) => entry.id === created.body.id);
-  assert.equal(session?.closeMode, 'owned-agent');
-  assert.equal(record(session?.capabilities).close, true);
-  assert.equal(record(session?.capabilities).restart, true);
-
-  try {
-    tmux.recordSpawn(text(created.body.id), {
-      ...spawn,
-      paneProcess: { ...paneProcess, startTime: '0' },
-    });
-    const refused = await post(`/api/sessions/${encodeURIComponent(text(created.body.id))}/close`);
-    assert.equal(refused.status, 409, JSON.stringify(refused.body));
-    assert.match(text(refused.body.error), /been replaced/i);
-    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true,
-      'a mismatched ownership record cannot kill the current pane');
-    assert.doesNotThrow(() => process.kill(registryProcess.pid, 0), 'resident worker remains alive after refused detach');
-
-    // Restore the exact accepted ownership record for the successful close.
-    tmux.recordSpawn(text(created.body.id), recordablePlacement(spawn));
-    const closed = await post(`/api/sessions/${encodeURIComponent(text(created.body.id))}/close`);
-    assert.equal(closed.status, 200, JSON.stringify(closed.body));
-    assert.deepEqual(closed.body, { success: true });
-    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), false);
-    assert.equal(processIdentityAlive(registry), false, 'worker exits before close responds');
-    assert.equal(tmux.getSpawn(text(created.body.id)), null, 'client ownership record was removed');
-  } finally {
-    try { process.kill(registryProcess.pid, 'SIGTERM'); } catch {}
-    try { fs.unlinkSync(path.join(regDir, regFile)); } catch {}
-  }
+  assert.equal(records(list.body.active).find(entry => entry.id === id)?.closeMode, 'owned-agent');
 });
 
-test('Prime close also stops a worker in the owned client process tree', { skip: !tmuxOk }, async () => {
-  process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_PRIME_DESCENDANT_WORKER=1 ${process.execPath} ${FIXTURE}`;
-  let spawn: TestRecord | null = null;
-  let registry: TestRecord | null = null;
-  let registryPath: string | null = null;
-  try {
-    const created = await post('/api/sessions/new', {
-      harness: 'prime',
-      target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
-    });
-    assert.equal(created.status, 200, JSON.stringify(created.body));
-    spawn = record(tmux.getSpawn(text(created.body.id)));
-    const regDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
-    const regFile = fs.readdirSync(regDir).find(name => {
-      const entry = record(JSON.parse(fs.readFileSync(path.join(regDir, name), 'utf8')));
-      return entry.harnessId === 'prime' && entry.spawnToken === spawn?.spawnToken;
-    });
-    assert.ok(regFile, 'descendant Prime worker registry exists');
-    registryPath = path.join(regDir, regFile);
-    registry = record(JSON.parse(fs.readFileSync(registryPath, 'utf8')));
-
-    const closed = await post(`/api/sessions/${encodeURIComponent(text(created.body.id))}/close`);
-    assert.equal(closed.status, 200, JSON.stringify(closed.body));
-    assert.equal(await tmux.paneExists(text(spawn.socket), text(spawn.paneId)), false);
-    assert.equal(processIdentityAlive(registry), false);
-    assert.equal(tmux.getSpawn(text(created.body.id)), null);
-  } finally {
-    process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime ${process.execPath} ${FIXTURE}`;
-    if (spawn) {
-      try { await tmux.killPane(text(spawn.socket), text(spawn.paneId)); } catch {}
-    }
-    if (registry?.pid) {
-      try { process.kill(Number(registry.pid), 'SIGTERM'); } catch {}
-    }
-    if (registryPath) fs.rmSync(registryPath, { force: true });
-  }
-});
-
-async function primeCloseFixture(t: test.TestContext) {
+test('Prime close stops the daemon root through kill and removes the client pane', { skip: !tmuxOk }, async t => {
   const created = await post('/api/sessions/new', {
     harness: 'prime', target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
   });
   assert.equal(created.status, 200, JSON.stringify(created.body));
   const id = text(created.body.id);
   const spawn = present(tmux.getSpawn(id));
-  const claim = present(primeClaims().find(entry => entry.spawnToken === spawn.spawnToken));
+  const agent = primeAgent(spawn);
+  t.after(async () => {
+    primeRows = [];
+    if (await tmux.paneExists(String(spawn.socket), String(spawn.paneId))) {
+      await tmux.killPane(String(spawn.socket), String(spawn.paneId));
+    }
+  });
+
+  const killsBefore = primeKills.length;
+  const closed = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.deepEqual(closed.body, { success: true });
+  assert.deepEqual(primeKills.slice(killsBefore), [agent.activeSessionId], 'close stops the exact daemon root');
+  assert.equal(primeRow(agent.activeSessionId), null, 'the roster no longer lists the stopped agent');
+  assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), false, 'the client pane was removed');
+  assert.equal(tmux.getSpawn(id), null, 'client ownership record was removed');
+});
+
+test('Prime close refuses a manual (unrecorded) agent', { skip: !tmuxOk }, async t => {
+  const created = await post('/api/sessions/new', {
+    harness: 'prime', target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const id = text(created.body.id);
+  const spawn = present(tmux.getSpawn(id));
+  const agent = primeAgent(spawn);
+  t.after(async () => {
+    primeRows = [];
+    if (await tmux.paneExists(String(spawn.socket), String(spawn.paneId))) {
+      await tmux.killPane(String(spawn.socket), String(spawn.paneId));
+    }
+  });
+
+  tmux.removeSpawn(id, spawn);
+  const killsBefore = primeKills.length;
+  const refused = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
+  assert.match(text(refused.body.error), /not launched by pi-dish/i);
+  assert.equal(primeKills.length, killsBefore, 'no daemon kill was sent');
+  assert.ok(primeRow(agent.activeSessionId), 'the agent keeps running');
+  assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), true);
+  assert.notEqual(sessionRecovery.getControl('prime', primeSessionId(agent)).closed, true,
+    'refused close rolls back recovery intent');
+});
+
+test('Prime close refuses a replaced client pane', { skip: !tmuxOk }, async t => {
+  const created = await post('/api/sessions/new', {
+    harness: 'prime', target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const id = text(created.body.id);
+  const spawn = present(tmux.getSpawn(id));
+  const agent = primeAgent(spawn);
+  t.after(async () => {
+    primeRows = [];
+    if (await tmux.paneExists(String(spawn.socket), String(spawn.paneId))) {
+      await tmux.killPane(String(spawn.socket), String(spawn.paneId));
+    }
+  });
+
+  recordPrimeSpawn(id, spawn, agent, { ...processEvidence(spawn.paneProcess), startTime: '0' });
+  const killsBefore = primeKills.length;
+  const refused = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
+  assert.match(text(refused.body.error), /been replaced/i);
+  assert.equal(primeKills.length, killsBefore, 'a mismatched ownership record cannot stop the agent');
+  assert.ok(primeRow(agent.activeSessionId), 'the agent remains alive after refused close');
+  assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), true,
+    'a mismatched ownership record cannot kill the current pane');
+  assert.notEqual(sessionRecovery.getControl('prime', primeSessionId(agent)).closed, true);
+});
+
+async function primeLaunchFixture(t: test.TestContext) {
+  const created = await post('/api/sessions/new', {
+    harness: 'prime', target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const id = text(created.body.id);
+  const spawn = present(tmux.getSpawn(id));
+  const agent = primeAgent(spawn);
+  const row = present(primeRow(agent.activeSessionId));
   t.after(async () => {
     primeRosterTransform = rows => rows;
     primeAfterList = () => {};
     primeAfterKill = () => {};
+    primeAfterRegister = () => {};
+    primeKillResponseDelayMs = 0;
     primeStopMode = 'stop';
     primeProtocolVersion = 7;
-    for (const entry of primeClaims().filter(entry => entry.nativeSessionId === claim.nativeSessionId)) {
-      process.kill(Number(entry.pid), 'SIGTERM');
-    }
-    if (processIdentityAlive(claim)) process.kill(Number(claim.pid), 'SIGTERM');
-    if (await tmux.paneExists(text(spawn.socket), text(spawn.paneId))) {
-      await tmux.killPane(text(spawn.socket), text(spawn.paneId));
+    primeRows = [];
+    if (await tmux.paneExists(String(spawn.socket), String(spawn.paneId))) {
+      await tmux.killPane(String(spawn.socket), String(spawn.paneId));
     }
   });
-  return { id, spawn, claim, close: () => post(`/api/sessions/${encodeURIComponent(id)}/close`) };
+  return { id, spawn, agent, row };
 }
 
-test('Prime restart replaces the worker in the same pane and transcript without stopping its peer', { skip: !tmuxOk }, async t => {
-  const { id, spawn, claim } = await primeCloseFixture(t);
-  const peer = await primeCloseFixture(t);
-  const location = present(await tmux.paneLocation(spawn.socket, spawn.paneId));
-  const transcript = fs.readFileSync(text(claim.sessionFile), 'utf8');
+test('Prime restart replaces the daemon agent in the same pane and transcript without stopping its peer', { skip: !tmuxOk }, async t => {
+  const { id, spawn, agent, row } = await primeLaunchFixture(t);
+  const peer = await primeLaunchFixture(t);
+  const location = present(await tmux.paneLocation(String(spawn.socket), String(spawn.paneId)));
+  const transcript = fs.readFileSync(String(agent.sessionFile), 'utf8');
   const killsBefore = primeKills.length;
   const restart = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
   assert.equal(restart.status, 200, JSON.stringify(restart.body));
   assert.deepEqual(restart.body, { success: true, id, placement: 'tmux', paneId: spawn.paneId });
-  assert.equal(processIdentityAlive(claim), false, 'old worker exited before success');
-  assert.equal(processIdentityAlive(peer.claim), true, 'other root remains alive');
-  assert.deepEqual(primeKills.slice(killsBefore), [`prime-${spawn.spawnToken}`]);
-  const replacement = present(tmux.getSpawn(id));
-  assert.equal(replacement.socket, spawn.socket);
-  assert.equal(replacement.paneId, spawn.paneId);
-  assert.notEqual(replacement.spawnToken, spawn.spawnToken);
-  assert.notEqual(processEvidence(replacement.paneProcess).pid, processEvidence(spawn.paneProcess).pid);
-  assert.deepEqual(await tmux.paneLocation(spawn.socket, spawn.paneId), location);
-  const worker = present(primeClaims().find(entry => entry.spawnToken === replacement.spawnToken));
-  assert.notEqual(worker.pid, claim.pid);
-  assert.equal(worker.sessionFile, claim.sessionFile);
-  assert.ok(Array.isArray(worker.launchArgs) && worker.launchArgs.includes('--resume'));
-  assert.equal(fs.readFileSync(text(claim.sessionFile), 'utf8'), transcript);
-  assert.notEqual(sessionRecovery.getControl('prime', text(claim.nativeSessionId)).closed, true);
+  assert.deepEqual(primeKills.slice(killsBefore), [agent.activeSessionId], 'the old root was stopped through the daemon');
+  assert.equal(primeRow(agent.activeSessionId), null, 'the old agent left the roster');
+  assert.ok(primeRow(peer.agent.activeSessionId), 'the other root remains alive');
+  const replacementSpawn = present(tmux.getSpawn(id));
+  const replacement = primeAgent(replacementSpawn);
+  assert.equal(replacementSpawn.socket, spawn.socket);
+  assert.equal(replacementSpawn.paneId, spawn.paneId, 'restart reuses the same pane');
+  assert.notEqual(replacement.activeSessionId, agent.activeSessionId);
+  assert.notEqual(replacement.workerInstanceId, agent.workerInstanceId);
+  assert.equal(replacement.sessionFile, agent.sessionFile, 'restart resumes the same transcript');
+  assert.notEqual(processEvidence(replacementSpawn.paneProcess).pid, processEvidence(spawn.paneProcess).pid);
+  assert.deepEqual(await tmux.paneLocation(String(spawn.socket), String(spawn.paneId)), location);
+  assert.ok(primeRow(replacement.activeSessionId), 'the replacement is listed in the roster');
+  assert.equal(fs.readFileSync(String(agent.sessionFile), 'utf8'), transcript);
+  assert.equal(await tmux.paneExists(String(peer.spawn.socket), String(peer.spawn.paneId)), true);
+  assert.notEqual(sessionRecovery.getControl('prime', text(row.sessionId)).closed, true,
+    'restart never retires recovery intent');
 });
 
-test('Prime restart rejects unowned, replaced and missing panes and changed supervisor ownership', { skip: !tmuxOk }, async t => {
-  const { id, spawn, claim } = await primeCloseFixture(t);
+test('Prime restart rejects unowned, replaced and drifted ownership', { skip: !tmuxOk }, async t => {
+  const { id, spawn, agent, row } = await primeLaunchFixture(t);
   const killsBefore = primeKills.length;
-  const refused = async () => {
+  const refused = async (pattern: RegExp, { paneAlive = true } = {}) => {
     const result = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
     assert.equal(result.status, 409, JSON.stringify(result.body));
-    assert.equal(primeKills.length, killsBefore);
-    assert.equal(processIdentityAlive(claim), true);
+    assert.match(text(result.body.error), pattern);
+    assert.equal(primeKills.length, killsBefore, 'no daemon kill was sent');
+    assert.ok(primeRow(agent.activeSessionId), 'the agent keeps running');
+    assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), paneAlive);
   };
   tmux.removeSpawn(id, spawn);
-  await refused();
-  tmux.recordSpawn(id, { ...spawn, paneProcess: { ...processEvidence(spawn.paneProcess), startTime: '0' } });
-  await refused();
-  tmux.recordSpawn(id, recordablePlacement(spawn));
-  primeRosterTransform = rows => rows.map(row => ({ ...row, workerPid: process.pid }));
-  await refused();
+  await refused(/launched into a tmux pane/i);
+  recordPrimeSpawn(id, spawn, agent, { ...processEvidence(spawn.paneProcess), startTime: '0' });
+  await refused(/no longer proves ownership/i);
+  recordPrimeSpawn(id, spawn, agent);
+  primeRosterTransform = rows => rows.map(entry => ({ ...entry, workerInstanceId: 'other-worker' }));
+  await refused(/no longer matches this live agent/i);
+  primeRosterTransform = rows => rows.map(entry => ({ ...entry, activeSessionId: 'another-root' }));
+  await refused(/no longer matches this live agent/i);
   primeRosterTransform = rows => rows;
-  primeAfterList = () => tmux.recordSpawn(id, { ...recordablePlacement(spawn), spawnToken: 'changed' });
-  await refused();
-  primeAfterList = () => {};
-  tmux.recordSpawn(id, recordablePlacement(spawn));
-  await tmux.killPane(spawn.socket, spawn.paneId);
-  await refused();
-  const row = present(records((await get('/api/sessions?active=1')).body.active).find(candidate => candidate.id === id));
-  assert.equal(record(row.capabilities).restart, false);
-  assert.equal(record(row.capabilities).close, true);
+  recordPrimeSpawn(id, spawn, { ...agent, activeSessionId: 'foreign-root' });
+  await refused(/no longer matches this live agent/i);
+  recordPrimeSpawn(id, spawn, agent);
+  await tmux.killPane(String(spawn.socket), String(spawn.paneId));
+  await refused(/no longer proves ownership/i, { paneAlive: false });
+  assert.notEqual(sessionRecovery.getControl('prime', text(row.sessionId)).closed, true,
+    'refused restarts never touch close intent');
 });
 
 for (const mode of ['lost-response', 'hang', 'replaced-pane']) {
   test(`Prime restart ${mode} never launches a replacement after an unproved stop or pane`, { skip: !tmuxOk }, async t => {
-    const { id, spawn, claim } = await primeCloseFixture(t);
+    const { id, spawn, agent, row } = await primeLaunchFixture(t);
     const oldTimeout = process.env.PI_DISH_CLOSE_TIMEOUT_MS;
     process.env.PI_DISH_CLOSE_TIMEOUT_MS = '300';
     t.after(() => {
       if (oldTimeout === undefined) delete process.env.PI_DISH_CLOSE_TIMEOUT_MS;
       else process.env.PI_DISH_CLOSE_TIMEOUT_MS = oldTimeout;
     });
-    if (mode === 'replaced-pane') primeAfterKill = () => { tmuxCmd(['respawn-pane', '-k', '-t', text(spawn.paneId), 'sleep 3600']); };
-    else primeStopMode = mode;
+    if (mode === 'replaced-pane') {
+      primeAfterKill = () => { tmuxCmd(['respawn-pane', '-k', '-t', String(spawn.paneId), 'sleep 3600']); };
+    } else primeStopMode = mode;
     const killsBefore = primeKills.length;
     const result = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
     assert.equal(result.status, 500, JSON.stringify(result.body));
-    assert.equal(primeKills.length, killsBefore + 1);
-    assert.equal(present(tmux.getSpawn(id)).spawnToken, spawn.spawnToken, 'no new launch');
-    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
-    if (mode === 'hang') assert.equal(processIdentityAlive(claim), true);
-    if (mode === 'replaced-pane') assert.equal(result.body.stopped, true);
-    assert.notEqual(sessionRecovery.getControl('prime', text(claim.nativeSessionId)).closed, true);
+    assert.equal(primeKills.length, killsBefore + 1, 'no retry of an indeterminate stop');
+    assert.equal(primeAgent(present(tmux.getSpawn(id))).activeSessionId, agent.activeSessionId, 'no new launch');
+    assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), true);
+    if (mode === 'hang') assert.ok(primeRow(agent.activeSessionId), 'no signal escalation');
+    if (mode === 'replaced-pane') {
+      assert.equal(result.body.stopped, true);
+      assert.match(text(result.body.error), /been replaced|process changed/i);
+    } else {
+      assert.match(text(result.body.error), mode === 'lost-response' ? /connection closed/i : /did not leave the daemon roster/i);
+    }
+    assert.notEqual(sessionRecovery.getControl('prime', text(row.sessionId)).closed, true);
   });
 }
 
-test('Prime restart excludes competing restart, close and resume requests while replacing its worker', { skip: !tmuxOk }, async t => {
-  const { id, spawn } = await primeCloseFixture(t);
-  const oldCommand = process.env.PI_DISH_PRIME_COMMAND;
-  process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_REGISTER_DELAY_MS=800 ${process.execPath} ${FIXTURE}`;
-  t.after(() => { process.env.PI_DISH_PRIME_COMMAND = oldCommand; });
-  let stopped: () => void = () => {};
-  const stopping = new Promise<void>(resolve => { stopped = resolve; });
-  primeAfterKill = stopped;
+test('Prime restart excludes competing restart, close and resume requests while replacing its agent', { skip: !tmuxOk }, async t => {
+  const { id, spawn, agent } = await primeLaunchFixture(t);
+  primeKillResponseDelayMs = 800;
+  const killsBefore = primeKills.length;
   const restart = post(`/api/sessions/${encodeURIComponent(id)}/restart`);
-  await stopping;
+  for (let i = 0; i < 300 && primeKills.length === killsBefore; i++) await delay(10);
+  assert.equal(primeKills.length, killsBefore + 1, 'restart reached the daemon stop');
   for (const action of ['restart', 'close', 'resume']) {
     const result = await post(`/api/sessions/${encodeURIComponent(id)}/${action}`);
     assert.equal(result.status, 409, JSON.stringify(result.body));
@@ -810,16 +878,16 @@ test('Prime restart excludes competing restart, close and resume requests while 
   }
   const result = await restart;
   assert.equal(result.status, 200, JSON.stringify(result.body));
-  assert.notEqual(present(tmux.getSpawn(id)).spawnToken, spawn.spawnToken);
+  assert.notEqual(primeAgent(present(tmux.getSpawn(id))).activeSessionId, agent.activeSessionId);
 });
 
 test('Prime failed replacement stays inspectable and blocks a second writer even after its client exits', { skip: !tmuxOk }, async t => {
-  const { id, spawn, claim } = await primeCloseFixture(t);
+  const { id, spawn, agent } = await primeLaunchFixture(t);
   const oldCommand = process.env.PI_DISH_PRIME_COMMAND;
   const oldTimeout = process.env.PI_DISH_SPAWN_TIMEOUT_MS;
-  // Only the replacement has a mismatched live hello; keep its worker
-  // observable for fixture teardown while exercising registration failure.
-  process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_HELLO_MISMATCH=1 ${process.execPath} ${FIXTURE}`;
+  // The replacement client never registers a root: the launch must report an
+  // uncertain replacement instead of letting a second writer start.
+  process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_PRIME_NO_REGISTER=1 ${process.execPath} ${FIXTURE}`;
   process.env.PI_DISH_SPAWN_TIMEOUT_MS = '1500';
   t.after(() => {
     process.env.PI_DISH_PRIME_COMMAND = oldCommand;
@@ -830,128 +898,119 @@ test('Prime failed replacement stays inspectable and blocks a second writer even
   assert.equal(result.status, 500, JSON.stringify(result.body));
   assert.equal(result.body.stopped, true);
   assert.match(text(result.body.error), /left open for inspection/);
-  assert.equal(processIdentityAlive(claim), false);
-  assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
-  // Remove its disposable claim to model a bridge-less resident worker.
-  const worker = primeClaims().find(entry => entry.nativeSessionId === claim.nativeSessionId);
-  assert.ok(worker);
-  const regDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
-  for (const name of fs.readdirSync(regDir)) {
-    if (JSON.parse(fs.readFileSync(path.join(regDir, name), 'utf8')).pid === worker.pid) fs.unlinkSync(path.join(regDir, name));
-  }
-  t.after(() => { if (processIdentityAlive(worker)) process.kill(Number(worker.pid), 'SIGTERM'); });
-  await tmux.killPane(spawn.socket, spawn.paneId);
+  assert.equal(primeRow(agent.activeSessionId), null, 'the old agent was stopped');
+  assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), true);
+  await tmux.killPane(String(spawn.socket), String(spawn.paneId));
   const retry = await post(`/api/sessions/${encodeURIComponent(id)}/resume`);
   assert.equal(retry.status, 409, JSON.stringify(retry.body));
   assert.match(text(retry.body.error), /previous Prime restart/);
-  assert.equal(processIdentityAlive(worker), true, 'no signal escalation');
 });
 
-for (const mismatch of ['session-id', 'session-file', 'client-pane']) {
-  test(`Prime restart rejects replacement ${mismatch} drift`, { skip: !tmuxOk }, async t => {
-    const { id, spawn, claim } = await primeCloseFixture(t);
-    const oldCommand = process.env.PI_DISH_PRIME_COMMAND;
-    const originalProbe = tmux.paneProcessIdentity;
-    t.after(() => {
-      process.env.PI_DISH_PRIME_COMMAND = oldCommand;
+test('Prime restart rejects a replacement whose client pane changed', { skip: !tmuxOk }, async t => {
+  const { id, spawn, agent } = await primeLaunchFixture(t);
+  const originalProbe = tmux.paneProcessIdentity;
+  t.after(() => { tmux.paneProcessIdentity = originalProbe; });
+  tmux.paneProcessIdentity = async (socket: string, paneId: string) => {
+    // The spawn record is dropped right before identification; swap the client
+    // once the replacement root is already listed.
+    if (paneId === spawn.paneId && socket === spawn.socket && !tmux.getSpawn(id)
+        && primeRows.some(row => row.sessionFile === agent.sessionFile && row.activeSessionId !== agent.activeSessionId)) {
       tmux.paneProcessIdentity = originalProbe;
-      for (const entry of primeClaims().filter(entry => text(entry.sessionFile).includes('/wrong-restart/'))) {
-        process.kill(Number(entry.pid), 'SIGTERM');
-      }
-    });
-    if (mismatch === 'client-pane') {
-      tmux.paneProcessIdentity = async (socket: string, paneId: string) => {
-        // The initial post-respawn snapshot still has the old spawn record.
-        // Replace the client only when the new worker is ready to register.
-        if (paneId === spawn.paneId && socket === spawn.socket && !tmux.getSpawn(id)
-            && primeClaims().some(entry => entry.nativeSessionId === claim.nativeSessionId)) {
-          tmux.paneProcessIdentity = originalProbe;
-          tmuxCmd(['respawn-pane', '-k', '-t', paneId, 'sleep 3600']);
-        }
-        return originalProbe(socket, paneId);
-      };
-    } else {
-      const wrongFile = path.join(tmpHome, 'wrong-restart', mismatch === 'session-id' ? 'wrong-id.jsonl' : path.basename(text(claim.sessionFile)));
-      process.env.PI_DISH_PRIME_COMMAND = `${oldCommand} --resume ${wrongFile}`;
+      tmuxCmd(['respawn-pane', '-k', '-t', String(paneId), 'sleep 3600']);
     }
-    const result = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
-    assert.equal(result.status, 500, JSON.stringify(result.body));
-    assert.equal(result.body.stopped, true);
-    assert.match(text(result.body.error), mismatch === 'client-pane' ? /client pane changed/ : /original transcript/);
-    assert.equal(tmux.getSpawn(id), null, 'unproved replacement receives no placement authority');
-    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'leave client for inspection');
-    assert.equal(processIdentityAlive(claim), false);
-  });
-}
+    return originalProbe(socket, paneId);
+  };
+  const result = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
+  assert.equal(result.status, 500, JSON.stringify(result.body));
+  assert.equal(result.body.stopped, true);
+  assert.match(text(result.body.error), /client pane changed/);
+  assert.equal(tmux.getSpawn(id), null, 'unproved replacement receives no placement authority');
+  assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), true, 'leave client for inspection');
+  assert.equal(primeRow(agent.activeSessionId), null);
+});
 
-test('Prime close rejects unowned launches, changed tokens, ambiguous roots and changed roster identities', { skip: !tmuxOk }, async t => {
-  const fixture = await primeCloseFixture(t);
-  const { id, spawn, claim, close } = fixture;
+test('Prime close follows a daemon-side /new that happened while pi-dish was down', { skip: !tmuxOk }, async t => {
+  const { id, spawn, agent, row } = await primeLaunchFixture(t);
+  const switchedId = switchPrimeSession(row);
   const killsBefore = primeKills.length;
-  const control = () => sessionRecovery.getControl('prime', text(claim.nativeSessionId));
+  const closed = await post(`/api/sessions/${encodeURIComponent(switchedId)}/close`);
+  assert.equal(closed.status, 200, JSON.stringify(closed.body));
+  assert.deepEqual(primeKills.slice(killsBefore), [agent.activeSessionId], 'the surviving worker is still the owned one');
+  assert.equal(primeRow(agent.activeSessionId), null);
+  assert.equal(tmux.getSpawn(switchedId), null);
+  assert.equal(tmux.getSpawn(id), null, 'the stale route key was re-keyed, not left behind');
+  assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), false);
+});
+
+test('Prime restart follows a moved route and resumes its current transcript', { skip: !tmuxOk }, async t => {
+  const { id, spawn, agent, row } = await primeLaunchFixture(t);
+  const switchedId = switchPrimeSession(row);
+  const transcript = fs.readFileSync(String(row.sessionFile), 'utf8');
+  const killsBefore = primeKills.length;
+  const restart = await post(`/api/sessions/${encodeURIComponent(switchedId)}/restart`);
+  assert.equal(restart.status, 200, JSON.stringify(restart.body));
+  assert.equal(restart.body.id, switchedId, 'the replacement keeps the moved route');
+  assert.deepEqual(primeKills.slice(killsBefore), [agent.activeSessionId]);
+  const replacement = primeAgent(present(tmux.getSpawn(switchedId)));
+  assert.equal(replacement.sessionFile, row.sessionFile, 'restart resumes the current transcript');
+  assert.notEqual(replacement.activeSessionId, agent.activeSessionId);
+  assert.equal(tmux.getSpawn(id), null, 'the stale route key was re-keyed, not duplicated');
+  assert.equal(fs.readFileSync(String(row.sessionFile), 'utf8'), transcript);
+});
+
+test('Prime close rejects drifted ownership and ambiguous roster identities', { skip: !tmuxOk }, async t => {
+  const { id, spawn, agent, row } = await primeLaunchFixture(t);
+  const killsBefore = primeKills.length;
   const refused = async (pattern: RegExp) => {
-    const result = await close();
+    const result = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
     assert.equal(result.status, 409, JSON.stringify(result.body));
     assert.match(text(result.body.error), pattern);
     assert.equal(primeKills.length, killsBefore, 'no daemon kill was sent');
-    assert.equal(processIdentityAlive(claim), true);
-    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
-    assert.notEqual(control().closed, true, 'refused close rolls back recovery intent');
+    assert.ok(primeRow(agent.activeSessionId), 'the agent keeps running');
+    assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), true);
+    assert.notEqual(sessionRecovery.getControl('prime', text(row.sessionId)).closed, true,
+      'refused close rolls back recovery intent');
   };
-  tmux.removeSpawn(id, spawn);
-  await refused(/not launched by pi-dish/);
-  tmux.recordSpawn(id, { ...recordablePlacement(spawn), spawnToken: 'wrong-token' });
-  await refused(/launch no longer matches/);
-  tmux.recordSpawn(id, recordablePlacement(spawn));
-  const transforms: Array<(row: TestRecord) => TestRecord> = [
-    row => ({ ...row, workerPid: process.pid }),
-    row => ({ ...row, sessionFile: '/another-session.jsonl' }),
-    row => ({ ...row, activeSessionId: 'different-root' }),
-    row => ({ ...row, parentActiveSessionId: 'parent-root' }),
+  const transforms: Array<readonly [(row: TestRecord) => TestRecord, RegExp]> = [
+    [entry => ({ ...entry, workerInstanceId: 'different-worker' }), /no longer matches this live agent/i],
+    [entry => ({ ...entry, activeSessionId: 'different-root' }), /no longer matches this live agent/i],
+    [entry => ({ ...entry, parentActiveSessionId: 'parent-root' }), /no longer matches this live agent/i],
   ];
-  for (const transform of transforms) {
+  for (const [transform, pattern] of transforms) {
     primeRosterTransform = rows => rows.map(transform);
-    await refused(/roster does not match/);
+    await refused(pattern);
   }
   primeRosterTransform = rows => [...rows, ...rows];
-  await refused(/roster does not match/);
+  await refused(/roster does not match/i);
   primeRosterTransform = rows => rows;
-  primeProtocolVersion = 6;
-  await refused(/Unsupported Prime/);
-  primeProtocolVersion = 7;
-  primeAfterList = () => tmux.recordSpawn(id, { ...recordablePlacement(spawn), spawnToken: 'changed-during-roster' });
-  await refused(/ownership changed/);
-});
-
-test('Prime close refuses an unreadable roster row without dispatching a stop', { skip: !tmuxOk }, async t => {
-  const { spawn, claim, close } = await primeCloseFixture(t);
-  const killsBefore = primeKills.length;
-  primeRosterTransform = rows => [...rows, null];
-  const result = await close();
-  assert.equal(result.status, 409, JSON.stringify(result.body));
-  assert.equal(primeKills.length, killsBefore);
-  assert.equal(processIdentityAlive(claim), true);
-  assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
-  assert.notEqual(sessionRecovery.getControl('prime', text(claim.nativeSessionId)).closed, true);
+  primeAfterList = () => recordPrimeSpawn(id, spawn, { ...agent, workerInstanceId: 'changed-during-roster' });
+  await refused(/no longer matches this live agent/i);
+  primeAfterList = () => {};
+  recordPrimeSpawn(id, spawn, agent);
+  recordPrimeSpawn(id, spawn, { ...agent, daemonSocket: path.join(tmpHome, 'other-daemon.sock') });
+  await refused(/daemon socket changed/i);
 });
 
 test('Prime close remains single-flight after its client exits and leaves another root alive', { skip: !tmuxOk }, async t => {
-  const selected = await primeCloseFixture(t);
-  const other = await primeCloseFixture(t);
-  await tmux.killPane(selected.spawn.socket, selected.spawn.paneId);
+  const selected = await primeLaunchFixture(t);
+  const other = await primeLaunchFixture(t);
+  await tmux.killPane(String(selected.spawn.socket), String(selected.spawn.paneId));
   const killsBefore = primeKills.length;
-  const results = await Promise.all([selected.close(), selected.close()]);
+  const results = await Promise.all([
+    post(`/api/sessions/${encodeURIComponent(selected.id)}/close`),
+    post(`/api/sessions/${encodeURIComponent(selected.id)}/close`),
+  ]);
   for (const result of results) assert.equal(result.status, 200, JSON.stringify(result.body));
-  assert.deepEqual(primeKills.slice(killsBefore), [`prime-${selected.spawn.spawnToken}`]);
-  assert.equal(processIdentityAlive(selected.claim), false);
-  assert.equal(processIdentityAlive(other.claim), true);
-  assert.equal(await tmux.paneExists(other.spawn.socket, other.spawn.paneId), true);
-  assert.equal(tmux.getSpawn(text(selected.id)), null);
+  assert.deepEqual(primeKills.slice(killsBefore), [selected.agent.activeSessionId]);
+  assert.equal(primeRow(selected.agent.activeSessionId), null);
+  assert.ok(primeRow(other.agent.activeSessionId), 'the other root remains alive');
+  assert.equal(await tmux.paneExists(String(other.spawn.socket), String(other.spawn.paneId)), true);
+  assert.equal(tmux.getSpawn(selected.id), null);
 });
 
 for (const mode of ['lost-response', 'hang', 'replaced-pane']) {
   test(`Prime ${mode} after stop preserves closed intent and never escalates or kills a replacement pane`, { skip: !tmuxOk }, async t => {
-    const { spawn, claim, close } = await primeCloseFixture(t);
+    const { id, spawn, agent, row } = await primeLaunchFixture(t);
     const previousTimeout = process.env.PI_DISH_CLOSE_TIMEOUT_MS;
     process.env.PI_DISH_CLOSE_TIMEOUT_MS = '300';
     t.after(() => {
@@ -959,32 +1018,45 @@ for (const mode of ['lost-response', 'hang', 'replaced-pane']) {
       else process.env.PI_DISH_CLOSE_TIMEOUT_MS = previousTimeout;
     });
     if (mode === 'replaced-pane') {
-      primeAfterKill = () => { tmuxCmd(['respawn-pane', '-k', '-t', text(spawn.paneId), 'sleep 3600']); };
+      primeAfterKill = () => { tmuxCmd(['respawn-pane', '-k', '-t', String(spawn.paneId), 'sleep 3600']); };
     } else primeStopMode = mode;
     const killsBefore = primeKills.length;
-    const result = await close();
+    const result = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
     assert.equal(result.status, 500, JSON.stringify(result.body));
-    assert.match(text(result.body.error), mode === 'lost-response' ? /socket closed/ : mode === 'hang' ? /did not exit/ : /been replaced/);
+    assert.match(text(result.body.error), mode === 'lost-response' ? /connection closed/i
+      : mode === 'hang' ? /did not leave the daemon roster/i : /been replaced/i);
     assert.equal(primeKills.length, killsBefore + 1, 'no retry of an indeterminate stop');
-    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true);
-    if (mode === 'hang') assert.equal(processIdentityAlive(claim), true, 'no signal escalation');
-    assert.equal(sessionRecovery.getControl('prime', text(claim.nativeSessionId)).closed, true);
+    assert.equal(primeAgent(present(tmux.getSpawn(id))).activeSessionId, agent.activeSessionId, 'no new launch');
+    assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), true);
+    if (mode === 'hang') assert.ok(primeRow(agent.activeSessionId), 'no signal escalation');
+    assert.equal(sessionRecovery.getControl('prime', text(row.sessionId)).closed, true);
   });
 }
 
-test('Prime without worker daemon metadata advertises no close and fails closed', { skip: !tmuxOk }, async t => {
-  const configured = process.env.PI_DISH_PRIME_COMMAND;
-  process.env.PI_DISH_PRIME_COMMAND = `env PI_FIXTURE_HARNESS=prime PI_FIXTURE_PRIME_DAEMON_SOCKET= ${process.execPath} ${FIXTURE}`;
-  let fixture;
-  try { fixture = await primeCloseFixture(t); }
-  finally { process.env.PI_DISH_PRIME_COMMAND = configured; }
-  const list = await get('/api/sessions?active=1');
-  assert.equal(record(records(list.body.active).find(row => row.id === fixture.id)?.capabilities).close, false);
-  const killsBefore = primeKills.length;
-  const result = await fixture.close();
-  assert.equal(result.status, 409);
-  assert.match(text(result.body.error), /daemon identity is unavailable/);
-  assert.equal(primeKills.length, killsBefore);
+test('Prime new-session identification refuses an ambiguous daemon roster', { skip: !tmuxOk }, async () => {
+  const panesBefore = tmuxCmd(['list-panes', '-s', '-t', 'work', '-F', '#{pane_id}']).trim().split('\n').filter(Boolean);
+  // A second root appears with the launch cwd while this launch is registering:
+  // pi-dish cannot tell which one it owns, so it must refuse ownership.
+  primeAfterRegister = () => {
+    primeRows.push({
+      activeSessionId: 'ambient-root', workerInstanceId: 'ambient-worker', sessionId: 'ambient-session',
+      sessionFile: path.join(tmpHome, '.prime', 'agent', 'sessions', 'ambient-session.jsonl'),
+      cwd: tmpHome, runtimeKind: 'top-level', lifecycle: 'live',
+      sessionActions: { steering: [], followUps: [] },
+    });
+  };
+  try {
+    const result = await post('/api/sessions/new', {
+      harness: 'prime', target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
+    });
+    assert.equal(result.status, 409, JSON.stringify(result.body));
+    assert.match(text(result.body.error), /daemon roots for one launch; refusing to select one/i);
+    const panesAfter = tmuxCmd(['list-panes', '-s', '-t', 'work', '-F', '#{pane_id}']).trim().split('\n').filter(Boolean);
+    assert.deepEqual(panesAfter.sort(), panesBefore.sort(), 'an unidentifiable launch leaves no pane');
+  } finally {
+    primeAfterRegister = () => {};
+    primeRows = [];
+  }
 });
 
 test('async tmux spawn returns a provisional operation before bridge registration', { skip: !tmuxOk }, async () => {
@@ -1108,35 +1180,28 @@ test('/reload is discovered and sent into a reachable OMP tmux pane', { skip: !t
   assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'the OMP pane remains live');
 });
 
-test('/reload still fails closed for alternate wrappers without an explicit fallback', { skip: !tmuxOk }, async () => {
+test('/reload reaches Prime through the daemon reload command, never pane keystrokes', { skip: !tmuxOk }, async () => {
   const created = await post('/api/sessions/new', {
     harness: 'prime',
     target: { type: 'tmux', socket: TMUX_SOCKET, tmuxSession: 'work' },
   });
   assert.equal(created.status, 200, JSON.stringify(created.body));
-  const spawn = tmux.getSpawn(text(created.body.id));
-  assert.ok(spawn, 'pi-dish owns the Prime pane');
-
-  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
-  const registryFile = fs.readdirSync(registryDir).find(name => {
-    const entry = JSON.parse(fs.readFileSync(path.join(registryDir, name), 'utf8'));
-    return entry.harnessId === 'prime' && entry.spawnToken === spawn.spawnToken;
-  });
-  assert.ok(registryFile, 'matching Prime registry claim exists');
-  const registryPath = path.join(registryDir, registryFile);
-  const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
-  fs.rmSync(`${registry.sessionFile}.keys`, { force: true });
+  const spawn = record(present(tmux.getSpawn(text(created.body.id))));
+  const agent = primeAgent(spawn);
+  fs.rmSync(`${agent.sessionFile}.keys`, { force: true });
 
   try {
     const result = await post(`/api/sessions/${encodeURIComponent(text(created.body.id))}/command`, { message: '/reload' });
-    assert.equal(result.status, 409, JSON.stringify(result.body));
-    assert.match(text(result.body.error), /does not support remote extension reload/i);
-    await new Promise(resolve => setTimeout(resolve, 100));
-    assert.equal(fs.existsSync(`${registry.sessionFile}.keys`), false, 'no /reload keystrokes reached the Prime TUI');
-    assert.equal(await tmux.paneExists(spawn.socket, spawn.paneId), true, 'the Prime pane remains untouched');
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.ok(primeSessionCommands.some(command => command.type === 'reload' && command.activeSessionId === agent.activeSessionId));
+    await delay(100);
+    assert.equal(fs.existsSync(`${agent.sessionFile}.keys`), false, 'no /reload keystrokes reached the Prime TUI');
+    assert.equal(await tmux.paneExists(String(spawn.socket), String(spawn.paneId)), true, 'the Prime pane remains untouched');
   } finally {
-    try { process.kill(registry.pid, 'SIGTERM'); } catch {}
-    try { fs.unlinkSync(registryPath); } catch {}
+    primeRows = [];
+    if (await tmux.paneExists(String(spawn.socket), String(spawn.paneId))) {
+      await tmux.killPane(String(spawn.socket), String(spawn.paneId));
+    }
   }
 });
 

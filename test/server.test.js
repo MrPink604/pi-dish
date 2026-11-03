@@ -32,6 +32,10 @@ process.env.HOST = '127.0.0.1';
 for (const key of ['PI_DISH_URL', 'PI_DISH_SHARE_PORT', 'PI_DISH_SHARE_HOST',
     'PI_DISH_SHARE_BASE_URL', 'PI_DISH_TERMINAL'])
     delete process.env[key];
+// Live Prime rows come from the resident daemon roster, whose socket lives
+// outside HOME. Pin a missing path under this suite's temp HOME so a real
+// daemon can never contribute accidental active rows.
+process.env.PRIME_AGENT_DAEMON_SOCKET = path.join(tmpHome, 'no-prime-daemon.sock');
 process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${path.join(__dirname, 'fixtures', 'fake-omp-export.js')}`;
 const IDLE_CHILD = path.join(__dirname, 'fixtures', 'idle-child.js');
 const SERVER_URL_HOST = path.join(__dirname, 'fixtures', 'server-url-host.js');
@@ -200,6 +204,8 @@ const harnessPricing = require('../lib/harness-pricing');
 const { invalidateRegistryCache } = require('../lib/bridge-session');
 const { processIdentity, processIdentityAlive } = require('../lib/process-identity');
 const sessionProvenance = require('../lib/session-provenance');
+const { resetPrimeDaemon } = require('../lib/prime-daemon');
+const { primeRow, startFakePrimeDaemon } = require('./fixtures/fake-prime-daemon.js');
 function responseObject(value) {
     return (0, test_types_js_1.record)(value);
 }
@@ -997,22 +1003,15 @@ test('live prime subagents surface under their live parent via the display entry
     writeRow(doneFile, doneNative, rootFile);
     display(runningDir, runningFile, runningNative, 'running');
     display(doneDir, doneFile, doneNative, 'completed');
-    const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
-    fs.mkdirSync(registryDir, { recursive: true });
+    // Prime 0.10+ roots register with the resident daemon, never the bridge
+    // registry; a live parent exists only while the roster lists it.
     const socket = path.join(tmpHome, 'prime-live-subagents.sock');
-    fs.writeFileSync(socket, 'stub');
-    const identity = (0, test_types_js_1.present)(processIdentity(process.pid));
-    const registryPath = path.join(registryDir, 'prime-live-subagents.json');
-    fs.writeFileSync(registryPath, JSON.stringify({
-        protocolVersion: 2,
-        wrapper: { harnessId: 'prime', name: 'Prime Agent', wrapperVersion: 'test' },
-        harnessId: 'prime', nativeSessionId: rootNative, sessionId: rootNative,
-        bridgeInstanceId: 'prime-live-subagents', instanceId: 'prime-live-subagents',
-        socketPath: socket, cwd: ompCwd, sessionFile: rootFile,
-        pid: identity.pid, startTime: identity.startTime,
-        capabilities: {}, spawnToken: null,
-    }));
-    invalidateRegistryCache();
+    const fakePrime = await startFakePrimeDaemon(socket, {
+        rows: [primeRow({ activeSessionId: 'prime-live-root-agent', sessionId: rootNative, sessionFile: rootFile, cwd: ompCwd, sessionName: rootNative })],
+    });
+    const previousSocket = process.env.PRIME_AGENT_DAEMON_SOCKET;
+    process.env.PRIME_AGENT_DAEMON_SOCKET = socket;
+    resetPrimeDaemon();
     try {
         const activeOnly = await get('/api/sessions?active=1');
         const children = (0, test_types_js_1.records)(activeOnly.body.children).map((session) => session.id);
@@ -1021,12 +1020,43 @@ test('live prime subagents surface under their live parent via the display entry
         const running = (0, test_types_js_1.present)((0, test_types_js_1.records)(activeOnly.body.children).find((session) => session.id === runningRoute));
         assert.equal(running.subagentLive, true);
         assert.equal(running.parentId, encodeSessionKey('prime', (0, test_types_js_1.nativeId)(rootNative)));
-        const related = await get(`/api/sessions/${encodeURIComponent(encodeSessionKey('prime', (0, test_types_js_1.nativeId)(rootNative)))}/related`);
+        const parentRoute = encodeSessionKey('prime', (0, test_types_js_1.nativeId)(rootNative));
+        const parent = (0, test_types_js_1.present)((0, test_types_js_1.records)(activeOnly.body.active).find((session) => session.id === parentRoute));
+        assert.equal(parent.name, rootNative, 'the roster row is the live parent');
+        const capabilities = (0, test_types_js_1.record)(parent.capabilities);
+        for (const capability of ['prompt', 'steer', 'followUp', 'abort', 'compact', 'models', 'setModel',
+            'setThinking', 'rename', 'commands', 'queueCancel', 'tree']) {
+            assert.equal(capabilities[capability], true, `Prime daemon capability ${capability}`);
+        }
+        assert.equal(capabilities.close, false, 'an unowned Prime root is not closeable');
+        assert.equal(capabilities.restart, false);
+        assert.equal(capabilities.fastMode, false, 'Prime has no fast mode');
+        // The daemon-backed routes accept a Prime root instead of failing the
+        // bridge-only gates: queue cancel, tree read and tree navigation.
+        const queued = await post(`/api/sessions/${encodeURIComponent(parentRoute)}/queue/cancel`, { kind: 'followUp', index: 0, text: 'queued text' });
+        assert.equal(queued.status, 200, JSON.stringify(queued.body));
+        assert.ok(fakePrime.commands.some((command) => command.type === 'mutate_queued_message'
+            && command.expectedText === 'queued text'), 'the cancel reached the daemon');
+        const compacted = await post(`/api/sessions/${encodeURIComponent(parentRoute)}/command`, { message: '/compact' });
+        assert.equal(compacted.status, 200, JSON.stringify(compacted.body));
+        assert.ok(fakePrime.commands.some((command) => command.type === 'compact'));
+        const tree = await get(`/api/sessions/${encodeURIComponent(parentRoute)}/tree`);
+        assert.equal(tree.status, 200, JSON.stringify(tree.body));
+        assert.deepEqual(tree.body.nodes, []);
+        const branch = await post(`/api/sessions/${encodeURIComponent(parentRoute)}/branch`, { entryId: 'entry-1' });
+        assert.equal(branch.status, 200, JSON.stringify(branch.body));
+        assert.ok(fakePrime.commands.some((command) => command.type === 'navigate_tree' && command.targetId === 'entry-1'));
+        const related = await get(`/api/sessions/${encodeURIComponent(parentRoute)}/related`);
         const runningRelation = (0, test_types_js_1.present)((0, test_types_js_1.records)(related.body.relations).find((relation) => (0, test_types_js_1.record)(relation.session).id === runningRoute));
         assert.equal((0, test_types_js_1.record)(runningRelation.session).subagentLive, true, 'relation summaries carry the live-subagent flag');
     }
     finally {
-        fs.rmSync(registryPath, { force: true });
+        if (previousSocket === undefined)
+            delete process.env.PRIME_AGENT_DAEMON_SOCKET;
+        else
+            process.env.PRIME_AGENT_DAEMON_SOCKET = previousSocket;
+        resetPrimeDaemon();
+        await fakePrime.close();
         fs.rmSync(primeDir, { recursive: true, force: true });
         invalidateRegistryCache();
         await get('/api/sessions');

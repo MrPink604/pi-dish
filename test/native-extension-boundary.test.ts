@@ -11,7 +11,7 @@ const execute = promisify(execFile);
 const nativeBoundaryHost = path.join(__dirname, 'fixtures', 'native-boundary-host.ts');
 const nativeQueueHost = path.join(__dirname, 'fixtures', 'native-queue-boundary-host.ts');
 
-test('native unknown-host guards retain Prime duplicate token adoption', async () => {
+test('native unknown-host guards and duplicate bridge loads stay safe', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-native-boundary-'));
   const env = sanitizeTestEnv({ PATH: process.env.PATH, HOME: root, TMUX: '', TMUX_PANE: '' });
   env.PI_DISH_SOCKET_DIR = path.join(root, 'sockets');

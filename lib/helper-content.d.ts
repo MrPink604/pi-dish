@@ -7,9 +7,10 @@ export declare function extractTextContent(content: unknown): string;
  *  Used when comparing a prompt to its echo. */
 export declare function extractTextBlocks(content: unknown): string;
 /**
- * Prime's single built-in tool: a stateful Python kernel whose shell access
- * is wrapped in bash('...') calls. Surface the wrapped command when present,
- * otherwise the first line of the code — mirroring the Bash/read summaries.
+ * Prime's single built-in tool (`ipython` up to 0.9, `python_repl` from the
+ * 0.10 Rust build): a stateful Python kernel whose shell access is wrapped in
+ * bash('...') calls. Surface the wrapped command when present, otherwise the
+ * first line of the code — mirroring the Bash/read summaries.
  */
 export declare function ipythonCodeSummary(code: unknown): string;
 export declare function getToolSummary(toolName: string, args: unknown): string;

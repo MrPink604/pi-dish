@@ -12,6 +12,8 @@ export interface SessionReadPorts {
     liveSessionHistoryPending(id: string): boolean;
     getRegisteredSession(id: string): BridgeRegistryEntry | null;
     getRPCSession(id: string): unknown;
+    /** Any transport: bridge registry, pi-dish RPC child, or Prime daemon root. */
+    isLive(id: string): boolean;
     getLiveSession(id: string): Promise<LiveSession | null>;
     liveTreeLeafId(session: InstanceType<typeof BridgeSession>): Promise<unknown>;
     getLiveContextUsage(id: string): unknown;

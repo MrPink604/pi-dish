@@ -5,9 +5,10 @@ usage() {
   cat <<'EOF'
 Usage: ./install.sh [--links-only]
 
-Install pi-dish dependencies and link its bridges and skills into the default
-Pi, OMP, and Prime agent directories. Set PI_AGENT_DIR, OMP_AGENT_DIR, or
-PRIME_AGENT_DIR to override a destination (useful for isolated installs).
+Install pi-dish dependencies, link the Pi/OMP bridges and every skill into the
+default Pi, OMP, and Prime agent directories, and remove retired Prime
+extension links. Set PI_AGENT_DIR, OMP_AGENT_DIR, or PRIME_AGENT_DIR to
+override a destination (useful for isolated installs).
 
   --links-only  Skip npm ci and only reconcile bridge and skill links
 EOF
@@ -69,18 +70,25 @@ link_path "$root/extensions/pi-dish-bridge" \
   "$pi_agent_dir/extensions/pi-dish-bridge"
 link_path "$root/extensions/pi-dish-bridge-omp" \
   "$omp_agent_dir/extensions/pi-dish-bridge-omp"
-# Prime discovery-loads extensions from ~/.prime/agent/extensions. Prime
-# resolves extension imports from the symlink path without realpath, so the
-# wrapper's ../pi-dish-bridge/core.js import additionally needs the shared
-# core linked as a sibling; the stock Pi bridge it exposes stands down under
-# a prime host (foreignWrapperHost in the bridge core). Managed pi-dish
-# launches still pass a generated token wrapper: if the discovery link has
-# already loaded a tokenless copy into the worker, the wrapper adopts into it
-# through the bridge's load sentinel rather than loading a duplicate bridge.
-link_path "$root/extensions/pi-dish-bridge-prime" \
-  "$prime_agent_dir/extensions/pi-dish-bridge-prime"
-link_path "$root/extensions/pi-dish-bridge" \
-  "$prime_agent_dir/extensions/pi-dish-bridge"
+
+# Prime 0.10+ is a native binary with no extension loader. Older installs
+# linked the retired Prime wrapper (and the shared core it imported) into
+# Prime's discovery directory; remove only links that resolve back into this
+# checkout, never a file or link the user owns.
+remove_repo_link() {
+  local destination=$1
+  [[ -L $destination ]] || return 0
+  local target
+  target=$(readlink -f -- "$destination" 2>/dev/null) || return 0
+  case $target in
+    "$root"|"$root"/*)
+      rm -f -- "$destination"
+      printf 'removed stale Prime extension link %s\n' "$destination"
+      ;;
+  esac
+}
+remove_repo_link "$prime_agent_dir/extensions/pi-dish-bridge-prime"
+remove_repo_link "$prime_agent_dir/extensions/pi-dish-bridge"
 
 for skill in "$root"/skills/*; do
   [[ -d $skill ]] || continue
@@ -90,9 +98,12 @@ for skill in "$root"/skills/*; do
   name=${skill##*/}
   link_path "$skill" "$pi_agent_dir/skills/$name"
   link_path "$skill" "$omp_agent_dir/skills/$name"
+  # Prime 0.10 discovers user skills under <agent dir>/skills (verified with
+  # `get_commands` over `--mode rpc` in an isolated HOME).
+  link_path "$skill" "$prime_agent_dir/skills/$name"
 done
 
-# Prime's only built-in tool (ipython) runs through a Python kernel whose
+# Prime's only built-in tool (python_repl; ipython before 0.10) runs through a Python kernel whose
 # first-use bootstrap needs uv; without it every tool call in a fresh prime
 # session fails with a setup error. Ensure uv exists when the prime CLI
 # pi-dish will launch is actually installed, so first-run sessions can

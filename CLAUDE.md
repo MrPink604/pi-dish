@@ -74,7 +74,7 @@ state store compiles strictly from `src/browser/session-state.ts` and issues
 immutable selection owners for its asynchronous callers. Details: [docs/typescript.md](docs/typescript.md).
 
 Lifecycle implementations now live in `src/core/session-{ownership,launch,operations}.ts`,
-`session-recovery.ts`, `tmux.ts`, `prime-lifecycle.ts`, `recovery-runner.ts` and
+`session-recovery.ts`, `tmux.ts`, `prime-daemon.ts`, `recovery-runner.ts` and
 `session-bounces.ts`. `server-app.ts` composes one owner set; launch fallback,
 close/restart/resume flights, quarantine and recovery/Bounce action policy stay with their owners.
 Routines receive the checked coordinator's methods directly. Definitions,
@@ -661,17 +661,18 @@ and inherit the server's own `$TMUX`). Tests that assert runtime kinds pin
 row-level ✕ on live sidebar rows — both funnel post-close handling through
 `finishSessionClose` (list re-fetch + re-select flips the view to inactive).
 
-Prime uses `closeMode: owned-agent`: `src/core/prime-lifecycle.ts` (generated as `lib/prime-lifecycle.js`) reads the exact
-live worker's non-secret supervisor-socket/root-id fields from `/proc`, fenced
-by its birth identity, and sends the protocol-7 operation behind `prime-agent
-stop`. The supervisor roster must match that root, worker PID and session
-file; a fresh bridge hello, launch token and pane check re-prove ownership
-before stop. Wait for worker exit, then clean up only the unchanged client
-pane — never the pane's descendant tree, which may include the shared daemon.
-The original client may already be gone; a replaced pane still fails closed.
-Manual roots remain uncloseable. A sent stop retains recovery's closed intent
-even if acknowledgement or pane cleanup fails, with no automatic retry or
-signal escalation. The UI keeps `client-only` detach labels for older hosts.
+Prime uses `closeMode: owned-agent`: `src/core/prime-daemon.ts` (generated as
+`lib/prime-daemon.js`) is pi-dish's client of Prime 0.10's resident daemon
+(`prime-agent.daemon` protocol 7, LF JSON over a Unix socket). Close re-reads
+the supervisor `list` roster, requires the spawn record's agent id, worker
+instance id and session file to match the live root, calls the daemon `kill`
+for that agent, then waits until the roster drops it. Only the unchanged
+client pane is removed afterwards — never the pane's descendant tree, which
+may include the shared daemon. The original client may already be gone; a
+replaced pane still fails closed. Manual roots remain uncloseable. A sent stop
+retains recovery's closed intent even if acknowledgement or pane cleanup
+fails, with no automatic retry or signal escalation. The UI keeps
+`client-only` detach labels for older hosts.
 
 `POST /api/sessions/:id/restart` is narrower than close because it replaces a
 runtime placement, not just the proved agent process. RPC children restart as
@@ -681,13 +682,14 @@ pi-dish owns that exact pane; `respawnPane()` then launches the descriptor's
 fresh resume argv/env in the same pane, preserving the tmux server, session,
 window, and pane while issuing new launch authority. Externally launched Pi
 sessions remain closeable but never advertise `capabilities.restart`. Prime
-uses its launch-token, worker and supervisor proofs instead of ancestry:
-restart stops the owned root/children through the checked operation coordinator while
-retaining the client pane, then rechecks placement and absence of a live writer
-before respawn. The new bridge must prove a new worker for the original
-session ID/file. An indeterminate stop launches nothing; failed registration
-leaves the pane inspectable and quarantines resume in the running server even
-if that pane exits, since the worker is detached. A missing client is Close-only.
+uses its daemon spawn record instead of ancestry: restart stops the owned
+agent through the checked operation coordinator while retaining the client
+pane, then relaunches `--resume <file>` in that pane and identifies the
+replacement by the roster root whose session file matches. It never starts a
+second writer while the old transcript is still listed. An indeterminate stop
+launches nothing; failed registration leaves the pane inspectable and
+quarantines resume in the running server even if that pane exits, since the
+daemon agent is detached. A missing client is Close-only.
 Prime stays excluded from bulk Bounce's idle-safety path. The stats-modal Restart
 button keys off explicit `restart: true` so mixed-version fleet hosts do not
 show an unsupported control.
@@ -805,11 +807,13 @@ deadline. On an ordinary Pi timeout an explicit window stays inspectable;
 hidden panes must be gone before RPC fallback. Alternate/conflicting claims and
 detached Prime replacement uncertainty retain their stricter cleanup/refusal paths.
 
-Wrapper-token harnesses (OMP, Prime) normally get a generated
+Wrapper-token harnesses (OMP) normally get a generated
 `~/.pi/dish/launch-wrappers/<harness>-<token>.ts` injected in place of the
-descriptor's `wrapperEntrypoint`. For OMP, install.sh also links the bridge
-into `~/.omp/agent/extensions/` where OMP's own extension discovery loads it
-into **every** session (symlinked dirs are explicitly supported; the bridge's
+descriptor's `wrapperEntrypoint`. Prime 0.10 loads no extensions: its managed
+launch runs the TUI on `--daemon-socket <primeDaemonSocket()>` and ownership
+comes from the daemon roster, with no wrapper token. For OMP, install.sh also
+links the bridge into `~/.omp/agent/extensions/` where OMP's own extension
+discovery loads it into **every** session (symlinked dirs are explicitly supported; the bridge's
 host-package import must stay a *literal* specifier — OMP's loader only
 rewrites literals to its bundled modules, and a variable specifier silently
 killed the whole native projection once). When that link realpaths to this
@@ -1143,7 +1147,7 @@ methods; checked `src/core/routine-runner.ts` owns scheduling and ledger policy.
 via `createSession` (no name; then a best-effort capability-gated rename), delivers,
 observes `turn_end`/`agent_end`/`message_end`/session-gone, and closes after
 `PI_DISH_ROUTINE_CLOSE_GRACE_MS` through `SessionOperations.closeSessionById`.
-A refused close (unprovable Prime worker or OMP pane ownership) records
+A refused close (unprovable Prime daemon ownership or OMP pane ownership) records
 `closeError` and never escalates. `continue` mode reuses the last
 invocation's session (live → prompt when idle, else resume headlessly, else
 spawn) and never auto-closes. Busy = an invocation in `starting`/`running`:
@@ -2445,7 +2449,7 @@ recognition errors are the user's to fix before the agent sees them.
   and merges adjacent groups so pagination can't fragment a turn. Streaming
   elements (no `data-msg-index`) are never grouped; live tool panels are
   removed once the authoritative JSONL messages land
-  (`removeDuplicatedLiveContent`). `eval` (OMP) and `ipython` (Prime) open
+  (`removeDuplicatedLiveContent`). `eval` (OMP) and `python_repl`/`ipython` (Prime) open
   with the cell source while they run — title or first code line in the
   header, not the language argument — and keep that source above streamed
   output. `bash` does the same with its command; the call block shows the

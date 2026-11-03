@@ -39,11 +39,11 @@ import { discoverHarnessSessions } from './session-discovery';
 import sessionIndex = require('./session-index');
 const { getSessionInfo } = sessionIndex;
 import { sourceForIdentity } from './session-source';
-import { composeSessionCatalog, registeredSessionObservation, rpcSessionObservation,
+import { composeSessionCatalog, registeredSessionObservation, rpcSessionObservation, primeSessionObservation,
   decodeLaunchParents, decodeRoutineAnnotations, withSessionContext, subsessionLabel,
   buildSourceSession } from './session-catalog';
 import { getHarness, listHarnesses } from './harnesses';
-import { sessionCapabilities } from './session-capabilities';
+import { sessionCapabilities, PRIME_DAEMON_CAPABILITIES } from './session-capabilities';
 import { refreshHarnessPricing } from './harness-pricing';
 import { createFeatureHandlers } from './feature-handlers';
 import {
@@ -52,8 +52,9 @@ import {
 import {
   createSessionOwnership, routeIdentity, routeSessionId, registryIdentity,
   sessionSwitchRouteData, liveSessionSupports,
-  spawnAllowsManagedClose, spawnAllowsRestart,
+  spawnAllowsManagedClose, spawnAllowsRestart, primeLaunchAuthorityForRoute,
 } from './session-ownership';
+import { getPrimeDaemon, PrimeDaemon, PrimeDaemonSession } from './prime-daemon';
 import { createSessionLaunch } from './session-launch';
 import { createSessionOperations } from './session-operations';
 import sessionProvenance = require('./session-provenance');
@@ -158,6 +159,12 @@ function property(value: unknown, key: string): unknown {
 /** Optional access short-circuits only nullish values, not other raw payloads. */
 function optionalProperty(value: unknown, key: string): unknown {
   return value == null ? undefined : property(value, key);
+}
+
+/** Slash-command names from a `get_commands` payload (`{ commands: [{ name }] }`). */
+function commandNames(data: unknown): string[] {
+  const rows = optionalProperty(data, 'commands');
+  return Array.isArray(rows) ? rows.map(row => property(row, 'name')).filter((name): name is string => typeof name === 'string') : [];
 }
 
 export interface ServerStartupObserver {
@@ -274,7 +281,7 @@ export function startServer(rootDirectory: string): Server {
   const streamViewers = new Map<string, number>();
   const fileHandlers = createFileHandlers({ resolveSessionCwd, findSessionSource });
   const sessionReadHandlers = createSessionReadHandlers({
-    findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession,
+    findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession, isLive,
     getLiveSession, liveTreeLeafId, getLiveContextUsage, getContextWindow, describeRuntime,
   });
   const publicationHandlers = createPublicationHandlers({
@@ -355,8 +362,15 @@ export function startServer(rootDirectory: string): Server {
   // application only after the transport has cleared its old replay state.
   const observedSessions = new WeakSet<LiveSession>();
 
+  /** Route id for a live transport: bridge and Prime rows carry a harness. */
+  function liveRouteId(sess: LiveSession): string {
+    if (sess instanceof PrimeDaemonSession) return routeSessionId('prime', sess.id);
+    if (sess instanceof BridgeSession) return routeSessionId(getHarness(sess.harnessId)?.id || 'pi', sess.id);
+    return sess.id;
+  }
+
   function observeSessionLifecycle(sess: LiveSession): void {
-    messageHold.wake(sess instanceof BridgeSession ? routeSessionId(getHarness(sess.harnessId)?.id || 'pi', sess.id) : sess.id);
+    messageHold.wake(liveRouteId(sess));
     const dismissAskDialogs = (source: string) => {
       for (const [id, data] of sess.extUIState.dialogs) {
         if ((data == null ? undefined : property(data, 'method')) !== 'ask') continue;
@@ -380,12 +394,25 @@ export function startServer(rootDirectory: string): Server {
   }
 
 
-  /** Live context usage, whichever backend reports it (registry beats RPC stats). */
+  /** The cached daemon root for a Prime route, without touching other harnesses. */
+  function primeLiveSession(sessionId: string): PrimeDaemonSession | null {
+    const identity = routeIdentity(sessionId);
+    return identity?.harnessId === 'prime' ? getPrimeDaemon().byNativeId(identity.nativeSessionId) : null;
+  }
+
+  /** Any live transport for a route: bridge registry, RPC child, Prime root. */
+  function isLive(sessionId: string): boolean {
+    return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive || !!primeLiveSession(sessionId);
+  }
+
+  /** Live context usage, whichever backend reports it (roster beats transport stats). */
   function getLiveContextUsage(sessionId: string): unknown {
     const reg = getRegisteredSession(sessionId);
     if (reg?.contextUsage) return reg.contextUsage;
     const stats = getRPCSession(sessionId)?.lastStats;
-    return (stats == null ? undefined : property(stats, 'contextUsage')) || null;
+    if (stats != null) return property(stats, 'contextUsage') || null;
+    const primeStats = primeLiveSession(sessionId)?.lastStats;
+    return primeStats == null ? null : property(primeStats, 'contextUsage') || null;
   }
 
   async function getSessionModels(sessionId: string) {
@@ -458,9 +485,39 @@ export function startServer(rootDirectory: string): Server {
   // Session listing
   // =========================================================================
 
+  // Prime's roster is polled by the daemon client; projections read that cache.
+  // A request that lands right after an external launch may still see a cold
+  // list, so the active-list route refreshes once per staleness window first.
+  const PRIME_ROSTER_STALE_MS = 1500;
+  let primeRosterReadAt = 0;
+  let primeRosterSocket: string | null = null;
+
+  function primeRosterIsStale(daemon: PrimeDaemon): boolean {
+    return daemon.socketPath !== primeRosterSocket || Date.now() - primeRosterReadAt > PRIME_ROSTER_STALE_MS;
+  }
+
+  function primeRoster(): PrimeDaemonSession[] {
+    const daemon = getPrimeDaemon();
+    if (primeRosterIsStale(daemon)) {
+      primeRosterReadAt = Date.now();
+      primeRosterSocket = daemon.socketPath;
+      daemon.refresh().catch(() => {});
+    }
+    return daemon.list();
+  }
+
+  async function refreshPrimeRoster(): Promise<void> {
+    const daemon = getPrimeDaemon();
+    if (!primeRosterIsStale(daemon)) return;
+    primeRosterReadAt = Date.now();
+    primeRosterSocket = daemon.socketPath;
+    try { await daemon.refresh(); } catch {}
+  }
+
   /**
-   * Active sessions = sessions registered by the pi-dish-bridge extension.
-   * We enrich the registry entry with metadata from the on-disk JSONL.
+   * Active sessions = sessions registered by the pi-dish-bridge extension,
+   * pi-dish's own RPC children, and every root agent in Prime's daemon roster.
+   * We enrich them with metadata from the on-disk JSONL.
    */
   function collectActiveObservations(registered: readonly BridgeRegistryEntry[] = listRegisteredSessions()): CatalogLiveObservation[] {
     const active: CatalogLiveObservation[] = [];
@@ -528,6 +585,40 @@ export function startServer(rootDirectory: string): Server {
         },
       }));
       seen.add(rpc.id);
+    }
+
+    // Prime 0.10+ agents live only in the resident daemon's roster: never in
+    // the bridge registry. One live root = one route; a daemon-side /new moves
+    // the same worker onto a new JSONL id, re-keyed by session_switch.
+    for (const prime of primeRoster()) {
+      const routeId = routeSessionId('prime', prime.nativeSessionId);
+      if (seen.has(routeId)) continue;
+      // The roster is the only place Prime rows are discovered, so the active
+      // projection is also where their lifecycle listeners get attached: a
+      // daemon-side /new rewrites this worker's transcript id, and the central
+      // session_switch adoption must re-key the spawn record even when no
+      // browser view is open.
+      observeSessionLifecycle(prime);
+      let info: SessionInfo | null = null;
+      let source: SessionSource | null = null;
+      if (prime.sessionFile && fs.existsSync(prime.sessionFile)) {
+        try {
+          source = sourceForIdentity('prime', prime.nativeSessionId, prime.sessionFile);
+          info = getSessionInfo(source);
+        } catch {}
+      }
+      const authority = primeLaunchAuthorityForRoute(routeId);
+      active.push(primeSessionObservation(prime, {
+        nativeSessionId: prime.nativeSessionId, source, info,
+        advice: {
+          capabilities: sessionCapabilities('prime', PRIME_DAEMON_CAPABILITIES, {
+            active: true, conflicted: false,
+            closeAllowed: authority.closeAllowed, restartAllowed: authority.restartAllowed,
+          }),
+          closeMode: getHarness('prime')!.closeMode, conflicted: false, liveInstanceCount: 1,
+        },
+      }));
+      seen.add(routeId);
     }
 
     return active;
@@ -640,8 +731,9 @@ export function startServer(rootDirectory: string): Server {
     return rows.map(session => sessionForClient(session));
   }
 
-  app.get('/api/sessions', (req: ApplicationRequest, res: ApplicationResponse) => {
+  app.get('/api/sessions', async (req: ApplicationRequest, res: ApplicationResponse) => {
     const query = ((req.query.q || '') as string).trim().toLowerCase();
+    await refreshPrimeRoster();
     let { active, previous, children, indexing, discoveryTruncated, discoverySkipped } =
       buildSessionCatalog({ activeOnly: req.query.active === '1' });
 
@@ -1119,8 +1211,9 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/sessions/:id/follow-up', sessionCommandHandlers.followUp);
 
   // Remove a not-yet-delivered queued steer/follow-up so its text can go back to
-  // the composer. Bridge-only (pi's queue arrays live inside the process); RPC
-  // sessions have no remote queue-editing path.
+  // the composer. Bridge sessions own the queue inside pi; a Prime root's queue
+  // lives in the daemon (mutate_queued_message). RPC children have no remote
+  // queue-editing path.
   app.post('/api/sessions/:id/queue/cancel', async (req: ApplicationRequest, res: ApplicationResponse) => {
     const body = req.body || {};
     const kind = property(body, 'kind');
@@ -1138,8 +1231,8 @@ export function startServer(rootDirectory: string): Server {
         if (validationError) return res.status(400).json({ error: validationError });
         return res.status(404).json({ error: 'Session not active' });
       }
-      if (!(sess instanceof BridgeSession)) {
-        return res.status(501).json({ error: 'queue editing requires the pi-dish-bridge extension' });
+      if (!(sess instanceof BridgeSession) && !(sess instanceof PrimeDaemonSession)) {
+        return res.status(501).json({ error: 'queue editing requires a live pi-dish bridge or Prime daemon session' });
       }
       if (!liveSessionSupports(sess, 'queueCancel')) {
         return res.status(409).json({ error: 'This session does not support queue cancellation.' });
@@ -1228,6 +1321,81 @@ export function startServer(rootDirectory: string): Server {
         );
         if (!known.has(name)) throw new Error(`unknown or unsupported command: /${name}`);
         await rpc.prompt(message);
+        return {};
+      }
+    }
+  }
+
+  /**
+   * Slash commands against a Prime daemon root. Prime has no extension command
+   * context: its daemon session commands are the API, and unknown command names
+   * are verified against `get_commands` before a prompt carries them (Prime's
+   * prompt path executes its own slash commands in-process).
+   */
+  async function runPrimeSlashCommand(prime: PrimeDaemonSession, message: string): Promise<{ info?: unknown }> {
+    const spaceIdx = message.indexOf(' ');
+    const name = (spaceIdx === -1 ? message.slice(1) : message.slice(1, spaceIdx)).trim();
+    const args = spaceIdx === -1 ? '' : message.slice(spaceIdx + 1).trim();
+    if (!liveSessionSupports(prime, 'commands')) throw new Error('This session does not support remote commands.');
+
+    switch (name) {
+      case 'compact': {
+        if (!liveSessionSupports(prime, 'compact')) throw new Error('This session does not support compaction.');
+        if (prime.compacting) throw new Error('Compaction already in progress — wait for it to finish.');
+        prime.compacting = true;
+        try {
+          const result = await prime.compact(args || undefined);
+          return { info: optionalProperty(result, 'info') };
+        } finally {
+          prime.compacting = false;
+        }
+      }
+      case 'abort':
+        await prime.abort();
+        return { info: 'Aborted' };
+      case 'name':
+        if (!args) throw new Error('usage: /name <name>');
+        await prime.setName(args);
+        return { info: 'Session renamed' };
+      case 'thinking':
+        if (!args) throw new Error(`usage: /thinking <${thinkingLevelNamesFor('prime').join('|')}>`);
+        await prime.setThinkingLevel(args);
+        return { info: `Thinking level: ${args}` };
+      case 'model': {
+        if (!args) throw new Error('usage: /model <provider/model-id>');
+        let { provider, id } = parseModelId(args);
+        if (!provider) {
+          // The daemon owns Prime's model catalog; resolve short ids there.
+          const data = await prime.getAvailableModels();
+          const listed = optionalProperty(data, 'models');
+          const models = Array.isArray(listed) ? listed : [];
+          const match = models.find(entry => property(entry, 'id') === args)
+            || models.find(entry => String(property(entry, 'id') ?? '').includes(args));
+          if (!match) throw new Error(`model not found: ${args}`);
+          provider = String(property(match, 'provider')); id = String(property(match, 'id'));
+        }
+        await prime.setModel(provider, id);
+        return { info: `Model set to ${provider}/${id}` };
+      }
+      case 'reload':
+        await prime.send('reload');
+        return { info: 'Reloading…' };
+      case 'export': {
+        const data = await prime.exportHtml(args || undefined);
+        return { info: `Exported to ${optionalProperty(data, 'path') || 'HTML'}` };
+      }
+      case 'new': {
+        const error: Error & { statusCode?: number } = new Error('Prime Agent cannot start a new session from pi-dish.');
+        error.statusCode = 400;
+        throw error;
+      }
+      default: {
+        // Prime's own commands/skills execute from a prompt; verify the name so a
+        // typo is not sent to the model as literal text.
+        const data = await prime.getCommands().catch(() => null);
+        const known = new Set(commandNames(data));
+        if (!known.has(name)) throw new Error(`unknown or unsupported command: /${name}`);
+        await prime.prompt(message);
         return {};
       }
     }
@@ -1554,6 +1722,16 @@ export function startServer(rootDirectory: string): Server {
         const data = await sess.runCommand(message as string, deliverAs as 'steer' | 'followUp' | undefined);
         return res.json({ success: true, info: optionalProperty(data, 'info') });
       }
+      if (sess instanceof PrimeDaemonSession) {
+        if (/^\/btw(\s|$)/.test(message as string)) {
+          return res.status(409).json({ error: 'This session does not support side chats.' });
+        }
+        if (/^\/login(\s|$)/.test(message as string)) {
+          return res.status(409).json({ error: 'This Prime Agent session does not support signing in from pi-dish.' });
+        }
+        const result = await runPrimeSlashCommand(sess, message as string);
+        return res.json({ success: true, info: result.info });
+      }
       const result = await runRpcSlashCommand(sess, message as string);
       res.json({ success: true, info: result.info });
     } catch (e) {
@@ -1852,7 +2030,7 @@ export function startServer(rootDirectory: string): Server {
     try {
       const identity = routeIdentity(req.params.id);
       if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
-      if (identity.harnessId !== 'pi' && identity.harnessId !== 'omp') {
+      if (identity.harnessId !== 'pi' && identity.harnessId !== 'omp' && identity.harnessId !== 'prime') {
         return res.status(409).json({ error: 'Session tree navigation is not supported for this harness.' });
       }
       const source = findSessionSource(req.params.id);
@@ -1860,6 +2038,15 @@ export function startServer(rootDirectory: string): Server {
       if (sess) {
         if (!liveSessionSupports(sess, 'treeNavigation')) {
           return res.status(409).json({ error: 'This session does not support tree navigation.' });
+        }
+        // Prime owns the leaf in its daemon process: navigate_tree moves it and
+        // returns the editor text, with no extension command context involved.
+        if (sess instanceof PrimeDaemonSession) {
+          const data = await sess.navigateTree(entryId as string, opts);
+          if (optionalProperty(data, 'cancelled') === true) {
+            return res.status(409).json({ error: 'Prime Agent cancelled the tree navigation; the leaf was not moved.' });
+          }
+          return res.json({ success: true, editorText: optionalProperty(data, 'editorText') });
         }
         if (!(sess instanceof BridgeSession)) {
           return res.status(409).json({ error: 'This live session has no bridge connection — install the pi-dish-bridge extension to navigate its tree.' });
@@ -1896,6 +2083,9 @@ export function startServer(rootDirectory: string): Server {
       if (!source) return res.status(404).json({ error: 'Session not found' });
       if (identity.harnessId === 'omp') {
         return res.status(409).json({ error: 'Navigating the tree of an inactive Oh My Pi session is not supported.' });
+      }
+      if (identity.harnessId === 'prime') {
+        return res.status(409).json({ error: 'Navigating the tree of an inactive Prime Agent session is not supported.' });
       }
       const result = await piSDK.branchSession(source.file, entryId as string, opts);
       res.json({ success: true, editorText: result.editorText });
@@ -2147,6 +2337,9 @@ export function startServer(rootDirectory: string): Server {
   function resolveSessionCwd(sessionId: string): unknown {
     const reg = getRegisteredSession(sessionId);
     if (reg?.cwd) return reg.cwd;
+    // A fresh Prime root may not have a JSONL header yet; its roster row does.
+    const primeCwd = primeLiveSession(sessionId)?.cwd;
+    if (primeCwd) return primeCwd;
     const session = findSessionSource(sessionId);
     if (session) {
       try { return parseSessionFile(session).cwd || null; } catch {}
@@ -2742,6 +2935,8 @@ export function startServer(rootDirectory: string): Server {
     recoveryRunner.stop();
     routineRunner.stop();
     messageHold.stop();
+    // Detach from Prime's daemon: the poller and socket belong to this server.
+    getPrimeDaemon().shutdown();
     if (shareServer) { try { shareServer.close(); } catch {} }
     remoteHosts.shutdown();
     sessionBounces.stop();
@@ -2837,6 +3032,10 @@ export function startServer(rootDirectory: string): Server {
     sessionBounces.start();
     hibernation.start();
     pushNotifier.start();
+    // Prime roots appear in the daemon roster, not the bridge registry: poll it
+    // so the active list and every capability projection track attaches/exits.
+    const primeDaemon = getPrimeDaemon();
+    primeDaemon.start();
     // A restored idle session is interrupted work, not a completed oneShot.
     recoveryRunner.start()
       .then(() => routineRunner.recoverAfterRestart())
