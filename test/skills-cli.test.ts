@@ -84,6 +84,7 @@ test.before(async () => {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Test server lacks TCP address');
   base = `http://127.0.0.1:${address.port}`;
+  await settleIndex();
 });
 test.after(() => {
   server.close();
@@ -112,10 +113,6 @@ async function settleIndex() {
   }
   throw new Error('fixture sessions never finished indexing');
 }
-
-test('the index settles so refs and search have a full corpus', async () => {
-  await settleIndex();
-});
 
 test('resolve expands a unique prefix to the full id', async () => {
   const { stdout } = await run(['resolve', '2026-08-24']);
