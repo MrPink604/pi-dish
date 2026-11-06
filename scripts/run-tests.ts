@@ -1,16 +1,10 @@
 #!/usr/bin/env node
 /**
- * `npm test` — the node:test runner, launched from a sanitized environment.
- *
- * The sanitizing (test/test-env.js) is the point: the operator's shell exports
- * the running deployment's HOST/PORT/share port, and suites that boot
- * server.js inherit them. Doing it here, once, means every test child *and*
- * every process a suite spawns starts clean, without NODE_OPTIONS (which
- * would also re-enter this file inside spawned pi/omp children and strip the
- * bridge's own PI_DISH_SOCKET_DIR/PI_DISH_SPAWN_TOKEN).
- *
- * Usage: `npm test`, `npm test -- test/server.test.js`,
- * `npm test -- --test-name-pattern=subagent`.
+ * `npm test` — node:test launched from a sanitized environment. The operator's
+ * shell exports the running deployment's HOST/PORT/share port, which suites that
+ * boot server.js would inherit. Done here once, rather than through NODE_OPTIONS,
+ * which would also re-enter this file inside spawned pi/omp children and strip
+ * the bridge's own PI_DISH_SOCKET_DIR/PI_DISH_SPAWN_TOKEN.
  */
 import fs = require('fs');
 import path = require('path');

@@ -4,10 +4,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.sanitizeTestEnv = sanitizeTestEnv;
 exports.applyTestEnv = applyTestEnv;
 /**
- * The environment every test process must start from: the operator's live
- * deployment variables (tailnet HOST, deployment PORT, share port, token) must
- * not reach a suite that boots server.js, and the bind target is pinned to an
- * ephemeral loopback port.
+ * The environment every test process starts from: the operator's deployment
+ * variables (tailnet HOST, PORT, share port, token) must not reach a suite that
+ * boots server.js, and the bind target is pinned to an ephemeral loopback port.
  */
 const fs = require("fs");
 const os = require("os");

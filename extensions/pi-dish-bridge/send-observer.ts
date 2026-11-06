@@ -1,14 +1,9 @@
-// Pi and OMP implement ExtensionAPI.sendUserMessage() as a synchronous call
-// into AgentSession.sendUserMessage() whose rejection reaches only the host's
-// own TUI (`.catch(...)`; verified Pi 0.85, OMP 18.11). A prompt the host
-// refused before admitting it — a signed-out provider, no model — therefore
-// looked delivered to pi-dish and was lost. Adapters holding the host's
-// AgentSession class patch it here once; the bridge core then captures the
-// promise of the call its own public sendUserMessage() makes, leaving the
-// host's delivery path (and its TUI error) intact.
-//
-// The sink lives in the symbol registry because an extension reload evaluates
-// a new module copy against the already-patched prototype.
+// ExtensionAPI.sendUserMessage() calls AgentSession.sendUserMessage()
+// synchronously and the rejection reaches only the host's TUI (verified Pi
+// 0.85, OMP 18.11), so a refused prompt looked delivered to pi-dish. Patch the
+// host's class once and capture that promise, leaving its delivery path intact.
+// The sink lives in the symbol registry: a reload evaluates a new module copy
+// against the already-patched prototype.
 
 import { isHostMethod, isObject, type HostMethod } from "./host.js";
 
