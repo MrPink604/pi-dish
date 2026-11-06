@@ -13,10 +13,7 @@ export interface HarnessJsonCommandOptions {
     cwd?: string;
 }
 export type HarnessJsonCommand = (descriptor: HarnessDescriptor, argv: string[], options?: HarnessJsonCommandOptions) => Promise<unknown>;
-/** Malformed/missing frontmatter keeps the filename fallback; unreadable files drop. */
-export declare function parseAgentFile(file: string, source: TaskAgent['source']): TaskAgent | null;
 export declare function listTaskAgents(descriptor: HarnessDescriptor, runJson: HarnessJsonCommand, { cwd, env }?: {
     cwd?: string;
     env?: HarnessEnvironment;
 }): Promise<TaskAgent[]>;
-export declare function _resetCacheForTests(): void;

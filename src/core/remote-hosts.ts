@@ -1,39 +1,13 @@
 /**
- * Fleet transports: how this host reaches the peers listed in
- * ~/.pi/dish/settings.json `remotes` (TASKS/multi-host.md block 5).
- *
- * Two kinds, both request/response — there is no standing mesh and hosts
- * never gossip:
- *   { name, url, token? }        direct HTTP to a peer's tailnet/LAN address,
- *                                the peer's own token attached here.
- *   { name, sshDest, remotePort? } a lazily-spawned `ssh -N -L <unix socket>`
- *                                forward for peers only reachable by ssh; the
- *                                peer stays loopback-bound and ssh keys are
- *                                the credential.
- *   { name, sshDest, deploy: true } the same forward, but this hub also owns
- *                                the peer: it uploads its host bundle
- *                                (host-bundle.ts) and runs it as the ssh
- *                                session's command. The deployed host lives
- *                                only while that session does, presents a
- *                                per-session token read from stdin, and is
- *                                let go after DEPLOY_IDLE_MS without traffic
- *                                or working sessions. Its agents keep running
- *                                in tmux on the far side.
+ * Fleet transports for the `remotes` in ~/.pi/dish/settings.json: direct HTTP
+ * to a peer's address, or a lazily-spawned ssh forward to a loopback-bound
+ * peer (optionally deploying this hub's host bundle over the session).
  *
  * `name` becomes a path segment under /hosts/<name>/api, so it is validated
- * hard; anything malformed is skipped rather than thrown, because one bad
- * fleet-map line must not take the server's settings down with it.
- *
- * HOME is resolved per call (lib/dish-store.js rules) so a test's temp HOME
- * gets its own remotes, run dir and probe state.
- *
- * Reachability is memoized, not polled: pi-dish is poll-driven already, so a
- * probe result is cached for a few seconds on success and gated behind a
- * backoff ladder on failure. The only timer is a deployed forward's idle
- * check, which never dials anything new.
- *
- * ssh stderr is never logged or returned: it carries host names, key paths
- * and auth detail. It is classified into a short code and the text dropped.
+ * hard and a malformed fleet-map entry is skipped, never thrown. Reachability
+ * is memoized behind a backoff ladder instead of polled. ssh stderr carries
+ * host names, key paths and auth detail, so it is classified into a short code
+ * and the text dropped.
  */
 import { spawn, type ChildProcess, type ChildProcessByStdio } from 'node:child_process';
 import crypto = require('node:crypto');
@@ -42,7 +16,7 @@ import http = require('node:http');
 import https = require('node:https');
 import path = require('node:path');
 import type { Readable, Writable } from 'node:stream';
-import { dishDir } from './dish-store';
+import { dishDir, readStore } from './dish-store';
 import { hostBundle, type HostBundle } from './host-bundle';
 import { readVapidKeys } from './push-notifications';
 import { isRecord } from './wire-protocol';
@@ -167,20 +141,9 @@ export const EXIT_NEEDS_VAPID = 98;
 const HOST_READY_RE = /pi-dish running at /;
 const MAX_DESCRIPTOR_BYTES = 64 * 1024;
 
-// --- config ---------------------------------------------------------------
-
-function settingsFile(): string {
-  return path.join(dishDir(), 'settings.json');
-}
-
 function readRemotesSetting(): unknown[] {
-  try {
-    const raw: unknown = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'));
-    const remotes: unknown = raw && typeof raw === 'object' && 'remotes' in raw ? raw.remotes : undefined;
-    return Array.isArray(remotes) ? remotes : [];
-  } catch {
-    return [];
-  }
+  const remotes = readStore('settings.json').remotes;
+  return Array.isArray(remotes) ? remotes : [];
 }
 
 export function isValidRemoteName(name: unknown): name is string {
@@ -188,7 +151,7 @@ export function isValidRemoteName(name: unknown): name is string {
 }
 
 /** Config entry -> normalized remote, or null when the entry is unusable. */
-export function normalizeRemote(value: unknown): Remote | null {
+function normalizeRemote(value: unknown): Remote | null {
   if (!value || typeof value !== 'object') return null;
   const entry = value as Record<string, unknown>;
   const name = typeof entry.name === 'string' ? entry.name.trim() : '';
@@ -242,8 +205,6 @@ export function getRemote(name: unknown): Remote | null {
   return listRemotes().find((r) => r.name === name) || null;
 }
 
-// --- per-remote state -----------------------------------------------------
-
 // Keyed by dish dir as well as name: a test's temp HOME is a different fleet,
 // and its ssh sockets live in a different run dir.
 const states = new Map<string, RemoteState>();
@@ -262,8 +223,6 @@ function backoffMs(failures: number): number {
   return BACKOFF_LADDER[Math.min(failures, BACKOFF_LADDER.length - 1)];
 }
 
-// --- errors ---------------------------------------------------------------
-
 function transportError(code: unknown): TransportError {
   const err = new Error(`remote transport: ${code}`) as TransportError;
   err.transportCode = code;
@@ -272,8 +231,6 @@ function transportError(code: unknown): TransportError {
 
 /** Network failure -> short code. Never surfaces a message or stderr text. */
 export function errorCode(err: unknown): unknown {
-  // Preserve legacy property access and truthy passthrough without claiming
-  // an external transportCode is one of our own short string codes.
   const failure = err as { transportCode?: unknown; code?: unknown } | null | undefined;
   if (failure && failure.transportCode) return failure.transportCode;
   const code = failure && failure.code;
@@ -305,8 +262,6 @@ export function classifySshStderr(text: unknown): SshErrorCode {
   if (/no route to host|network is unreachable/i.test(s)) return 'ssh_unreachable';
   return 'ssh_failed';
 }
-
-// --- ssh forwards ---------------------------------------------------------
 
 export function runDir(): string {
   return path.join(dishDir(), 'run');
@@ -397,7 +352,7 @@ export function hostLaunchScript(hash: string, port: number): string {
 }
 
 /** Unpacks a bundle tarball from stdin into ~/.pi/dish/host/<hash>, marked complete only once whole. */
-export function hostUploadScript(hash: string): string {
+function hostUploadScript(hash: string): string {
   const script = [
     TERMUX_ENV,
     'set -e; B="$HOME/.pi/dish/host"; mkdir -p "$B"; rm -rf "$B"/.incoming-*;',
@@ -668,8 +623,6 @@ export function shutdown(): void {
   }
 }
 
-// --- requests -------------------------------------------------------------
-
 // Never forwarded upstream: the caller's credential (the *hub's* token is not
 // the peer's, and a peer must never see it) and framing headers node owns.
 const DROPPED_REQUEST_HEADERS: Record<string, true> = {
@@ -732,8 +685,6 @@ export async function request(target: Remote | string, options: RemoteRequestOpt
     headers: { ...outboundHeaders(headers, remote.token, { upgrade }), host: url.host },
   });
 }
-
-// --- reachability ---------------------------------------------------------
 
 function sanitizeDescriptor(value: unknown): RemoteDescriptor | null {
   if (!value || typeof value !== 'object') return null;

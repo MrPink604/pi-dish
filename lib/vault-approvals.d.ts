@@ -88,8 +88,6 @@ export declare function decodeFields(value: unknown): VaultField[] | null;
 /** Notification for a pending request; the reason is the agent's claim, so it follows the facts. */
 export declare function vaultPushPayload(request: VaultRequest): Omit<PushPayload, 'hostId'>;
 export declare function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals;
-/** The listener's bridge credential, created 0600 on first use (exclusive, so racing first uses agree). */
-export declare function readBridgeToken(): string;
 type VaultHandler = (req: Request<{
     id: string;
 }>, res: Response) => void;

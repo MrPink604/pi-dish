@@ -91,6 +91,16 @@ function copyRelayResponseHeaders(peerRes: IncomingMessage, res: TransportRespon
   }
 }
 
+// Probes are memoized and individually bounded; the race keeps one wedged peer
+// from holding the fleet list open.
+function boundedProbe(remote: Remote): Promise<BoundedProbe> {
+  return Promise.race([
+    remoteHosts.probe(remote).catch((): BoundedProbe => ({ reachable: false })),
+    new Promise<BoundedProbe>((resolve) => setTimeout(
+      () => resolve({ reachable: false, error: 'timeout' }), HOSTS_PROBE_DEADLINE_MS).unref()),
+  ]);
+}
+
 export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   const { fleetArtifacts } = ports;
   const rawApi: TransportHandler = (req, res) => {
@@ -107,10 +117,9 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     const unreachable = (reason: unknown) => {
       res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason });
     };
-    // A peer already known down within its backoff slot answers instantly. A
-    // sleeping tailscale machine black-holes the connect rather than refusing
-    // it, so dialing anyway costs the whole first-byte timer on every request;
-    // the slot expiring (3-16s) is what re-dials, no other machinery needed.
+    // A peer known down within its backoff slot answers instantly: a sleeping
+    // tailscale machine black-holes the connect, so dialing would cost the
+    // whole first-byte timer. The slot expiry is what re-dials.
     const known = remoteHosts.reachability(remote);
     if (known && !known.reachable) return unreachable(known.error || 'unreachable');
 
@@ -160,12 +169,10 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   // Set by a hub fronting this host's page from a listener that has no /api to
   // answer the overlay (see serveFleetArtifact).
   const PAGE_COMMENTS_HEADER = 'x-pi-dish-page-comments';
-  // Marks every hub→peer public-artifact request (discovery probes and the
-  // mapped relay alike). A host receiving it answers from its local registry
-  // only: no mapping follow, no discovery of its own. That bounds a fleet in
-  // which hosts name each other as remotes to one hop — no loops, no
-  // amplification. Never copied from the client request (PUBLIC_FORWARD_HEADERS
-  // is an allowlist).
+  // Marks every hub→peer public-artifact request. The receiver answers from
+  // its local registry only (no mapping follow, no discovery of its own), so a
+  // fleet in which hosts name each other as remotes is bounded to one hop.
+  // Never copied from the client request.
   const ARTIFACT_HOP_HEADER = 'x-pi-dish-artifact-hop';
 
   // Discovery bounds. A token nobody claimed is remembered as absent so a
@@ -191,11 +198,9 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
 
   /**
    * Artifact bookkeeping for a proxied request, or null for everything else.
-   *
    * A peer minting a share/page through this hub is the hub's cue to record
-   * where the token lives and to hand back *its own* public URL: the browser
-   * is on the hub, and the peer's PI_DISH_SHARE_BASE_URL describes a front
-   * door this reader may not have.
+   * where the token lives and to answer with its own public URL: the peer's
+   * PI_DISH_SHARE_BASE_URL may describe a front door this reader lacks.
    */
   function fleetArtifactHook(remote: Remote, req: TransportRequest): ArtifactHook | null {
     const reqPath = req.url.split('?')[0];
@@ -257,15 +262,11 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
 
   /**
    * Which configured remote answers to a hostId. Fleet-map membership is the
-   * authorization (block 6's trust statement): only remotes this host already
-   * knows are ever probed, and an id nobody claims simply has no answer.
+   * authorization: only remotes this host already knows are ever probed.
    */
   async function findRemoteByHostId(hostId: string): Promise<Remote | null> {
     const remotes = remoteHosts.listRemotes();
-    const probes = await Promise.all(remotes.map((remote) => Promise.race([
-      remoteHosts.probe(remote).catch((): BoundedProbe => ({ reachable: false })),
-      new Promise<BoundedProbe>((resolve) => setTimeout(() => resolve({ reachable: false }), HOSTS_PROBE_DEADLINE_MS).unref()),
-    ])));
+    const probes = await Promise.all(remotes.map(boundedProbe));
     const index = probes.findIndex((probe) => probe.reachable && probe.descriptor?.hostId === hostId);
     return index >= 0 ? remotes[index] : null;
   }
@@ -334,17 +335,10 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   }
 
   /**
-   * Find which configured remote owns a token this host has no mapping for.
-   *
-   * A share or page minted on a peer by any route (its own UI, OMP's import
-   * hook, an agent publishing without --via) must still be reachable through
-   * every host that lists that peer as a remote. The probe is a HEAD of the
-   * token's own document — no new peer endpoint, so older peers answer it —
-   * and any 2xx/3xx is a claim. Security posture: tokens are ≥128-bit random
-   * capabilities, and a claim reveals nothing beyond serving the artifact
-   * itself; only remotes already in this host's fleet map are contacted; the
-   * hop header keeps it to one hop; and outbound traffic is bounded by the
-   * concurrency cap and the negative cache.
+   * Find which configured remote owns a token this host has no mapping for, by
+   * HEADing the token's own document (any 2xx/3xx is a claim). Tokens are
+   * ≥128-bit random capabilities, only fleet-map members are contacted, and
+   * the hop header keeps it to one hop.
    */
   function discoverOwner(token: string, kind: ArtifactKind): Promise<FleetArtifactRecord | null> {
     const key = `${kind}:${token}`;
@@ -411,10 +405,8 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
 
   /**
    * Fallback for a /share or /page token this host doesn't own: stream it from
-   * the peer that does. A token with no mapping is discovered by asking this
-   * host's remotes (see discoverOwner); an explicitly unmapped token, or a
-   * request that is itself a hub's hop, is a bare 404 without contacting
-   * anybody.
+   * the peer that does. An explicitly unmapped token, or a request that is
+   * itself a hub's hop, is a bare 404 without contacting anybody.
    */
   function serveFleetArtifact(req: TransportRequest, res: TransportResponse, kind: ArtifactKind, { annotate = true }: { annotate?: boolean } = {}): void {
     const token = req.params.token;
@@ -469,32 +461,29 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       (upstream) => upstream.end(),
       (peerRes) => {
           if (peerRes.statusCode === 404) {
-            // Revoked on the owner: the mapping is dead, and this reader gets
-            // the same bare 404 an unknown token gets. Only the token's own
-            // document proves that — a missing *asset* under a live page is
-            // the page's own 404, not the artifact's. And the slash spelling
-            // alone proves nothing: a single-file page root 404s `/page/t/`
-            // while `/page/t` is alive, so verify the bare form before
-            // pruning and send the reader there when it lives.
+            // Only the token's own document proves a revoke: a missing asset
+            // under a live page is the page's own 404. The slash spelling
+            // proves nothing either — a single-file page root 404s
+            // `/page/t/` while `/page/t` is alive — so verify the bare form
+            // before pruning and redirect the reader there when it lives.
             peerRes.resume();
             if (!documentRequest) return notFound();
             if (kind === 'page' && rest === '/') {
-              return remoteHosts.request(remote, { method: 'GET', path: `/page/${token}`, headers })
-                .then((check) => {
-                  const checkTimer = setTimeout(() => { try { check.destroy(); } catch {} notFound(); }, PUBLIC_ARTIFACT_TIMEOUT_MS);
-                  check.on('error', () => { clearTimeout(checkTimer); notFound(); });
-                  check.on('response', (checkRes) => {
-                    clearTimeout(checkTimer);
-                    checkRes.resume();
-                    if (checkRes.statusCode === 404) {
-                      fleetArtifacts.remove(token, mapping.host);
-                      return notFound();
-                    }
-                    res.redirect(302, `/page/${token}${query}`);
-                  });
-                  check.end();
-                })
-                .catch(notFound);
+              return relayFirstResponse(
+                remoteHosts.request(remote, { method: 'GET', path: `/page/${token}`, headers }),
+                PUBLIC_ARTIFACT_TIMEOUT_MS,
+                (check) => check.end(),
+                (checkRes) => {
+                  checkRes.resume();
+                  if (checkRes.statusCode === 404) {
+                    fleetArtifacts.remove(token, mapping.host);
+                    return notFound();
+                  }
+                  res.redirect(302, `/page/${token}${query}`);
+                },
+                notFound,
+                null,
+              );
             }
             fleetArtifacts.remove(token, mapping.host);
             return notFound();
@@ -512,12 +501,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
 
   const hosts: TransportHandler = async (_req, res) => {
     const remotes = remoteHosts.listRemotes();
-    // Probes are memoized and individually bounded; the race is the belt to
-    // that braces, so one wedged peer can never hold the fleet list open.
-    const probes = await Promise.all(remotes.map((remote) => Promise.race([
-      remoteHosts.probe(remote).catch((): BoundedProbe => ({ reachable: false, error: 'unreachable' })),
-      new Promise<BoundedProbe>((resolve) => setTimeout(() => resolve({ reachable: false, error: 'timeout' }), HOSTS_PROBE_DEADLINE_MS).unref()),
-    ])));
+    const probes = await Promise.all(remotes.map(boundedProbe));
 
     const hosts: FleetHostEntry[] = [{
       self: true,
@@ -543,9 +527,8 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   };
 
   // Feedback on a page this host merely fronts belongs to the host whose agent
-  // will read it. The overlay injected into a proxied page calls this host's
-  // page-scoped comment routes (mounted at /api/page-comments/:token); a token
-  // this host owns or has never mapped takes the normal local path.
+  // will read it; a token this host owns or has never mapped takes the local
+  // path.
   const pageComments: TransportHandler = (req, res, next) => {
     const token = req.params.token;
     if (!fleetArtifacts.isValidToken(token) || ports.localPageExists(token)) return next();

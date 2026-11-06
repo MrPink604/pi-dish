@@ -1,17 +1,15 @@
 /**
  * Web Push for installed browser clients. Each host pushes for its own live
  * sessions; the browser registers one subscription with every host, so the
- * fleet keeps its no-hub-aggregation rule. Every host must therefore sign with
- * the same VAPID key pair (`~/.pi/dish/vapid.json`, file-level like the token):
- * a host whose key differs from the subscribing origin's refuses the
- * subscription instead of accepting one it can never deliver to.
+ * fleet needs no hub aggregation. Every host must sign with the same VAPID key
+ * pair (`~/.pi/dish/vapid.json`): a host whose key differs from the
+ * subscribing origin's refuses the subscription instead of accepting one it
+ * can never deliver to.
  *
- * Triggers come from sampling the host's live-session catalog, which every
- * harness bridge keeps current in its registry entry without a socket client:
- *   - finished: a session observed working is idle for two consecutive samples
- *     (the gap between turns, or a provider retry, must not ring);
- *   - waiting: a session's ask dialog becomes pending.
- * The first sample after subscriptions appear is a baseline and never rings.
+ * Triggers come from sampling the host's live-session catalog: a session
+ * observed working is idle for two consecutive samples, or its ask dialog
+ * becomes pending. The first sample after subscriptions appear is a baseline
+ * and never rings.
  */
 import crypto = require('crypto');
 import fs = require('fs');
@@ -102,7 +100,7 @@ export function sessionTransitions(previous: SessionWatchState | null, rows: rea
   return { state, transitions };
 }
 
-export function decodeSubscription(value: unknown, now: () => number = Date.now): PushSubscriptionRecord | null {
+function decodeSubscription(value: unknown, now: () => number = Date.now): PushSubscriptionRecord | null {
   if (!isRecord(value) || typeof value.endpoint !== 'string' || !isRecord(value.keys)) return null;
   const { endpoint } = value;
   const { p256dh, auth } = value.keys;
@@ -116,7 +114,7 @@ export function decodeSubscription(value: unknown, now: () => number = Date.now)
 }
 
 /** Plain text of the last assistant message, collapsed and shortened for a notification. */
-export function assistantPreview(messages: readonly { readonly role?: unknown; readonly content: unknown }[]): string | null {
+function assistantPreview(messages: readonly { readonly role?: unknown; readonly content: unknown }[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== 'assistant') continue;
@@ -169,7 +167,7 @@ function topicFor(tag: string): string {
   return crypto.createHash('sha256').update(tag).digest('base64url').slice(0, 32);
 }
 
-export const sendWebPush: PushSender = async (subscription, payload, vapid) => {
+const sendWebPush: PushSender = async (subscription, payload, vapid) => {
   try {
     await webpush.sendNotification(subscription, JSON.stringify(payload), {
       vapidDetails: vapid, TTL: PUSH_TTL_SECONDS, urgency: 'high', topic: topicFor(payload.tag),

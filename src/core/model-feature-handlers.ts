@@ -52,9 +52,11 @@ function filterBridgeCommands(sess: InstanceType<typeof BridgeSession>, commands
   // Pi keeps its established full TUI list. Alternative harnesses retain only
   // supported commands and builtins mapped to an advertised bridge operation.
   if (sess.harnessId === 'pi') return commands;
-  return commandList(commands).filter(command => commandField(command, 'supported') === true
-    || (BRIDGE_COMMAND_CAPABILITIES[String(commandField(command, 'name'))]
-      && liveSessionSupports(sess, BRIDGE_COMMAND_CAPABILITIES[String(commandField(command, 'name'))])));
+  return commandList(commands).filter(command => {
+    if (commandField(command, 'supported') === true) return true;
+    const capability = BRIDGE_COMMAND_CAPABILITIES[String(commandField(command, 'name'))];
+    return !!capability && liveSessionSupports(sess, capability);
+  });
 }
 
 /** Commands pi-dish cannot drive on a Prime root: /new would switch the daemon

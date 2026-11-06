@@ -60,12 +60,6 @@ export declare function sessionTransitions(previous: SessionWatchState | null, r
     readonly state: SessionWatchState;
     readonly transitions: readonly SessionTransition[];
 };
-export declare function decodeSubscription(value: unknown, now?: () => number): PushSubscriptionRecord | null;
-/** Plain text of the last assistant message, collapsed and shortened for a notification. */
-export declare function assistantPreview(messages: readonly {
-    readonly role?: unknown;
-    readonly content: unknown;
-}[]): string | null;
 /**
  * The host's VAPID keys, generated on first use. The private key is a signing
  * secret: written 0600 and created exclusively, so two racing first uses
@@ -76,7 +70,6 @@ export interface PushSendResult {
     readonly gone: boolean;
 }
 export type PushSender = (subscription: PushSubscriptionRecord, payload: PushPayload, vapid: VapidKeys) => Promise<PushSendResult>;
-export declare const sendWebPush: PushSender;
 export interface PushNotifierPorts {
     /** Current live sessions on this host. */
     sessions(): readonly PushSessionRow[];

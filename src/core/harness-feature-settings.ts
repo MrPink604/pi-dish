@@ -30,6 +30,36 @@ function requestBody(body: unknown): Record<string, unknown> {
   return body && typeof body === 'object' ? body as Record<string, unknown> : {};
 }
 
+type HandlerRequest = Parameters<Handler>[0];
+type HandlerResponse = Parameters<Handler>[1];
+
+interface HarnessRoute {
+  supported(descriptor: HarnessDescriptor): boolean;
+  unsupported(descriptor: HarnessDescriptor): string;
+  run(descriptor: HarnessDescriptor, req: HandlerRequest, res: HandlerResponse): Promise<unknown>;
+  errorStatus?(error: unknown): number;
+}
+
+function harnessRoute({ supported, unsupported, run, errorStatus = () => 500 }: HarnessRoute): Handler {
+  return async (req, res) => {
+    const descriptor = getHarness(req.params.id);
+    if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
+    if (!supported(descriptor)) return res.status(501).json({ error: unsupported(descriptor) });
+    try {
+      await run(descriptor, req, res);
+    } catch (e) {
+      res.status(errorStatus(e)).json({ error: errorMessage(e) });
+    }
+  };
+}
+
+/** Undefined when absent; null after answering 400 when it is not a string. */
+function optionalCwd(res: HandlerResponse, value: unknown): string | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') { res.status(400).json({ error: 'cwd must be a string' }); return null; }
+  return value;
+}
+
 const MODEL_ROLE_KEY = /^[a-zA-Z][\w.-]{0,63}$/;
 const MODEL_ROLE_VALUE_MAX = 200;
 const AGENT_NAME_KEY = /^[A-Za-z0-9][\w.-]{0,63}$/;
@@ -45,15 +75,18 @@ function sanitizeModelRoles(value: unknown): Record<string, string> {
 // so a read(merged) → edit → set() round trip would silently copy a project's
 // `.omp/config.yml` overrides into the global config. An empty temp dir has no
 // project config to overlay, so reading there yields global alone.
-async function readGlobalConfigValues(descriptor: HarnessDescriptor, keys: string[]): Promise<unknown[]> {
+async function inEmptyDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-global-'));
   try {
-    const values = await Promise.all(keys.map(key => runHarnessJsonCommand(
-      descriptor, descriptor.argv.configGet!(key), { cwd: dir })));
-    return values.map(valueOf);
+    return await run(dir);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+async function readGlobalConfigValues(descriptor: HarnessDescriptor, keys: string[]): Promise<unknown[]> {
+  return inEmptyDir(async dir => (await Promise.all(keys.map(key => runHarnessJsonCommand(
+    descriptor, descriptor.argv.configGet!(key), { cwd: dir })))).map(valueOf));
 }
 
 async function readGlobalModelRoles(descriptor: HarnessDescriptor): Promise<Record<string, string>> {
@@ -75,8 +108,6 @@ async function readHarnessPilotConfig(descriptor: HarnessDescriptor, cwd?: strin
   const defaultThinkingLevel = typeof thinking === 'string' ? thinking : null;
   return { defaultModel, defaultThinkingLevel, modelRoles, globalModelRoles };
 }
-
-// --- Task-agent settings (OMP's /agents hub: one array + three records) ---
 
 const AGENT_SETTING_KEYS = ['disabledAgents', 'agentModelOverrides', 'agentPrewalk', 'agentAdvisor'];
 
@@ -143,8 +174,6 @@ function queueHarnessConfigWrite<T>(harnessId: string, task: () => Promise<T>): 
   return chained;
 }
 
-// --- Schema-driven settings (OMP's /settings panel) ---
-
 interface SettingRow {
   key: string;
   tab: string;
@@ -197,17 +226,11 @@ function listedSettings(value: unknown): Record<string, Record<string, unknown>>
 // a cwd, a differing effective value is reported as that project's override.
 // Settings the TUI has no tab for ("internal") are not offered.
 async function readSettings(descriptor: HarnessDescriptor, cwd?: string) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-global-'));
-  let schemaText: string, globalList: unknown, effectiveList: unknown;
-  try {
-    [schemaText, globalList, effectiveList] = await Promise.all([
-      runHarnessTextCommand(descriptor, descriptor.argv.configSchema!, { cwd: dir }),
-      runHarnessJsonCommand(descriptor, descriptor.argv.configList!, { cwd: dir }),
-      cwd ? runHarnessJsonCommand(descriptor, descriptor.argv.configList!, { cwd }) : null,
-    ]);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  const [schemaText, globalList, effectiveList] = await inEmptyDir(dir => Promise.all([
+    runHarnessTextCommand(descriptor, descriptor.argv.configSchema!, { cwd: dir }),
+    runHarnessJsonCommand(descriptor, descriptor.argv.configList!, { cwd: dir }),
+    cwd ? runHarnessJsonCommand(descriptor, descriptor.argv.configList!, { cwd }) : null,
+  ]));
   const schema = parseSettingsSchema(schemaText);
   const global = listedSettings(globalList);
   const effective = effectiveList === null ? null : listedSettings(effectiveList);
@@ -288,130 +311,105 @@ export const harnesses: Handler = (_req, res) => {
   });
 };
 
-
-export const harnessConfig: Handler = async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!descriptor.pilotConfig) {
-    return res.status(501).json({ error: `Pilot config is not supported for ${descriptor.label}.` });
-  }
-  if (req.query.cwd !== undefined && typeof req.query.cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  try {
-    res.json(await readHarnessPilotConfig(descriptor, req.query.cwd));
-  } catch (e) {
-    res.status(500).json({ error: errorMessage(e) });
-  }
-};
+export const harnessConfig = harnessRoute({
+  supported: descriptor => !!descriptor.pilotConfig,
+  unsupported: descriptor => `Pilot config is not supported for ${descriptor.label}.`,
+  async run(descriptor, req, res) {
+    const cwd = optionalCwd(res, req.query.cwd);
+    if (cwd === null) return;
+    res.json(await readHarnessPilotConfig(descriptor, cwd));
+  },
+});
 
 // Patch role → model assignments in the harness's *global* config. Values are
 // stored verbatim: the harness resolves model refs itself, and a rewrite here
 // would only invent a second dialect.
-export const updateModelRoles: Handler = async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!descriptor.pilotConfig || typeof descriptor.argv.configSet !== 'function') {
-    return res.status(501).json({ error: `Model roles are not editable for ${descriptor.label}.` });
-  }
-  const { roles, cwd } = requestBody(req.body);
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  if (!roles || typeof roles !== 'object' || Array.isArray(roles)) {
-    return res.status(400).json({ error: 'roles must be an object mapping role names to model refs' });
-  }
-  const patch = Object.entries(roles as Record<string, unknown>);
-  if (!patch.length) return res.status(400).json({ error: 'roles must name at least one role' });
-  for (const [role, model] of patch) {
-    if (!MODEL_ROLE_KEY.test(role)) {
-      return res.status(400).json({ error: `Invalid role name: ${role}` });
+export const updateModelRoles = harnessRoute({
+  supported: descriptor => !!descriptor.pilotConfig && typeof descriptor.argv.configSet === 'function',
+  unsupported: descriptor => `Model roles are not editable for ${descriptor.label}.`,
+  async run(descriptor, req, res) {
+    const { roles, cwd } = requestBody(req.body);
+    const cwdValue = optionalCwd(res, cwd);
+    if (cwdValue === null) return;
+    if (!roles || typeof roles !== 'object' || Array.isArray(roles)) {
+      return res.status(400).json({ error: 'roles must be an object mapping role names to model refs' });
     }
-    if (model === null) continue;
-    if (typeof model !== 'string' || !model.trim() || model.length > MODEL_ROLE_VALUE_MAX) {
-      return res.status(400).json({ error: `Invalid model for role ${role}: expected null or a non-empty model ref of at most ${MODEL_ROLE_VALUE_MAX} characters` });
+    const patch = Object.entries(roles as Record<string, unknown>);
+    if (!patch.length) return res.status(400).json({ error: 'roles must name at least one role' });
+    for (const [role, model] of patch) {
+      if (!MODEL_ROLE_KEY.test(role)) {
+        return res.status(400).json({ error: `Invalid role name: ${role}` });
+      }
+      if (model === null) continue;
+      if (typeof model !== 'string' || !model.trim() || model.length > MODEL_ROLE_VALUE_MAX) {
+        return res.status(400).json({ error: `Invalid model for role ${role}: expected null or a non-empty model ref of at most ${MODEL_ROLE_VALUE_MAX} characters` });
+      }
     }
-  }
-  try {
     res.json(await queueHarnessConfigWrite(descriptor.id, async () => {
       const record = await readGlobalModelRoles(descriptor);
-      for (const [role, model] of patch) {
-        // Every non-null value was validated above; the captured patch is local.
-        if (model === null) delete record[role]; else record[role] = model as string;
+      for (const [role, model] of patch as [string, string | null][]) {
+        if (model === null) delete record[role]; else record[role] = model;
       }
       await runHarnessJsonCommand(descriptor,
         descriptor.argv.configSet!(descriptor.pilotConfig!.modelRoles, JSON.stringify(record)));
       const [globalModelRoles, effective] = await Promise.all([
         readGlobalModelRoles(descriptor),
-        runHarnessJsonCommand(descriptor, descriptor.argv.configGet!(descriptor.pilotConfig!.modelRoles), { cwd }),
+        runHarnessJsonCommand(descriptor, descriptor.argv.configGet!(descriptor.pilotConfig!.modelRoles), { cwd: cwdValue }),
       ]);
       return { globalModelRoles, modelRoles: sanitizeModelRoles(valueOf(effective)) };
     }));
-  } catch (e) {
-    res.status(500).json({ error: errorMessage(e) });
-  }
-};
+  },
+});
 
 // Task-agent inventory (bundled + user + project definitions) with the
 // per-agent settings the harness's own agents hub edits.
-export const harnessAgents: Handler = async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!agentSettingsSupported(descriptor)) {
-    return res.status(501).json({ error: `Task agents are not configurable for ${descriptor.label}.` });
-  }
-  const cwd = req.query.cwd;
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  try {
+export const harnessAgents = harnessRoute({
+  supported: agentSettingsSupported,
+  unsupported: descriptor => `Task agents are not configurable for ${descriptor.label}.`,
+  async run(descriptor, req, res) {
+    const cwd = optionalCwd(res, req.query.cwd);
+    if (cwd === null) return;
     const [agents, settings] = await Promise.all([
       listTaskAgents(descriptor, runHarnessJsonCommand, { cwd }),
       readAgentSettings(descriptor, cwd),
     ]);
     res.json({ agents, ...settings, cwd: cwd || '' });
-  } catch (e) {
-    res.status(500).json({ error: errorMessage(e) });
-  }
-};
+  },
+});
 
 // Patch per-agent settings in the harness's *global* config. Each field is
 // tri-state: `disabled` toggles array membership, and `model`/`prewalk`/
 // `advisor` take a value or null to drop the override and inherit again.
-export const updateHarnessAgents: Handler = async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!agentSettingsSupported(descriptor) || typeof descriptor.argv.configSet !== 'function') {
-    return res.status(501).json({ error: `Task agents are not configurable for ${descriptor.label}.` });
-  }
-  const { agents, cwd } = requestBody(req.body);
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  if (!agents || typeof agents !== 'object' || Array.isArray(agents)) {
-    return res.status(400).json({ error: 'agents must be an object mapping agent names to settings' });
-  }
-  const patch = Object.entries(agents as Record<string, unknown>);
-  if (!patch.length) return res.status(400).json({ error: 'agents must name at least one agent' });
-  for (const [name, settings] of patch) {
-    if (!AGENT_NAME_KEY.test(name)) return res.status(400).json({ error: `Invalid agent name: ${name}` });
-    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
-      return res.status(400).json({ error: `Invalid settings for agent ${name}` });
+export const updateHarnessAgents = harnessRoute({
+  supported: descriptor => agentSettingsSupported(descriptor) && typeof descriptor.argv.configSet === 'function',
+  unsupported: descriptor => `Task agents are not configurable for ${descriptor.label}.`,
+  async run(descriptor, req, res) {
+    const { agents, cwd } = requestBody(req.body);
+    const cwdValue = optionalCwd(res, cwd);
+    if (cwdValue === null) return;
+    if (!agents || typeof agents !== 'object' || Array.isArray(agents)) {
+      return res.status(400).json({ error: 'agents must be an object mapping agent names to settings' });
     }
-    const fields = settings as Record<string, unknown>;
-    for (const field of ['disabled', 'prewalk', 'advisor']) {
-      const value = fields[field];
-      if (value !== undefined && value !== null && typeof value !== 'boolean') {
-        return res.status(400).json({ error: `Invalid ${field} for agent ${name}: expected a boolean or null` });
+    const patch = Object.entries(agents as Record<string, unknown>);
+    if (!patch.length) return res.status(400).json({ error: 'agents must name at least one agent' });
+    for (const [name, settings] of patch) {
+      if (!AGENT_NAME_KEY.test(name)) return res.status(400).json({ error: `Invalid agent name: ${name}` });
+      if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+        return res.status(400).json({ error: `Invalid settings for agent ${name}` });
+      }
+      const fields = settings as Record<string, unknown>;
+      for (const field of ['disabled', 'prewalk', 'advisor']) {
+        const value = fields[field];
+        if (value !== undefined && value !== null && typeof value !== 'boolean') {
+          return res.status(400).json({ error: `Invalid ${field} for agent ${name}: expected a boolean or null` });
+        }
+      }
+      const model = fields.model;
+      if (model !== undefined && model !== null
+          && (typeof model !== 'string' || !model.trim() || model.length > MODEL_ROLE_VALUE_MAX)) {
+        return res.status(400).json({ error: `Invalid model for agent ${name}: expected null or a non-empty model ref of at most ${MODEL_ROLE_VALUE_MAX} characters` });
       }
     }
-    const model = fields.model;
-    if (model !== undefined && model !== null
-        && (typeof model !== 'string' || !model.trim() || model.length > MODEL_ROLE_VALUE_MAX)) {
-      return res.status(400).json({ error: `Invalid model for agent ${name}: expected null or a non-empty model ref of at most ${MODEL_ROLE_VALUE_MAX} characters` });
-    }
-  }
-  try {
     res.json(await queueHarnessConfigWrite(descriptor.id, async () => {
       const keys = agentSettingKeyList(descriptor);
       const record = shapeAgentSettings(await readGlobalConfigValues(descriptor, keys));
@@ -428,7 +426,6 @@ export const updateHarnessAgents: Handler = async (req, res) => {
         }
         dirty.add(key);
       };
-      // The captured entries retain the values validated before the write queue.
       for (const [name, settings] of patch as [string, AgentPatch][]) {
         if (settings.disabled !== undefined && settings.disabled !== null
             && settings.disabled !== disabled.has(name)) {
@@ -453,53 +450,41 @@ export const updateHarnessAgents: Handler = async (req, res) => {
           await runHarnessJsonCommand(descriptor, descriptor.argv.configSet!(key, JSON.stringify(values[key])));
         }
       }
-      return readAgentSettings(descriptor, cwd);
+      return readAgentSettings(descriptor, cwdValue);
     }));
-  } catch (e) {
-    res.status(500).json({ error: errorMessage(e) });
-  }
-};
+  },
+});
 
 // Every setting the harness's own settings panel offers, grouped by its tabs.
-export const listHarnessSettings: Handler = async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!settingsSupported(descriptor)) {
-    return res.status(501).json({ error: `Settings are not editable for ${descriptor.label}.` });
-  }
-  const cwd = req.query.cwd;
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  try {
+export const listHarnessSettings = harnessRoute({
+  supported: settingsSupported,
+  unsupported: descriptor => `Settings are not editable for ${descriptor.label}.`,
+  async run(descriptor, req, res) {
+    const cwd = optionalCwd(res, req.query.cwd);
+    if (cwd === null) return;
     res.json(await readSettings(descriptor, cwd));
-  } catch (e) {
-    res.status(500).json({ error: errorMessage(e) });
-  }
-};
+  },
+});
 
 // Patch settings in the harness's *global* config: a value sets the key, null
 // resets it to the harness default. Every key and value is checked against
 // the current schema before the first write.
-export const updateHarnessSettings: Handler = async (req, res) => {
-  const descriptor = getHarness(req.params.id);
-  if (!descriptor) return res.status(404).json({ error: 'Unknown harness' });
-  if (!settingsSupported(descriptor)) {
-    return res.status(501).json({ error: `Settings are not editable for ${descriptor.label}.` });
-  }
-  const { settings, cwd } = requestBody(req.body);
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    return res.status(400).json({ error: 'cwd must be a string' });
-  }
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
-    return res.status(400).json({ error: 'settings must be an object mapping setting keys to values' });
-  }
-  const patch = Object.entries(settings as Record<string, unknown>);
-  if (!patch.length) return res.status(400).json({ error: 'settings must name at least one setting' });
-  for (const [key] of patch) {
-    if (!SETTING_KEY.test(key)) return res.status(400).json({ error: `Invalid setting key: ${key}` });
-  }
-  try {
+export const updateHarnessSettings = harnessRoute({
+  supported: settingsSupported,
+  unsupported: descriptor => `Settings are not editable for ${descriptor.label}.`,
+  errorStatus: error => (error instanceof SettingInputError ? 400 : 500),
+  async run(descriptor, req, res) {
+    const { settings, cwd } = requestBody(req.body);
+    const cwdValue = optionalCwd(res, cwd);
+    if (cwdValue === null) return;
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      return res.status(400).json({ error: 'settings must be an object mapping setting keys to values' });
+    }
+    const patch = Object.entries(settings as Record<string, unknown>);
+    if (!patch.length) return res.status(400).json({ error: 'settings must name at least one setting' });
+    for (const [key] of patch) {
+      if (!SETTING_KEY.test(key)) return res.status(400).json({ error: `Invalid setting key: ${key}` });
+    }
     res.json(await queueHarnessConfigWrite(descriptor.id, async () => {
       const rows = new Map((await readSettings(descriptor)).settings.map(row => [row.key, row]));
       const commands = patch.map(([key, value]) => {
@@ -509,9 +494,7 @@ export const updateHarnessSettings: Handler = async (req, res) => {
       });
       // One CLI process per key, in order; a failure leaves earlier writes committed.
       for (const command of commands) await runHarnessJsonCommand(descriptor, command);
-      return readSettings(descriptor, typeof cwd === 'string' ? cwd : undefined);
+      return readSettings(descriptor, cwdValue);
     }));
-  } catch (e) {
-    res.status(e instanceof SettingInputError ? 400 : 500).json({ error: errorMessage(e) });
-  }
-};
+  },
+});

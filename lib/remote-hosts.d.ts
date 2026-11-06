@@ -59,8 +59,6 @@ export declare const EXIT_NODE_MISSING = 96;
 export declare const EXIT_NEEDS_BUNDLE = 97;
 export declare const EXIT_NEEDS_VAPID = 98;
 export declare function isValidRemoteName(name: unknown): name is string;
-/** Config entry -> normalized remote, or null when the entry is unusable. */
-export declare function normalizeRemote(value: unknown): Remote | null;
 /** Configured peers, invalid entries skipped, first entry wins on a name clash. */
 export declare function listRemotes(): Remote[];
 export declare function getRemote(name: unknown): Remote | null;
@@ -93,8 +91,6 @@ export declare function sshArgv(remote: SshRemote, socketPath?: string, launch?:
  * Termux:API app; only a successful call writes the `scheduled` marker.
  */
 export declare function hostLaunchScript(hash: string, port: number): string;
-/** Unpacks a bundle tarball from stdin into ~/.pi/dish/host/<hash>, marked complete only once whole. */
-export declare function hostUploadScript(hash: string): string;
 /** Kill every ssh child. Hooked into the server's close (server.js). */
 export declare function shutdown(): void;
 /**
