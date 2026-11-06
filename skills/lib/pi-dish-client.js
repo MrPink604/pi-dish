@@ -215,7 +215,7 @@ function print(value, json) {
   else process.stdout.write(JSON.stringify(value, null, 2) + "\n");
 }
 function parseCommandLine(argv, fallback, flags = []) {
-  const line = { command: argv[0] ?? fallback, positional: [], json: false, values: {} };
+  const line = { command: argv[0] || fallback, positional: [], json: false, values: {} };
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--json") {

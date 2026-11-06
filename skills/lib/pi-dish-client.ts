@@ -162,7 +162,7 @@ export interface CommandLine {
  * value flags.
  */
 function parseCommandLine(argv: readonly string[], fallback: string, flags: readonly string[] = []): CommandLine {
-  const line: CommandLine = { command: argv[0] ?? fallback, positional: [], json: false, values: {} };
+  const line: CommandLine = { command: argv[0] || fallback, positional: [], json: false, values: {} };
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') { line.json = true; continue; }
