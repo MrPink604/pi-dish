@@ -219,12 +219,9 @@ declare function resolveSessionClientSide(base: string, host: unknown, id: strin
 declare function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: string | null): Promise<ResolvedSession>;
 /**
  * Merge per-host search results into one ranked list. The client is the
- * aggregator (TASKS/multi-host.md) — there is no server-side merged endpoint,
- * and there must not be one.
- *
- * `hostResults`: [{ host: '(self)' | 'tycho', results: [session, …] }, …]
- * Returns: [{ host, session }, …] sorted by searchScore desc, then (for the
- * unscored tail, which sorts after every scored row) by lastActivity desc.
+ * aggregator: there is no server-side merged endpoint, and there must not be
+ * one. Rows are sorted by searchScore descending, then the unscored tail by
+ * lastActivity descending.
  */
 declare function mergeSearchResults(hostResults: readonly SearchBucket[] | null | undefined, limit?: number): SearchRow[];
 declare function summarizeToolArgs(args: unknown, max?: number): string;

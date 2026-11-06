@@ -2,17 +2,15 @@
 /**
  * Shared plumbing for the vended pi-dish skill CLIs.
  *
- * Installation note: each skill directory is symlinked into
- * ~/.pi/agent/skills/ (see install.sh). Node resolves `require` through the
- * *realpath* of the requiring file, so a script at
+ * install.sh symlinks each skill directory into <agent dir>/skills/, and Node
+ * resolves `require` through the realpath of the requiring file, so
  * skills/<skill>/scripts/foo.js reaches this module with
- *   require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'))
- * even when it was invoked through the symlink. This directory is therefore
- * deliberately not a skill of its own — it ships with the repo and is reached
- * through the link, never installed beside the skills that use it.
+ * require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'))
+ * even when invoked through the link. This directory is therefore not a skill
+ * of its own — it is reached through the link, never installed beside them.
  *
- * Zero runtime dependencies, CommonJS, and no server imports: build:edges
- * bundles the portable reference helpers for use outside the repository.
+ * Zero runtime dependencies, CommonJS, no server imports: build:edges bundles
+ * the portable reference helpers for use outside the repository.
  */
 import fs = require('node:fs');
 import path = require('node:path');
@@ -133,10 +131,6 @@ class HttpError extends Error {
   constructor(message: string, readonly status: number, readonly body: unknown) { super(message); }
 }
 
-// =========================================================================
-// Output helpers
-// =========================================================================
-
 /** `fail` bound to one CLI's name, so every error line is attributable. */
 function makeFail(name: string) {
   return function fail(message: unknown) {
@@ -183,10 +177,6 @@ function parseCommandLine(argv: readonly string[], fallback: string, flags: read
   }
   return line;
 }
-
-// =========================================================================
-// Session discovery (process ancestry → bridge registry)
-// =========================================================================
 
 function parentPid(pid: number): number | null {
   try {
@@ -319,10 +309,6 @@ function discoverSessionQuietly(explicit?: string) {
   try { return discoverSession(explicit) || null; } catch { return null; }
 }
 
-// =========================================================================
-// HTTP
-// =========================================================================
-
 // One token for this server. A `/hosts/<name>` request is still a request to
 // the local server: it attaches each peer's own credential when it proxies, so
 // the CLI never holds per-host tokens.
@@ -366,9 +352,8 @@ async function requestText(base: string, pathname: string, init: RequestOptions 
   return { text, status: response.status };
 }
 
-// Cross-host reach is only a path prefix: every route the CLIs already speak
-// composes behind the local server's /hosts/<name> proxy (TASKS/multi-host.md
-// block 6). No host means the local server, exactly as before.
+// Cross-host reach is only a path prefix: the local server proxies every route
+// under /hosts/<name>; no host means this server.
 function hostPath(host: unknown, pathname: string) {
   return host ? `/hosts/${encodeURIComponent(String(host))}${pathname}` : pathname;
 }
@@ -399,10 +384,6 @@ async function unknownHostError(base: string, host: unknown) {
 function jsonInit(body: unknown, headers: Record<string, string> = {}): RequestOptions {
   return { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body || {}) };
 }
-
-// =========================================================================
-// Fleet
-// =========================================================================
 
 // Memoized per process: ref resolution, capability gating and `--host`
 // validation all want the same list, and a fleet probe is not free.
@@ -629,10 +610,6 @@ async function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: strin
   return { host, id: session.id, session };
 }
 
-// =========================================================================
-// Fleet search merge (pure)
-// =========================================================================
-
 function activityMs(value: unknown) {
   if (value == null) return 0;
   if (typeof value === 'number') return value;
@@ -642,12 +619,9 @@ function activityMs(value: unknown) {
 
 /**
  * Merge per-host search results into one ranked list. The client is the
- * aggregator (TASKS/multi-host.md) — there is no server-side merged endpoint,
- * and there must not be one.
- *
- * `hostResults`: [{ host: '(self)' | 'tycho', results: [session, …] }, …]
- * Returns: [{ host, session }, …] sorted by searchScore desc, then (for the
- * unscored tail, which sorts after every scored row) by lastActivity desc.
+ * aggregator: there is no server-side merged endpoint, and there must not be
+ * one. Rows are sorted by searchScore descending, then the unscored tail by
+ * lastActivity descending.
  */
 function mergeSearchResults(hostResults: readonly SearchBucket[] | null | undefined, limit?: number): SearchRow[] {
   const rows: SearchRow[] = [];
@@ -666,10 +640,6 @@ function mergeSearchResults(hostResults: readonly SearchBucket[] | null | undefi
   const max = typeof limit === 'number' && Number.isFinite(limit) && limit > 0 ? limit : rows.length;
   return rows.slice(0, max);
 }
-
-// =========================================================================
-// Transcript rendering (pure)
-// =========================================================================
 
 // Same priority as the session index's tool-arg extraction: the args a coding
 // session is recognised by come first, so a bulky `oldText` cannot crowd out
