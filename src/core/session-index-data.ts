@@ -1,5 +1,6 @@
 /** Persisted index projections and their consumed disk-ingress validation. */
-import { isRecord } from './session-metadata';
+import { finite, record as isRecord } from './helper-values';
+export { finite };
 
 export interface UsageState { provider: string | null; model: string; serviceTier?: Record<string, string> }
 export interface UsageTokens {
@@ -66,7 +67,6 @@ export function checkSearchLeaf(value: { leafId: unknown }): asserts value is { 
   if (value.leafId !== null && typeof value.leafId !== 'string') throw new TypeError('Invalid search projection');
 }
 export interface SkillProjection { records: SkillActivation[]; state: SkillState | null }
-export function finite(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value); }
 function nullableString(value: unknown): value is string | null { return value === null || typeof value === 'string'; }
 function usageState(value: unknown): value is UsageState {
   return isRecord(value) && nullableString(value.provider) && typeof value.model === 'string' &&

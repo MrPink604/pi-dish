@@ -3,7 +3,7 @@ import type { RequestHandler } from 'express';
 import { BridgeSession } from './bridge-session';
 import type { BridgeRegistryEntry } from './contracts';
 import type { LiveSession, RuntimeDescription } from './session-ownership';
-import type { SessionSource } from './session-source-contracts';
+import type { SessionSource } from './session-source';
 /** Ports retain captured read identity, never lifecycle permission. */
 export interface SessionReadPorts {
     findSessionSource(id: string, options?: {

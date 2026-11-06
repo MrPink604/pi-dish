@@ -1,5 +1,4 @@
 import type { HarnessId, NativeSessionId, SessionId, SessionIdentity } from './contracts';
-'use strict';
 
 import { getHarness } from './harnesses';
 
@@ -45,4 +44,4 @@ function canonicalSessionId(value: unknown): SessionId {
   return harnessId === 'pi' ? nativeSessionId as string as SessionId : encodeSessionKey(harnessId, nativeSessionId);
 }
 
-export = { encodeSessionKey, decodeSessionKey, resolveSessionRoute, canonicalSessionId, validSessionId: validId, VERSION, MAX_ID_LENGTH };
+export = { encodeSessionKey, decodeSessionKey, resolveSessionRoute, canonicalSessionId, validSessionId: validId, VERSION };

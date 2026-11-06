@@ -8,6 +8,12 @@ const EVAL_EVENT_KEYS = ['op', 'detail', 'path', 'cmd', 'args', 'key', 'action',
 const EVAL_EVENT_LIMIT = 50;
 const EVAL_EVENT_TEXT_LIMIT = 300;
 
+function pick(source: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of keys) if (source[key] !== undefined) out[key] = source[key];
+  return out;
+}
+
 /**
  * The few result details the browser formats: OMP bash timing/exit/deadline,
  * wait job rows and eval cell status/activity. Everything else in
@@ -16,16 +22,14 @@ const EVAL_EVENT_TEXT_LIMIT = 300;
 function projectToolDetails(toolName: unknown, details: unknown): Record<string, unknown> | undefined {
   if (!record(details)) return undefined;
   if (toolName === 'bash') {
-    const out: Record<string, unknown> = {};
-    for (const key of BASH_DETAIL_KEYS) if (details[key] !== undefined) out[key] = details[key];
+    const out = pick(details, BASH_DETAIL_KEYS);
     if (record(details.async) && typeof details.async.jobId === 'string') out.async = { jobId: details.async.jobId };
     return Object.keys(out).length ? out : undefined;
   }
   if (toolName === 'wait' && Array.isArray(details.jobs)) {
     return { jobs: details.jobs.flatMap((job: unknown) => {
       if (!record(job)) return [];
-      const out: Record<string, unknown> = {};
-      for (const key of WAIT_JOB_KEYS) if (job[key] !== undefined) out[key] = job[key];
+      const out = pick(job, WAIT_JOB_KEYS);
       for (const key of ['resultText', 'errorText'] as const) {
         if (typeof job[key] === 'string') out[key] = job[key].slice(0, OUTPUT_TEXT_LIMIT);
       }
@@ -36,8 +40,7 @@ function projectToolDetails(toolName: unknown, details: unknown): Record<string,
     const multi = details.cells.length > 1;
     return { cells: details.cells.flatMap((cell: unknown) => {
       if (!record(cell)) return [];
-      const out: Record<string, unknown> = {};
-      for (const key of EVAL_CELL_KEYS) if (cell[key] !== undefined) out[key] = cell[key];
+      const out = pick(cell, EVAL_CELL_KEYS);
       // A single cell's output is the result content already; only split cells need their own.
       if (multi && typeof cell.output === 'string') out.output = cell.output.slice(0, OUTPUT_TEXT_LIMIT);
       if (Array.isArray(cell.statusEvents)) {

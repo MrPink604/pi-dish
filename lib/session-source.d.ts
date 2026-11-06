@@ -1,13 +1,77 @@
 // Generated from src/core/session-source.ts; edit that source and run npm run build:core.
-import type { HarnessDescriptor, HarnessId, NativeSessionId } from './contracts';
-import type { SessionSource, SessionSourceResolver } from './session-source-contracts';
+import type { HarnessDescriptor, HarnessId, NativeSessionId, SessionId } from './contracts';
+/** Read identity only. Neither discovery nor a live observation proves process ownership. */
+export interface SessionSource {
+    readonly file: string;
+    readonly harnessId: HarnessId;
+    readonly nativeSessionId: NativeSessionId;
+    readonly sessionKey: SessionId;
+    readonly routeId: SessionId;
+    readonly profileId: string;
+    readonly profileVersion: number;
+    readonly parentSession: string | null;
+}
+export interface DiscoveryCandidate extends SessionSource {
+    readonly dirName: string;
+    readonly depth: number;
+    readonly identitySource: 'basename' | 'header';
+    /** Present and true only for a transcript inside the harness's private root. */
+    readonly private?: boolean;
+}
+export interface DiscoveryResult {
+    readonly candidates: readonly DiscoveryCandidate[];
+    readonly truncated: boolean;
+    readonly skipped: number;
+}
+export interface DiscoveryOptions {
+    readonly descriptor?: HarnessDescriptor;
+    readonly harnessId?: HarnessId;
+    readonly profileId?: string;
+    readonly profileVersion?: number;
+    readonly maxDepth?: number;
+    readonly maxFiles?: number;
+    readonly maxEntries?: number;
+    readonly excludeIds?: ReadonlySet<NativeSessionId> | readonly NativeSessionId[];
+    /**
+     * Walk `root` itself as one workspace instead of treating its children as
+     * workspace directories. Private roots hold flat `<ts>_<id>.jsonl` files
+     * even for nested-layout harnesses.
+     */
+    readonly singleWorkspace?: boolean;
+    /** The walked root is a private root: every candidate from it is private. */
+    readonly private?: boolean;
+}
+export interface LiveSourceObservation {
+    /** `prime-daemon`: a root agent read from Prime's resident daemon roster. */
+    readonly kind: 'registered' | 'rpc' | 'prime-daemon';
+    readonly harnessId: HarnessId;
+    readonly nativeSessionId: NativeSessionId;
+    readonly file: string | null;
+}
+export interface SourceLookup {
+    /** Keep raw route bytes: encoded Pi aliases must not enable partial matching. */
+    readonly route: unknown;
+    readonly exact?: boolean;
+    readonly discover?: boolean;
+    readonly live: readonly LiveSourceObservation[];
+}
+export interface SessionSourceResolver {
+    resolve(input: SourceLookup): SessionSource | null;
+    /** Replace discovered route entries, including on a truncated enumeration. */
+    refresh(discovery: DiscoveryResult): void;
+    /** Retire every route/profile alias for a vanished or replaced file. */
+    invalidate(file: string): void;
+    /** Retire lookup aliases for one canonical session without discarding file/header observations. */
+    invalidateRoute(route: string): void;
+    clear(): void;
+}
 interface ResolverOptions {
     readonly descriptors?: readonly HarnessDescriptor[];
     readonly roots?: Partial<Record<HarnessId, string>>;
     readonly privateRoots?: Partial<Record<HarnessId, string>>;
 }
-/** Construct a read descriptor from an explicit observed identity, including a
- * claimed file which has not been created yet. This grants no lifecycle rights. */
+/** A read descriptor for an explicit observed identity, including a claimed
+ * file that does not exist yet. This grants no lifecycle rights. */
 declare function sourceForIdentity(harnessId: HarnessId, nativeSessionId: NativeSessionId, file: string): SessionSource;
 /** Own historical route aliases and header-cache invalidation. Live inputs are
  * captured by the caller on each read; neither files nor sources prove ownership. */

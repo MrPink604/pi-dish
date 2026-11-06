@@ -7,7 +7,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { getHarness, resolveLaunchSpec } from './harnesses';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 
 export interface OmpShareTool {
   name: string;
@@ -55,7 +55,7 @@ export function readOmpExportData(html: string, policy: 'export' | 'import' = 'e
   return sessionDataMatch(html, policy).data;
 }
 
-export function normalizeSnapshot(snapshot: unknown): OmpShareSnapshot | null {
+function normalizeSnapshot(snapshot: unknown): OmpShareSnapshot | null {
   if (!isRecord(snapshot)) return null;
   const systemPrompt = typeof snapshot.systemPrompt === 'string' ? snapshot.systemPrompt : undefined;
   const tools = Array.isArray(snapshot.tools)

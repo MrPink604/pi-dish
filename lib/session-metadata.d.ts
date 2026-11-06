@@ -1,10 +1,39 @@
 // Generated from src/core/session-metadata.ts; edit that source and run npm run build:core.
 import type { CacheRetentionConfig } from './cache-retention';
-import type { CacheExpiry, CacheExpiryBasis, SessionEntries, SessionInfo } from './session-metadata-contracts';
+import { record as isRecord } from './helper-values';
+export { isRecord };
+export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
+/** 'unknown' anchors cache activity with no documented, estimated or configured window; only the serve-time learner fills it in. */
+export type StoredCacheExpiryBasis = CacheExpiryBasis | 'unknown';
+export interface CacheExpiry {
+    readonly refreshedAt: number;
+    readonly expiresAt: number;
+    readonly retentionMs: number;
+    readonly retention: string;
+    readonly basis: StoredCacheExpiryBasis;
+    /** Cache identity of the message that set the window; retained for incremental parsing. */
+    readonly identity: string;
+    readonly tier?: '1h';
+}
+/** Accumulator output before read-time model-window overlays. No route authority. */
+export interface SessionInfo {
+    model: string;
+    name: string | null;
+    messageCount: number;
+    contextTokens: number;
+    lastActivity: Date;
+    cwd: string | null;
+    sessionId: string | null;
+    parentSession: string | null;
+    cacheExpiry: CacheExpiry | null;
+}
+/** The parser retains physical framing without a second JSON pass. */
+export interface SessionEntries extends ReadonlyArray<unknown> {
+    readonly firstEntryOnFirstLine?: boolean;
+}
 interface MetadataProfile {
     readonly profileId?: string;
 }
-export declare function isRecord(value: unknown): value is Record<string, unknown>;
 export declare function cacheIdentity(message: Record<string, unknown>): string;
 export declare function cacheTokens(usage: Record<string, unknown>, key: 'cacheRead' | 'cacheWrite' | 'cacheWrite1h'): number;
 export declare function hasCacheActivity(message: Record<string, unknown>): boolean;
@@ -44,11 +73,7 @@ export declare function decodeSessionInfo(value: unknown): SessionInfo | null;
 export declare function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile, config?: CacheRetentionConfig): SessionInfo;
 /**
  * Extend an info object with entries appended after the range it was built
- * from — the O(delta) path lib/session-index.js uses for a streaming active
- * session, so a sidebar poll never re-parses a whole multi-MB JSONL because
- * one turn was appended. Mutates and returns `info`; `mtime` is the file's
- * new mtime (a full parse floors lastActivity at the mtime, so the extension
- * must too).
+ * from (session-index's O(delta) path). Mutates and returns `info`; `mtime` is
+ * the file's new mtime, which a full parse floors lastActivity at.
  */
 export declare function extendSessionInfoFromEntries(info: SessionInfo, entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile, config?: CacheRetentionConfig): SessionInfo;
-export {};

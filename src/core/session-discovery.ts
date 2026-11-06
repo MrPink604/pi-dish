@@ -3,9 +3,9 @@ import path = require('path');
 import { encodeSessionKey, canonicalSessionId, validSessionId } from './session-key';
 import { getHarness, listHarnesses } from './harnesses';
 import { isPrivateSessionFile, sessionRootsFor } from './private-sessions';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import type { HarnessDescriptor, HarnessId, NativeSessionId } from './contracts';
-import type { DiscoveryCandidate, DiscoveryOptions } from './session-source-contracts';
+import type { DiscoveryCandidate, DiscoveryOptions, DiscoveryResult } from './session-source';
 import { readSessionTailEntry } from './session-files';
 
 interface SessionHeader { id: string | null; cwd: string | null; parentSession: string | null; }
@@ -14,7 +14,6 @@ interface CandidateHint {
   file: string; id: string; dirName: string; depth: number;
   identitySource: 'basename' | 'header'; parentSession?: string;
 }
-interface Result { candidates: Candidate[]; truncated: boolean; skipped: number; }
 interface HarnessDiscoveryOptions extends DiscoveryOptions {
   roots?: Partial<Record<HarnessId, string>>;
   privateRoots?: Partial<Record<HarnessId, string>>;
@@ -167,10 +166,9 @@ function candidateForFile(file: string, workspaceDirName: string, depth: number,
 
 /**
  * Header-identity candidate for a session-artifacts JSONL (Prime RLM). The
- * child header carries the `parentSession` edge; `parentFallback` covers
- * pre-header releases only when the path shape names the parent directly
- * (`session-artifacts/<id>/sub-*` one generation down). Non-session JSONLs
- * (semantic-edges.jsonl, registries) have no session header and drop out.
+ * child header carries `parentSession`; `parentFallback` covers pre-header
+ * releases whose path names the parent. Non-session JSONLs have no header and
+ * drop out.
  */
 function artifactCandidateForFile(file: string, dirName: string, depth: number, descriptor: HarnessDescriptor, parentFallback: string | null, readHeader = readSessionHeader): CandidateHint | null {
   const header = readHeader(file, descriptor.profileId);
@@ -196,7 +194,7 @@ function artifactParentFallback(walkRoot: string, dirPath: string, rootParent: (
  * external launchers and OMP subagents. Normal files retain their basename
  * identity; generic/nested session files use validated header ids.
  */
-function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = {}): Result {
+function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = {}): DiscoveryResult {
   const descriptor = options.descriptor || getHarness(options.harnessId || 'pi');
   if (!descriptor) throw new TypeError('Unknown harness descriptor');
   const maxDepth = positiveInt(options.maxDepth ?? process.env.PI_DISH_SESSION_DISCOVERY_DEPTH, DEFAULT_MAX_DEPTH);
@@ -261,10 +259,8 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
     candidates.push(candidate);
   };
 
-  // Stream directory entries instead of materializing/sorting an unbounded
-  // directory before applying maxEntries. Candidate output and duplicate
-  // selection are sorted deterministically below; when traversal truncates,
-  // the response explicitly reports that it is partial.
+  // Stream entries instead of materializing an unbounded directory before
+  // applying maxEntries; truncation is reported on the result.
   const eachEntry = (dirPath: string, visit: (entry: fs.Dirent) => void) => {
     let dir: fs.Dir;
     try { dir = fs.opendirSync(dirPath); } catch { return; }
@@ -309,11 +305,8 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
     walk(path.join(rootDir, workspace.name), workspace.name, 0);
   });
 
-  // Prime-style RLM subagents live outside the sessions root, under
-  // <agent>/session-artifacts/<parentId>/sub-<id8>/<session>.jsonl. The walk
-  // shares the corpus file/entry budgets but gets its own depth budget: each
-  // subagent generation costs two directory levels (sub-* plus the
-  // interleaved session-artifacts segment).
+  // Prime-style RLM subagents live outside the sessions root, sharing the
+  // corpus file/entry budgets but with their own depth budget.
   if (descriptor.subagentArtifacts) {
     const artifactsRoot = path.join(path.dirname(rootDir), 'session-artifacts');
     const dirName = path.basename(rootDir);
@@ -348,7 +341,7 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
  * The ordinary root precedes the private root, so if both somehow hold one
  * native id, the ordinary store keeps the route (first wins).
  */
-function discoverHarnessSessions(descriptors: readonly HarnessDescriptor[] = listHarnesses(), options: HarnessDiscoveryOptions = {}): Result {
+function discoverHarnessSessions(descriptors: readonly HarnessDescriptor[] = listHarnesses(), options: HarnessDiscoveryOptions = {}): DiscoveryResult {
   const byKey = new Map<string, Candidate>();
   let truncated = false;
   let skipped = 0;
@@ -378,32 +371,35 @@ function findSessionCandidate(rootDir: string, sessionId: string, options: FindO
   return { candidate: partial.length ? partial[0] : null, truncated, skipped };
 }
 
+/** Two files claiming one header id are both omitted; neither is safe to route. */
+function subsessionCollector(descriptor: HarnessDescriptor, options: DiscoveryOptions) {
+  const byId = new Map<string, Candidate>();
+  const ambiguous = new Set<string>();
+  return {
+    add(hint: CandidateHint) {
+      if (byId.has(hint.id)) { byId.delete(hint.id); ambiguous.add(hint.id); }
+      if (!ambiguous.has(hint.id)) byId.set(hint.id, decorateCandidate(hint, descriptor, options));
+    },
+    values: () => [...byId.values()].sort((a, b) => a.file.localeCompare(b.file)),
+  };
+}
+
 /**
  * The nested subsession files under one session's own artifact directory
- * (`<parent>.jsonl` → `<parent>/<agent>.jsonl`, recursively). Bounded to that
- * subtree: callers resolve the subagents of a handful of *live* sessions per
- * request and must not pay the corpus-wide walk `discoverSessionCandidates`
- * performs.
- *
- * Identity derivation, the symlink refusal, the depth reach and the
- * two-header-ids-one-file ambiguity rule are the corpus walk's own — a
- * candidate found here is one that walk would also emit. What it cannot see
- * is a *corpus-wide* collision (a header id that some other workspace's file
- * claims by basename), so route lookup stays with the full walk, which is
- * authoritative: a row whose id it later refuses simply 404s on click rather
- * than opening a stranger's transcript.
+ * (`<parent>.jsonl` -> `<parent>/<agent>.jsonl`, recursively). Bounded to that
+ * subtree: a corpus-wide collision stays the full walk's business, so a row
+ * whose id it later refuses simply 404s on click.
  */
 function discoverSubsessionCandidates(parentFile: string, options: DiscoveryOptions = {}): Candidate[] {
   const descriptor = options.descriptor || getHarness(options.harnessId || 'pi');
   if (!descriptor) throw new TypeError('Unknown harness descriptor');
-  if (typeof parentFile !== 'string' || !parentFile.endsWith('.jsonl')) return [];
+  if (!parentFile.endsWith('.jsonl')) return [];
   if (descriptor.subagentArtifacts) return discoverArtifactSubsessions(parentFile, descriptor, options);
   if (!descriptor.nestedSubsessions) return [];
   const maxDepth = positiveInt(options.maxDepth, DEFAULT_MAX_DEPTH);
   const maxFiles = positiveInt(options.maxFiles, DEFAULT_SUBSESSION_FILES);
   const workspaceDirName = path.basename(path.dirname(parentFile));
-  const byId = new Map<string, Candidate>();
-  const ambiguous = new Set<string>();
+  const candidates = subsessionCollector(descriptor, options);
   let files = 0;
   const readHeader = scopedHeaders();
   const walk = (dirPath: string, depth: number): void => {
@@ -420,33 +416,25 @@ function discoverSubsessionCandidates(parentFile: string, options: DiscoveryOpti
       files += 1;
       const file = path.join(dirPath, entry.name);
       const candidate = candidateForFile(file, workspaceDirName, depth, descriptor, readHeader);
-      if (!candidate || !validSessionId(candidate.id)) continue;
-      // A copied/restored session tree yields two files claiming one header
-      // id; neither is safe to route, so the identity is omitted entirely.
-      if (byId.has(candidate.id)) { byId.delete(candidate.id); ambiguous.add(candidate.id); }
-      if (!ambiguous.has(candidate.id)) byId.set(candidate.id, decorateCandidate(candidate, descriptor, options));
+      if (candidate) candidates.add(candidate);
       walk(file.slice(0, -6), depth + 1); // its own subagents, one level down
     }
   };
   walk(parentFile.slice(0, -6), 1);
-  return [...byId.values()].sort((a, b) => a.file.localeCompare(b.file));
+  return candidates.values();
 }
 
 /**
- * Prime-RLM analogue of the OMP walk above: children of `parentFile` persist
- * under `dirname(dirname(parentFile))/session-artifacts/<parentId>/sub-*`,
- * recursively — the same derivation Prime's own session manager applies to
- * find a session's artifact dir. Grandchildren interleave another
- * `session-artifacts/<childId>` segment inside this tree, so one recursive
- * walk reaches the whole descendant fan-out.
+ * Prime-RLM analogue of the OMP walk: children live under
+ * `dirname(dirname(parentFile))/session-artifacts/<parentId>/sub-*`, with
+ * another `session-artifacts/<childId>` segment interleaved per generation.
  */
 function discoverArtifactSubsessions(parentFile: string, descriptor: HarnessDescriptor, options: DiscoveryOptions): Candidate[] {
   const maxFiles = positiveInt(options.maxFiles, DEFAULT_SUBSESSION_FILES);
   const parentId = path.basename(parentFile, '.jsonl');
   const artifactsDir = path.join(path.dirname(path.dirname(parentFile)), 'session-artifacts', parentId);
   const dirName = path.basename(path.dirname(parentFile));
-  const byId = new Map<string, Candidate>();
-  const ambiguous = new Set<string>();
+  const candidates = subsessionCollector(descriptor, options);
   let files = 0;
   const walk = (dirPath: string, depth: number): void => {
     if (depth > DEFAULT_ARTIFACTS_DEPTH || files >= maxFiles) return;
@@ -464,15 +452,11 @@ function discoverArtifactSubsessions(parentFile: string, descriptor: HarnessDesc
       files += 1;
       const candidate = artifactCandidateForFile(full, dirName, depth, descriptor,
         artifactParentFallback(artifactsDir, dirPath, (topId) => topId === null ? parentFile : null));
-      if (!candidate) continue;
-      // Same ambiguity rule as the OMP walk: two files claiming one header id
-      // are both omitted rather than letting a route pick a copy.
-      if (byId.has(candidate.id)) { byId.delete(candidate.id); ambiguous.add(candidate.id); }
-      if (!ambiguous.has(candidate.id)) byId.set(candidate.id, decorateCandidate(candidate, descriptor, options));
+      if (candidate) candidates.add(candidate);
     }
   };
   walk(artifactsDir, 1);
-  return [...byId.values()].sort((a, b) => a.file.localeCompare(b.file));
+  return candidates.values();
 }
 
 /**

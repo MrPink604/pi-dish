@@ -1,6 +1,6 @@
 // Generated from src/core/cache-lifetime.ts; edit that source and run npm run build:core.
 import type { CacheRetentionConfig } from './cache-retention';
-import type { CacheExpiry, CacheExpiryBasis, SessionEntries } from './session-metadata-contracts';
+import type { CacheExpiry, CacheExpiryBasis, SessionEntries } from './session-metadata';
 export interface CacheLifetimeStats {
     /** Decayed effective observation count behind the fit. */
     readonly observations: number;

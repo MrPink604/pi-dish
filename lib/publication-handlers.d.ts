@@ -1,7 +1,7 @@
 // Generated from src/core/publication-handlers.ts; edit that source and run npm run build:core.
 import type { RequestHandler } from 'express';
 import type { ParsedQs } from 'qs';
-import type { SessionSource, DiscoveryCandidate } from './session-source-contracts';
+import type { SessionSource, DiscoveryCandidate } from './session-source';
 import type { BridgeRegistryEntry } from './contracts';
 import type { SessionReadHandlers } from './session-read-handlers';
 import type { PublicArtifactRelay } from './relay-handlers';

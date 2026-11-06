@@ -3,6 +3,7 @@
  * Token-free prompts never consult the local catalog or fleet.
  */
 import { parseSessionRefTokens, parseSessionRefParts, appendSessionRefContext } from './helper-refs';
+import { record } from './helper-values';
 import type { RefContextEntry } from './helper-types';
 
 export interface SessionRefSummary {
@@ -26,14 +27,14 @@ export interface SessionRefHint {
 }
 
 /** Hints are untrusted metadata, clamped to the fields the context block uses. */
-export function sanitizeRefHint(hint: unknown): SessionRefHint | null {
-  if (!hint || typeof hint !== 'object' || !('ref' in hint) || typeof hint.ref !== 'string') return null;
+function sanitizeRefHint(hint: unknown): SessionRefHint | null {
+  if (!record(hint) || typeof hint.ref !== 'string') return null;
   return {
     ref: hint.ref,
-    name: 'name' in hint && typeof hint.name === 'string' ? hint.name : '',
-    host: 'host' in hint && typeof hint.host === 'string' ? hint.host : '',
-    cwd: 'cwd' in hint && typeof hint.cwd === 'string' ? hint.cwd : '',
-    isActive: !('isActive' in hint) || hint.isActive == null ? null : !!hint.isActive,
+    name: typeof hint.name === 'string' ? hint.name : '',
+    host: typeof hint.host === 'string' ? hint.host : '',
+    cwd: typeof hint.cwd === 'string' ? hint.cwd : '',
+    isActive: hint.isActive == null ? null : !!hint.isActive,
   };
 }
 

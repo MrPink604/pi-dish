@@ -12,7 +12,7 @@ import { encodeSessionKey, resolveSessionRoute, validSessionId, VERSION } from '
 import { createSessionSourceResolver } from './session-source';
 import { sessionRootsFor } from './private-sessions';
 import { discoverSubsessionCandidates, findSessionCandidate, readSessionHeader } from './session-discovery';
-import type { DiscoveryCandidate, LiveSourceObservation, SessionSource, SessionSourceResolver } from './session-source-contracts';
+import type { DiscoveryCandidate, LiveSourceObservation, SessionSource, SessionSourceResolver } from './session-source';
 import { record } from './helper-values';
 import * as tmux from './tmux';
 import * as recoveryStore from './session-recovery';

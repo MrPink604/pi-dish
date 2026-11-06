@@ -12,6 +12,5 @@ declare const _default: {
     canonicalSessionId: typeof canonicalSessionId;
     validSessionId: typeof validId;
     VERSION: string;
-    MAX_ID_LENGTH: number;
 };
 export = _default;

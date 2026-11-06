@@ -1,5 +1,5 @@
 // Generated from src/core/session-operations.ts; edit that source and run npm run build:core.
-import type { SessionSource } from './session-source-contracts';
+import type { SessionSource } from './session-source';
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import type { HarnessLaunchTarget, SessionLaunch } from './session-launch';
 import type { RecoveryRecord } from './session-recovery';

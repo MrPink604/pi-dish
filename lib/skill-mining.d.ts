@@ -1,5 +1,5 @@
 // Generated from src/core/skill-mining.ts; edit that source and run npm run build:core.
-import type { SessionEntries } from './session-metadata-contracts';
+import type { SessionEntries } from './session-metadata';
 import type { SkillActivation, SkillState, SkillProjection } from './session-index-data';
 export interface SkillContext {
     roots?: ReadonlyMap<string, string>;

@@ -94,9 +94,9 @@ import type { AvailableModel } from './pi-sdk';
 import type { SessionRefDependencies } from './session-refs';
 
 import type { AdvertisedCapabilities, BridgeRegistryEntry, SessionId } from './contracts';
-import type { SessionInfo } from './session-metadata-contracts';
-import type { DiscoveryCandidate, SessionSource } from './session-source-contracts';
-import type { CatalogAdvice, CatalogHistoryObservation, CatalogLiveObservation, CatalogSession, SessionCatalog, SessionCatalogOptions } from './session-catalog-contracts';
+import type { SessionInfo } from './session-metadata';
+import type { DiscoveryCandidate, SessionSource } from './session-source';
+import type { CatalogAdvice, CatalogHistoryObservation, CatalogLiveObservation, CatalogSession, SessionCatalog, SessionCatalogOptions } from './session-catalog';
 import type { SessionQuery } from './helper-types';
 import type { SessionFields } from './session-api';
 import type { LiveSession } from './session-ownership';

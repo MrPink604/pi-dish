@@ -4,7 +4,7 @@ import { refreshHarnessPricing } from './harness-pricing';
 import * as sessionIndex from './session-index';
 import type { UsageModel, UsageTotal } from './session-index-data';
 import { addUsage, compareUsageBuckets, compareUsageModels } from './helper-usage-math';
-import type { SessionSource } from './session-source-contracts';
+import type { SessionSource } from './session-source';
 
 interface SummaryUsage extends UsageTotal {
   priced?: boolean;

@@ -1,7 +1,7 @@
 import test = require('node:test');
-import type { SessionInfo } from '../lib/session-metadata-contracts.js';
-import type { SessionSource, DiscoveryCandidate } from '../lib/session-source-contracts.js';
-import type { CatalogSession } from '../lib/session-catalog-contracts.js';
+import type { SessionInfo } from '../lib/session-metadata.js';
+import type { SessionSource, DiscoveryCandidate } from '../lib/session-source.js';
+import type { CatalogSession } from '../lib/session-catalog.js';
 import type { HarnessId, NativeSessionId } from '../lib/contracts.js';
 import { nativeId as checkedNativeId, present } from './test-types.js';
 import assert = require('node:assert/strict');

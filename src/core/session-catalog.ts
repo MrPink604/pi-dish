@@ -5,15 +5,93 @@ import { loadCacheRetentionConfig } from './cache-retention';
 import { hasPendingAskDialog } from './extension-ui-state';
 import { canonicalSessionId, encodeSessionKey } from './session-key';
 import { isPrivateSessionFile } from './private-sessions';
-import { isRecord } from './wire-protocol';
-import type { HarnessId, NativeSessionId, SessionId } from './contracts';
-import type { SessionInfo } from './session-metadata-contracts';
-import type { SessionSource } from './session-source-contracts';
-import type {
-  CatalogAdvice, CatalogHistoryObservation, CatalogLiveObservation, CatalogRoutineAnnotation,
-  CatalogSession, SessionCatalog, SessionCatalogInput, SessionCatalogOptions,
-} from './session-catalog-contracts';
+import { decodeDirToCwd } from './session-files';
+import { record as isRecord } from './helper-values';
+import type { HarnessDescriptor, HarnessId, NativeSessionId, SessionCapabilities, SessionId, SessionIdentity } from './contracts';
+import type { SessionInfo } from './session-metadata';
+import type { DiscoveryCandidate, SessionSource } from './session-source';
+import type { CacheRetentionConfig } from './cache-retention';
 import { decodeFastModeState, type SessionFields } from './session-api';
+
+/** Already computed by lifecycle policy; presentation advice is never an ownership proof. */
+export interface CatalogAdvice {
+  readonly capabilities: Readonly<SessionCapabilities>;
+  readonly closeMode: HarnessDescriptor['closeMode'];
+  readonly conflicted: boolean;
+  readonly liveInstanceCount: number;
+}
+export interface CatalogLiveObservation extends Readonly<SessionIdentity> {
+  /** `prime`: a root agent read from Prime's daemon roster (no bridge registry row). */
+  readonly kind: 'registered' | 'rpc' | 'prime';
+  /** Reported even before the JSONL exists. This is not a resolved read source. */
+  readonly claimedFile: string | null;
+  readonly source: SessionSource | null;
+  readonly id: SessionId;
+  readonly fields: Readonly<Pick<SessionFields<Date | string | number>,
+    'name' | 'model' | 'thinkingLevel' | 'fastMode' | 'contextTokens' | 'contextPercent' | 'contextWindow'
+    | 'messageCount' | 'lastActivity' | 'turnInProgress' | 'askPending' | 'compacting' | 'cwd'>>;
+  readonly info: Readonly<SessionInfo> | null;
+  readonly pid: number | null;
+  readonly advice: CatalogAdvice;
+}
+export interface CatalogHistoryObservation {
+  readonly source: DiscoveryCandidate;
+  readonly info: Readonly<SessionInfo>;
+  readonly liveChild: boolean;
+  readonly advice: CatalogAdvice;
+}
+export interface CatalogRoutineAnnotation {
+  readonly routine: string;
+  readonly routineId: string;
+  readonly routineInvocationId: string;
+}
+/** Inputs are captured for one composition, not callbacks into mutable lifecycle stores. */
+export interface SessionCatalogInput {
+  readonly active: readonly CatalogLiveObservation[];
+  readonly history: readonly CatalogHistoryObservation[];
+  readonly launchParents: ReadonlyMap<SessionId, SessionId>;
+  readonly routines: ReadonlyMap<SessionId, CatalogRoutineAnnotation>;
+  readonly indexing: boolean;
+  readonly discoveryTruncated: boolean;
+  readonly discoverySkipped: number;
+  readonly activeOnly: boolean;
+}
+export interface SessionCatalogOptions {
+  readonly harnesses: ReadonlyMap<SessionIdentity['harnessId'],
+    Readonly<Pick<HarnessDescriptor, 'id' | 'label' | 'layout' | 'privateRootPath'>>>;
+  /** Existing model-window lookup policy, invoked at composition time, never persisted. */
+  readonly contextWindowForModel: (model: string | null | undefined) => number;
+  /** Read-only probes keep path derivation in the catalog, without duplicating it in adapters. */
+  readonly canonicalPath: (file: string | null) => string | null;
+  readonly directoryExists: (directory: string) => boolean;
+  /** One settings snapshot per catalog; individual projections may load on demand. */
+  readonly cacheRetention?: CacheRetentionConfig;
+}
+/** Before JSON serialization; default API fields omitted by view=client remain explicit. */
+export interface CatalogSession extends SessionFields<Date | string | number> {
+  readonly id: SessionId;
+  readonly sessionKey: SessionId;
+  readonly nativeSessionId: SessionIdentity['nativeSessionId'];
+  readonly harnessId: SessionIdentity['harnessId'];
+  readonly sessionFile: string | null;
+  readonly profileId?: string;
+  readonly profileVersion?: number;
+  readonly parentSession: string | null;
+  readonly parentSessionSource: string | null;
+  readonly pid?: number | null;
+}
+export interface SessionCatalog {
+  /** Active first, then previous and any active-only children, each route appearing once. */
+  readonly list: readonly CatalogSession[];
+  readonly active: readonly CatalogSession[];
+  readonly previous: readonly CatalogSession[];
+  readonly children: readonly CatalogSession[];
+  readonly byId: ReadonlyMap<SessionId, CatalogSession>;
+  readonly byPath: ReadonlyMap<string, CatalogSession>;
+  readonly indexing: boolean;
+  readonly discoveryTruncated: boolean;
+  readonly discoverySkipped: number;
+}
 
 type LiveFields = CatalogLiveObservation['fields'];
 interface ObservationContext {
@@ -127,10 +205,8 @@ function decodeRoutineAnnotations(value: unknown): ReadonlyMap<SessionId, Catalo
 }
 
 /**
- * Model catalogs can warm after indexing, so context derivation stays
- * read-time. So does the learned cache-TTL overlay: every path that serves
- * indexed session info goes through here, and the stored projection may be
- * an internal 'unknown' anchor that must never reach a client.
+ * Context derivation stays read-time: model catalogs warm after indexing, and
+ * a stored 'unknown' cache-expiry anchor must never reach a client.
  */
 function withSessionContext<T extends Readonly<SessionInfo>>(info: T,
   contextWindowForModel: SessionCatalogOptions['contextWindowForModel'],
@@ -190,7 +266,7 @@ function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advic
   const info = withSessionContext(raw, options.contextWindowForModel, options.cacheRetention);
   let cwd = info.cwd;
   if (!cwd && dirName !== undefined && source.harnessId === 'pi' && options.harnesses.get('pi')?.layout === 'nested') {
-    const decoded = '/' + dirName.replace(/^--/, '').replace(/--$/, '').replace(/-/g, '/');
+    const decoded = decodeDirToCwd(dirName);
     cwd = options.directoryExists(decoded) ? decoded : null;
   }
   return {

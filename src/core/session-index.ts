@@ -1,43 +1,25 @@
 /**
  * Persistent, incrementally-updated index of derived session data: the list
- * metadata `getSessionInfo` computes, plus the lowercased search text behind
- * server-side list search.
+ * metadata `getSessionInfo` computes plus the lowercased search text behind
+ * server-side list search. The in-memory caches in session-files.js are
+ * LRU-capped, so a whole-corpus scan would evict every entry before the next
+ * request revisits it; this index persists `(mtimeMs, size)`-validated
+ * projections under ~/.pi/dish/session-index/ and re-parses only changed
+ * files.
  *
- * Why it exists: the in-memory (mtimeMs, size) caches in session-files.js are
- * LRU-capped, and the historical scan iterates *every* session file — once
- * the file count exceeds a cap, a sequential scan evicts each entry before
- * the next request revisits it (0% hit rate) and every request re-parses the
- * whole corpus. At thousands of sessions that is seconds of synchronous
- * re-reads per sidebar poll or search keystroke. This module keeps the same
- * (mtimeMs, size) revalidation key but persists entries on disk, so a restart
- * re-parses nothing and steady state re-parses only files that changed.
- *
- * Storage: `~/.pi/dish/session-index/{meta,text}.ndjson` — append-only NDJSON
- * (one line per (re)indexed file, later lines win, `{"f":…,"del":1}` is a
- * tombstone), compacted via temp-file+rename when dead lines outweigh live
- * ones. Appends are buffered ~500ms; a torn final line is skipped on load and
- * simply re-indexed. No native modules, no node:sqlite — this must run on a
- * hand-built Node on old glibc.
- *
- * Scan contract (`scanSessions`): stat everything, serve fresh entries from
- * the index, synchronously re-index at most `PI_DISH_INDEX_SYNC_BUDGET`
- * (default 20) stale files, and queue the rest for a background build that
- * yields between files (setImmediate). Each individual parse is synchronous.
- * `indexing: true` in the result means a backlog remains and the caller is
- * seeing a partial list. Search text for a file mid-churn (a streaming active
- * session) is extended from the appended byte range only — a search keystroke
- * never re-extracts a multi-MB JSONL because one line was appended to it.
- *
- * Like shares.js, the storage dir is resolved from os.homedir() per call so
- * tests' temp HOMEs work; state is kept per resolved dir.
+ * `scanSessions` serves fresh entries, synchronously re-indexes at most
+ * `PI_DISH_INDEX_SYNC_BUDGET` (default 20) stale files, and queues the rest
+ * for a background build. A file that only grew is extended from the
+ * appended byte range, so a sidebar poll or search keystroke never re-parses
+ * a streaming multi-MB JSONL.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { SessionSource } from './session-source-contracts';
+import type { SessionSource } from './session-source';
 import { loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
-import type { SessionInfo } from './session-metadata-contracts';
+import type { SessionInfo } from './session-metadata';
 import { sessionInfoFromEntries, extendSessionInfoFromEntries, decodeSessionInfo, isRecord } from './session-metadata';
 import { checkSearchLeaf, decodeUsage, decodeSkillRecords, decodeSkillState, finite } from './session-index-data';
 import type { IndexedUsage, SkillActivation, SkillState } from './session-index-data';
@@ -64,13 +46,10 @@ export interface IndexedSessionInfo extends SessionInfo {
 }
 interface CacheStamp { mtimeMs: number; size: number; version: number; _bytes?: number }
 /**
- * Freshness inputs resolved once per scan instead of once per file: the
- * retention policy, and the per-harness pricing revision. `pricingRevision`
- * re-hashes the harness's whole override catalog on every call, and a warm
- * 341-session corpus (190 Pi + 151 OMP) spent 5-8ms of its 7-10ms scan there.
- * Both values are re-read on every call, so an edited setting or refreshed
- * catalog invalidates on the next scan; within one scan neither can change.
- * A queued backlog item resolves its own fresh context when drained.
+ * Freshness inputs resolved once per scan instead of once per file:
+ * `pricingRevision` re-hashes the harness's whole override catalog on every
+ * call, which dominated a warm scan. A queued backlog item resolves its own
+ * context when drained.
  */
 interface ScanContext {
   cacheConfig: CacheRetentionConfig;
@@ -115,34 +94,15 @@ function persistedFlag(value: unknown): boolean {
 const SYNC_BUDGET_DEFAULT = 20;
 const FLUSH_MS = 500;
 const COMPACT_MIN_DEAD_BYTES = 1_000_000;
-// v8 preserves known cost subtotals beside unavailable-call counts and adds
-// Pi rate-card revisions. v9 treats OMP subscription-plan providers' zero
-// rates as unpriced rather than free. v10 records inferred provider cache
-// expiry state. v11 applies host cache-TTL overrides and records their
-// revision so hand-edited settings invalidate derived expiry projections.
-// v12 mines cache-lifetime observations for the learned-TTL store; the store
-// is a serve-time overlay, not a freshness input, so it cannot reindex-loop.
-// v13 re-mines history into the gap-stratified observation window (recovering
-// long-idle probes the old FIFO evicted) and keeps an 'unknown' expiry anchor
-// for providers without a built-in window, so a learned TTL can serve them.
+// Each projection carries a schema version; bumping it re-indexes stale
+// entries through the bounded backlog. v13 is the current meta projection.
 const META_SCHEMA_VERSION = 13;
-// v2 indexed tool-call names/args (file paths, bash commands); v3 raises the
-// per-message prose cap to 100K and the session cap to 4M with keep-newest
-// overflow (corpus-measured: the old caps trimmed real pasted logs and the
-// tails of long sessions). Older entries reread via the normal bounded backlog.
 const TEXT_SCHEMA_VERSION = 3;
-// Skill-activation records mined during the same parse pass, persisted to a
-// third stream (skills.ndjson) under the same append/tombstone/compaction
-// rules as meta/text. Version bumps re-mine on the normal bounded backlog.
 const SKILLS_SCHEMA_VERSION = 1;
 
-// The set of known skill directories (dir -> SKILL.md path), pushed in from
-// the inventory scan so the miner can attribute a read of `references/foo.md`
-// to its skill. Empty is fine — SKILL.md reads and explicit /skill: blocks are
-// still detected without it (see lib/skill-mining.js). Deliberate limitation:
-// a roots change does NOT re-mine already-indexed files (that would reparse
-// the whole corpus every time a skill is added); bundled-file attribution in
-// an old entry catches up when its session file next changes.
+// Known skill directories (dir -> SKILL.md path) for attributing a read of
+// `references/foo.md` to its skill. A roots change deliberately does not
+// re-mine indexed files; attribution catches up when a file next changes.
 let skillCtx = { roots: new Map<string, string>() };
 
 export function setSkillRoots(skillFilePaths: readonly string[] | null | undefined): void {
@@ -168,11 +128,7 @@ class NdjsonLog {
     this.deadBytes = 0;
   }
 
-  /**
-   * Read the log into a Map(file -> entry). Unparseable lines (torn final
-   * append after a crash) are counted dead and skipped — the scan re-indexes
-   * whatever they held.
-   */
+  /** Latest line per file wins; an unparseable (torn) line is counted dead and re-indexed by the scan. */
   load() {
     const entries = new Map<string, LogRow>();
     let raw;
@@ -325,11 +281,10 @@ function compactText(st: IndexState) { st.textLog.compact(st.text, encodeText); 
 function compactSkills(st: IndexState) { st.skillsLog.compact(st.skills, encodeSkills); }
 
 /**
- * Route -> validated identity tuple. resolveSessionRoute, encodeSessionKey and
- * canonicalSessionId are pure functions of the route string, and normalize()
- * runs once per session per list search — thousands of base64 decodes and
- * re-encodes per query. The harness registry is static, so a route that
- * resolved never becomes invalid; a route that throws is never cached.
+ * Route -> validated identity tuple. The route functions are pure string
+ * transforms and normalize() runs once per session per list search; the
+ * harness registry is static, so a resolved route never becomes invalid and
+ * a throwing one is never cached.
  */
 interface RouteIdentity {
   harnessId: SessionSource['harnessId'];
@@ -406,10 +361,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
       endsNl,
     }, encodeText);
   const mined = mineSkillsFromEntries(entries, {
-    // Generic nested session.jsonl children carry their authoritative identity
-    // in the Pi header; traditional session files retain the basename identity.
-    // Public Pi routes and existing persisted associations remain raw IDs;
-    // alternate harnesses need the encoded tuple to avoid cross-corpus clashes.
+    // Public Pi routes stay raw ids; alternate harnesses need the encoded tuple to avoid cross-corpus clashes.
     sessionId: candidate.harnessId === 'pi' ? nativeSessionId : sessionKey,
     skillCtx,
   });
@@ -424,10 +376,8 @@ function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, st
   const cached = st.meta.get(file);
   const cachedText = st.text.get(file);
   const cachedSkills = st.skills.get(file);
-  // The skills entry participates in staleness: an index populated by a
-  // pre-skills build (or an older SKILLS_SCHEMA_VERSION) must re-mine its
-  // files through the normal bounded backlog, or a machine with an existing
-  // index would report zero skill usage for its whole historical corpus.
+  // The skills table participates in staleness; without it a pre-skills index
+  // would report zero skill usage for the whole historical corpus.
   return !!(cached && cached.version === META_SCHEMA_VERSION &&
     cached.info.sessionKey === candidate.sessionKey && cached.info.nativeSessionId === candidate.nativeSessionId &&
     cached.profileId === candidate.profileId && cached.profileVersion === candidate.profileVersion &&
@@ -442,16 +392,11 @@ function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, st
 }
 
 /**
- * O(delta) refresh for a session file that only grew — the streaming active
- * session, re-stated by every sidebar poll and usage request, whose full
- * re-index used to cost a whole-file parse (plus a full-text log append)
- * every ten seconds. When the appended byte range is a plain chain from the
- * indexed leaf, all three tables are extended in memory and the refreshed
- * info is returned; anything else (tree jump, shrink/rewrite, schema or
- * pricing mismatch, missing continuity state) returns null so the caller
- * falls back to a full re-index. Extensions are deliberately not logged —
- * hot files churn far too fast to persist per delta; a restart re-parses
- * them once (the same contract getSearchText has always had).
+ * O(delta) refresh for a session file that only grew. Extends all three
+ * tables in memory when the appended range is a plain chain from the indexed
+ * leaf; anything else (tree jump, shrink/rewrite, schema or pricing mismatch,
+ * missing continuity state) returns null so the caller re-indexes fully.
+ * Extensions are not logged: hot files churn too fast to persist per delta.
  */
 function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs.Stats,
   ctx: ScanContext): IndexedSessionInfo | null {
@@ -497,10 +442,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
     dropEntry(st, file);
     return null;
   }
-  // The extend path must honor the same total-text bound as a full build, or
-  // a long-running streaming session would grow past it one delta at a time.
-  // Like the build, overflow evicts the *oldest* text — the delta being
-  // appended is the newest turn, exactly what recall wants kept.
+  // Honor the same total-text bound as a full build, evicting oldest text first.
   if (extension.text) {
     const next = text.text ? text.text + ' ' + extension.text : extension.text;
     text.text = next.length > SEARCH_TEXT_SESSION_CAP
@@ -563,12 +505,9 @@ function kickBuilder(st: IndexState) {
 }
 
 /**
- * The scan behind the historical session list. `files` is the full
- * enumeration of session JSONLs to serve; returns
- * `{ infos: Map(file -> info), indexing }` where a file missing from `infos`
- * is still queued for background indexing (indexing === true exactly when
- * that backlog is non-empty). Index entries for files no longer in `files`
- * and gone from disk are tombstoned.
+ * The scan behind the historical session list. A file missing from `infos`
+ * is queued for background indexing, so `indexing` is exactly "a backlog
+ * remains". Entries for files gone from disk are tombstoned.
  */
 export function scanSessions(files: readonly SessionSource[]): { infos: ReadonlyMap<string, Readonly<IndexedSessionInfo>>; indexing: boolean } {
   const st = getState();
@@ -588,8 +527,7 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
       infos.set(file, st.meta.get(file)!.info);
       continue;
     }
-    // A file that merely grew (the streaming active session) extends in
-    // O(delta) instead of consuming sync budget on a whole-file re-parse.
+    // An append-only growth extends in O(delta) instead of consuming sync budget.
     const extended = tryExtendIndexEntry(st, candidate, stats, ctx);
     if (extended) {
       st.backlog.delete(file);
@@ -617,14 +555,9 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
 }
 
 /**
- * Search text for one session file. Fresh from the index when possible. A
- * file that only *grew* (a streaming session appends a line every delta) is
- * extended by extracting just the appended byte range — a search keystroke
- * against an active session must not re-read its whole multi-MB JSONL. The
- * extension stays in memory only (not logged): active files churn far too
- * fast to persist per delta, and a restart simply re-parses them once.
- * Anything else (shrunk, rewritten, never seen) is fully re-indexed.
- * '' when the file is unreadable.
+ * Search text for one session file: fresh from the index, extended in
+ * O(delta) when the file only grew, fully re-indexed otherwise. '' when the
+ * file is unreadable.
  */
 export function getSearchText(input: SessionSource): string {
   const candidate = normalize(input);
@@ -633,7 +566,7 @@ export function getSearchText(input: SessionSource): string {
   const cached = st.text.get(file);
   const meta = st.meta.get(file);
   let stats;
-  st.backlog.delete(file); // demand read owns this refresh; do not reparse next tick
+  st.backlog.delete(file); // this demand read owns the refresh
   try { stats = fs.statSync(file); } catch { return ''; }
   if (cached && cached.version === TEXT_SCHEMA_VERSION && meta &&
       meta.info.sessionKey === candidate.sessionKey && meta.info.nativeSessionId === candidate.nativeSessionId &&
@@ -642,26 +575,18 @@ export function getSearchText(input: SessionSource): string {
       cached.mtimeMs === stats.mtimeMs && cached.size === stats.size) {
     return cached.text;
   }
-  // Only the rebuild paths below read the freshness inputs, and only once per
-  // call: loading them before the check statted settings.json (and re-hashed
-  // the pricing catalog) once per session of every list search, which a fresh
-  // index entry never consults.
+  // Freshness inputs are loaded only by the rebuild paths below: a fresh entry
+  // would otherwise stat settings.json and re-hash the pricing catalog.
   const ctx = scanContext();
-  // The shared O(delta) extension keeps all three tables coherent — a
-  // text-only extension here used to leave meta/skills behind, which would
-  // now force the scan's extension path into a full re-index.
   if (tryExtendIndexEntry(st, candidate, stats, ctx)) return st.text.get(file)!.text;
   try { indexFile(st, candidate, stats, ctx); } catch { return ''; }
   return st.text.get(file)!.text;
 }
 
 /**
- * Index-backed single-file session info, returning exactly the shape
- * session-files' getSessionInfo returns. Serves fresh entries from memory,
- * extends append-only growth in O(delta), and fully (re-)indexes anything
- * else — so the per-poll metadata reads for an active session stop
- * re-parsing its whole streaming JSONL on every append. Throws when the
- * file is unreadable, like session-files.getSessionInfo.
+ * Index-backed single-file session info with session-files' shape. Serves
+ * fresh entries, extends append-only growth in O(delta), fully re-indexes
+ * anything else, and throws when the file is unreadable.
  */
 export function getSessionInfo(input: SessionSource): SessionInfo {
   const candidate = normalize(input);
@@ -675,9 +600,8 @@ export function getSessionInfo(input: SessionSource): SessionInfo {
     info = tryExtendIndexEntry(st, candidate, stats, ctx) || indexFile(st, candidate, stats, ctx);
   }
   st.backlog.delete(candidate.file); // just indexed/served; a queued rebuild is stale
-  // Strip index-internal fields (identity resolution, usage with its
-  // continuity state) so callers see the plain session-files info shape and
-  // API responses that spread info cannot leak them.
+  // Strip index-internal fields so callers (and responses spreading info) see
+  // the plain session-files shape.
   const { usage, sessionKey, harnessId, nativeSessionId, profileId, profileVersion, ...pub } = info;
   return pub;
 }
@@ -694,19 +618,16 @@ function readByteRange(file: string, start: number, end: number): string {
 }
 
 /**
- * All mined skill-activation records across every indexed session, flattened
- * and filtered. Reads only the in-memory index (loaded from skills.ndjson) —
- * never re-parses the JSONL corpus. `filter` accepts:
- *   { skill, sinceMs, cwd, kind } — skill is the absolute SKILL.md path.
- * Records for files not yet indexed (backlog) are simply absent; callers that
- * care report the index's `indexing` flag from scanSessions.
+ * Mined skill-activation records across every indexed session, filtered by
+ * absolute SKILL.md path, kind, cwd or time. Reads only the in-memory index;
+ * files still in the backlog are simply absent.
  */
 export function getSkillActivations(filter: { skill?: string; sinceMs?: number; cwd?: string; kind?: string } = {}): SkillActivation[] {
   const st = getState();
   const { skill, sinceMs, cwd, kind } = filter;
   const out: SkillActivation[] = [];
   for (const entry of st.skills.values()) {
-    for (const r of entry.records || []) {
+    for (const r of entry.records) {
       if (skill && r.skill !== skill) continue;
       if (kind && r.kind !== kind) continue;
       if (cwd && r.cwd !== cwd) continue;
