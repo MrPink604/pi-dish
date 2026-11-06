@@ -68,6 +68,8 @@ export declare function builtinCacheRetention(target: CacheTarget, long1h: boole
  * documented fixed/minimum windows and conservative provider estimates.
  */
 export declare function cacheExpiryForMessage(message: Record<string, unknown>, previous?: CacheExpiry | null, fallbackTimestamp?: unknown, config?: CacheRetentionConfig): CacheExpiry | null;
+/** The model id a model_change entry records, in the profile's field. */
+export declare function entryModel(entry: Record<string, unknown>, profileId: string | undefined): string | null;
 /** Validate persisted accumulator output, reviving its serialized activity Date. */
 export declare function decodeSessionInfo(value: unknown): SessionInfo | null;
 export declare function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile, config?: CacheRetentionConfig): SessionInfo;

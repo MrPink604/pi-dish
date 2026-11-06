@@ -74,8 +74,8 @@ function usageState(value: unknown): value is UsageState {
       Object.entries(value.serviceTier).every(([family, tier]) =>
         ['openai', 'anthropic', 'google'].includes(family) && typeof tier === 'string'));
 }
-const TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'] as const;
-const COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
+export const TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'] as const;
+export const COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
 const COUNTER_KEYS = ['calls', 'measured', 'durationMs', 'slowestMs'] as const;
 function numericFields(value: unknown, keys: readonly string[], required: boolean): boolean {
   return isRecord(value) && keys.every(key => (!required && value[key] === undefined) || finite(value[key]));

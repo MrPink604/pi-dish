@@ -10,6 +10,7 @@ import { cacheRetentionRevision, loadCacheRetentionConfig } from './cache-retent
 import { cacheExpiryForMessage, hasCacheActivity, isHardCacheMiss, sessionInfoFromEntries, isRecord } from './session-metadata.js';
 import { applyLearnedCacheExpiry } from './cache-lifetime.js';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata.js';
+import { COST_KEYS, TOKEN_KEYS } from './session-index-data.js';
 import type { IndexedUsage, UsageBucket, UsageCosts, UsageTokens } from './session-index-data.js';
 import { extractTextContent } from './helper-content.js';
 import { createUsageCostEstimator, isPlanProvider, pricingRevision } from './harness-pricing.js';
@@ -612,8 +613,6 @@ export function extendSearchIndexFromEntries(entries: SessionEntries, tree: bool
  */
 const statsCache = new Map<string, Cached<SessionStats>>(); // filePath -> { mtimeMs, size, value }
 
-const COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
-const TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'] as const;
 const emptyCosts = (): UsageCosts => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
 
 // Subscription-plan providers report zero costs because there is no

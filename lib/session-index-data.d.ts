@@ -82,6 +82,8 @@ export interface SkillProjection {
     records: SkillActivation[];
     state: SkillState | null;
 }
+export declare const TOKEN_KEYS: readonly ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
+export declare const COST_KEYS: readonly ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
 export declare function decodeUsage(value: unknown): IndexedUsage | null;
 export declare function decodeSkillState(value: unknown): SkillState | null;
 export declare function decodeSkillRecords(value: unknown): SkillActivation[] | null;

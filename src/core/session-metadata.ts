@@ -182,6 +182,12 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
 }
 
 
+/** The model id a model_change entry records, in the profile's field. */
+export function entryModel(entry: Record<string, unknown>, profileId: string | undefined): string | null {
+  const model = profileId === 'omp-v1' ? entry.model : entry.modelId;
+  return typeof model === 'string' && model ? model : null;
+}
+
 /** Validate persisted accumulator output, reviving its serialized activity Date. */
 export function decodeSessionInfo(value: unknown): SessionInfo | null {
   if (!isRecord(value) || typeof value.model !== 'string' ||
@@ -241,8 +247,8 @@ function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candi
       }
     }
     if (entry.type === 'model_change') {
-      const model = profileId === 'omp-v1' ? entry.model : entry.modelId;
-      if (nonempty(model)) info.model = model;
+      const model = entryModel(entry, profileId);
+      if (model) info.model = model;
       info.cacheExpiry = null;
     }
     // Explicit names win; the first user message is only a fallback.

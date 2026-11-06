@@ -20,7 +20,7 @@ import path from 'node:path';
 
 import { MAX_TTL_MS, MIN_TTL_MS, configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
-import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, hasCacheActivity, isRecord, resolveCacheTarget } from './session-metadata';
+import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, entryModel, hasCacheActivity, isRecord, resolveCacheTarget } from './session-metadata';
 import type { CacheExpiry, CacheExpiryBasis, SessionEntries } from './session-metadata';
 
 export interface CacheLifetimeStats {
@@ -393,8 +393,7 @@ function extractObservations(entries: SessionEntries, file: string,
     if (!isRecord(raw)) continue;
     if (raw.type === 'compaction') { chain.clear(); continue; }
     if (raw.type === 'model_change') {
-      const model = profileId === 'omp-v1' ? raw.model : raw.modelId;
-      if (typeof model === 'string' && model) currentModel = model;
+      currentModel = entryModel(raw, profileId) ?? currentModel;
       continue;
     }
     if (raw.type !== 'message') continue;
