@@ -2,7 +2,7 @@
 import type { UiScenario } from './contracts.js';
 
 const drafts: UiScenario = async ({ desktop, check, registryState }) => {
-  // 9. Drafts persist per session; ArrowUp recalls sent prompts
+  // Drafts persist per session; ArrowUp recalls sent prompts.
   console.log('drafts & history:');
   await desktop.evaluate(() => fixtureApp.features.composerDrafts.record('draft scenario history'));
   await desktop.fill('#promptInput', 'unsent draft');

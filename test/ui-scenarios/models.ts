@@ -2,7 +2,7 @@
 import type { UiScenario } from './contracts.js';
 
 const models: UiScenario = async ({ path, tmpHome, desktop, check, fs }) => {
-  // 6. Scoped models: dropdown edit mode toggles models and persists to
+  // Scoped models: dropdown edit mode toggles models and persists to
   // pi's settings.json (enabledModels), normal view hides disabled ones
   console.log('scoped models:');
   const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');

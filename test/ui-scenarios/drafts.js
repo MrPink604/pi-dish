@@ -1,7 +1,7 @@
 // Generated test/tool from test/ui-scenarios/drafts.ts; edit that source and run npm run build:tests.
 "use strict";
 const drafts = async ({ desktop, check, registryState }) => {
-    // 9. Drafts persist per session; ArrowUp recalls sent prompts
+    // Drafts persist per session; ArrowUp recalls sent prompts.
     console.log('drafts & history:');
     await desktop.evaluate(() => fixtureApp.features.composerDrafts.record('draft scenario history'));
     await desktop.fill('#promptInput', 'unsent draft');

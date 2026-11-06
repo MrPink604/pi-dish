@@ -1,7 +1,6 @@
 // Generated test/tool from test/ui-scenarios/mobile.ts; edit that source and run npm run build:tests.
 "use strict";
 const mobile = async ({ browser, watch, base, check, emit, SESSION_ID }) => {
-    // 3. Mobile: hamburger + drawer from empty state and session header
     console.log('mobile:');
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
     await watch(mobile, 'mobile');

@@ -2,7 +2,6 @@
 import type { UiScenario } from './contracts.js';
 
 const mobile: UiScenario = async ({ browser, watch, base, check, emit, SESSION_ID }) => {
-  // 3. Mobile: hamburger + drawer from empty state and session header
   console.log('mobile:');
   const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await watch(mobile, 'mobile');

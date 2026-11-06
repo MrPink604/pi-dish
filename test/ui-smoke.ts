@@ -1,18 +1,10 @@
 #!/usr/bin/env node
 /**
- * UI smoke test — boots server.js against a temp HOME containing a fake
- * *live* bridge session (Unix socket + registry entry, per the pattern in
- * CLAUDE.md), then drives Chromium with the repository-pinned
- * Playwright and asserts the core flows:
- *
- *   1. desktop: live session listed under Active, selecting renders messages
- *   2. prompt round-trip: send → streamed message_update renders live →
- *      turn_end swaps in the authoritative JSONL render
- *   3. mobile: hamburger opens the drawer from both the empty state and the
- *      session header; drawer closes on session pick
- *   4. zero pageerrors / console errors throughout
- *
- * Not part of `npm test` (needs Chrome). Run with: npm run test:ui
+ * UI smoke test — boots server.js against a temp HOME containing a fake live
+ * bridge session (Unix socket + registry entry), then drives Chromium with the
+ * repository-pinned Playwright. Individual features also run alone through
+ * `--scenario <name>` (see test/ui-scenarios/). Fails on any page or console
+ * error. Not part of `npm test` (needs Chrome): run with `npm run test:ui`.
  */
 import scenarios = require('./ui-scenarios/index.js');
 import type { UiRegistryState, UiScenarioContext } from './ui-scenarios/contracts.js';
@@ -156,10 +148,9 @@ appendEntry({ type: 'message', message: { role: 'custom', customType: 'async-res
   timestamp: Date.parse('2026-07-05T00:02:03.000Z') } });
 appendEntry({ type: 'custom_message', customType: 'future-notice',
   content: 'future custom content', display: true, timestamp: '2026-07-05T00:02:04.000Z' });
-// Diagram fences: one tagged ```mermaid, one the agent forgot to tag (the
-// common case — an untagged `flowchart LR` block used to read as a wall of
-// source). Labels stay free of path-looking tokens so the file-mention
-// linkifier has nothing to claim in here.
+// Diagram fences: one tagged ```mermaid and one the agent left untagged.
+// Labels stay free of path-looking tokens so the file-mention linkifier has
+// nothing to claim in here.
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: [
   'Target architecture:',
   '',
@@ -2907,7 +2898,6 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       'the theme picker has left the sidebar header');
     check(await desktop.locator('.sidebar-filter .filter-search-btn').count() === 1,
       'the all-sessions search lives in the filter row');
-    // The session header no longer spends an icon on /tree.
     check(await desktop.locator('#btnTree').count() === 0, 'the tree button is gone from the session header');
     {
       // Drag-to-resize: wider than the default, clamped, and persisted in px.
@@ -3482,10 +3472,9 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.locator('#statsBody').getByText('Performance', { exact: true }).waitFor();
     await desktop.click('#statsModal .modal-header .btn-icon');
 
-    // 14. Host-aware client keys (TASKS/multi-host.md phase 1). The server
-    // answers /api/host, so live session state is already stamped with the
-    // real self hostId — seed bare legacy keys and re-drive the migration
-    // under that same id to prove it is lossless and that the live key
+    // The server answers /api/host, so live session state is already stamped
+    // with the real self hostId: seed bare legacy keys and re-drive the
+    // migration under that id to prove it is lossless and that the live key
     // helpers agree with what it wrote.
     console.log('host-aware client keys:');
     const keys = await desktop.evaluate((id: string) => {
@@ -3543,11 +3532,10 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     check(keys.stampedHost === keys.hostId, 'session state writers stamp the host onto new entries');
     check(keys.migratedFlag === keys.hostId, 'migration is flagged so it runs once');
 
-    // 15. Multi-host aggregation (TASKS/multi-host.md phase 2). A second
-    // pi-dish on its own HOME, added to this browser as a directly-added
-    // host: sessions merge with host chips, session-scoped traffic goes to
-    // the owning host, the new-session takeover re-points, and a host that
-    // stops answering degrades to its own dimmed rows.
+    // A second pi-dish on its own HOME, added to this browser as a
+    // directly-added host: sessions merge with host chips, session-scoped
+    // traffic goes to the owning host, the new-session takeover re-points,
+    // and a host that stops answering degrades to its own dimmed rows.
     console.log('multi-host:');
     writeRemoteFixture(base);
     remoteHost = await startRemoteHost();
