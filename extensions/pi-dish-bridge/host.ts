@@ -8,6 +8,11 @@ export function isObject(value: unknown): value is HostObject {
   return value !== null && (typeof value === "object" || typeof value === "function");
 }
 
+/** An object (never a function), or null — for optional nested projections. */
+export function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
 export function field(value: unknown, key: PropertyKey): unknown {
   return isObject(value) ? value[key] : undefined;
 }

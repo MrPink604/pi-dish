@@ -6,18 +6,7 @@ import path = require('node:path');
 import { once } from 'node:events';
 import { performance } from 'node:perf_hooks';
 import type { Server } from 'node:http';
-const sessionKeys: typeof import('../lib/session-key') = require('../lib/session-key');
-const checkedNativeId = (value: unknown) => {
-  if (!sessionKeys.validSessionId(value)) throw new TypeError('Invalid fixture session id');
-  return value;
-};
-type TestRecord = Record<string, unknown>;
-const record = (value: unknown): TestRecord => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected object');
-  const out: TestRecord = {};
-  for (const [key, item] of Object.entries(value)) out[key] = item;
-  return out;
-};
+import { checkedNativeId, record, type FixtureRecord } from './dev-fixture-values.js';
 const { sanitizeTestEnv }: typeof import('../test/test-env') = require('../test/test-env')
 
 const scenario = process.argv[2] ?? '';
@@ -151,8 +140,8 @@ piSdk.getAvailableModels = async () => [];
 const index: typeof import('../lib/session-index') = require('../lib/session-index')
 const { encodeSessionKey }: typeof import('../lib/session-key') = require('../lib/session-key')
 let server: Server | null = null;
-const results: TestRecord[] = [];
-async function measure(name: string, action: () => TestRecord | Promise<TestRecord>): Promise<void> {
+const results: FixtureRecord[] = [];
+async function measure(name: string, action: () => FixtureRecord | Promise<FixtureRecord>): Promise<void> {
   counts = { directoryOpens: 0, directoryReads: 0, stats: 0, fullReads: 0, rangeReads: 0, bytes: 0 };
   const observed = counts;
   const start = performance.now();
@@ -177,7 +166,7 @@ async function main() {
   const address = activeServer.address();
   if (!address || typeof address === 'string') throw new Error('Baseline server lacks TCP address');
   const base = `http://127.0.0.1:${address.port}`;
-  const get = async (route: string): Promise<TestRecord> => {
+  const get = async (route: string): Promise<FixtureRecord> => {
     const response = await fetch(base + route);
     if (!response.ok) throw new Error(`${route}: HTTP ${response.status}`);
     const body = record(await response.json());

@@ -28,28 +28,9 @@ import net = require('node:net');
 import os = require('node:os');
 import path = require('node:path');
 import { execFileSync } from 'node:child_process';
-const sessionKeys: typeof import('../lib/session-key') = require('../lib/session-key');
-const checkedNativeId = (value: unknown) => {
-  if (!sessionKeys.validSessionId(value)) throw new TypeError('Invalid fixture session id');
-  return value;
-};
+import { checkedNativeId, present, record, records, type FixtureRecord } from './dev-fixture-values.js';
 const idleChild = path.join(__dirname, '..', 'test', 'fixtures', 'idle-child.js');
 type Harness = 'omp' | 'prime';
-type TestRecord = Record<string, unknown>;
-const record = (value: unknown): TestRecord => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected object');
-  const out: TestRecord = {};
-  for (const [key, item] of Object.entries(value)) out[key] = item;
-  return out;
-};
-const records = (value: unknown): TestRecord[] => {
-  if (!Array.isArray(value)) throw new TypeError('Expected array');
-  return value.map(record);
-};
-const present = <T>(value: T | null | undefined): T => {
-  if (value === null || value === undefined) throw new TypeError('Expected value');
-  return value;
-};
 const text = (value: unknown): string => String(value ?? '');
 const tmuxApi = () => {
   if (!tmux) throw new Error('tmux module not loaded');
@@ -136,7 +117,7 @@ const fakeOpenAi = http.createServer((req, res) => {
   req.setEncoding('utf8');
   req.on('data', chunk => { body += chunk; });
   req.on('end', async () => {
-    let request: TestRecord;
+    let request: FixtureRecord;
     try { request = record(JSON.parse(body)); } catch { res.writeHead(400).end(); return; }
     assert.equal(request.stream, true);
     const serviceTier = typeof request.service_tier === 'string' ? request.service_tier : null;
@@ -228,7 +209,7 @@ async function waitFor<T>(check: () => T | null | undefined | false | Promise<T 
 
 interface SessionStream {
   events: string[];
-  payloads: Array<{ event: string; data: TestRecord }>;
+  payloads: Array<{ event: string; data: FixtureRecord }>;
   close: () => Promise<void>;
 }
 
@@ -240,7 +221,7 @@ async function openSessionStream(sessionId: string): Promise<SessionStream> {
   if (!reader) throw new Error('Stream response has no body');
   const decoder = new TextDecoder();
   const events: string[] = [];
-  const payloads: Array<{ event: string; data: TestRecord }> = [];
+  const payloads: Array<{ event: string; data: FixtureRecord }> = [];
   let buffer = '';
   const pump = (async () => {
     while (true) {
@@ -439,8 +420,8 @@ async function testOmp() {
   };
 }
 
-function primeDaemonRequest(socketPath: string, command: TestRecord, timeoutMs = 20000): Promise<TestRecord> {
-  return new Promise<TestRecord>((resolve, reject) => {
+function primeDaemonRequest(socketPath: string, command: FixtureRecord, timeoutMs = 20000): Promise<FixtureRecord> {
+  return new Promise<FixtureRecord>((resolve, reject) => {
     const socket = net.connect(socketPath);
     const id = `pi-dish-canary-${String(command.type)}`;
     const timer = setTimeout(() => {
@@ -455,7 +436,7 @@ function primeDaemonRequest(socketPath: string, command: TestRecord, timeoutMs =
       while ((newline = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, newline);
         buffer = buffer.slice(newline + 1);
-        let message: TestRecord;
+        let message: FixtureRecord;
         try { message = record(JSON.parse(line)); } catch { continue; }
         if (message.type === 'daemon_hello') {
           socket.write(JSON.stringify({
@@ -492,7 +473,7 @@ async function shutdownPrime(daemonSocket = primeDaemon) {
 }
 
 /** Roster rows from the isolated daemon's own CLI, scoped by env socket. */
-function primeDaemonRoster(): TestRecord[] {
+function primeDaemonRoster(): FixtureRecord[] {
   const output = execFileSync(String(primeBin), ['list', '--json'], {
     encoding: 'utf8',
     timeout: 20000,
@@ -501,7 +482,7 @@ function primeDaemonRoster(): TestRecord[] {
   return records(record(JSON.parse(output)).sessions);
 }
 
-function rosterHasAgent(predicate: (row: TestRecord) => boolean): boolean {
+function rosterHasAgent(predicate: (row: FixtureRecord) => boolean): boolean {
   return primeDaemonRoster().some(predicate);
 }
 
@@ -727,7 +708,7 @@ async function cleanup() {
       assert.equal(harness.available, true, `${id} must be reported installed`);
       assert.equal(harness.rpcFallback, false);
     }
-    const result: TestRecord = {};
+    const result: FixtureRecord = {};
     for (const id of selected) result[id] = await (id === 'omp' ? testOmp() : testPrime());
     // OMP: two streamed turns (fast on, then off) plus one side-chat turn.
     // Prime: the managed turn, the held/aborted turn, restart, two peer turns,

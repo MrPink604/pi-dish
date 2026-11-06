@@ -3,7 +3,7 @@
 import type { ContextUsage, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PiPrivateOperations } from "./pi-private.js";
 import { createLoginController, type LoginAdapter } from "./login.js";
-import { callHost, field, isHostMethod, isObject, optionalHostCall, type HostMethod, type HostObject } from "./host.js";
+import { asRecord, callHost, field, isHostMethod, isObject, optionalHostCall, type HostMethod, type HostObject } from "./host.js";
 import { captureSendUserMessage } from "./send-observer.js";
 import * as cp from "node:child_process";
 import * as crypto from "node:crypto";
@@ -825,7 +825,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let sessionFile: string | null = null;
   let cwd: string | null = null;
   const clients = new Set<net.Socket>();
-  const wrappedUIs = new Map<object, Map<string, { original: unknown; wrapped: unknown }>>();
+  const wrappedUIs = new Map<Record<string, unknown>, Map<string, { original: unknown; wrapped: unknown }>>();
   const UI_METHOD_WRAPPER = Symbol("pi-dish-ui-method-wrapper");
 
   // OMP creates a fresh Proxy around the shared UI object for every extension
@@ -1257,10 +1257,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
       blocked: "[!]",
     };
     for (const phaseValue of value) {
-      if (!phaseValue || typeof phaseValue !== "object") continue;
-      const phase = phaseValue as Record<string, unknown>;
-      if (typeof phase.name !== "string" || !Array.isArray(phase.tasks)) continue;
-      const tasks = phase.tasks.filter(task => !!task && typeof task === "object") as Array<Record<string, unknown>>;
+      const phase = asRecord(phaseValue);
+      if (!phase || typeof phase.name !== "string" || !Array.isArray(phase.tasks)) continue;
+      const tasks = phase.tasks.map(asRecord).filter((task): task is Record<string, unknown> => task !== null);
       const closed = tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
       lines.push(`${phase.name}  ${closed}/${tasks.length}`);
       for (const task of tasks) {
@@ -1277,7 +1276,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let debugTodoProjection: { signature: string; count: number } | null = null;
 
   function projectNativeState(value: unknown): void {
-    const projection = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    const projection = asRecord(value) ?? {};
     const todoLines = renderNativeTodoLines(projection.todos);
     if (DEBUG_PROJECTION_LOG) {
       const signature = JSON.stringify(todoLines);
@@ -1297,17 +1296,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
       widgetPlacement: "aboveEditor",
     });
 
-    const plan = projection.planMode && typeof projection.planMode === "object"
-      ? projection.planMode as Record<string, unknown> : null;
+    const plan = asRecord(projection.planMode);
     const planText = plan?.enabled === true
       ? `Plan mode${typeof plan.workflow === "string" ? ` · ${plan.workflow}` : ""}`
       : undefined;
     emitExtensionUIRequest({ method: "setStatus", statusKey: "planmode", statusText: planText });
 
-    const prewalk = projection.prewalk && typeof projection.prewalk === "object"
-      ? projection.prewalk as Record<string, unknown> : null;
-    const target = prewalk?.target && typeof prewalk.target === "object"
-      ? prewalk.target as Record<string, unknown> : null;
+    const prewalk = asRecord(projection.prewalk);
+    const target = asRecord(prewalk?.target);
     const targetName = target && typeof target.provider === "string" && typeof target.id === "string"
       ? `${target.provider}/${target.id}` : null;
     const thinking = typeof prewalk?.thinkingLevel === "string" ? ` · ${prewalk.thinkingLevel}` : "";
@@ -1325,9 +1321,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // a completed goal is history, not status. Projection values arrive as
   // untrusted unknowns, so every field is checked before it is read.
   function renderGoalStatus(value: unknown): string | undefined {
-    const state = value && typeof value === "object" ? value as Record<string, unknown> : null;
+    const state = asRecord(value);
     if (state?.enabled !== true) return undefined;
-    const goal = state.goal && typeof state.goal === "object" ? state.goal as Record<string, unknown> : null;
+    const goal = asRecord(state.goal);
     if (!goal) return undefined;
     const status = typeof goal.status === "string" ? goal.status : "active";
     if (status === "complete" || status === "dropped") return undefined;
@@ -1343,11 +1339,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // Advisor: on/off plus the one failure mode worth a status line — configured
   // but with no model resolved, where nothing is actually watching.
   function renderAdvisorStatus(value: unknown): string | undefined {
-    const advisor = value && typeof value === "object" ? value as Record<string, unknown> : null;
+    const advisor = asRecord(value);
     if (advisor?.enabled !== true) return undefined;
     if (advisor.active !== true) return "Advisor · no model";
-    const overview = advisor.overview && typeof advisor.overview === "object"
-      ? advisor.overview as Record<string, unknown> : null;
+    const overview = asRecord(advisor.overview);
     const count = Array.isArray(overview?.advisors) ? overview.advisors.length : 0;
     return count > 1 ? `Advisor on · ${count} advisors` : "Advisor on";
   }
@@ -1739,8 +1734,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       try { resolve({ cancelled: true }); } catch {}
       broadcast({ type: "event", event: "extension_ui_resolved", data: { id, source: "shutdown" } });
     }
-    for (const [uiValue, methods] of wrappedUIs) {
-      const ui = uiValue as unknown as Record<string, unknown>;
+    for (const [ui, methods] of wrappedUIs) {
       for (const [name, method] of methods) {
         if (underlyingUIMethod(ui, name) === method.wrapped) ui[name] = method.original;
       }
