@@ -255,14 +255,26 @@ function inject(argv) {
 }
 /** aac v0.11.0 pairs non-interactively only alongside a request; the listener answers this probe itself. */
 exports.PAIR_PROBE = 'pidish-vault:pair';
+/** Run aac, turning a spawn error or a non-zero status into one attributable line. */
+function runAac(argv, verb) {
+    const result = (0, node_child_process_1.spawnSync)(aacBin(), argv, { encoding: 'utf8' });
+    if (result.error) {
+        fail(`could not run ${aacBin()}: ${result.error.message}`);
+        return null;
+    }
+    if (result.status !== 0) {
+        const detail = (result.stderr || result.stdout || '').trim().split('\n').pop() || 'no output';
+        fail(`${verb} failed (exit ${result.status}): ${detail}`);
+        return null;
+    }
+    return result.stdout;
+}
 function pair(token) {
     if (!token)
         return fail('usage: pair <psk-token>');
-    const result = (0, node_child_process_1.spawnSync)(aacBin(), aacArgv(['connect', '--token', token, '--domain', exports.PAIR_PROBE, '--output', 'json', '--timeout', '30']), { encoding: 'utf8' });
-    if (result.error)
-        return fail(`could not run ${aacBin()}: ${result.error.message}`);
-    if (result.status !== 0)
-        return fail(`pairing failed (exit ${result.status}): ${(result.stderr || result.stdout || '').trim().split('\n').pop() || 'no output'}`);
+    const paired = runAac(aacArgv(['connect', '--token', token, '--domain', exports.PAIR_PROBE, '--output', 'json', '--timeout', '30']), 'pairing');
+    if (paired === null)
+        return;
     process.stdout.write('Paired with the vault listener. `status` lists the cached connection.\n');
 }
 /** The listener answers this probe itself with item metadata as JSON in `notes`. */
@@ -287,12 +299,10 @@ function search(args) {
     const json = args.includes('--json');
     const text = args.filter(arg => arg !== '--json').join(' ').trim();
     const probe = exports.SEARCH_PREFIX + Buffer.from(text, 'utf8').toString('base64url');
-    const result = (0, node_child_process_1.spawnSync)(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', '30']), { encoding: 'utf8' });
-    if (result.error)
-        return fail(`could not run ${aacBin()}: ${result.error.message}`);
-    if (result.status !== 0)
-        return fail(`search failed (exit ${result.status}): ${(result.stderr || result.stdout || '').trim().split('\n').pop() || 'no output'}`);
-    const listing = decodeSearchReply(result.stdout);
+    const reply = runAac(aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', '30']), 'search');
+    if (reply === null)
+        return;
+    const listing = decodeSearchReply(reply);
     if (json)
         return void process.stdout.write(JSON.stringify(listing, null, 2) + '\n');
     for (const entry of listing.results) {
@@ -308,11 +318,8 @@ function search(args) {
 /** The listener answers this probe itself: `bw sync`, then an empty credential. */
 exports.SYNC_PROBE = 'pidish-vault:sync';
 function sync() {
-    const result = (0, node_child_process_1.spawnSync)(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', exports.SYNC_PROBE, '--timeout', '60']), { encoding: 'utf8' });
-    if (result.error)
-        return fail(`could not run ${aacBin()}: ${result.error.message}`);
-    if (result.status !== 0)
-        return fail(`sync failed (exit ${result.status}): ${(result.stderr || result.stdout || '').trim().split('\n').pop() || 'no output'}`);
+    if (runAac(aacArgv(['--output', 'json', 'connect', '--domain', exports.SYNC_PROBE, '--timeout', '60']), 'sync') === null)
+        return;
     process.stdout.write('Vault synced.\n');
 }
 function status() {

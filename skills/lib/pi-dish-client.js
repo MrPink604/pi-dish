@@ -22,7 +22,6 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var pi_dish_client_exports = {};
 __export(pi_dish_client_exports, {
   TOKEN: () => TOKEN,
-  ancestorPids: () => ancestorPids,
   api: () => api,
   defaultBase: () => defaultBase,
   discoverSession: () => discoverSession,
@@ -35,18 +34,14 @@ __export(pi_dish_client_exports, {
   fleetHost: () => fleetHost,
   fleetHosts: () => fleetHosts,
   fleetRows: () => fleetRows,
-  hostLabelOf: () => hostLabelOf,
   hostPath: () => hostPath,
   hostSupports: () => hostSupports,
-  isSessionRow: () => isSessionRow,
   jsonInit: () => jsonInit,
   makeFail: () => makeFail,
   mergeSearchResults: () => mergeSearchResults,
   nativeSessionId: () => nativeSessionId,
-  parentPid: () => parentPid,
   parseCommandLine: () => parseCommandLine,
   parseRef: () => parseRef,
-  pidAlive: () => pidAlive,
   print: () => print,
   record: () => record,
   registryEntries: () => registryEntries,
@@ -54,17 +49,12 @@ __export(pi_dish_client_exports, {
   renderTranscript: () => renderTranscript,
   request: () => request,
   requestText: () => requestText,
-  resetFleetCache: () => resetFleetCache,
-  resolveHostPart: () => resolveHostPart,
   resolveSessionClientSide: () => resolveSessionClientSide,
   resolveSessionRef: () => resolveSessionRef,
   sessionHarnessId: () => sessionHarnessId,
   sessionRows: () => sessionRows,
   stableSessionRef: () => stableSessionRef,
-  stringValue: () => stringValue,
-  summarizeToolArgs: () => summarizeToolArgs,
-  truncateResult: () => truncateResult,
-  unknownHostError: () => unknownHostError
+  stringValue: () => stringValue
 });
 module.exports = __toCommonJS(pi_dish_client_exports);
 var import_node_child_process = require("node:child_process");
@@ -421,9 +411,6 @@ function fleetHosts(base) {
   }
   return fleetPromise;
 }
-function resetFleetCache() {
-  fleetPromise = null;
-}
 function hostSupports(value, capability) {
   const entry = record(value ?? {});
   return !!(value && entry.capabilities && record(entry.capabilities)[capability]);
@@ -737,7 +724,6 @@ function renderTranscript(input, options = {}) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   TOKEN,
-  ancestorPids,
   api,
   defaultBase,
   discoverSession,
@@ -750,18 +736,14 @@ function renderTranscript(input, options = {}) {
   fleetHost,
   fleetHosts,
   fleetRows,
-  hostLabelOf,
   hostPath,
   hostSupports,
-  isSessionRow,
   jsonInit,
   makeFail,
   mergeSearchResults,
   nativeSessionId,
-  parentPid,
   parseCommandLine,
   parseRef,
-  pidAlive,
   print,
   record,
   registryEntries,
@@ -769,15 +751,10 @@ function renderTranscript(input, options = {}) {
   renderTranscript,
   request,
   requestText,
-  resetFleetCache,
-  resolveHostPart,
   resolveSessionClientSide,
   resolveSessionRef,
   sessionHarnessId,
   sessionRows,
   stableSessionRef,
-  stringValue,
-  summarizeToolArgs,
-  truncateResult,
-  unknownHostError
+  stringValue
 });

@@ -106,7 +106,7 @@ export function errorMessage(value: unknown): string {
 }
 export function errorStatus(value: unknown): unknown { return record(value ?? {}).status; }
 export function errorBody(value: unknown): Record<string, unknown> { return record(record(value ?? {}).body ?? {}); }
-export function isSessionRow(value: unknown): value is SessionRow {
+function isSessionRow(value: unknown): value is SessionRow {
   return typeof record(value ?? {}).id === 'string' && !!record(value ?? {}).id;
 }
 export function sessionRows(value: unknown): SessionRow[] {
@@ -398,8 +398,6 @@ function fleetHosts(base: string): Promise<unknown[] | null> {
   }
   return fleetPromise;
 }
-
-function resetFleetCache() { fleetPromise = null; }
 
 /** Absent capability means unsupported — mixed-version fleets are the norm. */
 function hostSupports(value: unknown, capability: string) {
@@ -792,17 +790,11 @@ function renderTranscript(input: unknown, options: TranscriptOptions = {}) {
 }
 
 export {
-  // output
   makeFail, print, parseCommandLine,
-  // discovery
-  parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId,
+  registryEntries, registryRouteId, sessionHarnessId, nativeSessionId,
   discoverSession, discoverSessionQuietly, fleetCallerId,
-  // http
-  TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit,
-  // fleet + refs
-  fleetHosts, resetFleetCache, hostSupports, hostLabelOf, parseRef, resolveHostPart,
-  entryForHostName, resolveSessionRef, resolveSessionClientSide,
-  stableSessionRef,
-  // pure helpers (unit-tested in test/skills-core.test.js)
-  mergeSearchResults, renderTranscript, summarizeToolArgs, truncateResult,
+  TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit,
+  fleetHosts, hostSupports, parseRef, entryForHostName, resolveSessionRef,
+  resolveSessionClientSide, stableSessionRef,
+  mergeSearchResults, renderTranscript,
 };
