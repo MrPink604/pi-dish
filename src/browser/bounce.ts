@@ -27,12 +27,13 @@ export function createBounce(options: {
     const value = document.getElementById(id); if (!value) throw new Error('Missing bounce element: ' + id); return value as T;
   };
   const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+  const readJson = (response: Response): Promise<unknown> => response.json().catch(() => ({}));
+  function failure(data: unknown, status: number) { return record(data) && typeof data.error === 'string' && data.error ? data.error : `HTTP ${status}`; }
   let disposed = false;
   function retire(state: BounceHostState): void { clearTimeout(state.timer); state.previewEvents.abort(); state.operationEvents.abort(); }
   function sameHost(host: BounceHost): boolean {
     return effectiveHosts().some(current => current.hostId === host.hostId && current.base === host.base && (current.token || '') === (host.token || ''));
   }
-  // --- Bounce agents: the browser selects a snapshot; each host owns its wait. ---
   let bounceHosts: BounceHostState[] = [];
   let bounceGeneration = 0;
   let bounceSubmitting = false;
@@ -93,8 +94,8 @@ export function createBounce(options: {
   async function loadBouncePreview(state: BounceHostState) {
     try {
       const res = await apiFetch(state.host, `/api/session-bounces/preview?mode=${state.mode}`, { timeoutMs: 20000 });
-      const data: unknown = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(record(data) && typeof data.error === 'string' && data.error || `HTTP ${res.status}`);
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(failure(data, res.status));
       if (!bounceHostElement(state)) return;
       state.targets = decodeBouncePreview(data);
     } catch (error) {
@@ -160,8 +161,8 @@ export function createBounce(options: {
     if (!snapshot.length) return;
     bounceSubmitting = true;
     updateBounceSelection();
-    // Clear the submitted selection even on a lost response: acceptance may have
-    // happened on the host. Never automatically retry a mutation.
+    // Clear the submitted selection even on a lost response: the host may have
+    // accepted it, and a mutation is never retried automatically.
     for (const { state } of snapshot) {
       state.selected.clear();
       state.actionNotice = '';
@@ -173,8 +174,8 @@ export function createBounce(options: {
           method: 'POST', timeoutMs: 20000, headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode: state.mode, sessionIds }),
         });
-        const data: unknown = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(record(data) && typeof data.error === 'string' && data.error || `HTTP ${res.status}`);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(failure(data, res.status));
         const operation = decodeBounceOperation(record(data) ? data.operation : null);
         ++state.readSeq;
         state.operations = [operation, ...state.operations.filter(op => op.id !== operation.id)];
@@ -198,8 +199,8 @@ export function createBounce(options: {
     const seq = ++state.readSeq;
     try {
       const res = await apiFetch(state.host, '/api/session-bounces', { timeoutMs: 20000 });
-      const data: unknown = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(record(data) && typeof data.error === 'string' && data.error || `HTTP ${res.status}`);
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(failure(data, res.status));
       const operations = decodeBounceOperations(data);
       if (seq === state.readSeq && bounceHostElement(state)) {
         state.operations = operations;
@@ -247,8 +248,8 @@ export function createBounce(options: {
     renderBounceOperations(state);
     try {
       const res = await apiFetch(state.host, `/api/session-bounces/${encodeURIComponent(operation.id)}`, { method: 'DELETE', timeoutMs: 20000 });
-      const data: unknown = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(record(data) && typeof data.error === 'string' && data.error || `HTTP ${res.status}`);
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(failure(data, res.status));
       const updated = decodeBounceOperation(record(data) ? data.operation : null);
       ++state.readSeq;
       state.operations = state.operations.map(op => op.id === operation.id ? updated : op);
@@ -279,14 +280,13 @@ export function createBounce(options: {
     const owner = sessionState.captureSelection();
     const affected = completed.find(({ target }) => target.sessionId === owner?.id && owner?.host === (state.host.hostId || null))?.target;
     await refreshSessions();
-    if (!bounceHostElement(state)) return; // Reconcile on reopen; never dismiss another takeover.
+    if (!bounceHostElement(state)) return;
     const id = affected?.replacementId || affected?.sessionId;
     if (affected && owner && id && !sessionState.findSession(id, owner.host)) await options.loadPrevious();
     if (!bounceHostElement(state)) return;
     for (const { key } of completed) bouncePendingRestarts.delete(key);
     if (!affected || !id || !owner || !sessionState.ownsSelection(owner)) return;
-    // Reconnect the selected transcript underneath the status surface, without
-    // closing it; an ordinary user session switch still closes the takeover.
+    // Reconnect the transcript underneath the status surface; a user switch still closes it.
     await selectSession(id, { host: owner.host, keepBounceView: true });
   }
 
