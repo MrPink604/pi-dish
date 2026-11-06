@@ -591,7 +591,7 @@ let remoteHost = null;
         });
     };
     try {
-        // 1. Desktop: list + select + history render
+        // Desktop: list + select + history render
         console.log('desktop:');
         const desktop = await browser.newPage({
             viewport: { width: 1280, height: 800 },
@@ -724,7 +724,7 @@ let remoteHost = null;
                 return img?.complete && img.naturalWidth === 1;
             }, { timeout: 3000 });
             await histGroup.evaluate((el) => { el.open = false; });
-            // 2. Prompt round-trip through the fake bridge
+            // Prompt round-trip through the fake bridge
             console.log('prompt round-trip:');
             await desktop.fill('#promptInput', 'ping from smoke test');
             await desktop.click('#btnSend');
@@ -1239,7 +1239,7 @@ let remoteHost = null;
             const rightGap = (feedBox.x + feedBox.width) - (userBox.x + userBox.width);
             check(leftGap > 100 && Math.abs(leftGap - rightGap) < 40, `wide viewport centers the column (gaps ${Math.round(leftGap)}/${Math.round(rightGap)})`);
             await wide.close();
-            // 3. @-mention: fuzzy file search under the session cwd (fff-backed)
+            // @-mention: fuzzy file search under the session cwd (fff-backed)
             console.log('@-mentions:');
             await desktop.fill('#promptInput', '');
             await desktop.type('#promptInput', 'look at @ma');
@@ -1263,7 +1263,7 @@ let remoteHost = null;
             const deepVal = await desktop.inputValue('#promptInput');
             check(deepVal === '@~/workspace/proj-alpha/README.md ', `drilled mention inserted (got ${JSON.stringify(deepVal)})`);
             await desktop.fill('#promptInput', '');
-            // 4. New-session takeover: fuzzy cwd search, lazy directory tree,
+            // New-session takeover: fuzzy cwd search, lazy directory tree,
             //    model select, and a routed spawn round-trip.
             console.log('new-session takeover:');
             await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
@@ -1634,7 +1634,7 @@ let remoteHost = null;
             await desktop.unroute(/\/api\/harnesses\/omp\/agents(?:\?|$)/);
             await desktop.unroute(/\/api\/harnesses\/omp\/settings(?:\?|$)/);
             await desktop.unroute('**/api/harnesses');
-            // 5. Rename propagates to the sidebar without a reload
+            // Rename propagates to the sidebar without a reload
             console.log('rename:');
             await desktop.click('#sessionName');
             await desktop.fill('#sessionNameInput', 'renamed live');
@@ -1645,7 +1645,7 @@ let remoteHost = null;
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('sessionName'), "document.getElementById('sessionName')").textContent === 'renamed live', null, { timeout: 5000 });
             await desktop.waitForFunction(() => document.querySelector('.session-item-name')?.textContent === 'renamed live', null, { timeout: 5000 });
             await scenarios.models(scenarioContext());
-            // 7. Image attachment: attach a PNG, send, optimistic + JSONL renders
+            // Image attachment: attach a PNG, send, optimistic + JSONL renders
             // both carry the image, and the bridge receives the base64 payload.
             console.log('image attachments:');
             await desktop.waitForSelector('#btnAttach', { state: 'visible', timeout: 5000 });
@@ -1683,7 +1683,7 @@ let remoteHost = null;
             await desktop.waitForSelector('.lightbox-overlay img');
             await desktop.click('.lightbox-overlay');
             check(await desktop.locator('.lightbox-overlay').count() === 0, 'lightbox dismissed on tap');
-            // 7a. Dictation: the composer mic records through MediaRecorder, POSTs the
+            // Dictation: the composer mic records through MediaRecorder, POSTs the
             // bytes to /api/stt (which relays them to the fake endpoint above) and
             // drops the transcript at the caret. It gets its own page because the
             // second half blanks the host's stt config and reloads — the capability
@@ -1728,7 +1728,7 @@ let remoteHost = null;
             await dictation.waitForFunction(() => document.getElementById('btnMic')?.style.display === 'none', { timeout: 5000 });
             check(await dictation.locator('#btnMic').isVisible() === false, 'the mic is hidden once no host advertises stt');
             await dictation.close();
-            // 8. Queue strip: steering a message during a turn surfaces it in the
+            // Queue strip: steering a message during a turn surfaces it in the
             // always-visible strip; Edit pulls it back out of pi's queue and into the
             // composer, emptying the strip.
             console.log('queue strip (steer + edit):');
@@ -1743,7 +1743,7 @@ let remoteHost = null;
             await desktop.waitForFunction(() => fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')").value.includes('steer me now'), { timeout: 5000 });
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('queuePanel'), "document.getElementById('queuePanel')").style.display === 'none', { timeout: 5000 });
             await desktop.fill('#promptInput', ''); // don't leave it in the draft
-            // 8a. Mid-turn steer delivery: pi delivers a queued user message during the
+            // Mid-turn steer delivery: pi delivers a queued user message during the
             // turn (message_start/message_end, role user). It must render in the
             // transcript immediately, before turn_end's JSONL catch-up.
             console.log('mid-turn steer delivery:');
@@ -1752,7 +1752,7 @@ let remoteHost = null;
             emit('message_end', { message: { role: 'user', content: [{ type: 'text', text: deliveredText }], timestamp: new Date().toISOString() } });
             await desktop.waitForFunction((t) => [...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes(t)), deliveredText, { timeout: 5000 });
             emit('turn_end', {});
-            // 8b. SSE queue replay: a queue with content must repopulate the strip on a
+            // SSE queue replay: a queue with content must repopulate the strip on a
             // fresh stream connection (switch away and back), from the hello/replay
             // path — not just from the live event the current client already saw.
             console.log('queue SSE replay:');
@@ -1789,7 +1789,7 @@ let remoteHost = null;
             check(!(await desktop.evaluate(() => fixtureApp.features.sessionActivity.turn)), 'agent_end clears the aborted turn');
             check(await desktop.locator('details.live-tool-panel').count() === 0, 'agent_end catch-up removes the aborted turn live tool panel');
             await desktop.fill('#promptInput', '');
-            // 8b. Working indicator: a synthetic turn (fully event-driven, so there
+            // Working indicator: a synthetic turn (fully event-driven, so there
             // is no timing window) shows the elapsed timer + running tool in the
             // header badge, ticks, and resets when the turn ends.
             console.log('working indicator:');
@@ -1800,7 +1800,7 @@ let remoteHost = null;
             emit('tool_execution_end', { toolCallId: 'wt1', toolName: 'Bash', args: { command: 'sleep 2' }, result: { content: [{ type: 'text', text: '' }] }, isError: false });
             emit('turn_end', {});
             await desktop.waitForFunction(() => document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
-            // 8c. Compaction status: compaction_start drives the working badge — the
+            // Compaction status: compaction_start drives the working badge — the
             // run chip carries turn/compaction state alone, so the status line stays
             // free of working prose (only outcomes and errors speak). The bridge
             // reports tokensBefore only (post-compaction size is unknown until the
@@ -1821,7 +1821,7 @@ let remoteHost = null;
             emit('compaction_end', { reason: 'manual', errorMessage: 'lost abort race' });
             await desktop.waitForFunction(() => !fixtureApp.features.sessionActivity.compacting, { timeout: 3000 });
             check(!(await desktop.evaluate((id) => fixtureApp.features.sessionActivity.isAborting(fixtureApp.ports.composerDrafts.keyForSession(id)), SESSION_ID)), 'compaction_end clears a compaction-only abort gate even on failure');
-            // 8c-2. Compaction gates sends: while compacting there's no turn, but a
+            // Compaction gates sends: while compacting there's no turn, but a
             // prompt sent now must be held (bridge buffers, acks queued) and delivered
             // as a turn once compaction ends — not raced against pi's message rewrite.
             // The working badge (not just the transient status line) shows compaction.
@@ -1862,7 +1862,7 @@ let remoteHost = null;
             await desktop.waitForFunction(() => document.getElementById('status')?.textContent === 'Compacted: 152.3k → ~30.5k tokens', { timeout: 3000 });
             emit('turn_end', {});
             await desktop.waitForFunction(() => document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
-            // 8c-3. Tree navigation: a session_tree event means the authoritative
+            // Tree navigation: a session_tree event means the authoritative
             // history changed (a /tree branch — from this UI, the TUI, or another
             // client), and the client must re-render the transcript from the JSONL.
             // The shrink direction is the structural proof: an append-only catch-up
@@ -1885,7 +1885,7 @@ let remoteHost = null;
             fs.writeFileSync(sessionFile, preBranchJsonl); // the "branch": history shrinks
             emit('session_tree', { newLeafId: 'anywhere' });
             await desktop.waitForFunction(() => ![...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes('pre-branch marker')), { timeout: 5000 });
-            // 8d. Terminal: header button opens a shell at the session cwd over the
+            // Terminal: header button opens a shell at the session cwd over the
             // WS endpoint; output round-trips; close + reopen reattaches the same
             // PTY and replays scrollback (arithmetic markers so the echo of the
             // *typed* line can't satisfy the assertions).
@@ -1966,7 +1966,7 @@ let remoteHost = null;
             }
             await desktop.click('#termCloseBtn');
             await scenarios.drafts(scenarioContext());
-            // 10. Extension UI scoping: widgets/statuses are per-session — cleared
+            // Extension UI scoping: widgets/statuses are per-session — cleared
             // on switch, replayed from the server's remembered state on switch-back.
             console.log('extension UI scoping:');
             emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: ['proc one', 'proc two'] });
@@ -2065,7 +2065,7 @@ let remoteHost = null;
             await desktop.waitForFunction(() => [...document.querySelectorAll('.ext-ui-widget-body')].some((el) => el.textContent === 'proc one\nproc two'), { timeout: 5000 });
             check(await desktop.locator('.ext-ui-widget').count() === 1, 'switch-back replays only session 1 widget');
             check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running', 'status badge replayed on switch-back');
-            // 10b. Extension dialogs dock above the chat box (no page-wide overlay,
+            // Extension dialogs dock above the chat box (no page-wide overlay,
             // no composer takeover), background to a slim bar, absorb host
             // re-emissions of the same payload, and survive session switches with
             // their in-progress selection intact. Session 1 is selected here.
@@ -2120,7 +2120,7 @@ let remoteHost = null;
             await desktop.waitForFunction(() => !document.getElementById('extUiDialogs'), { timeout: 5000 });
             emit('turn_end', {});
             await desktop.waitForTimeout(300);
-            // 10a. Selection/transcript ownership. Hold A's tail response, fully
+            // Selection/transcript ownership. Hold A's tail response, fully
             // select B, then release A: A must not reopen its stream or touch B's pane.
             console.log('session/transcript async ownership:');
             await desktop.evaluate(({ a }) => {
@@ -2510,7 +2510,7 @@ let remoteHost = null;
             emit('extension_ui_request', { method: 'setStatus', statusKey: 'procs', statusText: '' });
             await desktop.waitForFunction(() => !document.querySelector('.ext-ui-widget'), { timeout: 5000 });
             fs.rmSync(path.join(registryDir, `${SESSION2_ID}.json`), { force: true });
-            // 11. Sidebar: both workspaces share the tmp-HOME prefix, so the tree
+            // Sidebar: both workspaces share the tmp-HOME prefix, so the tree
             // shows one flattened prefix node with proj-alpha/proj-beta as children.
             // Collapsing a child hides its sessions and sinks it below its expanded
             // sibling; collapsing the prefix node hides the whole subtree. Pinning
@@ -2578,7 +2578,7 @@ let remoteHost = null;
                     await desktop.evaluate(() => localStorage.getItem('pi-dish-sidebar-width')) === null, 'double-clicking the handle restores the default width');
             }
             await scenarios.sidebar(scenarioContext());
-            // 12. All-tab server search: busy indicator while in flight, content
+            // All-tab server search: busy indicator while in flight, content
             // matches carry a highlighted snippet, clearing restores the full list.
             console.log('sidebar search:');
             await desktop.fill('#filterInput', 'beta answer');
@@ -2601,7 +2601,7 @@ let remoteHost = null;
             await desktop.waitForFunction(() => document.querySelectorAll('#sessionList .session-item').length >= 3, null, { timeout: 5000 });
             check(await desktop.locator('.session-item-snippet').count() === 0, 'clearing the query drops snippets and restores the list');
             check(await desktop.locator('#sessionList .workspace-group-header').count() > 0, 'clearing the query restores the grouped view');
-            // 12a. Active-tab content search: queries go through the server on both
+            // Active-tab content search: queries go through the server on both
             // tabs — a session matched by transcript content must not vanish when
             // the tab switches (the old Active filter was local metadata-only and
             // cleared the results).
@@ -2616,7 +2616,7 @@ let remoteHost = null;
             await desktop.fill('#filterInput', '');
             await desktop.click('#tabAll');
             await desktop.waitForFunction(() => document.querySelectorAll('#sessionList .session-item').length >= 3, null, { timeout: 5000 });
-            // 12b. Filter grammar + saved scopes + Recent view.
+            // Filter grammar + saved scopes + Recent view.
             console.log('filter grammar, scopes, recent view:');
             // Negation is metadata-only and works server-side on the All tab.
             await desktop.fill('#filterInput', '-beta');
@@ -2667,7 +2667,7 @@ let remoteHost = null;
             // Back to the workspace view for the sections below.
             await desktop.click('#viewToggle');
             await desktop.waitForFunction(() => [...document.querySelectorAll('.workspace-group-label')].some(el => el.textContent === 'proj-alpha'), null, { timeout: 5000 });
-            // 13. Long transcript history: reaching the top should implicitly page
+            // Long transcript history: reaching the top should implicitly page
             // older messages. Pages loaded deliberately stay warm across a brief
             // session switch, including the earliest page a filtered search may need.
             console.log('transcript history retention:');
@@ -2805,7 +2805,7 @@ let remoteHost = null;
                 !fixtureElement(document.getElementById('sessionRelations'), "document.getElementById('sessionRelations')").textContent.includes('overflow-'), registryState.sessionId, { timeout: 5000 });
             await desktop.click('#tabActive');
             await desktop.waitForTimeout(200);
-            // 13b. Advanced search takeover: opened via the "full search" chip
+            // Advanced search takeover: opened via the "full search" chip
             // (carrying the sidebar query), same grammar, multi-snippet results,
             // facet buttons that rewrite the query text, and click-through that
             // lands on the in-session match. Runs *after* the retention section on
@@ -2904,7 +2904,7 @@ let remoteHost = null;
             await scenarios.bounce(scenarioContext());
             await scenarios.fleet(scenarioContext());
             await scenarios.mobile(scenarioContext());
-            // 12b. Row-level close: live rows carry a quiet hover-reveal ✕ with a
+            // Row-level close: live rows carry a quiet hover-reveal ✕ with a
             // two-tap inline confirm. The POST is intercepted (deterministic — the
             // real SIGTERM round-trip is covered by the stats-modal section below,
             // which needs the session still live here).
@@ -2953,7 +2953,7 @@ let remoteHost = null;
             // The interception left the session live server-side; wait for the
             // post-close list reload to settle before the real close section below.
             await desktop.waitForSelector(`${closeRowSel} .session-close-btn`, { state: 'attached', timeout: 5000 });
-            // 13. Restart + close session. A bridge-registered Pi that pi-dish did
+            // Restart + close session. A bridge-registered Pi that pi-dish did
             // not launch remains closeable by exact process identity, but does not get
             // pane-replacement authority or a Restart button.
             console.log('restart and close session:');

@@ -589,7 +589,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
   };
 
   try {
-    // 1. Desktop: list + select + history render
+    // Desktop: list + select + history render
     console.log('desktop:');
     const desktop = await browser.newPage({
       viewport: { width: 1280, height: 800 },
@@ -747,7 +747,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     }, { timeout: 3000 });
     await histGroup.evaluate((el: HTMLDetailsElement) => { el.open = false; });
 
-    // 2. Prompt round-trip through the fake bridge
+    // Prompt round-trip through the fake bridge
     console.log('prompt round-trip:');
     await desktop.fill('#promptInput', 'ping from smoke test');
     await desktop.click('#btnSend');
@@ -1371,7 +1371,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       `wide viewport centers the column (gaps ${Math.round(leftGap)}/${Math.round(rightGap)})`);
     await wide.close();
 
-    // 3. @-mention: fuzzy file search under the session cwd (fff-backed)
+    // @-mention: fuzzy file search under the session cwd (fff-backed)
     console.log('@-mentions:');
     await desktop.fill('#promptInput', '');
     await desktop.type('#promptInput', 'look at @ma');
@@ -1399,7 +1399,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       `drilled mention inserted (got ${JSON.stringify(deepVal)})`);
     await desktop.fill('#promptInput', '');
 
-    // 4. New-session takeover: fuzzy cwd search, lazy directory tree,
+    // New-session takeover: fuzzy cwd search, lazy directory tree,
     //    model select, and a routed spawn round-trip.
     console.log('new-session takeover:');
     await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
@@ -1825,7 +1825,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.unroute(/\/api\/harnesses\/omp\/settings(?:\?|$)/);
     await desktop.unroute('**/api/harnesses');
 
-    // 5. Rename propagates to the sidebar without a reload
+    // Rename propagates to the sidebar without a reload
     console.log('rename:');
     await desktop.click('#sessionName');
     await desktop.fill('#sessionNameInput', 'renamed live');
@@ -1840,7 +1840,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
 
     await scenarios.models(scenarioContext());
 
-    // 7. Image attachment: attach a PNG, send, optimistic + JSONL renders
+    // Image attachment: attach a PNG, send, optimistic + JSONL renders
     // both carry the image, and the bridge receives the base64 payload.
     console.log('image attachments:');
     await desktop.waitForSelector('#btnAttach', { state: 'visible', timeout: 5000 });
@@ -1882,7 +1882,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.click('.lightbox-overlay');
     check(await desktop.locator('.lightbox-overlay').count() === 0, 'lightbox dismissed on tap');
 
-    // 7a. Dictation: the composer mic records through MediaRecorder, POSTs the
+    // Dictation: the composer mic records through MediaRecorder, POSTs the
     // bytes to /api/stt (which relays them to the fake endpoint above) and
     // drops the transcript at the caret. It gets its own page because the
     // second half blanks the host's stt config and reloads — the capability
@@ -1937,7 +1937,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       'the mic is hidden once no host advertises stt');
     await dictation.close();
 
-    // 8. Queue strip: steering a message during a turn surfaces it in the
+    // Queue strip: steering a message during a turn surfaces it in the
     // always-visible strip; Edit pulls it back out of pi's queue and into the
     // composer, emptying the strip.
     console.log('queue strip (steer + edit):');
@@ -1955,7 +1955,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.waitForFunction(() => fixtureElement(document.getElementById('queuePanel'), "document.getElementById('queuePanel')").style.display === 'none', { timeout: 5000 });
     await desktop.fill('#promptInput', ''); // don't leave it in the draft
 
-    // 8a. Mid-turn steer delivery: pi delivers a queued user message during the
+    // Mid-turn steer delivery: pi delivers a queued user message during the
     // turn (message_start/message_end, role user). It must render in the
     // transcript immediately, before turn_end's JSONL catch-up.
     console.log('mid-turn steer delivery:');
@@ -1967,7 +1967,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       deliveredText, { timeout: 5000 });
     emit('turn_end', {});
 
-    // 8b. SSE queue replay: a queue with content must repopulate the strip on a
+    // SSE queue replay: a queue with content must repopulate the strip on a
     // fresh stream connection (switch away and back), from the hello/replay
     // path — not just from the live event the current client already saw.
     console.log('queue SSE replay:');
@@ -2015,7 +2015,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       'agent_end catch-up removes the aborted turn live tool panel');
     await desktop.fill('#promptInput', '');
 
-    // 8b. Working indicator: a synthetic turn (fully event-driven, so there
+    // Working indicator: a synthetic turn (fully event-driven, so there
     // is no timing window) shows the elapsed timer + running tool in the
     // header badge, ticks, and resets when the turn ends.
     console.log('working indicator:');
@@ -2032,7 +2032,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.waitForFunction(() =>
       document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
 
-    // 8c. Compaction status: compaction_start drives the working badge — the
+    // Compaction status: compaction_start drives the working badge — the
     // run chip carries turn/compaction state alone, so the status line stays
     // free of working prose (only outcomes and errors speak). The bridge
     // reports tokensBefore only (post-compaction size is unknown until the
@@ -2060,7 +2060,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     check(!(await desktop.evaluate((id: string) => fixtureApp.features.sessionActivity.isAborting(fixtureApp.ports.composerDrafts.keyForSession(id)), SESSION_ID)),
       'compaction_end clears a compaction-only abort gate even on failure');
 
-    // 8c-2. Compaction gates sends: while compacting there's no turn, but a
+    // Compaction gates sends: while compacting there's no turn, but a
     // prompt sent now must be held (bridge buffers, acks queued) and delivered
     // as a turn once compaction ends — not raced against pi's message rewrite.
     // The working badge (not just the transient status line) shows compaction.
@@ -2119,7 +2119,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.waitForFunction(() =>
       document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
 
-    // 8c-3. Tree navigation: a session_tree event means the authoritative
+    // Tree navigation: a session_tree event means the authoritative
     // history changed (a /tree branch — from this UI, the TUI, or another
     // client), and the client must re-render the transcript from the JSONL.
     // The shrink direction is the structural proof: an append-only catch-up
@@ -2149,7 +2149,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       ![...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes('pre-branch marker')),
       { timeout: 5000 });
 
-    // 8d. Terminal: header button opens a shell at the session cwd over the
+    // Terminal: header button opens a shell at the session cwd over the
     // WS endpoint; output round-trips; close + reopen reattaches the same
     // PTY and replays scrollback (arithmetic markers so the echo of the
     // *typed* line can't satisfy the assertions).
@@ -2236,7 +2236,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
 
     await scenarios.drafts(scenarioContext());
 
-    // 10. Extension UI scoping: widgets/statuses are per-session — cleared
+    // Extension UI scoping: widgets/statuses are per-session — cleared
     // on switch, replayed from the server's remembered state on switch-back.
     console.log('extension UI scoping:');
     emit('extension_ui_request', { method: 'setWidget', widgetKey: 'procs', widgetLines: ['proc one', 'proc two'] });
@@ -2359,7 +2359,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     check(await desktop.locator('.ext-ui-widget').count() === 1, 'switch-back replays only session 1 widget');
     check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running',
       'status badge replayed on switch-back');
-    // 10b. Extension dialogs dock above the chat box (no page-wide overlay,
+    // Extension dialogs dock above the chat box (no page-wide overlay,
     // no composer takeover), background to a slim bar, absorb host
     // re-emissions of the same payload, and survive session switches with
     // their in-progress selection intact. Session 1 is selected here.
@@ -2425,7 +2425,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     emit('turn_end', {});
     await desktop.waitForTimeout(300);
 
-    // 10a. Selection/transcript ownership. Hold A's tail response, fully
+    // Selection/transcript ownership. Hold A's tail response, fully
     // select B, then release A: A must not reopen its stream or touch B's pane.
     console.log('session/transcript async ownership:');
     await desktop.evaluate(({ a }) => {
@@ -2841,7 +2841,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.waitForFunction(() => !document.querySelector('.ext-ui-widget'), { timeout: 5000 });
     fs.rmSync(path.join(registryDir, `${SESSION2_ID}.json`), { force: true });
 
-    // 11. Sidebar: both workspaces share the tmp-HOME prefix, so the tree
+    // Sidebar: both workspaces share the tmp-HOME prefix, so the tree
     // shows one flattened prefix node with proj-alpha/proj-beta as children.
     // Collapsing a child hides its sessions and sinks it below its expanded
     // sibling; collapsing the prefix node hides the whole subtree. Pinning
@@ -2915,7 +2915,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
 
     await scenarios.sidebar(scenarioContext());
 
-    // 12. All-tab server search: busy indicator while in flight, content
+    // All-tab server search: busy indicator while in flight, content
     // matches carry a highlighted snippet, clearing restores the full list.
     console.log('sidebar search:');
     await desktop.fill('#filterInput', 'beta answer');
@@ -2953,7 +2953,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     check(await desktop.locator('#sessionList .workspace-group-header').count() > 0,
       'clearing the query restores the grouped view');
 
-    // 12a. Active-tab content search: queries go through the server on both
+    // Active-tab content search: queries go through the server on both
     // tabs — a session matched by transcript content must not vanish when
     // the tab switches (the old Active filter was local metadata-only and
     // cleared the results).
@@ -2971,7 +2971,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.waitForFunction(() =>
       document.querySelectorAll('#sessionList .session-item').length >= 3, null, { timeout: 5000 });
 
-    // 12b. Filter grammar + saved scopes + Recent view.
+    // Filter grammar + saved scopes + Recent view.
     console.log('filter grammar, scopes, recent view:');
     // Negation is metadata-only and works server-side on the All tab.
     await desktop.fill('#filterInput', '-beta');
@@ -3039,7 +3039,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
       [...document.querySelectorAll('.workspace-group-label')].some(el => el.textContent === 'proj-alpha'),
       null, { timeout: 5000 });
 
-    // 13. Long transcript history: reaching the top should implicitly page
+    // Long transcript history: reaching the top should implicitly page
     // older messages. Pages loaded deliberately stay warm across a brief
     // session switch, including the earliest page a filtered search may need.
     console.log('transcript history retention:');
@@ -3200,7 +3200,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.click('#tabActive');
     await desktop.waitForTimeout(200);
 
-    // 13b. Advanced search takeover: opened via the "full search" chip
+    // Advanced search takeover: opened via the "full search" chip
     // (carrying the sidebar query), same grammar, multi-snippet results,
     // facet buttons that rewrite the query text, and click-through that
     // lands on the in-session match. Runs *after* the retention section on
@@ -3329,7 +3329,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
 
     await scenarios.mobile(scenarioContext());
 
-    // 12b. Row-level close: live rows carry a quiet hover-reveal ✕ with a
+    // Row-level close: live rows carry a quiet hover-reveal ✕ with a
     // two-tap inline confirm. The POST is intercepted (deterministic — the
     // real SIGTERM round-trip is covered by the stats-modal section below,
     // which needs the session still live here).
@@ -3384,7 +3384,7 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     // post-close list reload to settle before the real close section below.
     await desktop.waitForSelector(`${closeRowSel} .session-close-btn`, { state: 'attached', timeout: 5000 });
 
-    // 13. Restart + close session. A bridge-registered Pi that pi-dish did
+    // Restart + close session. A bridge-registered Pi that pi-dish did
     // not launch remains closeable by exact process identity, but does not get
     // pane-replacement authority or a Restart button.
     console.log('restart and close session:');
