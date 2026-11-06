@@ -2,6 +2,7 @@ import type { ApiRequest } from './api-client';
 import { sendJson } from './api-client';
 import type { DirectoryHost } from './directory-catalog';
 import type { SpawnTarget } from './spawn-targets';
+import { record } from '../core/helper-values';
 
 export interface SessionSpawnInput {
   readonly host: Readonly<DirectoryHost>;
@@ -28,9 +29,6 @@ export interface PendingSessionSpawn {
 export type SpawnStatus = Readonly<{ status: 'starting' }>
   | Readonly<{ status: 'ready'; sessionId: string }>
   | Readonly<{ status: 'error'; error: string }>;
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 export function decodeSpawnId(value: unknown): string {
   if (!record(value) || typeof value.spawnId !== 'string' || !value.spawnId) throw new Error('Failed to start session');
   return value.spawnId;
@@ -44,6 +42,8 @@ export function decodeSpawnStatus(value: unknown): SpawnStatus {
   throw new Error('Session spawn returned an invalid result');
 }
 export function sessionSpawnKey(host: string | null, spawnId: string): string { return JSON.stringify([host, spawnId]); }
+/** Composer draft key for a launched session that has no session id yet. */
+export function pendingComposerKey(spawnId: string): string { return `spawn:${spawnId}`; }
 
 /** Submitted operations own their endpoint and draft independently of the visible pane. */
 export function createSessionSpawns(options: {

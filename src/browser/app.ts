@@ -1,6 +1,7 @@
 import { createAppModels } from './app-models';
 import { OMP_MODEL_ROLES, composeModelRoleRef, modelRoleLevels, parseModelRoleRef } from '../core/helper-models';
 import { escapeHtml } from '../core/helper-format';
+import { record } from '../core/helper-values';
 import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
 import { sessionRef } from '../core/helper-refs';
 import { harnessBadgeInfo, hostDisplayLabel, hostSupportsCapability, hostSupportsTerminal, parseSessionKey, sessionKey, sessionRefKey } from './helper-identity';
@@ -8,6 +9,7 @@ import { shortCwd } from './helper-format';
 import { createHostView } from './host-view';
 import { createHostDirectory } from './host-directory';
 import { createHostTransport, createSessionApi, sendJson } from './api-client';
+import type { ApiRequest, HostTarget } from './api-client';
 import { createHostConnections, hostKeyOf } from './host-connections';
 import { createHostDiscovery } from './host-discovery';
 import { createHostPresentation, resolveColorToHex } from './host-presentation';
@@ -24,7 +26,7 @@ import { renderSidebar, type SidebarProjectionMemo } from './sidebar-render';
 import { createSessionView } from './session-view';
 import { createMainPane } from './main-pane';
 import { createSessionResume } from './session-resume';
-import { createModelCatalog, modelsCacheKey as modelsCacheKeyBase } from './model-catalog';
+import { createModelCatalog, modelsCacheKey } from './model-catalog';
 import { sameDirectoryHost } from './directory-catalog';
 import { createSessionRelations } from './session-relations';
 import { createSubagentsView } from './subagents-view';
@@ -54,7 +56,7 @@ import { createPromptDelivery } from './prompt-delivery';
 import { createSessionActivity } from './session-activity';
 import { createSideChat, type SideChatController } from './side-chat';
 import { createComposerSubmit } from './composer-submit';
-import { createSessionSpawns } from './session-spawns';
+import { createSessionSpawns, pendingComposerKey } from './session-spawns';
 import { createNewSession } from './new-session';
 import { createHarnessSettings } from './harness-settings';
 import { createCwdAutocomplete as createCwdAutocompleteBase } from './cwd-autocomplete';
@@ -65,7 +67,7 @@ import { createExtensionUI } from './extension-ui';
 import { createBrowserAssets } from './browser-assets';
 import { createDiagrams } from './diagrams';
 import { createRichText } from './rich-text';
-import { copyTextToClipboard as copyTextToClipboardBase } from './clipboard';
+import { copyTextToClipboard } from './clipboard';
 import { createTranscriptTree } from './transcript-tree';
 import { createThemes, terminalTheme as terminalThemeBase } from './themes';
 import { createTerminalController } from './terminal';
@@ -74,57 +76,33 @@ import { createRoutinesView } from './routines-view';
 import { createVaultApprovals, type VaultApprovalsController } from './vault-approvals';
 import { createBounce } from './bounce';
 import { createAppBindings } from './app-bindings';
-import type { HostEndpoint } from './api-client';
 import type { CwdAutocompleteOptions } from './cwd-autocomplete';
 import type { Terminal as Xterm } from '@xterm/xterm';
 import type { FitAddon as XtermFitAddon } from '@xterm/addon-fit';
 declare const Terminal: typeof Xterm | undefined;
 declare const FitAddon: { FitAddon: typeof XtermFitAddon } | typeof XtermFitAddon | undefined;
-import type { HostTarget } from './api-client';
 import type { SessionEntry } from './session-state';
 import type { HighlightRuntime, MarkedRuntime, MermaidRuntime } from './rich-text-vendors';
 declare const marked: MarkedRuntime | undefined, hljs: HighlightRuntime | undefined, mermaid: MermaidRuntime | undefined;
 
-// =========================================================================
-// Hosts (TASKS/multi-host.md phase 1) — every API touch resolves a host
-// entry first, so a later phase can point this client at several pi-dish
-// servers at once. With an empty catalog every request resolves to the self
-// host (base '', no token) and the wire traffic is exactly what a
-// single-host client always sent.
-// =========================================================================
-// Catalog values enter through the typed normalization/merge boundary.
-
 const hostView = createHostView();
-function appRecord(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
 const HOSTS_KEY = 'pi-dish-hosts';
 const KEYS_MIGRATED_KEY = 'pi-dish-keys-migrated';
-// Directly-added hosts (phase 2 owns the editor UI); self is always implicit.
 const hostDirectory: ReturnType<typeof createHostDirectory> = createHostDirectory({
   initialCatalog: readJSONPref(HOSTS_KEY, []),
   descriptor: id => hostDiscovery.descriptor(id),
   persistCatalog: catalog => localStorage.setItem(HOSTS_KEY, JSON.stringify(catalog)),
 });
 
-/**
- * The one fetch entry point for /api paths. Nothing else in this file may
- * call fetch() for the API: the host's base and bearer token are attached
- * here, so a request can't accidentally go to the serving origin when the
- * session lives elsewhere. Returns fetch's promise unchanged.
- */
-const apiTransport: ReturnType<typeof createHostTransport> = createHostTransport({ resolveHost: (...args) => hostDirectory.resolveHost(...args), fetch: (...args) => fetch(...args) });
-const sessionApi: ReturnType<typeof createSessionApi> = createSessionApi((...args) => apiTransport.request(...args));
+// The only fetch entry point for /api paths: it attaches the owning host's
+// base and bearer token, so a request cannot reach the serving origin when
+// the session lives elsewhere.
+const apiTransport: ReturnType<typeof createHostTransport> = createHostTransport({ resolveHost: hostDirectory.resolveHost, fetch: (...args) => fetch(...args) });
+const request: ApiRequest = apiTransport.request;
+const sessionApi: ReturnType<typeof createSessionApi> = createSessionApi(request);
 
-/**
- * The `<img src>` / `<a href>` counterpart to apiFetch: a host-relative /api
- * path (or a resource URL the owning host emitted, which is the same thing)
- * resolved against that host's base. Element-driven requests never pass
- * through apiFetch, so rendering one of these verbatim points the browser at
- * the serving origin — every remote session's transcript images and file
- * links then 404 against a hub that has no such session. Token hosts stay
- * unauthenticated here exactly as window.open'd exports do: an element
- * carries no Authorization header, and a 60s ticket outlives neither a lazy
- * image nor a reopened tab.
- */
+// Element-driven requests (`<img src>`, `<a href>`) cannot carry the bearer
+// token and stay unauthenticated, exactly like window.open'd exports.
 function hostAssetUrl(host: HostTarget | undefined, path: string) {
   return hostDirectory.resolveHost(host).base + path;
 }
@@ -146,8 +124,8 @@ function hostWsUrl(host: HostTarget, path: string) {
  * or expired by the time a reconnect would reuse it.
  */
 async function mintHostTicket(host: HostTarget, purpose: string) {
-  const data = await apiSend(host, '/api/auth/ticket', { purpose });
-  if (!appRecord(data) || typeof data.ticket !== 'string' || !data.ticket) throw new Error('no ticket');
+  const data = await sendJson(request, host, '/api/auth/ticket', { purpose });
+  if (!record(data) || typeof data.ticket !== 'string' || !data.ticket) throw new Error('no ticket');
   return data.ticket;
 }
 
@@ -184,18 +162,9 @@ function migrateClientKeys() {
   } catch {}
 }
 
-// =========================================================================
-// Effective host list + per-host connection state (multi-host phase 2)
-// =========================================================================
-// Three sources feed one list (mergeHostEntries in src/browser/host-catalog.ts): this server
-// (always), the fleet it advertises over GET /api/hosts (runtime only, never
-// persisted — an older server 404s and we simply stay single-host), and the
-// directly-added hosts in the localStorage catalog. Everything downstream —
-// the poll fan-out, the sidebar's host chips, the new-session picker, the
-// settings section — reads effectiveHosts(), so "which hosts are there" has
-// exactly one answer. With only self in it, every branch below is a no-op
-// and the UI is byte-identical to the single-host one.
-
+// Self, the advertised fleet and the device-local catalog merge into one
+// list; everything downstream reads effectiveHosts(), so "which hosts exist"
+// has exactly one answer.
 const hostConnections: ReturnType<typeof createHostConnections> = createHostConnections({ onChange: () => renderHostsSection() });
 
 function effectiveHosts() { return hostDirectory.effectiveHosts().map(hostView); }
@@ -204,7 +173,7 @@ function isMultiHost() { return effectiveHosts().length > 1; }
 function selfHostEntry() { return effectiveHosts()[0]; }
 
 /** Effective entry for a host id — null when nothing in the list claims it. */
-function hostEntryFor(...args: Parameters<typeof hostDirectory.entryFor>) { const host = hostDirectory.entryFor(...args); return host ? hostView(host) : null; }
+function hostEntryFor(hostId?: string | null) { const host = hostDirectory.entryFor(hostId); return host ? hostView(host) : null; }
 
 function hostLabelFor(hostId?: string | null) {
   const entry = hostEntryFor(hostId);
@@ -217,16 +186,11 @@ function hostIdIsDown(hostId?: string | null) {
 }
 
 // Connection observations and poll eligibility share the typed retry policy.
-function noteHostReachable(host: Parameters<typeof hostConnections.note>[0]) { hostConnections.note(host, 'success'); }
-function noteHostBlocked(host: Parameters<typeof hostConnections.note>[0]) { hostConnections.note(host, 'blocked'); }
-function noteHostFailure(host: Parameters<typeof hostConnections.note>[0], error: unknown) { hostConnections.note(host, { type: 'failure', error }); }
+function noteConnection(host: Parameters<typeof hostConnections.note>[0], event: 'success' | 'blocked' | 'failure', error?: unknown) {
+  hostConnections.note(host, event === 'failure' ? { type: 'failure', error } : event);
+}
 function seedHostConnFromFleet() { hostConnections.seed(effectiveHosts()); }
 function pollableHosts() { return hostConnections.pollable(effectiveHosts()); }
-
-/** Hosts whose data may be fetched for search/usage fan-out. */
-function fanoutHosts() {
-  return pollableHosts();
-}
 
 // The controls are usable before async initialization finishes. Fan-out
 // views wait on this first catalog load so an early click cannot capture
@@ -235,7 +199,7 @@ let resolveHostFleetReady: () => void;
 const hostFleetReady = new Promise<void>(resolve => { resolveHostFleetReady = resolve; });
 let startDiscoveredHosts: (() => void) | null = null;
 const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscovery({
-  request: (...args) => apiTransport.request(...args),
+  request,
   requestSelf: () => fetch('/api/host'),
   hosts: effectiveHosts,
   pollableHosts,
@@ -272,9 +236,6 @@ const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscover
   },
 });
 
-/** Resolve missing identities and refresh direct-host capabilities before fan-out. */
-function identifyHosts(refresh = false) { return hostDiscovery.identify(refresh); }
-
 /** Drop cached rows/state for hosts that left the effective list. */
 function pruneHostCaches() {
   const live = new Set(effectiveHosts().map(hostKeyOf));
@@ -282,13 +243,8 @@ function pruneHostCaches() {
   hostSessionLoader.prune(live);
 }
 
-// --- Host colors ---------------------------------------------------------
-// Each host wears one color across the sidebar (section headings, chips), so
-// "which machine is this?" lands before the label is read. Auto colors come
-// from the theme's chart slots by first-seen order — tokens, so they follow
-// the theme, and an order that is persisted so they never reshuffle. A user
-// override is a concrete hex (user data, stored verbatim). Nothing here is
-// a status light: the tint is faint, and liveness stays the dots' job.
+// One stable color per host across the sidebar; auto colors follow the theme
+// and their persisted first-seen order, so they never reshuffle.
 const HOST_COLORS_KEY = 'pi-dish-host-colors';
 const HOST_COLOR_ORDER_KEY = 'pi-dish-host-color-order';
 const hostPresentation: ReturnType<typeof createHostPresentation> = createHostPresentation({
@@ -301,19 +257,17 @@ const hostPresentation: ReturnType<typeof createHostPresentation> = createHostPr
     if (rows) renderHostsSection();
     renderSessions();
   },
-  escapeHtml, displayLabel: host => hostDisplayLabel(hostView(host)), isDown: (...args) => hostConnections.isDown(...args),
+  escapeHtml, displayLabel: host => hostDisplayLabel(hostView(host)), isDown: hostConnections.isDown,
 });
 
 // All session list/selection writes and their rendering hooks share one store.
-// Read its snapshots freely; mutate them only through its four state writers.
+// Mutate it only through its state writers.
 const sessionState: ReturnType<typeof createSessionState> = createSessionState({
   getSelfHostId: () => hostDirectory.self.hostId,
   getHostLabel: hostLabelFor,
   onListsChanged: () => { renderSessions(); vaultApprovals.render(); },
-  onCurrentChanged: (...args) => { sessionHeader.update(...args); vaultApprovals.render(); },
+  onCurrentChanged: () => { sessionHeader.update(); vaultApprovals.render(); },
 });
-// Provisional rows for asynchronous harness launches. They are presentation state,
-// not sessions: the durable source of truth remains tmux + the bridge registry.
 
 // Spawn operations are server-process-local and cannot be resumed after a
 // page reload, so their old draft keys have no view that could restore them.
@@ -325,16 +279,11 @@ try {
 } catch {}
 const responseDetailsController: ReturnType<typeof createResponseDetails> = createResponseDetails({ document, sessionState, mode: () => displayPreferences.responseMode });
 
-// =========================================================================
-// Scroll pinning — only follow streaming output while the user is at the
-// bottom. Scrolling up "unpins"; new content then accumulates below without
-// yanking the viewport, and a jump-to-bottom button appears.
-// =========================================================================
-
+// Scroll pinning: follow streaming output only while the reader is at the
+// bottom, so new content never yanks the viewport.
 const appChrome = createAppChrome({ document, storage: localStorage, older: container => transcriptController.maybeOlder(container) });
 function autosizePromptInput(input: HTMLTextAreaElement) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; }
 
-// Initialize
 document.addEventListener('DOMContentLoaded', async () => {
   const startupSelection = sessionState.selectionGeneration;
   
@@ -377,7 +326,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // Global Ctrl+C to abort
   document.addEventListener('keydown', function(e) {
     // Keys typed into the terminal belong to the shell (Ctrl+C = SIGINT,
     // Ctrl+F = forward), not to the app-level shortcuts.
@@ -456,11 +404,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
   sidebarControls.mount();
+  appChrome.mount();
 
-  const messagesEl = (document.getElementById('messages') as HTMLElement);
-  if (messagesEl) {
-    appChrome.mount();
-  }
   // Inline refs carry the identity resolved at render time; chips use the
   // same host-aware resolver. Delegation also covers refs in peek transcripts.
   document.addEventListener('click', (e) => {
@@ -559,7 +504,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     void restoreSavedSession();
   };
   startDiscoveredHosts();
-  void identifyHosts();
+  void hostDiscovery.identify();
   // Periodic refresh must preserve an in-flight server search, or the list
   // resets to unfiltered mid-search.
   sidebarLists.mount();
@@ -571,7 +516,7 @@ const sessionReferences: ReturnType<typeof createSessionReferences> = createSess
 });
 const composerAutocomplete: ReturnType<typeof createComposerAutocomplete> = createComposerAutocomplete({
   document, sessionState, composerKey: () => composerDrafts.key, provisional: () => !!sessionView.spawnId,
-  request: (host, path, options) => apiTransport.request(host, path, options), host: hostEntryFor, references: sessionReferences,
+  request, host: hostEntryFor, references: sessionReferences,
   multiHost: isMultiHost, hostLabel: hostLabelFor, failed: error => console.error('Failed to load commands:', error),
   models: { get scope() { return modelCatalog.scope; }, rows: () => modelCatalog.rows() },
   loadModels: (id, harness) => appModels.load(id, harness),
@@ -584,7 +529,7 @@ const composerAutocomplete: ReturnType<typeof createComposerAutocomplete> = crea
 // Query, list fan-out and seen activity have separate typed owners.
 const sidebarActivity: ReturnType<typeof createSidebarActivity> = createSidebarActivity({ document, storage: localStorage, sessionState });
 const sidebarQuery: ReturnType<typeof createSidebarQuery> = createSidebarQuery({
-  document, storage: localStorage, request: (host, path, options) => apiTransport.request(host, path, options), host: () => hostEntryFor(null)!,
+  document, storage: localStorage, request, host: () => hostEntryFor(null)!,
   render: () => renderSessions(), reload: query => sidebarLists.load(query), queriedFor: () => sidebarLists.queriedFor,
   invalidateLists: () => sidebarLists.invalidate(), busy: value => sidebarLists.busy(value),
   searchChanged: () => { if (searchViewController.isOpen()) searchViewController.run(); }, openSearch: query => searchViewController.open(query),
@@ -592,29 +537,27 @@ const sidebarQuery: ReturnType<typeof createSidebarQuery> = createSidebarQuery({
 });
 sidebarQuery.mount();
 const sidebarLists: ReturnType<typeof createSidebarLists> = createSidebarLists({
-  document, request: (host, path, options) => apiTransport.request(host, path, options), sessionState, activity: sidebarActivity,
+  document, request, sessionState, activity: sidebarActivity,
   hosts: effectiveHosts, pollable: pollableHosts, selfId: () => hostDirectory.self.hostId,
-  query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: (...args) => hostDiscovery.refreshSoon(...args),
-  connection: (host, event) => hostConnections.note(host, event),
+  query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: hostDiscovery.refreshSoon,
+  connection: hostConnections.note,
   askBlocked: (session, host) => extensionUI.toast(`${session.name || 'Unnamed'} is waiting for an answer`, 'warning', () => { void revealSession(session.id, host); }),
 });
 const hostSessionLoader = sidebarLists.loader;
-
-function persistSavedFilters(next: Parameters<typeof sidebarQuery.persistFilters>[0], host?: HostEndpoint | null) { return sidebarQuery.persistFilters(next, host || undefined); }
+const loadPrevious = () => sidebarLists.load(undefined, { withPrevious: true });
 
 // Sidebar row controls own preferences, family pins, confirmation, drag and menus.
 const sidebarControls: ReturnType<typeof createSidebarControls> = createSidebarControls({
-  document, storage: localStorage, sessionState, request: (host, path, options) => apiTransport.request(host, path, options),
+  document, storage: localStorage, sessionState, request,
   host: hostEntryFor, render: () => renderSessions(), closeSidebar: () => sidebarQuery.close(),
   select: (id, host) => sessionView.select(id, { host }), pending: id => sessionView.pending(id), create: (cwd, host) => newSessionController.create(cwd, host),
-  finishClose: (id, host, owner) => sessionInfo.finishClose(id, host, owner), refresh: () => sidebarLists.load(undefined, { withPrevious: true }),
-  ref: session => sessionRefFor(session), copy: text => copyTextToClipboard(text), status: (message, type) => setStatus(message, type),
+  finishClose: (id, host, owner) => sessionInfo.finishClose(id, host, owner), refresh: loadPrevious,
+  ref: session => sessionRefFor(session), copy: copyTextToClipboard, status: setStatus,
 });
 
 function keyForSessionId(id: string) { return sessionKey(sessionState.sessionHostId(id), id); }
 
 function sessionRefFor(session: Pick<SessionEntry, 'id' | 'host'> | null) { return session?.id ? sessionRef(session, hostEntryFor(session.host || null), sessionReferences.prefix(session)) : ''; }
-function isSessionMenuOpen() { return sidebarControls.menuOpen; }
 
 // State publications stay immediate; paint the latest snapshot once per frame.
 let sessionListFrame: number | null = null;
@@ -632,7 +575,7 @@ function renderSessions() {
       contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: sessionView.spawnId,
       expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
       closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
-      unread: (...args) => sidebarActivity.unread(...args), hostChip: (...args) => hostPresentation.chipHtml(...args),
+      unread: sidebarActivity.unread, hostChip: hostPresentation.chipHtml,
       hosts: effectiveHosts().map(host => {
         const cache = hostSessionLoader.getCache(host);
         return { ...host, state: hostConnections.stateOf(host), key: hostKeyOf(host), color: hostPresentation.colorFor(host.hostId || null),
@@ -649,20 +592,26 @@ function renderSessions() {
 // Session Selection
 // =========================================================================
 
-function pendingComposerKey(id: string) { return `spawn:${id}`; }
-const sessionView: ReturnType<typeof createSessionView> = createSessionView({ document, sessionState, storage: localStorage, endpoint: (...args) => hostDirectory.resolveHost(...args),
+// Thinking/model, terminal and mic buttons all read the selected session.
+function refreshSessionControls() {
+  sessionControls.updateThinking();
+  terminalController.updateButtons();
+  composerSpeech.updateButton();
+}
+
+const sessionView: ReturnType<typeof createSessionView> = createSessionView({ document, sessionState, storage: localStorage, endpoint: hostDirectory.resolveHost,
   get drafts() { return composerDrafts; }, get activity() { return sessionActivity; }, get transcript() { return transcriptController; }, get stream() { return messageStreamController; }, get resume() { return sessionResume; },
-  spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => streamingRenderer.cancel(), stopFollowing: () => { appChrome.stopFollowing(); },
+  spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => streamingRenderer.cancel(), stopFollowing: appChrome.stopFollowing,
   closeViews: keepBounce => mainPane.beforeSelection(keepBounce),
   closeTerminal: () => terminalController.close(), clearExtension: () => extensionUI.clear(), clearRelations: () => sessionRelationsController.clear(), closeControls: () => appChrome.closePanel(), hideAutocomplete: () => composerAutocomplete.hide(),
   retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => promptDelivery.render(data), resetSideChat: () => sideChat.reset(), resetArtifacts: () => sessionInfo.resetArtifacts(),
-  thinking: () => sessionControls.updateThinking(), terminal: () => terminalController.updateButtons(), mic: () => composerSpeech.updateButton(), mood: (description, face) => moodController.set(description, face), status: (message, type) => setStatus(message, type),
+  controls: refreshSessionControls, mood: (description, face) => moodController.set(description, face), status: setStatus,
   render: () => renderSessions(), cancelRecording: () => composerSpeech.cancel(), hideNote: () => composerNotes.hide(), reveal: (id, host) => sidebarControls.reveal(id, host),
   seen: session => sidebarActivity.mark(session), artifacts: owner => sessionInfo.refreshArtifacts(owner), header: () => sessionHeader.update(), relations: owner => sessionRelationsController.load(owner), models: (id, harness) => appModels.load(id, harness), commands: id => composerAutocomplete.loadCommands(id),
 });
 
-const sessionResume: ReturnType<typeof createSessionResume> = createSessionResume({ document, sessionState, request: (...args) => apiTransport.request(...args), endpoint: (...args) => hostDirectory.resolveHost(...args),
-  target: host => savedResumeTarget(host), refresh: () => sidebarLists.refresh(), select: (id, options) => sessionView.select(id, options), status: (message, type) => setStatus(message, type),
+const sessionResume: ReturnType<typeof createSessionResume> = createSessionResume({ document, sessionState, request, endpoint: hostDirectory.resolveHost,
+  target: host => savedResumeTarget(host), refresh: sidebarLists.refresh, select: sessionView.select, status: setStatus,
 });
 
 // =========================================================================
@@ -671,14 +620,11 @@ const sessionResume: ReturnType<typeof createSessionResume> = createSessionResum
 
 const modelCatalog: ReturnType<typeof createModelCatalog> = createModelCatalog({
   read: scope => sessionApi.models(scope.host, scope),
-  persist: (scope, models) => localStorage.setItem(modelsCacheKey(scope.harnessId, scope.host.hostId), JSON.stringify(models)),
-  changed: (...args) => responseDetailsController.refreshPricing(...args),
+  persist: (scope, models) => localStorage.setItem(modelsCacheKey(scope.harnessId, scope.host.hostId, hostDirectory.self.hostId), JSON.stringify(models)),
+  changed: () => responseDetailsController.refreshPricing(),
   failed: error => console.error('Failed to load models:', error),
 });
 
-function modelsCacheKey(harnessId: string, hostId: string | null) {
-  return modelsCacheKeyBase(harnessId, hostId, hostDirectory.self.hostId);
-}
 const appModels = createAppModels({ sessions: sessionState, catalog: modelCatalog, host: hostEntryFor });
 
 // =========================================================================
@@ -686,13 +632,13 @@ const appModels = createAppModels({ sessions: sessionState, catalog: modelCatalo
 // =========================================================================
 
 const sessionRelationsController: ReturnType<typeof createSessionRelations> = createSessionRelations({
-  document, window, sessionState, request: (host, path, init) => apiTransport.request(host, path, init), endpoint: hostEntryFor,
-  loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
+  document, window, sessionState, request, endpoint: hostEntryFor,
+  loadPrevious,
   openView: (owner, endpoint, initial) => subagentsController.open(owner, endpoint, initial),
   // The takeover's own lineage poll covers an open view (the header chip is
   // hidden there); the header poll defers to it instead of doubling requests.
   takeoverActive: () => subagentsController.isOpen(),
-  selectSession: (id, options) => sessionView.select(id, options), status: setStatus,
+  selectSession: sessionView.select, status: setStatus,
 });
 
 /**
@@ -700,34 +646,31 @@ const sessionRelationsController: ReturnType<typeof createSessionRelations> = cr
  * informative part, so it is dropped before the name is allowed to
  * ellipsize (CSS does the truncation). Full ref stays in the tooltip.
  */
-const sessionHeader: ReturnType<typeof createSessionHeader> = createSessionHeader({ document, sessionState, multi: isMultiHost, host: hostEntryFor, down: hostIdIsDown, color: (...args) => hostPresentation.colorFor(...args), label: hostLabelFor,
-  settings: session => harnessSupportsSettings(session), ensureHarness: id => ensureHarnessRows(id), thinking: () => sessionControls.updateThinking(), terminal: () => terminalController.updateButtons(), mic: () => composerSpeech.updateButton(),
+const sessionHeader: ReturnType<typeof createSessionHeader> = createSessionHeader({ document, sessionState, multi: isMultiHost, host: hostEntryFor, down: hostIdIsDown, color: hostPresentation.colorFor, label: hostLabelFor,
+  settings: harnessSupportsSettings, ensureHarness: ensureHarnessRows, controls: refreshSessionControls,
 });
 
 // Header actions capture their selection before opening editors or dispatching.
 const sessionControls: ReturnType<typeof createSessionControls> = createSessionControls({
-  document, sessionState, catalog: modelCatalog, request: (host, path, options) => apiTransport.request(host, path, options), host: hostEntryFor,
-  loadModels: (id, harness) => appModels.load(id, harness), status: (message, type) => setStatus(message, type),
+  document, sessionState, catalog: modelCatalog, request, host: hostEntryFor,
+  loadModels: (id, harness) => appModels.load(id, harness), status: setStatus,
 });
 
 // Whole-transcript search owns query requests, marks and bounded hit-window jumps.
 const sessionSearch: ReturnType<typeof createSessionSearch> = createSessionSearch({
-  document, sessionState, request: (host, path, init) => apiTransport.request(host, path, init), endpoint: hostEntryFor,
+  document, sessionState, request, endpoint: hostEntryFor,
   focusMode: () => appChrome.focus, ensureMessage: (index, owns) => transcriptController.ensureMessage(index, owns),
-  stopFollowing: () => { appChrome.stopFollowing(); }, updateJumpButton: (...args) => appChrome.jump(...args),
+  stopFollowing: appChrome.stopFollowing, updateJumpButton: appChrome.jump,
 });
-
-function searchPrev() { return sessionSearch.move(-1); }
-function searchNext() { return sessionSearch.move(1); }
 
 // Display preferences own modal requests, rendered controls and device readouts.
 const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDisplayPreferences({
-  document, storage: localStorage, request: (host, url, options) => apiTransport.request(host, url, options), host: () => hostEntryFor(null)!,
+  document, storage: localStorage, request, host: () => hostEntryFor(null)!,
   beforeOpen: () => { sidebarQuery.close(); },
   openFleet: () => { closeSettingsModal(); fleetController.open(); },
   themes: { render: select => themesController.render(select), apply: id => themesController.apply(id) },
   filters: () => sidebarQuery.filters, setFilters: value => sidebarQuery.setFilters(value),
-  persistFilters: (value, host) => persistSavedFilters([...value], host),
+  persistFilters: (value, host) => sidebarQuery.persistFilters([...value], host),
   metadataChanged: () => responseDetailsController.update(), contextChanged: () => renderSessions(), alert: message => alert(message),
   notifications: (container, signal) => pushNotifications.renderSettings(container, signal),
   sentPrompts: (container, signal) => promptHistory.renderSettings(container, signal),
@@ -735,7 +678,7 @@ const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDi
 
 // Web Push registration and the service worker that makes the app installable.
 const pushNotifications: PushNotifications = createPushNotifications({
-  window, storage: localStorage, request: (...args) => apiTransport.request(...args), hosts: effectiveHosts,
+  window, storage: localStorage, request, hosts: effectiveHosts,
   supports: host => hostSupportsCapability(host, 'push', appConfig), label: host => hostDisplayLabel(host),
   changed: () => { void displayPreferences.render(); },
   // A click is a fresh user selection: anything selected while lists load wins.
@@ -752,7 +695,7 @@ const pushNotifications: PushNotifications = createPushNotifications({
 
 // Vault approvals answer in the requesting session's view (TASKS/vault-approvals.md).
 const vaultApprovals: VaultApprovalsController = createVaultApprovals({
-  document, window, request: (...args) => apiTransport.request(...args),
+  document, window, request,
   sessions: () => [...sessionState.sessions.active, ...sessionState.sessions.previous],
   current: () => sessionState.currentSession,
   reveal: (id, host) => { void revealSession(id, host); },
@@ -769,9 +712,9 @@ function revealSession(id: string, host: string | null) {
 
 // Recovery owns its preferences/report views and captured host endpoints.
 const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
-  root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), hosts: effectiveHosts,
-  supports: host => hostSupportsCapability(host, 'recovery', appConfig), down: (...args) => hostConnections.isDown(...args),
-  fleetReady: () => hostFleetReady, refreshFleet: (...args) => hostDiscovery.loadFleet(...args),
+  root: document.querySelector<HTMLElement>('.main')!, request, hosts: effectiveHosts,
+  supports: host => hostSupportsCapability(host, 'recovery', appConfig), down: hostConnections.isDown,
+  fleetReady: () => hostFleetReady, refreshFleet: hostDiscovery.loadFleet,
   selectedHost: () => sessionState.currentSession?.host || null,
   preferencesOpen: () => fleetController.isOpen(),
   closeOtherViews: () => mainPane.beforeTakeover('recovery'),
@@ -785,18 +728,18 @@ const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
 
 const hostSettings: ReturnType<typeof createHostSettings> = createHostSettings({
   directory: hostDirectory, connections: hostConnections, discovery: hostDiscovery,
-  request: (...args) => apiTransport.request(...args), protocol: () => location.protocol,
+  request, protocol: () => location.protocol,
   promptToken: label => prompt(`Token for ${label}`, ''),
   displayLabel: host => hostDisplayLabel({ base: host.base, label: host.label ? String(host.label) : '', name: host.name ? String(host.name) : '' }), escapeHtml,
-  color: (...args) => hostPresentation.colorFor(...args), customColor: (...args) => hostPresentation.isCustom(...args), resolveColor: (...args) => resolveColorToHex(...args),
-  setColor: (...args) => hostPresentation.setColor(...args),
+  color: hostPresentation.colorFor, customColor: hostPresentation.isCustom, resolveColor: resolveColorToHex,
+  setColor: hostPresentation.setColor,
   onCatalogSaved: () => {
     if (newSessionController.isOpen()) newSessionController.renderHosts();
     pruneHostCaches();
     renderHostsSection();
     renderSessions();
   },
-  refreshSessions: (...args) => sidebarLists.refresh(...args), renderNewSessionHosts: (...args) => newSessionController.renderHosts(...args),
+  refreshSessions: sidebarLists.refresh, renderNewSessionHosts: (...args) => newSessionController.renderHosts(...args),
 });
 
 function renderHostsSection() {
@@ -808,7 +751,7 @@ function renderHostsSection() {
 // Fleet owns per-host capacity polling while open, and hosts the fleet-wide
 // controls (connections, bounce, recovery preferences) that it mounts.
 const fleetController: ReturnType<typeof createFleetView> = createFleetView({
-  root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), hosts: effectiveHosts,
+  root: document.querySelector<HTMLElement>('.main')!, request, hosts: effectiveHosts,
   connection: host => hostConnections.stateOf(host), supports: host => hostSupportsCapability(host, 'hostHealth', appConfig),
   clientSessions: hostId => {
     const self = selfHostEntry();
@@ -816,7 +759,7 @@ const fleetController: ReturnType<typeof createFleetView> = createFleetView({
     return { live: rows.length, working: rows.filter(session => session.turnInProgress).length };
   },
   dot: hostId => hostPresentation.dotHtml(hostId, 'fleet-host-dot'),
-  noteConnection: (host, event) => hostConnections.note(host, event),
+  noteConnection: hostConnections.note,
   closeOtherViews: () => mainPane.beforeTakeover('fleet'),
   mountSections: () => {
     const connections = document.getElementById('fleetConnections')!;
@@ -831,24 +774,20 @@ const fleetController: ReturnType<typeof createFleetView> = createFleetView({
 
 // Advanced search owns fleet query results, facet controls and click-through.
 const searchViewController: ReturnType<typeof createSearchView> = createSearchView({
-  root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), sessionState,
-  hosts: effectiveHosts, fanout: fanoutHosts, host: hostEntryFor, scope: (...args) => sidebarQuery.scope(...args),
-  connection: (host, event, error) => {
-    if (event === 'success') noteHostReachable(host);
-    else if (event === 'blocked') noteHostBlocked(host);
-    else noteHostFailure(host, error);
-  },
-  hostChip: (...args) => hostPresentation.chipHtml(...args),
+  root: document.querySelector<HTMLElement>('.main')!, request, sessionState,
+  hosts: effectiveHosts, fanout: pollableHosts, host: hostEntryFor, scope: sidebarQuery.scope,
+  connection: noteConnection,
+  hostChip: hostPresentation.chipHtml,
   closeOtherViews: () => mainPane.beforeTakeover('search'),
-  loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
-  selectSession: (id, options) => sessionView.select(id, options), sessionSearch,
+  loadPrevious,
+  selectSession: sessionView.select, sessionSearch,
 });
 
 // The skills directory and coverage view retain their entry-host ownership.
 const skillsController: ReturnType<typeof createSkills> = createSkills({
-  root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), self: selfHostEntry, origin: () => location.origin,
-  sessionState, loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
-  selectSession: (id, options) => sessionView.select(id, options),
+  root: document.querySelector<HTMLElement>('.main')!, request, self: selfHostEntry, origin: () => location.origin,
+  sessionState, loadPrevious,
+  selectSession: sessionView.select,
   closeOtherViews: () => mainPane.beforeTakeover('skills'),
   refine: ({ cwd, draft, host }) => { newSessionController.setHostId(host); newSessionController.open({ cwd, draft }); },
   copy: copyTextToClipboard, status: setStatus,
@@ -856,37 +795,33 @@ const skillsController: ReturnType<typeof createSkills> = createSkills({
 
 // Usage owns range/filter state, progressive fleet results and chart controls.
 const usageController: ReturnType<typeof createUsageView> = createUsageView({
-  root: document.querySelector<HTMLElement>('.main')!, request: (...args) => apiTransport.request(...args), storage: localStorage,
-  fleetReady: () => hostFleetReady, hosts: fanoutHosts, host: hostEntryFor, multiHost: isMultiHost,
+  root: document.querySelector<HTMLElement>('.main')!, request, storage: localStorage,
+  fleetReady: () => hostFleetReady, hosts: pollableHosts, host: hostEntryFor, multiHost: isMultiHost,
   closeOtherViews: () => mainPane.beforeTakeover('usage'),
-  connection: (host, event, error) => {
-    if (event === 'success') noteHostReachable(host);
-    else if (event === 'blocked') noteHostBlocked(host);
-    else noteHostFailure(host, error);
-  },
-  selectSession: (id, options) => sessionView.select(id, options),
+  connection: noteConnection,
+  selectSession: sessionView.select,
 });
 
 // Session information owns stats/process/share controls and artifact discovery.
 const sessionInfo: ReturnType<typeof createSessionInfo> = createSessionInfo({
-  document, request: (host, path, options) => apiTransport.request(host, path, options), sessionState, host: hostEntryFor,
-  reference: session => sessionRefFor(session), copy: text => copyTextToClipboard(text), status: (text, type) => setStatus(text, type), confirm: text => confirm(text),
-  loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }), refreshSessions: () => sidebarLists.refresh(), selectSession: (id, options) => sessionView.select(id, options),
+  document, request, sessionState, host: hostEntryFor,
+  reference: session => sessionRefFor(session), copy: copyTextToClipboard, status: setStatus, confirm: text => confirm(text),
+  loadPrevious, refreshSessions: sidebarLists.refresh, selectSession: sessionView.select,
 });
 
 // File and diff takeovers share a typed owner and keep comment coordination explicit.
 const fileViews: ReturnType<typeof createFileViews> = createFileViews({
-  document, sessionState, request: (host, path, options) => apiTransport.request(host, path, options), host: hostEntryFor,
-  markdown: text => richText.format(text), highlight: root => richText.highlight(root), copy: text => copyTextToClipboard(text),
-  status: (message, type) => setStatus(message, type), refreshArtifacts: owner => sessionInfo.refreshArtifacts(owner),
+  document, sessionState, request, host: hostEntryFor,
+  markdown: text => richText.format(text), highlight: root => richText.highlight(root), copy: copyTextToClipboard,
+  status: setStatus, refreshArtifacts: owner => sessionInfo.refreshArtifacts(owner),
   closeComments: () => anchoredCommentController.close(), clearComments: () => anchoredCommentController.set([]),
   refreshComments: () => anchoredCommentController.refresh(), markComments: () => anchoredCommentController.applyMarks(),
 });
 
 // Anchored comments retain their view, request and editor lifetimes.
 const anchoredCommentController: ReturnType<typeof createAnchoredComments> = createAnchoredComments({
-  document, sessionState, views: fileViews, request: (host, path, options) => apiTransport.request(host, path, options), host: hostEntryFor,
-  status: (message, type) => setStatus(message, type), loadPatch: details => fileViews.loadPatch(details),
+  document, sessionState, views: fileViews, request, host: hostEntryFor,
+  status: setStatus, loadPatch: details => fileViews.loadPatch(details),
 });
 
 // =========================================================================
@@ -894,28 +829,28 @@ const anchoredCommentController: ReturnType<typeof createAnchoredComments> = cre
 // =========================================================================
 
 const transcriptController: ReturnType<typeof createTranscript> = createTranscript({
-  document, sessionState, request: (host, path, options) => apiTransport.request(host, path, options), host: hostEntryFor,
+  document, sessionState, request, host: hostEntryFor,
   renderMessage: message => messageRenderer.message(message), finalize: (root, options) => finalizeRender(root, options),
   closeSearch: () => sessionSearch.close(), cancelStreaming: () => streamingRenderer.cancel(), mood: (description, face) => moodController.set(description, face),
-  updateMood: messages => moodController.fromMessages(messages), pinned: (...args) => appChrome.pinned(...args), scroll: (...args) => appChrome.scroll(...args), jump: (...args) => appChrome.jump(...args),
-  consumeEcho: (id, content) => consumePendingSelfEcho(id, content),
+  updateMood: messages => moodController.fromMessages(messages), pinned: appChrome.pinned, scroll: appChrome.scroll, jump: appChrome.jump,
+  consumeEcho: (id, content) => promptDelivery.consume(keyForSessionId(id), content),
 });
 
 // Typed message projection and telemetry retain only their own render data.
 const messageRenderer: ReturnType<typeof createMessageRenderer> = createMessageRenderer({
   document, sessionState, details: responseDetailsController, markdown: text => richText.format(text),
-  assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), pinned: (...args) => appChrome.pinned(...args),
-  follow: () => appChrome.following, scroll: (...args) => appChrome.scroll(...args), jump: (...args) => appChrome.jump(...args),
+  assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), pinned: appChrome.pinned,
+  follow: () => appChrome.following, scroll: appChrome.scroll, jump: appChrome.jump,
 });
 
 // Session-scoped takeover: family tree + trace peek + signaling, opened from
 // the header's "Subagents · N" link. Created late — it borrows the rich-text
 // and details plumbing of the main transcript renderer.
 const subagentsController: ReturnType<typeof createSubagentsView> = createSubagentsView({
-  root: document.querySelector<HTMLElement>('.main')!, request: (host, path, init) => apiTransport.request(host, path, init), sessionState, endpoint: hostEntryFor,
+  root: document.querySelector<HTMLElement>('.main')!, request, sessionState, endpoint: hostEntryFor,
   closeOtherViews: () => mainPane.beforeTakeover('subagents'),
-  loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }),
-  selectSession: (id, options) => sessionView.select(id, options), status: setStatus,
+  loadPrevious,
+  selectSession: sessionView.select, status: setStatus,
   markdown: text => richText.format(text), assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), details: responseDetailsController,
 });
 
@@ -925,7 +860,7 @@ const subagentsController: ReturnType<typeof createSubagentsView> = createSubage
 
 const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools({
   document, sessionState, started: (id, name) => sessionActivity.toolStarted(id, name),
-  finished: id => sessionActivity.toolFinished(id), pinned: (...args) => appChrome.pinned(...args), scroll: (...args) => appChrome.scroll(...args), jump: (...args) => appChrome.jump(...args),
+  finished: id => sessionActivity.toolFinished(id), pinned: appChrome.pinned, scroll: appChrome.scroll, jump: appChrome.jump,
   images: (content, alt) => messageRenderer.images(content, alt), mood: (name, args) => moodController.fromTool(name, args),
 });
 
@@ -933,11 +868,11 @@ const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools(
 // SSE Streaming (RPC events only)
 // =========================================================================
 
-const messageStreamController: ReturnType<typeof createMessageStream> = createMessageStream({ document, sessionState, endpoint: (...args) => hostDirectory.resolveHost(...args), ticket: host => mintHostTicket(host, 'stream'),
+const messageStreamController: ReturnType<typeof createMessageStream> = createMessageStream({ document, sessionState, endpoint: hostDirectory.resolveHost, ticket: host => mintHostTicket(host, 'stream'),
   get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
-  status: (message, type) => setStatus(message, type), catchup: owner => transcriptController.catchup(owner), refresh: () => sidebarLists.refresh(), artifacts: owner => sessionInfo.refreshArtifacts(owner),
-  pinned: (...args) => appChrome.pinned(...args), follow: () => appChrome.following, scroll: (...args) => appChrome.scroll(...args), jump: (...args) => appChrome.jump(...args), highlight: root => richText.highlight(root),
-  select: (id, options) => sessionView.select(id, options), deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => sidebarLists.load(query, options),
+  status: setStatus, catchup: owner => transcriptController.catchup(owner), refresh: sidebarLists.refresh, artifacts: owner => sessionInfo.refreshArtifacts(owner),
+  pinned: appChrome.pinned, follow: () => appChrome.following, scroll: appChrome.scroll, jump: appChrome.jump, highlight: root => richText.highlight(root),
+  select: sessionView.select, deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => sidebarLists.load(query, options),
 });
 
 // =========================================================================
@@ -947,13 +882,13 @@ const messageStreamController: ReturnType<typeof createMessageStream> = createMe
 // Drafts and attachments share a host-qualified composer owner.
 const composerDrafts: ReturnType<typeof createComposerDrafts> = createComposerDrafts({
   document, storage: localStorage, keyForSession: keyForSessionId, currentSessionId: () => sessionState.currentSession?.id || null,
-  autosize: input => autosizePromptInput(input), status: (message, type) => setStatus(message, type),
+  autosize: input => autosizePromptInput(input), status: setStatus,
   historyChanged: () => promptHistory.update(),
 });
 
 // Touch recall and settings management of sent prompts; rows capture their owner.
 const promptHistory: PromptHistoryController = createPromptHistory({
-  document, storage: localStorage, drafts: composerDrafts, copy: copyTextToClipboard, status: (message, type) => setStatus(message, type), confirm: text => confirm(text),
+  document, storage: localStorage, drafts: composerDrafts, copy: copyTextToClipboard, status: setStatus, confirm: text => confirm(text),
   label: owner => {
     if (owner.startsWith('spawn:')) return { name: null, detail: 'Pending new session' };
     const { hostId, sessionId } = parseSessionKey(owner), host = hostId ? hostLabelFor(hostId) || hostId : hostLabelFor(null);
@@ -965,17 +900,15 @@ const promptHistory: PromptHistoryController = createPromptHistory({
 const composerNotes: ReturnType<typeof createComposerNotes> = createComposerNotes(document);
 const composerSpeech: ReturnType<typeof createComposerSpeech> = createComposerSpeech({
   document, sessionState, composerKey: () => composerDrafts.key, hosts: effectiveHosts, config: () => appConfig,
-  request: (host, path, options) => apiTransport.request(host, path, options), status: message => setStatus(message),
+  request, status: setStatus,
   showNote: text => composerNotes.show(text), hideNote: () => composerNotes.hide(),
 });
 
-const promptDelivery: ReturnType<typeof createPromptDelivery> = createPromptDelivery({ document, sessionState, request: (...args) => apiTransport.request(...args), endpoint: (...args) => hostDirectory.resolveHost(...args),
-  restore: (key, text) => composerDrafts.restorePayload(key, text, null), status: (message, type) => setStatus(message, type),
+const promptDelivery: ReturnType<typeof createPromptDelivery> = createPromptDelivery({ document, sessionState, request, endpoint: hostDirectory.resolveHost,
+  restore: (key, text) => composerDrafts.restorePayload(key, text, null), status: setStatus,
 });
 
-function consumePendingSelfEcho(id: string, content: unknown) { return promptDelivery.consume(keyForSessionId(id), content); }
-
-const sessionActivity: ReturnType<typeof createSessionActivity> = createSessionActivity({ document, sessionState, clearQueue: () => promptDelivery.render(null), status: message => setStatus(message),
+const sessionActivity: ReturnType<typeof createSessionActivity> = createSessionActivity({ document, sessionState, clearQueue: () => promptDelivery.render(null), status: setStatus,
   sideChatActive: () => !!sideChat.active() });
 
 // ---------------------------------------------------------------------------
@@ -989,33 +922,33 @@ function syncComposerMode(active: boolean) {
   const input = document.getElementById('promptInput') as HTMLTextAreaElement | null;
   if (input) input.placeholder = active ? 'Ask a follow-up in the side chat…' : 'Send a message...';
 }
-const sideChat: SideChatController = createSideChat({ document, sessionState, markdown: text => richText.format(text), copy: text => copyTextToClipboard(text),
-  request: (...args) => apiTransport.request(...args), endpoint: (...args) => hostDirectory.resolveHost(...args), status: (message, type) => setStatus(message, type),
+const sideChat: SideChatController = createSideChat({ document, sessionState, markdown: text => richText.format(text), copy: copyTextToClipboard,
+  request, endpoint: hostDirectory.resolveHost, status: setStatus,
   onChange: syncComposerMode });
 
 const composerSubmit: ReturnType<typeof createComposerSubmit> = createComposerSubmit({ document, sessionState, drafts: composerDrafts, delivery: promptDelivery, activity: sessionActivity, sideChat,
-  request: (...args) => apiTransport.request(...args), endpoint: (...args) => hostDirectory.resolveHost(...args), spawnId: () => sessionView.spawnId, spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
-  refs: message => sessionReferences.hints(message), status: (message, type) => setStatus(message, type), openTree: () => transcriptTree.open(), hideAutocomplete: () => composerAutocomplete.hide(),
-  refresh: () => sidebarLists.refresh(), follow: () => { appChrome.follow(); }, scroll: (...args) => appChrome.scroll(...args), renderUser: (message, time, attrs) => messageRenderer.user(message, time, attrs),
+  request, endpoint: hostDirectory.resolveHost, spawnId: () => sessionView.spawnId, spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
+  refs: message => sessionReferences.hints(message), status: setStatus, openTree: () => transcriptTree.open(), hideAutocomplete: () => composerAutocomplete.hide(),
+  refresh: sidebarLists.refresh, follow: appChrome.follow, scroll: appChrome.scroll, renderUser: (message, time, attrs) => messageRenderer.user(message, time, attrs),
   woke: async (id, host) => { await sidebarLists.refresh(); const current = sessionState.currentSession; if (current?.id === id && (current.host || null) === host) await sessionView.select(id, { host }); },
 });
 
 const pendingSessionSpawns: ReturnType<typeof createSessionSpawns> = createSessionSpawns({
-  request: (...args) => apiTransport.request(...args), delay: attempt => new Promise(resolve => setTimeout(resolve, attempt < 50 ? 100 : 250)), harnessLabel: (...args) => newSessionController.harnessLabel(...args),
+  request, delay: attempt => new Promise(resolve => setTimeout(resolve, attempt < 50 ? 100 : 250)), harnessLabel: (...args) => newSessionController.harnessLabel(...args),
   current: () => sessionView.spawnId, changed: renderSessions,
   showPending: key => { sidebarQuery.switchTab('active'); sessionView.pending(key); if (window.innerWidth <= 768) sidebarQuery.close(); },
-  loadHost: host => sidebarLists.loadHost(host), hasSession: (id, host) => !!sessionState.findSession(id, host),
+  loadHost: sidebarLists.loadHost, hasSession: (id, host) => !!sessionState.findSession(id, host),
   selectSession: (id, host) => { void sessionView.select(id, { host }); },
-  stashPrompt: (...args) => composerDrafts.stash(...args),
+  stashPrompt: composerDrafts.stash,
   saveDraft: (key, draft) => { try { localStorage.setItem(composerDrafts.draftKey(pendingComposerKey(key)), draft); } catch {} },
   migratePrompt: (key, host, id) => composerDrafts.migrate(pendingComposerKey(key), sessionKey(host || hostDirectory.self.hostId, id)),
   discardPrompt: key => { const owner = pendingComposerKey(key); composerDrafts.clearDraft(owner); composerDrafts.images.discard(owner); },
-  showFailure: (...args) => sessionView.failure(...args), status: setStatus,
+  showFailure: sessionView.failure, status: setStatus,
 });
 // The typed takeover owns form state, controls, caches and launch view tokens.
 const newSessionController: ReturnType<typeof createNewSession> = createNewSession({
-  root: document.querySelector<HTMLElement>('.main')!, storage: localStorage, request: (...args) => apiTransport.request(...args),
-  self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown: (...args) => hostConnections.isDown(...args), multiHost: isMultiHost,
+  root: document.querySelector<HTMLElement>('.main')!, storage: localStorage, request,
+  self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown: hostConnections.isDown, multiHost: isMultiHost,
   sessionState, currentSpawn: () => sessionView.spawnId, spawns: pendingSessionSpawns, models: modelCatalog,
   closeOtherViews: () => mainPane.beforeTakeover('newSession'),
   closeSettings: () => harnessSettingsController.close(),
@@ -1037,7 +970,7 @@ function harnessSupportsSettings(session: SessionEntry | null) {
 
 // One typed editor serves session settings and the new-session takeover.
 const harnessSettingsController: ReturnType<typeof createHarnessSettings> = createHarnessSettings({
-  root: (document.getElementById('harnessSettingsModal') as HTMLElement), host: hostEntryFor, request: (...args) => apiTransport.request(...args),
+  root: (document.getElementById('harnessSettingsModal') as HTMLElement), host: hostEntryFor, request,
   fallbackModels: (host, harness) => modelCatalog.scope?.harnessId === harness
     && sameDirectoryHost(modelCatalog.scope?.host || null, host) ? modelCatalog.rows() : [],
   escapeHtml, shortCwd, roleDefinitions: OMP_MODEL_ROLES, parseModelRoleRef, composeModelRoleRef, modelRoleLevels,
@@ -1067,7 +1000,7 @@ function createCwdAutocomplete({
   onPick = () => {}, onSubmit = null, onBlur = null,
 }: Pick<CwdAutocompleteOptions, 'input' | 'dropdown' | 'known' | 'onPick' | 'onSubmit' | 'onBlur'> & { hostId?: () => string | null }) {
   return createCwdAutocompleteBase({ input, dropdown,
-    host: () => hostEntryFor(hostId()), request: (...args) => apiTransport.request(...args), known,
+    host: () => hostEntryFor(hostId()), request, known,
     match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
     onPick, onSubmit, onBlur,
   });
@@ -1076,16 +1009,6 @@ function createCwdAutocomplete({
 // =========================================================================
 // Utilities
 // =========================================================================
-
-/**
- * POST/PUT a JSON body to a host and parse the JSON reply. Throws
- * Error(data.error) on a non-2xx status so callers get the server's message
- * without each hand-rolling the res.ok / res.json().catch(() => ({})) dance
- * (they used to, with a slightly different fallback at every site).
- */
-async function apiSend(host: HostTarget, path: string, body?: unknown, method = 'POST') {
-  return sendJson((...args) => apiTransport.request(...args), host, path, body, method);
-}
 
 function readJSONPref(key: string, fallback: unknown): unknown {
   try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch { return fallback; }
@@ -1117,7 +1040,7 @@ function finalizeRender(container: HTMLElement, { stripLive = true, inserted }: 
 // =========================================================================
 
 const streamingRenderer: ReturnType<typeof createStreamingRenderer> = createStreamingRenderer({
-  document, sessionState, markdown: text => richText.format(text), pinned: (...args) => appChrome.pinned(...args), scroll: (...args) => appChrome.scroll(...args), jump: (...args) => appChrome.jump(...args),
+  document, sessionState, markdown: text => richText.format(text), pinned: appChrome.pinned, scroll: appChrome.scroll, jump: appChrome.jump,
   stream: (previous, text) => richText.stream(previous, text),
 });
 
@@ -1138,8 +1061,8 @@ const moodController: ReturnType<typeof createMood> = createMood(document);
 // =========================================================================
 
 const extensionUI: ReturnType<typeof createExtensionUI> = createExtensionUI({
-  document, sessionState, storage: localStorage, request: (host, path, options) => apiTransport.request(host, path, options), host: hostEntryFor,
-  status: (message, type) => setStatus(message, type),
+  document, sessionState, storage: localStorage, request, host: hostEntryFor,
+  status: setStatus,
 });
 
 // Rich text keeps the local vendor loaders, final render passes and diagram
@@ -1151,19 +1074,17 @@ const diagramRenderer: ReturnType<typeof createDiagrams> = createDiagrams({
 });
 const richText: ReturnType<typeof createRichText> = createRichText({
   document, marked: typeof marked === 'undefined' ? null : marked, highlight: () => typeof hljs === 'undefined' ? null : hljs,
-  assets: browserAssets, diagrams: diagramRenderer, sessionState, copy: text => copyTextToClipboard(text), status: (message, type) => setStatus(message, type),
+  assets: browserAssets, diagrams: diagramRenderer, sessionState, copy: copyTextToClipboard, status: setStatus,
   retainedRoots: () => transcriptController.retainedRoots(),
   matchRef: ref => sessionReferences.match(ref),
 });
-
-function copyTextToClipboard(text: string) { return copyTextToClipboardBase(text, document, navigator); }
 
 // =========================================================================
 // Tree Modal
 // =========================================================================
 const transcriptTree: ReturnType<typeof createTranscriptTree> = createTranscriptTree({
-  document, storage: localStorage, sessionState, request: (host, path, options) => apiTransport.request(host, path, options), host: hostEntryFor,
-  status: (message, type) => setStatus(message, type), selectSession: (id, options) => sessionView.select(id, options),
+  document, storage: localStorage, sessionState, request, host: hostEntryFor,
+  status: setStatus, selectSession: sessionView.select,
   copyMessageLink: button => sessionInfo.copyMessage(button),
   saveEditorDraft: (owner, text) => {
     try { const key = composerDrafts.draftKey(sessionRefKey(owner)); if (!(localStorage.getItem(key) || '').trim()) localStorage.setItem(key, text); } catch {}
@@ -1180,7 +1101,7 @@ document.addEventListener('keydown', function(e) {
   const lightbox = document.querySelector('.lightbox-overlay');
   if (lightbox) {
     e.preventDefault(); lightbox.remove();
-  } else if (isSessionMenuOpen()) {
+  } else if (sidebarControls.menuOpen) {
     e.preventDefault(); sidebarControls.closeMenu();
   } else if (promptHistory.isOpen()) {
     e.preventDefault(); promptHistory.close();
@@ -1234,7 +1155,7 @@ let appConfig: Record<string, unknown> = { terminal: false };
 async function loadConfig() {
   try {
     const res = await apiTransport.request(null, '/api/config');
-    const data: unknown = await res.json(); if (res.ok && appRecord(data)) appConfig = data;
+    const data: unknown = await res.json(); if (res.ok && record(data)) appConfig = data;
   } catch { /* feature stays hidden */ }
   terminalController.updateButtons();
   routinesController.updateButton();
@@ -1259,7 +1180,7 @@ function sessionHostSupportsTmux(session: SessionEntry | null) {
 
 // =========================================================================
 // Theme payloads and pre-paint cache restoration share typed token decoding.
-const themesController: ReturnType<typeof createThemes> = createThemes({ document, storage: localStorage, request: (host, url, options) => apiTransport.request(host, url, options), host: () => hostEntryFor(null)!,
+const themesController: ReturnType<typeof createThemes> = createThemes({ document, storage: localStorage, request, host: () => hostEntryFor(null)!,
   changed: () => { terminalController.refreshTheme(); diagramRenderer.refreshTheme(); },
 });
 
@@ -1282,19 +1203,19 @@ const panelResize: ReturnType<typeof createPanelResize> = createPanelResize({ do
 // =========================================================================
 // Routines own their host-qualified form, catalogs, mutations and run ledger.
 const routinesController: ReturnType<typeof createRoutinesView> = createRoutinesView({
-  root: document.querySelector<HTMLElement>('.main')!, request: (host, url, options) => apiTransport.request(host, url, options), storage: localStorage, sessionState,
-  hosts: fanoutHosts, effectiveHosts, host: hostEntryFor, fleetReady: () => hostFleetReady, config: () => appConfig, multiHost: isMultiHost,
-  hostChip: host => hostPresentation.chipHtml(host),
+  root: document.querySelector<HTMLElement>('.main')!, request, storage: localStorage, sessionState,
+  hosts: pollableHosts, effectiveHosts, host: hostEntryFor, fleetReady: () => hostFleetReady, config: () => appConfig, multiHost: isMultiHost,
+  hostChip: hostPresentation.chipHtml,
   closeOtherViews: () => mainPane.beforeTakeover('routines'),
-  connection: (host, event, error) => { if (event === 'success') noteHostReachable(host); else if (event === 'blocked') noteHostBlocked(host); else noteHostFailure(host, error); },
-  autocomplete: options => createCwdAutocomplete(options), copy: text => copyTextToClipboard(text), status: text => setStatus(text), confirm: text => confirm(text),
-  loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }), selectSession: (id, options) => sessionView.select(id, options),
+  connection: noteConnection,
+  autocomplete: options => createCwdAutocomplete(options), copy: copyTextToClipboard, status: setStatus, confirm: text => confirm(text),
+  loadPrevious, selectSession: sessionView.select,
 });
 
 // Bounce owns host snapshots, selected targets, status polling and view disposal.
 const bounceController: ReturnType<typeof createBounce> = createBounce({
-  document, request: (...args) => apiTransport.request(...args), hosts: effectiveHosts, fleetReady: () => hostFleetReady,
-  sessionState, refreshSessions: (...args) => sidebarLists.refresh(...args), loadPrevious: () => sidebarLists.load(undefined, { withPrevious: true }), selectSession: (...args) => sessionView.select(...args),
+  document, request, hosts: effectiveHosts, fleetReady: () => hostFleetReady,
+  sessionState, refreshSessions: sidebarLists.refresh, loadPrevious, selectSession: sessionView.select,
 });
 
 // Register exclusion policy once; close callbacks keep controller ownership lazy.
@@ -1350,8 +1271,8 @@ createAppBindings({ document, actions: {
   openArtifactsModal: () => sessionInfo.openArtifacts(),
   exportSession: () => sessionControls.export(),
   searchKey: event => { if (event instanceof KeyboardEvent) sessionSearch.key(event); },
-  searchPrev: () => searchPrev(),
-  searchNext: () => searchNext(),
+  searchPrev: () => sessionSearch.move(-1),
+  searchNext: () => sessionSearch.move(1),
   closeSearch: () => sessionSearch.close(),
   loadDiffView: () => fileViews.loadDiff(),
   closeDiffView: () => fileViews.closeDiff(),
