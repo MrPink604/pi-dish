@@ -303,10 +303,3 @@ function walkerSearch(basePath: string, query: string | null | undefined, limit:
     .slice(0, limit)
     .map(c => ({ path: c.path, gitStatus: null }));
 }
-
-/** Test hook: drop caches so temp-HOME fixtures are re-read. */
-export function resetCaches(): void {
-  homeDirCache = null;
-  for (const [, entry] of finders) entry.promise.then((f) => { try { f?.destroy(); } catch {} });
-  finders.clear();
-}

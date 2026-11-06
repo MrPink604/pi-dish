@@ -71,10 +71,11 @@ interface WireMessage {
 
 function assistantText(wire: WireMessage | null | undefined): string {
   if (wire?.role !== 'assistant' || !Array.isArray(wire.content)) return '';
-  return (wire.content as unknown[])
-    .flatMap((block) => {
-      const { type, text } = block as { type?: unknown; text?: unknown };
-      return type === 'text' && typeof text === 'string' ? [text] : [];
+  return wire.content
+    .flatMap((block: unknown) => {
+      if (!block || typeof block !== 'object' || !('type' in block) || block.type !== 'text'
+          || !('text' in block) || typeof block.text !== 'string') return [];
+      return [block.text];
     })
     .join('\n')
     .trim();
