@@ -275,9 +275,6 @@ function commandHelp(name) {
     lines.push('', 'Example:', `  ${spec.example}`);
     return lines.join('\n');
 }
-// =========================================================================
-// Argument parsing
-// =========================================================================
 const VALUE_FLAGS = new Map([
     ['--url', 'url'], ['--session', 'session'], ['--cwd', 'cwd'], ['--harness', 'harness'],
     ['--model', 'model'], ['--name', 'name'], ['--prompt', 'prompt'], ['--limit', 'limit'],
@@ -312,9 +309,6 @@ function parseArgs(argv) {
 function intArg(value, fallback, max = 100) {
     return Math.max(1, Math.min(max, Number.parseInt(value || String(fallback), 10) || fallback));
 }
-// =========================================================================
-// Output formatting
-// =========================================================================
 // Absent means unsupported (mixed-version fleets are the steady state); only
 // the capabilities an agent can act on are worth a column.
 const AGENT_CAPABILITIES = ['sessions', 'search', 'spawns', 'comments', 'pages', 'terminal', 'resolve', 'docs', 'hostHealth'];
@@ -366,9 +360,6 @@ function writeSnippets(session) {
         process.stdout.write(`    …${String(snippet).replace(/\s+/g, ' ').trim()}…\n`);
     }
 }
-// =========================================================================
-// Spawn helpers
-// =========================================================================
 // The local server's identity, for the display ref of a cross-host peer
 // message sender (`<label>/<ref>`).
 async function localHostIdentity(base) {
@@ -483,9 +474,6 @@ async function pollSpawn(base, host, spawnId, timeoutMs = 45000) {
     }
     throw new Error(`spawn ${spawnId} did not finish within ${Math.round(timeoutMs / 1000)}s`);
 }
-// =========================================================================
-// docs
-// =========================================================================
 const DOCS_UNSUPPORTED = "this host's pi-dish does not serve agent docs; try without --host or upgrade it";
 async function listDocs(base, host, json) {
     const entry = await entryForHostName(base, host);
@@ -542,9 +530,6 @@ async function showDoc(base, host, topic, json) {
         return print({ topic, markdown: text }, true);
     process.stdout.write(text.endsWith('\n') ? text : text + '\n');
 }
-// =========================================================================
-// search --all-hosts
-// =========================================================================
 const FLEET_SEARCH_TIMEOUT_MS = 20000;
 function abortInit() {
     // Feature-detected: a sleeping tailnet peer black-holes TCP, and an
@@ -622,9 +607,6 @@ async function fleetSearch(base, query, limit, json) {
         process.stdout.write('# A session index is still building; results may be partial — retry shortly.\n');
     }
 }
-// =========================================================================
-// load
-// =========================================================================
 const LOAD_UNSUPPORTED = 'this host does not report load (GET /api/host/health); update pi-dish there';
 function percent(value) {
     return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value * 100)}%` : '?';
@@ -685,12 +667,6 @@ async function fleetLoad(base, json) {
         process.stdout.write(row.status === 'ok' ? `${label}\t${loadLine(row)}\n` : `# ${label}: ${row.error}\n`);
     }
 }
-// =========================================================================
-// main
-// =========================================================================
-// =========================================================================
-// attach — join a live session's tmux pane from this terminal (local only)
-// =========================================================================
 function commandExists(cmd) {
     try {
         (0, node_child_process_1.execFileSync)('which', [cmd], { stdio: 'ignore' });
