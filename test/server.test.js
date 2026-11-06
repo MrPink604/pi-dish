@@ -1617,7 +1617,6 @@ test('GET /diff 404s when the session cwd is unknown', async () => {
     const { status } = await get(`/api/sessions/${NO_CWD_ID}/diff`);
     assert.equal(status, 404);
 });
-// --- published pages (lib/pages.js, /api/pages, /page/:token) ---------------
 test('POST /api/pages publishes a file and /page/:token serves it live from disk', async () => {
     const planFile = path.join(realCwd, 'plan.html');
     fs.writeFileSync(planFile, '<h1>the plan</h1>');
@@ -1839,7 +1838,6 @@ test('directory pages serve index.html and contained assets only', async () => {
     assert.equal((await fetch(base + body.path + '/nope.css')).status, 404);
     await del(`/api/pages/${body.token}`);
 });
-// --- anchored comments (lib/comments.js, /api/comments) -------------------
 test('comments support unpaginated indexing, selected reads, and acknowledgment', async () => {
     const fileTarget = {
         kind: 'file', path: path.join(realCwd, 'README.md'), relPath: 'README.md',
@@ -2690,9 +2688,6 @@ test('GET /page with an unknown token is a bare 404', async () => {
     assert.equal(res.status, 404);
     assert.equal(await res.text(), 'Not found');
 });
-test('the server exports PI_DISH_URL for spawned agents (pi-dish-pages skill)', () => {
-    assert.equal(process.env.PI_DISH_URL, base);
-});
 // A tailnet/LAN bind (HOST=<tailscale ip>) serves a loopback alias alongside
 // the bound address, so the URL handed to spawned agents is loopback — it
 // keeps working for skill CLIs even while the tailnet is unreachable. The
@@ -3126,7 +3121,6 @@ test('saved filters persist server-globally and update independently of the budg
     assert.deepEqual(clearedAll.body.savedFilters, []);
     assert.equal('savedFilters' in JSON.parse(fs.readFileSync(settingsFile, 'utf8')), false);
 });
-// --- speech to text ------------------------------------------------------
 //
 // settings.json is re-read per call, so these write the `stt` block in and
 // restore the previous contents afterwards.
@@ -3313,7 +3307,6 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
     const deadCancel = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'followUp', index: 0, text: 'x' });
     assert.equal(deadCancel.status, 404);
 });
-// --- Close session + runtime location --------------------------------------
 test('POST /close prunes a reused registry PID without signaling the new process', async () => {
     const { spawn } = require('node:child_process');
     const id = '2026-07-04T15-50-00-reusedpid';
@@ -3571,7 +3564,6 @@ test('Pi HTTP tree preserves branch depth and SDK display projection', async () 
         fs.rmSync(file, { force: true });
     }
 });
-// --- Tree branching (inactive sessions go through pi's SDK) ---------------
 // These mutate TREE_FILE (branching appends entries by design) and so run
 // in this order.
 test('POST /branch on a user message returns its text and persists the leaf move', async () => {
@@ -3950,7 +3942,6 @@ test('POST /branch on a live bridge session forwards navigate_tree', async () =>
         await new Promise((resolve, reject) => bridge.close(error => error ? reject(error) : resolve()));
     }
 });
-// --- Themes ----------------------------------------------------------------
 test('GET /api/themes lists built-ins plus valid user theme files', async () => {
     const themesDir = path.join(tmpHome, '.pi', 'dish', 'themes');
     fs.mkdirSync(themesDir, { recursive: true });
@@ -3976,7 +3967,6 @@ test('GET /api/themes without a themes dir serves the built-ins', async () => {
     assert.equal(status, 200);
     assert.deepEqual((0, test_types_js_1.records)(body.themes).map(theme => theme.id), ['solarized', 'graphite']);
 });
-// --- Public share links --------------------------------------------------
 // TREE_ID is a valid pi v3 session; the HTML exporter (and thus GET
 // /share/:token) rejects the id-less shorthand fixtures.
 test('POST /share is idempotent and 404s for an unknown session', async () => {
@@ -4509,7 +4499,6 @@ test('startup omits feature assets and compresses large static text', async () =
     assert.deepEqual(zlib.gunzipSync(gzip.body), identity.body);
     assert.ok(gzip.body.length < identity.body.length * 0.5, `expected at least 50% savings (${identity.body.length} -> ${gzip.body.length})`);
 });
-// --- Skills view -----------------------------------------------------------
 test('GET /api/skills discovers the fixture skill with mined usage rollups', async () => {
     const { status, body } = await get('/api/skills');
     assert.equal(status, 200);
