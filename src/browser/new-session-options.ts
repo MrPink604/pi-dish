@@ -1,3 +1,4 @@
+import { record } from '../core/helper-values';
 import type { CatalogModel } from '../core/session-api';
 import type { ApiRequest } from './api-client';
 import { sameDirectoryHost } from './directory-catalog';
@@ -80,9 +81,6 @@ export interface NewSessionConfigScope {
   readonly harnessId: string;
   readonly cwd: string;
   readonly view: number;
-}
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 export function decodeHarnessConfigPreview(value: unknown, cwd: string): HarnessConfigPreview {
   if (!record(value)) throw new Error('Invalid harness defaults');

@@ -1,3 +1,4 @@
+import { record } from '../core/helper-values';
 import type { ApiRequest } from './api-client';
 import type { EffectiveHost } from './host-catalog';
 import type { HostConnectionEvent } from './host-connections';
@@ -33,9 +34,6 @@ export interface HostDiscoveryOptions {
   now?: () => number;
 }
 const REFRESH_MS = 60000;
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
-}
 export function decodeHostDescriptor(value: unknown): HostDescriptor | null {
   if (!record(value) || typeof value.hostId !== 'string' || !value.hostId) return null;
   return { hostId: value.hostId, label: value.label || null,
