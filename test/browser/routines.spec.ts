@@ -28,7 +28,7 @@ async function setup(page: Page, fleet: FleetFixture) {
   });
   await expect(page.locator('.rt-row')).toHaveCount(2);
 }
-async function select(page: Page, host: BrowserHost & { hostId: string }) { await page.locator(`.rt-row[data-host="${host.hostId}"]`).click(); }
+async function select(page: Page, host: BrowserHost) { await page.locator(`.rt-row[data-host="${host.hostId}"]`).click(); }
 
 test('routine detail and invocation reads remain with their host after a same-id selection change', async ({ page, fleet }) => {
   await setup(page, fleet);

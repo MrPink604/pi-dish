@@ -1,5 +1,5 @@
-import type { Page, Route } from '@playwright/test';
-import { test, expect, ROOT } from './fixtures.js';
+import type { Page } from '@playwright/test';
+import { test, expect, ROOT, heldRoute } from './fixtures.js';
 test.use({ liveSessions: true });
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const attachment = { name: 'fixture.png', mimeType: 'image/png', buffer: Buffer.from(PNG, 'base64') };
@@ -32,16 +32,12 @@ for (const kind of ['prompt', 'command', 'steer', 'followUp']) {
     await page.locator('#promptInput').fill(message);
     if (kind !== 'command') await attach(page);
     const endpoint = `${fleet.self.base}/api/sessions/${ROOT}/${kind === 'followUp' ? 'prompt' : kind}`;
-    let receive: ((route: Route) => void) | undefined;
-    const received = new Promise<Route>(resolve => { receive = resolve; });
-    await page.route(endpoint, route => {
-      if (!receive) throw new Error('Composer route resolver not initialized');
-      receive(route);
-    });
+    const submission = heldRoute();
+    await page.route(endpoint, submission.hold);
     await page.evaluate(kind => {
       window.testSend = kind === 'steer' ? fixtureApp.features.composerSubmit.sendSteer() : kind === 'followUp' ? fixtureApp.features.composerSubmit.sendFollowUp() : fixtureApp.features.composerSubmit.sendPrompt();
     }, kind);
-    const route = await received;
+    const route = await submission.received;
     await fleet.select(fleet.peer);
     await page.locator('#promptInput').fill('peer work');
     await route.fulfill({ status: 503, json: { error: 'fixture rejection' } });

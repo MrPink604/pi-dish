@@ -37,20 +37,15 @@ async function openStats(page) {
     fs.mkdirSync(path.dirname(artifact), { recursive: true });
     await page.locator('#statsClose').scrollIntoViewIfNeeded();
     await page.screenshot({ path: artifact });
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
-    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/close`, (route) => {
-        if (!receive)
-            throw new Error('Prime close route resolver not initialized');
-        receive(route);
-    });
+    const closeRequest = (0, fixtures_js_1.heldRoute)();
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/close`, closeRequest.hold);
     const warning = new Promise(resolve => page.once('dialog', async (dialog) => {
         resolve(dialog.message());
         await dialog.accept();
     }));
     await page.locator('#sessionCloseBtn').click();
     (0, fixtures_js_1.expect)(await warning).toBe('Stop this agent and its children? Any work in progress will be aborted; the transcript stays resumable.');
-    const route = await received;
+    const route = await closeRequest.received;
     (0, fixtures_js_1.expect)(route.request().method()).toBe('POST');
     await fleet.select(fleet.self);
     await route.fulfill({ json: { success: true } });
@@ -74,20 +69,15 @@ async function openStats(page) {
     await (0, fixtures_js_1.expect)(page.locator('#sessionRestartBtn')).toBeInViewport();
     await (0, fixtures_js_1.expect)(page.locator('#sessionCloseBtn')).toBeInViewport();
     await page.screenshot({ path: path.join(path.dirname(artifact), 'prime-restart-mobile.png') });
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
-    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/restart`, (route) => {
-        if (!receive)
-            throw new Error('Prime restart route resolver not initialized');
-        receive(route);
-    });
+    const restart = (0, fixtures_js_1.heldRoute)();
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/restart`, restart.hold);
     const warning = new Promise(resolve => page.once('dialog', async (dialog) => {
         resolve(dialog.message());
         await dialog.accept();
     }));
     await page.locator('#sessionRestartBtn').click();
     (0, fixtures_js_1.expect)(await warning).toBe('Restart this agent? This stops the root and its children, aborting any work in progress, then resumes the root in the same pane. The transcript is kept; other root agents keep running.');
-    const route = await received;
+    const route = await restart.received;
     (0, fixtures_js_1.expect)(route.request().method()).toBe('POST');
     await (0, fixtures_js_1.expect)(page.locator('#sessionRestartBtn')).toBeDisabled();
     await (0, fixtures_js_1.expect)(page.locator('#sessionCloseBtn')).toBeDisabled();

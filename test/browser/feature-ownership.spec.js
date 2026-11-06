@@ -10,15 +10,10 @@ const fixtures_js_1 = require("./fixtures.js");
 });
 (0, fixtures_js_1.test)('a delayed resume does not reselect the same-id session on another host', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
-    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/resume`, route => {
-        if (!receive)
-            throw new Error('Resume route resolver not initialized');
-        receive(route);
-    });
+    const resume = (0, fixtures_js_1.heldRoute)();
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/resume`, resume.hold);
     await page.evaluate(() => { window.pendingResume = fixtureApp.features.sessionResume.resume(); });
-    const route = await received;
+    const route = await resume.received;
     await fleet.select(fleet.self);
     const before = await page.evaluate(() => fixtureApp.features.sessionState.captureSelection());
     await route.fulfill({ json: { id: fixtures_js_1.ROOT } });
@@ -28,8 +23,7 @@ const fixtures_js_1 = require("./fixtures.js");
 });
 (0, fixtures_js_1.test)('a late missing-share response cannot prompt or publish after changing hosts', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
+    const share = (0, fixtures_js_1.heldRoute)();
     const posts = [];
     let dialogs = 0;
     page.on('dialog', async (dialog) => { dialogs += 1; await dialog.accept(); });
@@ -40,9 +34,7 @@ const fixtures_js_1 = require("./fixtures.js");
                 return route.fulfill({ json: { url: `${host.base}/fixture-share` } });
             }
             if (host === fleet.peer) {
-                if (!receive)
-                    throw new Error('Share route resolver not initialized');
-                receive(route);
+                share.hold(route);
                 return;
             }
             return route.continue();
@@ -53,7 +45,7 @@ const fixtures_js_1 = require("./fixtures.js");
         button.dataset.entryId = 'fixture-message';
         window.pendingShareCopy = fixtureApp.features.sessionInfo.copyMessage(button);
     });
-    const route = await received;
+    const route = await share.received;
     await fleet.select(fleet.self);
     await route.fulfill({ status: 404, json: { error: 'No share' } });
     await page.evaluate(() => window.pendingShareCopy);
@@ -63,18 +55,13 @@ const fixtures_js_1 = require("./fixtures.js");
 });
 (0, fixtures_js_1.test)('a delayed search cannot replace the query on a same-id peer', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
-    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/search?q=peer-query`, route => {
-        if (!receive)
-            throw new Error('Search route resolver not initialized');
-        receive(route);
-    });
+    const search = (0, fixtures_js_1.heldRoute)();
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/search?q=peer-query`, search.hold);
     await page.evaluate(() => {
         fixtureApp.features.sessionSearch.open();
         window.pendingSessionSearch = fixtureApp.features.sessionSearch.run('peer-query');
     });
-    const route = await received;
+    const route = await search.received;
     await fleet.select(fleet.self);
     await page.evaluate(async () => { fixtureApp.features.sessionSearch.open(); await fixtureApp.features.sessionSearch.run('self-query'); });
     await route.fulfill({ json: { matches: [] } });

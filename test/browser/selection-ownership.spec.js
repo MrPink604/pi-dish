@@ -41,8 +41,7 @@ fixtures_js_1.test.describe('live selection ownership', () => {
         (0, fixtures_js_1.expect)(result).toEqual({ unchanged: true, sameStream: true, host: fleet.self.hostId, requests: 0 });
     });
     (0, fixtures_js_1.test)('a delayed stream ticket cannot replace a newer host connection', async ({ page, fleet }) => {
-        let receive;
-        const received = new Promise(resolve => { receive = resolve; });
+        const ticketHold = (0, fixtures_js_1.heldRoute)();
         await page.evaluate(() => {
             const mint = fixtureApp.ports.messageStreamController.ticket;
             fixtureApp.ports.messageStreamController.ticket = host => {
@@ -51,13 +50,9 @@ fixtures_js_1.test.describe('live selection ownership', () => {
                 return pending;
             };
         });
-        await page.route(`${fleet.peer.base}/api/auth/ticket`, route => {
-            if (!receive)
-                throw new Error('Stream-ticket resolver not initialized');
-            receive(route);
-        });
+        await page.route(`${fleet.peer.base}/api/auth/ticket`, ticketHold.hold);
         await fleet.select(fleet.peer);
-        const ticket = await received;
+        const ticket = await ticketHold.received;
         await fleet.select(fleet.self);
         await fixtures_js_1.expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
         const before = await page.evaluate(() => fixtureElement(fixtureApp.features.messageStreamController.source, 'active message stream').url);

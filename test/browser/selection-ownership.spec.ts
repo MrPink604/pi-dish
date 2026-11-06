@@ -1,5 +1,4 @@
-import type { Route } from '@playwright/test';
-import { test, expect, ROOT, CHILD } from './fixtures.js';
+import { test, expect, ROOT, CHILD, heldRoute } from './fixtures.js';
 
 test('related-session navigation stays on its host when both target ids collide', async ({ page, fleet }) => {
   await fleet.select(fleet.peer, CHILD);
@@ -40,8 +39,7 @@ test.describe('live selection ownership', () => {
   });
 
   test('a delayed stream ticket cannot replace a newer host connection', async ({ page, fleet }) => {
-    let receive: ((route: Route) => void) | undefined;
-    const received = new Promise<Route>(resolve => { receive = resolve; });
+    const ticketHold = heldRoute();
     await page.evaluate(() => {
       const mint = fixtureApp.ports.messageStreamController.ticket;
       fixtureApp.ports.messageStreamController.ticket = host => {
@@ -50,12 +48,9 @@ test.describe('live selection ownership', () => {
         return pending;
       };
     });
-    await page.route(`${fleet.peer.base}/api/auth/ticket`, route => {
-      if (!receive) throw new Error('Stream-ticket resolver not initialized');
-      receive(route);
-    });
+    await page.route(`${fleet.peer.base}/api/auth/ticket`, ticketHold.hold);
     await fleet.select(fleet.peer);
-    const ticket = await received;
+    const ticket = await ticketHold.received;
     await fleet.select(fleet.self);
     await expect.poll(() => page.evaluate(() => fixtureApp.features.messageStreamController.source?.readyState)).toBe(1);
     const before = await page.evaluate(() => fixtureElement(fixtureApp.features.messageStreamController.source, 'active message stream').url);
