@@ -1,7 +1,6 @@
-// Shared plumbing for the checked-in build outputs: map a TypeScript source to
-// its sibling runtime/declaration files, compile one program into a temporary
-// directory, then either verify or rewrite the tracked output. Compiling first
-// means a type error can never leave a partially updated tree behind.
+// Shared plumbing for the checked-in build outputs: every builder compiles
+// into a temporary directory first, so a type error can never leave a
+// partially updated tree behind.
 import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
@@ -13,6 +12,14 @@ export function checkRequested(script: string): boolean {
   const args = process.argv.slice(2);
   if (args.some(arg => arg !== '--check')) throw new Error(`Usage: node scripts/${script} [--check]`);
   return args.includes('--check');
+}
+
+/** Files below `directory`, as sorted repository-style paths. */
+export function filesUnder(directory: string): string[] {
+  return fs.readdirSync(directory, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => path.relative(directory, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'))
+    .sort();
 }
 
 export function programFiles(config: string): string[] {
@@ -69,10 +76,7 @@ export function buildProgram(
       process.exitCode = result.status || 1;
       return false;
     }
-    const files = fs.readdirSync(out, { recursive: true, withFileTypes: true })
-      .filter(entry => entry.isFile())
-      .map(entry => path.relative(out, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'));
-    step(files, file => fs.readFileSync(path.join(out, file), 'utf8'));
+    step(filesUnder(out), file => fs.readFileSync(path.join(out, file), 'utf8'));
     return true;
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
@@ -112,7 +116,7 @@ export function orphanedOutputs(
 export interface GeneratedOutput {
   file: string;
   target: string;
-  content: string;
+  content: string | Uint8Array;
   mode: number;
 }
 
@@ -151,15 +155,19 @@ export interface WriteOptions {
 export function writeOutputs(prepared: readonly GeneratedOutput[], options: WriteOptions): void {
   if (!options.check) {
     for (const { target, content, mode } of prepared) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, content);
       fs.chmodSync(target, mode);
     }
     console.log(options.writeOk);
     return;
   }
-  const stale = prepared.filter(({ target, content, mode }) => !fs.existsSync(target)
-    || fs.readFileSync(target, 'utf8') !== content
-    || (fs.statSync(target).mode & 0o777) !== mode);
+  const stale = prepared.filter(({ target, content, mode }) => {
+    if (!fs.existsSync(target)) return true;
+    const current = fs.readFileSync(target);
+    const matches = typeof content === 'string' ? current.toString('utf8') === content : current.equals(content);
+    return !matches || (fs.statSync(target).mode & 0o777) !== mode;
+  });
   if (!stale.length) {
     console.log(options.checkOk);
     return;

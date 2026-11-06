@@ -1,14 +1,14 @@
-// Checked-in local browser bundle. Type failures and check mode never rewrite it.
-import fs = require('node:fs');
+#!/usr/bin/env node
 import path = require('node:path');
 import { spawnSync } from 'node:child_process';
-const root = path.resolve(__dirname, '..');
-const check = process.argv.includes('--check');
-if (process.argv.slice(2).some(arg => arg !== '--check')) throw new Error('Usage: node scripts/build-browser.js [--check]');
+import esbuild = require('esbuild');
+import { checkRequested, root, writeOutputs, type GeneratedOutput } from './build-output.js';
+
+const check = checkRequested('build-browser.js');
 const compiled = spawnSync(process.execPath, [path.join(root, 'node_modules/typescript/bin/tsc'), '-p', 'tsconfig.browser.json'], { cwd: root, stdio: 'inherit' });
 if (compiled.error) throw compiled.error;
 if (compiled.status !== 0) process.exit(compiled.status || 1);
-import esbuild = require('esbuild');
+
 const entries = [
   { source: 'src/browser/app.ts', target: 'public/app.js' },
   { source: 'src/browser/theme-prepaint.ts', target: 'public/theme-prepaint.js' },
@@ -16,9 +16,11 @@ const entries = [
   { source: 'src/browser/artifact-comments.ts', target: 'public/artifact-comments.js' },
   { source: 'src/browser/service-worker.ts', target: 'public/sw.js' },
   { source: 'src/browser/shared-helpers.ts', target: 'public/helpers.js', globalName: 'PiDishHelpers',
-    footer: 'if (typeof module !== \"undefined\" && module.exports) module.exports = PiDishHelpers; else Object.assign(globalThis, PiDishHelpers);' },
+    footer: 'if (typeof module !== "undefined" && module.exports) module.exports = PiDishHelpers; else Object.assign(globalThis, PiDishHelpers);' },
 ];
-const outputs = entries.map(entry => {
+
+// Every entry is built and validated before any output is written.
+const prepared: GeneratedOutput[] = entries.map(entry => {
   const result = esbuild.buildSync({
     absWorkingDir: root, entryPoints: [entry.source], bundle: true,
     platform: 'browser', format: 'iife', globalName: entry.globalName, target: 'es2022',
@@ -38,17 +40,13 @@ const outputs = entries.map(entry => {
   if (result.outputFiles.length !== 1 || Object.values(result.metafile.outputs).some(out => out.imports.length)) {
     throw new Error('Each browser entrypoint must produce one self-contained local script');
   }
-  return { target: path.join(root, entry.target), contents: result.outputFiles[0].contents };
+  return { file: entry.target, target: path.join(root, entry.target), content: result.outputFiles[0].contents, mode: 0o644 };
 });
-// Validate every entry before writing any output, including in check mode.
-if (check) {
-  const stale = outputs.filter(output => !fs.existsSync(output.target)
-    || !fs.readFileSync(output.target).equals(output.contents));
-  if (stale.length) {
-    console.error('Browser output is stale; run npm run build:browser');
-    process.exitCode = 1;
-  } else console.log('Browser types and generated outputs match.');
-} else {
-  for (const output of outputs) fs.writeFileSync(output.target, output.contents);
-  console.log('Browser scripts generated.');
-}
+
+writeOutputs(prepared, {
+  check,
+  kind: 'Browser',
+  command: 'build:browser',
+  checkOk: 'Browser types and generated outputs match.',
+  writeOk: 'Browser scripts generated.',
+});
