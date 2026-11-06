@@ -67,5 +67,4 @@ export declare function catalogFragment(skill: Pick<Skill, 'name' | 'description
 export declare function getSkillsInventory(opts?: SkillsInventoryOptions): Promise<SkillsInventory>;
 /** Absolute SKILL.md paths for the mining context (session-index.setSkillRoots). */
 export declare function getSkillFilePaths(opts?: SkillsInventoryOptions): Promise<string[]>;
-export declare function _resetCacheForTests(): void;
 export {};

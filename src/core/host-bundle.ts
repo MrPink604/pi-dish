@@ -75,7 +75,7 @@ function treeFiles(dir: string, prefix = ''): string[] {
 }
 
 /** sha256 over sorted relative paths and contents: names the tree, not its mtimes. */
-export function hashTree(dir: string): string {
+function hashTree(dir: string): string {
   const hash = crypto.createHash('sha256');
   for (const rel of treeFiles(dir)) {
     hash.update(rel).update('\0').update(fs.readFileSync(path.join(dir, rel))).update('\0');

@@ -280,4 +280,3 @@ export async function getSkillFilePaths(opts: SkillsInventoryOptions = {}): Prom
   return inv.skills.map((s) => s.filePath);
 }
 
-export function _resetCacheForTests(): void { _cache = null; }

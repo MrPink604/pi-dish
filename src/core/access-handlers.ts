@@ -179,21 +179,16 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     }
     parsePlainJson(req, res, next);
   };
-  const apiGate: TransportHandler = (req, res, next) => {
-    if (!authToken) return next();
-    if (req.method === 'OPTIONS') return next();
-    if (HOST_PATH_RE.test(req.path)) return next();
-    if (tokenMatches(bearerToken(req))) return next();
-    if (STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream')) return next();
-    res.status(401).json({ error: 'Unauthorized: bearer token required' });
-  };
-  const hostsGate: TransportHandler = (req, res, next) => {
-    if (!authToken) return next();
-    if (req.method === 'OPTIONS') return next();
-    if (tokenMatches(bearerToken(req))) return next();
-    if (PROXY_STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream')) return next();
-    res.status(401).json({ error: 'Unauthorized: bearer token required' });
-  };
+
+  function tokenGate(exempt: (req: TransportRequest) => boolean): TransportHandler {
+    return (req, res, next) => {
+      if (!authToken || req.method === 'OPTIONS' || exempt(req) || tokenMatches(bearerToken(req))) return next();
+      res.status(401).json({ error: 'Unauthorized: bearer token required' });
+    };
+  }
+  const apiGate = tokenGate(req => HOST_PATH_RE.test(req.path)
+    || (STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream')));
+  const hostsGate = tokenGate(req => PROXY_STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream'));
   const host: TransportHandler = (_req, res) => { res.json(hostDescriptor()); };
   const ticket: TransportHandler = (req, res) => {
     const purpose = req.body && typeof req.body === 'object' && 'purpose' in req.body ? req.body.purpose : undefined;

@@ -106,8 +106,6 @@ async function readHarnessPilotConfig(descriptor: HarnessDescriptor, cwd?: strin
   return { defaultModel, defaultThinkingLevel, modelRoles, globalModelRoles };
 }
 
-// --- Task-agent settings (OMP's /agents hub: one array + three records) ---
-
 const AGENT_SETTING_KEYS = ['disabledAgents', 'agentModelOverrides', 'agentPrewalk', 'agentAdvisor'];
 
 function agentSettingsSupported(descriptor: HarnessDescriptor): boolean {
@@ -172,8 +170,6 @@ function queueHarnessConfigWrite<T>(harnessId: string, task: () => Promise<T>): 
   harnessConfigWrites.set(harnessId, chained.catch(() => {}));
   return chained;
 }
-
-// --- Schema-driven settings (OMP's /settings panel) ---
 
 interface SettingRow {
   key: string;
@@ -317,7 +313,6 @@ export const harnesses: Handler = (_req, res) => {
     })),
   });
 };
-
 
 export const harnessConfig = harnessRoute({
   supported: descriptor => !!descriptor.pilotConfig,

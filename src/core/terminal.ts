@@ -86,7 +86,7 @@ export function isTerminalAvailable(): boolean {
   return !!pty;
 }
 
-export function terminalUnavailableReason(): string | null {
+function terminalUnavailableReason(): string | null {
   if (!pty) {
     const failure = ptyLoadError as { message?: unknown } | null | undefined;
     return `node-pty failed to load: ${failure?.message}`;
@@ -212,7 +212,7 @@ export function attachClient(sessionId: string, cwd: string | null | undefined, 
 }
 
 /** Move clients off the old entry before kill so its exit cannot close them. */
-export function restartTerminal(sessionId: string, cwd: string | null | undefined, opts?: TerminalOptions): TerminalState {
+function restartTerminal(sessionId: string, cwd: string | null | undefined, opts?: TerminalOptions): TerminalState {
   const old = terminals.get(sessionId);
   const clients = old ? old.clients : new Set<WebSocket>();
   if (old) {

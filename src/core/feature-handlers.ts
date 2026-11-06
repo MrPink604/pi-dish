@@ -163,10 +163,7 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
   };
   const settings: FeatureHandler = (_req, res) => res.json(settingsForClient(ports.readDishSettings()));
   const updateSettings: FeatureHandler = (req, res) => {
-    // The JSON parser rejects primitives. Preserve the former `in` failure
-    // rather than silently treating a truthy malformed body as an empty patch.
-    const body = req.body || {};
-    if (typeof body !== 'object') throw new TypeError(`Cannot use 'in' operator to search for 'monthlyBudgetUsd' in ${body}`);
+    const body = (req.body ?? {}) as Record<string, unknown>;
     const settings = ports.readDishSettings();
     if ('monthlyBudgetUsd' in body) {
       const value = body.monthlyBudgetUsd;

@@ -41,7 +41,7 @@ function firstString(value: unknown): string | null {
 }
 
 /** Malformed/missing frontmatter keeps the filename fallback; unreadable files drop. */
-export function parseAgentFile(file: string, source: TaskAgent['source']): TaskAgent | null {
+function parseAgentFile(file: string, source: TaskAgent['source']): TaskAgent | null {
   let text: string;
   try {
     text = fs.readFileSync(file, 'utf8');
@@ -115,4 +115,3 @@ export async function listTaskAgents(
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function _resetCacheForTests(): void { bundledCache.clear(); }
