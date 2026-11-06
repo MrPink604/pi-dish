@@ -114,7 +114,7 @@ function runCli(args, options = {}) {
         delete env.PI_DISH_TOKEN;
     return execFileAsync(process.execPath, [CLI, ...args], { env });
 }
-test('boot a token-gated peer and a token-gated hub that knows it', async () => {
+test.before(async () => {
     const peerHome = makeHome();
     writeFixtureSession(peerHome);
     fs.writeFileSync(path.join(peerHome, '.pi', 'dish', 'token'), `${PEER_TOKEN}\n`);

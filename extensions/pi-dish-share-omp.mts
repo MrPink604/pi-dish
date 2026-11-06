@@ -22,14 +22,14 @@ export default async function shareThroughPiDish(htmlPath: string): Promise<{ ur
   });
   let result: unknown;
   try { result = await response.json(); } catch { result = null; }
-  const record = result && typeof result === 'object' ? result : null;
+  const body = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>;
   if (!response.ok) {
-    const error = record && 'error' in record && typeof record.error === 'string' ? record.error : null;
+    const error = typeof body.error === 'string' ? body.error : null;
     throw new Error(error || `pi-dish share import failed (${response.status})`);
   }
 
-  const url = record && 'url' in record && typeof record.url === 'string' ? record.url : null;
-  const relativePath = record && 'path' in record && typeof record.path === 'string' ? record.path : null;
+  const url = typeof body.url === 'string' ? body.url : null;
+  const relativePath = typeof body.path === 'string' ? body.path : null;
   if (!url && !relativePath) throw new Error('pi-dish share import returned no URL or path');
   return {
     url: url || new URL(relativePath!, baseUrl).href,

@@ -111,7 +111,6 @@ export declare function record(value: unknown): Record<string, unknown>;
 export declare function errorMessage(value: unknown): string;
 export declare function errorStatus(value: unknown): unknown;
 export declare function errorBody(value: unknown): Record<string, unknown>;
-export declare function isSessionRow(value: unknown): value is SessionRow;
 export declare function sessionRows(value: unknown): SessionRow[];
 /** Fleet arrays are opaque until a particular operation consumes a row. */
 export declare function fleetRows(value: unknown): unknown[];
@@ -121,9 +120,22 @@ export declare function stringValue(value: unknown, message: string): string;
 /** `fail` bound to one CLI's name, so every error line is attributable. */
 declare function makeFail(name: string): (message: unknown) => void;
 declare function print(value: unknown, json?: boolean): void;
-declare function parentPid(pid: number): number | null;
-declare function ancestorPids(): Set<number>;
-declare function pidAlive(pid: number): boolean;
+export interface CommandLine {
+    command: string;
+    positional: string[];
+    json: boolean;
+    session?: string;
+    url?: string;
+    /** Command-specific value flags, keyed without their leading dashes. */
+    values: Record<string, string | undefined>;
+}
+/**
+ * Parse `<command> [args] [flags]` as the skill CLIs accept it: the command is
+ * the first word, everything else is a positional argument or `--flag value`.
+ * `--json`, `--session` and `--url` are common; `flags` adds command-specific
+ * value flags.
+ */
+declare function parseCommandLine(argv: readonly string[], fallback: string, flags?: readonly string[]): CommandLine;
 declare function registryEntries(): RegistryEntry[];
 /** The id the HTTP routes speak for a registry entry (harness-qualified). */
 declare function registryRouteId(entry: RegistryEntry): unknown;
@@ -155,10 +167,8 @@ declare function request(base: string, pathname: string, init?: RequestOptions):
 declare function requestText(base: string, pathname: string, init?: RequestOptions): Promise<TextResult>;
 declare function hostPath(host: unknown, pathname: string): string;
 declare function api(base: string, host: unknown, pathname: string, init?: RequestOptions): Promise<HttpResult>;
-declare function unknownHostError(base: string, host: unknown): Promise<Error | null>;
 declare function jsonInit(body: unknown, headers?: Record<string, string>): RequestOptions;
 declare function fleetHosts(base: string): Promise<unknown[] | null>;
-declare function resetFleetCache(): void;
 /** Absent capability means unsupported — mixed-version fleets are the norm. */
 declare function hostSupports(value: unknown, capability: string): boolean;
 /**
@@ -179,13 +189,6 @@ declare function parseRef(raw: unknown): ParsedRef;
  * `--host` lands on its own host. Without a local host id the id stays bare.
  */
 declare function fleetCallerId(sessionId: unknown): string;
-declare function hostLabelOf(value: unknown): {} | null;
-/**
- * Resolve a ref's host part against this server's fleet: remote name first,
- * then host uuid (exact or an unambiguous ≥8-char prefix), then label. `self`
- * and any match on this host's own entry mean local (no proxy prefix).
- */
-declare function resolveHostPart(base: string, hostPart: string | null): Promise<ResolvedHost>;
 /** The fleet entry a `--host NAME` flag names, when the fleet is readable. */
 declare function entryForHostName(base: string, host: unknown): Promise<FleetHost | null>;
 /**
@@ -203,20 +206,15 @@ declare function resolveSessionClientSide(base: string, host: unknown, id: strin
 declare function resolveSessionRef(base: string, rawRef: unknown, hostFlag?: string | null): Promise<ResolvedSession>;
 /**
  * Merge per-host search results into one ranked list. The client is the
- * aggregator (TASKS/multi-host.md) — there is no server-side merged endpoint,
- * and there must not be one.
- *
- * `hostResults`: [{ host: '(self)' | 'tycho', results: [session, …] }, …]
- * Returns: [{ host, session }, …] sorted by searchScore desc, then (for the
- * unscored tail, which sorts after every scored row) by lastActivity desc.
+ * aggregator: there is no server-side merged endpoint, and there must not be
+ * one. Rows are sorted by searchScore descending, then the unscored tail by
+ * lastActivity descending.
  */
 declare function mergeSearchResults(hostResults: readonly SearchBucket[] | null | undefined, limit?: number): SearchRow[];
-declare function summarizeToolArgs(args: unknown, max?: number): string;
-declare function truncateResult(text: unknown, maxLines?: number, maxChars?: number): string;
 /**
  * Render a /messages payload as readable markdown. Pure: everything it needs
  * is in `payload` (the resolved list entry merged with the route's own
  * `session`) and `options`.
  */
 declare function renderTranscript(input: unknown, options?: TranscriptOptions): string;
-export { makeFail, print, parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit, fleetHosts, resetFleetCache, hostSupports, hostLabelOf, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, summarizeToolArgs, truncateResult, };
+export { makeFail, print, parseCommandLine, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, jsonInit, fleetHosts, hostSupports, parseRef, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, };

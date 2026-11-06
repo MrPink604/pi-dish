@@ -83,36 +83,24 @@ function configFiles(root, config) {
     const parsed = objectValue(JSON.parse(fs.readFileSync(path.join(root, config), 'utf8')), config);
     return stringList(parsed.files, `${config}.files`);
 }
+function git(root, args, input) {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', input, maxBuffer: 16 * 1024 * 1024 });
+    if (result.error)
+        throw result.error;
+    if (result.status !== 0)
+        throw new Error(`git ${args.join(' ')} failed: ${result.stderr.trim()}`);
+    return result.stdout;
+}
 export function repositoryPaths(root) {
-    const cached = spawnSync('git', ['ls-files', '--cached', '-z'], {
-        cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-    });
-    if (cached.error)
-        throw cached.error;
-    if (cached.status !== 0)
-        throw new Error(`git ls-files --cached failed: ${cached.stderr.trim()}`);
-    const others = spawnSync('git', [
+    const tracked = git(root, ['ls-files', '--cached', '-z']).split('\0').filter(Boolean);
+    const untracked = git(root, [
         'ls-files', '--others', '--exclude-standard', '-z', '--', '.',
         ':(exclude).amp', ':(exclude).amp/**',
-    ], { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-    if (others.error)
-        throw others.error;
-    if (others.status !== 0)
-        throw new Error(`git ls-files --others failed: ${others.stderr.trim()}`);
-    const tracked = cached.stdout.split('\0').filter(Boolean);
-    const untracked = others.stdout.split('\0')
-        .filter(file => file && file !== '.amp' && !file.startsWith('.amp/'));
+    ]).split('\0').filter(file => file && file !== '.amp' && !file.startsWith('.amp/'));
     const trackedPaths = new Set(tracked);
     const paths = new Set([...trackedPaths, ...untracked]);
-    const staged = spawnSync('git', ['ls-files', '--stage', '-z'], {
-        cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-    });
-    if (staged.error)
-        throw staged.error;
-    if (staged.status !== 0)
-        throw new Error(`git ls-files --stage failed: ${staged.stderr.trim()}`);
     const modes = new Map();
-    for (const row of staged.stdout.split('\0')) {
+    for (const row of git(root, ['ls-files', '--stage', '-z']).split('\0')) {
         if (!row)
             continue;
         const match = /^(\d+) [0-9a-f]+ \d+\t(.+)$/.exec(row);
@@ -179,18 +167,16 @@ function outputSuffixes(source, declaration) {
 function withoutSourceSuffix(source) {
     return source.replace(/\.(?:ts|mts|cts)$/, '');
 }
+// Ownership line each builder writes after any shebang, keyed by inventory group.
+const BANNERS = {
+    core: source => `// Generated from ${source};`,
+    tools: source => `// Generated tool from ${source};`,
+    tests: source => `// Generated test/tool from ${source};`,
+    edges: source => `// Generated edge from ${source};`,
+    browser: () => '// Generated from src/browser/;',
+};
 function expectedBanner(output) {
-    if (output.group === 'core')
-        return `// Generated from ${output.source};`;
-    if (output.group === 'tools')
-        return `// Generated tool from ${output.source};`;
-    if (output.group === 'tests')
-        return `// Generated test/tool from ${output.source};`;
-    if (output.group === 'edges')
-        return `// Generated edge from ${output.source};`;
-    if (output.group === 'browser')
-        return '// Generated from src/browser/;';
-    return undefined;
+    return BANNERS[output.group]?.(output.source);
 }
 function generatedOutputs(root, inventory) {
     const outputs = new Map();
@@ -251,14 +237,7 @@ export function validateLinguist(root, file, repository, generated, failures) {
         return;
     }
     const input = `${[...repository].sort().join('\0')}\0`;
-    const result = spawnSync('git', ['check-attr', '-z', '--stdin', 'linguist-generated'], {
-        cwd: root, encoding: 'utf8', input, maxBuffer: 16 * 1024 * 1024,
-    });
-    if (result.error)
-        throw result.error;
-    if (result.status !== 0)
-        throw new Error(`git check-attr failed: ${result.stderr.trim()}`);
-    const fields = result.stdout.split('\0');
+    const fields = git(root, ['check-attr', '-z', '--stdin', 'linguist-generated'], input).split('\0');
     if (fields.at(-1) === '')
         fields.pop();
     if (fields.length !== repository.size * 3) {
@@ -292,12 +271,11 @@ export function classifyExecutableInventory(executablePaths, generatedPaths, com
     const present = new Set(executablePaths);
     const compilerBodies = new Set();
     for (const file of executablePaths) {
-        const declaration = /\.d\.(?:ts|mts|cts)$/.test(file);
         const generated = generatedPaths.has(file);
-        const compilerOwned = compilerSources.has(file) && !declaration;
+        const compilerOwned = compilerSources.has(file) && !/\.d\.(?:ts|mts|cts)$/.test(file);
         const support = supportDeclarations.has(file);
         const exception = exceptions.has(file);
-        const classifications = Number(generated) + Number(compilerOwned) + Number(support) + Number(exception);
+        const classifications = [generated, compilerOwned, support, exception].filter(Boolean).length;
         if (classifications === 0)
             failures.push(`${file}: unclassified tracked executable path`);
         if (classifications > 1)
@@ -319,26 +297,79 @@ export function classifyExecutableInventory(executablePaths, generatedPaths, com
             failures.push(`${file}: stale named exception`);
     return { failures, compilerBodies };
 }
+function checkGeneratedOutputs(root, repository, executablePaths, expected, compilerSources, failures) {
+    const runtime = new Set();
+    const declarations = new Set();
+    const expectedByPath = new Set(expected.map(output => output.path));
+    for (const output of expected) {
+        if (!repository.paths.has(output.path)) {
+            failures.push(`${output.path}: missing generated output owned by ${output.source}`);
+            continue;
+        }
+        if (!output.external && (!repository.paths.has(output.source) || !compilerSources.has(output.source))) {
+            failures.push(`${output.path}: generated source is not compiler-owned: ${output.source}`);
+        }
+        const absolute = path.join(root, output.path);
+        if (!fs.existsSync(absolute)) {
+            failures.push(`${output.path}: generated output is absent from the worktree`);
+            continue;
+        }
+        const banner = expectedBanner(output);
+        if (banner) {
+            const content = fs.readFileSync(absolute, 'utf8').replace(/^#![^\n]*\n/, '');
+            if (!content.startsWith(banner))
+                failures.push(`${output.path}: generated ownership banner does not name ${output.source}`);
+        }
+        (output.declaration ? declarations : runtime).add(output.path);
+    }
+    for (const file of executablePaths) {
+        if (expectedByPath.has(file))
+            continue;
+        const absolute = path.join(root, file);
+        if (!fs.existsSync(absolute))
+            continue;
+        const content = fs.readFileSync(absolute, 'utf8').replace(/^#![^\n]*\n/, '');
+        if (content.startsWith('// Generated'))
+            failures.push(`${file}: orphan generated output`);
+    }
+    return { runtime, declarations };
+}
+/** Every tracked source the policy governs: declared, discovered, compiled or fixture. */
+function governedSources(root, policy, extra) {
+    const governed = new Set(stringList(policy.files, 'files'));
+    for (const dir of stringList(policy.roots, 'roots')) {
+        for (const entry of fs.readdirSync(path.join(root, dir), { recursive: true, encoding: 'utf8' })) {
+            if (isExecutableFamilyPath(entry))
+                governed.add(`${dir}/${entry}`);
+        }
+    }
+    for (const dir of stringList(policy.authoredRoots, 'authoredRoots')) {
+        for (const entry of fs.readdirSync(path.join(root, dir), { recursive: true, encoding: 'utf8' })) {
+            if (isTypeScriptImplementationPath(entry))
+                governed.add(`${dir}/${entry}`);
+        }
+    }
+    for (const file of extra)
+        governed.add(file);
+    return governed;
+}
 export function checkPolicy(root) {
     const policy = objectValue(JSON.parse(fs.readFileSync(path.join(root, 'source-policy.json'), 'utf8')), 'root');
     for (const field of ['authoredRoots', 'programs', 'negativeFixtures', 'files', 'roots', 'inventory']) {
         if (!(field in policy))
             throw new Error(`Source policy must name ${field}`);
     }
-    const projectFiles = stringList(policy.programs, 'programs');
-    const fixtures = new Set(stringList(policy.negativeFixtures, 'negativeFixtures'));
-    const governed = new Set(stringList(policy.files, 'files'));
-    const roots = stringList(policy.roots, 'roots');
-    const authoredRoots = stringList(policy.authoredRoots, 'authoredRoots');
     const inventoryPolicy = objectValue(policy.inventory, 'inventory');
+    const programFiles = stringList(policy.programs, 'programs');
+    const fixtures = new Set(stringList(policy.negativeFixtures, 'negativeFixtures'));
     const repository = repositoryPaths(root);
     const executablePaths = [...repository.paths].filter(isExecutableFamilyPath).sort();
     const failures = [];
     const api = new API();
-    let compilerSources = new Set();
+    const compilerSources = new Set();
     const programs = [];
     try {
-        const snapshot = api.updateSnapshot({ openProjects: projectFiles.map(file => path.join(root, file)) });
+        const snapshot = api.updateSnapshot({ openProjects: programFiles.map(file => path.join(root, file)) });
         for (const project of snapshot.getProjects()) {
             programs.push(project.program);
             for (const absolute of project.program.getSourceFileNames()) {
@@ -348,10 +379,7 @@ export function checkPolicy(root) {
             }
         }
         const expected = generatedOutputs(root, inventoryPolicy);
-        const expectedByPath = new Map(expected.map(output => [output.path, output]));
-        let compilerBodies = new Set();
-        const generatedRuntime = new Set();
-        const generatedDeclarations = new Set();
+        const generated = checkGeneratedOutputs(root, repository, executablePaths, expected, compilerSources, failures);
         const supportDeclarations = new Map(objectList(inventoryPolicy.compilerSupportDeclarations, 'inventory.compilerSupportDeclarations')
             .map(entry => [stringValue(entry.path, 'compiler support declaration path'), entry]));
         const exceptions = new Map(objectList(inventoryPolicy.exceptions, 'inventory.exceptions').map(entry => {
@@ -361,40 +389,8 @@ export function checkPolicy(root) {
             stringValue(entry.rationale, `${exceptionPath}.rationale`);
             return [exceptionPath, entry];
         }));
-        for (const output of expected) {
-            if (!repository.paths.has(output.path)) {
-                failures.push(`${output.path}: missing generated output owned by ${output.source}`);
-                continue;
-            }
-            if (!output.external && (!repository.paths.has(output.source) || !compilerSources.has(output.source))) {
-                failures.push(`${output.path}: generated source is not compiler-owned: ${output.source}`);
-            }
-            const absolute = path.join(root, output.path);
-            if (!fs.existsSync(absolute)) {
-                failures.push(`${output.path}: generated output is absent from the worktree`);
-                continue;
-            }
-            const banner = expectedBanner(output);
-            if (banner) {
-                const content = fs.readFileSync(absolute, 'utf8').replace(/^#![^\n]*\n/, '');
-                if (!content.startsWith(banner))
-                    failures.push(`${output.path}: generated ownership banner does not name ${output.source}`);
-            }
-            (output.declaration ? generatedDeclarations : generatedRuntime).add(output.path);
-        }
-        const knownBanners = ['// Generated from src/core/', '// Generated tool from ', '// Generated test/tool from ',
-            '// Generated edge from ', '// Generated from src/browser/;'];
-        for (const file of executablePaths) {
-            const absolute = path.join(root, file);
-            if (fs.existsSync(absolute) && !expectedByPath.has(file)) {
-                const content = fs.readFileSync(absolute, 'utf8').replace(/^#![^\n]*\n/, '');
-                if (knownBanners.some(banner => content.startsWith(banner)))
-                    failures.push(`${file}: orphan generated output`);
-            }
-        }
-        const classified = classifyExecutableInventory(executablePaths, new Set(expectedByPath.keys()), compilerSources, new Set(supportDeclarations.keys()), new Set(exceptions.keys()));
+        const classified = classifyExecutableInventory(executablePaths, new Set(expected.map(output => output.path)), compilerSources, new Set(supportDeclarations.keys()), new Set(exceptions.keys()));
         failures.push(...classified.failures);
-        compilerBodies = classified.compilerBodies;
         const shellEntries = new Map(objectList(inventoryPolicy.shell, 'inventory.shell').map(entry => {
             const shellPath = stringValue(entry.path, 'shell path');
             stringValue(entry.consumer, `${shellPath}.consumer`);
@@ -402,27 +398,9 @@ export function checkPolicy(root) {
             return [shellPath, entry];
         }));
         const shell = validateShellInventory(root, repository, new Set(shellEntries.keys()));
-        const shellPaths = shell.paths;
         failures.push(...shell.failures);
         validateLinguist(root, stringValue(inventoryPolicy.linguistAttributes, 'inventory.linguistAttributes'), repository.paths, new Set(expected.map(output => output.path)), failures);
-        for (const dir of roots) {
-            for (const entry of fs.readdirSync(path.join(root, dir), { recursive: true, encoding: 'utf8' })) {
-                if (isExecutableFamilyPath(entry))
-                    governed.add(`${dir}/${entry}`);
-            }
-        }
-        for (const dir of authoredRoots) {
-            for (const entry of fs.readdirSync(path.join(root, dir), { recursive: true, encoding: 'utf8' })) {
-                if (isTypeScriptImplementationPath(entry))
-                    governed.add(`${dir}/${entry}`);
-            }
-        }
-        for (const file of compilerBodies)
-            governed.add(file);
-        for (const file of supportDeclarations.keys())
-            governed.add(file);
-        for (const fixture of fixtures)
-            governed.add(fixture);
+        const governed = governedSources(root, policy, [...classified.compilerBodies, ...supportDeclarations.keys(), ...fixtures]);
         for (const file of [...governed].sort()) {
             const absolute = path.join(root, file);
             const program = programs.find(candidate => candidate.getSourceFileNames().includes(absolute));
@@ -441,16 +419,15 @@ export function checkPolicy(root) {
         }
         return { failures, count: governed.size, inventory: {
                 executablePaths: executablePaths.length,
-                shellPaths: shellPaths.length,
-                compilerBodies: compilerBodies.size,
-                generatedRuntime: generatedRuntime.size,
-                generatedDeclarations: generatedDeclarations.size,
+                shellPaths: shell.paths.length,
+                compilerBodies: classified.compilerBodies.size,
+                generatedRuntime: generated.runtime.size,
+                generatedDeclarations: generated.declarations.size,
                 supportDeclarations: supportDeclarations.size,
                 exceptions: exceptions.size,
             } };
     }
     finally {
-        compilerSources = new Set();
         api.close();
     }
 }

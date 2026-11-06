@@ -11,8 +11,9 @@
  * when invoked through the link.
  */
 import path = require('node:path');
+import type * as Client from '../../lib/pi-dish-client.js';
 
-let core: typeof import('../../lib/pi-dish-client.js');
+let core: typeof Client;
 try {
   core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
 } catch (e) {
@@ -25,16 +26,9 @@ try {
   process.exit(1);
 }
 
-const { makeFail, defaultBase, discoverSession, request, jsonInit } = core;
+const { makeFail, defaultBase, discoverSession, request, jsonInit, parseCommandLine, print } = core;
 const fail = makeFail('pi-dish-comments');
 
-interface CommentArgs {
-  command: string;
-  ids: string[];
-  json?: boolean;
-  session?: string;
-  url?: string;
-}
 interface CommentAnchor {
   startLine?: unknown; endLine?: unknown;
   oldStart?: unknown; oldEnd?: unknown;
@@ -54,19 +48,6 @@ interface Comment {
 function commentsIn(result: CommentResult): unknown[] {
   if (!Array.isArray(result.comments)) throw new TypeError('comments must be an array');
   return result.comments;
-}
-
-function parseArgs(argv: string[]): CommentArgs {
-  const args: CommentArgs = { command: argv[0] || 'list', ids: [] };
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--json') args.json = true;
-    else if (arg === '--session') args.session = argv[++i];
-    else if (arg === '--url') args.url = argv[++i];
-    else if (arg.startsWith('-')) throw new Error(`unknown option: ${arg}`);
-    else args.ids.push(arg);
-  }
-  return args;
 }
 
 function lineLabel(value: unknown) {
@@ -127,27 +108,26 @@ function printIndex(value: unknown) {
 }
 
 async function main() {
-  let args;
-  try { args = parseArgs(process.argv.slice(2)); } catch (error) { return fail(core.errorMessage(error)); }
-  const base = defaultBase(args.url);
-  let sessionId;
-  try { sessionId = discoverSession(args.session); } catch (error) { return fail(core.errorMessage(error)); }
-
   try {
+    const args = parseCommandLine(process.argv.slice(2), 'list');
+    const base = defaultBase(args.url);
+    const sessionId = discoverSession(args.session);
+    const ids = args.positional;
+
     if (args.command === 'session') {
-      process.stdout.write(String(sessionId) + '\n');
+      print(String(sessionId));
       return;
     }
     if (args.command === 'list') {
       const { data: result } = await request(base, `/api/comments/index?sessionId=${encodeURIComponent(String(sessionId))}`);
-      if (args.json) process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+      if (args.json) print(result, true);
       else printIndex(result);
       return;
     }
     if (args.command === 'get') {
-      if (!args.ids.length) throw new Error('get needs at least one comment id');
-      const { data: result } = await request(base, '/api/comments/get', jsonInit({ sessionId, ids: args.ids }));
-      if (args.json) process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+      if (!ids.length) throw new Error('get needs at least one comment id');
+      const { data: result } = await request(base, '/api/comments/get', jsonInit({ sessionId, ids }));
+      if (args.json) print(result, true);
       else {
         printBatch(result);
         const missing = core.record(result).missing;
@@ -157,19 +137,15 @@ async function main() {
     }
     if (args.command === 'count') {
       const { data: result } = await request(base, `/api/comments/count?sessionId=${encodeURIComponent(String(sessionId))}`);
-      if (args.json) process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-      else process.stdout.write(String(core.record(result).total) + '\n');
+      if (args.json) print(result, true);
+      else print(String(core.record(result).total));
       return;
     }
     if (args.command === 'ack') {
-      if (!args.ids.length) throw new Error('ack needs at least one comment id');
-      const acknowledged = [];
-      for (const id of args.ids) {
-        await request(base, `/api/comments/${encodeURIComponent(id)}/ack`, jsonInit({ sessionId }));
-        acknowledged.push(id);
-      }
-      if (args.json) process.stdout.write(JSON.stringify({ acknowledged }, null, 2) + '\n');
-      else process.stdout.write(`Acknowledged ${acknowledged.join(', ')}\n`);
+      if (!ids.length) throw new Error('ack needs at least one comment id');
+      for (const id of ids) await request(base, `/api/comments/${encodeURIComponent(id)}/ack`, jsonInit({ sessionId }));
+      if (args.json) print({ acknowledged: ids }, true);
+      else process.stdout.write(`Acknowledged ${ids.join(', ')}\n`);
       return;
     }
     throw new Error(`unknown command: ${args.command} (use list, get, ack, count, or session)`);

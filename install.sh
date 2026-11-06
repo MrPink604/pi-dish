@@ -96,11 +96,11 @@ for skill in "$root"/skills/*; do
   # not a skill — linking it would plant a SKILL.md-less dir in the registry.
   [[ -f $skill/SKILL.md ]] || continue
   name=${skill##*/}
-  link_path "$skill" "$pi_agent_dir/skills/$name"
-  link_path "$skill" "$omp_agent_dir/skills/$name"
   # Prime 0.10 discovers user skills under <agent dir>/skills (verified with
   # `get_commands` over `--mode rpc` in an isolated HOME).
-  link_path "$skill" "$prime_agent_dir/skills/$name"
+  for agent_dir in "$pi_agent_dir" "$omp_agent_dir" "$prime_agent_dir"; do
+    link_path "$skill" "$agent_dir/skills/$name"
+  done
 done
 
 # Prime's only built-in tool (python_repl; ipython before 0.10) runs through a Python kernel whose

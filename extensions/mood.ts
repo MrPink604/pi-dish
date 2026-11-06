@@ -69,21 +69,18 @@ export default function (pi: ExtensionAPI) {
 
 	function restoreMood(ctx: ExtensionContext) {
 		mood = { description: DEFAULT_DESCRIPTION, face: DEFAULT_FACE };
+		// `mood` is the older details key; both shapes appear in past transcripts.
+		const apply = (state: unknown) => {
+			if (!isRecord(state)) return;
+			const face = typeof state.face === "string" ? state.face
+				: typeof state.mood === "string" ? state.mood : null;
+			if (face !== null) setMood(face, String(state.description ?? mood.description));
+		};
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "set_mood") {
-				const details = entry.message.details;
-				if (isRecord(details)) {
-					if (typeof details.face === "string") setMood(details.face, String(details.description ?? mood.description));
-					else if (typeof details.mood === "string") setMood(details.mood, String(details.description ?? mood.description));
-				}
+				apply(entry.message.details);
 			}
-			if (entry.type === "custom" && entry.customType === CUSTOM_TYPE) {
-				const data = entry.data;
-				if (isRecord(data)) {
-					if (typeof data.face === "string") setMood(data.face, String(data.description ?? mood.description));
-					else if (typeof data.mood === "string") setMood(data.mood, String(data.description ?? mood.description));
-				}
-			}
+			if (entry.type === "custom" && entry.customType === CUSTOM_TYPE) apply(entry.data);
 		}
 	}
 

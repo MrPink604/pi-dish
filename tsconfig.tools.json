@@ -17,6 +17,7 @@
     ]
   },
   "files": [
+    "scripts/build-output.ts",
     "scripts/build-tools.ts",
     "scripts/build-tests.ts",
     "scripts/build-core.ts",

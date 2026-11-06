@@ -2,25 +2,19 @@
 // Generated tool from scripts/build-tools.ts; edit that source and run npm run build:tools.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-// Checked-in output bootstraps the pinned compiler after npm ci. Compile and
-// validate the complete sibling mapping before replacing any executable output.
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const node_child_process_1 = require("node:child_process");
-const root = path.resolve(__dirname, '..');
-const check = process.argv.includes('--check');
-if (process.argv.slice(2).some(arg => arg !== '--check')) {
-    throw new Error('Usage: node scripts/build-tools.js [--check]');
+// Checked-in output bootstraps the pinned compiler after npm ci; the complete
+// sibling mapping is validated before any executable output is replaced.
+const build_output_js_1 = require("./build-output.js");
+const BANNER = '// Generated tool from ';
+const check = (0, build_output_js_1.checkRequested)('build-tools.js');
+const sources = (0, build_output_js_1.programFiles)('tsconfig.tools.json');
+for (const source of sources) {
+    if (!/^(?:scripts|test)\/(?:[^/]+\/)*[^/]+\.(?:ts|mts)$/.test(source) || /\.d\.(?:ts|mts)$/.test(source)) {
+        throw new Error(`Unsupported tool source: ${source}`);
+    }
 }
-const config = JSON.parse(fs.readFileSync(path.join(root, 'tsconfig.tools.json'), 'utf8'));
-if (typeof config !== 'object' || config === null || !('files' in config)
-    || !Array.isArray(config.files) || !config.files.every((file) => typeof file === 'string')) {
-    throw new Error('Tool compiler configuration must list its source files');
-}
-const banner = '// Generated tool from ';
 // Preserve the existing executable modes; a shebang alone did not make every
-// historical tool executable. The new bootstrap itself is directly executable.
+// historical tool executable.
 const executables = {
     'scripts/build-tools.ts': true,
     'scripts/build-tests.ts': true,
@@ -29,105 +23,21 @@ const executables = {
     'scripts/run-tests.ts': true,
     'test/native-extensions.smoke.ts': true,
 };
-const outputs = new Map();
-for (const source of config.files) {
-    if ((!/^scripts\/[^/]+\.(?:ts|mts)$/.test(source)
-        && source !== 'test/test-env.ts'
-        && source !== 'test/native-extensions.smoke.ts'
-        && source !== 'test/cron.test.ts' && source !== 'test/session-capabilities.test.ts'
-        && source !== 'test/session-provenance.test.ts'
-        && source !== 'test/stt.test.ts' && source !== 'test/test-env.test.ts'
-        && source !== 'test/tmux-service.test.ts'
-        && source !== 'test/skills-coverage.test.ts' && source !== 'test/transport-frames.test.ts'
-        && source !== 'test/routines.test.ts' && source !== 'test/session-bounces.test.ts'
-        && source !== 'test/runtime-resources.test.ts' && source !== 'test/git-diff.test.ts'
-        && source !== 'test/file-mention.test.ts' && source !== 'test/recovery-runner.test.ts'
-        && source !== 'test/session-foundation.test.ts'
-        && source !== 'test/core-contracts.test.ts' && source !== 'test/core-build.test.ts'
-        && source !== 'test/edge-build.test.ts' && source !== 'test/source-policy.test.ts'
-        && source !== 'test/install.test.ts'
-        && source !== 'test/skill-mining.test.ts' && source !== 'test/skills-core.test.ts'
-        && source !== 'test/harness-pricing.test.ts' && source !== 'test/fixtures/fake-omp-models.ts'
-        && source !== 'test/host-auth.test.ts' && source !== 'test/session-recovery.test.ts'
-        && source !== 'test/fixtures/session-recovery-writer.ts')
-        || /\.d\.(?:ts|mts)$/.test(source)) {
-        throw new Error(`Unsupported tool source: ${source}`);
-    }
-    const esm = source.endsWith('.mts');
-    const stem = source.replace(/\.(?:ts|mts)$/, '');
-    for (const suffix of esm ? ['.mjs', '.d.mts'] : ['.js', '.d.ts']) {
-        const file = stem + suffix;
-        if (outputs.has(file))
-            throw new Error(`Duplicate tool output: ${file}`);
-        outputs.set(file, { source, executable: executables[source] === true && !suffix.startsWith('.d.') });
-    }
-}
-const out = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-tools-'));
-try {
-    const compiler = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc');
-    const result = (0, node_child_process_1.spawnSync)(process.execPath, [compiler, '-p', 'tsconfig.tools.json', '--outDir', out], {
-        cwd: root, stdio: 'inherit',
+const outputs = (0, build_output_js_1.siblingOutputs)(sources, {
+    kind: 'Tool',
+    declarations: () => true,
+    executable: source => executables[source] === true,
+});
+(0, build_output_js_1.buildProgram)('tsconfig.tools.json', 'pi-dish-tools-', (files, read) => {
+    (0, build_output_js_1.verifyMapping)('Tool', files, outputs);
+    const orphaned = (0, build_output_js_1.orphanedOutputs)(['scripts', 'test', 'test/ui-scenarios', 'test/fixtures'], BANNER, outputs, false);
+    if (orphaned.length)
+        throw new Error(`Remove obsolete tool output before building:\n${orphaned.join('\n')}`);
+    (0, build_output_js_1.writeOutputs)((0, build_output_js_1.generatedOutputs)(outputs, { banner: BANNER, command: 'build:tools', read: file => read(file) }), {
+        check,
+        kind: 'Tool',
+        command: 'build:tools',
+        checkOk: 'Tool types, generated output and modes match.',
+        writeOk: 'Tool JavaScript and declarations generated.',
     });
-    if (result.error)
-        throw result.error;
-    if (result.status !== 0) {
-        process.exitCode = result.status || 1;
-    }
-    else {
-        const emitted = fs.readdirSync(out, { recursive: true, withFileTypes: true })
-            .filter(entry => entry.isFile())
-            .map(entry => path.relative(out, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'));
-        const unexpected = emitted.filter(file => !outputs.has(file));
-        const missing = [...outputs.keys()].filter(file => !emitted.includes(file));
-        if (unexpected.length || missing.length) {
-            throw new Error(`Tool output mapping mismatch; unexpected: ${unexpected.join(', ')}; missing: ${missing.join(', ')}`);
-        }
-        const orphaned = [];
-        for (const directory of ['scripts', 'test', 'test/ui-scenarios', 'test/fixtures']) {
-            const outputDirectory = path.join(root, directory);
-            if (!fs.existsSync(outputDirectory))
-                continue;
-            for (const entry of fs.readdirSync(outputDirectory, { withFileTypes: true })) {
-                if (!entry.isFile() || !/\.(?:js|mjs|d\.ts|d\.mts)$/.test(entry.name))
-                    continue;
-                const file = `${directory}/${entry.name}`;
-                if (!outputs.has(file) && fs.readFileSync(path.join(root, file), 'utf8').replace(/^#![^\n]*\n/, '').startsWith(banner)) {
-                    orphaned.push(file);
-                }
-            }
-        }
-        if (orphaned.length)
-            throw new Error(`Remove obsolete tool output before building:\n${orphaned.join('\n')}`);
-        const prepared = [];
-        for (const [file, { source, executable }] of outputs) {
-            const raw = fs.readFileSync(path.join(out, file), 'utf8');
-            const shebang = raw.match(/^#![^\n]*\n/)?.[0] || '';
-            if (executable && shebang !== '#!/usr/bin/env node\n')
-                throw new Error(`CLI shebang missing or invalid: ${source}`);
-            const content = shebang + `${banner}${source}; edit that source and run npm run build:tools.\n` + raw.slice(shebang.length);
-            prepared.push({ file, target: path.join(root, file), content, mode: executable ? 0o755 : 0o644 });
-        }
-        const stale = [];
-        for (const { file, target, content, mode } of prepared) {
-            if (check) {
-                if (!fs.existsSync(target) || fs.readFileSync(target, 'utf8') !== content
-                    || (fs.statSync(target).mode & 0o777) !== mode)
-                    stale.push(file);
-            }
-            else {
-                fs.writeFileSync(target, content);
-                fs.chmodSync(target, mode);
-            }
-        }
-        if (stale.length) {
-            console.error(`Tool output is stale; run npm run build:tools:\n${stale.join('\n')}`);
-            process.exitCode = 1;
-        }
-        else {
-            console.log(check ? 'Tool types, generated output and modes match.' : 'Tool JavaScript and declarations generated.');
-        }
-    }
-}
-finally {
-    fs.rmSync(out, { recursive: true, force: true });
-}
+});

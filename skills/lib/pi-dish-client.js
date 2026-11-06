@@ -22,7 +22,6 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var pi_dish_client_exports = {};
 __export(pi_dish_client_exports, {
   TOKEN: () => TOKEN,
-  ancestorPids: () => ancestorPids,
   api: () => api,
   defaultBase: () => defaultBase,
   discoverSession: () => discoverSession,
@@ -35,17 +34,14 @@ __export(pi_dish_client_exports, {
   fleetHost: () => fleetHost,
   fleetHosts: () => fleetHosts,
   fleetRows: () => fleetRows,
-  hostLabelOf: () => hostLabelOf,
   hostPath: () => hostPath,
   hostSupports: () => hostSupports,
-  isSessionRow: () => isSessionRow,
   jsonInit: () => jsonInit,
   makeFail: () => makeFail,
   mergeSearchResults: () => mergeSearchResults,
   nativeSessionId: () => nativeSessionId,
-  parentPid: () => parentPid,
+  parseCommandLine: () => parseCommandLine,
   parseRef: () => parseRef,
-  pidAlive: () => pidAlive,
   print: () => print,
   record: () => record,
   registryEntries: () => registryEntries,
@@ -53,17 +49,12 @@ __export(pi_dish_client_exports, {
   renderTranscript: () => renderTranscript,
   request: () => request,
   requestText: () => requestText,
-  resetFleetCache: () => resetFleetCache,
-  resolveHostPart: () => resolveHostPart,
   resolveSessionClientSide: () => resolveSessionClientSide,
   resolveSessionRef: () => resolveSessionRef,
   sessionHarnessId: () => sessionHarnessId,
   sessionRows: () => sessionRows,
   stableSessionRef: () => stableSessionRef,
-  stringValue: () => stringValue,
-  summarizeToolArgs: () => summarizeToolArgs,
-  truncateResult: () => truncateResult,
-  unknownHostError: () => unknownHostError
+  stringValue: () => stringValue
 });
 module.exports = __toCommonJS(pi_dish_client_exports);
 var import_node_child_process = require("node:child_process");
@@ -222,6 +213,28 @@ function print(value, json) {
   if (json) process.stdout.write(JSON.stringify(value, null, 2) + "\n");
   else if (typeof value === "string") process.stdout.write(value + "\n");
   else process.stdout.write(JSON.stringify(value, null, 2) + "\n");
+}
+function parseCommandLine(argv, fallback, flags = []) {
+  const line = { command: argv[0] || fallback, positional: [], json: false, values: {} };
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--json") {
+      line.json = true;
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      line.positional.push(arg);
+      continue;
+    }
+    const name = arg.startsWith("--") ? arg.slice(2) : "";
+    if (name !== "session" && name !== "url" && !flags.includes(name)) throw new Error(`unknown option: ${arg}`);
+    if (i + 1 >= argv.length) throw new Error(`${arg} needs a value`);
+    const value = argv[++i];
+    if (name === "session") line.session = value;
+    else if (name === "url") line.url = value;
+    else line.values[name] = value;
+  }
+  return line;
 }
 function parentPid(pid) {
   try {
@@ -397,9 +410,6 @@ function fleetHosts(base) {
     fleetPromise = request(base, "/api/hosts").then(({ data }) => fleetRows(record(data ?? {}).hosts)).catch(() => null);
   }
   return fleetPromise;
-}
-function resetFleetCache() {
-  fleetPromise = null;
 }
 function hostSupports(value, capability) {
   const entry = record(value ?? {});
@@ -714,7 +724,6 @@ function renderTranscript(input, options = {}) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   TOKEN,
-  ancestorPids,
   api,
   defaultBase,
   discoverSession,
@@ -727,17 +736,14 @@ function renderTranscript(input, options = {}) {
   fleetHost,
   fleetHosts,
   fleetRows,
-  hostLabelOf,
   hostPath,
   hostSupports,
-  isSessionRow,
   jsonInit,
   makeFail,
   mergeSearchResults,
   nativeSessionId,
-  parentPid,
+  parseCommandLine,
   parseRef,
-  pidAlive,
   print,
   record,
   registryEntries,
@@ -745,15 +751,10 @@ function renderTranscript(input, options = {}) {
   renderTranscript,
   request,
   requestText,
-  resetFleetCache,
-  resolveHostPart,
   resolveSessionClientSide,
   resolveSessionRef,
   sessionHarnessId,
   sessionRows,
   stableSessionRef,
-  stringValue,
-  summarizeToolArgs,
-  truncateResult,
-  unknownHostError
+  stringValue
 });

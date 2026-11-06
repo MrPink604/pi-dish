@@ -36,10 +36,6 @@ const {
 
 const fail = makeFail('pi-dish-sessions');
 
-// =========================================================================
-// Command spec — the single source for both parsing and help
-// =========================================================================
-//
 // Agents are expected to learn this CLI from `--help` rather than from the
 // skill doc, so every entry carries a usage line, a sentence, its own flags
 // with value hints, and one realistic example. Parsing reads the same table
@@ -350,10 +346,6 @@ function commandHelp(name: string) {
   return lines.join('\n');
 }
 
-// =========================================================================
-// Argument parsing
-// =========================================================================
-
 const VALUE_FLAGS = new Map<string, keyof ValueArgs>([
   ['--url', 'url'], ['--session', 'session'], ['--cwd', 'cwd'], ['--harness', 'harness'],
   ['--model', 'model'], ['--name', 'name'], ['--prompt', 'prompt'], ['--limit', 'limit'],
@@ -384,10 +376,6 @@ function parseArgs(argv: string[]): SessionArgs {
 function intArg(value: string | undefined, fallback: number, max = 100) {
   return Math.max(1, Math.min(max, Number.parseInt(value || String(fallback), 10) || fallback));
 }
-
-// =========================================================================
-// Output formatting
-// =========================================================================
 
 // Absent means unsupported (mixed-version fleets are the steady state); only
 // the capabilities an agent can act on are worth a column.
@@ -443,10 +431,6 @@ function writeSnippets(session: SessionRow) {
     process.stdout.write(`    …${String(snippet).replace(/\s+/g, ' ').trim()}…\n`);
   }
 }
-
-// =========================================================================
-// Spawn helpers
-// =========================================================================
 
 // The local server's identity, for the display ref of a cross-host peer
 // message sender (`<label>/<ref>`).
@@ -547,10 +531,6 @@ async function pollSpawn(base: string, host: string | null, spawnId: string, tim
   throw new Error(`spawn ${spawnId} did not finish within ${Math.round(timeoutMs / 1000)}s`);
 }
 
-// =========================================================================
-// docs
-// =========================================================================
-
 const DOCS_UNSUPPORTED = "this host's pi-dish does not serve agent docs; try without --host or upgrade it";
 
 async function listDocs(base: string, host: string | null, json?: boolean) {
@@ -599,10 +579,6 @@ async function showDoc(base: string, host: string | null, topic: string, json?: 
   if (json) return print({ topic, markdown: text }, true);
   process.stdout.write(text.endsWith('\n') ? text : text + '\n');
 }
-
-// =========================================================================
-// search --all-hosts
-// =========================================================================
 
 const FLEET_SEARCH_TIMEOUT_MS = 20000;
 
@@ -676,10 +652,6 @@ async function fleetSearch(base: string, query: string, limit: number, json?: bo
   }
 }
 
-// =========================================================================
-// load
-// =========================================================================
-
 const LOAD_UNSUPPORTED = 'this host does not report load (GET /api/host/health); update pi-dish there';
 
 function percent(value: unknown) {
@@ -733,14 +705,6 @@ async function fleetLoad(base: string, json?: boolean) {
   }
 }
 
-// =========================================================================
-// main
-// =========================================================================
-
-// =========================================================================
-// attach — join a live session's tmux pane from this terminal (local only)
-// =========================================================================
-
 function commandExists(cmd: string) {
   try {
     execFileSync('which', [cmd], { stdio: 'ignore' });
@@ -752,7 +716,7 @@ function commandExists(cmd: string) {
 
 function activeTmuxEntries(): TmuxEntry[] {
   const entries = registryEntries();
-  const seen = new Set();
+  const seen = new Set<string>();
   const result: TmuxEntry[] = [];
   for (const entry of entries) {
     const tmux = core.record(entry.tmux ?? {});
