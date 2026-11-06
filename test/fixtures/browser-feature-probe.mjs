@@ -1,5 +1,5 @@
 // Generated test/tool from test/fixtures/browser-feature-probe.mts; edit that source and run npm run build:tests.
-import { FEATURE_FACTORY_NAMES, FIXTURE_FEATURE_NAMES, FIXTURE_PORT_NAMES, } from '../browser/fixture-contracts.js';
+import { FIXTURE_FEATURE_NAMES, FIXTURE_PORT_NAMES, } from '../browser/fixture-contracts.js';
 function isObservationRegistry(value) {
     if (typeof value !== 'object' || value === null || Array.isArray(value))
         return false;
@@ -19,13 +19,10 @@ function registry() {
     Reflect.set(globalThis, 'fixtureApp', created);
     return created;
 }
-export function observeFeature(name, factoryName, create, ...args) {
+export function observeFeature(name, create, ...args) {
     const fixture = registry();
     if (Object.hasOwn(fixture.features, name))
         throw new Error(`Duplicate application feature: ${name}`);
-    if (FEATURE_FACTORY_NAMES[name] !== factoryName) {
-        throw new Error(`Application feature ${name} expected ${FEATURE_FACTORY_NAMES[name]}, received ${factoryName}`);
-    }
     const value = create(...args);
     Reflect.set(fixture.features, name, value);
     Reflect.set(fixture.ports, name, args[0]);

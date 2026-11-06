@@ -14,10 +14,14 @@ function assertHelperContext(value) {
             throw new Error(`Missing browser helper ${name}`);
     }
 }
-test('the generated helper entry publishes its CommonJS API as ordinary browser globals', () => {
+function helperContext() {
     const context = { atob };
     vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/helpers.js'), 'utf8'), context);
     assertHelperContext(context);
+    return context;
+}
+test('the generated helper entry publishes its CommonJS API as ordinary browser globals', () => {
+    const context = helperContext();
     for (const [name, value] of Object.entries(H))
         assert.equal(typeof context[name], typeof value, name);
     assert.equal(context.escapeHtml('<tag>'), '&lt;tag&gt;');
@@ -33,9 +37,7 @@ test('the generated helper entry publishes its CommonJS API as ordinary browser 
     assert.match(extension.renderer(token), /math:x/);
 });
 test('a retained browser math extension uses a renderer that arrives after construction', () => {
-    const context = { atob };
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/helpers.js'), 'utf8'), context);
-    assertHelperContext(context);
+    const context = helperContext();
     const extension = context.createMathExtensions()[0];
     assert.ok(extension);
     const token = extension.tokenizer('$$x < y$$');
