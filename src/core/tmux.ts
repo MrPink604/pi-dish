@@ -134,6 +134,11 @@ function runTmux(args: readonly unknown[], { timeout = 3000 } = {}): Promise<str
   });
 }
 
+/** Every command names one server socket; the format/query calls share one timeout. */
+function runTmuxOn(socket: string, args: readonly unknown[]): Promise<string> {
+  return runTmux(['-S', socket, ...args], { timeout: 2000 });
+}
+
 let tmuxAvailable: boolean | null = null;
 export function isTmuxAvailable(): boolean {
   if (tmuxAvailable !== null) return tmuxAvailable;
@@ -152,25 +157,30 @@ export function tmuxTmpdir(): string {
   return `/tmp/tmux-${uid}`;
 }
 
+/** Candidate tmux server sockets under the tmpdir; stale socket files are left for tmux to reject. */
+function socketPaths(): { socket: string; name: string }[] {
+  const dir = tmuxTmpdir();
+  let names: string[];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  return names.flatMap((name) => {
+    const socket = path.join(dir, name);
+    try {
+      return fs.statSync(socket).isSocket() ? [{ socket, name }] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
 /** Enumerate live socket servers under the tmux tmpdir, skipping stale sockets. */
 export async function listServers(): Promise<TmuxServer[]> {
   if (!isTmuxAvailable()) return [];
-  const dir = tmuxTmpdir();
-  let names;
-  try { names = fs.readdirSync(dir); } catch { return []; }
   const servers: TmuxServer[] = [];
-  for (const name of names) {
-    const socket = path.join(dir, name);
-    let stat;
-    try { stat = fs.statSync(socket); } catch { continue; }
-    if (!stat.isSocket()) continue;
+  for (const { socket, name } of socketPaths()) {
     let out;
     try {
       // ':' is the target-spec separator; unlike a tab, tmux does not sanitize it.
-      out = await runTmux(
-        ['-S', socket, 'list-sessions', '-F', '#{session_name}:#{session_windows}:#{session_attached}'],
-        { timeout: 2000 },
-      );
+      out = await runTmuxOn(socket, ['list-sessions', '-F', '#{session_name}:#{session_windows}:#{session_attached}']);
     } catch {
       continue; // stale socket / dead server
     }
@@ -178,7 +188,7 @@ export async function listServers(): Promise<TmuxServer[]> {
       const [sname, windows, attached] = line.split(':');
       return { name: sname, windows: Number(windows) || 0, attached: attached === '1' };
     });
-    servers.push({ socket, name: path.basename(socket), sessions });
+    servers.push({ socket, name, sessions });
   }
   return servers;
 }
@@ -236,12 +246,12 @@ export async function respawnPane({ socket, paneId, cwd, command, env, expectedP
 }
 
 export async function sendKeys(socket: string, paneId: string, text: string): Promise<void> {
-  await runTmux(['-S', socket, 'send-keys', '-t', paneId, text, 'Enter'], { timeout: 2000 });
+  await runTmuxOn(socket, ['send-keys', '-t', paneId, text, 'Enter']);
 }
 
 // One chord, no Enter/literal flag: cannot land in a TUI's unsent composer draft.
 export async function sendKey(socket: string, paneId: string, key: string): Promise<void> {
-  await runTmux(['-S', socket, 'send-keys', '-t', paneId, key], { timeout: 2000 });
+  await runTmuxOn(socket, ['send-keys', '-t', paneId, key]);
 }
 
 export async function renameWindow(socket: string | null | undefined, target: string | null | undefined, name: unknown): Promise<void> {
@@ -250,10 +260,10 @@ export async function renameWindow(socket: string | null | undefined, target: st
   if (!sanitized) return;
   const sessionSafe = sanitized.replace(/[.:\s]+/g, '-').replace(/[^a-zA-Z0-9_-]+/g, '').slice(0, 48);
   try {
-    await runTmux(['-S', socket, 'rename-window', '-t', target, sanitized], { timeout: 2000 });
-    await runTmux(['-S', socket, 'select-pane', '-t', target, '-T', sanitized], { timeout: 2000 });
+    await runTmuxOn(socket, ['rename-window', '-t', target, sanitized]);
+    await runTmuxOn(socket, ['select-pane', '-t', target, '-T', sanitized]);
     if (sessionSafe) {
-      await runTmux(['-S', socket, 'rename-session', '-t', target, sessionSafe], { timeout: 2000 }).catch(() => {});
+      await runTmuxOn(socket, ['rename-session', '-t', target, sessionSafe]).catch(() => {});
     }
   } catch {}
 }
@@ -261,7 +271,7 @@ export async function renameWindow(socket: string | null | undefined, target: st
 // '=' means exact session-name match, not tmux's ordinary prefix match.
 export async function hasSession(socket: string, name: string): Promise<boolean> {
   try {
-    await runTmux(['-S', socket, 'has-session', '-t', `=${name}`], { timeout: 2000 });
+    await runTmuxOn(socket, ['has-session', '-t', `=${name}`]);
     return true;
   } catch {
     return false;
@@ -269,21 +279,38 @@ export async function hasSession(socket: string, name: string): Promise<boolean>
 }
 
 export async function killPane(socket: string, paneId: string): Promise<void> {
-  await runTmux(['-S', socket, 'kill-pane', '-t', paneId], { timeout: 2000 });
+  await runTmuxOn(socket, ['kill-pane', '-t', paneId]);
 }
 
-async function paneProcessId(socket: string, paneId: string): Promise<number | null> {
+/** One formatted field of a pane; null when tmux cannot answer (missing pane, dead socket). */
+async function paneField(socket: string, paneId: string, format: string): Promise<string | null> {
   if (!socket || !paneId) return null;
   try {
-    const out = await runTmux(
-      ['-S', socket, 'display-message', '-p', '-t', paneId, '#{pane_pid}'],
-      { timeout: 2000 },
-    );
-    const pid = Number(out.trim());
-    return Number.isInteger(pid) && pid > 1 ? pid : null;
+    const out = await runTmuxOn(socket, ['display-message', '-p', '-t', paneId, format]);
+    return out.trim();
   } catch {
     return null;
   }
+}
+
+async function paneProcessId(socket: string, paneId: string): Promise<number | null> {
+  const pid = Number(await paneField(socket, paneId, '#{pane_pid}'));
+  return Number.isInteger(pid) && pid > 1 ? pid : null;
+}
+
+/** Pane anchor process (null when unreadable) and whether any pane answers at all. */
+async function paneAnchor(socket: string, paneId: string): Promise<{ pid: number | null; exists: boolean }> {
+  const pid = await paneProcessId(socket, paneId);
+  return { pid, exists: pid !== null || await paneExists(socket, paneId) };
+}
+
+/** The pane's process tree plus caller-known descendants, keyed by exact birth identity. */
+function captureProcesses(pid: number | null, knownProcesses: readonly ProcessIdentity[]): Map<string, ProcessIdentity> {
+  const tracked = new Map<string, ProcessIdentity>();
+  for (const process of [...knownProcesses, ...(pid ? processTree(pid) : [])]) {
+    if (process?.pid && process?.startTime) tracked.set(`${process.pid}:${process.startTime}`, process);
+  }
+  return tracked;
 }
 
 function processTree(rootPid: number): ProcessIdentity[] {
@@ -316,15 +343,10 @@ function processTree(rootPid: number): ProcessIdentity[] {
  * exits and they are reparented; never mistake PID reuse for the old writer.
  */
 export async function paneProcessState(socket: string, paneId: string, { knownProcesses = [] }: PaneProcessOptions = {}): Promise<PaneProcessState> {
-  const pid = await paneProcessId(socket, paneId);
-  const paneStillExists = pid ? true : await paneExists(socket, paneId);
-  const tracked = new Map<string, ProcessIdentity>();
-  for (const process of [...knownProcesses, ...(pid ? processTree(pid) : [])]) {
-    if (process?.pid && process?.startTime) tracked.set(`${process.pid}:${process.startTime}`, process);
-  }
+  const { pid, exists } = await paneAnchor(socket, paneId);
   return {
-    paneExists: paneStillExists,
-    knownProcesses: [...tracked.values()].filter(processIdentityAlive),
+    paneExists: exists,
+    knownProcesses: [...captureProcesses(pid, knownProcesses).values()].filter(processIdentityAlive),
   };
 }
 
@@ -339,17 +361,13 @@ export async function paneProcessIdentity(socket: string, paneId: string): Promi
  * Hidden-session fallback cannot leave two processes writing the same JSONL.
  */
 export async function killPaneAndWait(socket: string, paneId: string, { timeout = 5000, knownProcesses = [] }: PaneCleanupOptions = {}): Promise<void> {
-  const pid = await paneProcessId(socket, paneId);
-  const paneStillExists = pid ? true : await paneExists(socket, paneId);
-  if (!pid && paneStillExists) {
+  const { pid, exists } = await paneAnchor(socket, paneId);
+  if (!pid && exists) {
     throw cleanupError(new Error(`could not identify process for tmux pane ${paneId}`), knownProcesses.filter(processIdentityAlive));
   }
   // Capture descendants before tmux closes the pane and reparents them. A
   // wrapper may be the root while its child is the actual JSONL writer.
-  const tracked = new Map<string, ProcessIdentity>();
-  for (const process of [...knownProcesses, ...(pid ? processTree(pid) : [])]) {
-    if (process?.pid && process?.startTime) tracked.set(`${process.pid}:${process.startTime}`, process);
-  }
+  const tracked = captureProcesses(pid, knownProcesses);
   const processesStillAlive = () => [...tracked.values()].filter(processIdentityAlive);
 
   if (pid) {
@@ -380,23 +398,16 @@ export async function killPaneAndWait(socket: string, paneId: string, { timeout 
 
 /** Human-facing location, not process ownership. Window names can contain ':'. */
 export async function paneLocation(socket: string, paneId: string): Promise<PaneLocation | null> {
-  if (!socket || !paneId) return null;
-  try {
-    const out = await runTmux(
-      ['-S', socket, 'display-message', '-p', '-t', paneId, '#{session_name}:#{window_index}:#{window_name}'],
-      { timeout: 2000 },
-    );
-    const parts = out.trim().split(':');
-    // Missing panes sometimes succeed with empty formatted fields.
-    if (parts.length < 3 || !parts[0]) return null;
-    return {
-      tmuxSession: parts[0],
-      windowIndex: Number(parts[1]),
-      windowName: parts.slice(2).join(':'),
-    };
-  } catch {
-    return null;
-  }
+  // Missing panes sometimes succeed with empty formatted fields.
+  const out = await paneField(socket, paneId, '#{session_name}:#{window_index}:#{window_name}');
+  if (out === null) return null;
+  const parts = out.split(':');
+  if (parts.length < 3 || !parts[0]) return null;
+  return {
+    tmuxSession: parts[0],
+    windowIndex: Number(parts[1]),
+    windowName: parts.slice(2).join(':'),
+  };
 }
 
 /**
@@ -405,21 +416,11 @@ export async function paneLocation(socket: string, paneId: string): Promise<Pane
  */
 export async function findPaneByPid(pid: number | string | null | undefined): Promise<(PaneTarget & PaneLocation) | null> {
   if (!pid || !isTmuxAvailable()) return null;
-  const dir = tmuxTmpdir();
-  let names;
-  try { names = fs.readdirSync(dir); } catch { return null; }
   const byPanePid = new Map<number, PaneTarget & PaneLocation>();
-  for (const name of names) {
-    const socket = path.join(dir, name);
-    let stat;
-    try { stat = fs.statSync(socket); } catch { continue; }
-    if (!stat.isSocket()) continue;
+  for (const { socket } of socketPaths()) {
     let out;
     try {
-      out = await runTmux(
-        ['-S', socket, 'list-panes', '-a', '-F', '#{pane_pid}:#{pane_id}:#{session_name}:#{window_index}:#{window_name}'],
-        { timeout: 2000 },
-      );
+      out = await runTmuxOn(socket, ['list-panes', '-a', '-F', '#{pane_pid}:#{pane_id}:#{session_name}:#{window_index}:#{window_name}']);
     } catch {
       continue; // stale socket / dead server
     }
@@ -460,17 +461,8 @@ function parentPid(pid: number): number {
 }
 
 export async function paneExists(socket: string, paneId: string): Promise<boolean> {
-  if (!socket || !paneId) return false;
-  try {
-    const out = await runTmux(
-      ['-S', socket, 'display-message', '-p', '-t', paneId, '#{pane_id}'],
-      { timeout: 2000 },
-    );
-    // Some tmux versions return success but empty fields for missing panes.
-    return !!out.trim();
-  } catch {
-    return false;
-  }
+  // Some tmux versions return success but empty fields for missing panes.
+  return !!(await paneField(socket, paneId, '#{pane_id}'));
 }
 
 /**
@@ -479,17 +471,11 @@ export async function paneExists(socket: string, paneId: string): Promise<boolea
  * "possibly watched", never as "nobody is looking".
  */
 export async function paneAttachedClients(socket: string, paneId: string): Promise<number | null> {
-  try {
-    const out = await runTmux(
-      ['-S', socket, 'display-message', '-p', '-t', paneId, '#{session_attached} #{session_group_attached}'],
-      { timeout: 2000 },
-    );
-    const counts = out.trim().split(/\s+/).filter(Boolean).map(Number);
-    if (!counts.length || counts.some(count => !Number.isInteger(count) || count < 0)) return null;
-    return Math.max(...counts);
-  } catch {
-    return null;
-  }
+  const out = await paneField(socket, paneId, '#{session_attached} #{session_group_attached}');
+  if (out === null) return null;
+  const counts = out.split(/\s+/).filter(Boolean).map(Number);
+  if (!counts.length || counts.some(count => !Number.isInteger(count) || count < 0)) return null;
+  return Math.max(...counts);
 }
 
 /**
@@ -511,7 +497,7 @@ export async function attachPaneArgv(socket: string, paneId: string): Promise<st
 /** Server prefix key, or null when unavailable. */
 export async function getPrefixKey(socket: string): Promise<string | null> {
   try {
-    const out = await runTmux(['-S', socket, 'show-options', '-g', 'prefix'], { timeout: 2000 });
+    const out = await runTmuxOn(socket, ['show-options', '-g', 'prefix']);
     const m = out.trim().match(/^prefix\s+(\S+)/);
     return m ? m[1] : null;
   } catch {
