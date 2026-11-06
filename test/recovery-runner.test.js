@@ -215,6 +215,14 @@ test('unresolved tool effects and corrupt tails require review', async (t) => {
     assert.ok(typeof corruptReason === 'string');
     assert.equal(Boolean(corruptReason), true);
 });
+test('transcript entries that are not JSON objects cannot be verified', async (t) => {
+    const s = scenario(t);
+    const base = JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'go' }] } }) + '\n';
+    for (const line of ['null', '[]', '42', '"text"']) {
+        fs.writeFileSync(s.file, base + line + '\n');
+        assert.ok(typeof await (0, recovery_runner_1.continuationSafety)(s.file) === 'string', `${line} is not a verifiable entry`);
+    }
+});
 test('aborted responses and compaction are never automatically continued', async (t) => {
     const s = scenario(t);
     fs.appendFileSync(s.file, JSON.stringify({ type: 'message', message: {

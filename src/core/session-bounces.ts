@@ -111,8 +111,8 @@ export interface SessionLifecycleActions {
 }
 
 export interface SessionBounceRuntimeOptions extends SessionBounceBounds, SessionLifecycleActionOptions {
-  /** Raw catalog data only; capture, inspection, and execution belong to this module. */
-  catalog(): unknown;
+  /** Catalog observations only; capture, inspection, and execution belong to this module. */
+  catalog(): readonly SessionBounceCatalogRow[];
 }
 
 type CapturedBounceTarget<Authority extends object> = SessionBounceTarget & { authority: Authority };
@@ -282,7 +282,7 @@ function trackBounceActivity(live: LiveSession): void {
   live.bounceActivityRevision = 0;
   const events = ['turn_start', 'compaction_start', 'queue_update', 'extension_ui_request', 'session_switch', 'message_start'];
   const changed = () => { live.bounceActivityRevision = Number(live.bounceActivityRevision) + 1; };
-  // Bridge's generic EventEmitter overload and RPC's listener API require narrowing.
+  // Bridge's EventEmitter overload and RPC's listener signature only unify per branch.
   if (live instanceof BridgeSession) {
     for (const event of events) live.on(event, changed);
   } else {
@@ -381,8 +381,8 @@ export function createSessionLifecycleActions({ operations, ownership }: Session
           ? await operations.restartSession(authority.sessionId, { beforeAction })
           : await operations.hibernateSession(authority.sessionId, { beforeAction });
         if (result.kind === 'stopped') return { replacementId: result.replacement?.id };
-        // Only replacement-not-ready carried body.stopped in the former wire response.
-        // Preserve terminal skip/fail semantics without mistaking either for a retry.
+        // A stopped replacement already changed the runtime, so its refusal status
+        // is a failure rather than a skip; neither is retry admission.
         if (result.kind !== 'replacement-not-ready' && [404, 409].includes(result.status)) {
           throw new LifecycleInterruption('skipped', result.error);
         }
@@ -423,13 +423,7 @@ export function createSessionBounceRuntime({ operations, ownership, catalog, ...
   const actions = createSessionLifecycleActions({ operations, ownership });
   return createSessionBounces<BounceAuthority, LiveSession>({
     ...bounds,
-    catalog: () => {
-      const rows = catalog();
-      if (!Array.isArray(rows) || !rows.every((row: unknown): row is SessionBounceCatalogRow => isRecord(row) && typeof row.id === 'string')) {
-        throw new TypeError('Active session observations must contain session identities');
-      }
-      return rows;
-    },
+    catalog,
     capture: actions.capture,
     inspect: actions.inspect,
     execute: actions.execute,

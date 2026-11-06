@@ -95,18 +95,12 @@ const OBSERVATION_EVENTS: Record<string, true> = {
 };
 const MAX_RECORD_BYTES = 1024 * 1024;
 
-// Event payloads historically accept arrays as objects too. Unlike JSON store
-// decoding, this is only a property-access boundary, not a feature-schema check.
-function eventObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object';
-}
-
 function diagnostic(error: unknown): void {
-  try { process.stderr.write(`[pi-dish-recovery] ${(eventObject(error) && error.message) || error}\n`); } catch {}
+  try { process.stderr.write(`[pi-dish-recovery] ${(isRecord(error) && error.message) || error}\n`); } catch {}
 }
 
 function missingFile(error: unknown): boolean {
-  return eventObject(error) && error.code === 'ENOENT';
+  return isRecord(error) && error.code === 'ENOENT';
 }
 
 export function bootId(): string | null {
@@ -256,10 +250,8 @@ function sameCheckpoint(a: RecoveryCheckpoint | null, b: RecoveryCheckpoint | nu
   return !!a && !!b && a.size === b.size && a.mtimeMs === b.mtimeMs;
 }
 
-export function checkpointMatches(record: unknown): boolean {
-  return isRecord(record) && validCheckpoint(record.checkpoint)
-    && typeof record.sessionFile === 'string' && path.isAbsolute(record.sessionFile)
-    && sameCheckpoint(record.checkpoint, transcriptCheckpoint(record.sessionFile));
+export function checkpointMatches(record: RecoveryRecord): boolean {
+  return sameCheckpoint(record.checkpoint, transcriptCheckpoint(record.sessionFile));
 }
 
 export function recordSession(snapshot: RecoveryObservation | null): RecoveryRecord | null {
@@ -319,19 +311,11 @@ export function getControl(harnessId: string, nativeSessionId: string): Recovery
 
 export function patchControl(harnessId: string, nativeSessionId: string, patch: RecoveryControlPatch): RecoveryControl {
   const current = readControl(harnessId, nativeSessionId);
-  const next = { ...current };
-  for (const key of ['excluded', 'closed'] as const) {
-    if (Object.hasOwn(patch, key)) {
-      if (typeof patch[key] !== 'boolean') throw new Error(`Recovery ${key} must be boolean`);
-      next[key] = patch[key];
-    }
-  }
-  if (Object.hasOwn(patch, 'attempt')) {
-    if (!(patch.attempt === null || isRecord(patch.attempt))) {
-      throw new Error('Recovery attempt must be an object or null');
-    }
-    next.attempt = patch.attempt;
-  }
+  const next: RecoveryControl = {
+    excluded: patch.excluded ?? current.excluded,
+    closed: patch.closed ?? current.closed,
+    attempt: patch.attempt === undefined ? current.attempt : patch.attempt,
+  };
   if (JSON.stringify(current) !== JSON.stringify(next)) {
     atomicWrite(fileFor('controls', harnessId, nativeSessionId), { version: VERSION, harnessId, nativeSessionId, ...next });
   }
@@ -401,7 +385,7 @@ export function createSessionObserver({ snapshot: readSnapshot, canWrite: writeA
   function event(type: string, input: unknown = {}): void {
     if (typeof type !== 'string' || !Object.hasOwn(OBSERVATION_EVENTS, type)) return;
     initialize();
-    const data = eventObject(input) ? input : {};
+    const data = isRecord(input) ? input : {};
     if (type === 'agent_start') {
       preserved = false;
       shutdown = false;
@@ -434,7 +418,7 @@ export function createSessionObserver({ snapshot: readSnapshot, canWrite: writeA
       if (messages) {
         for (let index = messages.length - 1; index >= 0; index--) {
           const message = messages[index];
-          if (eventObject(message) && message.role === 'assistant') {
+          if (isRecord(message) && message.role === 'assistant') {
             assistant = message;
             break;
           }

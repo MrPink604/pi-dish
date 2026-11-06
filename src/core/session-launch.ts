@@ -147,7 +147,7 @@ function forbidden(error: unknown): LaunchOutcome {
 
 function unclassifiedTmuxFailure(descriptor: HarnessDescriptor, error: unknown): LaunchOutcome {
   if (error instanceof BridgeSocketConfigError || error instanceof LifecycleInterruption) return forbidden(error);
-  // Unclassified Pi launch exceptions historically permit the headless RPC fallback.
+  // Only an unclassified launch exception permits the headless RPC fallback.
   return { kind: descriptor.rpcFallback ? 'fallback-permitted' : 'fallback-forbidden', error, status: errorStatus(error) };
 }
 
@@ -279,8 +279,9 @@ function stripLaunchWrapperArgs(descriptor: HarnessDescriptor, args: readonly un
   return [...args.slice(0, index - 1), ...args.slice(index + 1)];
 }
 
-function remainingProcesses(error: unknown): ProcessIdentity[] {
-  if (!record(error) || !Array.isArray(error.remainingProcesses)) return [];
+/** Live processes named by a tmux cleanup failure; null when the error carries no evidence. */
+export function cleanupProcesses(error: unknown): ProcessIdentity[] | null {
+  if (!record(error) || !Array.isArray(error.remainingProcesses)) return null;
   return error.remainingProcesses.filter((value: unknown): value is ProcessIdentity =>
     record(value) && typeof value.pid === 'number' && typeof value.startTime === 'string');
 }
@@ -543,7 +544,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
           }
         }
         // Detect cheap registrations promptly; pace larger registry scans toward
-        // the old 300ms cadence rather than repeatedly parsing every claim at 20ms.
+        // 300 ms rather than re-parsing every claim at 20 ms.
         const interval = Math.min(REGISTRY_POLL_MAX_MS, Math.max(REGISTRY_POLL_MIN_MS, (Date.now() - scanStartedAt) * 20));
         await delay(Math.min(interval, Math.max(1, deadline - Date.now())));
       }
@@ -577,7 +578,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
             : `${timeoutReason}, and tmux cleanup failed: ${errorMessage(cleanupError)}`;
         const error = new LaunchError(message, 500);
         return { kind: 'cleanup-incomplete', error, status: error.status,
-          cleanup: { socket, paneId, knownProcesses: remainingProcesses(cleanupError), timeout: cleanupTimeoutMs } };
+          cleanup: { socket, paneId, knownProcesses: cleanupProcesses(cleanupError) ?? [], timeout: cleanupTimeoutMs } };
       }
     }
     if (registrationError) return forbidden(registrationError);
@@ -617,6 +618,29 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     return run;
   }
 
+  /**
+   * Explicit or headless tmux first. A fallback-permitted failure retires
+   * headless tmux for this process and continues with the RPC path.
+   */
+  async function launchInTmuxOrRpc(
+    options: Omit<SpawnHarnessOptions, 'hidden' | 'restartPane' | 'target'> & { target?: HarnessLaunchTarget | null },
+    action: 'spawn' | 'resume',
+    rpcFallback: () => Promise<LaunchOutcome>,
+  ): Promise<LaunchOutcome> {
+    const { target } = options;
+    if (target?.type === 'tmux') return spawnHarnessInTmux({ ...options, target });
+    if (headlessTmuxEnabled(options.descriptor)) {
+      const outcome = await spawnHarnessHeadlessTmux(options);
+      if (outcome.kind !== 'fallback-permitted') return outcome;
+      headlessTmuxBroken = true;
+      console.error(`Headless tmux ${action} failed — falling back to an RPC child:`, errorMessage(outcome.error));
+    }
+    if (!options.descriptor.rpcFallback) {
+      return forbidden(new LaunchError(`${options.descriptor.label} requires tmux and does not support RPC fallback.`, 400));
+    }
+    return rpcFallback();
+  }
+
   async function validateHarnessPilotSelection(descriptor: HarnessDescriptor, { model, thinking, cwd }: PilotValidationInput): Promise<void> {
     if (descriptor.id !== 'omp' || (!model && !thinking)) return;
     if (thinking && !model) throw new LaunchError('Choose an Oh My Pi model before overriding its thinking level.', 400);
@@ -641,19 +665,13 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       const args = descriptor.argv.new({
         model: model ?? undefined, thinking: thinking ?? undefined, ...(sessionDir ? { sessionDir } : {}),
       });
-      if (target?.type === 'tmux') return await spawnHarnessInTmux({ descriptor, target, args, cwd, name });
-      if (headlessTmuxEnabled(descriptor)) {
-        const outcome = await spawnHarnessHeadlessTmux({ descriptor, args, cwd, name });
-        if (outcome.kind !== 'fallback-permitted') return outcome;
-        headlessTmuxBroken = true;
-        console.error('Headless tmux spawn failed — falling back to an RPC child:', errorMessage(outcome.error));
-      }
-      if (!descriptor.rpcFallback) return forbidden(new LaunchError(`${descriptor.label} requires tmux and does not support RPC fallback.`, 400));
-      const rpc = await createRPCSession({
-        model: model ?? undefined, thinking: thinking ?? undefined, cwd: cwd ?? undefined,
-        ...(sessionDir ? { sessionDir } : {}),
+      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name }, 'spawn', async () => {
+        const rpc = await createRPCSession({
+          model: model ?? undefined, thinking: thinking ?? undefined, cwd: cwd ?? undefined,
+          ...(sessionDir ? { sessionDir } : {}),
+        });
+        return { kind: 'ready', id: rpc.id };
       });
-      return { kind: 'ready', id: rpc.id };
     } catch (error) { return forbidden(error); }
   }
 
@@ -674,15 +692,8 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     try {
       const args = descriptor.argv.resume({ file: sessionFile, model: model ?? undefined });
       if (thinking && (descriptor.id === 'pi' || descriptor.id === 'omp')) args.push('--thinking', thinking);
-      if (target?.type === 'tmux') return await spawnHarnessInTmux({ descriptor, target, args, cwd, name });
-      if (headlessTmuxEnabled(descriptor)) {
-        const outcome = await spawnHarnessHeadlessTmux({ descriptor, args, cwd, name });
-        if (outcome.kind !== 'fallback-permitted') return outcome;
-        headlessTmuxBroken = true;
-        console.error('Headless tmux resume failed — falling back to an RPC child:', errorMessage(outcome.error));
-      }
-      if (!descriptor.rpcFallback) return forbidden(new LaunchError(`${descriptor.label} requires tmux and does not support RPC fallback.`, 400));
-      return await resumeRpcSession({ sessionFile, cwd, model, thinking });
+      return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name }, 'resume',
+        () => resumeRpcSession({ sessionFile, cwd, model, thinking }));
     } catch (error) { return forbidden(error); }
   }
 

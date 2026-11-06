@@ -25,7 +25,6 @@ test('harness descriptors keep alternate launches tmux-only and declare their li
     assert.equal(harnesses_1.registry.omp.closeMode, 'owned-pane');
     assert.equal(harnesses_1.registry.prime.closeMode, 'owned-agent');
     for (const id of ['omp']) {
-        assert.ok(id === 'omp');
         const descriptor = harnesses_1.registry[id];
         assert.ok(typeof descriptor.wrapperEntrypoint === 'string');
         assert.equal(descriptor.rpcFallback, false);
@@ -76,7 +75,6 @@ test('canonical identities round-trip strictly and legacy routes belong to Pi', 
     assert.ok((0, session_key_1.validSessionId)(nativeId));
     assert.ok((0, session_key_1.validSessionId)(shortId));
     for (const harnessId of ['pi', 'omp', 'prime']) {
-        assert.ok(harnessId === 'pi' || harnessId === 'omp' || harnessId === 'prime');
         const key = (0, session_key_1.encodeSessionKey)(harnessId, nativeId);
         assert.deepEqual((0, session_key_1.decodeSessionKey)(key), { harnessId, nativeSessionId: 'native:one' });
     }
@@ -91,7 +89,6 @@ test('canonical identities round-trip strictly and legacy routes belong to Pi', 
 });
 test('harness lookup accepts only registered string names', () => {
     for (const id of ['pi', 'omp', 'prime']) {
-        assert.ok(id === 'pi' || id === 'omp' || id === 'prime');
         assert.equal((0, harnesses_1.getHarness)(id), harnesses_1.registry[id]);
     }
     for (const id of ['constructor', '__proto__', 'toString', ['pi'], null, 42, { toString: () => 'pi' }]) {

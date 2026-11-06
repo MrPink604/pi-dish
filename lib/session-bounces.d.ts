@@ -93,8 +93,8 @@ export interface SessionLifecycleActions {
     execute(authority: BounceAuthority, mode: SessionLifecycleMode, inspected: SessionBounceInspection<LiveSession>): Promise<SessionBounceExecutionResult>;
 }
 export interface SessionBounceRuntimeOptions extends SessionBounceBounds, SessionLifecycleActionOptions {
-    /** Raw catalog data only; capture, inspection, and execution belong to this module. */
-    catalog(): unknown;
+    /** Catalog observations only; capture, inspection, and execution belong to this module. */
+    catalog(): readonly SessionBounceCatalogRow[];
 }
 export declare function createSessionBounces<Authority extends object, Runtime = unknown>({ catalog, capture, inspect, execute, intervalMs, maxOperations, maxTargets, }: SessionBounceQueueOptions<Authority, Runtime>): SessionBounces;
 export declare function lifecycleBlockers(state: unknown, live: LiveSession | null | undefined): string[];
