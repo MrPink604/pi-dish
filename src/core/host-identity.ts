@@ -1,13 +1,11 @@
-import type { HostId } from './contracts';
 /**
- * Stable identity for this host, for multi-host fleets (TASKS/multi-host.md).
- *
- * The id is a uuid generated once into ~/.pi/dish/host-id; clients pin a
- * catalog entry to it and fail a (re)connect that lands on a different host.
- * HOME is resolved per call (lib/dish-store.js rules) so a test's temp HOME
- * gets its own identity rather than the real machine's, and the write goes
- * through a temp file + rename so a concurrent reader never sees a partial id.
+ * Stable per-host identity: a uuid generated once into ~/.pi/dish/host-id.
+ * Clients pin a session to it and fail a (re)connect that lands elsewhere.
+ * HOME is resolved per call so a test's temp HOME gets its own identity, and
+ * the write goes through a temp file + rename so a concurrent reader never
+ * sees a partial id.
  */
+import type { HostId } from './contracts';
 import crypto = require('crypto');
 import fs = require('fs');
 import os = require('os');

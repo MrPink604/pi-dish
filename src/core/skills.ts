@@ -1,16 +1,12 @@
 /**
- * Skill inventory for the Skills view. Discovery goes through **pi's own
- * loader** (`loadSkills`, exported from the SDK) — never a reimplementation of
- * pi's discovery/collision rules. We scan each known workspace root (global +
- * every project cwd from the session lists), dedup by SKILL.md path, and derive
- * only observational metadata: byte sizes, a chars/4 token estimate (all badged
- * `estimate` — there is no exact tokenization in Phase 1), and the exact catalog
- * fragment pi would advertise, computed with pi's own `formatSkillsForPrompt`.
- *
- * Skill identity everywhere is the absolute SKILL.md path (stable, matches
- * pi's `<skill location="…">`). `disable-model-invocation` skills are
- * discovered but excluded from the advertised catalog (manual-only), adding
- * zero advertised cost — pi's formatSkillsForPrompt already filters them.
+ * Skill inventory for the Skills view. Discovery goes through pi's own loader
+ * (`loadSkills`), never a reimplementation of its discovery/collision rules.
+ * Each known workspace root is scanned, results dedup by SKILL.md path, and
+ * only observational metadata is derived: byte sizes, a chars/4 token estimate
+ * (always badged `estimate`), and the catalog fragment pi itself would
+ * advertise (`formatSkillsForPrompt`). Skill identity is the absolute SKILL.md
+ * path; `disable-model-invocation` skills are discovered but excluded from the
+ * advertised catalog.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';

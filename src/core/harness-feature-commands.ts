@@ -74,8 +74,8 @@ export function runHarnessJsonCommand(
       maxBuffer: 10 * 1024 * 1024,
     }, (error, stdout, stderr) => {
       if (settled) return;
-      // Pricing historically accepted complete JSON on timeout even without a
-      // final newline. Ordinary nonzero exits and partial JSON still fail.
+      // A timed-out catalog command may still have printed complete JSON;
+      // ordinary nonzero exits and partial JSON still fail.
       if (error && !(acceptCompleteJson && error.killed)) {
         return settle(reject, new Error((stderr || error.message).trim()));
       }

@@ -1,17 +1,15 @@
 /**
  * Web Push for installed browser clients. Each host pushes for its own live
  * sessions; the browser registers one subscription with every host, so the
- * fleet keeps its no-hub-aggregation rule. Every host must therefore sign with
- * the same VAPID key pair (`~/.pi/dish/vapid.json`, file-level like the token):
- * a host whose key differs from the subscribing origin's refuses the
- * subscription instead of accepting one it can never deliver to.
+ * fleet needs no hub aggregation. Every host must sign with the same VAPID key
+ * pair (`~/.pi/dish/vapid.json`): a host whose key differs from the
+ * subscribing origin's refuses the subscription instead of accepting one it
+ * can never deliver to.
  *
- * Triggers come from sampling the host's live-session catalog, which every
- * harness bridge keeps current in its registry entry without a socket client:
- *   - finished: a session observed working is idle for two consecutive samples
- *     (the gap between turns, or a provider retry, must not ring);
- *   - waiting: a session's ask dialog becomes pending.
- * The first sample after subscriptions appear is a baseline and never rings.
+ * Triggers come from sampling the host's live-session catalog: a session
+ * observed working is idle for two consecutive samples, or its ask dialog
+ * becomes pending. The first sample after subscriptions appear is a baseline
+ * and never rings.
  */
 import crypto = require('crypto');
 import fs = require('fs');

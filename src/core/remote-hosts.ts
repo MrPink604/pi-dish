@@ -231,8 +231,6 @@ function transportError(code: unknown): TransportError {
 
 /** Network failure -> short code. Never surfaces a message or stderr text. */
 export function errorCode(err: unknown): unknown {
-  // Preserve legacy property access and truthy passthrough without claiming
-  // an external transportCode is one of our own short string codes.
   const failure = err as { transportCode?: unknown; code?: unknown } | null | undefined;
   if (failure && failure.transportCode) return failure.transportCode;
   const code = failure && failure.code;

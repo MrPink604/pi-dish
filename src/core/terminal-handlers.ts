@@ -21,6 +21,8 @@ export interface TerminalHandlers {
   shutdown(): void;
 }
 
+const TERMINAL_PATH_RE = /^\/api\/sessions\/([^/]+)\/terminal$/;
+
 /** Local terminal only; peer upgrades remain ahead of it in the dispatcher. */
 export function createTerminalHandlers(ports: TerminalPorts): TerminalHandlers {
   // Disabled requests must remain indistinguishable from an absent endpoint.
@@ -28,7 +30,6 @@ export function createTerminalHandlers(ports: TerminalPorts): TerminalHandlers {
 
   const { WebSocketServer } = require('ws') as typeof WS;
   const wss = new WebSocketServer({ noServer: true });
-  const TERMINAL_PATH_RE = /^\/api\/sessions\/([^/]+)\/terminal$/;
 
   function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean {
     const match = TERMINAL_PATH_RE.exec(url.pathname);
@@ -39,7 +40,7 @@ export function createTerminalHandlers(ports: TerminalPorts): TerminalHandlers {
       socket.destroy();
       return true;
     }
-    // Preserve synchronous malformed-percent failures from the original block.
+    // A malformed percent escape throws before the upgrade, not mid-stream.
     const sessionId = decodeURIComponent(match[1]);
     const known = ports.getRegisteredSession(sessionId) || ports.getRPCSession(sessionId) || ports.findSessionFile(sessionId);
     if (!known) {
