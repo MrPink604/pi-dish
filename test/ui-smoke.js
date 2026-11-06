@@ -19,19 +19,17 @@ const test_types_js_1 = require("./test-types.js");
 const test_env_js_1 = require("./test-env.js");
 const browser_app_js_1 = require("./fixtures/browser-app.js");
 function isScenarioName(value) {
-    return value !== null && Object.hasOwn(scenarios, value);
+    return value !== null && value !== undefined && Object.hasOwn(scenarios, value);
 }
 const args = process.argv.slice(2);
 if (args[0] === '--list' && args.length === 1) {
     console.log(Object.keys(scenarios).join('\n'));
     process.exit(0);
 }
-const requestedScenario = args[0] === '--scenario' && args.length === 2 ? args[1] : null;
-if (args.length && !isScenarioName(requestedScenario)) {
+const selectedScenario = args[0] === '--scenario' && args.length === 2 && isScenarioName(args[1]) ? args[1] : null;
+if (args.length && selectedScenario === null) {
     throw new Error('Usage: npm run test:ui -- [--list | --scenario <name>]');
 }
-const selectedScenario = isScenarioName(requestedScenario) ? requestedScenario : null;
-// Resolve the browser cache before the fixture replaces HOME.
 const fs = require("node:fs");
 const os = require("node:os");
 const net = require("node:net");
@@ -252,13 +250,7 @@ const emit = (event, data) => {
     for (const client of clients)
         client.write(line);
 };
-const bridge = net.createServer((sock) => {
-    clients.add(sock);
-    sock.on('close', () => clients.delete(sock));
-    sock.on('error', () => clients.delete(sock));
-    // Mirror the real bridge hello: carries the current queue so the server can
-    // replay it into a client that just (re)connected.
-    sock.write(JSON.stringify({ type: 'hello', turnInProgress: false, queue: liveQueue }) + '\n');
+function onBridgeLines(sock, handle) {
     let buf = '';
     sock.on('data', (chunk) => {
         buf += chunk.toString('utf-8');
@@ -276,9 +268,18 @@ const bridge = net.createServer((sock) => {
                 continue;
             }
             if ((0, wire_protocol_js_1.isRecord)(message))
-                handleCommand(sock, message);
+                handle(message);
         }
     });
+}
+const bridge = net.createServer((sock) => {
+    clients.add(sock);
+    sock.on('close', () => clients.delete(sock));
+    sock.on('error', () => clients.delete(sock));
+    // Mirror the real bridge hello: carries the current queue so the server can
+    // replay it into a client that just (re)connected.
+    sock.write(JSON.stringify({ type: 'hello', turnInProgress: false, queue: liveQueue }) + '\n');
+    onBridgeLines(sock, message => handleCommand(sock, message));
 });
 function respond(sock, id, data) {
     sock.write(JSON.stringify({ type: 'response', id, success: true, data }) + '\n');
@@ -416,27 +417,11 @@ const bridge2 = net.createServer((sock) => {
     sock.on('error', () => { });
     sock.write(JSON.stringify({ type: 'hello', turnInProgress: false }) + '\n');
     sock.write(JSON.stringify({ type: 'event', event: 'extension_ui_request', data: { method: 'setWidget', widgetKey: 'deploys', widgetLines: ['deploy #7 running'] } }) + '\n');
-    let buf = '';
-    sock.on('data', (chunk) => {
-        buf += chunk.toString('utf-8');
-        let idx;
-        while ((idx = buf.indexOf('\n')) >= 0) {
-            const line = buf.slice(0, idx);
-            buf = buf.slice(idx + 1);
-            if (!line.trim())
-                continue;
-            let msg;
-            try {
-                msg = JSON.parse(line);
-            }
-            catch {
-                continue;
-            }
-            const data = msg.command === 'get_available_models'
-                ? { models: [{ id: 'smoke-model', provider: 'test', name: 'Smoke Model' }] }
-                : msg.command === 'get_commands' ? [] : {};
-            sock.write(JSON.stringify({ type: 'response', id: msg.id, success: true, data }) + '\n');
-        }
+    onBridgeLines(sock, msg => {
+        const data = msg.command === 'get_available_models'
+            ? { models: [{ id: 'smoke-model', provider: 'test', name: 'Smoke Model' }] }
+            : msg.command === 'get_commands' ? [] : {};
+        sock.write(JSON.stringify({ type: 'response', id: msg.id, success: true, data }) + '\n');
     });
 });
 const registerSession2 = () => fs.writeFileSync(path.join(registryDir, `${SESSION2_ID}.json`), JSON.stringify({

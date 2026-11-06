@@ -1,4 +1,4 @@
-import type { Page, Route } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { isRecord } from '../../lib/wire-protocol.js';
 import type { FleetFixture } from './fixtures.js';
 import { test, expect, ROOT } from './fixtures.js';

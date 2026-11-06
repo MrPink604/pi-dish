@@ -1,4 +1,4 @@
-import type { Page, Route } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures.js';
 async function setup(page: Page) {
   await page.evaluate(() => {
