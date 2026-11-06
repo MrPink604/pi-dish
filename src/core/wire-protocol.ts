@@ -19,6 +19,11 @@ export function isRecord(value: unknown): value is ProtocolRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** Read-only view of wire data whose feature payloads stay unvalidated. */
+export function asRecord(value: unknown): ProtocolRecord {
+  return isRecord(value) ? value : {};
+}
+
 const SIDE_CHAT_TURN_STATUSES: readonly SideChatTurnStatus[] = ['running', 'complete', 'error', 'cancelled'];
 
 function decodeSideChatTurn(value: unknown): SideChatTurn | null {

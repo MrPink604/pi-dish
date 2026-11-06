@@ -15,9 +15,9 @@ import os = require('os');
 import path = require('path');
 import { EventEmitter } from 'events';
 import { isDeepStrictEqual } from 'util';
-import { createLineSplitter } from './line-splitter';
+import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
-import { decodeBridgeFrame, decodeSideChat, isRecord, type ProtocolRecord } from './wire-protocol';
+import { asRecord, decodeBridgeFrame, decodeSideChat, isRecord, type ProtocolRecord } from './wire-protocol';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { createExtensionUIState, reduceExtensionUIState } from './extension-ui-state';
@@ -25,14 +25,12 @@ import { listHarnesses } from './harnesses';
 import { privateRootFor } from './private-sessions';
 
 import { validSessionId } from './session-key';
-import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, RunningToolCall, SideChatState } from './contracts';
+import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, PromptOptions, RunningToolCall, SideChatState } from './contracts';
 
 type BridgeRequest = Promise<unknown> & { readonly requestId?: number };
-interface PromptOptions { deliverAs?: 'steer' | 'followUp'; images?: unknown[]; }
 interface TreeOptions { summarize?: boolean; customInstructions?: string; label?: string; }
 type BridgeEvents = Record<string, unknown[]>;
 
-function asRecord(value: unknown): ProtocolRecord { return isRecord(value) ? value : {}; }
 function isRegistryEntry(value: unknown): value is BridgeRegistryEntry {
   return isRecord(value) && validSessionId(value.sessionId)
     && typeof value.socketPath === 'string' && value.socketPath.length > 0;
@@ -92,10 +90,6 @@ function listRegisteredSessions() {
 // from up to 500ms ago would still show the session as live.
 function invalidateRegistryCache() {
   registryCache = null;
-}
-
-function hasStartTime(entry: unknown) {
-  return Object.prototype.hasOwnProperty.call(entry || {}, 'startTime');
 }
 
 function hasOwn(entry: unknown, key: string) {
@@ -191,7 +185,7 @@ function validRegistryClaimShape(input: unknown): boolean {
     && entry.socketPath.length > 0
     && typeof entry.pid === 'number' && Number.isInteger(entry.pid)
     && entry.pid > 1
-    && hasStartTime(entry)
+    && hasOwn(entry, 'startTime')
     && !!entry.capabilities
     && typeof entry.capabilities === 'object'
     && !Array.isArray(entry.capabilities)
@@ -207,8 +201,8 @@ function sameRegistryClaim(left: unknown, right: unknown): boolean {
   return left.sessionId === right.sessionId
     && left.socketPath === right.socketPath
     && Number(left.pid) === Number(right.pid)
-    && hasStartTime(left) === hasStartTime(right)
-    && (!hasStartTime(left) || String(left.startTime) === String(right.startTime))
+    && hasOwn(left, 'startTime') === hasOwn(right, 'startTime')
+    && (!hasOwn(left, 'startTime') || String(left.startTime) === String(right.startTime))
     && leftBridgeId === rightBridgeId
     && registryHarnessId(left) === registryHarnessId(right)
     && (left.nativeSessionId || left.sessionId) === (right.nativeSessionId || right.sessionId)
@@ -296,7 +290,7 @@ function scanRegistry() {
       pruneRegisteredSession(entry);
       continue;
     }
-    if (hasStartTime(entry)) {
+    if (hasOwn(entry, 'startTime')) {
       const identity = processIdentity(Number(entry.pid));
       if (!identity || identity.startTime !== String(entry.startTime)) {
         pruneRegisteredSession(entry);
@@ -472,16 +466,17 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
         this._pending.failAll(new Error('socket closed'));
         this.emit('close');
       });
-      sock.on('data', createLineSplitter((line) => {
-        let msg: unknown;
-        try { msg = JSON.parse(line); } catch { return; }
-        this._handle(msg);
-      }));
+      sock.on('data', createJsonLineSplitter((msg) => { this._handle(msg); }));
     });
   }
 
+  /** Legacy claims predate claim-bound identity; v2 claims are immutable and proved by hello. */
+  private get legacyClaim(): boolean {
+    return Number(this.registryClaim.protocolVersion || 1) < 2;
+  }
+
   _validateV2Hello(msg: unknown) {
-    if (Number(this.registryClaim?.protocolVersion || 1) < 2) return null;
+    if (this.legacyClaim) return null;
     const claim = this.registryClaim;
     const mismatch = !validRegistryClaimShape(claim)
       || !validRegistryClaimShape(msg)
@@ -498,7 +493,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     // A v2 socket must prove the selected claim before any event can mutate
     // that claim or populate replay state. Otherwise a pre-hello switch could
     // rewrite the evidence that the following hello is compared against.
-    if (frame.kind !== 'hello' && Number(this.registryClaim.protocolVersion || 1) >= 2 && !this.hello) return;
+    if (frame.kind !== 'hello' && !this.legacyClaim && !this.hello) return;
     if (frame.kind === 'hello') {
       const msg = frame.hello;
       const protocolError = this._validateV2Hello(msg);
@@ -515,17 +510,14 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
         return;
       }
       this.hello = msg;
-      // Legacy Pi bridges predate claim-bound identity and retain their
-      // compatibility handshake. Protocol-v2 identity always remains the
-      // selected registry claim; only mutable state is refreshed from hello.
-      if (Number(this.registryClaim?.protocolVersion || 1) < 2) {
+      // Only legacy bridges may refresh identity from hello; a v2 claim keeps
+      // the identity the socket already proved.
+      if (this.legacyClaim) {
         this.protocolVersion = msg.protocolVersion || this.protocolVersion;
         this.wrapper = msg.wrapper || this.wrapper;
         this.harnessId = asRecord(msg.wrapper).harnessId || msg.harnessId || this.harnessId;
         this.nativeSessionId = nextNativeId;
         this.bridgeInstanceId = msg.bridgeInstanceId || msg.instanceId || this.bridgeInstanceId;
-      }
-      if (Number(this.registryClaim?.protocolVersion || 1) < 2) {
         if (isRecord(msg.capabilities)) this.capabilities = msg.capabilities;
       }
       this.turnInProgress = !!msg.turnInProgress;

@@ -80,6 +80,11 @@ export interface LaunchOptions {
     /** Alternate session directory (`--session-dir`); private roots only. */
     sessionDir?: string;
 }
+/** Every transport accepts a queue lane preference and inline images on a prompt. */
+export interface PromptOptions {
+    deliverAs?: 'steer' | 'followUp';
+    images?: unknown[];
+}
 /** Missing file remains representable: the legacy argv builders accept an empty options object. */
 export interface ResumeOptions {
     file?: string;
