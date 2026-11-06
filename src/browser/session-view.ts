@@ -3,7 +3,7 @@ import { sessionRefKey } from './helper-identity';
 import { hibernationSummary } from './hibernation';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import type { HostEndpoint } from './api-client';
-import type { PendingSessionSpawn } from './session-spawns';
+import { pendingComposerKey, type PendingSessionSpawn } from './session-spawns';
 /** Operations selection may consume; collaborators retain their other authority. */
 export interface SessionViewDrafts {
   stash(): void;
@@ -39,14 +39,13 @@ export function createSessionView(options: {
   closeViews: (keepBounce: boolean) => void; resetSearch: () => void; cancelStreaming: () => void; stopFollowing: () => void;
   closeTerminal: () => void; clearExtension: () => void; clearRelations: () => void; closeControls: () => void; hideAutocomplete: () => void;
   retireModels: () => void; retireCommands: () => void; queue: (value: null) => void; resetSideChat: () => void; resetArtifacts: () => void;
-  thinking: () => void; terminal: () => void; mic: () => void; mood: (description: string, face: string) => void; status: (message: string, type?: string) => void;
+  controls: () => void; mood: (description: string, face: string) => void; status: (message: string, type?: string) => void;
   render: () => void; cancelRecording: () => void; hideNote: () => void; reveal: (id: string, host?: string | null) => void;
   seen: (session: SessionEntry) => void; artifacts: (owner: SelectionOwner) => unknown; header: () => void; relations: (owner: SelectionOwner) => unknown;
   models: (id: string, harness?: string) => unknown; commands: (id: string) => unknown;
 }) {
   const { document, sessionState } = options; const element = (id: string) => document.getElementById(id)!;
   let currentSessionSpawnId: string | null = null, disposed = false;
-function pendingComposerKey(spawnId: string) { return `spawn:${spawnId}`; }
 
 // Ordered retirement phases: advance/stash draft, stash DOM, retire transports,
 // reset activity. Activation stays at its existing seams between these phases.
@@ -122,9 +121,7 @@ function showPendingSessionView(spawnId: string) {
   const cacheReset = element('sessionCache');
   cacheReset.style.display = 'none';
   cacheReset.textContent = '';
-  options.thinking();
-  options.terminal();
-  options.mic();
+  options.controls();
 
   options.transcript.reset();
   options.mood('', '');

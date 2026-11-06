@@ -6,7 +6,7 @@ import type { SessionState, SessionEntry } from './session-state';
 export function createSessionHeader(options: {
   document: Document; sessionState: SessionState; multi: () => boolean; host: (id: string | null | undefined) => unknown;
   down: (id: string | null | undefined) => boolean; color: (id: string | null | undefined) => string; label: (id: string | null | undefined) => string;
-  settings: (session: SessionEntry) => boolean; ensureHarness: (host: string | null) => void; thinking: () => void; terminal: () => void; mic: () => void;
+  settings: (session: SessionEntry) => boolean; ensureHarness: (host: string | null) => void; controls: () => void;
 }) {
 const { document, sessionState } = options; let disposed = false;
 const element = (id: string) => document.getElementById(id)!;
@@ -109,9 +109,7 @@ function updateSessionHeader() {
   updateFastMode();
   updateCacheExpiry();
 
-  options.thinking();
-  options.terminal();
-  options.mic();
+  options.controls();
 
   // Phone chip row: the working directory is the one piece of session
   // context the header used to hide behind the stats modal.
