@@ -107,5 +107,7 @@ export declare class LaunchError extends Error {
     constructor(message: string, status: number);
 }
 export declare const HEADLESS_TMUX_SERVER = "pi-dish";
+/** Live processes named by a tmux cleanup failure; null when the error carries no evidence. */
+export declare function cleanupProcesses(error: unknown): ProcessIdentity[] | null;
 export declare function createSessionLaunch(observations: SessionLaunchObservations): SessionLaunch;
 export {};
