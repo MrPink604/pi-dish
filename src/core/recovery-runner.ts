@@ -11,6 +11,7 @@ import { liveSessionSupports, recoveryRouteId, validateRecoveryRecord } from './
 import type { LiveSession, SessionOwnership } from './session-ownership';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryAttempt, RecoveryRecord } from './session-recovery';
+import { isRecord } from './wire-protocol';
 
 export type RecoveryMode = 'off' | 'restore' | 'continue';
 export type RecoveryStatus = 'pending' | 'failed' | 'needs-review' | 'closed' | 'live' | 'restoring' | 'restored' | 'continued';
@@ -73,8 +74,6 @@ export interface RecoveryRuntimeOptions extends RecoveryPresentationOptions {
   ownership: SessionOwnership;
 }
 
-type RememberedOutcome = RecoveryOutcome & { readonly observationId?: string };
-
 const MAX_SESSIONS = 5000;
 export const RECOVERY_PROMPT = 'pi-dish recovery: this session was interrupted while work was in progress. Before continuing, inspect the transcript, working files, and any external state affected by prior tools. A tool or external action may have completed without its result being recorded. Do not blindly repeat commands, writes, deployments, purchases, or other side effects. Reconcile what actually happened, explain any uncertainty, and ask for confirmation where safe continuation cannot be established. Continue the existing task only after this inspection; this message is not an instruction to replay the last prompt or retry a tool.';
 const HIBERNATED_REASON = 'Hibernated under memory pressure; a message resumes it.';
@@ -83,10 +82,8 @@ export function recoveryMode(value: unknown): RecoveryMode {
   return value === 'off' || value === 'restore' || value === 'continue' ? value : 'off';
 }
 
-/** Property access only, not a JSON schema: arrays and primitive boxing retain their old behavior. */
-function property(value: unknown, key: string): unknown {
-  if (value === null || value === undefined) throw new TypeError(`Cannot read properties of ${value} (reading '${key}')`);
-  return Reflect.get(Object(value), key);
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : isRecord(error) && typeof error.message === 'string' ? error.message : String(error);
 }
 
 // Stream with explicit bounds: a corrupt/huge transcript is reviewable, not a
@@ -98,30 +95,29 @@ export async function continuationSafety(file: string): Promise<string | null> {
   const input = fs.createReadStream(file, { encoding: 'utf8', highWaterMark: 16 * 1024 });
   const lines = readline.createInterface({ input, crlfDelay: Infinity });
   const pending = new Set<string>();
-  let count = 0, lastMessage: unknown = null, lastType: unknown = null;
+  let count = 0, lastMessage: Record<string, unknown> | null = null, lastType: unknown = null;
   try {
     for await (const line of lines) {
       if (!line.trim()) continue;
       if (++count > 200000 || line.length > 4 * 1024 * 1024) return 'The transcript exceeds the safe continuation inspection limit.';
       let entry: unknown;
       try { entry = JSON.parse(line); } catch { return 'The transcript contains an incomplete or corrupt entry.'; }
-      lastType = property(entry, 'type');
+      if (!isRecord(entry)) return 'The transcript contains an incomplete or corrupt entry.';
+      lastType = entry.type;
       if (lastType !== 'message') continue;
-      const message = property(entry, 'message');
-      if (!message || typeof property(message, 'role') !== 'string') return 'The transcript contains an unverifiable message.';
+      const message = entry.message;
+      if (!isRecord(message) || typeof message.role !== 'string') return 'The transcript contains an unverifiable message.';
       lastMessage = message;
-      if (property(message, 'role') === 'assistant') {
-        const content = property(message, 'content');
-        const blocks: readonly unknown[] = Array.isArray(content) ? content : [];
-        for (const block of blocks) {
-          if (property(block, 'type') !== 'toolCall' && property(block, 'type') !== 'tool_use') continue;
-          const id = property(block, 'id');
+      if (message.role === 'assistant') {
+        for (const block of Array.isArray(message.content) ? message.content : []) {
+          if (!isRecord(block) || (block.type !== 'toolCall' && block.type !== 'tool_use')) continue;
+          const id = block.id;
           if (typeof id !== 'string') return 'A tool call has no verifiable identity.';
           pending.add(id);
           if (pending.size > 10000) return 'Too many unresolved tool calls to verify safely.';
         }
-      } else if (property(message, 'role') === 'toolResult') {
-        const toolCallId = property(message, 'toolCallId');
+      } else if (message.role === 'toolResult') {
+        const toolCallId = message.toolCallId;
         if (typeof toolCallId !== 'string') return 'A tool result has no verifiable identity.';
         pending.delete(toolCallId);
       }
@@ -131,8 +127,8 @@ export async function continuationSafety(file: string): Promise<string | null> {
   if (pending.size) return 'Tool calls have no recorded result; inspect their external effects before continuing.';
   if (lastType === 'compaction' || lastType === 'branch_summary') return 'The transcript ends during compaction or branch navigation.';
   if (!lastMessage) return 'There is no interrupted conversation to continue.';
-  if (property(lastMessage, 'role') === 'assistant') {
-    const stopReason = property(lastMessage, 'stopReason');
+  if (lastMessage.role === 'assistant') {
+    const stopReason = lastMessage.stopReason;
     if (stopReason === 'aborted' || stopReason === 'error') return 'The last assistant response was aborted or failed.';
     if (stopReason !== 'toolUse') return 'The last assistant response may already have completed.';
   }
@@ -142,25 +138,26 @@ export async function continuationSafety(file: string): Promise<string | null> {
 export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunner {
   const { store, getMode, routeId, probeLive, validateRecord, restore, continueSession,
     now = () => Date.now(), log = console, hibernated = () => false } = deps;
-  const reports = new Map<string, RememberedOutcome>();
-  const reportLookup: ReadonlyMap<unknown, RememberedOutcome> = reports;
+  const reports = new Map<string, RecoveryOutcome>();
+  const reportObservations = new Map<string, string>();
   const flights = new Map<string, Promise<RecoveryOutcome>>();
   let startPromise: Promise<void> | null = null;
   let stopped = false;
 
   function remember(record: RecoveryRecord, status: RecoveryStatus, reason: unknown): RecoveryOutcome {
     const id = routeId(record);
-    const row: RememberedOutcome = { id, harnessId: record.harnessId, name: record.name || null,
+    const row: RecoveryOutcome = { id, harnessId: record.harnessId, name: record.name || null,
       cwd: record.cwd || null, excluded: !!store.getControl(record.harnessId, record.nativeSessionId).excluded,
       status, reason: reason || null, updatedAt: now() };
-    Object.defineProperty(row, 'observationId', {
-      value: store.readRecord(record.harnessId, record.nativeSessionId)?.observationId || record.observationId,
-    });
     if (!reports.has(id) && reports.size >= MAX_SESSIONS) {
       const oldest = reports.keys().next();
-      if (!oldest.done) reports.delete(oldest.value);
+      if (!oldest.done) {
+        reports.delete(oldest.value);
+        reportObservations.delete(oldest.value);
+      }
     }
     reports.set(id, row);
+    reportObservations.set(id, store.readRecord(record.harnessId, record.nativeSessionId)?.observationId || record.observationId);
     return row;
   }
 
@@ -182,11 +179,11 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     for (const record of records.slice(0, MAX_SESSIONS)) {
       const id = routeId(record);
       const control = store.getControl(record.harnessId, record.nativeSessionId);
-      let row: (Omit<RecoveryReportSession, 'excluded'> & { readonly observationId?: string }) | null | undefined = reports.get(id);
+      let row: Omit<RecoveryReportSession, 'excluded'> | null | undefined = reports.get(id);
       const previous = control.attempt;
       const ambiguous = previous?.delivery === 'uncertain' || previous?.status === 'restoring';
       if (row && (row.status === 'pending' || row.status === 'failed' || row.status === 'needs-review')
-          && row.observationId !== record.observationId && !ambiguous) row = null;
+          && reportObservations.get(id) !== record.observationId && !ambiguous) row = null;
       if (!row) {
         const attempt = ambiguous || previous?.observationId === record.observationId ? previous : null;
         row = { id, harnessId: record.harnessId, name: record.name || null, cwd: record.cwd || null,
@@ -206,16 +203,25 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
 
   async function run(record: RecoveryRecord, explicit: boolean): Promise<RecoveryOutcome> {
     const id = routeId(record);
-    let control = store.getControl(record.harnessId, record.nativeSessionId);
-    const previous = control.attempt;
+    const previous = store.getControl(record.harnessId, record.nativeSessionId).attempt;
     const ambiguous = previous?.delivery === 'uncertain' || previous?.status === 'restoring';
+    // Settings or a newer observation can cancel a continuation at any await.
+    function continuationRefusal(advanced: string): { status: 'restored' | 'needs-review'; reason: string } | null {
+      const control = store.getControl(record.harnessId, record.nativeSessionId);
+      if (stopped || control.closed || control.excluded || recoveryMode(getMode()) !== 'continue') {
+        return { status: 'restored', reason: 'Restored; continuation was cancelled by current recovery settings.' };
+      }
+      const current = store.readRecord(record.harnessId, record.nativeSessionId);
+      return !current || current.observationId !== record.observationId || current.activity !== 'running'
+        || current.runId !== record.runId || !store.checkpointMatches(record) ? { status: 'needs-review', reason: advanced } : null;
+    }
     try {
       // Always prefer a fresh socket/process identity to a historical record.
       const live = await probeLive(record);
       if (ambiguous && !explicit) return remember(record, 'needs-review', 'An earlier recovery launch or prompt has an uncertain outcome; inspect it before retrying.');
       if (live) return remember(record, ambiguous ? 'needs-review' : 'live', ambiguous
         ? 'The session is live, but an earlier recovery prompt has uncertain delivery. It was not resent.' : 'Attached to the surviving session; no prompt was sent.');
-      control = store.getControl(record.harnessId, record.nativeSessionId);
+      const control = store.getControl(record.harnessId, record.nativeSessionId);
       if (control.closed) return remember(record, 'closed', 'This session was explicitly closed.');
       if (hibernated(id) && !explicit) return remember(record, 'pending', HIBERNATED_REASON);
       if (control.excluded) return remember(record, 'pending', 'Excluded from automatic recovery.');
@@ -246,38 +252,24 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
           ? 'Restored without resending the earlier uncertain recovery prompt.' : 'Restored without sending a prompt.');
       }
       if (safety) return save(record, 'needs-review', safety);
-      control = store.getControl(record.harnessId, record.nativeSessionId);
-      const current = store.readRecord(record.harnessId, record.nativeSessionId);
-      if (stopped || control.closed || control.excluded || recoveryMode(getMode()) !== 'continue') {
-        return save(record, 'restored', 'Restored; continuation was cancelled by current recovery settings.');
-      }
-      if (!current || current.observationId !== record.observationId || current.activity !== 'running'
-          || current.runId !== record.runId || !store.checkpointMatches(record)) {
-        return save(record, 'needs-review', 'The session or transcript advanced during recovery; no prompt was sent.');
-      }
+      const refusal = continuationRefusal('The session or transcript advanced during recovery; no prompt was sent.');
+      if (refusal) return save(record, refusal.status, refusal.reason);
       const session = await probeLive(record);
       if (!session || session.turnInProgress || session.compacting) return save(record, 'needs-review', 'The restored session is unavailable, already working, or compacting; no prompt was sent.');
       // A second checkpoint immediately before durable delivery intent closes
       // the asynchronous live-handshake window. Delivery is never retried.
-      control = store.getControl(record.harnessId, record.nativeSessionId);
-      const latest = store.readRecord(record.harnessId, record.nativeSessionId);
-      if (stopped || control.closed || control.excluded || recoveryMode(getMode()) !== 'continue') {
-        return save(record, 'restored', 'Restored; continuation was cancelled by current recovery settings.');
-      }
-      if (!latest || latest.observationId !== record.observationId || latest.activity !== 'running'
-          || latest.runId !== record.runId || !store.checkpointMatches(record)) {
-        return save(record, 'needs-review', 'The session advanced before delivery; no prompt was sent.');
-      }
+      const beforeDelivery = continuationRefusal('The session advanced before delivery; no prompt was sent.');
+      if (beforeDelivery) return save(record, beforeDelivery.status, beforeDelivery.reason);
       save(record, 'restoring', 'Recovery prompt delivery is in progress.', { delivery: 'uncertain' });
       await continueSession(record, session, RECOVERY_PROMPT);
       return save(record, 'continued', 'Sent one visible recovery prompt to inspect state before continuing.', { delivery: 'confirmed' });
     } catch (error) {
       const attempt = store.getControl(record.harnessId, record.nativeSessionId).attempt;
       const uncertain = attempt?.delivery === 'uncertain' || attempt?.status === 'restoring';
-      try { return save(record, uncertain ? 'needs-review' : 'failed', property(error, 'message')); }
+      try { return save(record, uncertain ? 'needs-review' : 'failed', errorMessage(error)); }
       catch (persistError) {
-        log.error?.(`Recovery ${id}: ${property(persistError, 'message')}`);
-        return remember(record, 'failed', `Recovery state could not be persisted: ${property(persistError, 'message')}. ${property(error, 'message')}`);
+        log.error?.(`Recovery ${id}: ${errorMessage(persistError)}`);
+        return remember(record, 'failed', `Recovery state could not be persisted: ${errorMessage(persistError)}. ${errorMessage(error)}`);
       }
     }
   }
@@ -319,7 +311,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     return recover(record, true);
   }
 
-  return { start, retry, report, outcome: id => reportLookup.get(id) || null, stop: () => { stopped = true; } };
+  return { start, retry, report, outcome: id => typeof id === 'string' ? reports.get(id) ?? null : null, stop: () => { stopped = true; } };
 }
 
 /** Checked production restore/delivery policy; callers provide owners and presentation, not authority callbacks. */
