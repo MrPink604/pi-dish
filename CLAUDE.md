@@ -760,7 +760,7 @@ watched), then the shared bounce inspection. The stop is
 `createSessionLifecycleActions(...).execute(..., 'hibernate')`:
 `SessionOperations.hibernateSession` runs `performSessionClose` with the bounce
 final guard and never writes recovery close intent; owned-pane and logical
-closes now take `beforeAction` like the RPC path. Prime is never a candidate.
+closes take `beforeAction` like the RPC path. Prime is never a candidate.
 Records live in `~/.pi/dish/hibernation.json`, written only after a confirmed
 stop, stamped onto `previous` rows of `/api/sessions` as `hibernation`, and
 forgotten on wake, explicit resume/close, a restored recovery retry, or when the

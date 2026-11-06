@@ -1,15 +1,4 @@
-/**
- * Memory-pressure hibernation (lib/session-hibernation.js): the pressure
- * thresholds, per-tree memory/kernel/service classification, the bounded
- * backwards `eval` scan, and the sampler's selection, skip and wake policy.
- * Ownership and live-safety proofs are ports here; their production
- * implementation is the shared lifecycle action tested in
- * test/session-bounces.test.js.
- *
- * HOME points at a temp dir so ~/.pi/dish/hibernation.json is per-test state.
- *
- * Run with: npm test
- */
+/** HOME points at a temp dir so ~/.pi/dish/hibernation.json is per-test state. */
 import test = require('node:test');
 import assert = require('node:assert/strict');
 import fs = require('node:fs');
