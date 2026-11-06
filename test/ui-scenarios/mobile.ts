@@ -12,7 +12,6 @@ const mobile: UiScenario = async ({ browser, watch, base, check, emit, SESSION_I
   check(await mobile.locator('.empty-menu-btn').isVisible(), 'empty-state hamburger visible');
   await mobile.click('.empty-menu-btn');
   await mobile.waitForSelector('.sidebar.open');
-  check(true, 'drawer opens from empty state');
   await mobile.click(`.session-item[data-id="${SESSION_ID}"]`);
   await mobile.waitForSelector('.message.assistant');
   check(!(await mobile.locator('.sidebar').evaluate(el => el.classList.contains('open'))),
@@ -177,7 +176,6 @@ const mobile: UiScenario = async ({ browser, watch, base, check, emit, SESSION_I
   emit('extension_ui_request', { method: 'setStatus', statusKey: 'goal', statusText: '' });
   await mobile.waitForFunction(() =>
     fixtureElement(document.getElementById('extUiStatuses'), "document.getElementById('extUiStatuses')").style.display === 'none', { timeout: 5000 });
-  check(true, 'the strip hides itself when the last status clears');
   await mobile.click('#sessionModel');
   await mobile.waitForSelector('.model-option', { timeout: 5000 });
   check(await mobile.locator('.model-option').count() >= 2, 'model dropdown opens from header');
@@ -187,14 +185,12 @@ const mobile: UiScenario = async ({ browser, watch, base, check, emit, SESSION_I
   await mobile.waitForTimeout(200);
   await mobile.click('.header-menu-btn');
   await mobile.waitForSelector('.sidebar.open');
-  check(true, 'drawer opens from session header');
   // The drawer covers the overlay's center once its slide-in finishes.
   // Tap the exposed strip, so dismissal never depends on winning that race.
   const overlay = await mobile.locator('.sidebar-overlay').boundingBox();
   if (overlay === null) throw new Error('Missing overlay');
   await mobile.locator('.sidebar-overlay').click({ position: { x: overlay.width - 8, y: overlay.height / 2 } });
   await mobile.waitForFunction(() => !fixtureElement(document.getElementById('sidebar'), "document.getElementById('sidebar')").classList.contains('open'));
-  check(true, 'tapping the exposed overlay closes the drawer');
 
   // Terminal on mobile: opened from the ⚙ control panel; the extra-keys
   // bar (esc/tab/ctrl/arrows) is part of the touch layout. ^C must reach
@@ -231,7 +227,6 @@ const mobile: UiScenario = async ({ browser, watch, base, check, emit, SESSION_I
     const rows = document.querySelector('#terminalPanel .xterm');
     return rows && rows.textContent.includes('after-2');
   }, { timeout: 5000 });
-  check(true, '^C key interrupts a running command (prompt came back)');
   // Ctrl latch: tap ctrl, type c → ^C again (nothing running; just assert
   // the latch visually arms and clears).
   await mobile.tap('#terminalKeybar button[data-termkey="ctrl"]');

@@ -676,7 +676,6 @@ let remoteHost = null;
                 thinkingBox.y >= badgeBox.y, 'thinking dropdown is anchored under its badge on desktop');
             await desktop.click('#sessionThinking');
             await desktop.waitForSelector('#thinkingDropdown', { state: 'hidden' });
-            check(!(await desktop.locator('#thinkingDropdown').isVisible()), 'clicking the badge again closes the thinking dropdown');
             console.log('same-pane session switch:');
             writeRegistry({
                 sessionId: SWITCH_ID,
@@ -717,7 +716,6 @@ let remoteHost = null;
             });
             await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, SESSION_ID, { timeout: 5000 });
             await desktop.waitForFunction(() => document.getElementById('messages')?.textContent.includes('existing answer'), { timeout: 5000 });
-            check(true, 'client follows a resume switch back to the original route');
             // Tool-activity accordion: the historical tool turn folds into one
             // closed group holding the tool-only assistant message + tool result.
             const histGroup = desktop.locator('details.tool-group');
@@ -749,21 +747,17 @@ let remoteHost = null;
                 const img = document.querySelector('.message.tool-result img.msg-image');
                 return img?.complete && img.naturalWidth === 1;
             }, { timeout: 3000 });
-            check(true, 'resource-backed historical image renders successfully');
             await histGroup.evaluate((el) => { el.open = false; });
             // 2. Prompt round-trip through the fake bridge
             console.log('prompt round-trip:');
             await desktop.fill('#promptInput', 'ping from smoke test');
             await desktop.click('#btnSend');
             await desktop.waitForSelector('.session-item-status.working', { timeout: 2000 });
-            check(true, 'sidebar working dot appears during the turn');
             await desktop.waitForSelector('details.live-tool-panel', { timeout: 5000 });
-            check(true, 'live tool panel appeared mid-turn');
             await desktop.waitForFunction(() => document.querySelector('.live-tool-output')?.textContent.includes('h'), { timeout: 5000 });
             check(await desktop.locator('.live-tool-summary').isVisible() &&
                 await desktop.locator('.live-tool-summary').textContent() === 'echo hi', 'Bash command remains visible once output starts flowing');
             await desktop.waitForSelector('.message.assistant[data-streaming="true"]', { timeout: 5000 });
-            check(true, 'streaming element appeared');
             // The bridge echoed the prompt back as a user message_end (like real pi);
             // the optimistic render from send must suppress it — exactly one copy.
             check(await desktop.evaluate(() => [...document.querySelectorAll('.message.user')]
@@ -804,10 +798,8 @@ let remoteHost = null;
             const codeBlock = desktop.locator('.message.assistant[data-msg-index] .code-block:not(.diagram-block)');
             check(await codeBlock.count() === 1, 'fenced code block got a copy button wrapper');
             await desktop.waitForFunction(() => document.querySelector('.code-block:not(.diagram-block) code')?.classList.contains('hljs'), { timeout: 5000 });
-            check(true, 'first fenced code block lazily loads syntax highlighting');
             await codeBlock.locator('.code-copy-btn').click();
             await desktop.waitForFunction(() => [...document.querySelectorAll('.code-copy-btn')].some(b => b.textContent === '✓'), { timeout: 2000 });
-            check(true, 'copy button acked with ✓');
             const copied = await desktop.evaluate(() => navigator.clipboard.readText());
             check(copied.trim() === 'const answer = 42;', `clipboard holds the code text (got ${JSON.stringify(copied)})`);
             await desktop.waitForTimeout(200);
@@ -819,7 +811,6 @@ let remoteHost = null;
             // wait is generous.
             console.log('diagrams:');
             await desktop.waitForFunction(() => document.querySelectorAll('.diagram-block[data-diagram-state="rendered"] svg').length === 2, null, { timeout: 30000 });
-            check(true, 'tagged and sniffed diagram fences both rendered to SVG');
             const diagram = desktop.locator('.diagram-block').first();
             check((await diagram.locator('svg').textContent() ?? '').includes('EUP processor'), 'flowchart node labels rendered inside the SVG');
             check(!(await diagram.locator('pre').isVisible()), 'diagram source hidden behind the rendered SVG');
@@ -882,7 +873,6 @@ let remoteHost = null;
                 const rows = document.querySelectorAll('.message.custom-message.async-result:not([data-msg-index])');
                 return rows.length === 1 && !rows[0].hasAttribute('data-streaming');
             }, { timeout: 3000 });
-            check(true, 'custom message_end finalizes the live async-result row');
             emit('message_end', { message: { role: 'custom', customType: 'private-host-state',
                     content: 'hidden live custom content', display: false, timestamp: Date.now() } });
             await desktop.waitForTimeout(100);
@@ -963,7 +953,6 @@ let remoteHost = null;
                 .getAttribute('data-copy') === SESSION_ID, 'the second item copies the full session id');
             await desktop.keyboard.press('Escape');
             await desktop.waitForSelector('#sessionMenu', { state: 'hidden', timeout: 2000 });
-            check(true, 'context menu dismisses on Escape');
             // Reopened: copying confirms in place and the menu closes itself after.
             await desktop.click('.session-item', { button: 'right' });
             await desktop.waitForSelector('#sessionMenu', { state: 'visible', timeout: 2000 });
@@ -971,7 +960,6 @@ let remoteHost = null;
             await desktop.waitForFunction(() => !!document.querySelector('#sessionMenu .context-menu-item.copied'), { timeout: 2000 });
             check(await desktop.evaluate(() => navigator.clipboard.readText()) === copiedRef, 'ref landed on the clipboard');
             await desktop.waitForSelector('#sessionMenu', { state: 'hidden', timeout: 3000 });
-            check(true, 'context menu dismisses itself after a copy');
             // Stats modal: the session-file / cwd rows are click-to-copy buttons.
             await desktop.click('#sessionContext');
             await desktop.waitForSelector('#statsModal .stats-copy', { timeout: 2000 });
@@ -1050,7 +1038,6 @@ let remoteHost = null;
                 fixtureApp.features.anchoredCommentController.captureFile();
             });
             await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
-            check(true, 'file text selection opens the anchored comment bubble');
             const bubbleBox = await desktop.locator('#commentBubble').boundingBox();
             if (bubbleBox === null)
                 throw new Error('Missing bubbleBox');
@@ -1120,7 +1107,6 @@ let remoteHost = null;
                     throw new Error('Missing chip');
                 return chip.style.display !== 'none' && chip.textContent === '💬 1';
             }, { timeout: 5000 });
-            check(true, 'file view header chips the open comment count');
             await desktop.click('#fileViewBody mark.comment-mark');
             await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
             check(await desktop.locator('#commentBubbleTitle').textContent() === 'Edit comment', 'clicking a mark opens the bubble in edit mode');
@@ -1144,7 +1130,6 @@ let remoteHost = null;
             await desktop.click('#commentDeleteBtn');
             await desktop.waitForFunction(() => document.querySelectorAll('#fileViewBody mark.comment-mark').length === 0
                 && fixtureElement(document.getElementById('fileViewComments'), "document.getElementById('fileViewComments')").style.display === 'none', { timeout: 5000 });
-            check(true, 'the second tap deletes the comment and clears its mark and chip');
             check((await (await fetch(`${base}/api/comments/index?sessionId=${SESSION_ID}`)).json()).total === 0, 'the deleted comment left the agent-facing index');
             // Publish the viewed file as a page: 🌐 → link row → a standalone copy of
             // the file renderer (without app/comment UI) → unpublish clears it.
@@ -1162,7 +1147,6 @@ let remoteHost = null;
             // Shared-artifacts badge: the page plus the share link created earlier.
             console.log('artifacts:');
             await desktop.waitForFunction(() => document.getElementById('artifactCount')?.textContent === '2', { timeout: 5000 });
-            check(true, 'artifacts badge counts the page + the share link');
             await desktop.click('#btnArtifacts');
             await desktop.waitForSelector('#artifactsModal .artifact-row', { timeout: 2000 });
             const artifactLabels = await desktop.locator('#artifactsModal .artifact-link').allTextContents();
@@ -1178,16 +1162,13 @@ let remoteHost = null;
             await desktop.waitForSelector('#fileView', { state: 'hidden', timeout: 2000 });
             await findingsLink.click();
             await desktop.waitForSelector('#fileViewPage .stats-share-link', { timeout: 5000 });
-            check(true, 'existing page link resurfaces when the file is viewed again');
             await desktop.click('#filePageRevoke');
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('fileViewPage'), "document.getElementById('fileViewPage')").style.display === 'none', { timeout: 5000 });
             check((await fetch(pageLink)).status === 404, 'unpublish revokes the public URL');
             await desktop.waitForFunction(() => document.getElementById('artifactCount')?.textContent === '1', { timeout: 5000 });
-            check(true, 'artifacts badge drops the revoked page (share link remains)');
             await desktop.keyboard.press('Escape');
             await desktop.waitForSelector('#fileView', { state: 'hidden', timeout: 2000 });
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('messages'), "document.getElementById('messages')").offsetParent !== null, { timeout: 2000 });
-            check(true, 'Escape closes the viewer and restores the transcript');
             // Diff view: the ± header button swaps the transcript for the aggregate
             // uncommitted changes of every repo under the cwd; Escape restores it.
             console.log('diff view:');
@@ -1218,7 +1199,6 @@ let remoteHost = null;
                 fixtureApp.features.anchoredCommentController.captureDiff();
             });
             await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
-            check(true, 'diff line selection opens the anchored comment bubble');
             await desktop.fill('#commentBody', 'Use a more descriptive value here.');
             await desktop.click('#commentSendBtn');
             await desktop.waitForSelector('#commentBubble', { state: 'hidden', timeout: 5000 });
@@ -1261,7 +1241,6 @@ let remoteHost = null;
                 fixtureApp.features.anchoredCommentController.captureDiff();
             });
             await desktop.waitForSelector('#commentBubble', { state: 'visible', timeout: 2000 });
-            check(true, 'lazy patch line selection opens the comment bubble');
             await desktop.keyboard.press('Escape');
             await desktop.waitForSelector('#commentBubble', { state: 'hidden', timeout: 2000 });
             check(await desktop.locator('#diffView').isVisible(), 'first Escape closes the comment bubble only');
@@ -1289,7 +1268,6 @@ let remoteHost = null;
             await desktop.fill('#promptInput', '');
             await desktop.type('#promptInput', 'look at @ma');
             await desktop.waitForSelector('.autocomplete-item[data-file]', { timeout: 5000 });
-            check(true, '@ dropdown appeared');
             const first = await desktop.locator('.autocomplete-item[data-file]').first().getAttribute('data-file');
             check(first === 'src/main.js', `top match is src/main.js (got ${first})`);
             await desktop.keyboard.press('Tab');
@@ -1299,7 +1277,6 @@ let remoteHost = null;
             // @~/... path completion: directories drill deeper, files close the mention
             await desktop.type('#promptInput', '@~/works');
             await desktop.waitForSelector('.autocomplete-item[data-file="~/workspace"][data-dir]', { timeout: 5000 });
-            check(true, '@~/ token completes home dirs');
             await desktop.keyboard.press('Tab');
             check(await desktop.inputValue('#promptInput') === '@~/workspace/', 'accepting a dir appends a slash and keeps completing');
             await desktop.waitForSelector('.autocomplete-item[data-file="~/workspace/proj-alpha"][data-dir]', { timeout: 5000 });
@@ -1317,7 +1294,6 @@ let remoteHost = null;
             check((await desktop.locator('#sessionRelations').textContent() ?? '').includes('Subagents'), 'selected session exposes the session family tree link');
             await desktop.click('.sidebar-footer .btn');
             await desktop.waitForFunction(() => fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('new-session-open'), null, { timeout: 5000 });
-            check(true, 'takeover opens from the sidebar footer button');
             await desktop.click('#nsModelInput');
             check(await desktop.locator('#nsModelDropdown .cwd-option').filter({ hasText: '(default)' }).count() > 0, 'model picker offers (default)');
             check(await desktop.locator('#nsThinkingSelect option').filter({ hasText: 'High' }).count() > 0, 'reasoning level selector sits alongside the model selector');
@@ -1470,7 +1446,6 @@ let remoteHost = null;
             check(await desktop.inputValue('#nsHarnessSelect') === 'omp', 'a saved installed alternative survives asynchronous harness discovery');
             await desktop.fill('#nsModelInput', 'offline-model');
             await desktop.waitForSelector('#nsModelDropdown .cwd-option[data-key="fixture-missing/offline-model"]', { timeout: 5000 });
-            check(true, 'every OMP command-catalog model is selectable before spawn');
             await desktop.click('#nsModelDropdown .cwd-option[data-key="fixture-missing/offline-model"]');
             check(await desktop.evaluate(() => localStorage.getItem('pi-dish-new-model:omp')) === 'fixture-missing/offline-model', 'obsolete credential metadata cannot block pre-spawn model selection');
             check((await desktop.locator('#nsHarnessConfigValues').textContent() ?? '').includes('zai/glm-4.7-flash') &&
@@ -1587,7 +1562,6 @@ let remoteHost = null;
             // Directory tree: expand ~ → workspace, then click-select proj-alpha.
             await desktop.locator('#nsTree .ns-tree-chevron').first().click();
             await desktop.waitForFunction(() => [...document.querySelectorAll('#nsTree .ns-tree-name')].some(el => el.textContent === 'workspace'), null, { timeout: 5000 });
-            check(true, 'tree lazily lists the home subdirs');
             await desktop.locator('.ns-tree-row').filter({ hasText: 'workspace' }).first()
                 .locator('.ns-tree-chevron').click();
             await desktop.waitForFunction(() => [...document.querySelectorAll('#nsTree .ns-tree-name')].some(el => el.textContent === 'proj-alpha'), null, { timeout: 5000 });
@@ -1693,26 +1667,21 @@ let remoteHost = null;
             // a fixed sleep races it on a loaded machine. The renamed text persists
             // once set, so the rAF-polled wait can't miss it.
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('sessionName'), "document.getElementById('sessionName')").textContent === 'renamed live', null, { timeout: 5000 });
-            check(true, 'header shows new name');
             await desktop.waitForFunction(() => document.querySelector('.session-item-name')?.textContent === 'renamed live', null, { timeout: 5000 });
-            check(true, 'sidebar shows new name without reload');
             await scenarios.models(scenarioContext());
             // 7. Image attachment: attach a PNG, send, optimistic + JSONL renders
             // both carry the image, and the bridge receives the base64 payload.
             console.log('image attachments:');
             await desktop.waitForSelector('#btnAttach', { state: 'visible', timeout: 5000 });
-            check(true, 'the 📎 attach button is visible beside the composer');
             const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
             await desktop.evaluate(async (b64) => {
                 const bytes = Uint8Array.from(atob(b64), (character) => character.charCodeAt(0));
                 await fixtureApp.features.composerDrafts.images.add([new File([bytes], 'shot.png', { type: 'image/png' })]);
             }, PNG_B64);
             await desktop.waitForSelector('.attachment-thumb', { timeout: 5000 });
-            check(true, 'attachment thumbnail appears in the strip');
             await desktop.fill('#promptInput', 'describe the screenshot');
             await desktop.click('#btnSend');
             await desktop.waitForSelector('.message.user img.msg-image', { timeout: 5000 });
-            check(true, 'optimistic user message renders the image');
             // The bridge echoes the image prompt back as a user message_end (like
             // real pi); the optimistic render must suppress it even though the echoed
             // content carries a non-text block — exactly one bubble, one image, for
@@ -1733,11 +1702,9 @@ let remoteHost = null;
             // authoritative user message must still show the image.
             await desktop.waitForFunction(() => [...document.querySelectorAll('.message.user[data-msg-index]')]
                 .some((el) => el.textContent.includes('describe the screenshot') && el.querySelector('img.msg-image')), { timeout: 8000 });
-            check(true, 'JSONL user message renders the image after catch-up');
             // Lightbox: tap the image, overlay appears, tap dismisses
             await desktop.click('.message.user img.msg-image');
             await desktop.waitForSelector('.lightbox-overlay img');
-            check(true, 'lightbox opens on image tap');
             await desktop.click('.lightbox-overlay');
             check(await desktop.locator('.lightbox-overlay').count() === 0, 'lightbox dismissed on tap');
             // 7a. Dictation: the composer mic records through MediaRecorder, POSTs the
@@ -1760,13 +1727,11 @@ let remoteHost = null;
             await dictation.fill('#promptInput', 'note: ');
             await dictation.click('#btnMic');
             await dictation.waitForSelector('#btnMic.recording', { timeout: 5000 });
-            check(true, 'clicking the mic starts recording');
             // Long enough that the encoder emits a container worth transcribing (a
             // sub-1KB blob is treated as "nothing was recorded").
             await dictation.waitForTimeout(1500);
             await dictation.click('#btnMic');
             await dictation.waitForFunction(() => fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')").value.includes('transcribed hello'), { timeout: 20000 });
-            check(true, 'the transcript lands in the composer');
             check((await dictation.inputValue('#promptInput')).startsWith('note: transcribed hello'), 'it is inserted at the caret, keeping what was already typed');
             const sttRequest = (0, test_types_js_1.record)(sttRequests[0]);
             check(sttRequests.length === 1 && typeof sttRequest.filename === 'string' && /^audio\.[a-z0-9]+$/.test(sttRequest.filename) &&
@@ -1800,9 +1765,7 @@ let remoteHost = null;
             check(await desktop.locator('.queue-item[data-kind="steering"]').count() === 1, 'row tagged as steering');
             await desktop.click('.queue-item-edit');
             await desktop.waitForFunction(() => fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')").value.includes('steer me now'), { timeout: 5000 });
-            check(true, 'Edit returns the queued text to the composer');
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('queuePanel'), "document.getElementById('queuePanel')").style.display === 'none', { timeout: 5000 });
-            check(true, 'strip empties after the message is edited out of the queue');
             await desktop.fill('#promptInput', ''); // don't leave it in the draft
             // 8a. Mid-turn steer delivery: pi delivers a queued user message during the
             // turn (message_start/message_end, role user). It must render in the
@@ -1812,7 +1775,6 @@ let remoteHost = null;
             emit('message_start', { message: { role: 'user', content: [{ type: 'text', text: deliveredText }] } });
             emit('message_end', { message: { role: 'user', content: [{ type: 'text', text: deliveredText }], timestamp: new Date().toISOString() } });
             await desktop.waitForFunction((t) => [...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes(t)), deliveredText, { timeout: 5000 });
-            check(true, 'delivered user message renders mid-turn (before turn_end)');
             emit('turn_end', {});
             // 8b. SSE queue replay: a queue with content must repopulate the strip on a
             // fresh stream connection (switch away and back), from the hello/replay
@@ -1823,10 +1785,8 @@ let remoteHost = null;
             await desktop.click('.session-item'); // re-select → fresh SSE connection
             // selectSession clears the strip; only the server-side replay can refill it.
             await desktop.waitForFunction(() => [...document.querySelectorAll('.queue-item-text')].some((el) => el.textContent === 'replay me later'), { timeout: 5000 });
-            check(true, 'queue strip repopulates from the SSE replay after reconnect');
             setQueue({ steering: [], followUp: [] });
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('queuePanel'), "document.getElementById('queuePanel')").style.display === 'none', { timeout: 5000 });
-            check(true, 'strip hides when the queue drains');
             // Abort acknowledgement is not the turn boundary. The UI must stay in a
             // stopping turn until agent_end, reject a new prompt rather than letting
             // the backend auto-steer it into that turn, then run live-tool cleanup and
@@ -1860,13 +1820,10 @@ let remoteHost = null;
             emit('turn_start', {});
             emit('tool_execution_start', { toolCallId: 'wt1', toolName: 'Bash', args: { command: 'sleep 2' } });
             await desktop.waitForFunction(() => /Working \d+:\d\d · Bash/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
-            check(true, 'working badge shows elapsed timer and running tool');
             await desktop.waitForFunction(() => /Working \d+:0[1-9]/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 4000 });
-            check(true, 'elapsed timer ticks past 0:00');
             emit('tool_execution_end', { toolCallId: 'wt1', toolName: 'Bash', args: { command: 'sleep 2' }, result: { content: [{ type: 'text', text: '' }] }, isError: false });
             emit('turn_end', {});
             await desktop.waitForFunction(() => document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
-            check(true, 'working badge resets after the turn');
             // 8c. Compaction status: compaction_start drives the working badge — the
             // run chip carries turn/compaction state alone, so the status line stays
             // free of working prose (only outcomes and errors speak). The bridge
@@ -1876,15 +1833,12 @@ let remoteHost = null;
             console.log('compaction status:');
             emit('compaction_start', { reason: 'manual' });
             await desktop.waitForFunction(() => /^Compacting context…/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
-            check(true, 'compaction_start drives the working badge');
             check(!(await desktop.evaluate(() => /Compacting context/.test(document.getElementById('status')?.textContent || ''))), 'working prose stays off the status line');
             emit('compaction_end', { reason: 'manual', errorMessage: 'model refused' });
             await desktop.waitForFunction(() => (document.getElementById('status')?.textContent || '').startsWith('Compaction failed: model refused'), { timeout: 3000 });
-            check(true, 'failed compaction reports the error');
             emit('compaction_start', { reason: 'manual' });
             emit('compaction_end', { reason: 'manual', result: { tokensBefore: 152300 } });
             await desktop.waitForFunction(() => document.getElementById('status')?.textContent === 'Compacted (was 152.3k tokens)', { timeout: 3000 });
-            check(true, 'completed compaction reports tokensBefore');
             emit('compaction_start', { reason: 'manual' });
             await desktop.waitForSelector('#btnStop', { state: 'visible', timeout: 3000 });
             await desktop.click('#btnStop');
@@ -1899,14 +1853,12 @@ let remoteHost = null;
             fakeCompacting = true;
             emit('compaction_start', { reason: 'manual' });
             await desktop.waitForFunction(() => /^Compacting context…/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
-            check(true, 'compaction drives the working badge (with elapsed timer)');
             // A /compact typed while one runs must be refused client-side before it
             // ever reaches the server, and the composer text must survive.
             await desktop.fill('#promptInput', '');
             await desktop.type('#promptInput', '/compact');
             await desktop.click('#btnSend');
             await desktop.waitForFunction(() => document.getElementById('status')?.textContent === 'Compaction already in progress', { timeout: 3000 });
-            check(true, 'second /compact is refused while compacting');
             check(await desktop.evaluate(() => fixtureInput(document.getElementById('promptInput'), "document.getElementById('promptInput')").value) === '/compact', 'refused /compact keeps the composer text');
             await desktop.fill('#promptInput', '');
             const repliesBefore = await desktop.evaluate(() => [...document.querySelectorAll('.message.assistant')].filter((m) => /Streamed reply/.test(m.textContent)).length);
@@ -1914,14 +1866,11 @@ let remoteHost = null;
             await desktop.type('#promptInput', 'send after compaction');
             await desktop.click('#btnSend');
             await desktop.waitForFunction(() => /Queued — will send when compaction finishes/.test(document.getElementById('status')?.textContent || ''), { timeout: 3000 });
-            check(true, 'prompt sent mid-compaction is reported as queued');
             fakeCompacting = false;
             emit('compaction_end', { reason: 'manual', result: { tokensBefore: 90000 } });
             flushBufferedPrompt();
             await desktop.waitForFunction((n) => [...document.querySelectorAll('.message.assistant')].filter((m) => /Streamed reply/.test(m.textContent)).length > n, repliesBefore, { timeout: 6000 });
-            check(true, 'queued prompt is delivered as a turn after compaction ends');
             await desktop.waitForFunction(() => document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 6000 });
-            check(true, 'working badge resets after the flushed turn');
             // Auto-compaction runs *inside* a turn (turn + compaction flags both on):
             // the badge must switch to Compacting while it runs and hand back to the
             // turn's Working timer when it ends. Previously the turn badge masked it
@@ -1932,15 +1881,11 @@ let remoteHost = null;
             await desktop.waitForFunction(() => /^Working/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
             emit('compaction_start', { reason: 'auto' });
             await desktop.waitForFunction(() => /^Compacting context…/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
-            check(true, 'auto-compaction takes over the badge mid-turn');
             emit('compaction_end', { reason: 'auto', result: { tokensBefore: 152300, estimatedTokensAfter: 30500 } });
             await desktop.waitForFunction(() => /^Working/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
-            check(true, 'badge hands back to the turn timer when auto-compaction ends');
             await desktop.waitForFunction(() => document.getElementById('status')?.textContent === 'Compacted: 152.3k → ~30.5k tokens', { timeout: 3000 });
-            check(true, 'estimatedTokensAfter is reported when present');
             emit('turn_end', {});
             await desktop.waitForFunction(() => document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
-            check(true, 'badge fully resets after the compacted turn');
             // 8c-3. Tree navigation: a session_tree event means the authoritative
             // history changed (a /tree branch — from this UI, the TUI, or another
             // client), and the client must re-render the transcript from the JSONL.
@@ -1951,7 +1896,6 @@ let remoteHost = null;
             appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'pre-branch marker' }], timestamp: new Date().toISOString() } });
             emit('session_tree', { newLeafId: 'anywhere' });
             await desktop.waitForFunction(() => [...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes('pre-branch marker')), { timeout: 5000 });
-            check(true, 'session_tree triggers a transcript re-fetch (new entry renders)');
             // That reload tore down and reopened the SSE stream; an event emitted
             // into the gap before the new connection's subs register is silently
             // lost. Real clients recover appended messages via the init catch-up,
@@ -1965,7 +1909,6 @@ let remoteHost = null;
             fs.writeFileSync(sessionFile, preBranchJsonl); // the "branch": history shrinks
             emit('session_tree', { newLeafId: 'anywhere' });
             await desktop.waitForFunction(() => ![...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes('pre-branch marker')), { timeout: 5000 });
-            check(true, 'branched-away message disappears (forced reload, not a catch-up)');
             // 8d. Terminal: header button opens a shell at the session cwd over the
             // WS endpoint; output round-trips; close + reopen reattaches the same
             // PTY and replays scrollback (arithmetic markers so the echo of the
@@ -1974,7 +1917,6 @@ let remoteHost = null;
             check(await desktop.locator('#btnTerminal').isVisible(), 'terminal button visible when flag is on');
             await desktop.click('#btnTerminal');
             await desktop.waitForSelector('#terminalPanel .xterm', { timeout: 5000 });
-            check(true, 'terminal panel opens with an xterm instance');
             check(await desktop.evaluate(() => document.fonts.check('12px "Symbols Nerd Font Mono"')), 'Nerd Font symbols fallback loaded (p10k prompt glyphs)');
             const termText = () => desktop.evaluate(() => {
                 const state = fixtureApp.features.terminalController.state;
@@ -2005,7 +1947,6 @@ let remoteHost = null;
                 const rows = document.querySelector('#terminalPanel .xterm');
                 return rows && rows.textContent.includes('term-smoke-42');
             }, { timeout: 5000 });
-            check(true, 'reopen reattaches the PTY and replays scrollback');
             // Restart: confirm dialog, then a fresh shell — old scrollback gone,
             // new shell answers.
             desktop.once('dialog', (d) => d.accept());
@@ -2014,13 +1955,11 @@ let remoteHost = null;
                 const rows = document.querySelector('#terminalPanel .xterm');
                 return rows && !rows.textContent.includes('term-smoke-42');
             }, { timeout: 5000 });
-            check(true, 'restart clears the old scrollback');
             await desktop.keyboard.type('echo restarted-$((5+5))\r');
             await desktop.waitForFunction(() => {
                 const rows = document.querySelector('#terminalPanel .xterm');
                 return rows && rows.textContent.includes('restarted-10');
             }, { timeout: 5000 });
-            check(true, 'fresh shell after restart answers');
             // Drag-resize: pull the top-edge handle up — the panel grows, and the
             // height persists (as a % of the session view) for the next open.
             const heightBefore = await desktop.evaluate(() => fixtureElement(document.getElementById('terminalPanel'), "document.getElementById('terminalPanel')").offsetHeight);
@@ -2041,7 +1980,6 @@ let remoteHost = null;
                 check((await desktop.locator('#termModeBtn').textContent() ?? '').includes('pi tmux'), 'mode button offers the tmux pane view');
                 await desktop.click('#termModeBtn');
                 await desktop.waitForFunction(() => /tmux pane/i.test(fixtureElement(document.getElementById('terminalStatus'), "document.getElementById('terminalStatus')").textContent), { timeout: 5000 });
-                check(true, 'pane-less session surfaces the no-tmux-pane error');
                 await desktop.click('#termModeBtn'); // back to shell
                 await desktop.waitForFunction(() => fixtureElement(document.getElementById('terminalStatus'), "document.getElementById('terminalStatus')").textContent === '', { timeout: 5000 });
                 await desktop.keyboard.type('echo back-to-shell-$((6+3))\r');
@@ -2049,7 +1987,6 @@ let remoteHost = null;
                     const rows = document.querySelector('#terminalPanel .xterm');
                     return rows && rows.textContent.includes('back-to-shell-9');
                 }, { timeout: 5000 });
-                check(true, 'switching back re-enters a working shell');
             }
             await desktop.click('#termCloseBtn');
             await scenarios.drafts(scenarioContext());
@@ -2099,7 +2036,6 @@ let remoteHost = null;
             // And the removal still completes when nothing re-sets the widget.
             emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: [] });
             await desktop.waitForFunction(() => !document.querySelector('[data-widget-key="todo"]'), { timeout: 3000 });
-            check(true, 'widget removal completes when not re-set');
             // Status clear→set race: same churn hardening as the widget card. Hosts
             // re-project status lines at turn boundaries, and a clear/set pair inside
             // the removal grace must reuse the badge — destroy/recreate replays the
@@ -2119,14 +2055,12 @@ let remoteHost = null;
             await desktop.waitForFunction(() => [...document.querySelectorAll('.ext-ui-status-badge')].some((el) => el.textContent === 'temporary'), { timeout: 3000 });
             emit('extension_ui_request', { method: 'setStatus', statusKey: 'tempstat' });
             await desktop.waitForFunction(() => ![...document.querySelectorAll('.ext-ui-status-badge')].some((el) => el.textContent === 'temporary'), { timeout: 3000 });
-            check(true, 'status removal completes when not re-set');
             // The expand toggle only appears when the collapsed strip actually clips
             // text — a lone short line expands to itself, so the arrow was a dead
             // control; a clipped strip gets it back, and it toggles both ways.
             check(await desktop.evaluate(() => getComputedStyle(fixtureElement(document.getElementById('extUiStatusToggle'), '#extUiStatusToggle')).display === 'none'), 'status toggle hidden while nothing is clipped');
             emit('extension_ui_request', { method: 'setStatus', statusKey: 'goal', statusText: `Goal · ${'a very long objective line '.repeat(12)}` });
             await desktop.waitForFunction(() => getComputedStyle(fixtureElement(document.getElementById('extUiStatusToggle'), '#extUiStatusToggle')).display !== 'none', { timeout: 3000 });
-            check(true, 'status toggle appears once the collapsed strip clips');
             await desktop.click('#extUiStatusToggle');
             check(await desktop.evaluate(() => !fixtureElement(document.getElementById('extUiStatuses'), "document.getElementById('extUiStatuses')").classList.contains('collapsed')), 'status toggle expands the clipped strip');
             await desktop.click('#extUiStatusToggle');
@@ -2185,7 +2119,6 @@ let remoteHost = null;
             // Switch away: the stashed dialog leaves the DOM with its session.
             await desktop.click(`.session-item[data-id="${SESSION2_ID}"]`);
             await desktop.waitForFunction(() => !document.getElementById('extUiDialogs'), { timeout: 5000 });
-            check(true, 'dialog stashed on session switch');
             // Switch back: replay re-docks the live element, selection preserved.
             await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
             await desktop.waitForSelector('#extUiDialogs .ext-ui-dialog-modal', { timeout: 5000 });
@@ -2209,7 +2142,6 @@ let remoteHost = null;
             await desktop.waitForSelector('#extUiDialogs .ext-ui-dialog-modal', { timeout: 5000 });
             emit('extension_ui_resolved', { id: 'dlg-cf-1' });
             await desktop.waitForFunction(() => !document.getElementById('extUiDialogs'), { timeout: 5000 });
-            check(true, 'extension_ui_resolved dismisses the docked dialog');
             emit('turn_end', {});
             await desktop.waitForTimeout(300);
             // 10a. Selection/transcript ownership. Hold A's tail response, fully
@@ -2682,14 +2614,12 @@ let remoteHost = null;
             const snippet = await desktop.locator(`.session-item[data-id="${BETA_ID}"] .session-item-snippet`);
             check((await snippet.locator('mark').count()) >= 2, 'content match shows a snippet with the tokens highlighted');
             await desktop.waitForFunction(() => !fixtureElement(document.querySelector('.sidebar-filter'), "document.querySelector('.sidebar-filter')").classList.contains('searching'), null, { timeout: 5000 });
-            check(true, 'busy indicator clears once results land');
             check(await desktop.evaluate(() => document.querySelectorAll('#sessionList .session-item').length) === 1, 'non-matching sessions filtered out');
             // A typed query swaps the workspace tree for one flat relevance-ranked
             // list: the older session naming "cedar" leads the newer one that only
             // mentions it in its transcript.
             await desktop.fill('#filterInput', 'cedar');
             await desktop.waitForFunction((ids) => JSON.stringify([...document.querySelectorAll('#sessionList .session-item')].map((el) => el.dataset.id)) === ids, JSON.stringify([RANK_ID, BETA_ID]), { timeout: 5000 });
-            check(true, 'search results rank the name match above the newer content match');
             check(await desktop.locator('#sessionList .workspace-group-header').count() === 0, 'ranked search list drops the grouping headers');
             check(await desktop.locator('#sessionList .session-item .session-item-cwd').count() === 2, 'ranked rows keep their workspace hint');
             await desktop.fill('#filterInput', '');
@@ -2703,7 +2633,6 @@ let remoteHost = null;
             await desktop.click('#tabActive');
             await desktop.fill('#filterInput', 'existing');
             await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-snippet`, { timeout: 5000 });
-            check(true, 'Active-tab query content-matches the live session with a snippet');
             await desktop.click('#tabAll');
             await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-snippet`, { timeout: 5000 });
             await desktop.click('#tabActive');
@@ -2718,7 +2647,6 @@ let remoteHost = null;
             await desktop.fill('#filterInput', '-beta');
             await desktop.waitForFunction((betaId) => document.querySelectorAll('#sessionList .session-item').length >= 2 &&
                 !document.querySelector(`.session-item[data-id="${betaId}"]`), BETA_ID, { timeout: 5000 });
-            check(true, 'negative filter -beta hides the beta session, keeps the rest');
             // Typing surfaced the "+ save filter" chip — save the query as a scope.
             await desktop.evaluate(() => { window.prompt = () => 'No beta'; });
             await desktop.click('.scope-chip.scope-add');
@@ -2729,12 +2657,10 @@ let remoteHost = null;
             // after the clear, it would narrow the lists to an untyped query and only
             // the next 10s poll would undo it.
             await desktop.waitForFunction(() => fixtureApp.features.sidebarLists.queriedFor === '', null, { timeout: 5000 });
-            check(true, 'the absorbed query leaves no server-filtered lists behind');
             // Both proj-beta sessions (the beta transcript and the ranking fixture
             // sharing its cwd) are hidden by the scope, and the note says so.
             await desktop.waitForFunction((betaId) => !document.querySelector(`.session-item[data-id="${betaId}"]`) &&
                 document.querySelector('.scope-hidden-note')?.textContent === '2 hidden by scopes', BETA_ID, { timeout: 5000 });
-            check(true, 'active scope keeps filtering with an audit note for the hidden rows');
             // Scope state is device-local; definitions are server-global settings.
             check(await desktop.evaluate(() => localStorage.getItem('pi-dish-active-scopes')) === JSON.stringify(['No beta']), 'active scope persisted to localStorage');
             const serverFilters = await fetch(`${base}/api/settings`).then(r => r.json());
@@ -2763,7 +2689,6 @@ let remoteHost = null;
             await desktop.waitForSelector('.saved-filters-empty', { timeout: 5000 });
             await desktop.evaluate(() => fixtureApp.ports.appBindings.actions.closeSettingsModal(new Event('click'), document.body));
             await desktop.waitForFunction(() => !document.querySelector('.scope-chip'), null, { timeout: 5000 });
-            check(true, 'deleting the saved filter in settings clears the chips');
             // Back to the workspace view for the sections below.
             await desktop.click('#viewToggle');
             await desktop.waitForFunction(() => [...document.querySelectorAll('.workspace-group-label')].some(el => el.textContent === 'proj-alpha'), null, { timeout: 5000 });
@@ -2775,7 +2700,6 @@ let remoteHost = null;
             await desktop.waitForFunction(() => document.querySelectorAll('#messages [data-msg-index]').length === 50, null, { timeout: 5000 });
             await desktop.evaluate(() => { fixtureElement(document.getElementById('messages'), "document.getElementById('messages')").scrollTop = 0; });
             await desktop.waitForFunction(() => document.querySelectorAll('#messages [data-msg-index]').length >= 100, null, { timeout: 5000 });
-            check(true, 'scrolling to the top implicitly loads the previous transcript page');
             await desktop.evaluate(() => { fixtureElement(document.getElementById('messages'), "document.getElementById('messages')").scrollTop = 0; });
             await desktop.waitForFunction(() => document.querySelector('#messages [data-msg-index="0"]'), null, { timeout: 5000 });
             const loadedBetaCount = await desktop.locator('#messages [data-msg-index]').count();
@@ -2800,13 +2724,10 @@ let remoteHost = null;
             check((await desktop.locator('#sessionRelations').textContent() ?? '').includes('Subagents'), 'a session with family renders the subagents link');
             await desktop.click('#sessionRelations .session-relation-chip');
             await desktop.waitForSelector('#subagentsTree .lineage-row', { timeout: 5000 });
-            check(true, 'the subagents link opens the family takeover');
             await desktop.locator(`#subagentsTree .lineage-row[data-session-id="${registryState.sessionId}"]`).click();
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('subagentsDetailName'), "document.getElementById('subagentsDetailName')").textContent.length > 0, null, { timeout: 5000 });
-            check(true, 'a family tree row selects it for peeking without navigating');
             await desktop.click('#subagentsOpenBtn');
             await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
-            check(true, 'the peek pane Open action navigates to the available peer session');
             const relationRaceOwner = await desktop.evaluate(async (nextId) => {
                 const originalLoad = fixtureApp.features.sidebarLists.load;
                 let release;
@@ -2885,7 +2806,6 @@ let remoteHost = null;
             check(await desktop.locator('#subagentsTree .lineage-row.lineage-current').count() === 1, 'the tree marks the current session');
             await desktop.keyboard.press('Escape');
             await desktop.waitForFunction(() => !fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('subagents-open'), null, { timeout: 3000 });
-            check(true, 'Escape closes the subagents takeover');
             relationFixtureMode = 'active';
             await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), BETA_ID);
             await desktop.waitForSelector('#sessionRelations .session-relation-chip', { timeout: 5000 });
@@ -2903,7 +2823,6 @@ let remoteHost = null;
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('subagentsDetailName'), "document.getElementById('subagentsDetailName')").textContent.length > 0, null, { timeout: 5000 });
             await desktop.click('#subagentsOpenBtn');
             await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id, registryState.sessionId, { timeout: 5000 });
-            check(true, 'the Open action navigates to the relation');
             check(await desktop.locator('.main').evaluate((el) => !el.classList.contains('subagents-open')), 'navigation closes the subagents takeover');
             await desktop.unroute('**/api/sessions/*/lineage');
             await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), registryState.sessionId);
@@ -2947,7 +2866,6 @@ let remoteHost = null;
             await desktop.waitForFunction((id) => document.querySelectorAll('.search-result').length === 100 &&
                 !document.querySelector(`.search-result[data-id="${id}"]`) &&
                 document.querySelector('.search-count-line')?.textContent.includes('showing the 100 best matches'), BETA_ID, { timeout: 10000 });
-            check(true, 'unscoped rank-101 session is omitted with truthful cap messaging');
             await desktop.evaluate(() => fixtureApp.features.searchViewController.close());
             await desktop.click('.scope-chip[data-name="Beta only"]');
             await desktop.waitForSelector('.scope-chip[data-name="Beta only"].active', { timeout: 5000 });
@@ -2976,14 +2894,12 @@ let remoteHost = null;
                 return marks.includes('cedar') && marks.includes('maple') &&
                     card.querySelector('.search-result-count')?.textContent === '2 matches';
             }, BETA_ID, { timeout: 5000 });
-            check(true, 'distributed content terms render highlighted snippets');
             const countText = await desktop.evaluate((id) => document.querySelector(`.search-result[data-id="${id}"] .search-result-count`)?.textContent, BETA_ID);
             check(countText === '2 matches', `occurrence count rendered (got "${countText}")`);
             // The Active-only facet rewrites the query text (is:active) and filters.
             await desktop.click('#searchFacetActive');
             await desktop.waitForFunction((id) => fixtureInput(document.getElementById('searchViewInput'), "document.getElementById('searchViewInput')").value.includes('is:active') &&
                 !document.querySelector(`.search-result[data-id="${id}"]`), BETA_ID, { timeout: 5000 });
-            check(true, 'Active-only facet injects is:active and drops historical sessions');
             await desktop.click('#searchFacetActive');
             await desktop.waitForSelector(`.search-result[data-id="${BETA_ID}"]`, { timeout: 5000 });
             check(!(await desktop.evaluate(() => fixtureInput(document.getElementById('searchViewInput'), "document.getElementById('searchViewInput')").value)).includes('is:active'), 'toggling the facet off removes its token, keeping the text terms');
@@ -3001,7 +2917,6 @@ let remoteHost = null;
             await desktop.waitForFunction(() => fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('search-open'), null, { timeout: 5000 });
             await desktop.keyboard.press('Escape');
             await desktop.waitForFunction(() => !fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('search-open'), null, { timeout: 5000 });
-            check(true, 'Escape closes the search takeover');
             await desktop.click('.scope-chip[data-name="Beta only"].active');
             check(await desktop.evaluate(() => localStorage.getItem('pi-dish-active-scopes')) === JSON.stringify([]), 'toggling the saved scope inactive remains device-local');
             await desktop.fill('#filterInput', '');
@@ -3021,7 +2936,6 @@ let remoteHost = null;
             console.log('row-level close:');
             const closeRowSel = `.session-item[data-id="${SESSION_ID}"]`;
             await desktop.waitForSelector(`${closeRowSel} .session-close-btn`, { state: 'attached', timeout: 5000 });
-            check(true, 'live row carries the close button');
             // Hover-reveal: transparent until the row is hovered.
             await desktop.mouse.move(900, 400); // park the pointer off the sidebar
             const preOpacity = await desktop.$eval(`${closeRowSel} .session-close-btn`, (el) => getComputedStyle(el).opacity);
@@ -3031,7 +2945,6 @@ let remoteHost = null;
                 const button = fixtureElement(document.querySelector(sel), sel);
                 return parseFloat(getComputedStyle(button).opacity) > 0;
             }, `${closeRowSel} .session-close-btn`, { timeout: 5000 });
-            check(true, 'close button revealed on row hover');
             // First tap arms the confirm state; the tap must not select the row.
             const selectedBefore = await desktop.evaluate(() => document.querySelector('.session-item.active')?.dataset.id || null);
             await desktop.click(`${closeRowSel} .session-close-btn`);
@@ -3043,7 +2956,6 @@ let remoteHost = null;
             check(await desktop.locator(`${closeRowSel} .session-close-btn.confirm`).count() === 1, 'list re-render preserves the armed confirm');
             // The armed state auto-reverts after ~3s.
             await desktop.waitForFunction((sel) => !document.querySelector(sel), `${closeRowSel} .session-close-btn.confirm`, { timeout: 6000 });
-            check(true, 'confirm state reverts after ~3s');
             // Tap-tap through with the POST routed: assert it fired with the row id.
             let closePostUrl = null;
             const readClosePostUrl = () => closePostUrl;
@@ -3092,7 +3004,6 @@ let remoteHost = null;
             await desktop.waitForSelector('#resumeBar', { state: 'visible', timeout: 10000 });
             await dummyGone;
             check(dummySignal === 'SIGTERM', `close gracefully stopped the external agent (got ${dummySignal})`);
-            check(true, 'view flipped to the inactive/resume state after close');
             // RPC sessions are pi-dish-owned. Restart must replace the managed child
             // directly, retain the session id, and never divert into tmux.
             const rpcRestartId = await desktop.evaluate(async (id) => {
@@ -3104,7 +3015,6 @@ let remoteHost = null;
             await desktop.waitForFunction((id) => fixtureApp.features.sessionState.currentSession?.id === id && fixtureApp.features.sessionState.currentSession.isActive, rpcRestartId, { timeout: 10000 });
             await desktop.click('#sessionContext');
             await desktop.waitForSelector('#sessionRestartBtn', { timeout: 5000 });
-            check(true, 'pi-dish-owned RPC session offers Restart agent');
             const beforeRestartRuntime = await desktop.evaluate(() => {
                 const row = [...document.querySelectorAll('#statsBody tr')]
                     .find((tr) => tr.querySelector('.stats-key')?.textContent === 'Running in');
@@ -3119,7 +3029,6 @@ let remoteHost = null;
                 return current?.id === id && current.isActive &&
                     fixtureElement(document.getElementById('statsModal'), "document.getElementById('statsModal')").style.display === 'none';
             }, rpcRestartId, { timeout: 15000 });
-            check(true, 'restart kept the same RPC transcript selected');
             await desktop.click('#sessionContext');
             await desktop.waitForSelector('#sessionRestartBtn', { timeout: 5000 });
             const afterRestartRuntime = await desktop.evaluate(() => {
@@ -3138,7 +3047,6 @@ let remoteHost = null;
             await desktop.click('#inactiveStatsBtn');
             await desktop.waitForSelector('#statsModal', { state: 'visible' });
             await desktop.locator('#statsBody').getByText('Performance', { exact: true }).waitFor();
-            check(true, 'inactive session stats are accessible without resuming');
             await desktop.click('#statsModal .modal-header .btn-icon');
             // 14. Host-aware client keys (TASKS/multi-host.md phase 1). The server
             // answers /api/host, so live session state is already stamped with the

@@ -42,7 +42,6 @@ const skills: UiScenario = async ({ desktop, check }) => {
   await desktop.keyboard.press('Escape');
   await desktop.waitForFunction(() => !fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('new-session-open'),
     null, { timeout: 2000 });
-  check(true, 'Escape closes the new-session takeover opened by refine');
 };
 
 export = skills;

@@ -28,6 +28,5 @@ const skills = async ({ desktop, check }) => {
         fixtureApp.features.newSessionController.pendingDraft.includes('SKILL.md') && /coverage\?skill=/.test(fixtureApp.features.newSessionController.pendingDraft)), 'refine stashes an evidence-bundle draft (path + coverage URL), never auto-sent');
     await desktop.keyboard.press('Escape');
     await desktop.waitForFunction(() => !fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('new-session-open'), null, { timeout: 2000 });
-    check(true, 'Escape closes the new-session takeover opened by refine');
 };
 module.exports = skills;

@@ -7,7 +7,6 @@ const routines = async ({ desktop, check, CWD }) => {
     // resulting session's sidebar row. See TASKS/routines.md.
     console.log('routines:');
     await desktop.waitForSelector('#btnRoutines', { state: 'visible', timeout: 5000 });
-    check(true, 'sidebar header shows the routines icon on a routines-capable host');
     await desktop.click('#btnRoutines');
     await desktop.waitForSelector('.main.routines-open #rtNewBtn', { timeout: 5000 });
     check(await desktop.evaluate(() => fixtureElement(document.getElementById('sessionView'), "document.getElementById('sessionView')").offsetParent === null), 'session view hidden while the routines takeover is open');
@@ -34,7 +33,6 @@ const routines = async ({ desktop, check, CWD }) => {
     await desktop.fill('#rtPrompt', 'smoke routine prompt v2');
     await desktop.click('#rtSaveBtn');
     await desktop.waitForFunction(() => document.querySelector('.rt-version-badge')?.textContent === 'v2', null, { timeout: 10000 });
-    check(true, 'editing the prompt bumps the routine to version 2');
     await desktop.click('#rtVersions > summary');
     await desktop.waitForSelector('.rt-version-row', { timeout: 5000 });
     check(await desktop.locator('.rt-version-row').count() === 2, 'the versions block lists both prompt versions');
@@ -44,7 +42,6 @@ const routines = async ({ desktop, check, CWD }) => {
     // Run now: a real spawn through the fake RPC pi, observed to completion.
     await desktop.click('#rtRunBtn');
     await desktop.waitForSelector('.rt-table tbody tr', { timeout: 30000 });
-    check(true, 'Run now lands an invocation row in the runs table');
     await desktop.waitForFunction(() => /completed/.test(document.querySelector('.rt-table tbody tr')?.textContent || ''), null, { timeout: 40000 });
     const runRow = (await desktop.locator('.rt-table tbody tr').first().innerText()).replace(/\s+/g, ' ');
     check(runRow.includes('v2') && runRow.includes('invoke') && runRow.includes('prompt'), `the run records its version, trigger and delivery (got "${runRow}")`);
@@ -54,7 +51,6 @@ const routines = async ({ desktop, check, CWD }) => {
         await desktop.locator('.rt-filter-chip').count() === 1, 'clicking a version row filters the runs table to that version');
     await desktop.click('.rt-filter-clear');
     await desktop.waitForFunction(() => document.querySelectorAll('.rt-table tbody tr').length === 1, null, { timeout: 5000 });
-    check(true, 'clearing the version filter restores every run');
     // Provenance: the session the routine produced wears its chip.
     const routineSessionId = await desktop.evaluate(() => fixtureApp.features.routinesController.invocations[0]?.sessionId || null);
     check(!!routineSessionId, 'the invocation records the session it ran in');
@@ -79,7 +75,6 @@ const routines = async ({ desktop, check, CWD }) => {
         const rows = [...document.querySelectorAll('.session-item')];
         return rows.length === 1 && rows[0]?.dataset.id === id;
     }, routineSessionId, { timeout: 10000 });
-    check(true, 'routine:<name> narrows the sidebar to that routine\'s sessions');
     await desktop.evaluate(() => {
         fixtureInput(document.querySelector('#filterInput'), '#filterInput').value = '';
         fixtureApp.features.sidebarQuery.onInput();
@@ -91,12 +86,10 @@ const routines = async ({ desktop, check, CWD }) => {
     await desktop.click('[title="Usage and spend"]');
     await desktop.waitForFunction(() => fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('usage-open') &&
         !fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('routines-open'), null, { timeout: 5000 });
-    check(true, 'opening the usage view closes the routines takeover');
     await desktop.keyboard.press('Escape');
     await desktop.evaluate(() => fixtureApp.features.routinesController.open());
     await desktop.waitForSelector('.main.routines-open', { timeout: 5000 });
     await desktop.keyboard.press('Escape');
     await desktop.waitForFunction(() => !fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('routines-open'), null, { timeout: 3000 });
-    check(true, 'Escape closes the routines takeover');
 };
 module.exports = routines;

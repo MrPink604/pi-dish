@@ -38,7 +38,6 @@ const fleet: UiScenario = async ({ desktop, browser, watch, base, check }) => {
   'connections and bounce controls render below the host cards');
   await desktop.keyboard.press('Escape');
   await desktop.waitForFunction(() => !document.querySelector('.main')?.classList.contains('fleet-open'));
-  check(true, 'Escape closes the Fleet view');
 
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await watch(phone, 'fleet-mobile');

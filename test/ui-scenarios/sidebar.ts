@@ -131,7 +131,6 @@ const sidebar: UiScenario = async ({ desktop, registryState, check, SKILL_SESSIO
   await pinToggle(BETA_ID);
   await pinToggle(registryState.sessionId);
   await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
-  check(true, 'unpinning removes the pinned section');
 
   // A filtered result can contain only the child. Pinning that fragment must
   // still persist and later render the canonical parent family.
