@@ -75,7 +75,6 @@ export declare const MAX_VERSIONS = 50;
 export declare const MAX_PROMPT = 100000;
 export declare const MAX_INPUT_BYTES: number;
 export declare const MAX_SOURCE = 100;
-export declare function readRoutines(): Record<string, Routine>;
 export declare function listRoutines(): Routine[];
 /** Routines are addressed by uuid or by their (case-insensitive) unique name. */
 export declare function getRoutine(ref: string): Routine | null;
@@ -99,6 +98,5 @@ export declare function lastInvocation(routineId: string, predicate?: ((entry: R
 /** The invocation currently occupying the routine, if any (busy := this). */
 export declare function activeInvocation(routineId: string): RoutineInvocation | null;
 export declare function activeInvocations(): RoutineInvocation[];
-export declare function countActive(routineId: string): number;
 /** Latest invocation per session id; presentation-only provenance, never authority. */
 export declare function invocationsBySessionId(): Map<string, RoutineInvocation>;

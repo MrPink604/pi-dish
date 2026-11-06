@@ -39,9 +39,9 @@ export interface SessionShareToken {
   token: string;
 }
 
-// Box primitive legacy rows without asserting anything about their members.
+// Stored rows are external; members stay unknown until the route validates them.
 function fields(value: unknown): Record<string, unknown> {
-  return Object(value) as Record<string, unknown>;
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 
 function canonical(value: unknown): unknown {

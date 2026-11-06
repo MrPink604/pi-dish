@@ -17,7 +17,6 @@ import { execFile, execFileSync } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { record } from './helper-values';
 
 export interface GitRepoDiscoveryOptions {
   maxDepth?: number;
@@ -143,8 +142,10 @@ function runGit(cwd: string, args: readonly string[], { timeout = 10000, maxBuff
 }
 
 function gitErrorLine(error: unknown): string {
-  const detail = record(error) ? error.stderr || error.message || '' : '';
-  return (typeof detail === 'string' ? detail : '').trim().split('\n')[0];
+  const stderr = error && typeof error === 'object' && 'stderr' in error ? error.stderr : null;
+  const detail = typeof stderr === 'string' && stderr
+    ? stderr : error instanceof Error ? error.message : '';
+  return detail.trim().split('\n')[0];
 }
 
 let gitAvailable: boolean | null = null;
@@ -246,11 +247,11 @@ function unquotePath(p: string): string {
  * deletions, binary, patch }]; `path` is the post-change side (the pre-change
  * side for deletions).
  */
-export function splitPatch(patchText: unknown): GitFilePatch[] {
+export function splitPatch(patchText: string): GitFilePatch[] {
   const files: PatchSection[] = [];
   let cur: PatchSection | null = null;
   let inHunk = false;
-  for (const line of String(patchText).split('\n')) {
+  for (const line of patchText.split('\n')) {
     if (line.startsWith('diff --git ')) {
       cur = { newPath: null, oldPath: null, additions: 0, deletions: 0, binary: false, lines: [line] };
       files.push(cur);
@@ -302,8 +303,8 @@ export function splitPatch(patchText: unknown): GitFilePatch[] {
 // Machine-readable `git diff --numstat -z` output. Ordinary records keep the
 // path in the first NUL token (`add\tdel\tpath`); renames put an empty path
 // there and follow it with old + new path tokens. Binary counts are `-`.
-export function parseNumstat(out: unknown): GitNumstatFile[] {
-  const tokens = String(out).split('\0');
+export function parseNumstat(out: string): GitNumstatFile[] {
+  const tokens = out.split('\0');
   const files: GitNumstatFile[] = [];
   for (let i = 0; i < tokens.length;) {
     const head = tokens[i++];
@@ -548,14 +549,14 @@ export interface DiffViewPatch {
 }
 
 export interface DiffView {
-  summary(sessionId: string, cwd: unknown): Promise<DiffViewSummary>;
-  patch(sessionId: string, cwd: unknown, snapshotId: string, repoPath: string, filePath: string): Promise<DiffViewPatch | 'stale' | null>;
+  summary(sessionId: string, cwd: string): Promise<DiffViewSummary>;
+  patch(sessionId: string, cwd: string, snapshotId: string, repoPath: string, filePath: string): Promise<DiffViewPatch | 'stale' | null>;
   retireSession(sessionId: string): void;
 }
 
 interface DiffSnapshot {
   id: string;
-  cwd: unknown;
+  cwd: string;
   at: number;
   version: GitDiffAggregate['version'];
   data: Omit<GitDiffAggregate, 'version'>;
@@ -570,9 +571,7 @@ export function createDiffView(): DiffView {
 
   return {
     async summary(sessionId, cwd) {
-      // cwd remains a raw session value. These assertions preserve the existing
-      // filesystem/git coercions and errors rather than adding a validation gate.
-      const { version, ...data } = await aggregateDiffs(cwd as string, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
+      const { version, ...data } = await aggregateDiffs(cwd, { inlineLimit: DIFF_INLINE_FILE_LIMIT });
       const snapshot = {
         id: crypto.randomBytes(12).toString('hex'),
         cwd,
@@ -598,9 +597,9 @@ export function createDiffView(): DiffView {
       if (!repo || !file) return null;
       // Even an inline patch must pass both checks. A deferred git invocation
       // can race a file change; never serve that patch under the old snapshot.
-      if (await getDiffVersion(cwd as string) !== snapshot.version) return 'stale';
-      const patch = file.patch ? file : await getFilePatch(path.resolve(cwd as string, repo.path), file);
-      if (await getDiffVersion(cwd as string) !== snapshot.version) return 'stale';
+      if (await getDiffVersion(cwd) !== snapshot.version) return 'stale';
+      const patch = file.patch ? file : await getFilePatch(path.resolve(cwd, repo.path), file);
+      if (await getDiffVersion(cwd) !== snapshot.version) return 'stale';
       if (!patch?.patch) return null;
       snapshot.at = Date.now();
       snapshots.delete(sessionId);

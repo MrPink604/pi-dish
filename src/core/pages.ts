@@ -38,10 +38,9 @@ export interface ListedPageDto extends PageDto {
   token: unknown;
 }
 
-// Object boxing reproduces JS property access/spread for legacy primitive rows.
-// It makes no claim about the types of the object's unchecked members.
+// Stored rows are external; members stay unknown until the route validates them.
 function fields(value: unknown): Record<string, unknown> {
-  return Object(value) as Record<string, unknown>;
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 
 function canonical(value: unknown): unknown {

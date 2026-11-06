@@ -63,10 +63,6 @@ test('extractSessionPaths mines structured args, bash tokens, and dirnames', () 
   assert.ok(deepIndex > scratchIndex);
 });
 
-test('extractSessionPaths rejects a null message instead of silently losing its trail', () => {
-  assert.throws(() => extractSessionPaths([null], cwd, home), TypeError);
-});
-
 test('bare basename resolves to the most recently tool-touched file, not the cwd one', async () => {
   const r = await resolveFileMention('findings.md', { cwd, messages, home });
   assert.ok(r);

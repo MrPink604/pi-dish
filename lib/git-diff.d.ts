@@ -81,8 +81,8 @@ export declare function parseStatusV2(out: string): GitStatusV2;
  * deletions, binary, patch }]; `path` is the post-change side (the pre-change
  * side for deletions).
  */
-export declare function splitPatch(patchText: unknown): GitFilePatch[];
-export declare function parseNumstat(out: unknown): GitNumstatFile[];
+export declare function splitPatch(patchText: string): GitFilePatch[];
+export declare function parseNumstat(out: string): GitNumstatFile[];
 export declare function getRepoDiff(repoPath: string): Promise<GitRepoDiff>;
 /**
  * The full aggregate for the diff modal: every repo under `root` with its
@@ -102,8 +102,8 @@ export interface DiffViewPatch {
     binary: boolean;
 }
 export interface DiffView {
-    summary(sessionId: string, cwd: unknown): Promise<DiffViewSummary>;
-    patch(sessionId: string, cwd: unknown, snapshotId: string, repoPath: string, filePath: string): Promise<DiffViewPatch | 'stale' | null>;
+    summary(sessionId: string, cwd: string): Promise<DiffViewSummary>;
+    patch(sessionId: string, cwd: string, snapshotId: string, repoPath: string, filePath: string): Promise<DiffViewPatch | 'stale' | null>;
     retireSession(sessionId: string): void;
 }
 /** Owns the captured diff pane and every operation allowed to use its members. */

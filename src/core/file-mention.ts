@@ -127,11 +127,8 @@ export function extractSessionPaths(messages: readonly unknown[], cwd: string | 
     return path.normalize(p);
   };
   messages.forEach((msg, idx) => {
-    // Preserve native property-access errors for null/undefined legacy entries.
-    const message = msg as { role?: unknown; content?: unknown };
-    if (message.role !== 'assistant' || !Array.isArray(message.content)) return;
-    const content: readonly unknown[] = message.content;
-    for (const block of content) {
+    if (!record(msg) || msg.role !== 'assistant' || !Array.isArray(msg.content)) return;
+    for (const block of msg.content) {
       if (!record(block) || block.type !== 'toolCall') continue;
       const args = block.arguments || {};
       if (!record(args)) continue;

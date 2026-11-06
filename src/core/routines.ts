@@ -163,7 +163,7 @@ function parseRoutine(id: string, value: unknown): Routine | null {
   };
 }
 
-export function readRoutines(): Record<string, Routine> {
+function readRoutines(): Record<string, Routine> {
   const source = fields(readStore(ROUTINES_FILE).routines);
   const routines: Record<string, Routine> = {};
   for (const [id, value] of Object.entries(source)) {
@@ -487,11 +487,6 @@ export function activeInvocation(routineId: string): RoutineInvocation | null {
 
 export function activeInvocations(): RoutineInvocation[] {
   return readInvocations().filter((entry) => includes(ACTIVE_STATUSES, entry.status));
-}
-
-export function countActive(routineId: string): number {
-  return readInvocations()
-    .filter((entry) => entry.routineId === routineId && includes(ACTIVE_STATUSES, entry.status)).length;
 }
 
 /** Latest invocation per session id; presentation-only provenance, never authority. */
