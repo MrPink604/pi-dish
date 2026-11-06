@@ -2,7 +2,7 @@ import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
 import type { HarnessDescriptor, HarnessEnvironment } from './contracts';
-import { resolveLaunchSpec } from './harnesses';
+import { parseLaunchWords, resolveLaunchSpec } from './harnesses';
 
 // Command resolution must not import RPC/lifecycle modules: pricing also uses it.
 export interface HarnessLaunchSpec {
@@ -12,41 +12,6 @@ export interface HarnessLaunchSpec {
 
 export function harnessLaunchSpec(descriptor: HarnessDescriptor): HarnessLaunchSpec {
   return descriptor.id === 'pi' ? getPiLaunchSpec() : resolveLaunchSpec(descriptor);
-}
-
-function splitShellWords(input: unknown) {
-  const words = [];
-  let cur = '';
-  let quote = null;
-  let escape = false;
-  for (const ch of String(input)) {
-    if (escape) { cur += ch; escape = false; continue; }
-    if (ch === '\\' && quote !== "'") { escape = true; continue; }
-    if (quote) {
-      if (ch === quote) quote = null;
-      else cur += ch;
-      continue;
-    }
-    if (ch === "'" || ch === '"') { quote = ch; continue; }
-    if (/\s/.test(ch)) {
-      if (cur) { words.push(cur); cur = ''; }
-      continue;
-    }
-    cur += ch;
-  }
-  if (cur) words.push(cur);
-  return words;
-}
-
-function parseLaunchSpec(spec: string) {
-  const env: Record<string, string> = {};
-  let words = splitShellWords(spec);
-  if (words[0] === 'env') words = words.slice(1);
-  while (words[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) {
-    const [key, ...rest] = words.shift()!.split('=');
-    env[key] = rest.join('=');
-  }
-  return { env, argv: words };
 }
 
 function getPiAliasSpec() {
@@ -79,19 +44,11 @@ function resolveHostPi() {
   return 'pi';
 }
 
+/** Explicit PI_DISH_PI_COMMAND wins; otherwise a simple `alias pi=…` is mirrored. */
 export function getPiLaunchSpec(): HarnessLaunchSpec {
-  let spec;
-  if (process.env.PI_DISH_PI_COMMAND) {
-    // Explicit config wins. Example:
-    //   PI_DISH_PI_COMMAND="my-pi-wrapper --profile work"
-    spec = parseLaunchSpec(process.env.PI_DISH_PI_COMMAND);
-  } else {
-    // Otherwise mirror simple aliases without sourcing interactive rc files:
-    //   alias pi='AWS_PROFILE=work AWS_REGION=us-east-1 pi'
-    //   alias pi='my-pi-wrapper --profile work'
-    const alias = getPiAliasSpec();
-    spec = alias ? parseLaunchSpec(alias) : { env: {}, argv: ['pi'] };
-  }
-  if (spec.argv[0] === 'pi') spec.argv[0] = resolveHostPi();
-  return spec;
+  const configured = process.env.PI_DISH_PI_COMMAND || getPiAliasSpec() || 'pi';
+  const { env, words } = parseLaunchWords(configured);
+  const argv = words.length ? words : ['pi'];
+  if (argv[0] === 'pi') argv[0] = resolveHostPi();
+  return { env, argv };
 }
