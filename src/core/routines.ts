@@ -127,9 +127,9 @@ function includes<T>(allowed: readonly T[], value: unknown): value is T {
 function parseVersions(value: unknown, promptVersion: number, prompt: string, createdAt: number): RoutineVersion[] {
   const rows = Array.isArray(value) ? value : [];
   const versions = rows.flatMap((row): RoutineVersion[] => {
-    const fields_ = fields(row);
-    return typeof fields_.version === 'number' && typeof fields_.prompt === 'string'
-      ? [{ version: fields_.version, prompt: fields_.prompt, savedAt: numberOr(fields_.savedAt, 0) }]
+    const entry = fields(row);
+    return typeof entry.version === 'number' && typeof entry.prompt === 'string'
+      ? [{ version: entry.version, prompt: entry.prompt, savedAt: numberOr(entry.savedAt, 0) }]
       : [];
   });
   return versions.length ? versions.slice(-MAX_VERSIONS) : [{ version: promptVersion, prompt, savedAt: createdAt }];
