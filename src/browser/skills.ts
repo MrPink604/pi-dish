@@ -21,11 +21,14 @@ export function createSkills(options: {
   let viewHost: SkillsHost | null = null;
   let bodyEvents = new AbortController(), headerEvents = new AbortController();
   let indexingTimer: ReturnType<typeof setTimeout> | undefined, activationTimer: ReturnType<typeof setTimeout> | undefined;
-  const message = (error: unknown) => error instanceof Error ? error.message : String(error);
-  function owns(seq = skillsSeq): boolean {
+  function sameHost(host: SkillsHost): boolean {
     const current = options.self();
-    return seq === skillsSeq && isSkillsViewOpen() && !!viewHost && current.hostId === viewHost.hostId && current.base === viewHost.base && (current.token || '') === (viewHost.token || '');
+    return current.hostId === host.hostId && current.base === host.base && (current.token || '') === (host.token || '');
   }
+  function owns(seq = skillsSeq): boolean {
+    return seq === skillsSeq && isSkillsViewOpen() && !!viewHost && sameHost(viewHost);
+  }
+  const plural = (n: number) => n === 1 ? '' : 's';
   function retireBody(): void { bodyEvents.abort(); bodyEvents = new AbortController(); }
   async function read(path: string): Promise<unknown> {
     const host = viewHost;
@@ -35,18 +38,12 @@ export function createSkills(options: {
     if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
     return data;
   }
-  // --- Skills view (main-pane takeover) ------------------------------------
-  // Observational directory of discovered skills and their mined activation
-  // coverage. Directory + an in-takeover detail page (never a modal). Every
-  // token number is a chars/4 estimate; every usage number is inferred from
-  // tool calls — badged accordingly, and quiet skills are warm-muted, never
-  // alarm-colored. See TASKS/skills-view-phase1.md.
-  let skillsData: SkillDirectory | null = null;        // GET /api/skills payload
-  let skillsRefine: SkillRefine | null = null;      // refine config from the same payload
+  let skillsData: SkillDirectory | null = null;
+  let skillsRefine: SkillRefine | null = null;
   let skillsSort = 'recent';
   let skillsFilter = '';
-  let skillsDetailPath: string | null = null;  // absolute SKILL.md path when the detail is open
-  let skillsDetail: SkillCoverage | null = null;      // GET /api/skills/coverage payload
+  let skillsDetailPath: string | null = null;
+  let skillsDetail: SkillCoverage | null = null;
   let skillsSeq = 0;
 
   function isSkillsViewOpen() {
@@ -74,8 +71,6 @@ export function createSkills(options: {
     else loadSkillsDirectory();
   }
 
-  // Escape on the detail page steps back to the directory; on the directory it
-  // closes the takeover. Wired into the global Escape handler.
   function skillsViewEscape() {
     if (skillsDetailPath) { backToSkillsDirectory(); return true; }
     closeSkillsView();
@@ -83,12 +78,10 @@ export function createSkills(options: {
   }
 
   function fmtTok(n: number) {
-    n = Number(n) || 0;
     if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k';
     return String(n);
   }
   function fmtBytes(n: number) {
-    n = Number(n) || 0;
     if (n >= 1024 * 1024) return (n / 1048576).toFixed(1) + ' MB';
     if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
     return n + ' B';
@@ -99,8 +92,7 @@ export function createSkills(options: {
     return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   }
 
-  // Single-hue sparkline: bars scaled to `maxPx`, zero weeks as --chart-other
-  // stubs (never omitted). `pct` renders flex bars with % heights instead.
+  // Single-hue sparkline; zero weeks stay as --chart-other stubs. `pct` sizes bars by percentage.
   function renderSpark(weeks: readonly number[], { maxPx = 22, cls = 'spark', pct = false } = {}) {
     const max = Math.max(1, ...weeks);
     const bars = weeks.map(w => {
@@ -131,7 +123,7 @@ export function createSkills(options: {
     } catch (e) {
       if (!owns(seq)) return;
       body.classList.remove('usage-refreshing');
-      body.innerHTML = `<div class="usage-state">Could not load skills: ${escapeHtml(message(e))}</div>`;
+      body.innerHTML = `<div class="usage-state">Could not load skills: ${escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
     }
   }
 
@@ -264,7 +256,7 @@ export function createSkills(options: {
       renderSkillDetail(skill, cov);
     } catch (e) {
       if (!owns(seq) || skillsDetailPath !== skillPath) return;
-      body.innerHTML = `<div class="usage-state">Could not load coverage: ${escapeHtml(message(e))}</div>`;
+      body.innerHTML = `<div class="usage-state">Could not load coverage: ${escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
     }
   }
 
@@ -278,7 +270,6 @@ export function createSkills(options: {
     else loadSkillsDirectory();
   }
 
-  // Line-heat bucket from a line's read count relative to the mapped-read total.
   function heatClass(hits: number, numMapped: number) {
     if (!hits) return 'h0';
     const r = hits / Math.max(1, numMapped);
@@ -293,13 +284,12 @@ export function createSkills(options: {
     const body = element('skillsViewBody');
     const u = skill?.usage;
 
-    // Coverage centrepiece.
     let coverageHtml;
     if (cov.numMapped === 0) {
-      coverageHtml = `<div class="cov-cap">No ranged reads recorded since this file was last edited${cov.excludedBeforeMtime ? ` (${cov.excludedBeforeMtime} older read${cov.excludedBeforeMtime === 1 ? '' : 's'} predate it)` : ''}.</div>`;
+      coverageHtml = `<div class="cov-cap">No ranged reads recorded since this file was last edited${cov.excludedBeforeMtime ? ` (${cov.excludedBeforeMtime} older read${plural(cov.excludedBeforeMtime)} predate it)` : ''}.</div>`;
     } else if (cov.flatFullRead) {
       coverageHtml = `<div class="cov-flat">This skill is short enough that every one of the last
-        ${cov.numMapped} read${cov.numMapped === 1 ? '' : 's'} loaded it in full — nothing has been
+        ${cov.numMapped} read${plural(cov.numMapped)} loaded it in full — nothing has been
         skipped, so there is no partial-coverage map to show.</div>`;
     } else {
       const secRows = cov.sections.map((sec, i) => {
@@ -315,8 +305,8 @@ export function createSkills(options: {
           <div class="sec-open" id="skSecOpen${i}" style="display:none"></div>`;
       }).join('');
       coverageHtml = `
-        <div class="cov-headline"><b>~${fmtTok(cov.unreadTokensEst)} tok</b> (est) never entered context across the last ${cov.numMapped} read${cov.numMapped === 1 ? '' : 's'}</div>
-        <div class="cov-cap">${cov.numMapped} ranged read${cov.numMapped === 1 ? '' : 's'} mapped · ${cov.targetedTouches} targeted access${cov.targetedTouches === 1 ? '' : 'es'} (counted as touches, not mapped)${cov.excludedBeforeMtime ? ` · ${cov.excludedBeforeMtime} older read${cov.excludedBeforeMtime === 1 ? '' : 's'} predate this version` : ''}</div>
+        <div class="cov-headline"><b>~${fmtTok(cov.unreadTokensEst)} tok</b> (est) never entered context across the last ${cov.numMapped} read${plural(cov.numMapped)}</div>
+        <div class="cov-cap">${cov.numMapped} ranged read${plural(cov.numMapped)} mapped · ${cov.targetedTouches} targeted access${cov.targetedTouches === 1 ? '' : 'es'} (counted as touches, not mapped)${cov.excludedBeforeMtime ? ` · ${cov.excludedBeforeMtime} older read${plural(cov.excludedBeforeMtime)} predate this version` : ''}</div>
         ${secRows}
         <div class="d-note">Coverage maps ranged reads against the current file version only —
           activations before the last edit count toward totals but aren't mapped. A short skill
@@ -325,7 +315,7 @@ export function createSkills(options: {
 
     const kinds = cov.kindSplit || {};
     const wsLine = u?.topCwd
-      ? `Used in ${cov.cwdCount || u.cwdCount || 1} workspace${(cov.cwdCount || u.cwdCount || 1) === 1 ? '' : 's'}, mostly <span class="mono">${escapeHtml(shortCwd(cov.topCwd))}</span>`
+      ? `Used in ${cov.cwdCount || u.cwdCount || 1} workspace${plural(cov.cwdCount || u.cwdCount || 1)}, mostly <span class="mono">${escapeHtml(shortCwd(cov.topCwd))}</span>`
       : 'No workspace activity recorded yet';
     let latestHtml = '';
     if (cov.latest && cov.latest.sessionId) {
@@ -397,9 +387,7 @@ export function createSkills(options: {
     });
   }
 
-  // The ✎ launcher: prefill the new-session takeover with the skill dir as cwd
-  // and an evidence-bundle draft. Never auto-sends — the user reviews the draft
-  // in the composer after the session spawns.
+  // Prefills the new-session takeover with an evidence-bundle draft; never auto-sends.
   function startSkillRefine() {
     if (!owns() || !viewHost) return;
     const skill = (skillsData?.skills || []).find(s => s.skill === skillsDetailPath);
@@ -440,14 +428,13 @@ export function createSkills(options: {
     return lead.join('\n') + parts.join('\n');
   }
 
-  // "latest activation →": select the session and best-effort scroll to the
-  // activating entry (the per-message deep-link machinery keys on entry id).
+  // Selects the session, then best-effort scrolls to the activating entry.
   async function openSkillActivation(id: string, entryId: string): Promise<void> {
     if (!owns() || !viewHost) return;
     const endpoint = viewHost;
     closeSkillsView();
     const navigation = skillsSeq;
-    const current = () => !disposed && navigation === skillsSeq && options.self().hostId === endpoint.hostId && options.self().base === endpoint.base && (options.self().token || '') === (endpoint.token || '');
+    const current = () => !disposed && navigation === skillsSeq && sameHost(endpoint);
     if (!sessionState.findSession(id, endpoint.hostId)) await options.loadPrevious();
     if (!current() || !sessionState.findSession(id, endpoint.hostId)) return;
     const selecting = options.selectSession(id, { host: endpoint.hostId });

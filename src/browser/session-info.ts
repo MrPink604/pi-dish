@@ -44,12 +44,6 @@ export function createSessionInfo(options: {
     return decodeSessionShare(value);
   }
 
-  async function apiSend(host: HostEndpoint, path: string): Promise<unknown> {
-    const response = await apiFetch(host, path, { method: 'POST' }); const data: unknown = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
-    return data;
-  }
-
   // --- Session stats modal ---
   let statsModalGeneration = 0;
   let statsModalOwner: SelectionOwner | null = null;
@@ -147,9 +141,9 @@ export function createSessionInfo(options: {
   // link as a click-to-copy row plus a Revoke button.
   async function loadShareSection(owner: SelectionOwner, generation: number): Promise<void> {
     if (!ownsStatsModal(owner, generation) || !statsEndpoint) return;
-    const host = statsEndpoint, sequence = ++shareSequence, element = document.getElementById('statsShare'); if (!element) return;
-    if (!sessionSupports(sessionState.findSession(owner.id, owner.host), 'export')) { element.remove(); return; }
-    element.innerHTML = '<div class="stats-share-title">Public share link</div><div class="stats-share-body">Loading…</div>';
+    const host = statsEndpoint, sequence = ++shareSequence, holder = document.getElementById('statsShare'); if (!holder) return;
+    if (!sessionSupports(sessionState.findSession(owner.id, owner.host), 'export')) { holder.remove(); return; }
+    holder.innerHTML = '<div class="stats-share-title">Public share link</div><div class="stats-share-body">Loading…</div>';
     try { const share = await shareFor(host, owner.id); if (sequence === shareSequence) renderShareSection(owner, share, generation); }
     catch { if (sequence === shareSequence) renderShareSection(owner, null, generation); }
   }
@@ -158,8 +152,8 @@ export function createSessionInfo(options: {
     shareEvents.abort(); shareEvents = new AbortController();
     const sequence = ++shareSequence, host = statsEndpoint;
     const current = () => sequence === shareSequence && ownsStatsModal(owner, generation);
-    const element = document.getElementById('statsShare'); if (!element) return;
-    const body = element.querySelector('.stats-share-body') || element;
+    const holder = document.getElementById('statsShare'); if (!holder) return;
+    const body = holder.querySelector('.stats-share-body') || holder;
     const link = share ? share.url || location.origin + share.path : '';
     body.innerHTML = share
       ? `<button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button><button type="button" class="btn-small btn-danger" id="shareRevokeBtn">Revoke</button>`
@@ -261,7 +255,7 @@ export function createSessionInfo(options: {
       closeBtn.disabled = true;
       closeBtn.textContent = detach ? 'Detaching…' : 'Closing…';
       try {
-        await apiSend(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/close`);
+        await json(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/close`, { method: 'POST' });
         if (!ownsStatsModal(owner, generation)) return;
         closeStatsModal();
         await finishSessionClose(sessionId, host, owner);
@@ -290,7 +284,7 @@ export function createSessionInfo(options: {
       restartBtn.textContent = 'Restarting…';
       setStatus('Restarting agent…', 'working');
       try {
-        const data = await apiSend(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/restart`);
+        const data = await json(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/restart`, { method: 'POST' });
         if (!record(data) || typeof data.id !== 'string' || !data.id) throw new Error('Invalid restart response');
         if (ownsStatsModal(owner, generation)) closeStatsModal();
         if (owns(owner, endpoint)) setStatus('Agent restarted');
@@ -323,15 +317,15 @@ export function createSessionInfo(options: {
     const host = statsEndpoint, sequence = ++pagesSequence;
     pagesEvents.abort(); pagesEvents = new AbortController();
     const current = () => sequence === pagesSequence && ownsStatsModal(owner, generation);
-    const element = document.getElementById('statsPages'); if (!element) return;
+    const holder = document.getElementById('statsPages'); if (!holder) return;
     try {
       const pages = decodePublishedPages(await json(host, `/api/pages?sessionId=${encodeURIComponent(owner.id)}`));
       if (!current()) return;
-      element.innerHTML = pages.length ? '<div class="stats-share-title">Published pages</div>' + pages.map(page => {
+      holder.innerHTML = pages.length ? '<div class="stats-share-title">Published pages</div>' + pages.map(page => {
         const link = page.url || location.origin + page.path, label = page.title || page.root.split('/').pop();
         return `<div class="stats-page-row" data-token="${escapeHtml(page.token)}"><span class="stats-page-name" title="${escapeHtml(page.root)}">${escapeHtml(label)}${page.missing ? ' <span class="stats-page-missing">(file missing)</span>' : ''}</span><button type="button" class="stats-copy stats-share-link" data-copy="${escapeHtml(link)}" title="Click to copy">${escapeHtml(link)}</button><button type="button" class="btn-small btn-danger stats-page-revoke">Revoke</button></div>`;
       }).join('') : '';
-      element.querySelectorAll<HTMLButtonElement>('.stats-page-revoke').forEach(button => {
+      holder.querySelectorAll<HTMLButtonElement>('.stats-page-revoke').forEach(button => {
         const token = button.closest<HTMLElement>('.stats-page-row')?.dataset.token; if (!token) return;
         button.addEventListener('click', async () => {
           if (!current() || button.disabled) return; button.disabled = true;
@@ -339,7 +333,7 @@ export function createSessionInfo(options: {
           catch (error) { if (current()) { button.disabled = false; setStatus('Failed to revoke: ' + errorMessage(error), 'error'); } }
         }, { signal: pagesEvents.signal });
       });
-    } catch { if (current()) element.innerHTML = ''; }
+    } catch { if (current()) holder.innerHTML = ''; }
   }
 
   // --- Shared artifacts (header 📦: everything published/shared from the
