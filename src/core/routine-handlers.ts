@@ -28,45 +28,43 @@ export interface RoutineHandlers {
   getInvocation: RoutineHandler;
 }
 
-/** Access only: primitive boxing and null failures retain their original behavior. */
-function property(value: unknown, key: string): unknown {
-  if (value === null || value === undefined) throw new TypeError(`Cannot read properties of ${value} (reading '${key}')`);
-  return Reflect.get(Object(value), key);
+interface RoutineError extends Error {
+  status?: number;
+  invocation?: RoutineInvocation;
+  retryAfterSec?: number;
+  lastInvocation?: RoutineInvocation | null;
+}
+
+function bodyFields(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 
 const INVOCATION_ATTR_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
-
-function escapeInvocationAttr(value: unknown): string {
-  return String(value).replace(/[&<>"]/g, (ch) => INVOCATION_ATTR_ESCAPES[ch]);
-}
 
 /** Append caller input without templating the prompt, then expand composer-style #refs. */
 export function composeRoutinePrompt(routine: Routine, invocation: RoutineInvocation | null | undefined, refs: SessionRefDependencies): string {
   let text = routine.prompt;
   if (invocation && invocation.input !== null && invocation.input !== undefined) {
-    const source = invocation.source ? ` source="${escapeInvocationAttr(invocation.source)}"` : '';
+    const source = invocation.source
+      ? ` source="${invocation.source.replace(/[&<>"]/g, (ch) => INVOCATION_ATTR_ESCAPES[ch])}"` : '';
     text += `\n\n<invocation-input${source} invocation="${invocation.id}">\n`
       + `${JSON.stringify(invocation.input, null, 2)}\n</invocation-input>`;
   }
   return expandSessionRefs(text, [], refs);
 }
 
-function expandRoutineCwd(cwd: unknown): unknown {
-  return typeof cwd === 'string' && cwd.startsWith('~')
-    ? path.join(os.homedir(), cwd.slice(1).replace(/^\//, '')) : cwd;
-}
-
 function routineErrorResponse(res: RoutineResponse, error: unknown): RoutineResponse {
+  const routineError = error as RoutineError;
   const payload: { error: unknown; invocation?: unknown; retryAfterSec?: unknown; lastInvocation?: unknown } = {
-    error: property(error, 'message'),
+    error: routineError.message,
   };
-  if (property(error, 'invocation')) payload.invocation = property(error, 'invocation');
-  if (property(error, 'retryAfterSec') !== undefined) {
-    payload.retryAfterSec = property(error, 'retryAfterSec');
-    payload.lastInvocation = property(error, 'lastInvocation') || null;
+  if (routineError.invocation) payload.invocation = routineError.invocation;
+  if (routineError.retryAfterSec !== undefined) {
+    payload.retryAfterSec = routineError.retryAfterSec;
+    payload.lastInvocation = routineError.lastInvocation || null;
   }
   // Express remains the runtime validator for a thrown object's status value.
-  return res.status((property(error, 'status') || 500) as number).json(payload);
+  return res.status(routineError.status || 500).json(payload);
 }
 
 const ROUTINE_INVOCATION_PAGE_MAX = 200;
@@ -76,30 +74,26 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
 
   // Same pilot validation and precedence as POST /api/sessions/new, before the
   // definition store validates its fields. Pi ignores pilot-only selections.
-  async function validateRoutinePilot(input: unknown): Promise<void> {
-    const harness = property(input, 'harness');
-    const model = property(input, 'model');
-    const thinking = property(input, 'thinking');
-    const cwd = property(input, 'cwd');
+  async function validateRoutinePilot(harness: unknown, model: unknown, thinking: unknown, cwd: unknown): Promise<void> {
     const descriptor = getHarness(harness || 'pi');
     if (!descriptor) throw Object.assign(new Error(`Unknown harness: ${harness}`), { status: 400 });
-    await validateHarnessPilotSelection(descriptor, { model, thinking, cwd: expandRoutineCwd(cwd) });
+    const expandedCwd = typeof cwd === 'string' && cwd.startsWith('~')
+      ? path.join(os.homedir(), cwd.slice(1).replace(/^\//, '')) : cwd;
+    await validateHarnessPilotSelection(descriptor, { model, thinking, cwd: expandedCwd });
   }
 
-  function routineStats(routine: Routine, invocations: RoutineInvocation[]) {
-    const mine = invocations.filter((entry) => entry.routineId === routine.id);
-    return {
-      invocations: mine.length,
-      running: mine.filter((entry) => entry.status === 'starting' || entry.status === 'running').length,
-      lastInvocation: mine[0] || null,
-      nextRunAt: runner.nextRunAt(routine),
-    };
-  }
-
-  /** List rows omit the version history, which can be large. */
   function routineSummary(routine: Routine, invocations: RoutineInvocation[]) {
     const { versions, ...rest } = routine;
-    return { ...rest, stats: routineStats(routine, invocations) };
+    const mine = invocations.filter((entry) => entry.routineId === routine.id);
+    return {
+      ...rest,
+      stats: {
+        invocations: mine.length,
+        running: mine.filter((entry) => entry.status === 'starting' || entry.status === 'running').length,
+        lastInvocation: mine[0] || null,
+        nextRunAt: runner.nextRunAt(routine),
+      },
+    };
   }
 
   const list: RoutineHandler = (_req, res) => {
@@ -108,9 +102,9 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
   };
 
   const create: RoutineHandler = async (req, res) => {
-    const input = req.body || {};
+    const input = bodyFields(req.body);
     try {
-      await validateRoutinePilot(input);
+      await validateRoutinePilot(input.harness, input.model, input.thinking, input.cwd);
       res.status(201).json({ routine: routinesStore.createRoutine(input) });
     } catch (error) {
       routineErrorResponse(res, error);
@@ -126,14 +120,14 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
   const update: RoutineHandler = async (req, res) => {
     const existing = routinesStore.getRoutine(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Routine not found' });
-    const patch = req.body || {};
+    const patch = bodyFields(req.body);
     try {
-      await validateRoutinePilot({
-        harness: property(patch, 'harness') ?? existing.harness,
-        model: property(patch, 'model') === undefined ? existing.model : property(patch, 'model'),
-        thinking: property(patch, 'thinking') === undefined ? existing.thinking : property(patch, 'thinking'),
-        cwd: property(patch, 'cwd') ?? existing.cwd,
-      });
+      await validateRoutinePilot(
+        patch.harness ?? existing.harness,
+        patch.model === undefined ? existing.model : patch.model,
+        patch.thinking === undefined ? existing.thinking : patch.thinking,
+        patch.cwd ?? existing.cwd,
+      );
       res.json({ routine: routinesStore.updateRoutine(existing.id, patch) });
     } catch (error) {
       routineErrorResponse(res, error);
@@ -150,15 +144,14 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
   const invoke: RoutineHandler = async (req, res) => {
     const routine = routinesStore.getRoutine(req.params.id);
     if (!routine) return res.status(404).json({ error: 'Routine not found' });
-    const body = req.body || {};
-    const input = routinesStore.RoutineInputAdmission.prepare(
-      property(body, 'input') === undefined ? null : property(body, 'input'));
-    if (!input) {
+    const body = bodyFields(req.body);
+    const input = body.input === undefined ? null : body.input;
+    if (routinesStore.inputBytes(input) > routinesStore.MAX_INPUT_BYTES) {
       return res.status(413).json({ error: `input must serialize to at most ${routinesStore.MAX_INPUT_BYTES} bytes` });
     }
     let source: string | null = null;
-    if (property(body, 'source') !== undefined && property(body, 'source') !== null) {
-      const candidate = property(body, 'source');
+    if (body.source !== undefined && body.source !== null) {
+      const candidate = body.source;
       if (typeof candidate !== 'string' || candidate.length > routinesStore.MAX_SOURCE) {
         return res.status(400).json({ error: `source must be a string of at most ${routinesStore.MAX_SOURCE} characters` });
       }

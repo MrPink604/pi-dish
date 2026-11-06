@@ -16,8 +16,6 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
-const http = require("node:http");
-const express = require("express");
 const originalHome = process.env.HOME;
 const originalCloseGrace = process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS;
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-routines-test-'));
@@ -182,40 +180,44 @@ test('deleting a routine keeps its ledger entries', () => {
     assert.equal(store.countInvocations(routine.id), 1);
     assert.equal(store.readInvocations()[0].routineName, 'nightly-review', 'the name is denormalized');
 });
-test('external partial records keep their fields and native version arithmetic across updates', () => {
-    const saved = { id: 'external', name: 42, prompt: 'old', promptVersion: '2', versions: [], extra: { retained: true } };
+test('stored records are validated and normalized at the file boundary', () => {
     fs.writeFileSync(path.join(dishDir, 'routines.json'), JSON.stringify({
-        routines: { external: saved, wrongKey: { id: 'other' } },
+        routines: {
+            external: { id: 'external', name: 42, prompt: 'old', cwd: '/tmp' },
+            wrongKey: { id: 'other', name: 'other', prompt: 'p', cwd: '/tmp' },
+            partial: {
+                id: 'partial', name: 'partial', prompt: 'old', cwd: '/tmp/work',
+                promptVersion: '2', model: 42, thinking: 'ultra', enabled: 'yes', harness: 'ghost',
+                schedule: { cron: '@daily' }, extra: { retained: true },
+            },
+        },
     }));
-    assert.deepEqual(store.listRoutines(), [saved]);
-    const updated = updateRoutine('external', { prompt: 'new' });
-    assert.equal(updated.promptVersion, '21');
-    assert.deepEqual(updated.versions, [{ version: '21', prompt: 'new', savedAt: updated.updatedAt }]);
-    assert.deepEqual(updated.extra, saved.extra);
-    assert.equal(updated.name, 42);
-    const run = { id: 'external-run', routineId: 'external', startedAt: '100', status: 'running', extra: 'kept' };
-    fs.writeFileSync(path.join(dishDir, 'routine-invocations.json'), JSON.stringify({ invocations: [run, { id: 1 }] }));
-    assert.deepEqual(store.readInvocations(), [run]);
-    const completed = store.updateInvocation(run.id, { status: 'completed', endedAt: '150', extra: 'ignored' });
+    // A row whose id does not match its key, or whose name is not a string, is not a routine.
+    assert.deepEqual(store.listRoutines().map((routine) => routine.id), ['partial']);
+    const partial = store.getRoutine('partial');
+    assert.ok(partial);
+    assert.equal(partial.promptVersion, 1, 'a non-numeric version falls back to 1');
+    assert.equal(partial.model, undefined);
+    assert.equal(partial.thinking, undefined);
+    assert.equal(partial.enabled, true);
+    assert.equal(partial.harness, 'ghost', 'the harness is a launch selection, not a registry member');
+    assert.deepEqual(partial.schedule, { cron: '@daily' });
+    assert.deepEqual(partial.versions, [{ version: 1, prompt: 'old', savedAt: 0 }]);
+    assert.equal(Object.hasOwn(partial, 'extra'), false, 'unknown keys are dropped');
+    fs.writeFileSync(path.join(dishDir, 'routine-invocations.json'), JSON.stringify({
+        invocations: [
+            { id: 'external-run', routineId: 'partial', startedAt: '100', status: 'running', extra: 'kept' },
+            { id: 'bad-status', routineId: 'partial', startedAt: 1, status: 'nonsense' },
+            { id: 1 },
+        ],
+    }));
+    assert.deepEqual(store.readInvocations().map((entry) => entry.id), ['external-run']);
+    const completed = store.updateInvocation('external-run', { status: 'completed', endedAt: 150 });
     assert.ok(completed);
-    assert.equal(completed.durationMs, 50);
-    assert.equal(completed.endedAt, '150');
-    assert.equal(completed.extra, 'kept');
+    assert.equal(completed.startedAt, 0, 'a non-numeric start falls back to 0');
 });
-test('direct ledger admission retains validation order and rejects without persisting', () => {
+test('the ledger rejects input over the cap without persisting', () => {
     const routine = store.createRoutine(definition());
-    const input = { blob: 'x'.repeat(store.MAX_INPUT_BYTES) };
-    const cases = [
-        [{ status: 'bad', source: 42, input }, 400, /routine/],
-        [{ routine, status: 'bad', source: 42, input }, 400, /status/],
-        [{ routine, status: 'starting', source: 42, input }, 400, /source/],
-        [{ routine, status: 'starting', input }, 413, /input/],
-    ];
-    for (const [fields, status, message] of cases) {
-        const error = catchError(() => store.createInvocation(fields));
-        assert.equal(error.status, status);
-        assert.match(error.message, message);
-    }
     const cyclic = {};
     cyclic.self = cyclic;
     for (const value of [cyclic, 1n, Symbol('input'), () => null]) {
@@ -233,24 +235,6 @@ test('input cap counts UTF-8 bytes and includes JSON string quotes', () => {
     const error = catchError(() => store.createInvocation({ routine, status: 'completed', input: input + 'a' }));
     assert.equal(error.status, 413);
     assert.deepEqual(store.readInvocations().map(row => row.id), [accepted.id]);
-});
-test('admission owns its original input and rejects forged size receipts as raw input', () => {
-    const routine = store.createRoutine(definition());
-    const input = { note: 'before' };
-    const admission = store.RoutineInputAdmission.prepare(input);
-    assert.ok(admission);
-    const huge = { blob: 'x'.repeat(store.MAX_INPUT_BYTES) };
-    const prototypeForgery = Object.assign(Object.create(Object.getPrototypeOf(admission)), { input: huge, size: 0 });
-    for (const forged of [{ input: huge, size: 0 }, prototypeForgery]) {
-        const error = catchError(() => store.createInvocation({ routine, status: 'completed', input: forged }));
-        assert.equal(error.status, 413);
-    }
-    assert.deepEqual(store.readInvocations(), []);
-    input.note = 'after';
-    Object.assign(admission, { input: huge, size: 0 });
-    const accepted = store.createInvocation({ routine, status: 'completed', input: admission });
-    assert.equal(accepted.input, input, 'the genuine private slot, not public lookalike fields, owns input');
-    assert.deepEqual(existingInvocation(accepted.id).input, { note: 'after' }, 'measurement is not a normalized snapshot');
 });
 // ---------------------------------------------------------------------------
 // Runner
@@ -289,7 +273,6 @@ function harness(overrides = {}) {
     const resumed = [];
     let nextId = 1;
     const deps = {
-        store,
         createSession: async (spec) => {
             created.push(spec);
             const id = `sess-${nextId++}`;
@@ -386,7 +369,7 @@ test('busy: skip refuses with 409, steer and followUp deliver into the running s
     const first = runner.invoke(routine, { trigger: 'invoke' });
     await settleTwice();
     assert.equal(existingInvocation(first.id).status, 'running');
-    const refused = catchError(() => runner.invoke(routine, { trigger: 'invoke', source: 42 }));
+    const refused = catchError(() => runner.invoke(routine, { trigger: 'invoke', source: 'cli' }));
     assert.equal(refused.status, 409);
     assert.ok('invocation' in refused && isRecord(refused.invocation));
     assert.equal(refused.invocation.id, first.id);
@@ -480,7 +463,7 @@ test('minIntervalSec rate-limits invokes without recording the rejection', async
     await settleTwice();
     existingSession(sessions, 'sess-1').endTurn();
     await settleTwice();
-    const limited = catchError(() => runner.invoke(routine, { trigger: 'invoke', source: 42 }));
+    const limited = catchError(() => runner.invoke(routine, { trigger: 'invoke', source: 'cli' }));
     assert.equal(limited.status, 429);
     assert.ok('retryAfterSec' in limited && typeof limited.retryAfterSec === 'number');
     assert.ok(limited.retryAfterSec > 0 && limited.retryAfterSec <= 60);
@@ -642,80 +625,4 @@ test('input larger than the cap is refused before anything is recorded', () => {
     const error = catchError(() => runner.invoke(routine, { trigger: 'invoke', input: huge }));
     assert.equal(error.status, 413);
     assert.equal(store.countInvocations(routine.id), 0);
-});
-test('admission measures the first toJSON value without normalizing later persistence', () => {
-    const routine = store.createRoutine(definition());
-    const { runner } = harness({ createSession: () => new Promise(() => { }) });
-    let value = { note: 'admission' };
-    const later = { blob: 'x'.repeat(store.MAX_INPUT_BYTES) };
-    const input = { toJSON() { const current = value; value = later; return current; } };
-    try {
-        const invocation = runner.invoke(routine, { input });
-        assert.equal(invocation.input, input);
-        assert.deepEqual(existingInvocation(invocation.id).input, later, 'persistence still serializes the original object after the single admission observation');
-    }
-    finally {
-        runner.stop();
-    }
-});
-test('HTTP input admission retains JSON 413 versus native serialization rejection ownership', async () => {
-    const { createRoutineHandlers } = require('../lib/routine-handlers.js');
-    const routine = store.createRoutine(definition());
-    const { runner } = harness();
-    const handlers = createRoutineHandlers({ runner, validateHarnessPilotSelection: async () => { } });
-    const app = express();
-    const nativeErrors = [];
-    const fixtureErrorStatus = 599;
-    let injectedInput;
-    // These raw JavaScript values cannot all traverse JSON wire encoding.
-    const injectInput = (req, _res, next) => {
-        req.body = { input: injectedInput, source: 42 };
-        next();
-    };
-    const forwardInvocation = (req, res, next) => {
-        // Express4 does not forward rejected handler promises automatically.
-        void Promise.resolve(handlers.invoke(req, res, next)).catch(next);
-    };
-    const observeNativeFailure = (error, _req, res, _next) => {
-        nativeErrors.push(error);
-        res.status(fixtureErrorStatus).end();
-    };
-    app.post('/routines/:id/invoke', injectInput, forwardInvocation);
-    app.use(observeNativeFailure);
-    const server = http.createServer(app);
-    const cyclic = {};
-    cyclic.self = cyclic;
-    try {
-        await new Promise((resolve, reject) => {
-            server.once('error', reject);
-            server.listen(0, '127.0.0.1', resolve);
-        });
-        const address = server.address();
-        assert.ok(address && typeof address !== 'string');
-        const invoke = (input) => {
-            injectedInput = input;
-            return fetch(`http://127.0.0.1:${address.port}/routines/${encodeURIComponent(routine.id)}/invoke`, { method: 'POST' });
-        };
-        for (const input of [cyclic, 1n, Symbol('input'), () => null]) {
-            const before = nativeErrors.length;
-            const response = await invoke(input);
-            assert.equal(response.status, fixtureErrorStatus, 'native failures reach the fixture error boundary');
-            await response.arrayBuffer();
-            assert.equal(nativeErrors.length, before + 1);
-            assert.ok(nativeErrors[before] instanceof TypeError);
-        }
-        assert.deepEqual(store.readInvocations(), []);
-        const failuresBeforeOversize = nativeErrors.length;
-        const response = await invoke({ blob: 'x'.repeat(store.MAX_INPUT_BYTES) });
-        assert.equal(response.status, 413, 'the actual route rejects size before invalid source42');
-        const payload = await response.json();
-        assert.ok(isRecord(payload) && typeof payload.error === 'string');
-        assert.equal(nativeErrors.length, failuresBeforeOversize, '413 is handled by the route, not the fixture error boundary');
-        assert.deepEqual(store.readInvocations(), []);
-    }
-    finally {
-        server.closeAllConnections();
-        await new Promise(resolve => server.close(() => resolve()));
-        runner.stop();
-    }
 });

@@ -2615,7 +2615,6 @@ export function startServer(rootDirectory: string): Server {
 
 
   const routineRunner = createRoutineRunner({
-    store: routinesStore,
     createSession: sessionOperations.createSession,
     resumeSession: sessionOperations.resumeSessionById,
     getLiveSession,
