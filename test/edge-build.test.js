@@ -14,8 +14,9 @@ test('edge delivery preserves executable CJS and ESM, rejects drift and leaves o
     try {
         for (const dir of ['scripts', 'skills/scripts', 'extensions'])
             fs.mkdirSync(path.join(root, dir), { recursive: true });
-        fs.copyFileSync(path.join(__dirname, '../scripts/build-edges.js'), path.join(root, 'scripts/build-edges.js'));
-        fs.copyFileSync(path.join(__dirname, '../scripts/build-output.js'), path.join(root, 'scripts/build-output.js'));
+        for (const file of ['scripts/build-edges.js', 'scripts/build-output.js', 'tsconfig.node.json', 'tsconfig.base.json']) {
+            fs.copyFileSync(path.join(__dirname, '..', file), path.join(root, file));
+        }
         const config = JSON.parse(fs.readFileSync(path.join(__dirname, '../tsconfig.edges.json'), 'utf8'));
         assert.ok(typeof config === 'object' && config !== null && 'files' in config);
         const fixtureSources = ['skills/scripts/example.ts', 'extensions/share.mts'];
@@ -80,7 +81,8 @@ test('skill client bundle resolves aliases after installation without the source
         for (const dir of ['scripts', 'skills/lib', 'extensions', 'src/core']) {
             fs.mkdirSync(path.join(root, dir), { recursive: true });
         }
-        for (const file of ['scripts/build-edges.js', 'scripts/build-output.js', 'skills/lib/pi-dish-client.ts']) {
+        for (const file of ['scripts/build-edges.js', 'scripts/build-output.js', 'tsconfig.node.json',
+            'tsconfig.base.json', 'skills/lib/pi-dish-client.ts']) {
             fs.copyFileSync(path.join(__dirname, '..', file), path.join(root, file));
         }
         // Compile the real canonical owner, not a second fixture implementation.
