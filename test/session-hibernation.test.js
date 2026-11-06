@@ -1,18 +1,7 @@
 // Generated test/tool from test/session-hibernation.test.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-/**
- * Memory-pressure hibernation (lib/session-hibernation.js): the pressure
- * thresholds, per-tree memory/kernel/service classification, the bounded
- * backwards `eval` scan, and the sampler's selection, skip and wake policy.
- * Ownership and live-safety proofs are ports here; their production
- * implementation is the shared lifecycle action tested in
- * test/session-bounces.test.js.
- *
- * HOME points at a temp dir so ~/.pi/dish/hibernation.json is per-test state.
- *
- * Run with: npm test
- */
+/** HOME points at a temp dir so ~/.pi/dish/hibernation.json is per-test state. */
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
