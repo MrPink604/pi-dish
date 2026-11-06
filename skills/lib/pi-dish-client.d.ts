@@ -121,6 +121,22 @@ export declare function stringValue(value: unknown, message: string): string;
 /** `fail` bound to one CLI's name, so every error line is attributable. */
 declare function makeFail(name: string): (message: unknown) => void;
 declare function print(value: unknown, json?: boolean): void;
+export interface CommandLine {
+    command: string;
+    positional: string[];
+    json: boolean;
+    session?: string;
+    url?: string;
+    /** Command-specific value flags, keyed without their leading dashes. */
+    values: Record<string, string | undefined>;
+}
+/**
+ * Parse `<command> [args] [flags]` as the skill CLIs accept it: the command is
+ * the first word, everything else is a positional argument or `--flag value`.
+ * `--json`, `--session` and `--url` are common; `flags` adds command-specific
+ * value flags.
+ */
+declare function parseCommandLine(argv: readonly string[], fallback: string, flags?: readonly string[]): CommandLine;
 declare function parentPid(pid: number): number | null;
 declare function ancestorPids(): Set<number>;
 declare function pidAlive(pid: number): boolean;
@@ -219,4 +235,4 @@ declare function truncateResult(text: unknown, maxLines?: number, maxChars?: num
  * `session`) and `options`.
  */
 declare function renderTranscript(input: unknown, options?: TranscriptOptions): string;
-export { makeFail, print, parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit, fleetHosts, resetFleetCache, hostSupports, hostLabelOf, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, summarizeToolArgs, truncateResult, };
+export { makeFail, print, parseCommandLine, parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId, discoverSession, discoverSessionQuietly, fleetCallerId, TOKEN, defaultBase, request, requestText, hostPath, api, unknownHostError, jsonInit, fleetHosts, resetFleetCache, hostSupports, hostLabelOf, parseRef, resolveHostPart, entryForHostName, resolveSessionRef, resolveSessionClientSide, stableSessionRef, mergeSearchResults, renderTranscript, summarizeToolArgs, truncateResult, };

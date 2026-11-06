@@ -44,6 +44,7 @@ __export(pi_dish_client_exports, {
   mergeSearchResults: () => mergeSearchResults,
   nativeSessionId: () => nativeSessionId,
   parentPid: () => parentPid,
+  parseCommandLine: () => parseCommandLine,
   parseRef: () => parseRef,
   pidAlive: () => pidAlive,
   print: () => print,
@@ -222,6 +223,28 @@ function print(value, json) {
   if (json) process.stdout.write(JSON.stringify(value, null, 2) + "\n");
   else if (typeof value === "string") process.stdout.write(value + "\n");
   else process.stdout.write(JSON.stringify(value, null, 2) + "\n");
+}
+function parseCommandLine(argv, fallback, flags = []) {
+  const line = { command: argv[0] ?? fallback, positional: [], json: false, values: {} };
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--json") {
+      line.json = true;
+      continue;
+    }
+    if (!arg.startsWith("-")) {
+      line.positional.push(arg);
+      continue;
+    }
+    const name = arg.startsWith("--") ? arg.slice(2) : "";
+    if (name !== "session" && name !== "url" && !flags.includes(name)) throw new Error(`unknown option: ${arg}`);
+    if (i + 1 >= argv.length) throw new Error(`${arg} needs a value`);
+    const value = argv[++i];
+    if (name === "session") line.session = value;
+    else if (name === "url") line.url = value;
+    else line.values[name] = value;
+  }
+  return line;
 }
 function parentPid(pid) {
   try {
@@ -736,6 +759,7 @@ function renderTranscript(input, options = {}) {
   mergeSearchResults,
   nativeSessionId,
   parentPid,
+  parseCommandLine,
   parseRef,
   pidAlive,
   print,

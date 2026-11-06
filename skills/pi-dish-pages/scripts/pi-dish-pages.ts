@@ -16,8 +16,9 @@
  */
 import fs = require('node:fs');
 import path = require('node:path');
+import type * as Client from '../../lib/pi-dish-client.js';
 
-let core: typeof import('../../lib/pi-dish-client.js');
+let core: typeof Client;
 try {
   core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
 } catch (e) {
@@ -30,33 +31,8 @@ try {
   process.exit(1);
 }
 
-const { makeFail, defaultBase, discoverSessionQuietly, request, hostPath, jsonInit } = core;
+const { makeFail, defaultBase, discoverSessionQuietly, request, hostPath, jsonInit, parseCommandLine } = core;
 const fail = makeFail('pi-dish-pages');
-
-interface PageArgs {
-  command: string;
-  rest: string[];
-  json?: boolean;
-  title?: string;
-  via?: string;
-  session?: string;
-  url?: string;
-}
-
-function parseArgs(argv: string[]): PageArgs {
-  const args: PageArgs = { command: argv[0] || 'publish', rest: [] };
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--json') args.json = true;
-    else if (arg === '--title') args.title = argv[++i];
-    else if (arg === '--via') args.via = argv[++i];
-    else if (arg === '--session') args.session = argv[++i];
-    else if (arg === '--url') args.url = argv[++i];
-    else if (arg.startsWith('-')) throw new Error(`unknown option: ${arg}`);
-    else args.rest.push(arg);
-  }
-  return args;
-}
 
 async function publishViaHub(base: string, hub: string, page: unknown): Promise<unknown> {
   const { data } = await request(base, '/api/host');
@@ -77,17 +53,17 @@ async function publishViaHub(base: string, hub: string, page: unknown): Promise<
 
 async function main() {
   let args;
-  try { args = parseArgs(process.argv.slice(2)); } catch (error) { return fail(core.errorMessage(error)); }
+  try { args = parseCommandLine(process.argv.slice(2), 'publish', ['title', 'via']); } catch (error) { return fail(core.errorMessage(error)); }
   if (args.command !== 'publish') {
     return fail(`unknown command: ${args.command} (use publish)`);
   }
-  const target = args.rest[0];
+  const target = args.positional[0];
   if (!target) return fail('publish needs a path');
   const abs = path.resolve(target);
   if (!fs.existsSync(abs)) return fail(`no such file or directory: ${abs}`);
 
   const base = defaultBase(args.url);
-  const via = args.via || process.env.PI_DISH_PUBLIC_VIA || null;
+  const via = args.values.via || process.env.PI_DISH_PUBLIC_VIA || null;
 
   // Page comments route back to the session that published the artifact, so
   // identify it the same way the comments CLI does. Discovery failing is a
@@ -97,7 +73,7 @@ async function main() {
   let page: unknown;
   try {
     const { data } = await request(base, '/api/pages',
-      jsonInit({ path: abs, title: args.title || null, ...(sessionId ? { sessionId } : {}) }));
+      jsonInit({ path: abs, title: args.values.title || null, ...(sessionId ? { sessionId } : {}) }));
     page = data;
   } catch (error) {
     return fail(`could not publish ${abs}: ${core.errorMessage(error)}`);
@@ -114,7 +90,7 @@ async function main() {
     // `owner` is the name the hub knows *this* host by, which is what its
     // mapping is keyed on — handy when a fleet map disagrees with itself.
     const mapping = hubFields ? { via, path: hubFields.path, url: hubFields.url, owner: hubFields.host || null } : null;
-    process.stdout.write(JSON.stringify({ ...core.record(page ?? {}), hub: mapping, hubError }, null, 2) + '\n');
+    core.print({ ...core.record(page ?? {}), hub: mapping, hubError }, true);
   } else {
     const pageFields = core.record(page);
     process.stdout.write(`${pageFields.url || pageFields.path}\n`);

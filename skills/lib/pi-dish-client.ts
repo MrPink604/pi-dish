@@ -151,6 +151,39 @@ function print(value: unknown, json?: boolean) {
   else process.stdout.write(JSON.stringify(value, null, 2) + '\n');
 }
 
+export interface CommandLine {
+  command: string;
+  positional: string[];
+  json: boolean;
+  session?: string;
+  url?: string;
+  /** Command-specific value flags, keyed without their leading dashes. */
+  values: Record<string, string | undefined>;
+}
+
+/**
+ * Parse `<command> [args] [flags]` as the skill CLIs accept it: the command is
+ * the first word, everything else is a positional argument or `--flag value`.
+ * `--json`, `--session` and `--url` are common; `flags` adds command-specific
+ * value flags.
+ */
+function parseCommandLine(argv: readonly string[], fallback: string, flags: readonly string[] = []): CommandLine {
+  const line: CommandLine = { command: argv[0] ?? fallback, positional: [], json: false, values: {} };
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === '--json') { line.json = true; continue; }
+    if (!arg.startsWith('-')) { line.positional.push(arg); continue; }
+    const name = arg.startsWith('--') ? arg.slice(2) : '';
+    if (name !== 'session' && name !== 'url' && !flags.includes(name)) throw new Error(`unknown option: ${arg}`);
+    if (i + 1 >= argv.length) throw new Error(`${arg} needs a value`);
+    const value = argv[++i];
+    if (name === 'session') line.session = value;
+    else if (name === 'url') line.url = value;
+    else line.values[name] = value;
+  }
+  return line;
+}
+
 // =========================================================================
 // Session discovery (process ancestry → bridge registry)
 // =========================================================================
@@ -790,7 +823,7 @@ function renderTranscript(input: unknown, options: TranscriptOptions = {}) {
 
 export {
   // output
-  makeFail, print,
+  makeFail, print, parseCommandLine,
   // discovery
   parentPid, ancestorPids, pidAlive, registryEntries, registryRouteId, sessionHarnessId, nativeSessionId,
   discoverSession, discoverSessionQuietly, fleetCallerId,
