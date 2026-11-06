@@ -1,4 +1,4 @@
-import { test as base, expect, type Locator, type Page, type Route, type TestInfo } from '@playwright/test';
+import { test as base, expect, type Locator, type Route, type TestInfo } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
 import { fork } from 'node:child_process';
 import fs = require('node:fs');
