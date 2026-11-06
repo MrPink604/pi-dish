@@ -6,11 +6,12 @@
  * sees a partial id.
  */
 import type { HostId } from './contracts';
+import { isRecord } from './wire-protocol';
 import crypto = require('crypto');
 import fs = require('fs');
 import os = require('os');
 import path = require('path');
-import { dishDir } from './dish-store';
+import { dishDir, readDishSettings } from './dish-store';
 
 const memo = new Map<string, HostId>(); // resolved host-id path -> uuid
 
@@ -52,11 +53,8 @@ function getHostId(): HostId {
 }
 
 // `hostLabel` in ~/.pi/dish/settings.json, else the machine's hostname.
-function getHostLabel(settings?: unknown): string {
-  if (settings === undefined) {
-    try { settings = JSON.parse(fs.readFileSync(path.join(dishDir(), 'settings.json'), 'utf8')); } catch { settings = null; }
-  }
-  const label = settings && typeof settings === 'object' ? (settings as { hostLabel?: unknown }).hostLabel : null;
+function getHostLabel(settings: unknown = readDishSettings()): string {
+  const label = isRecord(settings) ? settings.hostLabel : null;
   if (typeof label === 'string' && label.trim()) return label.trim();
   return os.hostname();
 }

@@ -493,10 +493,6 @@ async function buildRepoDiff(repoPath: string, state: GitRepoState, { includePat
   return repo;
 }
 
-export async function getRepoDiff(repoPath: string): Promise<GitRepoDiff> {
-  return buildRepoDiff(repoPath, await getRepoState(repoPath));
-}
-
 /** Generate one patch selected from a previously gated repo summary. */
 async function getFilePatch(repoPath: string, file: GitFilePatchSelection | null | undefined): Promise<GitFilePatch | null> {
   if (!file || typeof file.path !== 'string' || !file.path) return null;

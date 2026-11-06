@@ -2,10 +2,10 @@ import compression = require('compression');
 import express = require('express');
 import crypto = require('crypto');
 import fs = require('fs');
-import os = require('os');
 import path = require('path');
 import type { IncomingMessage } from 'http';
 import type { ParsedQs } from 'qs';
+import { dishDir } from './dish-store';
 import hostIdentity = require('./host-identity');
 import * as terminal from './terminal';
 import * as tmux from './tmux';
@@ -51,7 +51,7 @@ function readAuthToken(): string | null {
   const fromEnv = (process.env.PI_DISH_TOKEN || '').trim();
   if (fromEnv) return fromEnv;
   try {
-    const fromFile = fs.readFileSync(path.join(os.homedir(), '.pi', 'dish', 'token'), 'utf8').trim();
+    const fromFile = fs.readFileSync(path.join(dishDir(), 'token'), 'utf8').trim();
     if (fromFile) return fromFile;
   } catch {}
   return null;

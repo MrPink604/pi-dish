@@ -5,6 +5,7 @@ import { removeExtensionUIDialog } from './extension-ui-state';
 import { getHarness } from './harnesses';
 import { routeIdentity, routeSessionId } from './session-ownership';
 import { isRecord } from './wire-protocol';
+import { errorMessage } from './http-boundary';
 import type { LiveSession, SessionOwnership } from './session-ownership';
 
 export function createLiveSessionInfo(ownership: SessionOwnership) {
@@ -38,7 +39,7 @@ export function createLiveSessionInfo(ownership: SessionOwnership) {
         const result = await session.readTreeLeaf();
         return (isRecord(result) ? result.leafId : undefined) ?? null;
       } catch (error) {
-        if (!/unknown command/i.test(String(error instanceof Error ? error.message : error))) throw error;
+        if (!/unknown command/i.test(errorMessage(error))) throw error;
         // Remember per connection: a reconnect may be a newer extension.
         session.treeLeafUnsupported = true;
       }

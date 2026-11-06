@@ -30,4 +30,12 @@ function writeStore(name: string, data: unknown): void {
   fs.renameSync(tmp, file);
 }
 
-export = { dishDir, readStore, writeStore };
+function readDishSettings(): Record<string, unknown> {
+  return readStore('settings.json');
+}
+
+function writeDishSettings(settings: Record<string, unknown>): void {
+  writeStore('settings.json', settings);
+}
+
+export = { dishDir, readStore, writeStore, readDishSettings, writeDishSettings };

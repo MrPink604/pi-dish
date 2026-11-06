@@ -21,8 +21,6 @@ export interface HtmlShareRecord {
   sessionId?: never;
 }
 
-export type ShareRecord = SessionShareRecord | HtmlShareRecord;
-
 export interface SessionShareDto {
   kind: 'session';
   // Invalid legacy identities are returned unchanged, not silently discarded.

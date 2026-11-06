@@ -67,11 +67,6 @@ export interface SkillActivation {
     cwd: string | null;
     model: string;
 }
-export interface SearchProjection {
-    text: string;
-    tree: boolean;
-    leafId: string | null;
-}
 /** Only tree identity remains untrusted after the typed parser's search projection. */
 export declare function checkSearchLeaf(value: {
     leafId: unknown;

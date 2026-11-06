@@ -1,7 +1,7 @@
 import fs = require('fs');
-import os = require('os');
 import path = require('path');
 import crypto = require('crypto');
+import { dishDir } from './dish-store';
 import { isRecord } from './wire-protocol';
 
 export type RecoveryActivity = 'idle' | 'running' | 'uncertain';
@@ -121,7 +121,7 @@ function validActivity(value: unknown): value is RecoveryActivity {
 function fileFor(kind: 'observations' | 'controls', harnessId: string, nativeSessionId: string): string {
   if (!validId(harnessId) || !validId(nativeSessionId)) throw new Error('Invalid recovery session identity');
   const key = crypto.createHash('sha256').update(JSON.stringify([harnessId, nativeSessionId])).digest('hex');
-  return path.join(os.homedir(), '.pi', 'dish', 'recovery', kind, `${key}.json`);
+  return path.join(dishDir(), 'recovery', kind, `${key}.json`);
 }
 
 function syncDirectory(dir: string): void {
@@ -209,7 +209,7 @@ export function readRecord(harnessId: string, nativeSessionId: string): Recovery
 }
 
 export function listRecords(): RecoveryRecord[] {
-  const dir = path.join(os.homedir(), '.pi', 'dish', 'recovery', 'observations');
+  const dir = path.join(dishDir(), 'recovery', 'observations');
   const records: RecoveryRecord[] = [];
   try {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

@@ -14,8 +14,8 @@
  * a streaming multi-MB JSONL.
  */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { dishDir } from './dish-store';
 import type { SessionSource } from './session-source';
 import { loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
@@ -209,11 +209,11 @@ class NdjsonLog {
   }
 }
 
-// dir -> state; the dir comes from os.homedir() per call (tests swap HOME).
+// dir -> state; dishDir() re-reads HOME per call (tests swap it).
 const states = new Map<string, IndexState>();
 
 function getState(): IndexState {
-  const dir = path.join(os.homedir(), '.pi', 'dish', 'session-index');
+  const dir = path.join(dishDir(), 'session-index');
   let st = states.get(dir);
   if (!st) {
     st = {

@@ -14,6 +14,7 @@ import { LifecycleInterruption, proveBridgeRegistryClaim, registryIdentity, rout
 import type { BeforeLifecycleAction } from './session-ownership';
 import { formatModelRef, parseModelId } from './helper-models';
 import type { ModelRef } from './helper-types';
+import { dishDir } from './dish-store';
 import { record } from './helper-values';
 import { errorMessage, errorStatus } from './http-boundary';
 import * as tmux from './tmux';
@@ -174,7 +175,7 @@ function validateBridgeSocketConfig(env: HarnessEnvironment): void {
   if (override && !path.isAbsolute(override)) {
     throw new BridgeSocketConfigError('PI_DISH_SOCKET_DIR must be an absolute path');
   }
-  const socketDir = override ? path.resolve(override) : path.join(env.HOME || os.homedir(), '.pi', 'dish', 'sockets');
+  const socketDir = override ? path.resolve(override) : path.join(dishDir(), 'sockets');
   const socketPath = path.join(socketDir, BRIDGE_SOCKET_BASENAME);
   const bytes = Buffer.byteLength(socketPath);
   if (bytes > MAX_BRIDGE_SOCKET_PATH_BYTES) {
@@ -212,7 +213,7 @@ function materializeLaunchWrapper(descriptor: HarnessDescriptor, token: string):
   if (!descriptor.wrapperEntrypoint) {
     throw new BridgeSocketConfigError(`${descriptor.label} uses wrapper token injection without a wrapper entrypoint`);
   }
-  const dir = path.join(os.homedir(), '.pi', 'dish', 'launch-wrappers');
+  const dir = path.join(dishDir(), 'launch-wrappers');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stat = fs.statSync(dir);
   if (!stat.isDirectory() || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) {

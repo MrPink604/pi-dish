@@ -15,9 +15,9 @@
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { dishDir } from './dish-store';
 import { MAX_TTL_MS, MIN_TTL_MS, configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
 import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, entryModel, hasCacheActivity, resolveCacheTarget } from './session-metadata';
@@ -146,7 +146,7 @@ const stores = new Map<string, LifetimeStore>();
 const chains = new Map<string, Map<string, { ts: number; tier1h: boolean }>>();
 
 function storeFile(): string {
-  return path.join(os.homedir(), '.pi', 'dish', 'cache-lifetime.json');
+  return path.join(dishDir(), 'cache-lifetime.json');
 }
 
 function decodeObservations(value: unknown): Observation[] {

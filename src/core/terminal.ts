@@ -57,11 +57,6 @@ export interface TerminalErrorFrame {
 
 export type TerminalServerFrame = TerminalAttachFrame | TerminalOutputFrame | TerminalExitFrame | TerminalErrorFrame;
 
-export type TerminalClientFrame =
-  | { type: 'input'; data: unknown }
-  | { type: 'resize'; cols?: unknown; rows?: unknown }
-  | { type: 'restart' };
-
 export interface TerminalState {
   proc: IPty;
   cwd: string;

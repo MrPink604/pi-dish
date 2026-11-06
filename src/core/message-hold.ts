@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
+import { dishDir } from './dish-store';
 import type { LiveSession } from './session-ownership';
 
 export interface PeerSender { id: string; ref: string; name: string }
@@ -84,7 +84,7 @@ function batchText(batch: Batch): string {
 
 /** Recipient-owned durable inbox. Each delivery mode keeps its own fixed window. */
 export function createMessageHold(ports: HoldPorts): MessageHold {
-  const file = path.join(os.homedir(), '.pi', 'dish', 'message-holds.json');
+  const file = path.join(dishDir(), 'message-holds.json');
   let batches = readBatches(file);
   let timer: NodeJS.Timeout | undefined;
   let running = false;

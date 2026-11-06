@@ -18,7 +18,7 @@ import * as piSDK from './pi-sdk';
 import { readSessionMessages, readSessionCwd, readSessionTailEntry } from './session-files';
 import { knownWorkspaceCwds } from './skill-feature-handlers';
 import { getHarness, listHarnesses } from './harnesses';
-import { readDishSettings, writeDishSettings } from './dish-settings';
+import { readDishSettings, writeDishSettings } from './dish-store';
 import { createAccessHandlers } from './access-handlers';
 import { createRelayHandlers } from './relay-handlers';
 import { createTerminalHandlers } from './terminal-handlers';

@@ -11,10 +11,10 @@
  */
 import fs = require('fs');
 import net = require('net');
-import os = require('os');
 import path = require('path');
 import { EventEmitter } from 'events';
 import { isDeepStrictEqual } from 'util';
+import { dishDir } from './dish-store';
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
 import { asRecord, decodeBridgeFrame, decodeSideChat, isRecord, type ProtocolRecord } from './wire-protocol';
@@ -56,8 +56,7 @@ function withSideChatDelta(state: SideChatState, input: unknown): SideChatState 
   return { ...state, turns: [...state.turns.slice(0, -1), updated] };
 }
 
-const ROOT = path.join(os.homedir(), '.pi', 'dish');
-const REGISTRY_DIR = path.join(ROOT, 'sessions');
+const REGISTRY_DIR = path.join(dishDir(), 'sessions');
 
 function ensureDirs() {
   try { fs.mkdirSync(REGISTRY_DIR, { recursive: true }); } catch {}
@@ -735,7 +734,6 @@ async function getBridgeSession(sessionId: NativeSessionId | BridgeRegistryEntry
 }
 
 export = {
-  ROOT,
   REGISTRY_DIR,
   listRegisteredSessions,
   invalidateRegistryCache,

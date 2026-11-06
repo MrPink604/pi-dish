@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
+import { dishDir } from './dish-store';
 import { getHarness } from './harnesses';
 import { runHarnessModelCatalog } from './harness-feature-commands';
 import * as YAML from 'yaml';
@@ -113,7 +114,7 @@ function loadModelOverrides(harnessId: string): CatalogModel[] {
 }
 
 function catalogFile(harnessId: string): string {
-  return path.join(os.homedir(), '.pi', 'dish', 'pricing', `${harnessId}.json`);
+  return path.join(dishDir(), 'pricing', `${harnessId}.json`);
 }
 
 function normalizeCatalog(raw: unknown): CatalogModel[] | null {

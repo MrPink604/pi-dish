@@ -106,7 +106,6 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
 }
 declare function getBridgeSession(sessionId: NativeSessionId | BridgeRegistryEntry): Promise<BridgeSession>;
 declare const _default: {
-    ROOT: string;
     REGISTRY_DIR: string;
     listRegisteredSessions: typeof listRegisteredSessions;
     invalidateRegistryCache: typeof invalidateRegistryCache;

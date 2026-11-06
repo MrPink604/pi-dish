@@ -2,9 +2,13 @@
 declare function dishDir(): string;
 declare function readStore(name: string): Record<string, unknown>;
 declare function writeStore(name: string, data: unknown): void;
+declare function readDishSettings(): Record<string, unknown>;
+declare function writeDishSettings(settings: Record<string, unknown>): void;
 declare const _default: {
     dishDir: typeof dishDir;
     readStore: typeof readStore;
     writeStore: typeof writeStore;
+    readDishSettings: typeof readDishSettings;
+    writeDishSettings: typeof writeDishSettings;
 };
 export = _default;

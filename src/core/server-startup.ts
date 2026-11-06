@@ -162,9 +162,7 @@ export function startListeners(options: ListenerOptions): Server {
   if (shareServer) {
     const share = shareServer;
     const shareHost = process.env.PI_DISH_SHARE_HOST || host;
-    // Node coerces a numeric string; pass the env value through unchanged.
-    const sharePort: number = process.env.PI_DISH_SHARE_PORT as unknown as number;
-    share.listen(sharePort, shareHost, () => {
+    share.listen(Number(process.env.PI_DISH_SHARE_PORT), shareHost, () => {
       console.log(`pi-dish share listener at http://${shareHost}:${(share.address() as AddressInfo).port}`);
     });
   }

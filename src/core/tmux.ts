@@ -15,10 +15,10 @@
  */
 import { execFile, execFileSync } from 'child_process';
 import fs = require('fs');
-import os = require('os');
 import path = require('path');
 import { setTimeout as delay } from 'timers/promises';
 import type { ProcessIdentity, ProcessIdentityInput } from './contracts';
+import { readStore, writeStore } from './dish-store';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { record } from './helper-values';
 
@@ -507,26 +507,7 @@ export async function getPrefixKey(socket: string): Promise<string | null> {
 
 // --- Persisted spawn placements (~/.pi/dish/tmux-spawns.json) --------------
 
-function spawnsFile(): string {
-  return path.join(os.homedir(), '.pi', 'dish', 'tmux-spawns.json');
-}
-
-function readSpawns(): Record<string, unknown> {
-  try {
-    const data: unknown = JSON.parse(fs.readFileSync(spawnsFile(), 'utf8'));
-    return record(data) ? data : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeSpawns(spawns: Record<string, unknown>): void {
-  const file = spawnsFile();
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(spawns, null, 2));
-  fs.renameSync(tmp, file);
-}
+const SPAWNS_STORE = 'tmux-spawns.json';
 
 function isPlacement(value: unknown): value is SpawnPlacement {
   return record(value) && typeof value.socket === 'string' && typeof value.paneId === 'string';
@@ -535,7 +516,7 @@ function isPlacement(value: unknown): value is SpawnPlacement {
 /** Persisted placements by route id. Evidence only: callers re-read live state before acting. */
 export function listSpawns(): Record<string, SpawnPlacement> {
   const out: Record<string, SpawnPlacement> = {};
-  for (const [sessionId, value] of Object.entries(readSpawns())) {
+  for (const [sessionId, value] of Object.entries(readStore(SPAWNS_STORE))) {
     if (isPlacement(value)) out[sessionId] = value;
   }
   return out;
@@ -558,7 +539,7 @@ export function recordSpawn(sessionId: string, { socket, paneId, spawnToken, bri
   wrapperPath?: unknown;
   primeAgent?: unknown;
 }): void {
-  const spawns = readSpawns();
+  const spawns = readStore(SPAWNS_STORE);
   spawns[sessionId] = {
     socket,
     paneId,
@@ -569,11 +550,11 @@ export function recordSpawn(sessionId: string, { socket, paneId, spawnToken, bri
     ...(wrapperPath ? { wrapperPath } : {}),
     ...(primeAgent ? { primeAgent } : {}),
   };
-  writeSpawns(spawns);
+  writeStore(SPAWNS_STORE, spawns);
 }
 
 export function getSpawn(sessionId: string): SpawnPlacement | null {
-  const value = readSpawns()[sessionId];
+  const value = readStore(SPAWNS_STORE)[sessionId];
   return isPlacement(value) ? value : null;
 }
 
@@ -592,11 +573,11 @@ function sameSpawnRecord(left: unknown, right: unknown): boolean {
 }
 
 export function removeSpawn(sessionId: string, expected: SpawnPlacement | null = null): boolean {
-  const spawns = readSpawns();
+  const spawns = readStore(SPAWNS_STORE);
   if (!Object.prototype.hasOwnProperty.call(spawns, sessionId)) return false;
   if (expected && !sameSpawnRecord(spawns[sessionId], expected)) return false;
   delete spawns[sessionId];
-  writeSpawns(spawns);
+  writeStore(SPAWNS_STORE, spawns);
   return true;
 }
 
@@ -604,19 +585,19 @@ export function removeSpawn(sessionId: string, expected: SpawnPlacement | null =
 export function rekeySpawn(previousSessionId: string, sessionId: string, expected: SpawnPlacement | null = null): boolean {
   if (!previousSessionId || !sessionId) return false;
   if (previousSessionId === sessionId) return !!getSpawn(sessionId);
-  const spawns = readSpawns();
+  const spawns = readStore(SPAWNS_STORE);
   const current = spawns[previousSessionId];
   if (!current || (expected && !sameSpawnRecord(current, expected))) return false;
   spawns[sessionId] = current;
   delete spawns[previousSessionId];
-  writeSpawns(spawns);
+  writeStore(SPAWNS_STORE, spawns);
   return true;
 }
 
 /** Drop unregistered placements whose panes are gone, preserving concurrent writes. */
 export async function pruneSpawns(registeredIds: ReadonlySet<string> = new Set()): Promise<Record<string, unknown>> {
   const dead: [string, Record<string, unknown>][] = [];
-  for (const [id, entry] of Object.entries(readSpawns())) {
+  for (const [id, entry] of Object.entries(readStore(SPAWNS_STORE))) {
     if (registeredIds.has(id) || !record(entry)) continue;
     // Malformed placement fields cannot name a live pane; the record still
     // participates in the same compare-before-prune check after other probes.
@@ -624,12 +605,12 @@ export async function pruneSpawns(registeredIds: ReadonlySet<string> = new Set()
     dead.push([id, entry]);
   }
   // Probes yield: re-read, then remove only the same inspected record.
-  const spawns = readSpawns();
+  const spawns = readStore(SPAWNS_STORE);
   if (dead.length) {
     for (const [id, inspected] of dead) {
       if (sameSpawnRecord(spawns[id], inspected)) delete spawns[id];
     }
-    writeSpawns(spawns);
+    writeStore(SPAWNS_STORE, spawns);
   }
   return spawns;
 }

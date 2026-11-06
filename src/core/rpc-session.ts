@@ -6,9 +6,9 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { once } from 'events';
 import { fileURLToPath } from 'url';
 import fs = require('fs');
-import os = require('os');
 import path = require('path');
 import crypto = require('crypto');
+import { dishDir } from './dish-store';
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
 import { asRecord, decodeRPCFrame, isRecord, type ProtocolRecord } from './wire-protocol';
@@ -111,7 +111,7 @@ class RPCSession extends TransportSession {
 
   _canObserveRecovery() {
     if (this.recoveryBridgeOwned || !this.sessionFile) return false;
-    const dir = path.join(os.homedir(), '.pi', 'dish', 'sessions');
+    const dir = path.join(dishDir(), 'sessions');
     let entries;
     try { entries = fs.readdirSync(dir); } catch (error) {
       if (errorCode(error) === 'ENOENT') return true;

@@ -83,7 +83,6 @@ export declare function parseStatusV2(out: string): GitStatusV2;
  */
 export declare function splitPatch(patchText: string): GitFilePatch[];
 export declare function parseNumstat(out: string): GitNumstatFile[];
-export declare function getRepoDiff(repoPath: string): Promise<GitRepoDiff>;
 /**
  * The full aggregate for the diff modal: every repo under `root` with its
  * uncommitted changes. Repo paths are root-relative ('.' for root itself);
