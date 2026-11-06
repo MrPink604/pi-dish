@@ -14,7 +14,7 @@ const PORTABLE_SOURCES = [
     'helper-refs', 'helper-query', 'helper-values', 'helper-identity',
     'helper-format', 'helper-types', 'session-api',
 ].map(name => `src/core/${name}`);
-const check = (0, build_output_js_1.checkRequested)('build-edges');
+const check = (0, build_output_js_1.checkRequested)('build-edges.js');
 const sources = (0, build_output_js_1.programFiles)('tsconfig.edges.json');
 for (const source of sources) {
     if (!/\.(?:ts|mts)$/.test(source) || /\.d\.(?:ts|mts)$/.test(source)

@@ -716,7 +716,7 @@ function commandExists(cmd: string) {
 
 function activeTmuxEntries(): TmuxEntry[] {
   const entries = registryEntries();
-  const seen = new Set();
+  const seen = new Set<string>();
   const result: TmuxEntry[] = [];
   for (const entry of entries) {
     const tmux = core.record(entry.tmux ?? {});

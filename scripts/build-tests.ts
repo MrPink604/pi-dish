@@ -5,7 +5,7 @@ import { buildProgram, checkRequested, generatedOutputs, orphanedOutputs, progra
 import type { OutputEntry } from './build-output.js';
 
 const BANNER = '// Generated test/tool from ';
-const check = checkRequested('build-tests');
+const check = checkRequested('build-tests.js');
 const programs = ['tsconfig.node-tests.json', 'tsconfig.browser-tests.json', 'tsconfig.ui-tests.json', 'tsconfig.dev-tools.json'];
 const declarationPrograms: Record<string, true> = { 'tsconfig.node-tests.json': true, 'tsconfig.dev-tools.json': true };
 

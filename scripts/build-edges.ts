@@ -13,7 +13,7 @@ const PORTABLE_SOURCES = [
   'helper-format', 'helper-types', 'session-api',
 ].map(name => `src/core/${name}`);
 
-const check = checkRequested('build-edges');
+const check = checkRequested('build-edges.js');
 const sources = programFiles('tsconfig.edges.json');
 for (const source of sources) {
   if (!/\.(?:ts|mts)$/.test(source) || /\.d\.(?:ts|mts)$/.test(source)

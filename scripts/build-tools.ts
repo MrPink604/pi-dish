@@ -4,7 +4,7 @@
 import { buildProgram, checkRequested, generatedOutputs, orphanedOutputs, programFiles, siblingOutputs, verifyMapping, writeOutputs } from './build-output.js';
 
 const BANNER = '// Generated tool from ';
-const check = checkRequested('build-tools');
+const check = checkRequested('build-tools.js');
 const sources = programFiles('tsconfig.tools.json');
 for (const source of sources) {
   if (!/^(?:scripts|test)\/(?:[^/]+\/)*[^/]+\.(?:ts|mts)$/.test(source) || /\.d\.(?:ts|mts)$/.test(source)) {

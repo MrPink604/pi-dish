@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // sibling mapping is validated before any executable output is replaced.
 const build_output_js_1 = require("./build-output.js");
 const BANNER = '// Generated tool from ';
-const check = (0, build_output_js_1.checkRequested)('build-tools');
+const check = (0, build_output_js_1.checkRequested)('build-tools.js');
 const sources = (0, build_output_js_1.programFiles)('tsconfig.tools.json');
 for (const source of sources) {
     if (!/^(?:scripts|test)\/(?:[^/]+\/)*[^/]+\.(?:ts|mts)$/.test(source) || /\.d\.(?:ts|mts)$/.test(source)) {
