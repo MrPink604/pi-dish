@@ -3,27 +3,20 @@
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
 /**
- * pi-dish-sessions — read and control peer pi coding-agent sessions through
- * the pi-dish HTTP API.
- *
- * The plumbing (session discovery, HTTP, ref resolution, transcript
- * rendering) lives in skills/lib/pi-dish-client.js. Skills are installed by
- * symlinking each skill directory into ~/.pi/agent/skills/, and Node resolves
- * requires through the realpath, so this relative path reaches the pi-dish
- * repo's own copy even when invoked through the link.
+ * Read and control peer pi coding-agent sessions through the pi-dish HTTP API.
+ * Plumbing (discovery, HTTP, refs, transcript rendering) is skills/lib.
  */
 const path = require("node:path");
 const os = require("node:os");
 const node_child_process_1 = require("node:child_process");
+const clientPath = path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js');
 let core;
 try {
-    core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
+    core = require(clientPath);
 }
 catch (e) {
-    process.stderr.write('pi-dish-sessions: could not load the shared pi-dish client library '
-        + `(${e instanceof Error && e.message ? e.message : e}).\n`
-        + 'Install the skills by symlinking the skill directories from the pi-dish repo '
-        + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n');
+    process.stderr.write(`pi-dish-sessions: cannot load ${clientPath} (${e instanceof Error ? e.message : e}); `
+        + 'install the skills by symlinking them from the pi-dish repo (./install.sh).\n');
     process.exit(1);
 }
 const { makeFail, print, defaultBase, discoverSession, fleetCallerId, request, api, jsonInit, requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef, mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef, } = core;
@@ -330,15 +323,10 @@ function sessionLine(session, ref) {
     return `${ref || session.id}\t${state}\t${session.name || 'Unnamed'}\t${session.cwd || ''}`;
 }
 /**
- * The handle each row prints, per host. A non-Pi route id is ~100 base64
- * characters whose first ~30 are identical for every session of that harness
- * on the host, so printing it invites an agent to retype it — and a mistyped
- * key still decodes, leaving the server nothing to say but "not found".
- * `stableSessionRef` picks the shortest *identifier* that still resolves
- * there (normally the uuid tail) and leaves a route id whole rather than
- * printing a snapshot-unique truncation of it.
- * A host that predates ref aliases resolves route-id prefixes only, so its
- * rows keep printing full ids.
+ * The handle each row prints, per host: a non-Pi route id is ~100 base64
+ * characters that invite a mistyped retype, so prefer the shortest identifier
+ * the host still resolves (normally the uuid tail). Hosts predating ref aliases
+ * resolve route-id prefixes only and keep printing full ids.
  */
 function refIndex(sessions, entry) {
     const rows = sessions || [];
@@ -373,18 +361,10 @@ async function localHostIdentity(base) {
         return null;
     }
 }
-// The identity stamped on a peer `send`/`follow-up` so the target's owning
-// host may hold it for its configured window (`messageHoldWindowMs`) instead
-// of interrupting a busy session. `steer` carries none: it is an explicit
-// interruption and always delivers immediately.
-//
-// The sender is the calling session. Its name comes from the local bridge
-// registry, falling back to the host's resolved session (and to the same
-// `Unnamed` placeholder the rest of the CLI prints for a nameless session).
-// A caller the CLI cannot identify at all yields null, and the route then
-// delivers immediately — the old, unheld behavior. Cross-host sends qualify
-// the durable identity with the host id and the display ref with this host's
-// fleet label (falling back to the host id when no usable label is configured).
+// The identity stamped on a peer `send`/`follow-up` so the owning host may hold
+// it for `messageHoldWindowMs` instead of interrupting a busy session. `steer`
+// carries none. An unidentifiable caller yields null and delivers immediately;
+// cross-host sends qualify the identity with the host id and this host's label.
 async function peerSenderIdentity(base, targetHost, sourceSessionId) {
     if (sourceSessionId == null || sourceSessionId === '')
         return null;
@@ -414,11 +394,9 @@ async function peerSenderIdentity(base, targetHost, sourceSessionId) {
         return null;
     return { id: `${host.id}:${self}`, ref: `${host.label || host.id}/${ref}`, name };
 }
-// A peer spawned from an OMP session should be an OMP session: the harness is
-// inherited from the caller, not defaulted to Pi (the HTTP route's own default,
-// kept for the web UI's explicit selection). `--harness` overrides. The target
-// host is asked what it actually has, so a missing harness fails here naming
-// the alternatives instead of dying inside a launch.
+// A peer spawned from an OMP session is an OMP session: the harness is
+// inherited, `--harness` overrides, and the target host's installed set is
+// checked here so a missing harness names the alternatives.
 async function resolveSpawnHarness(base, host, explicit, callerSessionId) {
     const wanted = explicit || sessionHarnessId(callerSessionId);
     if (!wanted)

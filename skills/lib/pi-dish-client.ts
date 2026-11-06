@@ -1,16 +1,10 @@
 'use strict';
 /**
- * Shared plumbing for the vended pi-dish skill CLIs.
- *
- * install.sh symlinks each skill directory into <agent dir>/skills/, and Node
- * resolves `require` through the realpath of the requiring file, so
- * skills/<skill>/scripts/foo.js reaches this module with
- * require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'))
- * even when invoked through the link. This directory is therefore not a skill
- * of its own — it is reached through the link, never installed beside them.
- *
- * Zero runtime dependencies, CommonJS, no server imports: build:edges bundles
- * the portable reference helpers for use outside the repository.
+ * Shared plumbing for the vended pi-dish skill CLIs. install.sh symlinks each
+ * skill directory into <agent dir>/skills/, and Node resolves requires through
+ * the link's realpath, so a skill reaches this module as
+ * `<skill>/../../lib/pi-dish-client.js`. Not a skill of its own.
+ * Zero runtime dependencies, CommonJS, no server imports.
  */
 import fs = require('node:fs');
 import path = require('node:path');
@@ -156,10 +150,8 @@ export interface CommandLine {
 }
 
 /**
- * Parse `<command> [args] [flags]` as the skill CLIs accept it: the command is
- * the first word, everything else is a positional argument or `--flag value`.
- * `--json`, `--session` and `--url` are common; `flags` adds command-specific
- * value flags.
+ * Parse `<command> [args] [flags]`: `--json`, `--session` and `--url` are
+ * common, `flags` adds command-specific value flags.
  */
 function parseCommandLine(argv: readonly string[], fallback: string, flags: readonly string[] = []): CommandLine {
   const line: CommandLine = { command: argv[0] || fallback, positional: [], json: false, values: {} };
@@ -222,10 +214,8 @@ function registryEntries(): RegistryEntry[] {
     try {
       const entry: unknown = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
       if (!isRegistryEntry(entry)) return [];
-      // Mirror the server's scanRegistry liveness rules (minus its pruning
-      // side effects — these CLIs only read): a crashed pi leaves its entry
-      // behind, and a dead session must not win cwd fallback or inflate the
-      // "N live sessions" count in the ambiguity error.
+      // Mirror scanRegistry's liveness rules without its pruning: a dead
+      // session must not win cwd fallback or inflate the live count.
       if (entry.socketPath && (typeof entry.socketPath !== 'string' || !fs.existsSync(entry.socketPath))) return [];
       if (typeof entry.pid === 'number' && Number.isInteger(entry.pid) && !pidAlive(entry.pid)) return [];
       return [entry];
@@ -408,13 +398,8 @@ function hostSupports(value: unknown, capability: string) {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Parse a session ref. Pure — the host part is only *named* here, resolving it
- * against the fleet needs the server.
- *
- *   8f3ab2c1              → { hostPart: null,    hostIdForm: false, id: '8f3ab2c1' }
- *   tycho/8f3ab2c1        → { hostPart: 'tycho', hostIdForm: false, id: '8f3ab2c1' }
- *   self/8f3ab2c1         → { hostPart: 'self',  hostIdForm: false, id: '8f3ab2c1' }
- *   <uuid>:<sessionId>    → { hostPart: uuid,    hostIdForm: true,  id: '<sessionId>' }
+ * Parse a session ref: `[host/]id`, where a `<uuid>:<id>` head is the
+ * machine-produced provenance form. Pure — the host part is only named here.
  */
 function parseRef(raw: unknown): ParsedRef {
   const ref = String(raw ?? '').trim();
@@ -439,11 +424,9 @@ function parseRef(raw: unknown): ParsedRef {
 }
 
 /**
- * The calling session in the fleet-global provenance form
- * (`<hostId>:<sessionId>`), qualified with the host id this machine's pi-dish
- * persisted beside the bridge registry. Every server accepts it — this host
- * strips its own qualifier — so the CLI need not know whether PI_DISH_URL or
- * `--host` lands on its own host. Without a local host id the id stays bare.
+ * The calling session as `<hostId>:<sessionId>`, qualified with this machine's
+ * persisted host id. Every server accepts that form, so the CLI need not know
+ * whether its URL lands on its own host. Without a host id the id stays bare.
  */
 function fleetCallerId(sessionId: unknown): string {
   const id = String(sessionId);
@@ -538,10 +521,8 @@ function sessionCatalog(data: unknown) {
 }
 
 /**
- * Client-side ref resolution: for hosts that predate GET
- * /api/sessions/resolve, and for hosts whose resolver predates ref aliases —
- * resolving locally turns a short alias into the full route id the host does
- * understand, so short refs work across a mixed-version fleet.
+ * Resolve locally for hosts that predate /api/sessions/resolve or its ref
+ * aliases: a short alias becomes the full route id the host does understand.
  */
 async function resolveSessionClientSide(base: string, host: unknown, id: string, exactOnly?: boolean): Promise<SessionRow> {
   const { data } = await api(base, host, '/api/sessions');
