@@ -27,6 +27,7 @@ import type { NativeSessionId, PromptOptions } from './contracts';
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
 import { asRecord, isRecord, type ProtocolRecord } from './wire-protocol';
+import { errorMessage } from './http-boundary';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { validSessionId } from './session-key';
 import { getHarness, resolveLaunchSpec } from './harnesses';
@@ -39,8 +40,6 @@ export interface PrimeQueueState { steering: string[]; followUp: string[]; }
 
 function text(value: unknown): string | null { return typeof value === 'string' && value ? value : null; }
 function strings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
-function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-
 /**
  * The daemon socket Prime itself would use for this launch configuration:
  * an explicit `--daemon-socket` in PI_DISH_PRIME_COMMAND, then

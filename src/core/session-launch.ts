@@ -15,6 +15,7 @@ import type { BeforeLifecycleAction } from './session-ownership';
 import { formatModelRef, parseModelId } from './helper-models';
 import type { ModelRef } from './helper-types';
 import { record } from './helper-values';
+import { errorMessage, errorStatus } from './http-boundary';
 import * as tmux from './tmux';
 
 export interface HarnessLaunchTarget {
@@ -132,23 +133,15 @@ const REGISTRY_POLL_MAX_MS = 300;
 const MAX_BRIDGE_SOCKET_PATH_BYTES = 103;
 const BRIDGE_SOCKET_BASENAME = `${'0'.repeat(24)}.sock`;
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : record(error) && typeof error.message === 'string' ? error.message : String(error);
-}
-
-function errorStatus(error: unknown): number {
-  return record(error) && typeof error.status === 'number' && error.status ? error.status : 500;
-}
-
 function forbidden(error: unknown): LaunchOutcome {
-  if (error instanceof LifecycleInterruption) return { kind: 'interrupted', error, status: errorStatus(error) };
-  return { kind: 'fallback-forbidden', error, status: errorStatus(error) };
+  if (error instanceof LifecycleInterruption) return { kind: 'interrupted', error, status: errorStatus(error, 500) };
+  return { kind: 'fallback-forbidden', error, status: errorStatus(error, 500) };
 }
 
 function unclassifiedTmuxFailure(descriptor: HarnessDescriptor, error: unknown): LaunchOutcome {
   if (error instanceof BridgeSocketConfigError || error instanceof LifecycleInterruption) return forbidden(error);
   // Only an unclassified launch exception permits the headless RPC fallback.
-  return { kind: descriptor.rpcFallback ? 'fallback-permitted' : 'fallback-forbidden', error, status: errorStatus(error) };
+  return { kind: descriptor.rpcFallback ? 'fallback-permitted' : 'fallback-forbidden', error, status: errorStatus(error, 500) };
 }
 
 interface SpawnRegistration {

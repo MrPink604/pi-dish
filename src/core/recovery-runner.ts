@@ -12,6 +12,7 @@ import type { LiveSession, SessionOwnership } from './session-ownership';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryAttempt, RecoveryRecord } from './session-recovery';
 import { isRecord } from './wire-protocol';
+import { errorMessage } from './http-boundary';
 
 export type RecoveryMode = 'off' | 'restore' | 'continue';
 export type RecoveryStatus = 'pending' | 'failed' | 'needs-review' | 'closed' | 'live' | 'restoring' | 'restored' | 'continued';
@@ -80,10 +81,6 @@ const HIBERNATED_REASON = 'Hibernated under memory pressure; a message resumes i
 
 export function recoveryMode(value: unknown): RecoveryMode {
   return value === 'off' || value === 'restore' || value === 'continue' ? value : 'off';
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : isRecord(error) && typeof error.message === 'string' ? error.message : String(error);
 }
 
 // Stream with explicit bounds: a corrupt/huge transcript is reviewable, not a

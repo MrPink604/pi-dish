@@ -11,6 +11,7 @@ import type { BridgeCapability } from './contracts';
 import type { CatalogModel } from './session-api';
 import type { FeatureHandler, FeatureHandlers, FeaturePorts } from './feature-handlers';
 import { harnessCommandAvailable, runHarnessModelCommand, withCatalogThinkingLevels, MODELS_CACHE_TTL } from './harness-feature-commands';
+import { errorMessage } from './http-boundary';
 
 const RPC_BUILTIN_COMMANDS = [
   EMULATED_COMMAND_METADATA.compact,
@@ -44,10 +45,6 @@ function commandList(value: unknown): unknown[] {
 function responseCommands(data: unknown): unknown {
   return data && typeof data === 'object' && 'commands' in data ? data.commands : undefined;
 }
-function errorMessage(error: unknown): unknown {
-  return error && typeof error === 'object' && 'message' in error ? error.message : undefined;
-}
-
 function filterBridgeCommands(sess: InstanceType<typeof BridgeSession>, commands: unknown): unknown {
   // Pi keeps its established full TUI list. Alternative harnesses retain only
   // supported commands and builtins mapped to an advertised bridge operation.

@@ -6,6 +6,7 @@ import type { HarnessDescriptor } from './contracts';
 import { getHarness, listHarnesses } from './harnesses';
 import { listTaskAgents } from './harness-agents';
 import { harnessCommandAvailable, runHarnessJsonCommand, runHarnessTextCommand } from './harness-feature-commands';
+import { errorMessage, requestBody } from './http-boundary';
 
 type Handler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 interface AgentSettings {
@@ -22,12 +23,6 @@ interface AgentPatch {
 }
 function valueOf(result: unknown): unknown {
   return result && typeof result === 'object' && 'value' in result ? result.value : undefined;
-}
-function errorMessage(error: unknown): unknown {
-  return error && typeof error === 'object' && 'message' in error ? error.message : undefined;
-}
-function requestBody(body: unknown): Record<string, unknown> {
-  return body && typeof body === 'object' ? body as Record<string, unknown> : {};
 }
 
 type HandlerRequest = Parameters<Handler>[0];
@@ -328,7 +323,7 @@ export const updateModelRoles = harnessRoute({
   supported: descriptor => !!descriptor.pilotConfig && typeof descriptor.argv.configSet === 'function',
   unsupported: descriptor => `Model roles are not editable for ${descriptor.label}.`,
   async run(descriptor, req, res) {
-    const { roles, cwd } = requestBody(req.body);
+    const { roles, cwd } = requestBody(req);
     const cwdValue = optionalCwd(res, cwd);
     if (cwdValue === null) return;
     if (!roles || typeof roles !== 'object' || Array.isArray(roles)) {
@@ -384,7 +379,7 @@ export const updateHarnessAgents = harnessRoute({
   supported: descriptor => agentSettingsSupported(descriptor) && typeof descriptor.argv.configSet === 'function',
   unsupported: descriptor => `Task agents are not configurable for ${descriptor.label}.`,
   async run(descriptor, req, res) {
-    const { agents, cwd } = requestBody(req.body);
+    const { agents, cwd } = requestBody(req);
     const cwdValue = optionalCwd(res, cwd);
     if (cwdValue === null) return;
     if (!agents || typeof agents !== 'object' || Array.isArray(agents)) {
@@ -474,7 +469,7 @@ export const updateHarnessSettings = harnessRoute({
   unsupported: descriptor => `Settings are not editable for ${descriptor.label}.`,
   errorStatus: error => (error instanceof SettingInputError ? 400 : 500),
   async run(descriptor, req, res) {
-    const { settings, cwd } = requestBody(req.body);
+    const { settings, cwd } = requestBody(req);
     const cwdValue = optionalCwd(res, cwd);
     if (cwdValue === null) return;
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {

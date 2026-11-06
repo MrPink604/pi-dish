@@ -12,6 +12,7 @@ import crypto = require('crypto');
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
 import { asRecord, decodeRPCFrame, isRecord, type ProtocolRecord } from './wire-protocol';
+import { errorMessage } from './http-boundary';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { reduceExtensionUIState } from './extension-ui-state';
 import { safeHeaderSessionId } from './session-discovery';
@@ -31,8 +32,6 @@ function validatedNativeId(value: unknown): NativeSessionId {
 }
 
 function errorCode(error: unknown): unknown { return isRecord(error) ? error.code : undefined; }
-function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-
 class RPCSession extends TransportSession {
   declare id: NativeSessionId;
   declare proc: ChildProcessWithoutNullStreams;
