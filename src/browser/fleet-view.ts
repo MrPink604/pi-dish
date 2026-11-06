@@ -103,7 +103,7 @@ export function fleetHealthHtml(health: FleetHealth): string {
 }
 
 type Connection = 'reachable' | 'connecting' | 'backoff' | 'blocked';
-interface HostState { key: string; health?: FleetHealth; error?: string; receivedAt?: number; pending?: boolean }
+interface HostState { key: string; health?: FleetHealth; error?: string; receivedAt?: number }
 export interface FleetViewOptions {
   root: HTMLElement; request: ApiRequest; hosts: () => readonly FleetHost[];
   connection: (host: FleetHost) => Connection; supports: (host: FleetHost) => boolean;
@@ -116,11 +116,7 @@ export interface FleetViewOptions {
 const STALE_MS = 30_000;
 const STATE_NOTES: Record<Connection, string> = { reachable: '', connecting: 'connecting', backoff: 'unreachable', blocked: 'needs a token' };
 
-/**
- * The fleet takeover: per-host capacity plus the fleet-wide controls that used
- * to live in Settings. Health is polled only while the view is open and the
- * page visible; each host answers for itself (client is the aggregator).
- */
+/** Health is polled only while the view is open and the page visible. */
 export function createFleetView(options: FleetViewOptions) {
   const doc = options.root.ownerDocument;
   const now = options.now || (() => Date.now());
@@ -182,7 +178,6 @@ export function createFleetView(options: FleetViewOptions) {
     states.set(key, state);
     const connection = options.connection(host);
     if (!options.supports(host) || connection === 'blocked') return;
-    state.pending = true;
     const owns = () => owner === generation && isOpen() && states.get(key) === state;
     try {
       const response = await options.request(endpoint, '/api/host/health', { timeoutMs: 8000 });
@@ -198,7 +193,7 @@ export function createFleetView(options: FleetViewOptions) {
       if (!owns()) return;
       state.error = error instanceof Error ? error.message : String(error);
     } finally {
-      if (owns()) { state.pending = false; render(); }
+      if (owns()) render();
     }
   }
 

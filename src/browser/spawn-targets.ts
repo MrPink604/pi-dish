@@ -1,3 +1,4 @@
+import { record } from '../core/helper-values';
 import type { ApiRequest } from './api-client';
 import { sameDirectoryHost } from './directory-catalog';
 import type { DirectoryHost } from './directory-catalog';
@@ -14,9 +15,6 @@ const HEADLESS: SpawnChoice = { label: 'pi-dish (headless)', target: null, pinne
 export function spawnTargetKey(choice: SpawnChoice): string {
   if (!choice.target) return 'headless';
   return `${choice.target.socket}::${choice.needsName ? 'new' : choice.target.tmuxSession}`;
-}
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 export function decodeSpawnChoices(value: unknown): readonly SpawnChoice[] {
   if (!record(value) || !value.available || !Array.isArray(value.servers)) return [HEADLESS];

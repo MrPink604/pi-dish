@@ -9,13 +9,6 @@ import type { createResponseDetails } from './response-details';
 import { decodeSessionLineage } from './session-relations';
 import type { LineageNode, LineageSession, SessionLineage } from './session-relations';
 
-// --- Subagents view (main-pane takeover) ---
-// One session's whole family: the /lineage tree on the left, a peek pane on
-// the right showing the selected relative's transcript tail (full message
-// fidelity, read-only) plus a signal composer that prompts/steers the target
-// through the existing per-session routes. The underlying session selection
-// never changes — peeking and signaling never turn the main view into the
-// subagent's trace, and closing returns exactly to the viewed session.
 export function createSubagentsView(options: {
   root: HTMLElement; request: ApiRequest; sessionState: SessionState;
   endpoint: (host: string | null) => HostEndpoint | null;
@@ -32,6 +25,9 @@ export function createSubagentsView(options: {
     const value = document.getElementById(id); if (!value) throw new Error('Missing subagents view element: ' + id); return value as T;
   };
   const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+  function failure(data: unknown, status: number) {
+    return record(data) && typeof data.error === 'string' && data.error ? data.error : `HTTP ${status}`;
+  }
   let disposed = false;
   let viewOwner: SelectionOwner | null = null;
   let viewEndpoint: HostEndpoint | null = null;
@@ -129,12 +125,11 @@ export function createSubagentsView(options: {
       const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
       const data: unknown = await res.json();
       if (!current()) return;
-      if (!res.ok) throw new Error(record(data) && typeof data.error === 'string' && data.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(failure(data, res.status));
       lastIndexing = record(data) && data.indexing === true;
       lineage = decodeSessionLineage(data);
       renderTree();
-      // Refresh the detail pane against fresh summaries (capabilities flip as
-      // sessions start/stop) without disturbing the trace's paging state.
+      // Refresh against fresh summaries without disturbing the trace's paging state.
       if (selectedId) {
         const node = findNode(lineage.tree, session => session.id === selectedId);
         peekTarget = node?.session || null;
@@ -145,8 +140,7 @@ export function createSubagentsView(options: {
     } catch (error) {
       if (current()) console.error('Failed to load session lineage:', error);
     } finally {
-      if (current()) loadInFlight = false;
-      else loadInFlight = false;
+      loadInFlight = false;
       if (current()) focusPendingAgent();
     }
   }
@@ -273,8 +267,7 @@ export function createSubagentsView(options: {
     syncPeekTimer();
   }
 
-  // The detail pane: meta line, read-only trace tail, and a signal composer
-  // whose buttons mirror exactly what the target's capabilities allow.
+  // Buttons mirror exactly what the target's capabilities allow.
   function renderDetail() {
     const empty = element('subagentsDetailEmpty');
     const content = element('subagentsDetailContent');
@@ -326,7 +319,7 @@ export function createSubagentsView(options: {
       const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(target.id)}/messages${query}`);
       const data: unknown = await res.json();
       if (stale()) return;
-      if (!res.ok) throw new Error(record(data) && typeof data.error === 'string' && data.error || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(failure(data, res.status));
       const payload = record(data) ? data : {};
       const messages = Array.isArray(payload.messages) ? payload.messages : [];
       const trace = element('subagentsTrace');

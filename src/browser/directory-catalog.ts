@@ -1,3 +1,4 @@
+import { record } from '../core/helper-values';
 import type { ApiRequest, HostEndpoint } from './api-client';
 
 /** Identity and route travel together; null means a selected host is unavailable. */
@@ -7,9 +8,6 @@ export interface DirectoryChild { readonly path: string; readonly name: string }
 export interface DirectoryChildren { readonly dirs: readonly DirectoryChild[]; readonly error: boolean }
 export function sameDirectoryHost(a: Readonly<DirectoryHost> | null, b: Readonly<DirectoryHost> | null): boolean {
   return !!a && !!b && a.hostId === b.hostId && a.base === b.base && a.token === b.token;
-}
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 export function decodeKnownDirectories(value: unknown): KnownDirectory[] {
   if (!Array.isArray(value)) return [];

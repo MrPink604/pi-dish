@@ -1,3 +1,4 @@
+import { record } from '../core/helper-values';
 export interface HarnessConfig {
   readonly defaultModel: string;
   readonly defaultThinkingLevel: string;
@@ -50,9 +51,6 @@ export interface HarnessSetting {
 export interface HarnessSettingsList {
   readonly tabs: readonly { readonly id: string; readonly label: string }[];
   readonly settings: readonly HarnessSetting[];
-}
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 const text = (value: unknown) => typeof value === 'string' ? value : '';
 export function stringRecord(value: unknown): Readonly<Record<string, string>> {

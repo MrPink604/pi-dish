@@ -1,3 +1,4 @@
+import { record } from '../core/helper-values';
 /** Published pages accept only the comment fields their overlay consumes. */
 export interface TextAnchor {
   readonly type: 'text';
@@ -9,9 +10,6 @@ export interface PageComment {
   readonly id: string;
   readonly body: string;
   readonly anchor: TextAnchor;
-}
-function record(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 /** Decodes the page-scoped list (`GET /api/page-comments/:token`). */
 export function decodePageComments(value: unknown): readonly PageComment[] {

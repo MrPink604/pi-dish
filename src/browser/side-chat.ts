@@ -186,8 +186,8 @@ export function createSideChat(options: {
       + '<div class="side-chat-turns"></div>';
     const stop = panel.querySelector<HTMLButtonElement>('.side-chat-stop')!;
     const close = panel.querySelector<HTMLButtonElement>('.side-chat-close')!;
-    stop.addEventListener('click', () => { void cancel(); }, { signal: events.signal });
-    close.addEventListener('click', () => { void closeSideChat(); }, { signal: events.signal });
+    stop.addEventListener('click', () => { void action('cancel'); }, { signal: events.signal });
+    close.addEventListener('click', () => { void action('close'); }, { signal: events.signal });
     shell = { stop, close, turns: panel.querySelector<HTMLElement>('.side-chat-turns')! };
     return shell;
   }
@@ -292,17 +292,18 @@ export function createSideChat(options: {
     }
   }
 
-  function cancel() { return action('cancel'); }
-  function closeSideChat() { return action('close'); }
+  function clearChatState() {
+    state = null;
+    stateOwner = null;
+    if (copyTimer) { clearTimeout(copyTimer); copyTimer = null; }
+    copyToken++;
+  }
 
   /** Selection change: the replacement stream replays its own side chat. */
   function reset() {
     if (disposed) return;
     sequence++;
-    state = null;
-    stateOwner = null;
-    if (copyTimer) { clearTimeout(copyTimer); copyTimer = null; }
-    copyToken++;
+    clearChatState();
     render();
     notify();
   }
@@ -311,10 +312,7 @@ export function createSideChat(options: {
     if (disposed) return;
     disposed = true;
     sequence++;
-    state = null;
-    stateOwner = null;
-    if (copyTimer) { clearTimeout(copyTimer); copyTimer = null; }
-    copyToken++;
+    clearChatState();
     events.abort();
     shell = null;
     turns.clear();
@@ -324,5 +322,5 @@ export function createSideChat(options: {
     if (notified) { notified = false; options.onChange?.(false); }
   }
 
-  return { ask, apply, cancel: cancel, close: closeSideChat, active, reset, dispose };
+  return { ask, apply, cancel: () => action('cancel'), close: () => action('close'), active, reset, dispose };
 }
