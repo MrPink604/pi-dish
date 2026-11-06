@@ -1,5 +1,5 @@
 import path = require('path');
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
 import { buildSourceSession } from './session-catalog';
 import { getSessionInfo } from './session-index';
 import { errorMessage } from './errors';
@@ -43,9 +43,6 @@ export interface SessionRelationPorts {
   resolveSessionCandidate(id: string): SessionSource | null;
 }
 
-type RelationHandler = RequestHandler<Record<string, string>, unknown, unknown,
-  Record<string, unknown>, Record<string, unknown>>;
-
 const LINEAGE_NODE_CAP_DEFAULT = 500;
 const LINEAGE_DEPTH_CAP = 24;
 const INVALID_SESSION_RE = /Invalid session ID|Unknown harness/;
@@ -80,8 +77,8 @@ function relationSessionSummary(session: CatalogSession): CatalogRelationSummary
 }
 
 export function createSessionRelationHandlers(ports: SessionRelationPorts): {
-  related: RelationHandler;
-  lineage: RelationHandler;
+  related: RouteHandler;
+  lineage: RouteHandler;
 } {
   const { catalog: runtime } = ports;
 
@@ -93,7 +90,7 @@ export function createSessionRelationHandlers(ports: SessionRelationPorts): {
 
   // Advisory relationships only: native parentSession headers, OMP's nested
   // subsession layout, and pi-dish launch provenance. None implies control.
-  function related(req: Parameters<RelationHandler>[0], res: Parameters<RelationHandler>[1]): void {
+  function related(req: Parameters<RouteHandler>[0], res: Parameters<RouteHandler>[1]): void {
     try {
       const base = runtime.buildSessionCatalog();
       const list = [...base.list];
@@ -151,7 +148,7 @@ export function createSessionRelationHandlers(ports: SessionRelationPorts): {
 
   // Recursive family view: the whole native/launch family around a session
   // rather than /related's direct neighbors.
-  function lineage(req: Parameters<RelationHandler>[0], res: Parameters<RelationHandler>[1]): void {
+  function lineage(req: Parameters<RouteHandler>[0], res: Parameters<RouteHandler>[1]): void {
     try {
       const configuredCap = Number.parseInt(process.env.PI_DISH_LINEAGE_NODE_CAP || '', 10);
       const nodeCap = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : LINEAGE_NODE_CAP_DEFAULT;

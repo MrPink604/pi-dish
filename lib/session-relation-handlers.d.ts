@@ -1,5 +1,5 @@
 // Generated from src/core/session-relation-handlers.ts; edit that source and run npm run build:core.
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
 import type { CatalogRuntime } from './session-catalog-runtime';
 import type { CatalogSession } from './session-catalog-contracts';
 import type { SessionSource } from './session-source-contracts';
@@ -33,9 +33,7 @@ export interface SessionRelationPorts {
     catalog: CatalogRuntime;
     resolveSessionCandidate(id: string): SessionSource | null;
 }
-type RelationHandler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 export declare function createSessionRelationHandlers(ports: SessionRelationPorts): {
-    related: RelationHandler;
-    lineage: RelationHandler;
+    related: RouteHandler;
+    lineage: RouteHandler;
 };
-export {};

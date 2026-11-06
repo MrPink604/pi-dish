@@ -2697,6 +2697,60 @@ test('OMP side chat replays its snapshot and coalesces streamed deltas', async (
   }
 });
 
+test('host builtin slash commands validate arguments before any pane lookup', async () => {
+  const nativeId = 'omp-host-builtin-validation';
+  const routeId = encodeSessionKey('omp', checkedNativeId(nativeId));
+  const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+  const socketPath = path.join(tmpHome, 'omp-host-builtin.sock');
+  fs.mkdirSync(registryDir, { recursive: true });
+  const identity = present(processIdentity(process.pid));
+  const claim: TestRecord = {
+    protocolVersion: 2,
+    wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+    harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId,
+    bridgeInstanceId: nativeId, instanceId: nativeId,
+    sessionFile: ompSessionFile, socketPath, cwd: ompCwd,
+    pid: identity.pid, startTime: identity.startTime, spawnToken: null,
+    capabilities: { commands: true },
+  };
+  const sockets = new Set<net.Socket>();
+  const bridge = net.createServer(sock => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+    sock.on('error', () => {});
+    sock.write(JSON.stringify({ type: 'hello', ...claim }) + '\n');
+  });
+  await new Promise<void>((resolve, reject) => { bridge.once('error', reject); bridge.listen(socketPath, resolve); });
+  const registryPath = path.join(registryDir, `${nativeId}.json`);
+  fs.writeFileSync(registryPath, JSON.stringify(claim));
+  invalidateRegistryCache();
+  const commandRoute = `/api/sessions/${encodeURIComponent(routeId)}/command`;
+  const rejects = async (message: string, pattern: RegExp) => {
+    const result = await post(commandRoute, { message });
+    assert.equal(result.status, 400, JSON.stringify(result.body));
+    assert.match(text(result.body.error), pattern);
+  };
+
+  try {
+    await rejects('/goal', /requires arguments/);
+    await rejects('/goal drop', /only available in the Oh My Pi terminal UI/);
+    await rejects('/goal set', /only available in the Oh My Pi terminal UI/);
+    await rejects('/shake images now', /Invalid arguments for \/shake; expected images/);
+    await rejects('/goal bad\u0001objective', /Invalid arguments for \/goal/);
+
+    // A well-formed curated command reaches the pane requirement, which is the
+    // only remaining gate when the session has no tmux pane.
+    const pane = await post(commandRoute, { message: '/goal set ship it' });
+    assert.equal(pane.status, 409, JSON.stringify(pane.body));
+    assert.match(text(pane.body.error), /requires a reachable Oh My Pi tmux pane/);
+  } finally {
+    fs.rmSync(registryPath, { force: true });
+    invalidateRegistryCache();
+    for (const sock of sockets) sock.destroy();
+    await new Promise<void>((resolve, reject) => bridge.close(error => error ? reject(error) : resolve()));
+  }
+});
+
 test('OMP command discovery includes pane-backed host commands and API aliases stay capability-first', async () => {
   const nativeId = 'omp-command-filter';
   const routeId = encodeSessionKey('omp', checkedNativeId(nativeId));
@@ -5017,9 +5071,13 @@ test('GET /api/sessions/resolve accepts a native id or uuid tail and answers wit
   assert.equal((await get(`/api/sessions/resolve?id=${encodeURIComponent(corrupt)}`)).status, 404);
 });
 
-test('GET /api/host advertises ref-alias resolution so clients can print short refs', async () => {
-  const { body } = await get('/api/host');
-  assert.equal(record(body.capabilities).refAliases, true);
+test('GET /api/host advertises the client capability flags', async () => {
+  const { status, body } = await get('/api/host');
+  assert.equal(status, 200);
+  const capabilities = record(body.capabilities);
+  assert.equal(capabilities.refAliases, true);
+  assert.equal(capabilities.resolve, true);
+  assert.equal(capabilities.docs, true);
 });
 
 test('GET /api/sessions/resolve rejects unknown and too-short refs', async () => {
@@ -5073,13 +5131,6 @@ test('GET /api/agent-docs/:topic serves markdown and gates the topic name', asyn
     assert.ok(!text.includes('"dependencies"'), `${attempt} must not serve file content`);
     assert.ok(!text.includes('Session refs'), `${attempt} must not serve doc content`);
   }
-});
-
-test('GET /api/host advertises the resolve and docs capabilities', async () => {
-  const { status, body } = await get('/api/host');
-  assert.equal(status, 200);
-  assert.equal(record(body.capabilities).resolve, true);
-  assert.equal(record(body.capabilities).docs, true);
 });
 
 export {};

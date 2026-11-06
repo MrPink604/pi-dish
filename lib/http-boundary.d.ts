@@ -1,0 +1,8 @@
+// Generated from src/core/http-boundary.ts; edit that source and run npm run build:core.
+import type { Request, RequestHandler, Response } from 'express';
+import type { ParsedQs } from 'qs';
+export type ApplicationRequest = Request<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
+export type ApplicationResponse = Response<unknown, Record<string, unknown>>;
+export type RouteHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
+/** Express leaves parsed JSON untyped; every route body is a boundary object. */
+export declare function requestBody(req: ApplicationRequest): Record<string, unknown>;

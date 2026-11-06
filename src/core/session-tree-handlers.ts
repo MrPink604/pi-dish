@@ -1,4 +1,5 @@
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
+import { requestBody } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
 import { errorMessage, httpError } from './errors';
@@ -20,9 +21,6 @@ export interface SessionTreePorts {
   locatePiPane(sessionId: string): Promise<tmux.PaneTarget | null>;
 }
 
-type BranchHandler = RequestHandler<Record<string, string>, unknown, unknown,
-  Record<string, unknown>, Record<string, unknown>>;
-
 const TMUX_CHORD_MODIFIERS: Record<string, string> = { ctrl: 'C-', alt: 'M-', shift: 'S-' };
 
 // The tmux key chord a bridge advertises for its tree service. Only F-keys are
@@ -40,7 +38,7 @@ function tmuxKeyForChord(chord: unknown): string | null {
   return `${prefix}${base.toUpperCase()}`;
 }
 
-export function createSessionTreeHandler(ports: SessionTreePorts): { branch: BranchHandler } {
+export function createSessionTreeHandler(ports: SessionTreePorts): { branch: RouteHandler } {
   // Bridge navigate_tree needs a stashed pi command context. RPC-backed
   // sessions can prime one with an RPC prompt; tmux TUI sessions get the
   // command typed into their pane.
@@ -106,8 +104,8 @@ export function createSessionTreeHandler(ports: SessionTreePorts): { branch: Bra
     return operation;
   }
 
-  const branch: BranchHandler = async (req, res) => {
-    const body = (req.body ?? {}) as { entryId?: unknown; summarize?: unknown; customInstructions?: unknown };
+  const branch: RouteHandler = async (req, res) => {
+    const body = requestBody(req);
     if (!body.entryId || typeof body.entryId !== 'string') {
       return res.status(400).json({ error: 'entryId required' });
     }

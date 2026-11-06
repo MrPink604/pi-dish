@@ -1,11 +1,8 @@
 import fs = require('fs');
 import path = require('path');
 import os = require('os');
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
 import { isRecord } from './wire-protocol';
-
-type ContentHandler = RequestHandler<Record<string, string>, unknown, unknown,
-  Record<string, unknown>, Record<string, unknown>>;
 
 const AGENT_DOC_TOPIC_RE = /^[a-z0-9-]{1,64}$/;
 const AGENT_DOC_DESCRIPTION_MAX = 160;
@@ -35,8 +32,8 @@ function agentDocSummary(markdown: string) {
  * The server ships the agent-facing docs for the API this build serves, so an
  * agent in a mixed-version fleet reads the running host's docs.
  */
-export function createAgentDocHandlers(docsDirectory: string): { list: ContentHandler; topic: ContentHandler } {
-  const list: ContentHandler = (_req, res) => {
+export function createAgentDocHandlers(docsDirectory: string): { list: RouteHandler; topic: RouteHandler } {
+  const list: RouteHandler = (_req, res) => {
     let files: string[];
     try {
       files = fs.readdirSync(docsDirectory).filter((file) => file.endsWith('.md')).sort();
@@ -54,7 +51,7 @@ export function createAgentDocHandlers(docsDirectory: string): { list: ContentHa
     res.json({ topics });
   };
 
-  const topic: ContentHandler = (req, res) => {
+  const topic: RouteHandler = (req, res) => {
     const name = req.params.topic;
     // The shape gate is also the path-traversal gate.
     if (!AGENT_DOC_TOPIC_RE.test(name)) return res.status(404).json({ error: 'Unknown docs topic' });
@@ -75,7 +72,7 @@ export function createAgentDocHandlers(docsDirectory: string): { list: ContentHa
  * ~/.pi/dish/themes/*.json. Unreadable or malformed files are skipped: a broken
  * theme file must not take down the picker. Re-read per call so edits show.
  */
-export const themesHandler: ContentHandler = (_req, res) => {
+export const themesHandler: RouteHandler = (_req, res) => {
   const themes: { id: string; builtin?: boolean; tokens?: Record<string, string> }[] = [
     { id: 'solarized', builtin: true }, { id: 'graphite', builtin: true },
   ];

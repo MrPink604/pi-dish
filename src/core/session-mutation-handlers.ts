@@ -1,4 +1,5 @@
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
+import { requestBody } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
 import { errorMessage, errorStatus } from './errors';
@@ -19,14 +20,11 @@ export interface SessionMutationPorts {
   getRegisteredSession(id: string): BridgeRegistryEntry | null;
 }
 
-type MutationHandler = RequestHandler<Record<string, string>, unknown, unknown,
-  Record<string, unknown>, Record<string, unknown>>;
-
 function sideChatSnapshot(data: unknown) {
   return { success: true, sideChat: isRecord(data) ? data.sideChat ?? null : null };
 }
 
-export function sideChatSupported(sess: InstanceType<typeof BridgeSession>, res: Parameters<MutationHandler>[1]): boolean {
+export function sideChatSupported(sess: InstanceType<typeof BridgeSession>, res: Parameters<RouteHandler>[1]): boolean {
   if (liveSessionSupports(sess, 'sideChat')) return true;
   // A harness started before side chats still runs the old blocking /btw
   // bridge; only a restart loads the new extension.
@@ -39,20 +37,20 @@ export function sideChatSupported(sess: InstanceType<typeof BridgeSession>, res:
 }
 
 export function createSessionMutationHandlers(ports: SessionMutationPorts): {
-  thinking: MutationHandler;
-  fast: MutationHandler;
-  abort: MutationHandler;
-  sideChat: MutationHandler;
-  sideChatAsk: MutationHandler;
-  sideChatCancel: MutationHandler;
-  sideChatClose: MutationHandler;
-  uiResponse: MutationHandler;
-  rename: MutationHandler;
-  model: MutationHandler;
-  cancelQueued: MutationHandler;
+  thinking: RouteHandler;
+  fast: RouteHandler;
+  abort: RouteHandler;
+  sideChat: RouteHandler;
+  sideChatAsk: RouteHandler;
+  sideChatCancel: RouteHandler;
+  sideChatClose: RouteHandler;
+  uiResponse: RouteHandler;
+  rename: RouteHandler;
+  model: RouteHandler;
+  cancelQueued: RouteHandler;
 } {
-  const thinking: MutationHandler = async (req, res) => {
-      const { level } = (req.body ?? {}) as { level?: unknown };
+  const thinking: RouteHandler = async (req, res) => {
+      const { level } = requestBody(req);
       if (typeof level !== 'string' || !ALL_THINKING_LEVEL_NAMES.includes(level)) {
         return res.status(400).json({ error: `level must be one of: ${ALL_THINKING_LEVEL_NAMES.join(', ')}` });
       }
@@ -72,8 +70,8 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
       }
   };
 
-  const fast: MutationHandler = async (req, res) => {
-      const { enabled } = (req.body ?? {}) as { enabled?: unknown };
+  const fast: RouteHandler = async (req, res) => {
+      const { enabled } = requestBody(req);
       if (typeof enabled !== 'boolean') {
         return res.status(400).json({ error: 'enabled must be a boolean' });
       }
@@ -90,7 +88,7 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
       }
   };
 
-  const abort: MutationHandler = async (req, res) => {
+  const abort: RouteHandler = async (req, res) => {
       try {
         const sess = await ports.getLiveSession(req.params.id);
         if (!sess) return res.status(404).json({ error: 'Session not active' });
@@ -102,7 +100,7 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
       }
   };
 
-  async function sideChatBridge(req: Parameters<MutationHandler>[0], res: Parameters<MutationHandler>[1]) {
+  async function sideChatBridge(req: Parameters<RouteHandler>[0], res: Parameters<RouteHandler>[1]) {
     const sess = await ports.getLiveSession(req.params.id);
     if (!sess) { res.status(404).json({ error: 'Session not active' }); return null; }
     if (!(sess instanceof BridgeSession)) {
@@ -112,7 +110,7 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
     return sess;
   }
 
-  function withSideChat(route: (sess: InstanceType<typeof BridgeSession>, req: Parameters<MutationHandler>[0], res: Parameters<MutationHandler>[1]) => Promise<unknown>): MutationHandler {
+  function withSideChat(route: (sess: InstanceType<typeof BridgeSession>, req: Parameters<RouteHandler>[0], res: Parameters<RouteHandler>[1]) => Promise<unknown>): RouteHandler {
     return async (req, res) => {
       try {
         const sess = await sideChatBridge(req, res);
@@ -129,7 +127,7 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
 
   const sideChatAsk = withSideChat(async (sess, req, res) => {
     if (!sideChatSupported(sess, res)) return;
-    const { question, chatId } = (req.body ?? {}) as { question?: unknown; chatId?: unknown };
+    const { question, chatId } = requestBody(req);
     if (typeof question !== 'string' || !question.trim()) {
       return res.status(400).json({ error: 'usage: /btw <question>' });
     }
@@ -142,7 +140,7 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
 
   const sideChatCancel = withSideChat(async (sess, req, res) => {
     if (!sideChatSupported(sess, res)) return;
-    const { chatId } = (req.body ?? {}) as { chatId?: unknown };
+    const { chatId } = requestBody(req);
     if (typeof chatId !== 'string' || !chatId) {
       return res.status(400).json({ error: 'chatId required' });
     }
@@ -151,15 +149,15 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
 
   const sideChatClose = withSideChat(async (sess, req, res) => {
     if (!sideChatSupported(sess, res)) return;
-    const { chatId } = (req.body ?? {}) as { chatId?: unknown };
+    const { chatId } = requestBody(req);
     if (typeof chatId !== 'string' || !chatId) {
       return res.status(400).json({ error: 'chatId required' });
     }
     res.json(sideChatSnapshot(await sess.sideChatClose(chatId)));
   });
 
-  const uiResponse: MutationHandler = async (req, res) => {
-      const body = (req.body ?? {}) as { requestId?: unknown; value?: unknown; confirmed?: unknown; cancelled?: unknown };
+  const uiResponse: RouteHandler = async (req, res) => {
+      const body = requestBody(req);
       if (!body.requestId || typeof body.requestId !== 'string') {
         return res.status(400).json({ error: 'requestId required' });
       }
@@ -182,8 +180,8 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
       }
   };
 
-  const rename: MutationHandler = async (req, res) => {
-      const { name } = (req.body ?? {}) as { name?: unknown };
+  const rename: RouteHandler = async (req, res) => {
+      const { name } = requestBody(req);
       if (typeof name !== 'string' || !name) return res.status(400).json({ error: 'Name required' });
       try {
         const sess = await ports.getLiveSession(req.params.id);
@@ -211,8 +209,8 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
       }
   };
 
-  const model: MutationHandler = async (req, res) => {
-      const { modelId, model: alias } = (req.body ?? {}) as { modelId?: unknown; model?: unknown };
+  const model: RouteHandler = async (req, res) => {
+      const { modelId, model: alias } = requestBody(req);
       const requested = modelId || alias;
       if (typeof requested !== 'string' || !requested) {
         return res.status(400).json({ error: 'modelId or model required' });
@@ -243,8 +241,8 @@ export function createSessionMutationHandlers(ports: SessionMutationPorts): {
   // Remove a not-yet-delivered queued steer/follow-up so its text can go back
   // to the composer. Bridge sessions own the queue inside pi; a Prime root's
   // queue lives in the daemon. RPC children have no remote queue editing.
-  const cancelQueued: MutationHandler = async (req, res) => {
-      const { kind, index, text } = (req.body ?? {}) as { kind?: unknown; index?: unknown; text?: unknown };
+  const cancelQueued: RouteHandler = async (req, res) => {
+      const { kind, index, text } = requestBody(req);
       const validationError = (kind !== 'steering' && kind !== 'followUp')
         || typeof text !== 'string' || !text
         ? 'kind (steering|followUp) and non-empty text required'

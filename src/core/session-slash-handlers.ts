@@ -1,4 +1,5 @@
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
+import { requestBody } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
 import { errorMessage, errorStatus, httpError } from './errors';
@@ -17,9 +18,6 @@ export interface SlashCommandPorts {
   getLiveSession(sessionId: string): Promise<LiveSession | null>;
   locatePiPane(sessionId: string): Promise<tmuxTypes.PaneTarget | null>;
 }
-
-type CommandHandler = RequestHandler<Record<string, string>, unknown, unknown,
-  Record<string, unknown>, Record<string, unknown>>;
 
 interface ParsedHostBuiltin {
   command: HostBuiltin;
@@ -55,7 +53,7 @@ function splitCommand(message: string): { name: string; args: string } {
   };
 }
 
-export function createSlashCommandHandler(ports: SlashCommandPorts): { command: CommandHandler } {
+export function createSlashCommandHandler(ports: SlashCommandPorts): { command: RouteHandler } {
   /** /reload against a bridge session, with tmux and socket-teardown fallbacks. */
   async function reloadBridgeSession(sess: InstanceType<typeof BridgeSession>, sessionId: string) {
     let bridgeError: unknown = null;
@@ -265,8 +263,8 @@ export function createSlashCommandHandler(ports: SlashCommandPorts): { command: 
     }
   }
 
-  const command: CommandHandler = async (req, res) => {
-    const { message, deliverAs } = (req.body ?? {}) as { message?: unknown; deliverAs?: unknown };
+  const command: RouteHandler = async (req, res) => {
+    const { message, deliverAs } = requestBody(req);
     if (typeof message !== 'string' || !message.startsWith('/')) {
       return res.status(400).json({ error: 'message must start with /' });
     }

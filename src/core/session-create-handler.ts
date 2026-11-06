@@ -1,4 +1,5 @@
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
+import { requestBody } from './http-boundary';
 import { errorMessage, errorStatus } from './errors';
 import { getHarness } from './harnesses';
 import sessionProvenance = require('./session-provenance');
@@ -15,17 +16,14 @@ export interface SessionCreatePorts {
   getRPCSession(id: string): InstanceType<typeof RPCSession> | null | undefined;
 }
 
-type CreateHandler = RequestHandler<Record<string, string>, unknown, unknown,
-  Record<string, unknown>, Record<string, unknown>>;
-
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export function createSessionCreateHandlers(ports: SessionCreatePorts): {
-  create: CreateHandler;
-  spawnStatus: CreateHandler;
+  create: RouteHandler;
+  spawnStatus: RouteHandler;
 } {
-  const create: CreateHandler = async (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
+  const create: RouteHandler = async (req, res) => {
+    const body = requestBody(req);
     const harness = body.harness === undefined ? 'pi' : body.harness;
     const descriptor = getHarness(harness);
     if (!descriptor) return res.status(400).json({ error: `Unknown harness: ${harness}` });
@@ -96,7 +94,7 @@ export function createSessionCreateHandlers(ports: SessionCreatePorts): {
     }
   };
 
-  const spawnStatus: CreateHandler = (req, res) => {
+  const spawnStatus: RouteHandler = (req, res) => {
     const operation = ports.sessionOperations.getSessionSpawn(req.params.id);
     if (!operation) return res.status(404).json({ error: 'Session spawn not found' });
     res.status(operation.status === 'starting' ? 202 : 200).json(operation);

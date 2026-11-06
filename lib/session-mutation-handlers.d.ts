@@ -1,5 +1,5 @@
 // Generated from src/core/session-mutation-handlers.ts; edit that source and run npm run build:core.
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import type { LiveSession } from './session-ownership';
 import type { BridgeRegistryEntry } from './contracts';
@@ -11,19 +11,17 @@ export interface SessionMutationPorts {
     }): SessionSource | null;
     getRegisteredSession(id: string): BridgeRegistryEntry | null;
 }
-type MutationHandler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
-export declare function sideChatSupported(sess: InstanceType<typeof BridgeSession>, res: Parameters<MutationHandler>[1]): boolean;
+export declare function sideChatSupported(sess: InstanceType<typeof BridgeSession>, res: Parameters<RouteHandler>[1]): boolean;
 export declare function createSessionMutationHandlers(ports: SessionMutationPorts): {
-    thinking: MutationHandler;
-    fast: MutationHandler;
-    abort: MutationHandler;
-    sideChat: MutationHandler;
-    sideChatAsk: MutationHandler;
-    sideChatCancel: MutationHandler;
-    sideChatClose: MutationHandler;
-    uiResponse: MutationHandler;
-    rename: MutationHandler;
-    model: MutationHandler;
-    cancelQueued: MutationHandler;
+    thinking: RouteHandler;
+    fast: RouteHandler;
+    abort: RouteHandler;
+    sideChat: RouteHandler;
+    sideChatAsk: RouteHandler;
+    sideChatCancel: RouteHandler;
+    sideChatClose: RouteHandler;
+    uiResponse: RouteHandler;
+    rename: RouteHandler;
+    model: RouteHandler;
+    cancelQueued: RouteHandler;
 };
-export {};

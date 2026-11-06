@@ -1,4 +1,4 @@
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
 import { errorMessage } from './errors';
 import { createHostHealth } from './host-health';
 import {
@@ -24,21 +24,18 @@ export interface SessionBrowsePorts {
   hibernated(): ReadonlyMap<string, HibernationState>;
 }
 
-type BrowseHandler = RequestHandler<Record<string, string>, unknown, unknown,
-  Record<string, unknown>, Record<string, unknown>>;
-
 const SEARCH_RESULT_CAP = 100;
 
 export function createSessionBrowseHandlers(ports: SessionBrowsePorts): {
-  list: BrowseHandler;
-  hostHealth: BrowseHandler;
-  resolve: BrowseHandler;
-  search: BrowseHandler;
+  list: RouteHandler;
+  hostHealth: RouteHandler;
+  resolve: RouteHandler;
+  search: RouteHandler;
 } {
   const { catalog: runtime } = ports;
   const hostHealth = createHostHealth();
 
-  const list: BrowseHandler = async (req, res) => {
+  const list: RouteHandler = async (req, res) => {
     const query = ((req.query.q || '') as string).trim().toLowerCase();
     await runtime.refreshPrimeRoster();
     let { active, previous, children, indexing, discoveryTruncated, discoverySkipped } =
@@ -65,7 +62,7 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts): {
     res.json(response);
   };
 
-  const health: BrowseHandler = async (_req, res) => {
+  const health: RouteHandler = async (_req, res) => {
     try {
       const healthSnapshot = await hostHealth.read();
       const { active, children } = runtime.buildSessionCatalog({ activeOnly: true });
@@ -86,7 +83,7 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts): {
     }
   };
 
-  const resolve: BrowseHandler = (req, res) => {
+  const resolve: RouteHandler = (req, res) => {
     const ref = String(req.query.id ?? '').trim();
     if (!ref) return res.status(400).json({ error: 'id is required' });
     if (ref.length < 4) return res.status(400).json({ error: 'id prefix must be at least 4 characters' });
@@ -111,7 +108,7 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts): {
 
   // Main-pane search: one flat result list with multiple snippets and an
   // occurrence count per content match, ranked then capped.
-  const search: BrowseHandler = (req, res) => {
+  const search: RouteHandler = (req, res) => {
     const query = ((req.query.q || '') as string).trim().toLowerCase();
     const scopeQuery = String(req.query.scope || '').trim().toLowerCase();
     const { active, previous, indexing, discoveryTruncated, discoverySkipped } = runtime.buildSessionCatalog();

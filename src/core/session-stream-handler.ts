@@ -1,4 +1,4 @@
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
 import { errorMessage } from './errors';
@@ -13,9 +13,6 @@ export interface SessionStreamPorts {
   /** Open browser event streams per canonical session; hibernation reads it. */
   viewers: Map<string, number>;
 }
-
-type StreamHandler = RequestHandler<Record<string, string>, unknown, unknown,
-  Record<string, unknown>, Record<string, unknown>>;
 
 interface ExtensionUIPayload {
   method?: unknown;
@@ -38,7 +35,7 @@ function extensionUIPayload(value: unknown): ExtensionUIPayload {
 const MESSAGE_UPDATE_COALESCE_MS = 50;
 const SIDE_CHAT_COALESCE_MS = 100;
 
-export function createSessionStreamHandler(ports: SessionStreamPorts): StreamHandler {
+export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHandler {
   return async (req, res) => {
     const sessionId = req.params.id;
     res.setHeader('Content-Type', 'text/event-stream');

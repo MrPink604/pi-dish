@@ -1,5 +1,5 @@
 // Generated from src/core/session-tree-handlers.ts; edit that source and run npm run build:core.
-import type { RequestHandler } from 'express';
+import type { RouteHandler } from './http-boundary';
 import tmux = require('./tmux');
 import type { BridgeRegistryEntry } from './contracts';
 import type { RPCSession } from './rpc-session';
@@ -12,8 +12,6 @@ export interface SessionTreePorts {
     getRPCSession(id: string): InstanceType<typeof RPCSession> | null | undefined;
     locatePiPane(sessionId: string): Promise<tmux.PaneTarget | null>;
 }
-type BranchHandler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 export declare function createSessionTreeHandler(ports: SessionTreePorts): {
-    branch: BranchHandler;
+    branch: RouteHandler;
 };
-export {};

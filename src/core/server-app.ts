@@ -57,8 +57,8 @@ import { getPrimeDaemon } from './prime-daemon';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
 import { errorMessage, errorStatus } from './errors';
-import type { Request, Response, NextFunction } from 'express';
-import type { ParsedQs } from 'qs';
+import { requestBody, type ApplicationRequest, type ApplicationResponse } from './http-boundary';
+import type { NextFunction } from 'express';
 import type { Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { IncomingMessage } from 'node:http';
@@ -70,13 +70,6 @@ import type { SessionBounceMode } from './session-bounces';
 
 export { observeServerStartup };
 export type { ServerStartupObserver } from './server-startup';
-
-type ApplicationRequest = Request<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
-type ApplicationResponse = Response<unknown, Record<string, unknown>>;
-
-function requestBody(req: ApplicationRequest): Record<string, unknown> {
-  return (req.body ?? {}) as Record<string, unknown>;
-}
 
 export function startServer(rootDirectory: string): Server {
   const app = express();
@@ -151,10 +144,7 @@ export function startServer(rootDirectory: string): Server {
     liveSourceObservations,
   } = ownership;
 
-  function liveOrWake(sessionId: string): Promise<LiveSession | null> {
-    return wakeSession(sessionId);
-  }
-  async function wakeSession(sessionId: string): Promise<LiveSession | null> {
+  async function liveOrWake(sessionId: string): Promise<LiveSession | null> {
     const live = await getLiveSession(sessionId);
     if (live || !await hibernation.wake(sessionId)) return live;
     const woken = await getLiveSession(sessionId);
