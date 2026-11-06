@@ -7,7 +7,7 @@ export type ApplicationResponse = Response<unknown, Record<string, unknown>>;
 export type RouteHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 
 /** Express leaves parsed JSON untyped; every route body is a boundary object. */
-export function requestBody(req: ApplicationRequest): Record<string, unknown> {
+export function requestBody(req: { body?: unknown }): Record<string, unknown> {
   return (req.body ?? {}) as Record<string, unknown>;
 }
 

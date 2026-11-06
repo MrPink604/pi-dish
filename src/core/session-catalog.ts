@@ -7,6 +7,7 @@ import { canonicalSessionId, encodeSessionKey } from './session-key';
 import { isPrivateSessionFile } from './private-sessions';
 import { decodeDirToCwd } from './session-files';
 import { record as isRecord } from './helper-values';
+import { asRecord } from './wire-protocol';
 import type { HarnessDescriptor, HarnessId, NativeSessionId, SessionCapabilities, SessionId, SessionIdentity } from './contracts';
 import type { SessionInfo } from './session-metadata';
 import type { DiscoveryCandidate, SessionSource } from './session-source';
@@ -107,10 +108,9 @@ const timestamp = (value: unknown): Date | string | number | undefined =>
   typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))
     || (value instanceof Date && Number.isFinite(value.getTime())) ? value : undefined;
 
-function record(value: unknown): Record<string, unknown> { return isRecord(value) ? value : {}; }
 function modelRef(value: unknown): string | null {
   if (typeof value === 'string') return value || null;
-  const model = record(value);
+  const model = asRecord(value);
   const provider = string(model.provider);
   const id = string(model.id) || string(model.modelId);
   return provider && id ? `${provider}/${id}` : null;
@@ -133,7 +133,7 @@ function observation(kind: CatalogLiveObservation['kind'], harnessId: HarnessId,
  * conflicts and lifecycle advice remain with the registry/policy adapter. */
 function registeredSessionObservation(value: unknown, context: RegisteredContext): CatalogLiveObservation {
   if (!isRecord(value)) throw new TypeError('Invalid registered session observation');
-  const usage = record(value.contextUsage);
+  const usage = asRecord(value.contextUsage);
   return observation('registered', context.harnessId, string(value.sessionFile), {
     name: string(value.name), model: string(value.model), thinkingLevel: string(value.thinkingLevel),
     fastMode: decodeFastModeState(value.fastMode) ?? null,
@@ -148,17 +148,17 @@ function registeredSessionObservation(value: unknown, context: RegisteredContext
  * asserting that another module already validated their presentation fields. */
 function rpcSessionObservation(value: unknown, context: ObservationContext): CatalogLiveObservation {
   if (!isRecord(value)) throw new TypeError('Invalid RPC session observation');
-  const state = record(value.state);
-  const usage = record(record(value.lastStats).contextUsage);
+  const state = asRecord(value.state);
+  const usage = asRecord(asRecord(value.lastStats).contextUsage);
   return observation('rpc', 'pi', string(value.sessionFile) || string(state.sessionFile), {
     name: string(state.sessionName) || string(state.name),
     model: modelRef(state.model) || modelRef(value.model), thinkingLevel: string(state.thinkingLevel),
     contextTokens: number(usage.tokens), contextPercent: number(usage.percent),
-    contextWindow: number(usage.contextWindow) || number(record(state.model).contextWindow),
+    contextWindow: number(usage.contextWindow) || number(asRecord(state.model).contextWindow),
     messageCount: number(state.messageCount), lastActivity: timestamp(value.lastActivityAt),
     turnInProgress: value.turnInProgress === true, askPending: hasPendingAskDialog(value.extUIState), compacting: value.compacting === true,
     cwd: string(value.cwd),
-  }, number(record(value.proc).pid) ?? null, context);
+  }, number(asRecord(value.proc).pid) ?? null, context);
 }
 
 /** A live Prime daemon root: the roster supplies identity, model, activity and
@@ -166,8 +166,8 @@ function rpcSessionObservation(value: unknown, context: ObservationContext): Cat
  * Only root agents reach here; RLM children stay silent helper semantics. */
 function primeSessionObservation(value: unknown, context: ObservationContext): CatalogLiveObservation {
   if (!isRecord(value)) throw new TypeError('Invalid Prime daemon session observation');
-  const state = record(value.state);
-  const usage = record(record(value.lastStats).contextUsage);
+  const state = asRecord(value.state);
+  const usage = asRecord(asRecord(value.lastStats).contextUsage);
   return observation('prime', 'prime', string(value.sessionFile), {
     name: string(state.sessionName) || string(state.name),
     model: modelRef(state.model), thinkingLevel: string(state.thinkingLevel),
@@ -175,7 +175,7 @@ function primeSessionObservation(value: unknown, context: ObservationContext): C
     lastActivity: timestamp(value.lastActivityAt),
     turnInProgress: value.turnInProgress === true, askPending: false, compacting: value.compacting === true,
     cwd: string(value.cwd),
-  }, number(record(value.summary).workerPid) ?? null, context);
+  }, number(asRecord(value.summary).workerPid) ?? null, context);
 }
 
 /** Validate advisory store snapshots without migrating or granting authority to

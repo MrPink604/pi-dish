@@ -5,7 +5,9 @@ export type ApplicationRequest = Request<Record<string, string>, unknown, unknow
 export type ApplicationResponse = Response<unknown, Record<string, unknown>>;
 export type RouteHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 /** Express leaves parsed JSON untyped; every route body is a boundary object. */
-export declare function requestBody(req: ApplicationRequest): Record<string, unknown>;
+export declare function requestBody(req: {
+    body?: unknown;
+}): Record<string, unknown>;
 /** Errors carry their HTTP status as ad-hoc fields; both spellings are in use. */
 export interface HttpError extends Error {
     statusCode?: number;

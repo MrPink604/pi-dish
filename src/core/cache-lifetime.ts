@@ -20,7 +20,8 @@ import path from 'node:path';
 
 import { MAX_TTL_MS, MIN_TTL_MS, configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
-import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, entryModel, hasCacheActivity, isRecord, resolveCacheTarget } from './session-metadata';
+import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, entryModel, hasCacheActivity, resolveCacheTarget } from './session-metadata';
+import { isRecord } from './wire-protocol';
 import type { CacheExpiry, CacheExpiryBasis, SessionEntries } from './session-metadata';
 
 export interface CacheLifetimeStats {

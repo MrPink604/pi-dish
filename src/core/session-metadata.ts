@@ -4,7 +4,6 @@ import { extractTextContent } from './helper-content';
 import { truncate } from './helper-format';
 import { splitSessionRefContext } from './helper-refs';
 import { record as isRecord } from './helper-values';
-export { isRecord };
 
 export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
 /** 'unknown' anchors cache activity with no documented, estimated or configured window; only the serve-time learner fills it in. */

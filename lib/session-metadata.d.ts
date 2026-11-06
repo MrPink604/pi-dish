@@ -1,7 +1,5 @@
 // Generated from src/core/session-metadata.ts; edit that source and run npm run build:core.
 import type { CacheRetentionConfig } from './cache-retention';
-import { record as isRecord } from './helper-values';
-export { isRecord };
 export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
 /** 'unknown' anchors cache activity with no documented, estimated or configured window; only the serve-time learner fills it in. */
 export type StoredCacheExpiryBasis = CacheExpiryBasis | 'unknown';
@@ -79,3 +77,4 @@ export declare function sessionInfoFromEntries(entries: SessionEntries, mtime?: 
  * the file's new mtime, which a full parse floors lastActivity at.
  */
 export declare function extendSessionInfoFromEntries(info: SessionInfo, entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile, config?: CacheRetentionConfig): SessionInfo;
+export {};

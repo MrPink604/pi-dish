@@ -15,9 +15,9 @@ export type BridgeFrame = ResponseFrame
   | { kind: 'hello'; hello: ProtocolRecord }
   | { kind: 'event'; event: string; data: unknown };
 
-export function isRecord(value: unknown): value is ProtocolRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
+import { record } from './helper-values';
+
+export const isRecord: (value: unknown) => value is ProtocolRecord = record;
 
 /** Read-only view of wire data whose feature payloads stay unvalidated. */
 export function asRecord(value: unknown): ProtocolRecord {
