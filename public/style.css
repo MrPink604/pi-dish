@@ -1913,6 +1913,69 @@ body.sidebar-open {
   font-weight: 600;
 }
 
+/* Sort/filter controls (src/browser/table-controls.ts). State is aria-sort on
+   the header and the input's value; the match count renders from data-count
+   so it never enters the transcript's text. */
+.markdown-body th.md-table-sortable {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.markdown-body th.md-table-sortable:hover {
+  color: var(--text-bright);
+}
+
+.markdown-body th.md-table-sortable:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.markdown-body th.md-table-sortable::after {
+  content: '↕';
+  margin-left: 6px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  font-weight: 400;
+}
+
+.markdown-body th[aria-sort='ascending']::after { content: '▲'; color: var(--accent); opacity: 1; }
+.markdown-body th[aria-sort='descending']::after { content: '▼'; color: var(--accent); opacity: 1; }
+
+.markdown-body .md-table { margin: 8px 0; }
+.markdown-body .md-table table { margin: 4px 0 0; }
+
+.md-table-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.md-table-tools[data-count]::after {
+  content: attr(data-count);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.md-table-filter {
+  background: var(--bg-darker);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text);
+  font-family: inherit;
+  width: 200px;
+  max-width: 100%;
+  outline: none;
+}
+
+.md-table-filter:focus { border-color: var(--accent); }
+
+/* 16px keeps iOS from zooming the page when the field takes focus. */
+@media (max-width: 768px) {
+  .md-table-filter { font-size: 16px; flex: 1; }
+}
+
 /* LaTeX math rendering */
 .markdown-body .math-block {
   margin: 8px 0;

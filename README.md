@@ -135,7 +135,8 @@ Rules of thumb:
 - **Rich content** — markdown with syntax highlighting, KaTeX-typeset
   `$…$`/`$$…$$` math in the transcript and in published/rendered file pages,
   Mermaid and SVG fenced diagrams rendered theme-matched with source and
-  zoom controls — all from locally vendored assets.
+  zoom controls, and markdown tables with click-to-sort headers and a row
+  filter — all from locally vendored assets.
 - **Mobile-first** — the whole point. Slide-out drawer, slide-up control
   panel, touch-sized everything. Installable as an app with push
   notifications when a session finishes or waits for you (over https).

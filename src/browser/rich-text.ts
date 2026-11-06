@@ -9,6 +9,7 @@ import type { SessionState, SessionEntry } from './session-state';
 import { SESSION_REF_TOKEN_RE } from '../core/helper-refs';
 import type { StreamingBlockState, StreamingFrame } from './streaming-render';
 import { record } from '../core/helper-values';
+import { createTableControls } from './table-controls';
 
 declare const katex: KatexRenderer | undefined;
 const MATH_PENDING_CLASS = 'math-pending', MATH_SOURCE_ATTR = 'data-math-source';
@@ -103,6 +104,7 @@ export function createRichText(options: { document: Document; marked: MarkedRunt
     else if (event.target.closest('.diagram-zoom-btn')) options.diagrams.openLightbox(block);
   }, { signal: events.signal });
   let disposed = false, mathAssetsPromise: Promise<void> | null = null, highlightAssetsPromise: Promise<HighlightRuntime> | null = null;
+  const tables = createTableControls({ document });
   options.marked?.use({
     breaks: true,
     gfm: true,
@@ -193,8 +195,8 @@ function linkSessionRefs(html: string) {
 }
 
 // Post-render pass over final markdown: syntax-highlight fenced code blocks,
-// give each one a copy button, and turn diagram fences into rendered
-// diagrams. Runs after final renders only — streaming re-renders skip it to
+// give each one a copy button, turn diagram fences into rendered diagrams,
+// and give tables sort/filter controls. Runs after final renders only — streaming re-renders skip it to
 // stay cheap (and half a diagram is not parseable anyway) — and must stay
 // idempotent (it re-runs on every append/prepend). The wrapper div keeps the
 // button pinned while the <pre> scrolls horizontally (an absolutely
@@ -246,6 +248,7 @@ function applyHighlight(el?: ParentNode | null) {
   hydrateMath(root);
   options.diagrams.render(root);
   linkifyFilePaths(root);
+  tables.enhance(root);
 }
 
 /** The fence's declared language, from marked's `language-x` class. */
@@ -405,5 +408,5 @@ function linkifyFilePaths(root: ParentNode) {
     ]).then(() => { const runtime = options.highlight(); if (!runtime) throw new Error('Syntax highlighter did not load'); return runtime; })
       .catch(error => { highlightAssetsPromise = null; throw error; });
   }
-  return { format: formatMarkdown, stream: streamMarkdown, highlight: applyHighlight, dispose() { disposed = true; events.abort(); copies = new WeakMap(); for (const timer of copyTimers) clearTimeout(timer); copyTimers.clear(); } };
+  return { format: formatMarkdown, stream: streamMarkdown, highlight: applyHighlight, dispose() { disposed = true; events.abort(); tables.dispose(); copies = new WeakMap(); for (const timer of copyTimers) clearTimeout(timer); copyTimers.clear(); } };
 }

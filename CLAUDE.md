@@ -2484,6 +2484,18 @@ recognition errors are the user's to fix before the agent sees them.
   copies the source. The same pass runs in the file viewer, so a `.md` file's
   fences and a whole `.mmd` file both render there. The fenced-block click
   delegation lives on `document` (not `#messages`) for exactly that reason.
+- **Markdown tables** get sort/filter controls in the same `applyHighlight`
+  pass (`src/browser/table-controls.ts`), so the transcript and file viewer
+  share them (side chat and subagent traces skip that pass). Any table with two or more body rows gets
+  focusable headers that cycle ascending → descending → original order
+  (`aria-sort`; each row's `data-table-order` restores the authored order).
+  Numbers sharing a unit (`7.5 ms`, `1,200 ms`, `12%`) sort by value, other
+  cells by numeric-aware text order, and empty cells stay last both ways.
+  Five or more rows add a `.md-table` wrapper with an all-terms row filter;
+  its match count renders from `data-count` via CSS, keeping it out of the
+  transcript text that search and comment anchoring read. All state lives in
+  the DOM and events are delegated on `document`, so retained fragments
+  restore sorted and filtered.
 - **Clickable file mentions / viewer** (`lib/file-mention.js`, `GET
   /api/sessions/:id/file?path=`): agents write findings.md deep in the tree
   and refer to it by bare filename — `linkifyFilePaths()` (runs inside

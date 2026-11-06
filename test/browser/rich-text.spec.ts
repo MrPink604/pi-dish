@@ -80,6 +80,47 @@ test('published page and share paths open on the browsing origin, not as files',
   await expect(page.locator('#sessionView.file-open')).toHaveCount(0);
 });
 
+test('markdown tables sort by column type, filter rows and keep their state across a session switch', async ({ page, fleet }) => {
+  const markdown = '| Name | Time |\n|---|---|\n| beta | 1,200 ms |\n| alpha | 95 ms |\n| gamma |  |\n| delta | 7.5 ms |\n| epsilon | 300 ms |\n\n'
+    + '| Key | Value |\n|---|---|\n| b | 2 |\n| a | 10 |';
+  const page1 = { messages: [{ role: 'assistant', index: 0, content: markdown }], session: {}, firstIndex: 0, lastIndex: 0, hasMore: false, totalMessages: 1 };
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({ json: page1 }));
+  await page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host, forceTranscriptReload: true }), { id: ROOT, host: fleet.self.hostId });
+  const big = page.locator('#messages .md-table table'), small = page.locator('#messages .markdown-body > table');
+  const names = big.locator('tbody tr:not([hidden]) td:first-child'), time = big.locator('th', { hasText: 'Time' });
+  // Numbers order by value within a unit (not text, not natural-decimal); empty cells stay last.
+  await time.click();
+  await expect(time).toHaveAttribute('aria-sort', 'ascending');
+  await expect(names).toHaveText(['delta', 'alpha', 'epsilon', 'beta', 'gamma']);
+  await time.click();
+  await expect(names).toHaveText(['beta', 'epsilon', 'alpha', 'delta', 'gamma']);
+  await time.click();
+  await expect(time).not.toHaveAttribute('aria-sort', /./);
+  await expect(names).toHaveText(['beta', 'alpha', 'gamma', 'delta', 'epsilon']);
+  const name = big.locator('th', { hasText: 'Name' });
+  await name.focus(); await name.press('Enter');
+  await expect(names).toHaveText(['alpha', 'beta', 'delta', 'epsilon', 'gamma']);
+  // Every term must match; the count is styling, not transcript text.
+  const filter = page.locator('#messages .md-table-filter');
+  await filter.fill('E ms');
+  await expect(names).toHaveText(['beta', 'delta', 'epsilon']);
+  await expect(page.locator('#messages .md-table-tools')).toHaveAttribute('data-count', '3 of 5');
+  await expect(page.locator('#messages .markdown-body')).not.toContainText('3 of 5');
+  // Two rows can still be sorted, but get no filter box.
+  await expect(small).toHaveCount(1);
+  await small.locator('th', { hasText: 'Value' }).click();
+  await expect(small.locator('tbody td:first-child')).toHaveText(['b', 'a']);
+  await small.locator('th', { hasText: 'Value' }).click();
+  await expect(small.locator('tbody td:first-child')).toHaveText(['a', 'b']);
+  await fleet.select(fleet.peer);
+  await fleet.select(fleet.self);
+  await expect(names).toHaveText(['beta', 'delta', 'epsilon']);
+  await expect(filter).toHaveValue('E ms');
+  await filter.fill('');
+  await expect(names).toHaveText(['alpha', 'beta', 'delta', 'epsilon', 'gamma']);
+  await expect(page.locator('#messages .md-table-tools')).not.toHaveAttribute('data-count', /./);
+});
+
 test('streamed session mentions become clickable before the turn finishes', async ({ page, fleet }) => {
   await fleet.select(fleet.self);
   await page.evaluate(id => {
