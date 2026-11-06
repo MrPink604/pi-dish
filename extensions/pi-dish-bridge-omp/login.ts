@@ -1,23 +1,12 @@
 import type { LoginAdapter, LoginInteraction, LoginProvider } from "../pi-dish-bridge/login.js";
+import { hostMethod as method, isObject, type HostObject } from "../pi-dish-bridge/host.js";
 
 // OMP keeps the callback-style login API: ctx.modelRegistry.authStorage.oauth
 // .login(providerId, { onAuth, onPrompt, onProgress, onManualCodeInput, signal })
 // persists the credential (OAuth or a prompted API key) and returns it
 // (verified OMP 18.11). The selectable provider list lives in @oh-my-pi/pi-ai.
 
-type HostRecord = Record<PropertyKey, unknown>;
-type HostMethod = (this: unknown, ...args: unknown[]) => unknown;
-
-function isObject(value: unknown): value is HostRecord {
-  return value !== null && (typeof value === "object" || typeof value === "function");
-}
-
-function method(target: unknown, name: string): HostMethod | null {
-  const value = isObject(target) ? target[name] : undefined;
-  return typeof value === "function" ? value as HostMethod : null;
-}
-
-let authModule: HostRecord | null = null;
+let authModule: HostObject | null = null;
 
 // Launch wrappers live outside this directory tree, where OMP does not
 // rewrite bare host-package specifiers; they import the module themselves and
@@ -32,7 +21,7 @@ try {
   useOmpAuthModule(await import("@oh-my-pi/pi-ai"));
 } catch {}
 
-function oauthApi(ctx: unknown): HostRecord | null {
+function oauthApi(ctx: unknown): HostObject | null {
   const registry = isObject(ctx) ? ctx.modelRegistry : undefined;
   const storage = isObject(registry) ? registry.authStorage : undefined;
   const oauth = isObject(storage) ? storage.oauth : undefined;
@@ -46,7 +35,7 @@ function promptText(value: unknown): { message: string; placeholder?: string } {
   return { message, placeholder };
 }
 
-function callbacks(ui: LoginInteraction): HostRecord {
+function callbacks(ui: LoginInteraction): HostObject {
   return {
     signal: ui.signal,
     onAuth(info: unknown) {

@@ -1,6 +1,7 @@
 import { createBridge, PUBLIC_EVENT_PROFILE, type BridgeDescriptor, type SideTurnInput } from "../pi-dish-bridge/core.js";
 import { getOmpNativeProjection, subscribeOmpNativeProjection, ompFastModeState, setOmpFastMode, getOmpNativeCaptureStats, getOmpNativeSession, patchOmpAgentSession } from "./native-state.js";
 import { ompLogin, useOmpAuthModule } from "./login.js";
+import { isObject } from "../pi-dish-bridge/host.js";
 
 // OMP's own /btw prompt ($bunfs/root/btw-user-*.md, verified 18.1.16). The
 // embedded asset is unreadable from an extension, so the text is mirrored
@@ -17,10 +18,6 @@ function btwPrompt(question: string): string {
 }
 
 type HostModelRef = { api: string; provider: string; id: string };
-
-function isObject(value: unknown): value is Record<PropertyKey, unknown> {
-  return !!value && typeof value === "object";
-}
 
 function isHostModelRef(value: unknown): value is HostModelRef {
   return isObject(value) &&

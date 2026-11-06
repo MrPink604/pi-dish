@@ -3,6 +3,7 @@
 import type { ContextUsage, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PiPrivateOperations } from "./pi-private.js";
 import { createLoginController, type LoginAdapter } from "./login.js";
+import { callHost, field, isHostMethod, isObject, optionalHostCall, type HostMethod, type HostObject } from "./host.js";
 import { captureSendUserMessage } from "./send-observer.js";
 import * as cp from "node:child_process";
 import * as crypto from "node:crypto";
@@ -15,40 +16,12 @@ import { EMULATED_COMMAND_METADATA, PI_EMULATED_THINKING_LEVELS } from "../../li
 import { collectActivePath, walkBranchTree } from "../../lib/helper-tree.js";
 import { createToolEventStream } from "../../lib/tool-event-stream.js";
 
-// Alternate hosts deliberately enter as unknown. A callable guard establishes
-// only that a member can be invoked; its result is still unknown until consumed.
-// This is not a declaration of either host SDK (compact/thinking differ from Pi).
-type HostObject = Record<PropertyKey, unknown>;
-type HostMethod = (this: unknown, ...args: unknown[]) => unknown;
 type UserContent = Parameters<ExtensionAPI["sendUserMessage"]>[0];
 type DeliveryOptions = Parameters<ExtensionAPI["sendUserMessage"]>[1];
 type UIRequest = Record<string, unknown> & { method: string; id?: string };
 type HostModel = HostObject & { provider: string; id: string };
 type HostCommand = HostObject & { name: string; source: string };
 type FastModeBridgeState = { available: boolean; enabled: boolean; active: boolean };
-
-function isObject(value: unknown): value is HostObject {
-  return value !== null && (typeof value === "object" || typeof value === "function");
-}
-
-function field(value: unknown, key: PropertyKey): unknown {
-  return isObject(value) ? value[key] : undefined;
-}
-
-function isHostMethod(value: unknown): value is HostMethod {
-  return typeof value === "function";
-}
-
-function callHost(target: unknown, name: string, ...args: unknown[]): unknown {
-  const method = field(target, name);
-  if (!isHostMethod(method)) throw new Error(`host does not expose ${name}`);
-  return Reflect.apply(method, target, args);
-}
-
-function optionalHostCall(target: unknown, name: string, ...args: unknown[]): unknown {
-  if (!isHostMethod(field(target, name))) return undefined;
-  return callHost(target, name, ...args);
-}
 
 function errorText(error: unknown): string {
   return String(field(error, "message") || error);

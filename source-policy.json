@@ -237,6 +237,7 @@
     "extensions/pi-dish-share-omp.mts",
     "extensions/mood.ts",
     "extensions/pi-dish-bridge/core.ts",
+    "extensions/pi-dish-bridge/host.ts",
     "extensions/pi-dish-bridge/index.ts",
     "extensions/pi-dish-bridge/login.ts",
     "extensions/pi-dish-bridge/pi-login.ts",
