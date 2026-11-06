@@ -151,7 +151,7 @@ export function isValidRemoteName(name: unknown): name is string {
 }
 
 /** Config entry -> normalized remote, or null when the entry is unusable. */
-export function normalizeRemote(value: unknown): Remote | null {
+function normalizeRemote(value: unknown): Remote | null {
   if (!value || typeof value !== 'object') return null;
   const entry = value as Record<string, unknown>;
   const name = typeof entry.name === 'string' ? entry.name.trim() : '';
@@ -352,7 +352,7 @@ export function hostLaunchScript(hash: string, port: number): string {
 }
 
 /** Unpacks a bundle tarball from stdin into ~/.pi/dish/host/<hash>, marked complete only once whole. */
-export function hostUploadScript(hash: string): string {
+function hostUploadScript(hash: string): string {
   const script = [
     TERMUX_ENV,
     'set -e; B="$HOME/.pi/dish/host"; mkdir -p "$B"; rm -rf "$B"/.incoming-*;',

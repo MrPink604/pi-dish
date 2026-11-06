@@ -56,12 +56,6 @@ declare const terminals: Map<string, TerminalState>;
 export { terminals as _terminals };
 export declare function isTerminalEnabled(): boolean;
 export declare function isTerminalAvailable(): boolean;
-/**
- * Cwd only applies on creation; missing directories fall back to HOME. Command
- * argv replaces the default shell, undefined environment overlays delete keys,
- * and metadata rides on each attach frame (including restarted terminals).
- */
-export declare function getOrCreateTerminal(sessionId: string, cwd: string | null | undefined, { idleKillMs, bufferMax, command, env, meta }?: TerminalOptions): TerminalState;
 /** Frame callbacks follow the current PTY after restart, not the original one. */
 export declare function attachClient(sessionId: string, cwd: string | null | undefined, ws: WebSocket, opts?: TerminalOptions): TerminalState;
 export declare function detachClient(sessionId: string, ws: WebSocket): void;

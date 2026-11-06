@@ -100,7 +100,7 @@ export function sessionTransitions(previous: SessionWatchState | null, rows: rea
   return { state, transitions };
 }
 
-export function decodeSubscription(value: unknown, now: () => number = Date.now): PushSubscriptionRecord | null {
+function decodeSubscription(value: unknown, now: () => number = Date.now): PushSubscriptionRecord | null {
   if (!isRecord(value) || typeof value.endpoint !== 'string' || !isRecord(value.keys)) return null;
   const { endpoint } = value;
   const { p256dh, auth } = value.keys;
@@ -114,7 +114,7 @@ export function decodeSubscription(value: unknown, now: () => number = Date.now)
 }
 
 /** Plain text of the last assistant message, collapsed and shortened for a notification. */
-export function assistantPreview(messages: readonly { readonly role?: unknown; readonly content: unknown }[]): string | null {
+function assistantPreview(messages: readonly { readonly role?: unknown; readonly content: unknown }[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== 'assistant') continue;
@@ -167,7 +167,7 @@ function topicFor(tag: string): string {
   return crypto.createHash('sha256').update(tag).digest('base64url').slice(0, 32);
 }
 
-export const sendWebPush: PushSender = async (subscription, payload, vapid) => {
+const sendWebPush: PushSender = async (subscription, payload, vapid) => {
   try {
     await webpush.sendNotification(subscription, JSON.stringify(payload), {
       vapidDetails: vapid, TTL: PUSH_TTL_SECONDS, urgency: 'high', topic: topicFor(payload.tag),

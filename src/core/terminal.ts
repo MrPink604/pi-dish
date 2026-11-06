@@ -104,7 +104,7 @@ function defaultShell(): string {
  * argv replaces the default shell, undefined environment overlays delete keys,
  * and metadata rides on each attach frame (including restarted terminals).
  */
-export function getOrCreateTerminal(
+function getOrCreateTerminal(
   sessionId: string,
   cwd: string | null | undefined,
   { idleKillMs = IDLE_KILL_MS, bufferMax = RING_BUFFER_MAX, command = null, env = null, meta = null }: TerminalOptions = {},
@@ -224,11 +224,7 @@ function restartTerminal(sessionId: string, cwd: string | null | undefined, opts
   }
   const term = getOrCreateTerminal(sessionId, cwd, opts);
   for (const ws of clients) term.clients.add(ws);
-  const frame: TerminalAttachFrame = { type: 'attach', replay: '', cwd: term.cwd, ...(term.meta || {}) };
-  const payload = JSON.stringify(frame);
-  for (const ws of clients) {
-    if (ws.readyState === 1) { try { ws.send(payload); } catch {} }
-  }
+  broadcast(term, { type: 'attach', replay: '', cwd: term.cwd, ...(term.meta || {}) });
   return term;
 }
 
@@ -255,7 +251,7 @@ function scheduleIdleKill(sessionId: string, delay: number): void {
     else killTerminal(sessionId);
   }, delay);
   // Idle cleanup must not hold the server open during shutdown.
-  if (term.idleTimer.unref) term.idleTimer.unref();
+  term.idleTimer.unref();
 }
 
 export function killTerminal(sessionId: string): void {

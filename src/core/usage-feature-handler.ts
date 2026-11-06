@@ -79,12 +79,10 @@ export function createUsageSummaryHandler(ports: FeaturePorts): FeatureHandler {
           }
           if (!cutoff || (day !== 'unknown' && day >= cutoff)) addUsage(modelSelected, part);
         }
-        else if (!cutoff) addUsage(modelSelected, bucket); // schema-2 transitional safety
+        else if (!cutoff) addUsage(modelSelected, bucket); // pre-days bucket
         if (modelSelected.calls) {
           addUsage(byModel.get(ref) || (byModel.set(ref, { ...emptyUsage(), provider: bucket.provider, model: bucket.model }), byModel.get(ref)!), modelSelected);
-          if (!modelFilter || modelFilter.has(ref)) {
-            if (modelFilter) addUsage(selected, modelSelected);
-          }
+          if (modelFilter?.has(ref)) addUsage(selected, modelSelected);
         }
       }
       addUsage(totals, selected);

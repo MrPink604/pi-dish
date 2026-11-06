@@ -180,7 +180,7 @@ function escapeXml(s: string): string {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 }
-export function catalogFragment(skill: Pick<Skill, 'name' | 'description' | 'filePath'>): string {
+function catalogFragment(skill: Pick<Skill, 'name' | 'description' | 'filePath'>): string {
   return [
     '  <skill>',
     `    <name>${escapeXml(skill.name)}</name>`,

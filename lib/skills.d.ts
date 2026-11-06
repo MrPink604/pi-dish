@@ -1,5 +1,5 @@
 // Generated from src/core/skills.ts; edit that source and run npm run build:core.
-import type { ResourceDiagnostic, Skill } from '@earendil-works/pi-coding-agent' with { 'resolution-mode': 'import' };
+import type { ResourceDiagnostic } from '@earendil-works/pi-coding-agent' with { 'resolution-mode': 'import' };
 import type { SkillActivation } from './session-index-data';
 type SkillDiagnostic = Pick<ResourceDiagnostic, 'type' | 'message' | 'path'>;
 interface BundleFile {
@@ -62,7 +62,6 @@ export declare function projectSkillCoverage(content: string, mtimeMs: number, r
         }[];
     }[];
 };
-export declare function catalogFragment(skill: Pick<Skill, 'name' | 'description' | 'filePath'>): string;
 /** Scan project roots plus global user skills, optionally restricted to one cwd. */
 export declare function getSkillsInventory(opts?: SkillsInventoryOptions): Promise<SkillsInventory>;
 /** Absolute SKILL.md paths for the mining context (session-index.setSkillRoots). */

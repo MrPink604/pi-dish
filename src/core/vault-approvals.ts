@@ -291,7 +291,7 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
 }
 
 /** The listener's bridge credential, created 0600 on first use (exclusive, so racing first uses agree). */
-export function readBridgeToken(): string {
+function readBridgeToken(): string {
   const file = path.join(dishStore.dishDir(), 'vault', 'bridge.token');
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   try {

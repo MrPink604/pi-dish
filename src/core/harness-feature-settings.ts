@@ -75,15 +75,18 @@ function sanitizeModelRoles(value: unknown): Record<string, string> {
 // so a read(merged) → edit → set() round trip would silently copy a project's
 // `.omp/config.yml` overrides into the global config. An empty temp dir has no
 // project config to overlay, so reading there yields global alone.
-async function readGlobalConfigValues(descriptor: HarnessDescriptor, keys: string[]): Promise<unknown[]> {
+async function inEmptyDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-global-'));
   try {
-    const values = await Promise.all(keys.map(key => runHarnessJsonCommand(
-      descriptor, descriptor.argv.configGet!(key), { cwd: dir })));
-    return values.map(valueOf);
+    return await run(dir);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+async function readGlobalConfigValues(descriptor: HarnessDescriptor, keys: string[]): Promise<unknown[]> {
+  return inEmptyDir(async dir => (await Promise.all(keys.map(key => runHarnessJsonCommand(
+    descriptor, descriptor.argv.configGet!(key), { cwd: dir })))).map(valueOf));
 }
 
 async function readGlobalModelRoles(descriptor: HarnessDescriptor): Promise<Record<string, string>> {
@@ -223,17 +226,11 @@ function listedSettings(value: unknown): Record<string, Record<string, unknown>>
 // a cwd, a differing effective value is reported as that project's override.
 // Settings the TUI has no tab for ("internal") are not offered.
 async function readSettings(descriptor: HarnessDescriptor, cwd?: string) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-global-'));
-  let schemaText: string, globalList: unknown, effectiveList: unknown;
-  try {
-    [schemaText, globalList, effectiveList] = await Promise.all([
-      runHarnessTextCommand(descriptor, descriptor.argv.configSchema!, { cwd: dir }),
-      runHarnessJsonCommand(descriptor, descriptor.argv.configList!, { cwd: dir }),
-      cwd ? runHarnessJsonCommand(descriptor, descriptor.argv.configList!, { cwd }) : null,
-    ]);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  const [schemaText, globalList, effectiveList] = await inEmptyDir(dir => Promise.all([
+    runHarnessTextCommand(descriptor, descriptor.argv.configSchema!, { cwd: dir }),
+    runHarnessJsonCommand(descriptor, descriptor.argv.configList!, { cwd: dir }),
+    cwd ? runHarnessJsonCommand(descriptor, descriptor.argv.configList!, { cwd }) : null,
+  ]));
   const schema = parseSettingsSchema(schemaText);
   const global = listedSettings(globalList);
   const effective = effectiveList === null ? null : listedSettings(effectiveList);
