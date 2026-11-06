@@ -22,6 +22,10 @@ export interface RecoveryReport {
 }
 const text = (value: unknown) => typeof value === 'string' ? value : '';
 const message = (value: unknown) => value instanceof Error ? value.message : String(value);
+const failure = (data: unknown, status: number) => record(data) && text(data.error) || `HTTP ${status}`;
+const RECOVERY_MODE_LABELS: Readonly<Record<string, string>> = {
+  off: 'Off', restore: 'Restore open sessions', continue: 'Restore and continue interrupted work',
+};
 export function decodeRecoveryMode(value: unknown): RecoveryMode {
   return value === 'restore' || value === 'continue' ? value : 'off';
 }
@@ -48,7 +52,6 @@ export function createRecovery(options: RecoveryOptions) {
     const value = doc.getElementById(id); if (!value) throw new Error('Missing recovery element: ' + id); return value as T;
   };
   const apiFetch = options.request;
-  const apiSend = (host: RecoveryHost, path: string, payload: unknown, method: string) => sendJson(apiFetch, host, path, payload, method);
   const effectiveHosts = options.hosts;
   const hostIsDown = options.down;
   const confirm = options.confirm;
@@ -64,8 +67,7 @@ export function createRecovery(options: RecoveryOptions) {
   function unmountPreferences(): void {
     ++preferencesSeq; preferenceEvents?.abort(); preferenceEvents = null; preferenceEndpoint = undefined;
   }
-  // Recovery is host-global; retain host entries, not ids that could fall back
-  // to self if a remote disappears while a request is in flight.
+  // Retain host entries: an id could fall back to self if a remote disappears mid-request.
   let recoveryHostId: string | null = null;
   let recoveryViewSeq = 0;
 
@@ -81,9 +83,10 @@ export function createRecovery(options: RecoveryOptions) {
   function recoveryHostOptions(hosts: readonly RecoveryHost[]) {
     return hosts.map(host => `<option value="${escapeHtml(host.hostId || '')}">${escapeHtml(hostDisplayLabel(host))}</option>`).join('');
   }
+  const recoveryModeOptionsHtml = Object.entries(RECOVERY_MODE_LABELS)
+    .map(([value, label]) => `<option value="${value}">${label}</option>`).join('');
 
-  // Refresh only the options, not the form: a fleet poll must not discard an
-  // unsaved mode selection. Losing the selected host invalidates its requests.
+  // Refresh only the options: a fleet poll must not discard an unsaved mode selection.
   function refreshRecoveryHosts() {
     if (disposed) return;
     const hosts = recoveryCapableHosts();
@@ -126,7 +129,7 @@ export function createRecovery(options: RecoveryOptions) {
     section.innerHTML = `<label for="recoveryMode"><strong>Session recovery</strong><small>Saved on the selected host for all devices. Runs whenever its server is launched; no boot-service setup is required. Restore opens sessions idle. Continue may incur model cost and perform external actions; tool execution is not exactly-once.</small></label>
       <div class="recovery-controls">
         <label for="recoverySettingsHost">Host</label><select id="recoverySettingsHost"></select>
-        <select id="recoveryMode" disabled aria-label="Recovery mode"><option value="off">Off</option><option value="restore">Restore open sessions</option><option value="continue">Restore and continue interrupted work</option></select>
+        <select id="recoveryMode" disabled aria-label="Recovery mode">${recoveryModeOptionsHtml}</select>
         <div class="recovery-actions"><button class="btn-small" id="saveRecoveryMode" disabled>Save</button><button class="btn-small" id="openRecoveryReport">Recovery report</button></div>
         <small id="recoverySettingsStatus" role="status"></small>
         <small id="recoveryUnavailableHosts" role="status" hidden></small>
@@ -157,7 +160,7 @@ export function createRecovery(options: RecoveryOptions) {
       try {
         const res = await apiFetch(host, '/api/settings', { timeoutMs: 20000 });
         const data: unknown = await res.json();
-        if (!res.ok) throw new Error(record(data) && text(data.error) || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(failure(data, res.status));
         if (!owns(request, host)) return;
         mode.value = decodeRecoveryMode(record(data) ? data.recoveryMode : null);
         mode.disabled = save.disabled = false;
@@ -180,7 +183,7 @@ export function createRecovery(options: RecoveryOptions) {
       mode.disabled = save.disabled = true;
       status.textContent = 'Saving…';
       try {
-        await apiSend(host, '/api/settings', { recoveryMode: value }, 'PUT');
+        await sendJson(apiFetch, host, '/api/settings', { recoveryMode: value }, 'PUT');
         if (owns(request, host)) status.textContent = 'Saved on ' + hostDisplayLabel(host) + ' for future server launches.';
       } catch (error) {
         if (owns(request, host)) status.textContent = 'Save failed: ' + message(error);
@@ -241,10 +244,10 @@ export function createRecovery(options: RecoveryOptions) {
       const res = await apiFetch(host, '/api/recovery', { timeoutMs: 20000 });
       const data: unknown = await res.json();
       if (!owns()) return;
-      if (!res.ok) throw new Error(record(data) && text(data.error) || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(failure(data, res.status));
       const report = decodeRecoveryReport(data);
-      const modes: Readonly<Record<string, string>> = { off: 'Off', restore: 'Restore open sessions', continue: 'Restore and continue interrupted work' };
-      body.innerHTML = `<p class="recovery-note"><strong>${escapeHtml(Object.hasOwn(modes, report.mode) ? modes[report.mode] : report.mode)}</strong> on ${escapeHtml(hostDisplayLabel(host))}. Recovery runs when this host’s server starts, not when this report opens.</p>
+      const modeLabel = Object.hasOwn(RECOVERY_MODE_LABELS, report.mode) ? RECOVERY_MODE_LABELS[report.mode] : report.mode;
+      body.innerHTML = `<p class="recovery-note"><strong>${escapeHtml(modeLabel)}</strong> on ${escapeHtml(hostDisplayLabel(host))}. Recovery runs when this host’s server starts, not when this report opens.</p>
         <p class="recovery-note">Needs review means recovery could not safely decide what happened. Inspect the transcript and any external actions before proceeding. Restore only reopens the session idle; it does not replay an uncertain prompt. Excluding a session prevents automatic recovery, without closing it.</p>
         <div id="recoveryActionStatus" role="status" class="recovery-note"></div>
         <div class="recovery-list"></div>`;
@@ -277,7 +280,7 @@ export function createRecovery(options: RecoveryOptions) {
           const status = body.querySelector<HTMLElement>('#recoveryActionStatus')!;
           status.textContent = 'Updating ' + (record.name || record.id) + '…';
           try {
-            await apiSend(host, path, payload, method);
+            await sendJson(apiFetch, host, path, payload, method);
             if (owns()) await loadRecoveryView();
           } catch (error) {
             if (!owns()) return;
