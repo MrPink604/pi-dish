@@ -5,10 +5,6 @@ export type HibernationMode = 'pressure' | 'off';
 export declare function hibernationMode(value: unknown): HibernationMode;
 export declare const HIBERNATION_MIN_IDLE_MS: number;
 export declare const HIBERNATION_EVAL_WINDOW_MS: number;
-/** Pressure: less than this share of RAM available... */
-export declare const PRESSURE_AVAILABLE_FRACTION = 0.1;
-/** ...or more than this share of configured swap in use. */
-export declare const PRESSURE_SWAP_USED_FRACTION = 0.75;
 export interface MemorySample {
     readonly totalBytes: number;
     readonly availableBytes: number;
@@ -22,7 +18,6 @@ export interface ProcReader {
     pids(): number[];
     read(pid: number, file: 'status' | 'cmdline'): string | null;
 }
-export declare const procfs: ProcReader;
 export interface ProcessTreeSummary {
     readonly processes: number;
     readonly rssBytes: number;

@@ -1,19 +1,9 @@
 /**
- * Memory-pressure hibernation. When the host runs short of memory, pi-dish
- * gracefully stops the longest-idle live agent that is provably doing nothing,
- * keeps its transcript resumable, and resumes it when a message arrives.
- *
- * Hibernation is not an explicit close: recovery intent is untouched and the
- * record lives in its own store (`~/.pi/dish/hibernation.json`). Eligibility
- * is deliberately conservative; anything that cannot be proven idle is kept:
- *   - a turn, compaction, ask dialog, queued input, background job, live
- *     subagent or running tool (the shared bounce safety inspection);
- *   - a browser event stream or tmux client watching the session;
- *   - a warm prompt cache, or activity within HIBERNATION_MIN_IDLE_MS;
- *   - a supervised service under the session's launch broker;
- *   - a live eval kernel whose transcript used `eval` within
- *     HIBERNATION_EVAL_WINDOW_MS (older kernel state is discarded and recorded).
- * One session is stopped per sample, so the next sample sees the freed memory.
+ * Memory-pressure hibernation: stop the longest-idle agent that is provably
+ * doing nothing while keeping its transcript resumable, one session per sample
+ * so the next sample measures the freed memory. This is not an explicit close;
+ * recovery intent is untouched and the record lives in its own store.
+ * Eligibility is conservative: anything that cannot be proven idle is kept.
  */
 import fs = require('fs');
 import path = require('path');
@@ -31,10 +21,8 @@ export function hibernationMode(value: unknown): HibernationMode {
 
 export const HIBERNATION_MIN_IDLE_MS = 2 * 60 * 60 * 1000;
 export const HIBERNATION_EVAL_WINDOW_MS = 8 * 60 * 60 * 1000;
-/** Pressure: less than this share of RAM available... */
-export const PRESSURE_AVAILABLE_FRACTION = 0.10;
-/** ...or more than this share of configured swap in use. */
-export const PRESSURE_SWAP_USED_FRACTION = 0.75;
+const PRESSURE_AVAILABLE_FRACTION = 0.10;
+const PRESSURE_SWAP_USED_FRACTION = 0.75;
 const SAMPLE_INTERVAL_MS = 60_000;
 const HIBERNATION_HARNESSES: Record<string, true> = { omp: true, pi: true };
 const STORE = 'hibernation.json';
@@ -81,7 +69,7 @@ export interface ProcReader {
   read(pid: number, file: 'status' | 'cmdline'): string | null;
 }
 
-export const procfs: ProcReader = {
+const procfs: ProcReader = {
   pids: () => {
     try { return fs.readdirSync('/proc').filter(name => /^\d+$/.test(name)).map(Number); }
     catch { return []; }
@@ -321,7 +309,10 @@ export function createSessionHibernation<Authority, Inspection extends Hibernati
     const live = ports.candidates();
     // A record describes an inactive session; anything live again has woken.
     const records = readRecords();
-    for (const row of live) if (records.has(canonical(row.id) ?? '')) forget(row.id);
+    for (const row of live) {
+      const id = canonical(row.id);
+      if (id && records.has(id)) forget(id);
+    }
     if (hibernationMode(ports.readSettings().hibernation) === 'off') return { skipped: 'Hibernation is off.' };
     const measured = parseMeminfo(ports.readMeminfo());
     if (!measured) return { skipped: 'Memory pressure cannot be measured on this host.' };
@@ -367,7 +358,10 @@ export function createSessionHibernation<Authority, Inspection extends Hibernati
     },
     stop() { stopped = true; clearInterval(timer); timer = undefined; },
     records: readRecords,
-    isHibernated: sessionId => readRecords().has(canonical(sessionId) ?? ''),
+    isHibernated: sessionId => {
+      const id = canonical(sessionId);
+      return !!id && readRecords().has(id);
+    },
     forget,
     async wake(sessionId) {
       const id = canonical(sessionId);
