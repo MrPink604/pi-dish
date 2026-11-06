@@ -148,29 +148,13 @@ export declare function routeIdentity(value: unknown): (SessionIdentity & {
 export declare function routeSessionId(harnessId: HarnessId, nativeSessionId: NativeSessionId): string;
 export declare function registryIdentity(input: unknown): SessionIdentity | null;
 export declare function sameProcessIdentity(left: unknown, right: unknown): boolean;
-export declare function spawnMatchesRegistryClaim(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined): boolean;
 export declare function proveBridgeRegistryClaim(entry: BridgeRegistryEntry): Promise<void>;
-/** Synchronous observations, not an authorization that survives an await. */
-export declare function spawnAllowsOwnedPaneClose(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined): boolean;
-export declare function primeAgentMatchesSummary(agent: tmux.PrimeAgentPlacement, summary: PrimeAgentSummary): boolean;
-/**
- * The same resident worker. A Prime `/new` moves the agent to a new transcript
- * while `activeSessionId` and `workerInstanceId` survive, so transcript equality
- * is not part of worker identity.
- */
-export declare function primeAgentSameWorker(agent: tmux.PrimeAgentPlacement, summary: PrimeAgentSummary): boolean;
 /** Compare transcripts through their real paths without inventing a match on failure. */
-export declare function sameTranscriptFile(left: unknown, right: unknown): boolean;
+export declare function sameTranscriptFile(left: string | null | undefined, right: string | null | undefined): boolean;
 export interface PrimeLaunchAuthority {
     readonly closeAllowed: boolean;
     readonly restartAllowed: boolean;
 }
-/**
- * Prime launch authority for one route id: a recorded launch must name the
- * same resident worker as the roster summary, even when the route key moved.
- * Synchronous by design; callers refresh the roster before projecting a row.
- */
-export declare function primeLaunchAuthority(sessionId: string, summary: PrimeAgentSummary | null): PrimeLaunchAuthority;
 /** Resolve the cached roster root for a Prime route, then apply primeLaunchAuthority. */
 export declare function primeLaunchAuthorityForRoute(sessionId: string): PrimeLaunchAuthority;
 export declare function spawnAllowsManagedClose(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined, closeMode: HarnessDescriptor['closeMode']): boolean;
