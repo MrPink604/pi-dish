@@ -81,7 +81,7 @@ export interface RecoveryObserverOptions {
 export declare function bootId(): string | null;
 export declare function readRecord(harnessId: string, nativeSessionId: string): RecoveryRecord | null;
 export declare function listRecords(): RecoveryRecord[];
-export declare function checkpointMatches(record: unknown): boolean;
+export declare function checkpointMatches(record: RecoveryRecord): boolean;
 export declare function recordSession(snapshot: RecoveryObservation | null): RecoveryRecord | null;
 export declare function getControl(harnessId: string, nativeSessionId: string): RecoveryControl;
 export declare function patchControl(harnessId: string, nativeSessionId: string, patch: RecoveryControlPatch): RecoveryControl;
