@@ -1,4 +1,5 @@
 import type { ApiRequest } from './api-client';
+import { errorMessage } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { EffectiveHost } from './host-catalog';
 import { sttUnavailableReason, formatDuration, insertAtCaret } from './helper-format';
@@ -110,7 +111,7 @@ export function createComposerSpeech(options: {
       const text = record(value) && typeof value.text === 'string' ? value.text.trim() : '';
       if (!text) { options.showNote('No speech detected.'); return; }
       insert(text);
-    } catch (error) { if (current()) options.showNote(error instanceof Error ? error.message : 'Transcription failed'); }
+    } catch (error) { if (current()) options.showNote(errorMessage(error)); }
     finally {
       if (transcription === entry) { transcription = null; if (owns(owner)) options.status(''); updateButton(); }
     }

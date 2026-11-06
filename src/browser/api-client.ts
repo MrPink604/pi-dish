@@ -8,10 +8,29 @@ export interface RequestOptions extends RequestInit { timeoutMs?: number }
 export type ApiRequest = (host: HostTarget, path: string, options?: RequestOptions) => Promise<Response>;
 
 type CapturedHost = Readonly<HostEndpoint & { hostId: string | null }>;
-/** Search/usage retire on credential changes; absent credentials compare equal. */
+/** Absent credentials compare equal. */
+export function sameEndpoint(left: HostEndpoint | null | undefined, right: HostEndpoint | null | undefined): boolean {
+  return !!left && !!right && left.base === right.base && (left.token || '') === (right.token || '');
+}
+
+/** Search/usage retire on host or credential changes. */
 export function sameCapturedHost(current: CapturedHost | null, captured: CapturedHost): boolean {
-  return !!current && current.hostId === captured.hostId && current.base === captured.base
-    && (current.token || '') === (captured.token || '');
+  return !!current && current.hostId === captured.hostId && sameEndpoint(current, captured);
+}
+
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function readJson(response: Response): Promise<unknown> {
+  return response.json().catch(() => ({}));
+}
+
+/** The server's `error` text, else `label (status)`; no label means a bare `HTTP status`. */
+export function responseError(response: Response, data: unknown, label?: string): string {
+  const error = data && typeof data === 'object' && 'error' in data ? data.error : null;
+  if (typeof error === 'string' && error) return error;
+  return label ? `${label} (${response.status})` : `HTTP ${response.status}`;
 }
 
 export class ApiHttpError extends Error {
@@ -45,12 +64,8 @@ export function createHostTransport(options: {
 }
 
 async function jsonResponse(response: Response, fallback: string): Promise<unknown> {
-  // Keep generic mutations compatible with successful empty/non-JSON responses.
-  const data: unknown = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = data && typeof data === 'object' && 'error' in data ? data.error : null;
-    throw new ApiHttpError(typeof error === 'string' && error ? error : `${fallback} (${response.status})`, response.status);
-  }
+  const data = await readJson(response);
+  if (!response.ok) throw new ApiHttpError(responseError(response, data, fallback), response.status);
   return data;
 }
 

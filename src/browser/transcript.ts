@@ -1,4 +1,5 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { RenderMessage } from './message-data';
 import { sessionRefKey } from './helper-identity';
@@ -162,7 +163,7 @@ export function createTranscript(options: {
     } catch (error) {
       if (owns(owner) && container.contains(gap)) {
         const label = gap.querySelector('span');
-        if (label) label.textContent = `Failed: ${error instanceof Error ? error.message : String(error)} — retry`;
+        if (label) label.textContent = `Failed: ${errorMessage(error)} — retry`;
       }
     } finally {
       delete gap.dataset.loading;
@@ -215,7 +216,7 @@ export function createTranscript(options: {
       const data = await page(owner, 'limit=50'); if (!owns(owner)) return;
       sessionState.mergeCurrentSession(owner.selection, data.session); loaded = { key: sessionRefKey(owner.selection), base: owner.endpoint.base };
       cursors = { oldestIndex: data.firstIndex, lastIndex: data.lastIndex, hasOlder: data.hasMore, total: data.totalMessages || 0 }; render(data.messages);
-    } catch (error) { if (owns(owner)) container.innerHTML = `<div class="error">Failed to load messages: ${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`; }
+    } catch (error) { if (owns(owner)) container.innerHTML = `<div class="error">Failed to load messages: ${escapeHtml(errorMessage(error))}</div>`; }
   }
   async function loadOlder() {
     // Concurrent consumers join the existing request; the original operation
@@ -241,7 +242,7 @@ export function createTranscript(options: {
         if (!document.getElementById('moodIndicator')) options.updateMood(data.messages);
         if (anchor?.isConnected && container.contains(anchor)) container.scrollTop += anchor.getBoundingClientRect().top - offset;
       } else if (cursors.oldestIndex === before) { cursors.hasOlder = false; container.querySelector('#loadOlderBar')?.remove(); bindBar(); }
-    } catch (error) { if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${error instanceof Error ? error.message : String(error)} — retry`; }
+    } catch (error) { if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${errorMessage(error)} — retry`; }
   }
   async function catchup(selection = sessionState.captureSelection()): Promise<void> {
     const owner = capture(selection); if (!owner) return; if (cursors.lastIndex == null) return load(selection);

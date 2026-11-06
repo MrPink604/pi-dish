@@ -1,4 +1,5 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage } from './api-client';
 import { record } from '../core/helper-values';
 import { escapeHtml } from '../core/helper-format';
 import { decodeSavedFilters } from './display-preferences';
@@ -55,7 +56,7 @@ export function createSidebarQuery(options: {
     if (disposed) return; const captured = query.trim(); if (!captured) return;
     const name = options.prompt('Name this filter:', ''); if (!name?.trim()) return; const trimmed = name.trim().slice(0, 60), next = filters.filter(filter => filter.name !== trimmed).concat([{ name: trimmed, query: captured }]);
     scopes.add(trimmed); store('pi-dish-active-scopes', [...scopes]); cancelDebounce(); options.invalidateLists(); options.busy(false); input.value = ''; query = ''; const generation = queryGeneration;
-    try { await persistFilters(next); } catch (error) { if (!disposed && generation === queryGeneration) options.alert('Could not save filter: ' + (error instanceof Error ? error.message : String(error))); }
+    try { await persistFilters(next); } catch (error) { if (!disposed && generation === queryGeneration) options.alert('Could not save filter: ' + errorMessage(error)); }
   }
   function renderChips() {
     if (disposed) return; chipEvents.abort(); chipEvents = new AbortController(); const { signal } = chipEvents;

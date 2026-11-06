@@ -1,5 +1,6 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import { setSessionModel, setSessionThinking, setSessionFast, renameSession, sendJson } from './api-client';
+import { setSessionModel, setSessionThinking, setSessionFast, renameSession, sendJson, errorMessage, readJson, responseError } from './api-client';
+import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { createModelCatalog } from './model-catalog';
 import { mountModelSelector } from './model-selector';
@@ -7,15 +8,13 @@ import { mountThinkingSelector } from './thinking-selector';
 import { thinkingLevelsFor } from '../core/helper-models';
 import { formatTokens, filenameFromContentDisposition } from './helper-format';
 import { sessionKey } from './helper-identity';
-import { record } from '../core/helper-values';
 export function createSessionControls(options: {
   document: Document; sessionState: SessionState; catalog: ReturnType<typeof createModelCatalog>; request: ApiRequest;
   host: (id: string | null) => HostEndpoint | null; loadModels: (id: string, harnessId?: string) => Promise<unknown>;
   status: (message: string, type?: string) => void;
 }) {
   const { document, sessionState, catalog } = options, window = document.defaultView!;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing session control: ' + id); return value as T; };
-  const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+  const element = requiredElement(document, 'session control');
   function header() { return sessionState.currentSession; }
   function sessionSupports(row: NonNullable<ReturnType<typeof header>>, capability: string) { return row.capabilities?.[capability] !== false; }
   interface Owner { selection: SelectionOwner; endpoint: Readonly<HostEndpoint> }
@@ -101,7 +100,7 @@ export function createSessionControls(options: {
     enabledTimer = later(() => {
       enabledTimer = null; const current = options.host(null); if (!current || current.base !== endpoint.base) return;
       void sendJson(options.request, { ...endpoint, token: current.token }, '/api/models/enabled', { enabledIds: ids }, 'PUT').catch(error => {
-        if (!disposed && sequence === enabledSequence && options.host(null)?.base === endpoint.base) options.status('Failed to save model list: ' + errorText(error), 'error');
+        if (!disposed && sequence === enabledSequence && options.host(null)?.base === endpoint.base) options.status('Failed to save model list: ' + errorMessage(error), 'error');
       });
     }, 400);
   }
@@ -113,7 +112,7 @@ export function createSessionControls(options: {
       await setSessionModel(options.request, mutationEndpoint(owner), owner.selection.id, selector); if (!current()) return;
       sessionState.patchSession(owner.selection.id, { model: selector }, owner.selection.host);
       if (owns(owner)) options.status('Model switched to ' + selector);
-    } catch (error) { if (current() && owns(owner)) options.status('Model switch failed: ' + errorText(error), 'error'); }
+    } catch (error) { if (current() && owns(owner)) options.status('Model switch failed: ' + errorMessage(error), 'error'); }
   }
   function updateThinking() {
     const session = header(), badge = element('sessionThinking');
@@ -151,7 +150,7 @@ export function createSessionControls(options: {
       const result = await setSessionThinking(options.request, mutationEndpoint(owner), owner.selection.id, level); if (!current()) return;
       const reported = result.level || level; sessionState.patchSession(owner.selection.id, { thinkingLevel: reported }, owner.selection.host);
       if (owns(owner)) options.status(reported !== level ? `Thinking level: ${reported} (model doesn't support ${level})` : `Thinking level: ${reported}`);
-    } catch (error) { if (current() && owns(owner)) options.status('Thinking level failed: ' + errorText(error), 'error'); }
+    } catch (error) { if (current() && owns(owner)) options.status('Thinking level failed: ' + errorMessage(error), 'error'); }
   }
 
   async function toggleFast() {
@@ -166,7 +165,7 @@ export function createSessionControls(options: {
       if (!current()) return;
       sessionState.patchSession(owner.selection.id, { fastMode: result.fastMode }, owner.selection.host);
       if (owns(owner)) options.status(result.fastMode?.enabled ? 'Fast mode on — priority service tier' : 'Fast mode off');
-    } catch (error) { if (current() && owns(owner)) options.status('Fast mode failed: ' + errorText(error), 'error'); }
+    } catch (error) { if (current() && owns(owner)) options.status('Fast mode failed: ' + errorMessage(error), 'error'); }
   }
   function cancelRename() { renameOwner = null; renameEvents.abort(); element('sessionNameInput').style.display = 'none'; element('sessionName').style.display = ''; }
   function startRename() {
@@ -183,7 +182,7 @@ export function createSessionControls(options: {
     const session = header(); if (!owns(owner) || !session?.isActive || !sessionSupports(session, 'rename') || !value || value === session.name) return;
     const current = mutation(owner, 'rename');
     try { await renameSession(options.request, mutationEndpoint(owner), owner.selection.id, value); if (current()) sessionState.patchSession(owner.selection.id, { name: value }, owner.selection.host); }
-    catch (error) { if (current() && owns(owner)) options.status('Rename failed: ' + errorText(error), 'error'); }
+    catch (error) { if (current() && owns(owner)) options.status('Rename failed: ' + errorMessage(error), 'error'); }
   }
   function download(blob: Blob, name: string) {
     if (disposed) return; const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = name; link.rel = 'noopener'; document.body.appendChild(link); link.click(); link.remove();
@@ -198,11 +197,11 @@ export function createSessionControls(options: {
     options.status('Exporting session…', 'working');
     try {
       const response = await options.request(endpoint, path);
-      if (!response.ok) { const data: unknown = await response.json().catch(() => null); throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`); }
+      if (!response.ok) throw new Error(responseError(response, await readJson(response)));
       const blob = await response.blob(); if (!endpointCurrent(owner)) return;
       download(blob, filenameFromContentDisposition(response.headers.get('Content-Disposition'), fallback));
       if (sequence === exportSequence && owns(owner)) options.status('Session exported');
-    } catch (error) { if (sequence === exportSequence && owns(owner)) options.status('Export failed: ' + errorText(error), 'error'); }
+    } catch (error) { if (sequence === exportSequence && owns(owner)) options.status('Export failed: ' + errorMessage(error), 'error'); }
   }
   element('sessionName').addEventListener('click', startRename, { signal: lifetime.signal });
   element('sessionModel').addEventListener('click', () => { void toggleModels(); }, { signal: lifetime.signal });

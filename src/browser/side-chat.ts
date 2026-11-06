@@ -1,5 +1,5 @@
 import { record } from '../core/helper-values';
-import { ApiHttpError, sendJson } from './api-client';
+import { ApiHttpError, errorMessage, sendJson } from './api-client';
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 
@@ -287,7 +287,7 @@ export function createSideChat(options: {
       setState(decodeSideChat(record(value) ? value.sideChat : null), captured.owner);
     } catch (error) {
       if (!owns(captured)) return;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       options.status(`Could not ${kind === 'cancel' ? 'stop' : 'close'} the side chat: ${message}`, 'error');
     }
   }

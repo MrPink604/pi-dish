@@ -1,5 +1,6 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import { sendJson } from './api-client';
+import { sendJson, errorMessage } from './api-client';
+import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { TranscriptTree, TranscriptTreeBranch, TranscriptTreeFilter, TranscriptTreeNode, TranscriptTreeProjection, TranscriptTreeTool } from './transcript-tree-data';
 import { TRANSCRIPT_TREE_FILTERS, decodeTranscriptTree, nodePreview, projectTranscriptTree, transcriptTreeDescend, transcriptTreePath, transcriptTreeVisibleAnchor } from './transcript-tree-data';
@@ -21,8 +22,7 @@ export function createTranscriptTree(options: {
   copyMessageLink: (button: HTMLElement) => void;
 }) {
   const { document, sessionState, storage, status: setStatus } = options;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing tree element: ' + id); return value as T; };
-  const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+  const element = requiredElement(document, 'tree');
   const hoverPointer = () => document.defaultView?.matchMedia?.('(hover: hover)').matches ?? true;
   let disposed = false, treeViewGeneration = 0, branchGeneration = 0, operationGeneration = 0;
   let treeData: TranscriptTree | null = null, treeOwner: SelectionOwner | null = null, treeEndpoint: Readonly<HostEndpoint> | null = null;

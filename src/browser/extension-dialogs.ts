@@ -1,5 +1,5 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import { sendJson } from './api-client';
+import { errorMessage, sendJson } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { ExtensionRequest, ExtensionResponse, ExtensionAuth } from './extension-ui-data';
 import { authCallbackMatches, authUrlState, parseAuthCallback } from './extension-auth';
@@ -167,7 +167,7 @@ export function createExtensionDialogs(options: {
     void sendJson(options.request, Object.freeze({ ...host }), `/api/sessions/${encodeURIComponent(entry.sessionId)}/ui-response`, { requestId, ...response })
       .catch(error => {
         onFailure?.();
-        if (!silent && !disposed && sessionState.ownsSelection(owner)) options.status(`Dialog response failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+        if (!silent && !disposed && sessionState.ownsSelection(owner)) options.status(`Dialog response failed: ${errorMessage(error)}`, 'error');
       });
   }
 

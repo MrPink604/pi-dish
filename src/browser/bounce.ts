@@ -5,6 +5,8 @@ import { hostDisplayLabel, sessionKey } from './helper-identity';
 import { record } from '../core/helper-values';
 import { bounceMode, decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } from './bounce-data';
 import type { BounceMode, BounceTarget, BounceOperation, BounceResult } from './bounce-data';
+import { errorMessage, readJson, responseError } from './api-client';
+import { requiredElement } from './dom';
 export interface BounceHost extends HostEndpoint {
   readonly hostId: string | null; readonly name?: string | null; readonly label?: string | null;
   readonly capabilities?: Readonly<Record<string, boolean | undefined>>;
@@ -23,12 +25,7 @@ export function createBounce(options: {
 }) {
   const document = options.document, apiFetch = options.request, sessionState = options.sessionState;
   const effectiveHosts = options.hosts, refreshSessions = options.refreshSessions, selectSession = options.selectSession;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => {
-    const value = document.getElementById(id); if (!value) throw new Error('Missing bounce element: ' + id); return value as T;
-  };
-  const message = (error: unknown) => error instanceof Error ? error.message : String(error);
-  const readJson = (response: Response): Promise<unknown> => response.json().catch(() => ({}));
-  function failure(data: unknown, status: number) { return record(data) && typeof data.error === 'string' && data.error ? data.error : `HTTP ${status}`; }
+  const element = requiredElement(document, 'bounce');
   let disposed = false;
   function retire(state: BounceHostState): void { clearTimeout(state.timer); state.previewEvents.abort(); state.operationEvents.abort(); }
   function sameHost(host: BounceHost): boolean {
@@ -95,11 +92,11 @@ export function createBounce(options: {
     try {
       const res = await apiFetch(state.host, `/api/session-bounces/preview?mode=${state.mode}`, { timeoutMs: 20000 });
       const data = await readJson(res);
-      if (!res.ok) throw new Error(failure(data, res.status));
+      if (!res.ok) throw new Error(responseError(res, data));
       if (!bounceHostElement(state)) return;
       state.targets = decodeBouncePreview(data);
     } catch (error) {
-      state.previewError = `Preview unavailable: ${message(error)}`;
+      state.previewError = `Preview unavailable: ${errorMessage(error)}`;
     }
     state.loading = false;
     renderBouncePreview(state);
@@ -175,14 +172,14 @@ export function createBounce(options: {
           body: JSON.stringify({ mode: state.mode, sessionIds }),
         });
         const data = await readJson(res);
-        if (!res.ok) throw new Error(failure(data, res.status));
+        if (!res.ok) throw new Error(responseError(res, data));
         const operation = decodeBounceOperation(record(data) ? data.operation : null);
         ++state.readSeq;
         state.operations = [operation, ...state.operations.filter(op => op.id !== operation.id)];
         state.actionNotice = 'Snapshot queued on this host.';
         await reconcileBounceRestarts(state, [operation], true);
       } catch (error) {
-        state.actionNotice = `Queue request failed: ${message(error)}. Acceptance may be unknown; check recent operations before selecting again.`;
+        state.actionNotice = `Queue request failed: ${errorMessage(error)}. Acceptance may be unknown; check recent operations before selecting again.`;
       }
       renderBounceOperations(state);
     }));
@@ -200,7 +197,7 @@ export function createBounce(options: {
     try {
       const res = await apiFetch(state.host, '/api/session-bounces', { timeoutMs: 20000 });
       const data = await readJson(res);
-      if (!res.ok) throw new Error(failure(data, res.status));
+      if (!res.ok) throw new Error(responseError(res, data));
       const operations = decodeBounceOperations(data);
       if (seq === state.readSeq && bounceHostElement(state)) {
         state.operations = operations;
@@ -208,7 +205,7 @@ export function createBounce(options: {
         await reconcileBounceRestarts(state, operations);
       }
     } catch (error) {
-      if (seq === state.readSeq) state.operationError = `Status unavailable: ${message(error)}. Displayed operations may be stale.`;
+      if (seq === state.readSeq) state.operationError = `Status unavailable: ${errorMessage(error)}. Displayed operations may be stale.`;
     }
     state.polling = false;
     renderBounceOperations(state);
@@ -249,14 +246,14 @@ export function createBounce(options: {
     try {
       const res = await apiFetch(state.host, `/api/session-bounces/${encodeURIComponent(operation.id)}`, { method: 'DELETE', timeoutMs: 20000 });
       const data = await readJson(res);
-      if (!res.ok) throw new Error(failure(data, res.status));
+      if (!res.ok) throw new Error(responseError(res, data));
       const updated = decodeBounceOperation(record(data) ? data.operation : null);
       ++state.readSeq;
       state.operations = state.operations.map(op => op.id === operation.id ? updated : op);
       state.actionNotice = 'Waiting targets cancelled. Executing targets continue.';
       await reconcileBounceRestarts(state, [updated]);
     } catch (error) {
-      state.actionNotice = `Cancellation failed: ${message(error)}. Check status before trying again.`;
+      state.actionNotice = `Cancellation failed: ${errorMessage(error)}. Check status before trying again.`;
     }
     state.cancelling.delete(operation.id);
     renderBounceOperations(state);

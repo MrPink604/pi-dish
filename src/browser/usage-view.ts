@@ -1,5 +1,7 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
 import { sameCapturedHost } from './api-client';
+import { errorMessage } from './api-client';
+import { requiredElement } from './dom';
 import type { HelperHost } from '../core/helper-types';
 import type { Costs, Tokens, UsageBucket, UsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry } from './shared-helper-types';
 import { escapeHtml } from '../core/helper-format';
@@ -24,9 +26,7 @@ export function createUsageView(options: {
 }) {
   const document = options.root.ownerDocument, window = document.defaultView!;
   const localStorage = options.storage, isMultiHost = options.multiHost;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => {
-    const value = document.getElementById(id); if (!value) throw new Error('Missing usage element: ' + id); return value as T;
-  };
+  const element = requiredElement(document, 'usage');
   let disposed = false, dataSequence = 0;
   let bodyEvents = new AbortController(), chartEvents = new AbortController(), detailEvents = new AbortController();
   const events = new AbortController();
@@ -287,7 +287,7 @@ export function createUsageView(options: {
       if (indexing) usageTimer = setTimeout(() => { if (!stale()) void loadUsageView(); }, 1000);
     } catch (error) {
       if (stale()) return;
-      usageError = error instanceof Error ? error.message : String(error);
+      usageError = errorMessage(error);
       if (usageTab !== 'limits') renderActiveTab();
     }
   }

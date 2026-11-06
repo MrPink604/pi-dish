@@ -25,6 +25,3 @@ export function decodePageComments(value: unknown): readonly PageComment[] {
         suffix: typeof anchor.suffix === 'string' ? anchor.suffix : '' } }];
   });
 }
-export function responseError(value: unknown, status: number): string {
-  return record(value) && typeof value.error === 'string' && value.error ? value.error : `HTTP ${status}`;
-}

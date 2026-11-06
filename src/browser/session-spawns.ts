@@ -1,5 +1,5 @@
 import type { ApiRequest } from './api-client';
-import { sendJson } from './api-client';
+import { errorMessage, sendJson } from './api-client';
 import type { DirectoryHost } from './directory-catalog';
 import type { SpawnTarget } from './spawn-targets';
 import { record } from '../core/helper-values';
@@ -103,7 +103,7 @@ export function createSessionSpawns(options: {
     } catch (error) {
       pending.delete(key);
       options.changed();
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       if (options.current() === key) {
         options.showFailure(key, message, spawn);
         options.status(`Session start failed: ${message}`, 'error');

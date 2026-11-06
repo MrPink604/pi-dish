@@ -1,6 +1,6 @@
 import type { SessionState, SessionEntry } from './session-state';
 import type { HostEndpoint, ApiRequest } from './api-client';
-import { createSessionApi, sendJson } from './api-client';
+import { createSessionApi, errorMessage, sendJson } from './api-client';
 import type { SpawnTarget } from './spawn-targets';
 import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';
@@ -25,7 +25,7 @@ export function createSessionResume(options: {
       const current = session.model && session.model !== 'unknown' ? ` (${session.model})` : '';
       select.innerHTML = `<option value="">Session model${escapeHtml(current)}</option>` + models.map(model => { const name = model.selector || `${model.provider}/${model.id}`; return `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`; }).join('');
       select.disabled = false; select.title = 'Optionally override the model while resuming this OMP session';
-    } catch (error) { if (owns()) { select.disabled = true; select.title = `Could not load Oh My Pi models: ${error instanceof Error ? error.message : String(error)}`; } }
+    } catch (error) { if (owns()) { select.disabled = true; select.title = `Could not load Oh My Pi models: ${errorMessage(error)}`; } }
   }
   async function resume() {
     const owner = sessionState.captureSelection(); if (disposed || !owner) return;
@@ -39,7 +39,7 @@ export function createSessionResume(options: {
       const data = await sendJson(options.request, endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/resume`, { ...(target ? { target: { ...target } } : {}), ...(model ? { model } : {}) });
       if (disposed) return; if (!record(data) || typeof data.id !== 'string' || !data.id) throw new Error('Resume returned an invalid session');
       await options.refresh(); if (!owns()) return; options.status('Session resumed'); options.select(data.id, { host: owner.host });
-    } catch (error) { if (owns()) options.status('Resume failed: ' + (error instanceof Error ? error.message : String(error)), 'error'); }
+    } catch (error) { if (owns()) options.status('Resume failed: ' + errorMessage(error), 'error'); }
     finally { if (pending.get(key) === token) pending.delete(key); }
   }
   return { reset, load, resume, dispose() { if (disposed) return; reset(); disposed = true; pending.clear(); } };

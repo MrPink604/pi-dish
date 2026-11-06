@@ -1,8 +1,9 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
-import { sendJson } from './api-client';
+import { errorMessage, responseError, sendJson } from './api-client';
 import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { record } from '../core/helper-values';
+import { requiredElement } from './dom';
 
 export interface RecoveryHost extends HostEndpoint {
   readonly hostId: string | null;
@@ -21,8 +22,6 @@ export interface RecoveryReport {
   readonly totalRecords: number; readonly truncated: boolean;
 }
 const text = (value: unknown) => typeof value === 'string' ? value : '';
-const message = (value: unknown) => value instanceof Error ? value.message : String(value);
-const failure = (data: unknown, status: number) => record(data) && text(data.error) || `HTTP ${status}`;
 const RECOVERY_MODE_LABELS: Readonly<Record<string, string>> = {
   off: 'Off', restore: 'Restore open sessions', continue: 'Restore and continue interrupted work',
 };
@@ -48,9 +47,7 @@ export interface RecoveryOptions {
 }
 export function createRecovery(options: RecoveryOptions) {
   const doc = options.root.ownerDocument;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => {
-    const value = doc.getElementById(id); if (!value) throw new Error('Missing recovery element: ' + id); return value as T;
-  };
+  const element = requiredElement(doc, 'recovery');
   const apiFetch = options.request;
   const effectiveHosts = options.hosts;
   const hostIsDown = options.down;
@@ -160,13 +157,13 @@ export function createRecovery(options: RecoveryOptions) {
       try {
         const res = await apiFetch(host, '/api/settings', { timeoutMs: 20000 });
         const data: unknown = await res.json();
-        if (!res.ok) throw new Error(failure(data, res.status));
+        if (!res.ok) throw new Error(responseError(res, data));
         if (!owns(request, host)) return;
         mode.value = decodeRecoveryMode(record(data) ? data.recoveryMode : null);
         mode.disabled = save.disabled = false;
         status.textContent = '';
       } catch (error) {
-        if (owns(request, host)) status.textContent = 'Could not load: ' + message(error);
+        if (owns(request, host)) status.textContent = 'Could not load: ' + errorMessage(error);
       }
     };
     hostSelect.addEventListener('change', () => { void load(); }, listener);
@@ -186,7 +183,7 @@ export function createRecovery(options: RecoveryOptions) {
         await sendJson(apiFetch, host, '/api/settings', { recoveryMode: value }, 'PUT');
         if (owns(request, host)) status.textContent = 'Saved on ' + hostDisplayLabel(host) + ' for future server launches.';
       } catch (error) {
-        if (owns(request, host)) status.textContent = 'Save failed: ' + message(error);
+        if (owns(request, host)) status.textContent = 'Save failed: ' + errorMessage(error);
       } finally {
         if (owns(request, host)) mode.disabled = save.disabled = false;
       }
@@ -244,7 +241,7 @@ export function createRecovery(options: RecoveryOptions) {
       const res = await apiFetch(host, '/api/recovery', { timeoutMs: 20000 });
       const data: unknown = await res.json();
       if (!owns()) return;
-      if (!res.ok) throw new Error(failure(data, res.status));
+      if (!res.ok) throw new Error(responseError(res, data));
       const report = decodeRecoveryReport(data);
       const modeLabel = Object.hasOwn(RECOVERY_MODE_LABELS, report.mode) ? RECOVERY_MODE_LABELS[report.mode] : report.mode;
       body.innerHTML = `<p class="recovery-note"><strong>${escapeHtml(modeLabel)}</strong> on ${escapeHtml(hostDisplayLabel(host))}. Recovery runs when this host’s server starts, not when this report opens.</p>
@@ -284,7 +281,7 @@ export function createRecovery(options: RecoveryOptions) {
             if (owns()) await loadRecoveryView();
           } catch (error) {
             if (!owns()) return;
-            status.textContent = 'Action failed: ' + message(error) + '. Refresh the report to check the host’s outcome before trying again.';
+            status.textContent = 'Action failed: ' + errorMessage(error) + '. Refresh the report to check the host’s outcome before trying again.';
             row.querySelector<HTMLInputElement>('.recovery-excluded')!.checked = record.excluded;
             actionBusy = false;
             controls.forEach(control => { control.disabled = false; });
@@ -301,7 +298,7 @@ export function createRecovery(options: RecoveryOptions) {
         }, listener);
       }
     } catch (error) {
-      if (owns()) body.textContent = 'Could not load recovery report: ' + message(error);
+      if (owns()) body.textContent = 'Could not load recovery report: ' + errorMessage(error);
     }
   }
 

@@ -1,4 +1,5 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage } from './api-client';
 import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { record, finite } from '../core/helper-values';
@@ -191,7 +192,7 @@ export function createFleetView(options: FleetViewOptions) {
     } catch (error) {
       if (!(error instanceof Error && error.message === 'Needs a token')) options.noteConnection(host, { type: 'failure', error });
       if (!owns()) return;
-      state.error = error instanceof Error ? error.message : String(error);
+      state.error = errorMessage(error);
     } finally {
       if (owns()) render();
     }

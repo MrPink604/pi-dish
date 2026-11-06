@@ -1,7 +1,7 @@
 import { formatTime } from './helper-format';
 import { sessionRefKey } from './helper-identity';
 import { record } from '../core/helper-values';
-import { sendJson } from './api-client';
+import { errorMessage, sendJson } from './api-client';
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SessionState } from './session-state';
 import type { createComposerDrafts } from './composer-drafts';
@@ -56,7 +56,7 @@ export function createComposerSubmit(options: {
     } catch (error) {
       if (disposed) return;
       composerDrafts.restorePayload(ownerKey, message, null);
-      if (owns()) options.status(`Side chat: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      if (owns()) options.status(`Side chat: ${errorMessage(error)}`, 'error');
     }
   }
 async function sendPrompt() {
@@ -116,7 +116,7 @@ async function sendPrompt() {
       if (owns()) options.status(data.info || 'Done');
       options.refresh();
     } catch (error) {
-    if (disposed) return; const e = { message: error instanceof Error ? error.message : String(error) };
+    if (disposed) return; const e = { message: errorMessage(error) };
       composerDrafts.restorePayload(ownerKey, message, null);
       if (owns()) {
         options.status(`${message.split(' ')[0]}: ${e.message}`, 'error');
@@ -175,7 +175,7 @@ async function sendPrompt() {
       delivery.render(delivery.queue);
     }
   } catch (error) {
-    if (disposed) return; const e = { message: error instanceof Error ? error.message : String(error) };
+    if (disposed) return; const e = { message: errorMessage(error) };
     delivery.discard(clientPromptId); // no echo is coming for a failed send
     composerDrafts.restorePayload(ownerKey, message, images);
     if (owns()) {
@@ -239,7 +239,7 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
     if (resp?.result?.queued) options.status('Queued — will send when compaction finishes');
     else options.status(steer ? 'Steered' : 'Queued for after this turn');
   } catch (error) {
-    if (disposed) return; const e = { message: error instanceof Error ? error.message : String(error) };
+    if (disposed) return; const e = { message: errorMessage(error) };
     composerDrafts.restorePayload(ownerKey, message, images);
     if (owns()) {
       options.status(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
@@ -271,7 +271,7 @@ async function abortTurn() {
     // the turn owned by the stream until turn_end/agent_end performs cleanup
     // and JSONL catch-up.
   } catch (error) {
-    if (disposed) return; const e = { message: error instanceof Error ? error.message : String(error) };
+    if (disposed) return; const e = { message: errorMessage(error) };
     sessionActivity.endAbort(ownerKey, abortOwner);
     if (owns()) options.status('Stop failed: ' + e.message, 'error');
   }

@@ -1,4 +1,6 @@
 import type { ApiRequest, HostEndpoint, RequestOptions } from './api-client';
+import { errorMessage, readJson, responseError } from './api-client';
+import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner, SessionEntry } from './session-state';
 import type { SessionShare, PublishedPage } from './session-info-data';
 import { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './session-info-data';
@@ -14,8 +16,7 @@ export function createSessionInfo(options: {
   const { document, sessionState } = options, location = document.defaultView!.location;
   const copyTextToClipboard = options.copy, setStatus = options.status, confirm = options.confirm, sessionRefFor = options.reference;
   const apiFetch = options.request, refreshSessions = options.refreshSessions, selectSession = options.selectSession;
-  const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing session info element: ' + id); return value as T; };
+  const element = requiredElement(document, 'session info');
   let disposed = false;
   let statsEndpoint: Readonly<HostEndpoint> | null = null;
   let statsEvents = new AbortController(), shareEvents = new AbortController(), pagesEvents = new AbortController(), processEvents = new AbortController(), artifactEvents = new AbortController();
@@ -32,15 +33,15 @@ export function createSessionInfo(options: {
   }
   function sessionSupports(session: SessionEntry | undefined, capability: string) { return session?.capabilities?.[capability] !== false; }
   async function json(host: HostEndpoint, path: string, init?: RequestOptions): Promise<unknown> {
-    const response = await apiFetch(host, path, init); const data: unknown = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
+    const response = await apiFetch(host, path, init), data = await readJson(response);
+    if (!response.ok) throw new Error(responseError(response, data));
     return data;
   }
   async function shareFor(host: HostEndpoint, id: string): Promise<SessionShare | null> {
     const response = await apiFetch(host, `/api/sessions/${encodeURIComponent(id)}/share`);
     if (response.status === 404) return null;
     const value: unknown = await response.json();
-    if (!response.ok) throw new Error(record(value) && typeof value.error === 'string' ? value.error : `HTTP ${response.status}`);
+    if (!response.ok) throw new Error(responseError(response, value));
     return decodeSessionShare(value);
   }
 

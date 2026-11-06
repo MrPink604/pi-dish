@@ -1,4 +1,4 @@
-import { ApiHttpError, sendJson } from './api-client';
+import { ApiHttpError, sendJson, errorMessage } from './api-client';
 import type { ApiRequest } from './api-client';
 import { decodeVaultOverview, vaultCardsHtml, vaultPanelHtml, vaultRequestSession } from './vault-approvals-data';
 import type { VaultOverviewView, VaultRequestView, VaultSessionCandidate } from './vault-approvals-data';
@@ -151,7 +151,7 @@ export function createVaultApprovals(options: {
       await sendJson(options.request, null, path, body, method);
     } catch (error) {
       notice = error instanceof ApiHttpError && error.status === 409 ? 'That request was already decided or expired.'
-        : `Vault action failed: ${error instanceof Error ? error.message : String(error)}`;
+        : `Vault action failed: ${errorMessage(error)}`;
       if (!panelOpen) options.toast(notice, () => showPanel(true));
     } finally {
       busy.delete(id);

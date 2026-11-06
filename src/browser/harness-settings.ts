@@ -1,5 +1,5 @@
 import type { ApiRequest } from './api-client';
-import { modelCatalogUrl } from './api-client';
+import { errorMessage, modelCatalogUrl } from './api-client';
 import { sameDirectoryHost } from './directory-catalog';
 import type { DirectoryHost } from './directory-catalog';
 import { decodeModelCatalog } from '../core/session-api';
@@ -58,7 +58,6 @@ export function createHarnessSettings(options: {
   }
   const button = $<HTMLButtonElement>('modelRolesSave');
   const search = $<HTMLInputElement>('hsSettingsSearch');
-  const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
   function isOpen(): boolean { return root.style.display === 'flex'; }
   function owns(view: SettingsView): boolean { return harnessSettings === view && isOpen(); }
   function ownsHost(view: SettingsView): boolean { return sameDirectoryHost(view.host, options.host(view.scope.hostId)); }

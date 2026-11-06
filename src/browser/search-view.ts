@@ -1,5 +1,6 @@
 import type { ApiRequest } from './api-client';
-import { sameCapturedHost } from './api-client';
+import { sameEndpoint, errorMessage } from './api-client';
+import { requiredElement } from './dom';
 import type { SessionState } from './session-state';
 import type { createSessionSearch } from './session-search';
 import { escapeHtml } from '../core/helper-format';
@@ -19,9 +20,7 @@ export function createSearchView(options: {
   sessionSearch: ReturnType<typeof createSessionSearch>;
 }) {
   const document = options.root.ownerDocument, sessionState = options.sessionState;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => {
-    const value = document.getElementById(id); if (!value) throw new Error('Missing search view element: ' + id); return value as T;
-  };
+  const element = requiredElement(document, 'search view');
   const effectiveHosts = options.hosts, fanoutHosts = options.fanout, scopeQuery = options.scope;
   const hostChipHtml = (host: string | null | undefined) => options.hostChip(host || null);
   const isMultiHost = () => effectiveHosts().length > 1;
@@ -30,9 +29,8 @@ export function createSearchView(options: {
   const events = new AbortController();
   let view = 0;
   function sameHost(host: SearchHost): boolean {
-    return sameCapturedHost(options.host(host.hostId), host);
+    return sameEndpoint(options.host(host.hostId), host);
   }
-  const message = (error: unknown) => error instanceof Error ? error.message : String(error);
   // --- Advanced search (main-pane takeover) ---
   // Full-width search over every session: the sidebar grammar verbatim (one
   // dialect — never fork it), multiple highlighted snippets per session with
@@ -169,7 +167,7 @@ export function createSearchView(options: {
     } catch (e) {
       if (stale()) return;
       body.classList.remove('usage-refreshing');
-      body.innerHTML = `<div class="usage-state">Search failed: ${escapeHtml(message(e))}</div>`;
+      body.innerHTML = `<div class="usage-state">Search failed: ${escapeHtml(errorMessage(e))}</div>`;
     }
   }
 

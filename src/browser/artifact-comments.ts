@@ -1,5 +1,6 @@
-import { decodePageComments, responseError } from './artifact-comment-data';
+import { decodePageComments } from './artifact-comment-data';
 import type { PageComment, TextAnchor } from './artifact-comment-data';
+import { errorMessage, responseError } from './api-client';
 import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comment-anchors';
 
 /* Anchored comments for pi-dish published pages.
@@ -184,7 +185,7 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
         ? await send(`/${encodeURIComponent(submittedEdit.id)}`, { body: commentBody })
         : await send('', { body: commentBody, anchor: submittedSelection });
       const result: unknown = await response.json();
-      if (!response.ok) throw new Error(responseError(result, response.status));
+      if (!response.ok) throw new Error(responseError(response, result));
       if (submittedVersion === draftVersion
           && (submittedEdit ? editing === submittedEdit : selected === submittedSelection)) {
         close();
@@ -193,7 +194,7 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
       toast(submittedEdit ? 'Comment updated' : 'Comment saved');
       refreshComments();
     } catch (error) {
-      if (submittedVersion === draftVersion) status.textContent = error instanceof Error ? error.message : String(error);
+      if (submittedVersion === draftVersion) status.textContent = errorMessage(error);
     } finally {
       if (submittedVersion === draftVersion) sendButton.disabled = false;
     }
@@ -216,12 +217,12 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
     try {
       const response = await send(`/${encodeURIComponent(target.id)}/delete`, {});
       const result: unknown = await response.json();
-      if (!response.ok) throw new Error(responseError(result, response.status));
+      if (!response.ok) throw new Error(responseError(response, result));
       if (submittedVersion === draftVersion) close();
       toast('Comment deleted');
       refreshComments();
     } catch (error) {
-      if (submittedVersion === draftVersion) { status.textContent = error instanceof Error ? error.message : String(error); disarmDelete(); }
+      if (submittedVersion === draftVersion) { status.textContent = errorMessage(error); disarmDelete(); }
     } finally {
       if (submittedVersion === draftVersion) deleteButton.disabled = false;
     }

@@ -1,8 +1,9 @@
 import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage, sameCapturedHost, responseError } from './api-client';
+import { requiredElement } from './dom';
 import type { SessionState } from './session-state';
 import { escapeHtml } from '../core/helper-format';
 import { formatRelativeTime, shortCwd } from './helper-format';
-import { record } from '../core/helper-values';
 import { decodeSkillDirectory, decodeSkillCoverage } from './skills-data';
 import type { SkillDirectory, SkillRefine, SkillEntry, SkillCoverage } from './skills-data';
 export interface SkillsHost extends HostEndpoint { readonly hostId: string | null }
@@ -14,16 +15,13 @@ export function createSkills(options: {
   copy: (text: string) => void; status: (message: string) => void;
 }) {
   const document = options.root.ownerDocument, sessionState = options.sessionState;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => {
-    const value = document.getElementById(id); if (!value) throw new Error('Missing skills element: ' + id); return value as T;
-  };
+  const element = requiredElement(document, 'skills');
   let disposed = false;
   let viewHost: SkillsHost | null = null;
   let bodyEvents = new AbortController(), headerEvents = new AbortController();
   let indexingTimer: ReturnType<typeof setTimeout> | undefined, activationTimer: ReturnType<typeof setTimeout> | undefined;
   function sameHost(host: SkillsHost): boolean {
-    const current = options.self();
-    return current.hostId === host.hostId && current.base === host.base && (current.token || '') === (host.token || '');
+    return sameCapturedHost(options.self(), host);
   }
   function owns(seq = skillsSeq): boolean {
     return seq === skillsSeq && isSkillsViewOpen() && !!viewHost && sameHost(viewHost);
@@ -35,7 +33,7 @@ export function createSkills(options: {
     if (!host) throw new Error('Skills host is no longer available');
     const response = await options.request(host, path);
     const data: unknown = await response.json();
-    if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
+    if (!response.ok) throw new Error(responseError(response, data));
     return data;
   }
   let skillsData: SkillDirectory | null = null;
@@ -123,7 +121,7 @@ export function createSkills(options: {
     } catch (e) {
       if (!owns(seq)) return;
       body.classList.remove('usage-refreshing');
-      body.innerHTML = `<div class="usage-state">Could not load skills: ${escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
+      body.innerHTML = `<div class="usage-state">Could not load skills: ${escapeHtml(errorMessage(e))}</div>`;
     }
   }
 
@@ -256,7 +254,7 @@ export function createSkills(options: {
       renderSkillDetail(skill, cov);
     } catch (e) {
       if (!owns(seq) || skillsDetailPath !== skillPath) return;
-      body.innerHTML = `<div class="usage-state">Could not load coverage: ${escapeHtml(e instanceof Error ? e.message : String(e))}</div>`;
+      body.innerHTML = `<div class="usage-state">Could not load coverage: ${escapeHtml(errorMessage(e))}</div>`;
     }
   }
 
