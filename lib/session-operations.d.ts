@@ -12,7 +12,7 @@ export interface SessionOperationObservations {
     ownership: SessionOwnership;
     launch: SessionLaunch;
     /** Catalog and transcript observations only; admission belongs to this owner. */
-    getActiveSessions(): unknown;
+    getActiveSessions(): readonly ActiveSessionObservation[];
     readSessionCwd(source: SessionSource): unknown;
     recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string): void;
 }
@@ -101,8 +101,6 @@ export interface SessionOperationResponse {
     preserveCloseIntent?: boolean;
     stopped?: boolean;
 }
-/** Wire compatibility is separate from whether a destructive action actually completed. */
-export declare function sessionOperationResponse(outcome: SessionOperationOutcome): SessionOperationResponse;
 export declare class SessionOperationError extends Error {
     readonly status: number;
     constructor(status: number, message: string);
@@ -114,7 +112,6 @@ export interface SessionOperations {
     recordSessionLaunch(sessionId: string, sourceSessionId: string, operationId?: string): string | null;
     resumeSessionById(requestedId: unknown, options?: ResumeSessionOptions): Promise<ResumeSessionResult>;
     probeRecoveryLive(record: RecoveryRecord): Promise<LiveSession | null>;
-    assertNoConflictingWriter(sessionId: string, canonicalFile: string): void;
     closeSession(sessionId: unknown): Promise<SessionOperationOutcome>;
     closeSessionById(sessionId: unknown): Promise<SessionOperationResponse>;
     restartSession(sessionId: string, options?: {
@@ -127,13 +124,9 @@ export interface SessionOperations {
     hibernateSession(sessionId: string, options: {
         beforeAction: BeforeLifecycleAction;
     }): Promise<SessionOperationOutcome>;
-    hasCloseFlight(canonicalRoute: string): boolean;
-    hasRestartFlight(canonicalRoute: string): boolean;
-    hasResumeFlight(canonicalFile: string): boolean;
     /** Execution exclusion is intentionally not resume/close/restart admission. */
     beginBounceAction(canonicalRoute: string, live: LiveSession): void;
     endBounceAction(canonicalRoute: string, live: LiveSession): void;
-    hasBounceAction(canonicalRoute: string): boolean;
     admitHttpAction(requestedId: string, method: string): SessionOperationResponse | null;
 }
 export declare function createSessionOperations(observations: SessionOperationObservations): SessionOperations;

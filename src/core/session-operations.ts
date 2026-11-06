@@ -6,6 +6,7 @@ import type { BridgeRegistryEntry, ProcessIdentity } from './contracts';
 import { BridgeSession, invalidateRegistryCache, listRegisteredSessions, pruneRegisteredSession } from './bridge-session';
 import { getHarness } from './harnesses';
 import { formatModelRef } from './helper-models';
+import { record } from './helper-values';
 import { getPrimeDaemon } from './prime-daemon';
 import { processIdentityAlive } from './process-identity';
 import { canonicalSessionId } from './session-key';
@@ -13,8 +14,8 @@ import { sourceForIdentity } from './session-source';
 import type { SessionSource } from './session-source-contracts';
 import { LifecycleInterruption, OwnershipRefusal, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity, sameTranscriptFile, validateRecoveryRecord } from './session-ownership';
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
-import { HEADLESS_TMUX_SERVER } from './session-launch';
-import type { CleanupEvidence, HarnessLaunchTarget, ResumeUncertainty, SessionLaunch } from './session-launch';
+import { HEADLESS_TMUX_SERVER, cleanupProcesses } from './session-launch';
+import type { CleanupEvidence, HarnessLaunchTarget, LaunchOutcome, ResumeUncertainty, SessionLaunch } from './session-launch';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryControl, RecoveryRecord } from './session-recovery';
 import * as tmux from './tmux';
@@ -29,7 +30,7 @@ export interface SessionOperationObservations {
   ownership: SessionOwnership;
   launch: SessionLaunch;
   /** Catalog and transcript observations only; admission belongs to this owner. */
-  getActiveSessions(): unknown;
+  getActiveSessions(): readonly ActiveSessionObservation[];
   readSessionCwd(source: SessionSource): unknown;
   recordLaunchProvenance(sessionId: string, sourceSessionId: string, operationId: string): void;
 }
@@ -106,7 +107,7 @@ export interface SessionOperationResponse {
 }
 
 /** Wire compatibility is separate from whether a destructive action actually completed. */
-export function sessionOperationResponse(outcome: SessionOperationOutcome): SessionOperationResponse {
+function sessionOperationResponse(outcome: SessionOperationOutcome): SessionOperationResponse {
   if (outcome.kind === 'stopped') {
     return { status: 200, body: { success: true, ...outcome.replacement } };
   }
@@ -132,33 +133,23 @@ export interface SessionOperations {
   recordSessionLaunch(sessionId: string, sourceSessionId: string, operationId?: string): string | null;
   resumeSessionById(requestedId: unknown, options?: ResumeSessionOptions): Promise<ResumeSessionResult>;
   probeRecoveryLive(record: RecoveryRecord): Promise<LiveSession | null>;
-  assertNoConflictingWriter(sessionId: string, canonicalFile: string): void;
   closeSession(sessionId: unknown): Promise<SessionOperationOutcome>;
   closeSessionById(sessionId: unknown): Promise<SessionOperationResponse>;
   restartSession(sessionId: string, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationOutcome>;
   restartSessionById(sessionId: string, options?: { beforeAction?: BeforeLifecycleAction | null }): Promise<SessionOperationResponse>;
   /** Graceful stop that keeps recovery intent and resumability; never an explicit close. */
   hibernateSession(sessionId: string, options: { beforeAction: BeforeLifecycleAction }): Promise<SessionOperationOutcome>;
-  hasCloseFlight(canonicalRoute: string): boolean;
-  hasRestartFlight(canonicalRoute: string): boolean;
-  hasResumeFlight(canonicalFile: string): boolean;
   /** Execution exclusion is intentionally not resume/close/restart admission. */
   beginBounceAction(canonicalRoute: string, live: LiveSession): void;
   endBounceAction(canonicalRoute: string, live: LiveSession): void;
-  hasBounceAction(canonicalRoute: string): boolean;
   admitHttpAction(requestedId: string, method: string): SessionOperationResponse | null;
 }
 
-function objectFields(value: unknown): Record<string, unknown> | null {
-  return value !== null && (typeof value === 'object' || typeof value === 'function') ? value as Record<string, unknown> : null;
-}
 function errorMessage(error: unknown): string {
-  const message = objectFields(error)?.message;
-  return typeof message === 'string' ? message : String(error);
+  return record(error) && typeof error.message === 'string' ? error.message : String(error);
 }
 function errorStatus(error: unknown): number {
-  const status = objectFields(error)?.status;
-  return typeof status === 'number' && status ? status : 500;
+  return record(error) && typeof error.status === 'number' && error.status ? error.status : 500;
 }
 function filePath(value: unknown): string {
   if (typeof value !== 'string') throw new TypeError('Session file must be a string');
@@ -174,17 +165,8 @@ function observedText(value: unknown): string | undefined {
   if (typeof value !== 'string') throw new TypeError('Session metadata must be a string');
   return value;
 }
-function remainingProcesses(error: unknown): ProcessIdentity[] | null {
-  const remaining = objectFields(error)?.remainingProcesses;
-  if (!Array.isArray(remaining) || !remaining.every((item: unknown) => {
-    const fields = objectFields(item);
-    return fields && typeof fields.pid === 'number' && typeof fields.startTime === 'string';
-  })) return null;
-  return remaining as ProcessIdentity[];
-}
 function savedProcessAlive(value: unknown): boolean {
-  const fields = objectFields(value);
-  return !!fields && processIdentityAlive({ pid: Number(fields.pid), startTime: String(fields.startTime) });
+  return record(value) && processIdentityAlive({ pid: Number(value.pid), startTime: String(value.startTime) });
 }
 function noAction(status: number, error: string, cause?: unknown): NoActionOutcome {
   return { kind: 'no-action', status, error, cause };
@@ -332,7 +314,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
         return { kind: 'stopped' };
       } catch (error) {
         if (error instanceof LifecycleInterruption) throw error;
-        const preserve = stopped || objectFields(error)?.stopRequested === true;
+        const preserve = stopped || (record(error) && error.stopRequested === true);
         const failure: OperationFailure = {
           status: preserve ? 500 : 409, error: `Failed to stop ${descriptor.label}: ${errorMessage(error)}`, cause: error,
           closeIntent: { preserve, stopped },
@@ -368,7 +350,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
       const identity = proof.process;
       try { process.kill(Number(registry.pid), 'SIGTERM'); }
       catch (error) {
-        if (objectFields(error)?.code !== 'ESRCH') return noAction(500, `Failed to signal pi (pid ${registry.pid}): ${errorMessage(error)}`, error);
+        if (!record(error) || error.code !== 'ESRCH') return noAction(500, `Failed to signal pi (pid ${registry.pid}): ${errorMessage(error)}`, error);
       }
       exited = () => !processIdentityAlive(identity);
     } else return noAction(404, 'Session not active');
@@ -386,6 +368,14 @@ export function createSessionOperations(observations: SessionOperationObservatio
     return { kind: 'stop-uncertain', status: 500, error: `pi did not exit within ${Math.round(timeoutMs / 1000)}s — it may be stuck; check the process directly` };
   }
 
+  /** Registers the close/hibernate flight so concurrent callers cannot signal twice. */
+  async function withCloseFlight(id: string, action: () => Promise<SessionOperationOutcome>): Promise<SessionOperationOutcome> {
+    const flight = Promise.resolve().then(action);
+    closeFlights.set(id, flight);
+    try { return await flight; }
+    finally { if (closeFlights.get(id) === flight) closeFlights.delete(id); }
+  }
+
   async function closeSession(sessionId: unknown): Promise<SessionOperationOutcome> {
     const identity = routeIdentity(sessionId);
     if (!identity) return noAction(400, 'Invalid session ID');
@@ -393,7 +383,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
     if (restartFlights.has(id)) return noAction(409, 'The session is being restarted.');
     const existing = closeFlights.get(id);
     if (existing) return existing;
-    const flight = Promise.resolve().then(async (): Promise<SessionOperationOutcome> => {
+    return withCloseFlight(id, async () => {
       let previous: RecoveryControl | undefined;
       let result: SessionOperationOutcome | undefined;
       try {
@@ -419,9 +409,6 @@ export function createSessionOperations(observations: SessionOperationObservatio
         return noAction(500, errorMessage(error), error);
       }
     });
-    closeFlights.set(id, flight);
-    try { return await flight; }
-    finally { if (closeFlights.get(id) === flight) closeFlights.delete(id); }
   }
 
   async function hibernateSession(sessionId: string, { beforeAction }: { beforeAction: BeforeLifecycleAction }): Promise<SessionOperationOutcome> {
@@ -429,11 +416,8 @@ export function createSessionOperations(observations: SessionOperationObservatio
     if (!identity) return noAction(400, 'Invalid session ID');
     const id = routeSessionId(identity.harnessId, identity.nativeSessionId);
     if (restartFlights.has(id) || closeFlights.has(id)) return noAction(409, 'The session is already being restarted or closed.');
-    // Unlike closeSession, recovery intent is untouched: the transcript stays resumable.
-    const flight = performSessionClose(id, { beforeAction });
-    closeFlights.set(id, flight);
-    try { return await flight; }
-    finally { if (closeFlights.get(id) === flight) closeFlights.delete(id); }
+    // Recovery intent is untouched: the transcript stays resumable.
+    return withCloseFlight(id, () => performSessionClose(id, { beforeAction }));
   }
 
   /** A live Prime root for this route, from the polled daemon roster cache. */
@@ -443,6 +427,12 @@ export function createSessionOperations(observations: SessionOperationObservatio
   }
   function sessionIsActive(sessionId: string): boolean {
     return !!primeRootFor(sessionId) || !!ownership.getRegisteredSession(sessionId) || !!ownership.getRPCSession(sessionId)?.alive;
+  }
+  /** A timed-out tmux placement keeps blocking another writer until its pane or process is gone. */
+  function rememberUncertainPlacement(sessionFile: string, outcome: LaunchOutcome): void {
+    if (outcome.kind === 'explicit-uncertain' || outcome.kind === 'detached-replacement-uncertain') {
+      uncertainExplicitResumes.set(sessionFile, outcome.placement);
+    }
   }
   function clearResumeQuarantines(sessionFile: string): void {
     failedResumeCleanups.delete(sessionFile);
@@ -480,7 +470,8 @@ export function createSessionOperations(observations: SessionOperationObservatio
     }
     const boot = recoveryStore.bootId();
     const control = recoveryStore.getControl(identity.harnessId, identity.nativeSessionId);
-    const savedLaunch = objectFields(control.attempt?.launch);
+    const launch = control.attempt?.launch;
+    const savedLaunch = record(launch) ? launch : null;
     if (savedLaunch && (!boot || !savedLaunch.bootId || savedLaunch.bootId === boot)
         && (savedLaunch.uncertain || savedProcessAlive(savedLaunch))) {
       throw new SessionOperationError(409, 'A previous recovery launch may still own this transcript; refusing another writer.');
@@ -527,11 +518,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
       invalidateRegistryCache();
       if (activeSessionClearsQuarantine(sessionId)) return { success: true, id: sessionId, alreadyActive: true };
       assertNoConflictingWriter(sessionId, sessionFile);
-      const active = observations.getActiveSessions();
-      if (!Array.isArray(active) || !active.every((row: unknown): row is ActiveSessionObservation => typeof objectFields(row)?.id === 'string')) {
-        throw new TypeError('Active session observations must contain session identities');
-      }
-      if (ownership.liveSubsessionCandidates(active).some(candidate => candidate.routeId === sessionId)) {
+      if (ownership.liveSubsessionCandidates(observations.getActiveSessions()).some(candidate => candidate.routeId === sessionId)) {
         throw new SessionOperationError(409, 'This session is a subagent still loaded in its parent session; its parent owns the transcript. Close or finish the parent session before resuming it.');
       }
       const uncertainExplicit = uncertainExplicitResumes.get(sessionFile);
@@ -559,7 +546,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
           if (failedResumeCleanups.get(sessionFile) === failedCleanup) failedResumeCleanups.delete(sessionFile);
           invalidateRegistryCache();
         } catch (cleanupError) {
-          const remaining = remainingProcesses(cleanupError);
+          const remaining = cleanupProcesses(cleanupError);
           if (remaining) failedResumeCleanups.set(sessionFile, { ...failedCleanup, knownProcesses: remaining });
           throw new SessionOperationError(500, `Previous hidden tmux cleanup is still incomplete; refusing to resume another process against this session file: ${errorMessage(cleanupError)}`);
         }
@@ -586,16 +573,11 @@ export function createSessionOperations(observations: SessionOperationObservatio
       // R/L is asymmetric: close never checks this file flight, and an already-active R may return above.
       if (closeFlights.has(sessionId)) throw new SessionOperationError(409, 'The session is being closed; retry after close completes.');
       const outcome = await launch.launchResumedSession({
-        descriptor, sessionFile, cwd, name: recovery?.name || observedText(objectFields(sessionSource)?.name) || null, target, model, thinking,
+        descriptor, sessionFile, cwd, name: recovery?.name || null, target, model, thinking,
       });
       if (outcome.kind !== 'ready') {
-        if (target?.type === 'tmux') {
-          if (outcome.kind === 'explicit-uncertain' || outcome.kind === 'detached-replacement-uncertain') {
-            uncertainExplicitResumes.set(sessionFile, outcome.placement);
-          }
-        } else if (outcome.kind === 'cleanup-incomplete') {
-          failedResumeCleanups.set(sessionFile, outcome.cleanup);
-        }
+        if (target?.type === 'tmux') rememberUncertainPlacement(sessionFile, outcome);
+        else if (outcome.kind === 'cleanup-incomplete') failedResumeCleanups.set(sessionFile, outcome.cleanup);
         throw outcome.error;
       }
       if (outcome.id !== sessionId) throw new SessionOperationError(409, 'The resumed harness registered a different session identity; inspect the running process.');
@@ -714,7 +696,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
           workerStopped = true;
           beforeRespawn = () => ownership.preparePrimeReplacement(restartCapture, sessionFile);
         }
-        const paneProcess = objectFields(spawn.paneProcess);
+        const pane = record(spawn.paneProcess) ? spawn.paneProcess : null;
         const outcome = await launch.spawnHarnessInTmux({
           descriptor,
           target: { socket: spawn.socket },
@@ -724,15 +706,13 @@ export function createSessionOperations(observations: SessionOperationObservatio
           hidden: path.resolve(spawn.socket) === path.resolve(path.join(tmux.tmuxTmpdir(), HEADLESS_TMUX_SERVER)),
           restartPane: {
             sessionId, paneId: spawn.paneId,
-            paneProcess: paneProcess ? { pid: Number(paneProcess.pid), startTime: String(paneProcess.startTime) } : null,
+            paneProcess: pane ? { pid: Number(pane.pid), startTime: String(pane.startTime) } : null,
             spawn, registry,
             beforeAction: beforeRespawn,
           },
         });
         if (outcome.kind !== 'ready') {
-          if (outcome.kind === 'explicit-uncertain' || outcome.kind === 'detached-replacement-uncertain') {
-            uncertainExplicitResumes.set(sessionFile, outcome.placement);
-          }
+          rememberUncertainPlacement(sessionFile, outcome);
           throw outcome.error;
         }
         return { kind: 'stopped', replacement: { id: outcome.id, placement: 'tmux', paneId: spawn.paneId } };
@@ -769,11 +749,9 @@ export function createSessionOperations(observations: SessionOperationObservatio
 
   return {
     createSession, startSessionSpawn, getSessionSpawn: spawnId => sessionSpawnOperations.get(spawnId), recordSessionLaunch,
-    resumeSessionById, probeRecoveryLive, assertNoConflictingWriter, closeSession, restartSession, hibernateSession,
+    resumeSessionById, probeRecoveryLive, closeSession, restartSession, hibernateSession,
     closeSessionById: async sessionId => sessionOperationResponse(await closeSession(sessionId)),
     restartSessionById: async (sessionId, options) => sessionOperationResponse(await restartSession(sessionId, options)),
-    hasCloseFlight: id => closeFlights.has(id), hasRestartFlight: id => restartFlights.has(id),
-    hasResumeFlight: file => resumeFlights.has(file), beginBounceAction, endBounceAction,
-    hasBounceAction: id => bounceActionLocks.has(id), admitHttpAction,
+    beginBounceAction, endBounceAction, admitHttpAction,
   };
 }
