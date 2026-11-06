@@ -1,6 +1,6 @@
 import type { RouteHandler } from './http-boundary';
 import { requestBody } from './http-boundary';
-import { errorMessage, errorStatus } from './errors';
+import { errorMessage, errorStatus } from './http-boundary';
 import { getHarness } from './harnesses';
 import sessionProvenance = require('./session-provenance');
 import type { BridgeRegistryEntry } from './contracts';
@@ -18,10 +18,7 @@ export interface SessionCreatePorts {
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-export function createSessionCreateHandlers(ports: SessionCreatePorts): {
-  create: RouteHandler;
-  spawnStatus: RouteHandler;
-} {
+export function createSessionCreateHandlers(ports: SessionCreatePorts) {
   const create: RouteHandler = async (req, res) => {
     const body = requestBody(req);
     const harness = body.harness === undefined ? 'pi' : body.harness;

@@ -79,14 +79,59 @@ export interface CatalogRuntime {
   enumerateSessionCandidates(excludeIds?: ReadonlySet<string>): DiscoveryCandidate[];
   filterSessionsByQuery(list: readonly CatalogSession[], query: string): readonly CatalogSession[];
   resolveRefInCatalog(catalog: SessionCatalog, ref: unknown, exactOnly?: boolean): { session: CatalogSession | null; matches: CatalogSession[] };
-  historicalAdvice(source: SessionSource, liveChild?: boolean): CatalogAdvice;
-  canonicalSessionPath(file: string | null): string | null;
   parseSessionFile(source: SessionSource): SessionFileInfo;
   getSessionModels(sessionId: string): Promise<CatalogModel[] | null>;
-  getContextWindow(modelId: string | null | undefined): number;
   refreshPrimeRoster(): Promise<void>;
-  setModelsCache(models: AvailableModel[]): void;
-  getModelsCache(): { models: AvailableModel[] | null; time: number };
+}
+
+export function canonicalSessionPath(file: string | null): string | null {
+  if (!file) return null;
+  try { return fs.realpathSync(file); } catch { return path.resolve(file); }
+}
+
+export function historicalAdvice(source: SessionSource, liveChild = false): CatalogAdvice {
+  return {
+    capabilities: {
+      ...sessionCapabilities(source.harnessId, {}, { active: false }),
+      ...(liveChild ? { resume: false } : {}),
+    },
+    closeMode: getHarness(source.harnessId)!.closeMode,
+    conflicted: false, liveInstanceCount: 0,
+  };
+}
+
+export function getContextWindow(modelId: string | null | undefined): number {
+  if (!modelId) return DEFAULT_CONTEXT_WINDOW;
+  const memoized = contextWindowMemo.get(modelId);
+  if (memoized != null) return memoized;
+
+  let window: number | undefined;
+  if (modelsCache) {
+    const longest = (models: AvailableModel[]) => models.reduce<AvailableModel | undefined>(
+      (best, model) => (!best || model.id.length > best.id.length ? model : best), undefined);
+    const match = modelsCache.find(model => model.id === modelId)
+      || longest(modelsCache.filter(model => modelId.includes(model.id)))
+      || longest(modelsCache.filter(model => model.id.startsWith(modelId + '-')));
+    if (match?.contextWindow) window = match.contextWindow;
+  }
+  if (!window) {
+    for (const [prefix, size] of CONTEXT_WINDOW_FALLBACKS) {
+      if (modelId.includes(prefix)) { window = size; break; }
+    }
+  }
+  window = window || DEFAULT_CONTEXT_WINDOW;
+  contextWindowMemo.set(modelId, window);
+  return window;
+}
+
+export function setModelsCache(models: AvailableModel[]): void {
+  modelsCache = models;
+  modelsCacheTime = Date.now();
+  contextWindowMemo.clear();
+}
+
+export function getModelsCache() {
+  return { models: modelsCache, time: modelsCacheTime };
 }
 
 export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime {
@@ -197,28 +242,12 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     return active;
   }
 
-  function canonicalSessionPath(file: string | null): string | null {
-    if (!file) return null;
-    try { return fs.realpathSync(file); } catch { return path.resolve(file); }
-  }
-
   const options: SessionCatalogOptions = {
     harnesses: new Map(listHarnesses().map(descriptor => [descriptor.id, descriptor])),
     contextWindowForModel: getContextWindow,
     canonicalPath: canonicalSessionPath,
     directoryExists: directory => fs.existsSync(directory),
   };
-
-  function historicalAdvice(source: SessionSource, liveChild = false): CatalogAdvice {
-    return {
-      capabilities: {
-        ...sessionCapabilities(source.harnessId, {}, { active: false }),
-        ...(liveChild ? { resume: false } : {}),
-      },
-      closeMode: getHarness(source.harnessId)!.closeMode,
-      conflicted: false, liveInstanceCount: 0,
-    };
-  }
 
   // Active-only composition: no historical corpus or live-child traversal.
   function getActiveSessions(registered: readonly BridgeRegistryEntry[] = listRegisteredSessions()): readonly CatalogSession[] {
@@ -333,40 +362,6 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     return null;
   }
 
-  function getContextWindow(modelId: string | null | undefined): number {
-    if (!modelId) return DEFAULT_CONTEXT_WINDOW;
-    const memoized = contextWindowMemo.get(modelId);
-    if (memoized != null) return memoized;
-
-    let window: number | undefined;
-    if (modelsCache) {
-      const longest = (models: AvailableModel[]) => models.reduce<AvailableModel | undefined>(
-        (best, model) => (!best || model.id.length > best.id.length ? model : best), undefined);
-      const match = modelsCache.find(model => model.id === modelId)
-        || longest(modelsCache.filter(model => modelId.includes(model.id)))
-        || longest(modelsCache.filter(model => model.id.startsWith(modelId + '-')));
-      if (match?.contextWindow) window = match.contextWindow;
-    }
-    if (!window) {
-      for (const [prefix, size] of CONTEXT_WINDOW_FALLBACKS) {
-        if (modelId.includes(prefix)) { window = size; break; }
-      }
-    }
-    window = window || DEFAULT_CONTEXT_WINDOW;
-    contextWindowMemo.set(modelId, window);
-    return window;
-  }
-
-  function setModelsCache(models: AvailableModel[]): void {
-    modelsCache = models;
-    modelsCacheTime = Date.now();
-    contextWindowMemo.clear();
-  }
-
-  function getModelsCache() {
-    return { models: modelsCache, time: modelsCacheTime };
-  }
-
   return {
     options,
     buildSessionCatalog,
@@ -374,13 +369,8 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     enumerateSessionCandidates,
     filterSessionsByQuery,
     resolveRefInCatalog,
-    historicalAdvice,
-    canonicalSessionPath,
     parseSessionFile,
     getSessionModels,
-    getContextWindow,
     refreshPrimeRoster,
-    setModelsCache,
-    getModelsCache,
   };
 }

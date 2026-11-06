@@ -32,7 +32,7 @@ function agentDocSummary(markdown: string) {
  * The server ships the agent-facing docs for the API this build serves, so an
  * agent in a mixed-version fleet reads the running host's docs.
  */
-export function createAgentDocHandlers(docsDirectory: string): { list: RouteHandler; topic: RouteHandler } {
+export function createAgentDocHandlers(docsDirectory: string) {
   const list: RouteHandler = (_req, res) => {
     let files: string[];
     try {

@@ -33,9 +33,8 @@ import { createSessionOwnership, liveSessionSupports, registryIdentity, routeIde
 import { createSessionLaunch } from './session-launch';
 import { createSessionOperations } from './session-operations';
 import { createMessageHold } from './message-hold';
-import { createCatalogRuntime } from './session-catalog-runtime';
-import { createLiveSessionInfo } from './live-session-info';
-import { createSessionLifecycleObserver } from './live-session-lifecycle';
+import { createCatalogRuntime, getContextWindow, getModelsCache, setModelsCache } from './session-catalog-runtime';
+import { createLiveSessionInfo, createSessionLifecycleObserver } from './live-sessions';
 import { createSessionBrowseHandlers } from './session-browse-handlers';
 import { createSessionRelationHandlers } from './session-relation-handlers';
 import { createSlashCommandHandler } from './session-slash-handlers';
@@ -56,7 +55,7 @@ import { expandSessionRefs } from './session-refs';
 import { getPrimeDaemon } from './prime-daemon';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
-import { errorMessage, errorStatus } from './errors';
+import { errorMessage, errorStatus } from './http-boundary';
 import { requestBody, type ApplicationRequest, type ApplicationResponse } from './http-boundary';
 import type { NextFunction } from 'express';
 import type { Server } from 'node:http';
@@ -66,6 +65,7 @@ import type { HarnessLaunchTarget } from './session-launch';
 import type { SessionRefDependencies } from './session-refs';
 import type { LiveSession } from './session-ownership';
 import type { SessionSource } from './session-source-contracts';
+import type { SessionCatalog } from './session-catalog-contracts';
 import type { SessionBounceMode } from './session-bounces';
 
 export { observeServerStartup };
@@ -128,12 +128,8 @@ export function startServer(rootDirectory: string): Server {
   app.delete('/api/fleet-artifacts/:token', relayHandlers.removeArtifact);
   app.get('/api/hosts', relayHandlers.hosts);
 
-  function observeSessionLifecycle(session: LiveSession): void {
-    lifecycleObserver(session);
-  }
-
   const ownership = createSessionOwnership({
-    onLive: observeSessionLifecycle,
+    onLive: session => lifecycleObserver(session),
     onRetired: route => { fileHandlers.retireSession(route); },
     readSessionTailEntry,
   });
@@ -161,16 +157,12 @@ export function startServer(rootDirectory: string): Server {
   // Open browser event streams per canonical session: an open view is a reader
   // hibernation must not pull the agent out from under.
   const streamViewers = new Map<string, number>();
-  const catalog = createCatalogRuntime({
-    ownership,
-    getLiveSession,
-    onPrimeSession: observeSessionLifecycle,
-  });
-  const liveInfo = createLiveSessionInfo(ownership);
   const lifecycleObserver = createSessionLifecycleObserver({
     wakeSession: routeId => { messageHold.wake(routeId); },
     adoptSessionSwitch: (session, data) => { adoptBridgeSessionSwitch(session, data); },
   });
+  const catalog = createCatalogRuntime({ ownership, getLiveSession, onPrimeSession: lifecycleObserver });
+  const liveInfo = createLiveSessionInfo(ownership);
 
   function findSessionSource(sessionId: unknown, { exact = false } = {}): SessionSource | null {
     return sessionSources.resolve({ route: sessionId, exact, live: liveSourceObservations(sessionId) });
@@ -201,7 +193,7 @@ export function startServer(rootDirectory: string): Server {
     getLiveSession,
     liveTreeLeafId: liveInfo.liveTreeLeafId,
     getLiveContextUsage: liveInfo.getLiveContextUsage,
-    getContextWindow: catalog.getContextWindow,
+    getContextWindow,
     describeRuntime,
   });
   const publicationHandlers = createPublicationHandlers({
@@ -230,8 +222,8 @@ export function startServer(rootDirectory: string): Server {
     getSessionModels: catalog.getSessionModels,
     getLiveSession,
     locatePiPane,
-    getModelsCache: catalog.getModelsCache,
-    setModelsCache: catalog.setModelsCache,
+    getModelsCache,
+    setModelsCache,
     applicationRoot: rootDirectory,
     piSettingsFile: PI_SETTINGS_FILE,
   });
@@ -271,7 +263,7 @@ export function startServer(rootDirectory: string): Server {
   // The catalog is only read once a prompt actually carries a `#ref`, so these
   // dependency bundles are built lazily.
   function sessionRefDeps(): SessionRefDependencies {
-    let built: ReturnType<typeof catalog.buildSessionCatalog> | null = null;
+    let built: SessionCatalog | null = null;
     return {
       selfHostId: hostIdentity.getHostId(),
       resolveLocal: (id, exactOnly) => {
@@ -617,7 +609,6 @@ export function startServer(rootDirectory: string): Server {
 
   app.get('/api/sessions/:id/stream', createSessionStreamHandler({ getLiveSession, viewers: streamViewers }));
 
-  // Construct resources and listener handlers before binding any socket.
   const terminalHandlers = terminal.isTerminalEnabled() ? createTerminalHandlers({
     upgradeAuthorized: accessHandlers.upgradeAuthorized,
     getRegisteredSession,
@@ -656,7 +647,7 @@ export function startServer(rootDirectory: string): Server {
   return startListeners({
     app, host: HOST, port: PORT, upgrade, closeResources,
     terminalShutdown: terminalHandlers?.shutdown,
-    warm: () => { piSDK.getAvailableModels().then(catalog.setModelsCache).catch(() => {}); },
+    warm: () => { piSDK.getAvailableModels().then(setModelsCache).catch(() => {}); },
     onListening: () => {
       // Skill roots precede the first big index build; failure remains harmless.
       skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds(catalog.buildSessionCatalog) })

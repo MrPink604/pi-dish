@@ -1,5 +1,5 @@
 import type { RouteHandler } from './http-boundary';
-import { errorMessage } from './errors';
+import { errorMessage } from './http-boundary';
 import { createHostHealth } from './host-health';
 import {
   buildSnippets, evaluateSessionQuery, isAutomationSession, parseSessionQuery,
@@ -9,15 +9,9 @@ import { stableSessionRef } from './helper-refs.js';
 import { sourceForIdentity } from './session-source';
 import { getSearchText } from './session-index';
 import { sessionForClient } from './session-api';
-import type { HibernationState, SessionFields } from './session-api';
+import type { HibernationState } from './session-api';
 import type { CatalogRuntime } from './session-catalog-runtime';
-import type { CatalogSession, SessionCatalog } from './session-catalog-contracts';
-
-interface CatalogListResponse extends Pick<SessionCatalog, 'indexing' | 'discoveryTruncated' | 'discoverySkipped'> {
-  active: readonly (SessionFields<Date | string | number> & { id: string })[];
-  previous: readonly (SessionFields<Date | string | number> & { id: string })[];
-  children: readonly (SessionFields<Date | string | number> & { id: string })[];
-}
+import type { CatalogSession } from './session-catalog-contracts';
 
 export interface SessionBrowsePorts {
   catalog: CatalogRuntime;
@@ -26,40 +20,33 @@ export interface SessionBrowsePorts {
 
 const SEARCH_RESULT_CAP = 100;
 
-export function createSessionBrowseHandlers(ports: SessionBrowsePorts): {
-  list: RouteHandler;
-  hostHealth: RouteHandler;
-  resolve: RouteHandler;
-  search: RouteHandler;
-} {
+export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
   const { catalog: runtime } = ports;
   const hostHealth = createHostHealth();
 
   const list: RouteHandler = async (req, res) => {
     const query = ((req.query.q || '') as string).trim().toLowerCase();
     await runtime.refreshPrimeRoster();
-    let { active, previous, children, indexing, discoveryTruncated, discoverySkipped } =
-      runtime.buildSessionCatalog({ activeOnly: req.query.active === '1' });
-
+    const catalog = runtime.buildSessionCatalog({ activeOnly: req.query.active === '1' });
     const hibernated = ports.hibernated();
-    if (hibernated.size) {
-      previous = previous.map(session => {
+    const previous = hibernated.size
+      ? catalog.previous.map(session => {
         const state = hibernated.get(session.id);
         return state ? { ...session, hibernation: state } : session;
-      });
-    }
-    if (query) {
-      active = runtime.filterSessionsByQuery(active, query);
-      previous = runtime.filterSessionsByQuery(previous, query);
-      children = runtime.filterSessionsByQuery(children, query);
-    }
-    const response: CatalogListResponse = { active, previous, children, indexing, discoveryTruncated, discoverySkipped };
-    if (req.query.view === 'client') {
-      response.active = active.map(session => sessionForClient(session));
-      response.previous = previous.map(session => sessionForClient(session));
-      response.children = children.map(session => sessionForClient(session));
-    }
-    res.json(response);
+      })
+      : catalog.previous;
+    const projection = (rows: readonly CatalogSession[]) => {
+      const filtered = query ? runtime.filterSessionsByQuery(rows, query) : rows;
+      return req.query.view === 'client' ? filtered.map(session => sessionForClient(session)) : filtered;
+    };
+    res.json({
+      active: projection(catalog.active),
+      previous: projection(previous),
+      children: projection(catalog.children),
+      indexing: catalog.indexing,
+      discoveryTruncated: catalog.discoveryTruncated,
+      discoverySkipped: catalog.discoverySkipped,
+    });
   };
 
   const health: RouteHandler = async (_req, res) => {

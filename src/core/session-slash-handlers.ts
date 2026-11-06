@@ -2,7 +2,7 @@ import type { RouteHandler } from './http-boundary';
 import { requestBody } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
-import { errorMessage, errorStatus, httpError } from './errors';
+import { errorMessage, errorStatus, httpError } from './http-boundary';
 import { parseModelId, thinkingLevelNamesFor } from './helper-models.js';
 import { getHarness } from './harnesses';
 import { liveSessionSupports } from './session-ownership';
@@ -53,7 +53,7 @@ function splitCommand(message: string): { name: string; args: string } {
   };
 }
 
-export function createSlashCommandHandler(ports: SlashCommandPorts): { command: RouteHandler } {
+export function createSlashCommandHandler(ports: SlashCommandPorts) {
   /** /reload against a bridge session, with tmux and socket-teardown fallbacks. */
   async function reloadBridgeSession(sess: InstanceType<typeof BridgeSession>, sessionId: string) {
     let bridgeError: unknown = null;

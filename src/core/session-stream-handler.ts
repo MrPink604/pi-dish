@@ -1,7 +1,7 @@
 import type { RouteHandler } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
-import { errorMessage } from './errors';
+import { errorMessage } from './http-boundary';
 import { canonicalSessionId } from './session-key';
 import { sessionSwitchRouteData } from './session-ownership';
 import { createToolEventStream } from './tool-event-stream';
@@ -94,8 +94,7 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
 
     sub('turn_start', () => send('turn_start', {}));
 
-    // Coalesced message_update forwarding — each event carries the full message
-    // so far, so dropping intermediates loses nothing.
+    // Each message_update carries the full message, so intermediates can drop.
     let pendingUpdate: unknown = null;
     let updateTimer: NodeJS.Timeout | null = null;
     const flushUpdate = () => {
@@ -126,16 +125,13 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     sub('message_end', (data) => {
       const message = messageForStream(isRecord(data) ? data.message : undefined);
       const role = isRecord(message) ? message.role : undefined;
-      // A steer/follow-up delivered mid-turn, or OMP's completed background job,
-      // is forwarded so the client can show it without waiting for turn_end.
-      // Don't touch the coalescer: a user message doesn't invalidate a pending
-      // assistant delta.
+      if (role !== 'assistant' && role !== 'user' && role !== 'custom') return;
+      // An assistant bubble supersedes any pending delta; a mid-turn user/custom
+      // message does not invalidate it.
       if (role === 'assistant') clearPendingUpdate();
-      if (role === 'assistant' || role === 'user' || role === 'custom') send('message_end', { message });
+      send('message_end', { message });
     });
 
-    // Tree navigation changed the authoritative history; the client re-renders
-    // from the JSONL.
     sub('session_tree', (data) => send('session_tree', data || {}));
     // Keep clients attached to the old route long enough to learn which route
     // now owns the same pane.

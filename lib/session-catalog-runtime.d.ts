@@ -31,16 +31,16 @@ export interface CatalogRuntime {
         session: CatalogSession | null;
         matches: CatalogSession[];
     };
-    historicalAdvice(source: SessionSource, liveChild?: boolean): CatalogAdvice;
-    canonicalSessionPath(file: string | null): string | null;
     parseSessionFile(source: SessionSource): SessionFileInfo;
     getSessionModels(sessionId: string): Promise<CatalogModel[] | null>;
-    getContextWindow(modelId: string | null | undefined): number;
     refreshPrimeRoster(): Promise<void>;
-    setModelsCache(models: AvailableModel[]): void;
-    getModelsCache(): {
-        models: AvailableModel[] | null;
-        time: number;
-    };
 }
+export declare function canonicalSessionPath(file: string | null): string | null;
+export declare function historicalAdvice(source: SessionSource, liveChild?: boolean): CatalogAdvice;
+export declare function getContextWindow(modelId: string | null | undefined): number;
+export declare function setModelsCache(models: AvailableModel[]): void;
+export declare function getModelsCache(): {
+    models: AvailableModel[] | null;
+    time: number;
+};
 export declare function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime;

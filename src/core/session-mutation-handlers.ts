@@ -2,7 +2,7 @@ import type { RouteHandler } from './http-boundary';
 import { requestBody } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
-import { errorMessage, errorStatus } from './errors';
+import { errorMessage, errorStatus } from './http-boundary';
 import { removeExtensionUIDialog } from './extension-ui-state';
 import { ALL_THINKING_LEVEL_NAMES, parseModelId, thinkingLevelNamesFor } from './helper-models.js';
 import * as piSDK from './pi-sdk';
@@ -36,19 +36,7 @@ export function sideChatSupported(sess: InstanceType<typeof BridgeSession>, res:
   return false;
 }
 
-export function createSessionMutationHandlers(ports: SessionMutationPorts): {
-  thinking: RouteHandler;
-  fast: RouteHandler;
-  abort: RouteHandler;
-  sideChat: RouteHandler;
-  sideChatAsk: RouteHandler;
-  sideChatCancel: RouteHandler;
-  sideChatClose: RouteHandler;
-  uiResponse: RouteHandler;
-  rename: RouteHandler;
-  model: RouteHandler;
-  cancelQueued: RouteHandler;
-} {
+export function createSessionMutationHandlers(ports: SessionMutationPorts) {
   const thinking: RouteHandler = async (req, res) => {
       const { level } = requestBody(req);
       if (typeof level !== 'string' || !ALL_THINKING_LEVEL_NAMES.includes(level)) {

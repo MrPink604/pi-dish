@@ -61,16 +61,12 @@ export function startListeners(options: ListenerOptions): Server {
     shareEvents.on(errorMonitor, reportFailure);
   }
 
-  function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    options.upgrade(req, socket, head);
-  }
-
   function createOwnedServer(): Server {
     const listener = createServer(app);
     listener.on('close', () => options.closeResources(shareServer));
     // Keep the terminal shutdown callback's native EventEmitter receiver.
     if (options.terminalShutdown) listener.on('close', options.terminalShutdown);
-    listener.on('upgrade', upgrade);
+    listener.on('upgrade', options.upgrade);
     return listener;
   }
 

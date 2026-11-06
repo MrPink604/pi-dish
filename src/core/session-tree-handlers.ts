@@ -2,7 +2,7 @@ import type { RouteHandler } from './http-boundary';
 import { requestBody } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
-import { errorMessage, httpError } from './errors';
+import { errorMessage, httpError } from './http-boundary';
 import * as piSDK from './pi-sdk';
 import { liveSessionSupports, routeIdentity } from './session-ownership';
 import { isRecord } from './wire-protocol';
@@ -38,7 +38,7 @@ function tmuxKeyForChord(chord: unknown): string | null {
   return `${prefix}${base.toUpperCase()}`;
 }
 
-export function createSessionTreeHandler(ports: SessionTreePorts): { branch: RouteHandler } {
+export function createSessionTreeHandler(ports: SessionTreePorts) {
   // Bridge navigate_tree needs a stashed pi command context. RPC-backed
   // sessions can prime one with an RPC prompt; tmux TUI sessions get the
   // command typed into their pane.

@@ -1,14 +1,15 @@
 import path = require('path');
 import type { RouteHandler } from './http-boundary';
 import { buildSourceSession } from './session-catalog';
+import { canonicalSessionPath, historicalAdvice } from './session-catalog-runtime';
 import { getSessionInfo } from './session-index';
-import { errorMessage } from './errors';
+import { errorMessage } from './http-boundary';
 import sessionProvenance = require('./session-provenance');
 import type { CatalogRuntime } from './session-catalog-runtime';
 import type { CatalogSession } from './session-catalog-contracts';
 import type { SessionSource } from './session-source-contracts';
 
-export interface CatalogRelationSummary extends Pick<CatalogSession, 'id' | 'sessionKey' | 'name' | 'lastActivity'> {
+interface CatalogRelationSummary extends Pick<CatalogSession, 'id' | 'sessionKey' | 'name' | 'lastActivity'> {
   harnessId: CatalogSession['harnessId'];
   nativeSessionId: CatalogSession['nativeSessionId'] | CatalogSession['id'];
   cwd: string | null;
@@ -21,18 +22,18 @@ export interface CatalogRelationSummary extends Pick<CatalogSession, 'id' | 'ses
   agentId?: string;
 }
 
-export interface CatalogRelation {
+interface CatalogRelation {
   kind: 'parent' | 'child' | 'startedFrom' | 'startedHere';
   source: string;
   session: CatalogRelationSummary;
 }
 
-export interface CatalogLineageEdge {
+interface CatalogLineageEdge {
   kind: 'startedHere' | 'child';
   source: string;
 }
 
-export interface CatalogLineageNode {
+interface CatalogLineageNode {
   session: CatalogRelationSummary;
   edge: CatalogLineageEdge | null;
   children: CatalogLineageNode[];
@@ -76,10 +77,7 @@ function relationSessionSummary(session: CatalogSession): CatalogRelationSummary
   };
 }
 
-export function createSessionRelationHandlers(ports: SessionRelationPorts): {
-  related: RouteHandler;
-  lineage: RouteHandler;
-} {
+export function createSessionRelationHandlers(ports: SessionRelationPorts) {
   const { catalog: runtime } = ports;
 
   function parentPathOf(session: CatalogSession | null | undefined): string | null {
@@ -100,9 +98,9 @@ export function createSessionRelationHandlers(ports: SessionRelationPorts): {
       if (!resolved) {
         const candidate = ports.resolveSessionCandidate(req.params.id);
         if (!candidate) { res.status(404).json({ error: 'Session not found' }); return; }
-        resolved = buildSourceSession(candidate, getSessionInfo(candidate), runtime.historicalAdvice(candidate), runtime.options);
+        resolved = buildSourceSession(candidate, getSessionInfo(candidate), historicalAdvice(candidate), runtime.options);
         byId.set(resolved.id, resolved);
-        byPath.set(runtime.canonicalSessionPath(candidate.file), resolved);
+        byPath.set(canonicalSessionPath(candidate.file), resolved);
         list.push(resolved);
       }
       const current = resolved;
@@ -118,7 +116,7 @@ export function createSessionRelationHandlers(ports: SessionRelationPorts): {
       };
       const resolveParent = (session: CatalogSession | null | undefined): CatalogSession | null => {
         const parentPath = parentPathOf(session);
-        return parentPath ? byPath.get(runtime.canonicalSessionPath(parentPath)) || null : null;
+        return parentPath ? byPath.get(canonicalSessionPath(parentPath)) || null : null;
       };
 
       add('parent', current.parentSessionSource || 'pi-session-header', resolveParent(current));
@@ -160,11 +158,11 @@ export function createSessionRelationHandlers(ports: SessionRelationPorts): {
       if (!current) {
         const candidate = ports.resolveSessionCandidate(req.params.id);
         if (!candidate) { res.status(404).json({ error: 'Session not found' }); return; }
-        current = buildSourceSession(candidate, getSessionInfo(candidate), runtime.historicalAdvice(candidate), runtime.options);
+        current = buildSourceSession(candidate, getSessionInfo(candidate), historicalAdvice(candidate), runtime.options);
         // Mirror composeSessionCatalog's parent resolution for a row the scan
         // has not folded in yet (indexing race).
         const parentPath = parentPathOf(current);
-        const nativeParent = parentPath ? byPath.get(runtime.canonicalSessionPath(parentPath))?.id || null : null;
+        const nativeParent = parentPath ? byPath.get(canonicalSessionPath(parentPath))?.id || null : null;
         const launch = sessionProvenance.getLaunch(current.id);
         current.parentId = nativeParent
           || (launch && byId.has(launch.sourceSessionId) ? launch.sourceSessionId : null);

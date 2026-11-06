@@ -40,8 +40,14 @@ into a temporary directory and rejects mismatched or orphaned generated output.
 Node and harness consumers continue to execute the checked-in JS;
 do not run these sources directly, since runtime-relative paths belong to `lib/`.
 
-`src/core/server-app.ts` owns application composition, session controls, SSE and
-listener policy. Its generated `lib/server-app.js` receives the application root
+`src/core/server-app.ts` owns application composition: middleware order, route
+registration and service wiring. Cohesive policies live beside it:
+`session-catalog-runtime.ts` (catalog, search ranking, model windows),
+`session-browse-handlers.ts`, `session-relation-handlers.ts`,
+`session-slash-handlers.ts`, `session-mutation-handlers.ts`,
+`session-tree-handlers.ts`, `session-stream-handler.ts` (SSE) and
+`server-startup.ts` (readiness, loopback alias, retry and listener teardown).
+Its generated `lib/server-app.js` receives the application root
 explicitly; assets, docs and package metadata must not resolve relative to `lib/`.
 The strict-checkJs launcher is only
 `module.exports = require('./lib/server-app').startServer(__dirname);`.
@@ -567,14 +573,14 @@ separate and carry their host label(s). Reset credits dedupe by title+expiry
 under the same host-label rule. `usageLimitsHtml` renders that merged
 view; the Limits subtab shows an empty state when no host answers with reports.
 
-Server-side session dispatch: `getLiveSession(id)` in `src/core/server-app.ts` is the one
+Server-side session dispatch: `getLiveSession(id)` in `src/core/session-ownership.ts` is the one
 place bridge-vs-RPC resolution lives (bridge registry entry → connected
 BridgeSession, else alive RPCSession, else null). Don't re-roll the
 `getRegisteredSession ? getBridgeSession : getRPCSession` dance in routes;
 branch on `instanceof BridgeSession` only for genuinely backend-specific
 calls (setModel arg shapes, runCommand vs the RPC slash emulation).
 
-Remote `/reload` (`reloadBridgeSession` in `src/core/server-app.ts`): the bridge triggers it
+Remote `/reload` (`reloadBridgeSession` in `src/core/session-slash-handlers.ts`): the bridge triggers it
 via the captured AgentSession's `prompt("/dish-reload")`, **deferred a
 macrotask** — fired in the same tick, the reload's socket teardown outruns
 the run_command response frame. The server keeps two escape hatches: a
@@ -1277,7 +1283,8 @@ exactly single-host pi-dish.
 Fleet transport is authored in `src/core/remote-hosts.ts`; access, relay and local
 terminal endpoint policy lives in `access-handlers.ts`, `relay-handlers.ts` and
 `terminal-handlers.ts`. Their generated `lib/` modules expose individual handlers;
-`server-app.ts` keeps the original registration positions and upgrade dispatch order.
+`server-app.ts` keeps the original registration positions; `server-startup.ts` owns
+upgrade dispatch, readiness and listener policy.
 Raw API, public artifact and parsed comment relays remain separate policies.
 
 - **Identity**: `GET /api/host` (always unauthenticated) → `{ hostId, label,
@@ -1803,7 +1810,7 @@ pi emits `message_update` on every delta, each carrying the **full message so
 far** — intermediates are droppable. The path is:
 
 1. Bridge extension broadcasts events over the session's Unix socket.
-2. `src/core/server-app.ts` SSE (`/api/sessions/:id/stream`) forwards them, coalescing
+2. `src/core/session-stream-handler.ts` (`/api/sessions/:id/stream`) forwards them, coalescing
    `message_update` per connection (~50ms window, latest wins). The legacy
    split events (`thinking`/`tool_call`/`tool_result`) are gone — everything
    streams through `message_update`.
