@@ -90,12 +90,13 @@ factory mounts, middleware ordering, startup/recovery sequencing, listener owner
 and close hooks remain in their original order. No session/control, fleet,
 publication, SSE or validation policy remains in the launcher.
 
-Raw payloads stay unknown until their original native operations. The private
-property helper emits native indexed access; it does not decode or trust a DTO.
-The three pre-existing reload-error annotations preserve sloppy-write behavior
-under strict output using an ignored four-argument `Reflect.set` result, with
-the original thrown value as receiver. These are compatibility boundaries, not
-new validation or a general reflection layer. [M7 evidence](m7-evidence.json)
+Raw payloads stay unknown until their original native operations. Route bodies
+are typed once at the HTTP boundary (`http-boundary.ts`), and consumed bridge
+payload fields are read through narrow record guards instead of a generic
+property helper. The reload errors keep their sloppy-write status annotation
+using an ignored four-argument `Reflect.set` result, with the original thrown
+value as receiver. These are compatibility boundaries, not new validation or a
+general reflection layer. [M7 evidence](m7-evidence.json)
 records the frozen inventory, exact approved boundaries and runtime verification.
 
 See the [stage plan](session-catalog-migration.md) for scope, field authority,
@@ -140,7 +141,12 @@ The integration lead, not this guide, records milestone acceptance.
 | TypeScript source in `src/core/` | Responsibility |
 | --- | --- |
 | `contracts.ts` | Identity distinctions, process proof shapes, harness descriptors and running-tool snapshots |
-| `server-app.ts` | Checked application composition, remaining route/control/SSE policy, ordered startup and owned listener teardown |
+| `server-app.ts` | Checked application composition: middleware order, route registration and service wiring |
+| `server-startup.ts` | Readiness observation, agent URL advertisement, loopback alias, bind retry, owned listener teardown |
+| `session-catalog-runtime.ts` | Live/historical catalog composition, search ranking, ref resolution and model context windows |
+| `session-browse-handlers.ts`, `session-relation-handlers.ts` | Session list/host-health/resolve/search routes and advisory relation/lineage trees |
+| `session-slash-handlers.ts`, `session-mutation-handlers.ts`, `session-tree-handlers.ts` | Slash commands and host builtins, thinking/model/rename/side-chat/queue mutations, branch navigation |
+| `session-stream-handler.ts` | SSE proxy, replay and per-connection coalescing |
 | `session-key.ts` | Strict route decoding, harness/native encoding and legacy Pi canonicalization |
 | `harnesses.ts` | Existing harness registry and launch argv/environment construction |
 | `runtime-resources.ts` | External extension/skill/lib paths resolved against the installed application root |
@@ -212,7 +218,7 @@ until serialization; wire decoding is a separate boundary.
 M2's routine consumers retain raw persisted selections and ledger ids until their
 existing consuming operations. The runner uses the actual lifecycle coordinator
 and M1 reference-expansion implementation, not parallel dependency declarations.
-`server-app.ts` retains registration/startup ordering and supplies observations;
+`server-app.ts` retains registration ordering, `server-startup.ts` the startup sequencing, and both supply observations;
 the root launcher contains none of the former routine prompt or route-policy bodies.
 
 New-launch argv/cwd remain unknown through native spawn/execFile boundaries.

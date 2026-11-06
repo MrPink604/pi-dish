@@ -1617,7 +1617,6 @@ test('GET /diff 404s when the session cwd is unknown', async () => {
     const { status } = await get(`/api/sessions/${NO_CWD_ID}/diff`);
     assert.equal(status, 404);
 });
-// --- published pages (lib/pages.js, /api/pages, /page/:token) ---------------
 test('POST /api/pages publishes a file and /page/:token serves it live from disk', async () => {
     const planFile = path.join(realCwd, 'plan.html');
     fs.writeFileSync(planFile, '<h1>the plan</h1>');
@@ -1839,7 +1838,6 @@ test('directory pages serve index.html and contained assets only', async () => {
     assert.equal((await fetch(base + body.path + '/nope.css')).status, 404);
     await del(`/api/pages/${body.token}`);
 });
-// --- anchored comments (lib/comments.js, /api/comments) -------------------
 test('comments support unpaginated indexing, selected reads, and acknowledgment', async () => {
     const fileTarget = {
         kind: 'file', path: path.join(realCwd, 'README.md'), relPath: 'README.md',
@@ -2447,6 +2445,59 @@ test('OMP side chat replays its snapshot and coalesces streamed deltas', async (
         await new Promise((resolve, reject) => bridge.close(error => error ? reject(error) : resolve()));
     }
 });
+test('host builtin slash commands validate arguments before any pane lookup', async () => {
+    const nativeId = 'omp-host-builtin-validation';
+    const routeId = encodeSessionKey('omp', (0, test_types_js_1.nativeId)(nativeId));
+    const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+    const socketPath = path.join(tmpHome, 'omp-host-builtin.sock');
+    fs.mkdirSync(registryDir, { recursive: true });
+    const identity = (0, test_types_js_1.present)(processIdentity(process.pid));
+    const claim = {
+        protocolVersion: 2,
+        wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+        harnessId: 'omp', nativeSessionId: nativeId, sessionId: nativeId,
+        bridgeInstanceId: nativeId, instanceId: nativeId,
+        sessionFile: ompSessionFile, socketPath, cwd: ompCwd,
+        pid: identity.pid, startTime: identity.startTime, spawnToken: null,
+        capabilities: { commands: true },
+    };
+    const sockets = new Set();
+    const bridge = net.createServer(sock => {
+        sockets.add(sock);
+        sock.on('close', () => sockets.delete(sock));
+        sock.on('error', () => { });
+        sock.write(JSON.stringify({ type: 'hello', ...claim }) + '\n');
+    });
+    await new Promise((resolve, reject) => { bridge.once('error', reject); bridge.listen(socketPath, resolve); });
+    const registryPath = path.join(registryDir, `${nativeId}.json`);
+    fs.writeFileSync(registryPath, JSON.stringify(claim));
+    invalidateRegistryCache();
+    const commandRoute = `/api/sessions/${encodeURIComponent(routeId)}/command`;
+    const rejects = async (message, pattern) => {
+        const result = await post(commandRoute, { message });
+        assert.equal(result.status, 400, JSON.stringify(result.body));
+        assert.match(text(result.body.error), pattern);
+    };
+    try {
+        await rejects('/goal', /requires arguments/);
+        await rejects('/goal drop', /only available in the Oh My Pi terminal UI/);
+        await rejects('/goal set', /only available in the Oh My Pi terminal UI/);
+        await rejects('/shake images now', /Invalid arguments for \/shake; expected images/);
+        await rejects('/goal bad\u0001objective', /Invalid arguments for \/goal/);
+        // A well-formed curated command reaches the pane requirement, which is the
+        // only remaining gate when the session has no tmux pane.
+        const pane = await post(commandRoute, { message: '/goal set ship it' });
+        assert.equal(pane.status, 409, JSON.stringify(pane.body));
+        assert.match(text(pane.body.error), /requires a reachable Oh My Pi tmux pane/);
+    }
+    finally {
+        fs.rmSync(registryPath, { force: true });
+        invalidateRegistryCache();
+        for (const sock of sockets)
+            sock.destroy();
+        await new Promise((resolve, reject) => bridge.close(error => error ? reject(error) : resolve()));
+    }
+});
 test('OMP command discovery includes pane-backed host commands and API aliases stay capability-first', async () => {
     const nativeId = 'omp-command-filter';
     const routeId = encodeSessionKey('omp', (0, test_types_js_1.nativeId)(nativeId));
@@ -2636,9 +2687,6 @@ test('GET /page with an unknown token is a bare 404', async () => {
     const res = await fetch(base + '/page/does-not-exist');
     assert.equal(res.status, 404);
     assert.equal(await res.text(), 'Not found');
-});
-test('the server exports PI_DISH_URL for spawned agents (pi-dish-pages skill)', () => {
-    assert.equal(process.env.PI_DISH_URL, base);
 });
 // A tailnet/LAN bind (HOST=<tailscale ip>) serves a loopback alias alongside
 // the bound address, so the URL handed to spawned agents is loopback — it
@@ -3073,7 +3121,6 @@ test('saved filters persist server-globally and update independently of the budg
     assert.deepEqual(clearedAll.body.savedFilters, []);
     assert.equal('savedFilters' in JSON.parse(fs.readFileSync(settingsFile, 'utf8')), false);
 });
-// --- speech to text ------------------------------------------------------
 //
 // settings.json is re-read per call, so these write the `stt` block in and
 // restore the previous contents afterwards.
@@ -3260,7 +3307,6 @@ test('POST endpoints validate input and reject inactive sessions', async () => {
     const deadCancel = await post(`/api/sessions/${SESSION_ID}/queue/cancel`, { kind: 'followUp', index: 0, text: 'x' });
     assert.equal(deadCancel.status, 404);
 });
-// --- Close session + runtime location --------------------------------------
 test('POST /close prunes a reused registry PID without signaling the new process', async () => {
     const { spawn } = require('node:child_process');
     const id = '2026-07-04T15-50-00-reusedpid';
@@ -3518,7 +3564,6 @@ test('Pi HTTP tree preserves branch depth and SDK display projection', async () 
         fs.rmSync(file, { force: true });
     }
 });
-// --- Tree branching (inactive sessions go through pi's SDK) ---------------
 // These mutate TREE_FILE (branching appends entries by design) and so run
 // in this order.
 test('POST /branch on a user message returns its text and persists the leaf move', async () => {
@@ -3897,7 +3942,6 @@ test('POST /branch on a live bridge session forwards navigate_tree', async () =>
         await new Promise((resolve, reject) => bridge.close(error => error ? reject(error) : resolve()));
     }
 });
-// --- Themes ----------------------------------------------------------------
 test('GET /api/themes lists built-ins plus valid user theme files', async () => {
     const themesDir = path.join(tmpHome, '.pi', 'dish', 'themes');
     fs.mkdirSync(themesDir, { recursive: true });
@@ -3923,7 +3967,6 @@ test('GET /api/themes without a themes dir serves the built-ins', async () => {
     assert.equal(status, 200);
     assert.deepEqual((0, test_types_js_1.records)(body.themes).map(theme => theme.id), ['solarized', 'graphite']);
 });
-// --- Public share links --------------------------------------------------
 // TREE_ID is a valid pi v3 session; the HTML exporter (and thus GET
 // /share/:token) rejects the id-less shorthand fixtures.
 test('POST /share is idempotent and 404s for an unknown session', async () => {
@@ -4456,7 +4499,6 @@ test('startup omits feature assets and compresses large static text', async () =
     assert.deepEqual(zlib.gunzipSync(gzip.body), identity.body);
     assert.ok(gzip.body.length < identity.body.length * 0.5, `expected at least 50% savings (${identity.body.length} -> ${gzip.body.length})`);
 });
-// --- Skills view -----------------------------------------------------------
 test('GET /api/skills discovers the fixture skill with mined usage rollups', async () => {
     const { status, body } = await get('/api/skills');
     assert.equal(status, 200);
@@ -4628,9 +4670,13 @@ test('GET /api/sessions/resolve accepts a native id or uuid tail and answers wit
     assert.notEqual(corrupt, ALIAS_ROUTE_ID);
     assert.equal((await get(`/api/sessions/resolve?id=${encodeURIComponent(corrupt)}`)).status, 404);
 });
-test('GET /api/host advertises ref-alias resolution so clients can print short refs', async () => {
-    const { body } = await get('/api/host');
-    assert.equal((0, test_types_js_1.record)(body.capabilities).refAliases, true);
+test('GET /api/host advertises the client capability flags', async () => {
+    const { status, body } = await get('/api/host');
+    assert.equal(status, 200);
+    const capabilities = (0, test_types_js_1.record)(body.capabilities);
+    assert.equal(capabilities.refAliases, true);
+    assert.equal(capabilities.resolve, true);
+    assert.equal(capabilities.docs, true);
 });
 test('GET /api/sessions/resolve rejects unknown and too-short refs', async () => {
     const unknown = await get('/api/sessions/resolve?id=nosuchsessionprefix');
@@ -4677,10 +4723,4 @@ test('GET /api/agent-docs/:topic serves markdown and gates the topic name', asyn
         assert.ok(!text.includes('"dependencies"'), `${attempt} must not serve file content`);
         assert.ok(!text.includes('Session refs'), `${attempt} must not serve doc content`);
     }
-});
-test('GET /api/host advertises the resolve and docs capabilities', async () => {
-    const { status, body } = await get('/api/host');
-    assert.equal(status, 200);
-    assert.equal((0, test_types_js_1.record)(body.capabilities).resolve, true);
-    assert.equal((0, test_types_js_1.record)(body.capabilities).docs, true);
 });
