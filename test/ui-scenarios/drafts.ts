@@ -1,4 +1,3 @@
-// Shared by the full smoke and a fresh --scenario drafts run.
 import type { UiScenario } from './contracts.js';
 
 const drafts: UiScenario = async ({ desktop, check, registryState }) => {

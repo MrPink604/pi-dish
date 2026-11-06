@@ -1,8 +1,7 @@
 // Generated test/tool from test/ui-scenarios/skills.ts; edit that source and run npm run build:tests.
 "use strict";
 const skills = async ({ desktop, check }) => {
-    // Skills view: the observational directory + in-takeover detail + refine
-    // launcher. Opened from the sidebar-header shield button.
+    // Skills directory, detail page and refine launcher.
     console.log('skills view:');
     await desktop.click('[title="Skills"]');
     await desktop.waitForFunction(() => fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('skills-open') &&

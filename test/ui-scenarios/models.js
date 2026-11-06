@@ -1,8 +1,8 @@
 // Generated test/tool from test/ui-scenarios/models.ts; edit that source and run npm run build:tests.
 "use strict";
 const models = async ({ path, tmpHome, desktop, check, fs }) => {
-    // Scoped models: dropdown edit mode toggles models and persists to
-    // pi's settings.json (enabledModels), normal view hides disabled ones
+    // Edit mode toggles models into pi's settings.json; the normal view hides
+    // disabled ones.
     console.log('scoped models:');
     const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
     const readSettings = () => { try {

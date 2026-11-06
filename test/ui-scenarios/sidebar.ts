@@ -1,4 +1,3 @@
-// Shared by the full smoke and a fresh --scenario sidebar run.
 import type { UiScenario } from './contracts.js';
 
 const sidebar: UiScenario = async ({ desktop, registryState, check, SKILL_SESSION_ID, CWD, BETA_ID, SESSION_ID }) => {

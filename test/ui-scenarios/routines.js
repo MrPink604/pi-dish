@@ -1,10 +1,8 @@
 // Generated test/tool from test/ui-scenarios/routines.ts; edit that source and run npm run build:tests.
 "use strict";
 const routines = async ({ desktop, check, CWD }) => {
-    // Routines takeover: the fifth sidebar-header icon, the create/edit
-    // round-trip (a changed prompt is a new version), a real Run now through
-    // the fake RPC pi, and the routine provenance chip that lands on the
-    // resulting session's sidebar row.
+    // Routines takeover: create/edit, a real Run now through the fake RPC pi,
+    // and the provenance chip on the resulting session's sidebar row.
     console.log('routines:');
     await desktop.waitForSelector('#btnRoutines', { state: 'visible', timeout: 5000 });
     await desktop.click('#btnRoutines');

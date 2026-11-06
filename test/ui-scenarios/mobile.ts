@@ -1,4 +1,3 @@
-// Shared by the full smoke and a fresh --scenario mobile run.
 import type { UiScenario } from './contracts.js';
 
 const mobile: UiScenario = async ({ browser, watch, base, check, emit, SESSION_ID }) => {
@@ -28,9 +27,7 @@ const mobile: UiScenario = async ({ browser, watch, base, check, emit, SESSION_I
   check(relationLayout.chips === 1 && relationLayout.text.includes('Subagents') && relationLayout.height <= 32,
     `the family-tree link stays a single compact mobile chip (got ${JSON.stringify(relationLayout)})`);
 
-  // Header contract: three rows. The title owns row 1; row 2 carries the
-  // four controls that always matter, unclipped, with the model chip the
-  // only one allowed to shrink; row 3 scrolls and leads with run state.
+  // Header contract: three rows; only the model chip may shrink.
   const title = await mobile.locator('#sessionName').boundingBox();
   const model = await mobile.locator('#sessionModel').boundingBox();
   check(title && model && title.y + title.height <= model.y,
@@ -94,12 +91,9 @@ const mobile: UiScenario = async ({ browser, watch, base, check, emit, SESSION_I
   check(!statusVisibility.working && statusVisibility.error,
     `the run chip carries turn state alone; only errors add prose (got ${JSON.stringify(statusVisibility)})`);
 
-  // Composer contract on a phone: every control lives inside the field's
-  // box, the content-tool rail sits below the text (an overlaid rail let
-  // scrolled lines run under the glyphs), and the context readout holds
-  // one position across the idle/running switch — a turn starting used
-  // to reflow the whole row and push Follow-up off screen. Steer stacks
-  // above follow-up on the rail baseline so the box does not grow.
+  // Composer contract on a phone: controls stay inside the field, the
+  // content-tool rail sits below the text, and the context readout holds its
+  // position across the idle/running switch.
   const ctxRight = () => mobile.evaluate(() =>
     Math.round(fixtureElement(document.getElementById('sessionContext'), "document.getElementById('sessionContext')").getBoundingClientRect().right));
   const boxHeight = () => mobile.evaluate(() =>

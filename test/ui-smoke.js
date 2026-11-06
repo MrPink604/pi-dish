@@ -3,11 +3,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 /**
- * UI smoke test — boots server.js against a temp HOME containing a fake live
- * bridge session (Unix socket + registry entry), then drives Chromium with the
- * repository-pinned Playwright. Individual features also run alone through
- * `--scenario <name>` (see test/ui-scenarios/). Fails on any page or console
- * error. Not part of `npm test` (needs Chrome): run with `npm run test:ui`.
+ * Boots server.js against a temp HOME holding a fake bridge session, then drives
+ * Chromium. `--scenario <name>` runs one feature alone (test/ui-scenarios/).
+ * Not part of `npm test` (needs Chrome): run with `npm run test:ui`.
  */
 const scenarios = require("./ui-scenarios/index.js");
 const playwright_1 = require("playwright");
@@ -35,25 +33,20 @@ const os = require("node:os");
 const net = require("node:net");
 const path = require("node:path");
 const { processIdentity } = require('../lib/process-identity.js');
-// --- temp HOME with one live fixture session ---------------------------------
-// Same first move as `npm test`: drop the operator's deployment out of the
-// environment (HOST would bind this server to their tailnet address, the
-// share port would collide with the running one) before setting our own.
+// Same first move as `npm test`: drop the operator's deployment (HOST, share
+// port) from the environment before setting our own.
 (0, test_env_js_1.applyTestEnv)();
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
 process.env.PI_DISH_TERMINAL = '1'; // exercise the terminal panel
 process.env.PI_DISH_INDEX_SYNC_BUDGET = '1000'; // deterministic >100-session search fixtures
-// Empty tmux tmpdir: describeRuntime's pid-ancestry fallback scans it, and a
-// tmux session enclosing this test would otherwise claim the dummy pi child
-// (the close-session section expects a plain "terminal" runtime).
+// Empty tmux tmpdir, or describeRuntime's pid-ancestry fallback finds the
+// enclosing tmux session instead of the dummy pi child.
 process.env.TMUX_TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-tmux-'));
-// The routines section runs a routine for real, so the server needs a
-// spawnable headless backend: pin the dispatch to an RPC child and point it
-// at the fake pi that speaks pi's real --mode rpc protocol (the scaffolding
-// test/rpc-session.test.js uses). Every other section still stubs
-// /api/sessions/new client-side, so nothing else spawns.
+// The routines section runs for real, so pin the headless dispatch to an RPC
+// child speaking pi's --mode rpc protocol to the fake pi; every other section
+// stubs /api/sessions/new client-side.
 process.env.PI_DISH_HEADLESS = 'rpc';
 process.env.PI_DISH_PI_COMMAND =
     `${process.execPath} ${path.join(__dirname, 'fixtures', 'fake-rpc-pi.js')}`;
@@ -69,9 +62,8 @@ const CWD = path.join(tmpHome, 'workspace', 'proj-alpha');
 fs.mkdirSync(path.join(CWD, 'src'), { recursive: true });
 fs.writeFileSync(path.join(CWD, 'src', 'main.js'), 'console.log(1);\n');
 fs.writeFileSync(path.join(CWD, 'README.md'), '# alpha\n');
-// A dirty git repo under the cwd for the diff view (one committed+modified
-// file, one untracked). Filenames chosen not to collide with the @-mention
-// fuzzy-search assertions ('ma', 'REA').
+// A dirty git repo under the cwd for the diff view: one committed+modified
+// file, one untracked, named clear of the @-mention assertions.
 const REPO = path.join(CWD, 'repo-x');
 fs.mkdirSync(REPO, { recursive: true });
 const git = (...args) => (0, node_child_process_1.execFileSync)('git', args, {
@@ -99,9 +91,8 @@ const sessionFile = path.join(sessionDir, `${SESSION_ID}.jsonl`);
 const appendEntry = (entry) => fs.appendFileSync(sessionFile, JSON.stringify(entry) + '\n');
 appendEntry({ type: 'session', cwd: CWD, timestamp: '2026-07-05T00:00:00.000Z' });
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'existing question' }], timestamp: '2026-07-05T00:00:01.000Z' } });
-// Entry id + response timing (start = message.timestamp ms epoch, end =
-// entry timestamp): 45 output tokens in 1.5s → the header shows "30 tok/s"
-// and the 🔗 button deep-links ?targetId=ui-a1.
+// 45 output tokens in 1.5s → the header shows "30 tok/s"; the entry id makes
+// the 🔗 button deep-link ?targetId=ui-a1.
 appendEntry({ type: 'message', id: 'ui-a1', timestamp: '2026-07-05T00:00:02.000Z', message: { role: 'assistant', provider: 'test', model: 'smoke-model', stopReason: 'stop', content: [{ type: 'text', text: 'existing **answer** with inline math $x^2$, ~literal tildes~, and ~~intentional strike~~' }], timestamp: Date.parse('2026-07-05T00:00:00.500Z'), usage: { input: 100, output: 45, reasoning: 5, cacheRead: 20, cacheWrite: 10, cost: { total: 0.001005 } } } });
 // A historical turn with tool activity — must fold into a closed .tool-group.
 appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'check the readme' }], timestamp: '2026-07-05T00:00:03.000Z' } });
@@ -114,19 +105,17 @@ for (let i = 0; i < 8; i++) {
     appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: `filler question ${i}` }], timestamp: `2026-07-05T00:01:0${i}.000Z` } });
     appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: `filler answer ${i}\n\nwith a second paragraph of text to take up vertical space in the feed.` }], timestamp: `2026-07-05T00:01:0${i}.500Z` } });
 }
-// A file-mention turn for the file viewer: the write toolCall gives the
-// resolver the deep path; the prose mentions it by bare basename (backticked)
-// and README.md in plain text. The message carries text, so it doesn't fold
-// into a tool-group (the accordion counts above stay stable).
+// A file-mention turn: the write toolCall gives the resolver the deep path,
+// and the prose mentions it backticked plus README.md in plain text. Text
+// content keeps the accordion counts above stable.
 fs.mkdirSync(path.join(CWD, 'deep', 'nest'), { recursive: true });
 fs.writeFileSync(path.join(CWD, 'deep', 'nest', 'findings.md'), '# deep findings\n\nhello from deep\n');
 appendEntry({ type: 'message', message: { role: 'assistant', content: [
             { type: 'text', text: 'Wrote my notes to `findings.md` — compare with README.md at the root. [Full notes](deep/nest/findings.md) and [the repo](https://example.com/repo).' },
             { type: 'toolCall', id: 'fm1', name: 'write', arguments: { path: path.join(CWD, 'deep', 'nest', 'findings.md'), content: '# deep findings\n' } },
         ], timestamp: '2026-07-05T00:02:00.000Z' } });
-// OMP interruption/custom-message shapes: the empty assistant shell should
-// not render a ghost header, while the hidden interrupted reasoning becomes a
-// marker. Async and unknown visible custom types each get a subdued row.
+// OMP shapes: an empty assistant shell renders no ghost header, hidden
+// interrupted reasoning becomes a marker, and visible custom types get rows.
 appendEntry({ type: 'message', message: { role: 'assistant', content: [], timestamp: '2026-07-05T00:02:01.000Z' } });
 appendEntry({ type: 'custom_message', customType: 'interrupted-thinking',
     content: '<system-notice>private interrupted reasoning</system-notice>', display: false,
@@ -137,9 +126,8 @@ appendEntry({ type: 'message', message: { role: 'custom', customType: 'async-res
         timestamp: Date.parse('2026-07-05T00:02:03.000Z') } });
 appendEntry({ type: 'custom_message', customType: 'future-notice',
     content: 'future custom content', display: true, timestamp: '2026-07-05T00:02:04.000Z' });
-// Diagram fences: one tagged ```mermaid and one the agent left untagged.
-// Labels stay free of path-looking tokens so the file-mention linkifier has
-// nothing to claim in here.
+// One tagged ```mermaid fence and one untagged; labels stay clear of
+// path-looking tokens the file-mention linkifier would claim.
 appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: [
                     'Target architecture:',
                     '',
@@ -160,9 +148,8 @@ appendEntry({ type: 'message', message: { role: 'assistant', content: [{ type: '
                     '  Bridge-->>Dish: turn_end',
                     '```',
                 ].join('\n') }], timestamp: '2026-07-05T00:02:05.000Z' } });
-// Same-pane session-switch target. The fake bridge rewrites its stable
-// registry claim to this identity and emits session_switch so the browser's
-// follow logic is exercised against a distinct authoritative transcript.
+// Same-pane session-switch target: the fake bridge re-claims this identity
+// and emits session_switch, so follow logic meets a second transcript.
 const SWITCH_ID = '2026-07-05T00-03-00-uiswitch';
 const switchFile = path.join(sessionDir, `${SWITCH_ID}.jsonl`);
 fs.writeFileSync(switchFile, [
@@ -182,9 +169,8 @@ const betaEntries = [
     { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'beta question' }], timestamp: '2026-07-04T00:00:01.000Z' } },
     { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'beta answer' }], timestamp: '2026-07-04T00:00:02.000Z' } },
 ];
-// Long enough to require three transcript pages. This protects intentional
-// history loading: scrolling to the top pages backward, and switching away
-// briefly must not discard the pages the reader chose to load.
+// Long enough to need three transcript pages: paging back and switching away
+// briefly must not discard pages the reader loaded.
 for (let i = 0; i < 128; i++) {
     betaEntries.push({
         type: 'message',
@@ -199,10 +185,8 @@ const betaFile = path.join(sessionDirB, `${BETA_ID}.jsonl`);
 fs.writeFileSync(betaFile, betaEntries.map((e) => JSON.stringify(e)).join('\n') + '\n');
 const betaAt = new Date('2026-07-04T00:05:00.000Z');
 fs.utimesSync(betaFile, betaAt, betaAt);
-// Relevance-ranking fixture: same workspace as beta (so the tree assertions
-// still see two groups), older, and matching "cedar" in its *name* — beta
-// only mentions cedar once in its transcript. Recency would list beta first;
-// the ranked search list must not.
+// Same workspace as beta, older, and matching "cedar" in its name — recency
+// would list beta first, ranking must not.
 const RANK_ID = '2026-07-03T00-00-00-uismoke4';
 const rankFile = path.join(sessionDirB, `${RANK_ID}.jsonl`);
 fs.writeFileSync(rankFile, [
@@ -212,7 +196,6 @@ fs.writeFileSync(rankFile, [
 ].map((e) => JSON.stringify(e)).join('\n') + '\n');
 const rankAt = new Date('2026-07-03T00:05:00.000Z');
 fs.utimesSync(rankFile, rankAt, rankAt);
-// --- skills fixture: a global skill + a session that partially reads it ------
 const skillDir = path.join(tmpHome, '.pi', 'agent', 'skills', 'smoke-skill');
 fs.mkdirSync(skillDir, { recursive: true });
 const skillMd = path.join(skillDir, 'SKILL.md');
@@ -225,9 +208,8 @@ fs.writeFileSync(skillMd, [
 ].join('\n'));
 const skillEdited = new Date('2026-07-01T00:00:00.000Z');
 fs.utimesSync(skillMd, skillEdited, skillEdited);
-// Lives under proj-alpha (no new workspace group) and carries no usage, so it
-// can't perturb the sidebar-tree or usage-view assertions — it exists only to
-// give the skill one mined ranged read for the coverage map.
+// No usage and no new workspace group, so it cannot perturb the sidebar-tree
+// or usage assertions; it exists to give the skill one mined ranged read.
 const SKILL_SESSION_ID = '2026-07-05T00-05-00-skillui1';
 const skillSessionFile = path.join(sessionDir, `${SKILL_SESSION_ID}.jsonl`);
 fs.writeFileSync(skillSessionFile, [
@@ -237,12 +219,9 @@ fs.writeFileSync(skillSessionFile, [
                 { type: 'toolCall', id: 'skuitc1', name: 'read', arguments: { path: skillMd, offset: 1, limit: 10 } },
             ] } },
 ].map((e) => JSON.stringify(e)).join('\n') + '\n');
-// --- fake bridge socket -------------------------------------------------------
-// Speaks the newline-delimited JSON protocol from lib/bridge-session.js:
-// requests {id, command, ...} -> {type:'response', id, success, data};
-// events pushed as {type:'event', event, data}. On `prompt` it streams a
-// whole turn and appends the resulting messages to the JSONL, so the real
-// SSE -> streaming-renderer -> catch-up path is exercised end to end.
+// Speaks lib/bridge-session.js's newline-delimited JSON protocol. A `prompt`
+// streams a whole turn and appends it to the JSONL, so the real SSE →
+// renderer → catch-up path runs end to end.
 const socketPath = path.join(tmpHome, 'bridge.sock');
 const clients = new Set();
 const emit = (event, data) => {
@@ -356,16 +335,15 @@ function streamTurn(userText, images) {
     const imageList = Array.isArray(images) ? images : [];
     const userContent = [{ type: 'text', text: userText }, ...imageList];
     emit('turn_start', {});
-    // Real pi echoes the prompt as a user message_start/message_end right after
-    // turn_start (agent-core runAgentLoop). The client must suppress this echo —
-    // it already rendered the prompt optimistically on send.
+    // Real pi echoes the prompt after turn_start; the client rendered it
+    // optimistically and must suppress the echo.
     const echoedUser = { role: 'user', content: userContent, timestamp: now() };
     emit('message_start', { message: echoedUser });
     emit('message_end', { message: echoedUser });
     emit('message_end', { message: echoedUser }); // OMP may repeat the completed event
     appendEntry({ type: 'message', message: echoedUser });
-    // Tool phase first: live panel appears mid-turn, then the JSONL catch-up
-    // after turn_end must replace it with a collapsed .tool-group.
+    // The live tool panel appears mid-turn; the JSONL catch-up after turn_end
+    // must replace it with a collapsed .tool-group.
     const toolArgs = { command: 'echo hi' };
     emit('tool_execution_start', { toolCallId: 'tc1', toolName: 'Bash', args: toolArgs });
     setTimeout(() => {
@@ -390,11 +368,9 @@ function streamTurn(userText, images) {
                 appendEntry({ type: 'message', message: done });
                 emit('message_end', { message: done });
                 emit('turn_end', {});
-                // OMP can repeat the completed event after the turn boundary. The
-                // browser must not append it beside the authoritative JSONL render —
-                // not the verbatim repeat, not a metadata-drifted one (usage attached
-                // late), and not a late message_update, which must not resurrect a
-                // streaming bubble for an already-finalized message either.
+                // OMP may repeat the completed event after the turn boundary, verbatim
+                // or usage-drifted, and may follow with a late message_update; none may
+                // render beside the authoritative JSONL copy.
                 setTimeout(() => emit('message_end', { message: done }), 100);
                 setTimeout(() => emit('message_end', { message: { ...done, usage: { input: 500, output: 42 } } }), 120);
                 setTimeout(() => emit('message_update', { message: done }), 140);
@@ -402,10 +378,8 @@ function streamTurn(userText, images) {
         }, 60);
     }, 150);
 }
-// --- second fake bridge (extension-UI scoping section) -------------------------
 // Mirrors the real bridge's replayExtensionUI: pushes its widget on every
-// socket connect. Registered lazily inside section 10 so earlier sections
-// still see exactly one Active session.
+// socket connect. Registered lazily so earlier sections see one Active session.
 const SESSION2_ID = '2026-07-05T01-00-00-widget22';
 const session2File = path.join(sessionDir, `${SESSION2_ID}.jsonl`);
 fs.writeFileSync(session2File, [
@@ -429,11 +403,9 @@ const registerSession2 = () => fs.writeFileSync(path.join(registryDir, `${SESSIO
     pid: process.pid, cwd: CWD, name: 'widget session', model: 'smoke-model',
     contextUsage: { tokens: 100, contextWindow: 100000, percent: 0.1 },
 }));
-// --- fake transcription endpoint (speech to text) ----------------------------
-// The server relays the recorded audio here as OpenAI-shaped multipart; the
-// browser only ever sees /api/stt. The `stt` block in the temp HOME's
-// settings.json is what makes the host advertise the capability at all, and
-// settings are re-read per call, so blanking it mid-run hides the button.
+// The server relays recorded audio here as OpenAI-shaped multipart; the browser
+// only sees /api/stt. Settings are re-read per call, so blanking the `stt`
+// block mid-run hides the button.
 const sttRequests = [];
 const sttEndpoint = http.createServer(async (req, res) => {
     try {
@@ -467,13 +439,10 @@ function writeSttSettings(block) {
         delete parsed.stt;
     fs.writeFileSync(dishSettingsFile, JSON.stringify(parsed, null, 2) + '\n');
 }
-// --- assertions ---------------------------------------------------------------
 let failures = 0;
-// --- a second pi-dish, on its own HOME (multi-host phase 2) ------------------
-// HOME is process-global, so the peer has to be a child process. It runs with
-// a token + an allowedOrigins entry for the main server's origin: that is the
-// only way a browser on origin A may call origin B's API at all, and it
-// exercises the token/CORS/ticket paths the fleet proxy doesn't need.
+// HOME is process-global, so the peer is a child process with a token and an
+// allowedOrigins entry for this server's origin: the only way a browser on
+// origin A may call origin B's API, and it exercises the token/CORS paths.
 const REMOTE_TOKEN = 'ui-smoke-remote-token';
 const REMOTE_SESSION_ID = '2026-07-06T00-00-00-uiremote1';
 const remoteHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-remote-'));
@@ -486,9 +455,8 @@ function writeRemoteFixture(mainOrigin) {
     fs.writeFileSync(path.join(dishDir, 'settings.json'), JSON.stringify({ allowedOrigins: [mainOrigin], label: 'tycho' }));
     const dir = path.join(remoteHome, '.pi', 'agent', 'sessions', '--remote--');
     fs.mkdirSync(dir, { recursive: true });
-    // Deliberately the *same* cwd string as the main host's session: two
-    // machines sharing a path is two workspaces, and the sidebar must not
-    // merge them into one group.
+    // Deliberately the same cwd string as the main host's session: two machines
+    // sharing a path are two workspaces.
     fs.writeFileSync(path.join(dir, `${REMOTE_SESSION_ID}.jsonl`), [
         { type: 'session', cwd: CWD, timestamp: '2026-07-06T00:00:00.000Z' },
         { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'remote question' }], timestamp: '2026-07-06T00:00:01.000Z' } },
@@ -565,11 +533,8 @@ let remoteHost = null;
     if (serverAddress === null || typeof serverAddress === 'string')
         throw new Error('Expected server TCP address');
     const base = `http://127.0.0.1:${serverAddress.port}`;
-    // Warm the harness pricing catalogs now, minutes before the usage-view
-    // section needs them: the first /api/usage-summary blocks on
-    // refreshHarnessPricing, which spawns `omp models --json`, and on a fresh
-    // HOME that cold start has been measured at ~11s here (under 1s warm) —
-    // more than the section's 5s wait. Fire-and-forget; the result is unused.
+    // Warm the harness pricing catalog now: the first /api/usage-summary blocks
+    // on `omp models --json`, which takes ~11s on a fresh HOME.
     fetch(`${base}/api/usage-summary?days=30`).then((r) => r.arrayBuffer()).catch(() => { });
     const executablePath = process.env.CHROME_BIN || undefined;
     const browser = await playwright_1.chromium.launch({
@@ -702,9 +667,8 @@ let remoteHost = null;
             if (histLabel === null)
                 throw new Error('Missing histLabel');
             check(histLabel.includes('1 tool use'), `group label counts tool uses (got ${JSON.stringify(histLabel)})`);
-            // Image tool result: the Read of an image renders its {type:'image'} block
-            // as an img.msg-image inside the (image-open) tool-result details, and the
-            // header meta flags it. Open the group so the image is actually visible.
+            // The Read's {type:'image'} block renders as an img.msg-image inside the
+            // image-open tool-result details; open the group so it is visible.
             const imgResult = histGroup.locator('.message.tool-result');
             check((await imgResult.locator('.tool-result-meta').allTextContents()).some((t) => t.trim() === 'image'), 'tool-result header meta flags the image');
             check(await imgResult.locator('details.tool-result-details').evaluate((el) => el.open), 'image tool result is open by default');
@@ -715,9 +679,7 @@ let remoteHost = null;
             const imgSrc = await historicalImage.getAttribute('src');
             check(imgSrc === `/api/sessions/${SESSION_ID}/messages/ui-img1/images/1`, `historical image URL uses its stable JSONL entry id (got ${imgSrc})`);
             check(await historicalImage.getAttribute('loading') === 'lazy', 'historical image opts into native lazy loading');
-            // loading="lazy" means the fetch is viewport-driven: bring it on screen
-            // (as a reader would) before asserting it decoded, or content appended
-            // below it silently defers the load forever.
+            // loading="lazy" defers the fetch until the image is on screen.
             await historicalImage.scrollIntoViewIfNeeded();
             await desktop.waitForFunction(() => {
                 const img = document.querySelector('.message.tool-result img.msg-image');
@@ -780,11 +742,9 @@ let remoteHost = null;
             check(copied.trim() === 'const answer = 42;', `clipboard holds the code text (got ${JSON.stringify(copied)})`);
             await desktop.waitForTimeout(200);
             check(await desktop.locator('.session-item-status.working').count() === 0, 'working dot cleared after the turn');
-            // Diagram fences (mermaid): the tagged block and the untagged one an agent
-            // forgot to label both render to SVG; the source stays one tap away, the
-            // copy button still copies source (not markup), and the zoom overlay opens
-            // at the diagram's own scale. mermaid is a lazy 3.5MB vendor script, so the
-            // wait is generous.
+            // Tagged and untagged ```mermaid fences both render to SVG; source stays a
+            // tap away and copy yields source, not markup. The vendor script is a lazy
+            // 3.5MB load, hence the generous wait.
             console.log('diagrams:');
             await desktop.waitForFunction(() => document.querySelectorAll('.diagram-block[data-diagram-state="rendered"] svg').length === 2, null, { timeout: 30000 });
             const diagram = desktop.locator('.diagram-block').first();
@@ -1544,11 +1504,8 @@ let remoteHost = null;
             await desktop.locator('.ns-tree-row').filter({ hasText: 'proj-alpha' }).first().click();
             check(await desktop.inputValue('#newSessionCwd') === CWD, 'selecting a tree dir sets the cwd input');
             await desktop.waitForFunction((cwd) => fixtureApp.features.modelCatalog.scope?.cwd === cwd, CWD, { timeout: 5000 });
-            // Spawn: routed async round-trip (deterministic — no real pi child).
-            // The POST opts into asynchronous spawning; the takeover closes
-            // immediately in favor of the provisional composer pane, and the monitor
-            // reconciles the "Starting" row to the fake session once the routed
-            // status flips ready.
+            // Routed async spawn (no real pi child): the takeover closes at once and
+            // the monitor reconciles the "Starting" row when the status flips ready.
             let spawnResult = 'starting';
             let readySpawnPolled = false;
             let asyncSpawnBody;
@@ -1683,11 +1640,8 @@ let remoteHost = null;
             await desktop.waitForSelector('.lightbox-overlay img');
             await desktop.click('.lightbox-overlay');
             check(await desktop.locator('.lightbox-overlay').count() === 0, 'lightbox dismissed on tap');
-            // Dictation: the composer mic records through MediaRecorder, POSTs the
-            // bytes to /api/stt (which relays them to the fake endpoint above) and
-            // drops the transcript at the caret. It gets its own page because the
-            // second half blanks the host's stt config and reloads — the capability
-            // is read at boot, and `desktop` carries state later sections rely on.
+            // Dictation runs on its own page: the second half blanks the host's stt
+            // config and reloads, and `desktop` carries state later sections need.
             console.log('speech to text:');
             const dictation = await browser.newPage({
                 viewport: { width: 1280, height: 800 },
@@ -1763,10 +1717,8 @@ let remoteHost = null;
             await desktop.waitForFunction(() => [...document.querySelectorAll('.queue-item-text')].some((el) => el.textContent === 'replay me later'), { timeout: 5000 });
             setQueue({ steering: [], followUp: [] });
             await desktop.waitForFunction(() => fixtureElement(document.getElementById('queuePanel'), "document.getElementById('queuePanel')").style.display === 'none', { timeout: 5000 });
-            // Abort acknowledgement is not the turn boundary. The UI must stay in a
-            // stopping turn until agent_end, reject a new prompt rather than letting
-            // the backend auto-steer it into that turn, then run live-tool cleanup and
-            // authoritative JSONL catch-up from agent_end.
+            // Abort acknowledgement is not the turn boundary: the UI stays in the
+            // stopping turn until agent_end and rejects a prompt in the meantime.
             console.log('abort ownership + cleanup:');
             emit('turn_start', {});
             emit('tool_execution_start', { toolCallId: 'abort-tool', toolName: 'Bash', args: { command: 'sleep 30' } });
@@ -1800,12 +1752,9 @@ let remoteHost = null;
             emit('tool_execution_end', { toolCallId: 'wt1', toolName: 'Bash', args: { command: 'sleep 2' }, result: { content: [{ type: 'text', text: '' }] }, isError: false });
             emit('turn_end', {});
             await desktop.waitForFunction(() => document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
-            // Compaction status: compaction_start drives the working badge — the
-            // run chip carries turn/compaction state alone, so the status line stays
-            // free of working prose (only outcomes and errors speak). The bridge
-            // reports tokensBefore only (post-compaction size is unknown until the
-            // next LLM response), and a failed manual compaction must not leave the
-            // badge stuck.
+            // compaction_start drives the working badge; the run chip carries all
+            // turn/compaction state, so the status line stays free of working prose.
+            // A failed manual compaction must not leave the badge stuck.
             console.log('compaction status:');
             emit('compaction_start', { reason: 'manual' });
             await desktop.waitForFunction(() => /^Compacting context…/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
@@ -1821,10 +1770,8 @@ let remoteHost = null;
             emit('compaction_end', { reason: 'manual', errorMessage: 'lost abort race' });
             await desktop.waitForFunction(() => !fixtureApp.features.sessionActivity.compacting, { timeout: 3000 });
             check(!(await desktop.evaluate((id) => fixtureApp.features.sessionActivity.isAborting(fixtureApp.ports.composerDrafts.keyForSession(id)), SESSION_ID)), 'compaction_end clears a compaction-only abort gate even on failure');
-            // Compaction gates sends: while compacting there's no turn, but a
-            // prompt sent now must be held (bridge buffers, acks queued) and delivered
-            // as a turn once compaction ends — not raced against pi's message rewrite.
-            // The working badge (not just the transient status line) shows compaction.
+            // A prompt sent during compaction is buffered and delivered as a turn
+            // afterwards, never raced against pi's message rewrite.
             console.log('compaction queuing:');
             fakeCompacting = true;
             emit('compaction_start', { reason: 'manual' });
@@ -1847,11 +1794,8 @@ let remoteHost = null;
             flushBufferedPrompt();
             await desktop.waitForFunction((n) => [...document.querySelectorAll('.message.assistant')].filter((m) => /Streamed reply/.test(m.textContent)).length > n, repliesBefore, { timeout: 6000 });
             await desktop.waitForFunction(() => document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 6000 });
-            // Auto-compaction runs *inside* a turn (turn + compaction flags both on):
-            // the badge must switch to Compacting while it runs and hand back to the
-            // turn's Working timer when it ends. Previously the turn badge masked it
-            // and the user couldn't tell why the stream had stalled — or that a
-            // /compact sent now would corrupt the session.
+            // Auto-compaction runs inside a turn: the badge switches to Compacting and
+            // hands back to the turn's Working timer.
             console.log('auto-compaction mid-turn:');
             emit('turn_start', {});
             await desktop.waitForFunction(() => /^Working/.test(document.querySelector('#sessionWorking .spinner-text')?.textContent || ''), { timeout: 3000 });
@@ -1862,23 +1806,17 @@ let remoteHost = null;
             await desktop.waitForFunction(() => document.getElementById('status')?.textContent === 'Compacted: 152.3k → ~30.5k tokens', { timeout: 3000 });
             emit('turn_end', {});
             await desktop.waitForFunction(() => document.querySelector('#sessionWorking .spinner-text')?.textContent === 'Working', { timeout: 3000 });
-            // Tree navigation: a session_tree event means the authoritative
-            // history changed (a /tree branch — from this UI, the TUI, or another
-            // client), and the client must re-render the transcript from the JSONL.
-            // The shrink direction is the structural proof: an append-only catch-up
-            // can never remove a message, only a forced full reload can.
+            // session_tree means the authoritative history changed (a /tree branch
+            // from any client), so the transcript re-renders from the JSONL. Shrinking
+            // is the proof: only a full reload can remove a message.
             console.log('tree navigation reload:');
             const preBranchJsonl = fs.readFileSync(sessionFile, 'utf-8');
             appendEntry({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'pre-branch marker' }], timestamp: new Date().toISOString() } });
             emit('session_tree', { newLeafId: 'anywhere' });
             await desktop.waitForFunction(() => [...document.querySelectorAll('.message.user')].some((el) => el.textContent.includes('pre-branch marker')), { timeout: 5000 });
-            // That reload tore down and reopened the SSE stream; an event emitted
-            // into the gap before the new connection's subs register is silently
-            // lost. Real clients recover appended messages via the init catch-up,
-            // but a tree rewrite *shrinks* history — not append-recoverable — so
-            // prove the new stream is live before the next emit. Extension statuses
-            // are remembered server-side and replayed into every new connection, so
-            // this badge arrives whichever side of the reconnect the event lands on.
+            // Events emitted into the reconnect gap are lost, so prove the new stream
+            // is live before emitting. Extension statuses replay into every new
+            // connection, so the badge arrives either side of the reconnect.
             emit('extension_ui_request', { method: 'setStatus', statusKey: 'tree-sync', statusText: 'stream reconnected' });
             await desktop.waitForFunction(() => [...document.querySelectorAll('.ext-ui-status-badge')].some((el) => el.textContent === 'stream reconnected'), { timeout: 5000 });
             emit('extension_ui_request', { method: 'setStatus', statusKey: 'tree-sync', statusText: '' });
@@ -1974,11 +1912,9 @@ let remoteHost = null;
             await desktop.waitForSelector('.ext-ui-widget', { timeout: 5000 });
             check(await desktop.locator('.ext-ui-widget-body').textContent() === 'proc one\nproc two', 'live widget rendered for session 1');
             check(await desktop.locator('.ext-ui-status-badge').textContent() === '2 running', 'status badge rendered');
-            // Widget clear→set race: a clear holds the card visible through a grace
-            // window before fading it out; a re-set inside that window must reuse
-            // the same element and cancel the removal. Todo-style widgets clear and
-            // re-set at turn/tool boundaries — hiding on the clear half collapses
-            // and reopens the frame on every rewrite while a session runs.
+            // A clear holds the card through a grace window; a re-set inside it reuses
+            // the element. Todo-style widgets clear and re-set at turn boundaries, so a
+            // hide on the clear half collapses the frame on every rewrite.
             emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: ['task one'] });
             await desktop.waitForFunction(() => [...document.querySelectorAll('.ext-ui-widget')].some((el) => el.dataset.widgetKey === 'todo'), { timeout: 3000 });
             await desktop.evaluate(() => { fixtureElement(document.querySelector('[data-widget-key="todo"]'), '[data-widget-key="todo"]').dataset.marker = 'kept'; });
@@ -2012,11 +1948,9 @@ let remoteHost = null;
             // And the removal still completes when nothing re-sets the widget.
             emit('extension_ui_request', { method: 'setWidget', widgetKey: 'todo', widgetLines: [] });
             await desktop.waitForFunction(() => !document.querySelector('[data-widget-key="todo"]'), { timeout: 3000 });
-            // Status clear→set race: same churn hardening as the widget card. Hosts
-            // re-project status lines at turn boundaries, and a clear/set pair inside
-            // the removal grace must reuse the badge — destroy/recreate replays the
-            // badge's pop animation and reads as rapid flickering. The re-set keeps
-            // the '2 running' text so the switch-back replay check below still holds.
+            // Same churn hardening for statuses: a clear/set pair inside the removal
+            // grace reuses the badge instead of replaying its pop animation. The re-set
+            // keeps the '2 running' text for the replay check below.
             await desktop.evaluate(() => { fixtureElement(document.querySelector('.ext-ui-status-badge'), '.ext-ui-status-badge').dataset.marker = 'kept'; });
             emit('extension_ui_request', { method: 'setStatus', statusKey: 'procs' });
             await desktop.waitForTimeout(50);
@@ -2046,10 +1980,8 @@ let remoteHost = null;
             bridge2.listen(socket2Path);
             await (0, node_events_1.once)(bridge2, 'listening');
             registerSession2();
-            // The server caches the registry scan for 500ms (REGISTRY_CACHE_MS) — a
-            // loadSessions() right after registering can read a warm cache that predates
-            // session 2 and file it under "previous", so it never shows on the Active
-            // tab. Let the cache lapse before forcing the fetch.
+            // REGISTRY_CACHE_MS would serve a warm scan from before session 2 existed,
+            // filing it under "previous"; let the cache lapse.
             await desktop.waitForTimeout(600);
             await desktop.evaluate(() => fixtureApp.features.sidebarLists.load());
             await desktop.waitForSelector(`.session-item[data-id="${SESSION2_ID}"]`, { timeout: 5000 });
@@ -2510,11 +2442,8 @@ let remoteHost = null;
             emit('extension_ui_request', { method: 'setStatus', statusKey: 'procs', statusText: '' });
             await desktop.waitForFunction(() => !document.querySelector('.ext-ui-widget'), { timeout: 5000 });
             fs.rmSync(path.join(registryDir, `${SESSION2_ID}.json`), { force: true });
-            // Sidebar: both workspaces share the tmp-HOME prefix, so the tree
-            // shows one flattened prefix node with proj-alpha/proj-beta as children.
-            // Collapsing a child hides its sessions and sinks it below its expanded
-            // sibling; collapsing the prefix node hides the whole subtree. Pinning
-            // sessions floats them into a drag-reorderable section at the top.
+            // Both workspaces share the tmp-HOME prefix: one flattened prefix node with
+            // proj-alpha/proj-beta. Collapsing sinks a child and pins float a section.
             console.log('session card layout & sidebar chrome:');
             await desktop.click('#tabAll');
             await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-tags`, { timeout: 5000 });
@@ -2601,10 +2530,8 @@ let remoteHost = null;
             await desktop.waitForFunction(() => document.querySelectorAll('#sessionList .session-item').length >= 3, null, { timeout: 5000 });
             check(await desktop.locator('.session-item-snippet').count() === 0, 'clearing the query drops snippets and restores the list');
             check(await desktop.locator('#sessionList .workspace-group-header').count() > 0, 'clearing the query restores the grouped view');
-            // Active-tab content search: queries go through the server on both
-            // tabs — a session matched by transcript content must not vanish when
-            // the tab switches (the old Active filter was local metadata-only and
-            // cleared the results).
+            // Queries go through the server on both tabs: a transcript-content match
+            // must not vanish when the tab switches.
             await desktop.click('#tabActive');
             await desktop.fill('#filterInput', 'existing');
             await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"] .session-item-snippet`, { timeout: 5000 });
@@ -2805,12 +2732,8 @@ let remoteHost = null;
                 !fixtureElement(document.getElementById('sessionRelations'), "document.getElementById('sessionRelations')").textContent.includes('overflow-'), registryState.sessionId, { timeout: 5000 });
             await desktop.click('#tabActive');
             await desktop.waitForTimeout(200);
-            // Advanced search takeover: opened via the "full search" chip
-            // (carrying the sidebar query), same grammar, multi-snippet results,
-            // facet buttons that rewrite the query text, and click-through that
-            // lands on the in-session match. Runs *after* the retention section on
-            // purpose — click-through warms the beta transcript cache, which would
-            // break that section's cold-load page-count assertions.
+            // Advanced search takeover. Runs after the retention section on purpose:
+            // click-through warms the beta transcript cache that section counts cold.
             console.log('advanced search takeover:');
             // Add the cap-boundary corpus only now: earlier sidebar tree/drag checks
             // intentionally retain their small deterministic fixture set.
@@ -2825,12 +2748,8 @@ let remoteHost = null;
                 const at = new Date(timestamp);
                 fs.utimesSync(file, at, at);
             }
-            // Save a device-local active scope, then prove the beta session is absent
-            // at rank 101 without it but survives when the server applies the scope
-            // before truncating (the 100 fillers name the term, beta only mentions it
-            // once in its transcript, so it ranks last either way). The
-            // server-reported hidden count covers all 100 excluded sessions, not
-            // merely rows from an already-capped response.
+            // A saved active scope keeps beta alive past rank 101: the server applies
+            // it before truncating, and the hidden count covers all excluded sessions.
             await desktop.fill('#filterInput', 'cwd:proj-beta');
             await desktop.evaluate(() => { window.prompt = () => 'Beta only'; });
             await desktop.click('.scope-chip.scope-add');
@@ -2904,10 +2823,8 @@ let remoteHost = null;
             await scenarios.bounce(scenarioContext());
             await scenarios.fleet(scenarioContext());
             await scenarios.mobile(scenarioContext());
-            // Row-level close: live rows carry a quiet hover-reveal ✕ with a
-            // two-tap inline confirm. The POST is intercepted (deterministic — the
-            // real SIGTERM round-trip is covered by the stats-modal section below,
-            // which needs the session still live here).
+            // Live rows carry a hover-reveal ✕ with a two-tap confirm. The POST is
+            // intercepted; the real SIGTERM round-trip is covered further down.
             console.log('row-level close:');
             const closeRowSel = `.session-item[data-id="${SESSION_ID}"]`;
             await desktop.waitForSelector(`${closeRowSel} .session-close-btn`, { state: 'attached', timeout: 5000 });
