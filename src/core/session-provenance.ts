@@ -12,7 +12,7 @@ export interface LaunchProvenance {
   createdAt: number;
 }
 
-export function validId(value: unknown): value is string {
+function validId(value: unknown): value is string {
   try { resolveSessionRoute(value); return true; } catch { return false; }
 }
 
@@ -91,8 +91,4 @@ export function getLaunchesFrom(sourceSessionId: unknown): Array<LaunchProvenanc
     .filter(([, value]) => value.sourceSessionId === canonicalSourceId)
     .map(([sessionId, value]) => ({ sessionId, ...value }))
     .sort((a, b) => b.createdAt - a.createdAt);
-}
-
-export function resetForTests(): void {
-  // Stateless module; HOME-scoped tests replace the store itself.
 }

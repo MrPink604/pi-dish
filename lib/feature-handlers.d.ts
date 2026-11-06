@@ -1,7 +1,7 @@
 // Generated from src/core/feature-handlers.ts; edit that source and run npm run build:core.
 import type { RequestHandler } from 'express';
-import type { SessionCatalog } from './session-catalog-contracts';
-import type { SessionSource } from './session-source-contracts';
+import type { SessionCatalog } from './session-catalog';
+import type { SessionSource } from './session-source';
 import type { SessionOwnership } from './session-ownership';
 import type { CatalogModel } from './session-api';
 import type { AvailableModel } from './pi-sdk';

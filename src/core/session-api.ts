@@ -1,3 +1,5 @@
+import { finite, record } from './helper-values';
+
 export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
 export interface CacheExpiryProjection {
   readonly refreshedAt: number;
@@ -107,11 +109,11 @@ export interface ThinkingResult extends MutationResult { level: string }
 export interface FastModeResult extends MutationResult { fastMode: FastModeState | null }
 export interface EnabledModelsResult extends MutationResult { enabledModels: string[] | null }
 
-function record(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+/** Own, enumerable data property: `__proto__` from the wire must stay ordinary data. */
+function define(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, { value, enumerable: true, configurable: true, writable: true });
 }
 function text(value: unknown): value is string { return typeof value === 'string' && value.length > 0; }
-function finite(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value); }
 function invalid(kind: string): never { throw new Error(`Invalid ${kind} response`); }
 
 type FieldDecoders = { [K in keyof Required<SessionFields>]: (value: unknown) => SessionFields[K] };
@@ -157,7 +159,7 @@ function decodeCapabilities(value: unknown): SessionFields['capabilities'] {
   const capabilities: Record<string, boolean> = {};
   for (const [key, enabled] of Object.entries(value)) {
     if (typeof enabled !== 'boolean') return invalid('session capabilities');
-    Object.defineProperty(capabilities, key, { value: enabled, enumerable: true, configurable: true, writable: true });
+    define(capabilities, key, enabled);
   }
   return capabilities;
 }
@@ -166,7 +168,7 @@ function decodeFields(value: Record<string, unknown>): SessionFields {
   for (const key of Object.keys(fieldDecoders) as (keyof SessionFields)[]) {
     if (!Object.hasOwn(value, key)) continue;
     const decoded = fieldDecoders[key](value[key]);
-    if (decoded !== undefined) Object.defineProperty(fields, key, { value: decoded, enumerable: true, configurable: true, writable: true });
+    if (decoded !== undefined) define(fields as Record<string, unknown>, key, decoded);
   }
   return fields;
 }
@@ -182,7 +184,7 @@ export function decodeSessionRow(value: unknown): SessionRow {
   const extras: Record<string, unknown> = {};
   for (const [key, extra] of Object.entries(wire)) {
     if (key === 'id' || key === 'host' || key === 'hostLabel' || Object.hasOwn(fieldDecoders, key)) continue;
-    Object.defineProperty(extras, key, { value: extra, enumerable: true, configurable: true, writable: true });
+    define(extras, key, extra);
   }
   return { id: wire.id, fields: decodeFields(wire), extras };
 }
@@ -194,7 +196,7 @@ function decodePatch<K extends keyof SessionFields>(value: unknown, keys: readon
     if (!Object.hasOwn(value, key) || value[key] === undefined) continue;
     const decoded = fieldDecoders[key](value[key]);
     if (decoded === undefined) return invalid('session patch');
-    Object.defineProperty(patch, key, { value: decoded, enumerable: true, configurable: true, writable: true });
+    define(patch as Record<string, unknown>, key, decoded);
   }
   return patch;
 }

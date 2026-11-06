@@ -12,7 +12,7 @@ import { readFileForViewer } from './file-mention';
 import { renderFilePage } from './file-page';
 import { readOmpExportData } from './omp-export';
 import { isolateArtifact } from './artifact-isolation';
-import type { SessionSource, DiscoveryCandidate } from './session-source-contracts';
+import type { SessionSource, DiscoveryCandidate } from './session-source';
 import type { BridgeRegistryEntry } from './contracts';
 import type { SessionReadHandlers } from './session-read-handlers';
 import type { PublicArtifactRelay } from './relay-handlers';

@@ -1,4 +1,7 @@
 // Generated from src/core/session-index-data.ts; edit that source and run npm run build:core.
+/** Persisted index projections and their consumed disk-ingress validation. */
+import { finite } from './helper-values';
+export { finite };
 export interface UsageState {
     provider: string | null;
     model: string;
@@ -79,7 +82,8 @@ export interface SkillProjection {
     records: SkillActivation[];
     state: SkillState | null;
 }
-export declare function finite(value: unknown): value is number;
+export declare const TOKEN_KEYS: readonly ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'];
+export declare const COST_KEYS: readonly ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
 export declare function decodeUsage(value: unknown): IndexedUsage | null;
 export declare function decodeSkillState(value: unknown): SkillState | null;
 export declare function decodeSkillRecords(value: unknown): SkillActivation[] | null;

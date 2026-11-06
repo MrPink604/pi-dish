@@ -1,5 +1,5 @@
 // Generated from src/core/cache-retention.ts; edit that source and run npm run build:core.
-import type { CacheExpiryBasis } from './session-metadata-contracts';
+import type { CacheExpiryBasis } from './session-metadata';
 export interface CacheRetentionPolicy {
     readonly retentionMs: number;
     readonly retention: string;

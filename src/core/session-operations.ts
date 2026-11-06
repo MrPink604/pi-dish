@@ -11,7 +11,7 @@ import { getPrimeDaemon } from './prime-daemon';
 import { processIdentityAlive } from './process-identity';
 import { canonicalSessionId } from './session-key';
 import { sourceForIdentity } from './session-source';
-import type { SessionSource } from './session-source-contracts';
+import type { SessionSource } from './session-source';
 import { LifecycleInterruption, OwnershipRefusal, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity, sameTranscriptFile, validateRecoveryRecord } from './session-ownership';
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import { HEADLESS_TMUX_SERVER, cleanupProcesses } from './session-launch';

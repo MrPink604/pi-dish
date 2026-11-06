@@ -1,5 +1,4 @@
 import type { HarnessDescriptor, HarnessId } from './contracts';
-'use strict';
 
 import fs = require('fs');
 import os = require('os');

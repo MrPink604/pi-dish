@@ -1,33 +1,17 @@
 /**
- * Learned provider cache lifetimes. Providers report cache *token activity*,
- * never expiry timestamps, so the built-in retention ladder in
- * session-metadata.js is a pile of documented defaults and guesses. This
- * module measures the real thing: every assistant message with cache
- * activity is a Bernoulli probe of "did the provider cache survive the idle
- * gap since the previous cache-active message in this session?" — a hit
- * (cacheRead > 0) lower-bounds the lifetime, a hard miss upper-bounds it.
- * Both sides are one-sided censored samples of the cache lifetime, so per
- * (api, provider, model, tier) we fit a 2-parameter logistic warmth curve
- * P(hit | gap) on log-gap: the p=0.5 crossing is the learned TTL and the
- * slope is the provider's cache *reliability* (a deterministic server-side
- * TTL produces a cliff; best-effort eviction produces a shallow slope).
+ * Learned provider cache lifetimes. Providers report cache token activity, not
+ * expiry timestamps, so each cache-active assistant message is a Bernoulli
+ * probe of "did the cache survive the idle gap?": a hit lower-bounds the
+ * lifetime, a hard miss upper-bounds it. Per (api, provider, model, tier) a
+ * weighted ridge logistic fit of P(hit | gap) on log-gap yields a TTL (the
+ * p=0.5 crossing) and a reliability slope, over a gap-stratified bounded
+ * window with a 14-day half-life and a prior anchored on the built-in ladder.
+ * A learned policy activates only with enough decayed support, both outcomes
+ * observed, and the crossing bracketed by real hits and misses.
  *
- * Fitting is a batch weighted ridge logistic regression (Newton) over a
- * bounded sliding window — 45 days per identity, stratified by idle gap so
- * rare long-idle probes survive tool-loop chatter (see WINDOW_MAX_OBS), with a
- * 14-day exponential half-life so provider behavior drift washes out — with
- * an L2 prior anchored on the built-in ladder. A learned policy activates
- * only with enough decayed support, both outcomes observed, and the crossing
- * bracketed by real hits and misses; until then (and for documented 'fixed'
- * retentions, and whenever a user cacheTtlOverrides rule matches) the
- * built-in projection stands.
- *
- * Ingestion rides the session indexer: full parses call
- * observeCacheLifetimeFromEntries, O(delta) extensions call
- * extendCacheLifetimeFromEntries. Observations dedup by (file, timestamp) so
- * a restart's full re-parse after unpersisted in-memory extensions is
- * idempotent. State persists to ~/.pi/dish/cache-lifetime.json (tmp+rename),
- * resolved per call like the other host stores so tests' temp HOMEs work.
+ * Ingestion rides the session indexer and dedups by (file, timestamp), so a
+ * restart's re-parse is idempotent. State persists to
+ * ~/.pi/dish/cache-lifetime.json, resolved per call so tests' temp HOMEs work.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -36,8 +20,8 @@ import path from 'node:path';
 
 import { MAX_TTL_MS, MIN_TTL_MS, configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
-import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, hasCacheActivity, isRecord, resolveCacheTarget } from './session-metadata';
-import type { CacheExpiry, CacheExpiryBasis, SessionEntries } from './session-metadata-contracts';
+import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, entryModel, hasCacheActivity, isRecord, resolveCacheTarget } from './session-metadata';
+import type { CacheExpiry, CacheExpiryBasis, SessionEntries } from './session-metadata';
 
 export interface CacheLifetimeStats {
   /** Decayed effective observation count behind the fit. */
@@ -365,8 +349,7 @@ function identityOf(key: string): string {
 }
 
 function priorTtlFor(key: string): number {
-  const [api = '', provider = '', model = ''] = identityOf(key).split('\u0000');
-  return builtinCacheRetention(resolveCacheTarget({ api, provider, model }), tierOf(key) === '1h')?.retentionMs ??
+  return builtinCacheRetention(resolveCacheTarget(splitIdentity(identityOf(key))), tierOf(key) === '1h')?.retentionMs ??
     FALLBACK_PRIOR_TTL_MS;
 }
 
@@ -410,8 +393,7 @@ function extractObservations(entries: SessionEntries, file: string,
     if (!isRecord(raw)) continue;
     if (raw.type === 'compaction') { chain.clear(); continue; }
     if (raw.type === 'model_change') {
-      const model = profileId === 'omp-v1' ? raw.model : raw.modelId;
-      if (typeof model === 'string' && model) currentModel = model;
+      currentModel = entryModel(raw, profileId) ?? currentModel;
       continue;
     }
     if (raw.type !== 'message') continue;

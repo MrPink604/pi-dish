@@ -162,22 +162,12 @@ if (apiSession.capabilities) {
   void absentCapability;
 }
 
-// The implemented source/index/catalog contracts are checked through generated declarations.
+// Generated declarations keep the implemented source/index/catalog types checked.
 import type { SessionFields, SessionRow, SessionMutationPatch, SessionActivityPatch, SessionTranscriptPatch } from '../../lib/session-api';
-import type { SessionSource, SessionSourceResolver } from '../../lib/session-source-contracts';
-import type { SessionMetadataIndex } from '../../lib/session-index-contracts';
+import type { SessionSource, SessionSourceResolver } from '../../lib/session-source';
 import * as implementedIndex from '../../lib/session-index';
-import { createSessionSourceResolver } from '../../lib/session-source';
-import { composeSessionCatalog } from '../../lib/session-catalog';
-import type { SessionCatalogInput, SessionCatalogOptions, SessionCatalog } from '../../lib/session-catalog-contracts';
-const checkedIndex: SessionMetadataIndex = implementedIndex;
-const checkedResolver: SessionSourceResolver = createSessionSourceResolver();
-declare const catalogInput: SessionCatalogInput;
-declare const catalogOptions: SessionCatalogOptions;
-const checkedCatalog: SessionCatalog = composeSessionCatalog(catalogInput, catalogOptions);
-void [checkedIndex, checkedResolver, checkedCatalog];
-import type { CatalogSession, CatalogLiveObservation } from '../../lib/session-catalog-contracts';
 import { sessionForClient } from '../../lib/session-api';
+import type { CatalogSession, CatalogLiveObservation } from '../../lib/session-catalog';
 declare const serverCatalogRow: CatalogSession;
 // @ts-expect-error Server projection cannot accept malformed first-party metadata.
 sessionForClient({ ...serverCatalogRow, model: 123 });
@@ -204,17 +194,15 @@ const controlPatch: SessionTranscriptPatch = { capabilities: { close: true } };
 const datePatch: SessionTranscriptPatch = { lastActivity: new Date() };
 declare const source: SessionSource;
 declare const sourceResolver: SessionSourceResolver;
-declare const metadataIndex: SessionMetadataIndex;
-metadataIndex.scanSessions([source]);
 sourceResolver.resolve({ route: sessionId, live: [] });
 // @ts-expect-error Native ids and route ids are not interchangeable.
 const wrongSource: SessionSource = { ...source, nativeSessionId: sessionId };
 // @ts-expect-error Route ids cannot be built from native ids without canonicalization.
 const wrongRoute: SessionSource = { ...source, routeId: nativeId };
 // @ts-expect-error A bare path does not identify a parser profile or harness.
-metadataIndex.getSessionInfo('/tmp/session.jsonl');
+implementedIndex.getSessionInfo('/tmp/session.jsonl');
 // @ts-expect-error Borrowed cache observations are not mutable catalog snapshots.
-metadataIndex.scanSessions([source]).infos.get(source.file)!.name = 'mutated';
+implementedIndex.scanSessions([source]).infos.get(source.file)!.name = 'mutated';
 // @ts-expect-error Authoritative metadata has no open extension index signature.
 closedRow.fields.extension = true;
 void [pendingHistory, serverTimestamp, prematureWireTimestamp, omittedPatch, nullablePatch, badMetadata, typoPatch, identityPatch, livePatch, controlPatch, datePatch, wrongSource, wrongRoute];

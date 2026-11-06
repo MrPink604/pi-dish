@@ -1,6 +1,6 @@
 import test = require('node:test');
 import { nativeId as checkedNativeId, present } from './test-types.js';
-import type { DiscoveryCandidate } from '../lib/session-source-contracts.js';
+import type { DiscoveryCandidate } from '../lib/session-source.js';
 import assert = require('node:assert');
 import fs = require('node:fs');
 import os = require('node:os');

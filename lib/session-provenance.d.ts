@@ -5,7 +5,6 @@ export interface LaunchProvenance {
     operationId: string | null;
     createdAt: number;
 }
-export declare function validId(value: unknown): value is string;
 export declare function isHostQualified(value: unknown): value is string;
 /**
  * Strip this host's own qualifier from a caller id. Local sessions are keyed
@@ -20,4 +19,3 @@ export declare function getLaunch(sessionId: unknown): LaunchProvenance | null;
 export declare function getLaunchesFrom(sourceSessionId: unknown): Array<LaunchProvenance & {
     sessionId: string;
 }>;
-export declare function resetForTests(): void;

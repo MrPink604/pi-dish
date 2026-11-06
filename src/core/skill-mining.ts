@@ -29,7 +29,7 @@ import { extractTextContent } from './helper-content';
 import { finite, record } from './helper-values';
 import { parseSessionEntries } from './session-files';
 import { matchCommandPaths } from './command-paths';
-import type { SessionEntries } from './session-metadata-contracts';
+import type { SessionEntries } from './session-metadata';
 import type { SkillActivation, SkillState, SkillProjection } from './session-index-data';
 
 export interface SkillContext { roots?: ReadonlyMap<string, string> }

@@ -6,8 +6,8 @@ import { MAX_MESSAGE_HOLD_WINDOW_MS, messageHoldWindowMs } from './message-hold'
 import { hibernationMode } from './session-hibernation';
 import { listHarnesses } from './harnesses';
 import { harnessCommandAvailable, runHarnessJsonCommand } from './harness-feature-commands';
-import type { SessionCatalog } from './session-catalog-contracts';
-import type { SessionSource } from './session-source-contracts';
+import type { SessionCatalog } from './session-catalog';
+import type { SessionSource } from './session-source';
 import type { SessionOwnership } from './session-ownership';
 import type { CatalogModel } from './session-api';
 import type { AvailableModel } from './pi-sdk';

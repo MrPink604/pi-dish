@@ -1,5 +1,5 @@
 import type { Request, Response, RequestHandler } from 'express';
-import type { SessionSource } from './session-source-contracts';
+import type { SessionSource } from './session-source';
 import { record } from './helper-values';
 import { searchHomeDirs, getDirChildren, isPathCompletionToken, completePath, searchFiles } from './file-search';
 import { resolveFileMention, readFileForViewer } from './file-mention';

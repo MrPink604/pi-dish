@@ -17,7 +17,7 @@ import {
   mineSkillsFromEntries,
 } from '../lib/skill-mining.js';
 import type { SkillContext, SkillMiningOptions } from '../lib/skill-mining.js';
-import type { SessionEntries } from '../lib/session-metadata-contracts.js';
+import type { SessionEntries } from '../lib/session-metadata.js';
 import type { SkillActivation, SkillState, SkillProjection } from '../lib/session-index-data.js';
 
 const SKILL = '/home/u/.pi/agent/skills/demo/SKILL.md';

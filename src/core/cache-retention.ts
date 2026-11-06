@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { modelMatchesPattern } from './helper-models';
-import type { CacheExpiryBasis } from './session-metadata-contracts';
+import { record } from './helper-values';
+import type { CacheExpiryBasis } from './session-metadata';
 
 export interface CacheRetentionPolicy {
   readonly retentionMs: number;
@@ -33,11 +34,6 @@ export const MIN_TTL_MS = 60_000;
 export const MAX_TTL_MS = 365 * 24 * 60 * 60_000;
 const cache = new Map<string, CachedConfig>();
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown> : null;
-}
-
 function formatDuration(ms: number): string {
   if (ms % (24 * 60 * 60_000) === 0) return `${ms / (24 * 60 * 60_000)}d`;
   if (ms % (60 * 60_000) === 0) return `${ms / (60 * 60_000)}h`;
@@ -61,11 +57,11 @@ function parseRules(value: unknown): CacheTtlRule[] {
   if (!Array.isArray(value)) return [];
   const rules: CacheTtlRule[] = [];
   for (const raw of value.slice(0, MAX_RULES)) {
-    const item = record(raw);
-    const ttl = parseDuration(item?.ttl);
-    const provider = typeof item?.provider === 'string' ? item.provider.trim().toLowerCase() : '';
-    const model = typeof item?.model === 'string' ? item.model.trim() : '';
-    const basis = item?.basis === undefined ? 'fixed' : item.basis;
+    const item = record(raw) ? raw : {};
+    const ttl = parseDuration(item.ttl);
+    const provider = typeof item.provider === 'string' ? item.provider.trim().toLowerCase() : '';
+    const model = typeof item.model === 'string' ? item.model.trim() : '';
+    const basis = item.basis === undefined ? 'fixed' : item.basis;
     if (!ttl || (!provider && !model) || provider.length > 100 || model.length > 200 ||
         (basis !== 'fixed' && basis !== 'minimum' && basis !== 'estimate')) continue;
     rules.push({ ...ttl, provider, model, basis });
@@ -90,8 +86,9 @@ export function loadCacheRetentionConfig(): CacheRetentionConfig {
   } catch {}
   const existing = cache.get(file);
   if (existing?.stamp === stamp) return existing.config;
-  const settings = record(readSettings(file));
-  const rules = parseRules(settings?.cacheTtlOverrides);
+  const parsed = readSettings(file);
+  const settings = record(parsed) ? parsed : {};
+  const rules = parseRules(settings.cacheTtlOverrides);
   const digest = createHash('sha256').update(JSON.stringify(rules)).digest('hex').slice(0, 16);
   const config = { revision: `v${CONFIG_REVISION}:${digest}`, rules };
   cache.set(file, { stamp, config });

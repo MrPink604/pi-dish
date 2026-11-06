@@ -1,14 +1,44 @@
 import { configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
-import type { CacheExpiry, CacheExpiryBasis, SessionEntries, SessionInfo, StoredCacheExpiryBasis } from './session-metadata-contracts';
-
 import { extractTextContent } from './helper-content';
 import { truncate } from './helper-format';
 import { splitSessionRefContext } from './helper-refs';
-interface MetadataProfile { readonly profileId?: string }
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+import { record as isRecord } from './helper-values';
+export { isRecord };
+
+export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
+/** 'unknown' anchors cache activity with no documented, estimated or configured window; only the serve-time learner fills it in. */
+export type StoredCacheExpiryBasis = CacheExpiryBasis | 'unknown';
+
+export interface CacheExpiry {
+  readonly refreshedAt: number;
+  readonly expiresAt: number;
+  readonly retentionMs: number;
+  readonly retention: string;
+  readonly basis: StoredCacheExpiryBasis;
+  /** Cache identity of the message that set the window; retained for incremental parsing. */
+  readonly identity: string;
+  readonly tier?: '1h';
 }
+
+/** Accumulator output before read-time model-window overlays. No route authority. */
+export interface SessionInfo {
+  model: string;
+  name: string | null;
+  messageCount: number;
+  contextTokens: number;
+  lastActivity: Date;
+  cwd: string | null;
+  sessionId: string | null;
+  parentSession: string | null;
+  cacheExpiry: CacheExpiry | null;
+}
+/** The parser retains physical framing without a second JSON pass. */
+export interface SessionEntries extends ReadonlyArray<unknown> {
+  readonly firstEntryOnFirstLine?: boolean;
+}
+
+interface MetadataProfile { readonly profileId?: string }
 function nonempty(value: unknown): value is string { return typeof value === 'string' && value.length > 0; }
 function shortName(text: string) {
   return truncate(text, 40, '...');
@@ -128,8 +158,9 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
   if (!isRecord(message.usage) || !hasCacheActivity(message)) return null;
   const usage = message.usage;
   const identity = cacheIdentity(message);
+  const target = resolveCacheTarget(message);
   const read = cacheTokens(usage, 'cacheRead');
-  const long = cacheTier1h(usage, resolveCacheTarget(message).provider === 'anthropic');
+  const long = cacheTier1h(usage, target.provider === 'anthropic');
   const startedAt = new Date((message.timestamp ?? fallbackTimestamp) as string | number | Date).getTime();
   if (!Number.isFinite(startedAt)) return null;
 
@@ -139,7 +170,6 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
   if (read > 0 && previous?.identity === identity) {
     ({ retentionMs, retention, basis } = previous);
   } else {
-    const target = resolveCacheTarget(message);
     const configured = configuredCacheRetention(config, target.provider, target.model);
     const derived = configured ?? builtinCacheRetention(target, long);
     // No known window: keep an 'unknown' anchor (refresh time + identity) so
@@ -151,6 +181,12 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
     ...(long ? { tier: '1h' as const } : {}) };
 }
 
+
+/** The model id a model_change entry records, in the profile's field. */
+export function entryModel(entry: Record<string, unknown>, profileId: string | undefined): string | null {
+  const model = profileId === 'omp-v1' ? entry.model : entry.modelId;
+  return typeof model === 'string' && model ? model : null;
+}
 
 /** Validate persisted accumulator output, reviving its serialized activity Date. */
 export function decodeSessionInfo(value: unknown): SessionInfo | null {
@@ -181,11 +217,8 @@ export function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, ca
 
 /**
  * Extend an info object with entries appended after the range it was built
- * from — the O(delta) path lib/session-index.js uses for a streaming active
- * session, so a sidebar poll never re-parses a whole multi-MB JSONL because
- * one turn was appended. Mutates and returns `info`; `mtime` is the file's
- * new mtime (a full parse floors lastActivity at the mtime, so the extension
- * must too).
+ * from (session-index's O(delta) path). Mutates and returns `info`; `mtime` is
+ * the file's new mtime, which a full parse floors lastActivity at.
  */
 export function extendSessionInfoFromEntries(info: SessionInfo, entries: SessionEntries, mtime?: Date, candidate: MetadataProfile = {},
   config: CacheRetentionConfig = loadCacheRetentionConfig()): SessionInfo {
@@ -200,9 +233,7 @@ function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candi
     const entry = entries[i];
     if (!isRecord(entry)) continue;
     const message = isRecord(entry.message) ? entry.message : null;
-    // Only an entry parsed from physical line zero can be Pi's SessionHeader
-    // / OMP's title line (parseEntries marks that on the array). A blank or
-    // torn first line means the file has no readable header, and a later
+    // Only an entry parsed from physical line zero can be the header; a later
     // session-shaped entry must not be promoted to one.
     const isFirst = fromStart && i === 0 && entries.firstEntryOnFirstLine === true;
     if (profileId === 'omp-v1' && isFirst && entry.type === 'title' && nonempty(entry.title)) info.name = entry.title;
@@ -216,21 +247,18 @@ function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candi
       }
     }
     if (entry.type === 'model_change') {
-      const model = profileId === 'omp-v1' ? entry.model : entry.modelId;
-      if (nonempty(model)) info.model = model;
+      const model = entryModel(entry, profileId);
+      if (model) info.model = model;
       info.cacheExpiry = null;
     }
-    // Explicit names assign unconditionally (later wins); the first user
-    // message is only a fallback for a still-unnamed session. Same resolution
-    // the whole-file parse performed at return time.
+    // Explicit names win; the first user message is only a fallback.
     if (entry.type === 'session_info' && nonempty(entry.name)) info.name = entry.name;
     if (nonempty(entry.sessionName)) info.name = entry.sessionName;
     if (entry.type === 'message' && message?.role === 'user') {
       info.messageCount++;
       if (info.name === null) {
-        // The <session-refs> block is appended context, not something the
-        // user wrote — a session named after its first prompt must not be
-        // named after the block that followed it.
+        // The <session-refs> block is appended context, not user text, so it
+        // must never become the session name.
         const { text } = splitSessionRefContext(extractTextContent(message.content));
         if (text) info.name = shortName(text);
       }

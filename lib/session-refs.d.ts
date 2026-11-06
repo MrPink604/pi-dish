@@ -16,6 +16,4 @@ export interface SessionRefHint {
     cwd: string;
     isActive: boolean | null;
 }
-/** Hints are untrusted metadata, clamped to the fields the context block uses. */
-export declare function sanitizeRefHint(hint: unknown): SessionRefHint | null;
 export declare function expandSessionRefs(message: unknown, hints: unknown, deps: SessionRefDependencies): string;
