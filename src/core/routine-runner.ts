@@ -8,17 +8,18 @@
  * `supports` dep, exactly as the spawn/prompt routes go through
  * `liveSessionSupports`.
  */
-
+import { setTimeout as delay } from 'node:timers/promises';
 import { parseCron, cronMatches, nextCronMatch } from './cron';
-import type { CreatedRoutineInvocation, Routine, RoutineInvocation, RoutineStore } from './routines';
+import * as store from './routines';
+import type { Routine, RoutineDelivery, RoutineInvocation, RoutineMode, RoutineTrigger } from './routines';
 import type { SessionOperations } from './session-operations';
 import type { LiveSession, SessionOwnership } from './session-ownership';
 import type { RecoveryOutcome } from './recovery-runner';
 import type { BridgeCapability } from './contracts';
 
 export interface RoutineInvokeOptions {
-  trigger?: 'invoke' | 'schedule';
-  source?: unknown;
+  trigger?: RoutineTrigger;
+  source?: string | null;
   input?: unknown;
 }
 
@@ -34,7 +35,6 @@ export interface RoutineRunner {
 }
 
 export interface RoutineRunnerPorts {
-  store: RoutineStore;
   createSession: SessionOperations['createSession'];
   resumeSession: SessionOperations['resumeSessionById'];
   getLiveSession: SessionOwnership['getLiveSession'];
@@ -42,17 +42,10 @@ export interface RoutineRunnerPorts {
   composePrompt(routine: Routine, invocation: RoutineInvocation): string | Promise<string>;
   isTurnInProgress?(session: LiveSession): boolean;
   supports?(session: LiveSession, capability: BridgeCapability): boolean;
-  recoveryOutcome?(sessionId: unknown): Pick<RecoveryOutcome, 'status' | 'reason'> | null;
+  recoveryOutcome?(sessionId: string): Pick<RecoveryOutcome, 'status' | 'reason'> | null;
   now?(): number;
   log?: { error?(message: string): void; warn?(message: string): void };
 }
-
-/** Property access retains legacy primitive boxing and null failures, not a schema assertion. */
-function property(value: unknown, key: string): unknown {
-  if (value === null || value === undefined) throw new TypeError(`Cannot read properties of ${value} (reading '${key}')`);
-  return Reflect.get(Object(value), key);
-}
-
 
 export const DEFAULT_CLOSE_GRACE_MS = 10000;
 export const STARTING_WATCHDOG_MS = 2 * 60 * 1000;
@@ -67,13 +60,23 @@ function coded(message: string, status: number, extra: Record<string, unknown> =
   return Object.assign(new Error(message), { status }, extra);
 }
 
-function assistantText(message: unknown): string {
-  if (!message || property(message, 'role') !== 'assistant') return '';
-  const raw = property(message, 'content');
-  const content: unknown[] = Array.isArray(raw) ? raw : [];
-  return content
-    .filter((block) => block && property(block, 'type') === 'text' && typeof property(block, 'text') === 'string')
-    .map((block) => property(block, 'text'))
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+interface WireMessage {
+  role?: unknown;
+  content?: unknown;
+}
+
+function assistantText(wire: WireMessage | null | undefined): string {
+  if (wire?.role !== 'assistant' || !Array.isArray(wire.content)) return '';
+  return wire.content
+    .flatMap((block: unknown) => {
+      if (!block || typeof block !== 'object' || !('type' in block) || block.type !== 'text'
+          || !('text' in block) || typeof block.text !== 'string') return [];
+      return [block.text];
+    })
     .join('\n')
     .trim();
 }
@@ -83,37 +86,27 @@ function closeGraceMs() {
   return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_CLOSE_GRACE_MS;
 }
 
-/** Scheduling and ledger policy consume the sole lifecycle coordinator directly. */
 export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   const {
-    store,
     createSession,
     resumeSession,
     getLiveSession,
     closeSession,
     composePrompt,
     isTurnInProgress = (sess) => !!sess?.turnInProgress,
-    // Delivery and post-spawn rename use the checked live capability predicate.
     supports = () => true,
     recoveryOutcome = () => null,
     now = () => Date.now(),
     log = console,
   } = deps;
 
-  // Observer bookkeeping per in-flight invocation, so restart recovery and the
-  // watchdog can tell a run this process is watching from one it is not.
-  const watched = new Map<string, { detach(): void }>(); // invocation id -> { detach }
+  // In-flight invocation observers, so restart recovery and the watchdog can
+  // tell a run this process is watching from one it is not.
+  const watched = new Map<string, { detach(): void }>();
   let timer: NodeJS.Timeout | null = null;
 
-  function sleep(ms: number): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const handle = setTimeout(resolve, ms);
-      handle.unref?.();
-    });
-  }
-
   function nextRunAt(routine: Routine | null | undefined, from = now()): number | null {
-    const cron = routine?.schedule == null ? undefined : property(routine.schedule, 'cron');
+    const cron = routine?.schedule?.cron;
     if (!cron) return null;
     let parsed;
     try {
@@ -125,17 +118,13 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     return next ? next.getTime() : null;
   }
 
-  // -------------------------------------------------------------------------
-  // Observation
-  // -------------------------------------------------------------------------
-
-  function observe(sess: LiveSession, invocationId: string, { mode }: { mode: unknown }) {
+  function observe(sess: LiveSession, invocationId: string, mode: RoutineMode) {
     let finished = false;
     let summary: string | null = null;
     let agentEndTimer: NodeJS.Timeout | null = null;
 
     const detach = () => {
-      if (agentEndTimer) clearTimeout(agentEndTimer);
+      clearTimeout(agentEndTimer ?? undefined);
       sess.off('turn_end', onTurnEnd);
       sess.off('agent_end', onAgentEnd);
       sess.off('message_end', onMessageEnd);
@@ -150,14 +139,13 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       if (finished) return;
       finished = true;
       detach();
-      const endedAt = now();
       const invocation = store.updateInvocation(invocationId, {
         status,
-        endedAt,
+        endedAt: now(),
         summary,
-        error: error || null,
+        error: error ? message(error) : null,
       });
-      if (invocation && mode === 'oneShot') scheduleClose(invocation);
+      if (invocation && mode === 'oneShot') void scheduleClose(invocation);
     }
 
     function onTurnEnd() { finish('completed'); }
@@ -172,7 +160,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     }
 
     function onMessageEnd(data: unknown) {
-      const text = assistantText(data == null ? undefined : property(data, 'message'));
+      const text = assistantText((data as { message?: WireMessage } | null)?.message);
       if (text) summary = text.slice(0, 500);
     }
 
@@ -195,7 +183,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
    */
   async function scheduleClose(invocation: RoutineInvocation) {
     if (!invocation.sessionId) return;
-    await sleep(closeGraceMs());
+    await delay(closeGraceMs(), undefined, { ref: false });
     try {
       const { status, body } = await closeSession(invocation.sessionId);
       if (status >= 200 && status < 300) {
@@ -207,13 +195,9 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
         });
       }
     } catch (error) {
-      store.updateInvocation(invocation.id, { closed: false, closeError: property(error, 'message') });
+      store.updateInvocation(invocation.id, { closed: false, closeError: message(error) });
     }
   }
-
-  // -------------------------------------------------------------------------
-  // Invoke
-  // -------------------------------------------------------------------------
 
   /**
    * Record the run and start it. Returns the persisted invocation (status
@@ -223,10 +207,6 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
    */
   function invoke(routine: Routine, { trigger = 'invoke', source = null, input = null }: RoutineInvokeOptions = {}): RoutineInvocation {
     const at = now();
-    const admission = store.RoutineInputAdmission.prepare(input);
-    if (!admission) {
-      throw coded(`input must serialize to at most ${store.MAX_INPUT_BYTES} bytes`, 413);
-    }
 
     if (trigger === 'schedule' && !routine.enabled) {
       return store.createInvocation({
@@ -236,27 +216,30 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
 
     // Rate guard: deliberately not recorded, or an invoke storm would fill the
     // ledger with nothing but its own rejections.
-    if (trigger === 'invoke' && (routine.minIntervalSec as number) > 0) {
+    if (trigger === 'invoke' && routine.minIntervalSec > 0) {
       const last = store.lastInvocation(routine.id, (entry) => entry.status !== 'skipped');
-      const elapsed = last ? at - (last.startedAt as number) : Infinity;
-      if (elapsed < (routine.minIntervalSec as number) * 1000) {
+      const elapsed = last ? at - last.startedAt : Infinity;
+      if (elapsed < routine.minIntervalSec * 1000) {
         throw coded(
           `Routine "${routine.name}" runs at most once every ${routine.minIntervalSec}s`,
           429,
-          { retryAfterSec: Math.ceil(((routine.minIntervalSec as number) * 1000 - elapsed) / 1000), lastInvocation: last },
+          {
+            retryAfterSec: Math.ceil((routine.minIntervalSec * 1000 - elapsed) / 1000),
+            lastInvocation: last,
+          },
         );
       }
     }
 
-    let delivery: unknown = 'prompt';
     const busy = store.activeInvocation(routine.id);
+    let delivery: RoutineDelivery = 'prompt';
     if (busy) {
       // A scheduled tick never queues into a running turn: the cadence is a
       // cadence, not a backlog.
       if (trigger === 'schedule' || routine.onBusy === 'skip') {
         if (trigger === 'schedule') {
           return store.createInvocation({
-            routine, trigger, source, input: admission, status: 'skipped', skipReason: 'busy', startedAt: at,
+            routine, trigger, source, input: null, status: 'skipped', skipReason: 'busy', startedAt: at,
           });
         }
         throw coded(`Routine "${routine.name}" is already running`, 409, { invocation: busy });
@@ -265,18 +248,37 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     }
 
     const invocation = store.createInvocation({
-      routine, trigger, source, input: admission, delivery, status: 'starting', startedAt: at,
+      routine, trigger, source, input, delivery, status: 'starting', startedAt: at,
     });
     run(routine, invocation, busy).catch((error) => {
-      log.error?.(`Routine ${routine.name} invocation failed: ${property(error, 'message')}`);
-      store.updateInvocation(invocation.id, { status: 'errored', endedAt: now(), error: property(error, 'message') });
+      log.error?.(`Routine ${routine.name} invocation failed: ${message(error)}`);
+      store.updateInvocation(invocation.id, { status: 'errored', endedAt: now(), error: message(error) });
     });
     return invocation;
   }
 
-  async function run(routine: Routine, invocation: CreatedRoutineInvocation, busy: RoutineInvocation | null) {
+  async function findContinuationSession(routine: Routine, invocation: RoutineInvocation) {
+    const previous = store.lastInvocation(routine.id, (entry) =>
+      entry.id !== invocation.id && !!entry.sessionId);
+    if (!previous?.sessionId) return null;
+    const live = await getLiveSession(previous.sessionId).catch(() => null);
+    if (live) return { sess: live, sessionId: previous.sessionId };
+    try {
+      const resumed = await resumeSession(previous.sessionId);
+      const sessionId = resumed?.id || previous.sessionId;
+      const sess = await getLiveSession(sessionId).catch(() => null);
+      return sess ? { sess, sessionId } : null;
+    } catch (error) {
+      // A session that can no longer be resumed is not this run's failure:
+      // spawn a fresh one rather than annotating a recovered run with an error.
+      log.warn?.(`Routine ${routine.name} could not resume ${previous.sessionId}: ${message(error)}`);
+      return null;
+    }
+  }
+
+  async function run(routine: Routine, invocation: RoutineInvocation, busy: RoutineInvocation | null) {
+    let sessionId: string | null = null;
     let sess: LiveSession | null = null;
-    let sessionId: unknown = null;
 
     if (busy && invocation.delivery !== 'prompt') {
       sessionId = busy.sessionId;
@@ -286,26 +288,8 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
         throw coded(`This session does not support ${invocation.delivery}.`, 409);
       }
     } else if (routine.mode === 'continue') {
-      const previous = store.lastInvocation(routine.id, (entry) =>
-        entry.id !== invocation.id && !!entry.sessionId);
-      if (previous?.sessionId) {
-        sess = await getLiveSession(previous.sessionId).catch(() => null);
-        if (sess) {
-          sessionId = previous.sessionId;
-        } else {
-          try {
-            const resumed = await resumeSession(previous.sessionId);
-            sessionId = resumed?.id || previous.sessionId;
-            sess = await getLiveSession(sessionId).catch(() => null);
-          } catch (error) {
-            // A session that can no longer be resumed is not this run's
-            // failure: fall through and spawn a fresh one, keeping the record
-            // clean rather than annotating a recovered run with an error.
-            log.warn?.(`Routine ${routine.name} could not resume ${previous.sessionId}: ${property(error, 'message')}`);
-            sess = null;
-          }
-        }
-      }
+      const continuation = await findContinuationSession(routine, invocation);
+      if (continuation) ({ sess, sessionId } = continuation);
     }
 
     let spawned = false;
@@ -324,7 +308,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
 
     // Observers go up before delivery: a fast turn can end before `prompt()`
     // resolves, and the whole record would otherwise hang in `running`.
-    const observer = observe(sess, invocation.id, { mode: routine.mode });
+    const observer = observe(sess, invocation.id, routine.mode);
     store.updateInvocation(invocation.id, { status: 'running', sessionId });
 
     try {
@@ -334,11 +318,12 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       else await sess.prompt(text);
     } catch (error) {
       observer.detach();
-      const failed = store.updateInvocation(invocation.id,
-        { status: 'errored', endedAt: now(), error: property(error, 'message') });
+      const failed = store.updateInvocation(invocation.id, {
+        status: 'errored', endedAt: now(), error: message(error),
+      });
       // A oneShot spawn whose delivery never landed would otherwise leave an
       // idle session nobody asked for. Only ever close what this run spawned.
-      if (failed && spawned && routine.mode === 'oneShot') scheduleClose(failed);
+      if (failed && spawned && routine.mode === 'oneShot') void scheduleClose(failed);
     }
   }
 
@@ -348,7 +333,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       await sess.setName(`${routine.name} ${stamp(new Date(now()))}`);
     } catch (error) {
       // Naming is cosmetic; a harness that refuses it must not fail the run.
-      log.warn?.(`Routine ${routine.name} could not name its session: ${property(error, 'message')}`);
+      log.warn?.(`Routine ${routine.name} could not name its session: ${message(error)}`);
     }
   }
 
@@ -364,22 +349,17 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     const deadline = Date.now() + timeoutMs;
     let current = store.getInvocation(id);
     while (current && current.status === 'starting' && Date.now() < deadline) {
-      await sleep(100);
+      await delay(100, undefined, { ref: false });
       current = store.getInvocation(id);
     }
     return current;
   }
 
-  // -------------------------------------------------------------------------
-  // Scheduling, watchdog, restart recovery
-  // -------------------------------------------------------------------------
-
   function sweepStarting(at: number) {
     for (const invocation of store.activeInvocations()) {
       if (invocation.status !== 'starting') continue;  // a long turn is a long turn
-      if (at - (invocation.startedAt as number) < STARTING_WATCHDOG_MS) continue;
-      const held = watched.get(invocation.id);
-      if (held) held.detach();
+      if (at - invocation.startedAt < STARTING_WATCHDOG_MS) continue;
+      watched.get(invocation.id)?.detach();
       store.updateInvocation(invocation.id, {
         status: 'errored',
         endedAt: at,
@@ -399,9 +379,8 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     const minute = Math.floor(at / 60000) * 60000;
     for (const routine of store.listRoutines()) {
       if (!routine.enabled) continue;
-      const cron = routine.schedule == null ? undefined : property(routine.schedule, 'cron');
-      if (!cron) continue;
-      if (routine.lastScheduledMinute === minute) continue;
+      const cron = routine.schedule?.cron;
+      if (!cron || routine.lastScheduledMinute === minute) continue;
       let parsed;
       try {
         parsed = parseCron(cron);
@@ -413,7 +392,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       try {
         invoke(routine, { trigger: 'schedule' });
       } catch (error) {
-        log.error?.(`Scheduled routine ${routine.name} failed to start: ${property(error, 'message')}`);
+        log.error?.(`Scheduled routine ${routine.name} failed to start: ${message(error)}`);
       }
     }
   }
@@ -435,13 +414,14 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       // A deleted routine leaves the ledger entry behind; treat its mode as
       // `continue` so recovery can never close a session it cannot attribute.
       const mode = routine?.mode === 'oneShot' ? 'oneShot' : 'continue';
-      const sess = invocation.sessionId
-        ? await getLiveSession(invocation.sessionId).catch(() => null) : null;
-      const recovery = invocation.sessionId ? recoveryOutcome(invocation.sessionId) : null;
+      const sessionId = invocation.sessionId;
+      const sess = sessionId ? await getLiveSession(sessionId).catch(() => null) : null;
+      const recovery = sessionId ? recoveryOutcome(sessionId) : null;
       if (recovery && !['live', 'continued'].includes(recovery.status)) {
         store.updateInvocation(invocation.id, {
           status: 'interrupted', endedAt: at,
-          error: recovery.reason || 'Session recovery requires review before this invocation can continue.',
+          error: typeof recovery.reason === 'string' && recovery.reason
+            ? recovery.reason : 'Session recovery requires review before this invocation can continue.',
         });
         continue;
       }
@@ -452,11 +432,11 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
         continue;
       }
       if (isTurnInProgress(sess)) {
-        observe(sess, invocation.id, { mode });
+        observe(sess, invocation.id, mode);
         continue;
       }
       const completed = store.updateInvocation(invocation.id, { status: 'completed', endedAt: at });
-      if (completed && mode === 'oneShot') scheduleClose(completed);
+      if (completed && mode === 'oneShot') void scheduleClose(completed);
     }
   }
 
@@ -466,14 +446,14 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       try {
         tick();
       } catch (error) {
-        log.error?.(`Routine scheduler tick failed: ${property(error, 'message')}`);
+        log.error?.(`Routine scheduler tick failed: ${message(error)}`);
       }
     }, TICK_MS);
     timer.unref?.();
   }
 
   function stop() {
-    if (timer) clearInterval(timer);
+    clearInterval(timer ?? undefined);
     timer = null;
     for (const held of [...watched.values()]) held.detach();
   }
@@ -490,4 +470,3 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     get watching() { return watched.size; },
   };
 }
-

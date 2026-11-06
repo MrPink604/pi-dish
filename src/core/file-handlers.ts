@@ -28,6 +28,10 @@ export interface FileHandlers {
 
 export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
   const diffView = createDiffView();
+  const sessionCwd = (sessionId: string): string | null => {
+    const cwd = ports.resolveSessionCwd(sessionId);
+    return typeof cwd === 'string' && cwd ? cwd : null;
+  };
 
   const searchDirectories: FileHandler = (req, res) => {
     try {
@@ -50,12 +54,12 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
   const searchSessionFiles: FileHandler = async (req, res) => {
     try {
       const q = String(req.query.q || '');
-      const cwd = ports.resolveSessionCwd(req.params.id);
+      const cwd = sessionCwd(req.params.id);
       if (isPathCompletionToken(q)) {
-        return res.json({ cwd, files: completePath(q, { cwd: cwd as string | null | undefined, limit: 20 }) });
+        return res.json({ cwd, files: completePath(q, { cwd, limit: 20 }) });
       }
       if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
-      const files = await searchFiles(cwd as string, q, 20);
+      const files = await searchFiles(cwd, q, 20);
       res.json({ cwd, files });
     } catch (error) {
       res.status(500).json({ error: record(error) ? error.message : undefined });
@@ -68,12 +72,12 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
       return { status: 400, body: { error: 'path required' } } as const;
     }
     const sessionId = req.params.id;
-    const cwd = ports.resolveSessionCwd(sessionId);
+    const cwd = sessionCwd(sessionId);
     const session = ports.findSessionSource(sessionId);
     if (!cwd && !session) return { status: 404, body: { error: 'Unknown session' } } as const;
     let messages: readonly unknown[] = [];
     if (session) { try { messages = readSessionMessages(session); } catch {} }
-    const resolved = await resolveFileMention(mention, { cwd: cwd as string | null | undefined, messages });
+    const resolved = await resolveFileMention(mention, { cwd, messages });
     if (!resolved) {
       return { status: 404, body: { error: `Couldn't find "${mention}" among this session's files` } } as const;
     }
@@ -110,8 +114,8 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
       }
       res.json({
         path: resolved.absPath,
-        relPath: cwd && resolved.absPath.startsWith((cwd as string) + '/')
-          ? resolved.absPath.slice((cwd as string).length + 1) : null,
+        relPath: cwd && resolved.absPath.startsWith(cwd + '/')
+          ? resolved.absPath.slice(cwd.length + 1) : null,
         line: resolved.line ?? null,
         ...file,
       });
@@ -136,7 +140,7 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
           repoPath.length > 2048 || filePath.length > 4096) {
         return res.status(400).json({ error: 'repo, path, and snapshot required' });
       }
-      const cwd = ports.resolveSessionCwd(req.params.id);
+      const cwd = sessionCwd(req.params.id);
       if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
       const patch = await diffView.patch(req.params.id, cwd, snapshotId, repoPath, filePath);
       if (patch === 'stale') return staleDiffResponse(res);
@@ -149,7 +153,7 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
 
   const diffSummary: FileHandler = async (req, res) => {
     try {
-      const cwd = ports.resolveSessionCwd(req.params.id);
+      const cwd = sessionCwd(req.params.id);
       if (!cwd) return res.status(404).json({ error: 'Session cwd unknown' });
       res.json(await diffView.summary(req.params.id, cwd));
     } catch (error) {

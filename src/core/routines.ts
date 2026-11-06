@@ -13,53 +13,76 @@ export type RoutineDelivery = 'prompt' | 'steer' | 'followUp';
 export type RoutineStatus = 'starting' | 'running' | 'completed' | 'errored' | 'interrupted' | 'skipped';
 export type RoutineThinking = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type RoutineOnBusy = 'skip' | 'steer' | 'followUp';
+export type RoutineTrigger = 'invoke' | 'schedule';
 
-/** Persisted rows establish only id; other fields and extra keys remain untrusted. */
-export interface Routine extends Record<string, unknown> {
-  id: string;
-  name?: unknown;
-  description?: unknown;
-  harness?: unknown;
-  cwd?: unknown;
-  model?: unknown;
-  thinking?: unknown;
-  prompt?: unknown;
-  promptVersion?: unknown;
-  versions?: unknown;
-  schedule?: unknown;
-  enabled?: unknown;
-  mode?: unknown;
-  onBusy?: unknown;
-  minIntervalSec?: unknown;
-  lastScheduledMinute?: unknown;
-  createdAt?: unknown;
-  updatedAt?: unknown;
+export interface RoutineVersion {
+  version: number;
+  prompt: string;
+  savedAt: number;
 }
 
-export interface RoutineInvocation extends Record<string, unknown> {
+export interface Routine {
   id: string;
-  routineId?: unknown;
-  routineName?: unknown;
-  version?: unknown;
-  trigger?: unknown;
-  source?: unknown;
-  delivery?: unknown;
-  status?: unknown;
-  skipReason?: unknown;
-  sessionId?: unknown;
-  startedAt?: unknown;
-  endedAt?: unknown;
-  durationMs?: unknown;
-  error?: unknown;
-  input?: unknown;
-  summary?: unknown;
-  closed?: unknown;
-  closeError?: unknown;
+  name: string;
+  description: string;
+  harness: string;
+  cwd: string;
+  model?: string;
+  thinking?: RoutineThinking;
+  prompt: string;
+  promptVersion: number;
+  versions: RoutineVersion[];
+  schedule: { cron: string } | null;
+  enabled: boolean;
+  mode: RoutineMode;
+  onBusy: RoutineOnBusy;
+  minIntervalSec: number;
+  lastScheduledMinute: number | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
-/** Only freshly created rows have passed delivery selection; persisted rows remain raw. */
-export interface CreatedRoutineInvocation extends RoutineInvocation {
+export interface RoutineInvocation {
+  id: string;
+  routineId: string;
+  routineName: string;
+  version: number;
+  trigger: RoutineTrigger;
+  source: string | null;
   delivery: RoutineDelivery;
+  status: RoutineStatus;
+  skipReason: string | null;
+  sessionId: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number | null;
+  error: string | null;
+  input: unknown;
+  summary: string | null;
+  closed: boolean;
+  closeError: string | null;
+}
+
+export interface NewInvocation {
+  routine: Routine;
+  status: RoutineStatus;
+  trigger?: RoutineTrigger;
+  source?: string | null;
+  input?: unknown;
+  delivery?: RoutineDelivery;
+  skipReason?: string | null;
+  sessionId?: string | null;
+  startedAt?: number;
+  error?: string | null;
+}
+
+export type InvocationPatch = Partial<Pick<RoutineInvocation,
+  'status' | 'sessionId' | 'endedAt' | 'durationMs' | 'error' | 'summary' | 'closed' | 'closeError' | 'delivery' | 'skipReason'>>;
+
+export interface ListInvocationOptions {
+  routineId?: string | null;
+  limit?: number;
+  before?: number | null;
 }
 
 const ROUTINES_FILE = 'routines.json';
@@ -68,26 +91,32 @@ const INVOCATIONS_FILE = 'routine-invocations.json';
 export const MAX_INVOCATIONS = 5000;
 export const MAX_VERSIONS = 50;
 export const MAX_PROMPT = 100000;
-const MAX_DESCRIPTION = 500;
-export const MAX_SOURCE = 100;
 export const MAX_INPUT_BYTES = 32 * 1024;
-export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
-export const THINKING_LEVELS: RoutineThinking[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-export const MODES: RoutineMode[] = ['oneShot', 'continue'];
-export const ON_BUSY: RoutineOnBusy[] = ['skip', 'steer', 'followUp'];
-export const DELIVERIES: RoutineDelivery[] = ['prompt', 'steer', 'followUp'];
-export const STATUSES: RoutineStatus[] = ['starting', 'running', 'completed', 'errored', 'interrupted', 'skipped'];
+export const MAX_SOURCE = 100;
+const MAX_DESCRIPTION = 500;
+const NAME_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
+const THINKING_LEVELS: RoutineThinking[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const MODES: RoutineMode[] = ['oneShot', 'continue'];
+const ON_BUSY: RoutineOnBusy[] = ['skip', 'steer', 'followUp'];
+const DELIVERIES: RoutineDelivery[] = ['prompt', 'steer', 'followUp'];
+const STATUSES: RoutineStatus[] = ['starting', 'running', 'completed', 'errored', 'interrupted', 'skipped'];
 const ACTIVE_STATUSES: RoutineStatus[] = ['starting', 'running'];
 
 function fail(message: string, status = 400): Error & { status: number } {
-  const error = new Error(message);
-  return Object.assign(error, { status });
+  return Object.assign(new Error(message), { status });
 }
 
-/** Property access, not a schema: retain primitive boxing and nullish failures. */
-function property(value: unknown, key: string): unknown {
-  if (value === null || value === undefined) throw new TypeError(`Cannot read properties of ${value} (reading '${key}')`);
-  return Reflect.get(Object(value), key);
+/** A JSON body or stored row; a non-object carries no fields. */
+function fields(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function stringOr(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function numberOr(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 function includes<T>(allowed: readonly T[], value: unknown): value is T {
@@ -95,30 +124,51 @@ function includes<T>(allowed: readonly T[], value: unknown): value is T {
   return values.includes(value);
 }
 
-function isRoutine(value: unknown, id: string): value is Routine {
-  return !!value && typeof value === 'object' && property(value, 'id') === id;
+function parseVersions(value: unknown, promptVersion: number, prompt: string, createdAt: number): RoutineVersion[] {
+  const rows = Array.isArray(value) ? value : [];
+  const versions = rows.flatMap((row): RoutineVersion[] => {
+    const entry = fields(row);
+    return typeof entry.version === 'number' && typeof entry.prompt === 'string'
+      ? [{ version: entry.version, prompt: entry.prompt, savedAt: numberOr(entry.savedAt, 0) }]
+      : [];
+  });
+  return versions.length ? versions.slice(-MAX_VERSIONS) : [{ version: promptVersion, prompt, savedAt: createdAt }];
 }
 
-function isInvocation(value: unknown): value is RoutineInvocation {
-  return !!value && typeof value === 'object' && typeof property(value, 'id') === 'string';
+/** A stored row is validated once here; everything downstream sees a Routine. */
+function parseRoutine(id: string, value: unknown): Routine | null {
+  const row = fields(value);
+  if (row.id !== id || typeof row.name !== 'string' || typeof row.prompt !== 'string') return null;
+  const promptVersion = numberOr(row.promptVersion, 1);
+  const cron = fields(row.schedule).cron;
+  return {
+    id,
+    name: row.name,
+    description: stringOr(row.description, ''),
+    harness: stringOr(row.harness, 'pi'),
+    cwd: stringOr(row.cwd, ''),
+    model: typeof row.model === 'string' && row.model.trim() ? row.model.trim() : undefined,
+    thinking: includes(THINKING_LEVELS, row.thinking) ? row.thinking : undefined,
+    prompt: row.prompt,
+    promptVersion,
+    versions: parseVersions(row.versions, promptVersion, row.prompt, numberOr(row.createdAt, 0)),
+    schedule: typeof cron === 'string' && cron.trim() ? { cron: cron.trim() } : null,
+    enabled: row.enabled === undefined ? true : Boolean(row.enabled),
+    mode: includes(MODES, row.mode) ? row.mode : 'oneShot',
+    onBusy: includes(ON_BUSY, row.onBusy) ? row.onBusy : 'skip',
+    minIntervalSec: numberOr(row.minIntervalSec, 0),
+    lastScheduledMinute: typeof row.lastScheduledMinute === 'number' ? row.lastScheduledMinute : null,
+    createdAt: numberOr(row.createdAt, 0),
+    updatedAt: numberOr(row.updatedAt, 0),
+  };
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return Number.isFinite(value);
-}
-
-// ---------------------------------------------------------------------------
-// Definitions
-// ---------------------------------------------------------------------------
-
-export function readRoutines(): Record<string, Routine> {
-  const raw = readStore(ROUTINES_FILE);
-  const source = raw.routines && typeof raw.routines === 'object' && !Array.isArray(raw.routines)
-    ? raw.routines : {};
+function readRoutines(): Record<string, Routine> {
+  const source = fields(readStore(ROUTINES_FILE).routines);
   const routines: Record<string, Routine> = {};
-  const entries: [string, unknown][] = Object.entries(source);
-  for (const [id, value] of entries) {
-    if (isRoutine(value, id)) routines[id] = value;
+  for (const [id, value] of Object.entries(source)) {
+    const routine = parseRoutine(id, value);
+    if (routine) routines[id] = routine;
   }
   return routines;
 }
@@ -128,30 +178,29 @@ function writeRoutines(routines: Record<string, Routine>): void {
 }
 
 export function listRoutines(): Routine[] {
-  return Object.values(readRoutines())
-    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return Object.values(readRoutines()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Routines are addressed by uuid or by their (case-insensitive) unique name. */
-export function getRoutine(ref: unknown): Routine | null {
-  if (typeof ref !== 'string' || !ref) return null;
+export function getRoutine(ref: string): Routine | null {
   return lookupRoutine(readRoutines(), ref);
 }
 
-function lookupRoutine(routines: Record<string, Routine>, ref: unknown): Routine | null {
-  if (typeof ref !== 'string' || !ref) return null;
+function lookupRoutine(routines: Record<string, Routine>, ref: string): Routine | null {
+  if (!ref) return null;
   if (routines[ref]) return routines[ref];
   const wanted = ref.toLowerCase();
-  return Object.values(routines).find((routine) => String(routine.name).toLowerCase() === wanted) || null;
+  return Object.values(routines).find((routine) => routine.name.toLowerCase() === wanted) || null;
 }
 
-function validateName(name: unknown, routines: Record<string, Routine>, selfId: unknown): asserts name is string {
+function validateName(name: unknown, routines: Record<string, Routine>, selfId: string): string {
   if (typeof name !== 'string' || !NAME_RE.test(name)) {
     throw fail('name must be lowercase letters, digits and dashes (1-48 chars, starting alphanumeric)');
   }
   const clash = Object.values(routines).find((routine) =>
-    routine.id !== selfId && String(routine.name).toLowerCase() === name.toLowerCase());
+    routine.id !== selfId && routine.name.toLowerCase() === name.toLowerCase());
   if (clash) throw fail(`A routine named "${clash.name}" already exists`, 409);
+  return name;
 }
 
 function validateOptionalString(value: unknown, field: string, max: number): string {
@@ -175,12 +224,12 @@ function validateSchedule(schedule: unknown): { cron: string } | null {
   if (typeof schedule !== 'object' || Array.isArray(schedule)) {
     throw fail('schedule must be null or { cron }');
   }
-  const cron = property(schedule, 'cron');
+  const cron = fields(schedule).cron;
   if (typeof cron !== 'string' || !cron.trim()) throw fail('schedule.cron is required');
   try {
     parseCron(cron);
   } catch (error) {
-    throw fail(`Invalid schedule: ${property(error, 'message')}`);
+    throw fail(`Invalid schedule: ${error instanceof Error ? error.message : String(error)}`);
   }
   return { cron: cron.trim() };
 }
@@ -199,41 +248,41 @@ function validatePrompt(prompt: unknown): string {
 
 function validateMinInterval(value: unknown): number {
   if (value === undefined || value === null) return 0;
-  // Number.isInteger establishes the numeric operand; the assertion changes no coercion.
-  if (!Number.isInteger(value) || (value as number) < 0) throw fail('minIntervalSec must be an integer >= 0');
-  return value as number;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw fail('minIntervalSec must be an integer >= 0');
+  }
+  return value;
 }
 
-function validateHarness(harness: unknown): unknown {
+function validateHarness(harness: unknown): string {
   const id = harness === undefined || harness === null ? 'pi' : harness;
-  if (!getHarness(id)) throw fail(`Unknown harness: ${id}`);
+  if (typeof id !== 'string' || !getHarness(id)) throw fail(`Unknown harness: ${id}`);
   return id;
 }
 
 export function createRoutine(input: unknown = {}): Routine {
+  const body = fields(input);
   const routines = readRoutines();
   const id = crypto.randomUUID();
-  validateName(property(input, 'name'), routines, id);
+  const name = validateName(body.name, routines, id);
+  const prompt = validatePrompt(body.prompt);
   const now = Date.now();
-  const prompt = validatePrompt(property(input, 'prompt'));
   const routine: Routine = {
     id,
-    name: property(input, 'name'),
-    description: validateOptionalString(property(input, 'description'), 'description', MAX_DESCRIPTION),
-    harness: validateHarness(property(input, 'harness')),
-    cwd: validateCwd(property(input, 'cwd')),
-    // Repeated reads preserve getter behavior as well as the original validation order.
-    model: typeof property(input, 'model') === 'string' && (property(input, 'model') as string).trim()
-      ? (property(input, 'model') as string).trim() : undefined,
-    thinking: validateEnum(property(input, 'thinking'), 'thinking', THINKING_LEVELS, undefined),
+    name,
+    description: validateOptionalString(body.description, 'description', MAX_DESCRIPTION),
+    harness: validateHarness(body.harness),
+    cwd: validateCwd(body.cwd),
+    model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined,
+    thinking: validateEnum(body.thinking, 'thinking', THINKING_LEVELS, undefined),
     prompt,
     promptVersion: 1,
     versions: [{ version: 1, prompt, savedAt: now }],
-    schedule: validateSchedule(property(input, 'schedule')),
-    enabled: property(input, 'enabled') === undefined ? true : !!property(input, 'enabled'),
-    mode: validateEnum(property(input, 'mode'), 'mode', MODES, 'oneShot'),
-    onBusy: validateEnum(property(input, 'onBusy'), 'onBusy', ON_BUSY, 'skip'),
-    minIntervalSec: validateMinInterval(property(input, 'minIntervalSec')),
+    schedule: validateSchedule(body.schedule),
+    enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+    mode: validateEnum(body.mode, 'mode', MODES, 'oneShot'),
+    onBusy: validateEnum(body.onBusy, 'onBusy', ON_BUSY, 'skip'),
+    minIntervalSec: validateMinInterval(body.minIntervalSec),
     lastScheduledMinute: null,
     createdAt: now,
     updatedAt: now,
@@ -244,46 +293,41 @@ export function createRoutine(input: unknown = {}): Routine {
 }
 
 /** Only changed prompt text appends a version; ordinary edits do not. */
-export function updateRoutine(ref: unknown, patch: unknown = {}): Routine | null {
+export function updateRoutine(ref: string, patch: unknown = {}): Routine | null {
   const routines = readRoutines();
   const existing = lookupRoutine(routines, ref);
   if (!existing) return null;
-  const routine = { ...routines[existing.id] };
+  const body = fields(patch);
+  const routine: Routine = { ...existing };
 
-  if (property(patch, 'name') !== undefined) {
-    validateName(property(patch, 'name'), routines, routine.id);
-    routine.name = property(patch, 'name');
+  if (body.name !== undefined) routine.name = validateName(body.name, routines, routine.id);
+  if (body.description !== undefined) {
+    routine.description = validateOptionalString(body.description, 'description', MAX_DESCRIPTION);
   }
-  if (property(patch, 'description') !== undefined) {
-    routine.description = validateOptionalString(property(patch, 'description'), 'description', MAX_DESCRIPTION);
+  if (body.harness !== undefined) routine.harness = validateHarness(body.harness);
+  if (body.cwd !== undefined) routine.cwd = validateCwd(body.cwd);
+  if (body.model !== undefined) {
+    if (body.model === null || body.model === '') routine.model = undefined;
+    else if (typeof body.model !== 'string') throw fail('model must be a string');
+    else routine.model = body.model.trim() || undefined;
   }
-  if (property(patch, 'harness') !== undefined) routine.harness = validateHarness(property(patch, 'harness'));
-  if (property(patch, 'cwd') !== undefined) routine.cwd = validateCwd(property(patch, 'cwd'));
-  if (property(patch, 'model') !== undefined) {
-    if (property(patch, 'model') === null || property(patch, 'model') === '') routine.model = undefined;
-    else if (typeof property(patch, 'model') !== 'string') throw fail('model must be a string');
-    else routine.model = (property(patch, 'model') as string).trim() || undefined;
+  if (body.thinking !== undefined) {
+    routine.thinking = body.thinking === null || body.thinking === ''
+      ? undefined : validateEnum(body.thinking, 'thinking', THINKING_LEVELS, undefined);
   }
-  if (property(patch, 'thinking') !== undefined) {
-    routine.thinking = property(patch, 'thinking') === null || property(patch, 'thinking') === ''
-      ? undefined : validateEnum(property(patch, 'thinking'), 'thinking', THINKING_LEVELS, undefined);
-  }
-  if (property(patch, 'schedule') !== undefined) routine.schedule = validateSchedule(property(patch, 'schedule'));
-  if (property(patch, 'enabled') !== undefined) routine.enabled = !!property(patch, 'enabled');
-  if (property(patch, 'mode') !== undefined) routine.mode = validateEnum(property(patch, 'mode'), 'mode', MODES, routine.mode);
-  if (property(patch, 'onBusy') !== undefined) routine.onBusy = validateEnum(property(patch, 'onBusy'), 'onBusy', ON_BUSY, routine.onBusy);
-  if (property(patch, 'minIntervalSec') !== undefined) routine.minIntervalSec = validateMinInterval(property(patch, 'minIntervalSec'));
+  if (body.schedule !== undefined) routine.schedule = validateSchedule(body.schedule);
+  if (body.enabled !== undefined) routine.enabled = Boolean(body.enabled);
+  if (body.mode !== undefined) routine.mode = validateEnum(body.mode, 'mode', MODES, routine.mode);
+  if (body.onBusy !== undefined) routine.onBusy = validateEnum(body.onBusy, 'onBusy', ON_BUSY, routine.onBusy);
+  if (body.minIntervalSec !== undefined) routine.minIntervalSec = validateMinInterval(body.minIntervalSec);
 
   const now = Date.now();
-  if (property(patch, 'prompt') !== undefined) {
-    const prompt = validatePrompt(property(patch, 'prompt'));
+  if (body.prompt !== undefined) {
+    const prompt = validatePrompt(body.prompt);
     if (prompt !== routine.prompt) {
       routine.prompt = prompt;
-      // Operand-only assertions preserve native + and iteration: a saved string
-      // version concatenates, and a truthy non-iterable versions value still throws.
-      routine.promptVersion = ((routine.promptVersion || 1) as number) + 1;
-      // Trim from the front; the current version always remains in the history.
-      routine.versions = [...((routine.versions || []) as Iterable<unknown>), { version: routine.promptVersion, prompt, savedAt: now }]
+      routine.promptVersion += 1;
+      routine.versions = [...routine.versions, { version: routine.promptVersion, prompt, savedAt: now }]
         .slice(-MAX_VERSIONS);
     }
   }
@@ -293,7 +337,7 @@ export function updateRoutine(ref: unknown, patch: unknown = {}): Routine | null
   return routine;
 }
 
-export function deleteRoutine(ref: unknown): Routine | null {
+export function deleteRoutine(ref: string): Routine | null {
   const routines = readRoutines();
   const existing = lookupRoutine(routines, ref);
   if (!existing) return null;
@@ -303,88 +347,93 @@ export function deleteRoutine(ref: unknown): Routine | null {
 }
 
 /** Persist the fired minute to prevent double-firing after a same-minute restart. */
-export function markScheduled(id: unknown, minuteMs: unknown): Routine | null {
+export function markScheduled(id: string, minuteMs: number): Routine | null {
   const routines = readRoutines();
-  // Index-only assertions retain the original repeated ToPropertyKey coercions.
-  if (!routines[id as string]) return null;
-  routines[id as string] = { ...routines[id as string], lastScheduledMinute: minuteMs };
+  const existing = routines[id];
+  if (!existing) return null;
+  const routine: Routine = { ...existing, lastScheduledMinute: minuteMs };
+  routines[id] = routine;
   writeRoutines(routines);
-  return routines[id as string];
+  return routine;
 }
 
-// ---------------------------------------------------------------------------
-// Invocation ledger
-// ---------------------------------------------------------------------------
+function parseInvocation(value: unknown): RoutineInvocation | null {
+  const row = fields(value);
+  if (typeof row.id !== 'string' || !includes(STATUSES, row.status)) return null;
+  return {
+    id: row.id,
+    routineId: stringOr(row.routineId, ''),
+    routineName: stringOr(row.routineName, ''),
+    version: numberOr(row.version, 1),
+    trigger: row.trigger === 'schedule' ? 'schedule' : 'invoke',
+    source: typeof row.source === 'string' ? row.source : null,
+    delivery: includes(DELIVERIES, row.delivery) ? row.delivery : 'prompt',
+    status: row.status,
+    skipReason: typeof row.skipReason === 'string' ? row.skipReason : null,
+    sessionId: typeof row.sessionId === 'string' ? row.sessionId : null,
+    startedAt: numberOr(row.startedAt, 0),
+    endedAt: typeof row.endedAt === 'number' ? row.endedAt : null,
+    durationMs: typeof row.durationMs === 'number' ? row.durationMs : null,
+    error: typeof row.error === 'string' ? row.error : null,
+    input: row.input === undefined ? null : row.input,
+    summary: typeof row.summary === 'string' ? row.summary : null,
+    closed: row.closed === true,
+    closeError: typeof row.closeError === 'string' ? row.closeError : null,
+  };
+}
 
 export function readInvocations(): RoutineInvocation[] {
-  const raw = readStore(INVOCATIONS_FILE);
-  const list: unknown[] = Array.isArray(raw.invocations) ? raw.invocations : [];
-  return list.filter(isInvocation);
+  const stored = readStore(INVOCATIONS_FILE).invocations;
+  const rows: unknown[] = Array.isArray(stored) ? stored : [];
+  return rows.flatMap((row) => {
+    const invocation = parseInvocation(row);
+    return invocation ? [invocation] : [];
+  });
 }
 
 function writeInvocations(invocations: RoutineInvocation[]): void {
   writeStore(INVOCATIONS_FILE, { version: 1, invocations: invocations.slice(0, MAX_INVOCATIONS) });
 }
 
-/**
- * One admission measurement, not an immutable snapshot of caller data.
- * Only this private brand can carry a prior measurement through the input slot;
- * the captured reference is also the exact value the ledger receives.
- */
-export class RoutineInputAdmission {
-  readonly #input: unknown;
-  readonly #size: number;
-
-  private constructor(input: unknown) {
-    this.#input = input;
-    // JSON.stringify may return undefined; retain byteLength's native failure.
-    this.#size = input === undefined || input === null
-      ? 0 : Buffer.byteLength(JSON.stringify(input), 'utf8');
-  }
-
-  /** Null means oversized; native serialization errors still escape to the caller. */
-  static prepare(input: unknown): RoutineInputAdmission | null {
-    const admission = input !== null && typeof input === 'object' && #input in input
-      ? input : new RoutineInputAdmission(input);
-    return admission.#size > MAX_INPUT_BYTES ? null : admission;
-  }
-
-  /** Read the private slot, never a caller-overridable value getter. */
-  static value(admission: RoutineInputAdmission): unknown {
-    return admission.#input;
-  }
+/** UTF-8 size of the JSON form callers persist; null and undefined are empty. */
+export function inputBytes(input: unknown): number {
+  if (input === undefined || input === null) return 0;
+  return Buffer.byteLength(JSON.stringify(input)!, 'utf8');
 }
 
-export function createInvocation(fields: unknown = {}): CreatedRoutineInvocation {
-  const routine = property(fields, 'routine');
-  if (!routine) throw fail('routine is required');
-  if (!includes(STATUSES, property(fields, 'status'))) throw fail(`status must be one of: ${STATUSES.join(', ')}`);
-  const source = property(fields, 'source') == null ? null : validateOptionalString(property(fields, 'source'), 'source', MAX_SOURCE) || null;
-  const input = property(fields, 'input') === undefined ? null : property(fields, 'input');
-  const admission = RoutineInputAdmission.prepare(input);
-  if (!admission) {
+export function createInvocation({
+  routine,
+  status,
+  trigger = 'invoke',
+  source = null,
+  input = null,
+  delivery = 'prompt',
+  skipReason = null,
+  sessionId = null,
+  startedAt = Date.now(),
+  error = null,
+}: NewInvocation): RoutineInvocation {
+  if (inputBytes(input) > MAX_INPUT_BYTES) {
     throw fail(`input must serialize to at most ${MAX_INPUT_BYTES} bytes`, 413);
   }
-  const startedAt = Number.isFinite(property(fields, 'startedAt')) ? property(fields, 'startedAt') : Date.now();
-  const terminal = property(fields, 'status') === 'skipped';
-  const delivery = property(fields, 'delivery');
-  const invocation: CreatedRoutineInvocation = {
+  const terminal = status === 'skipped';
+  const invocation: RoutineInvocation = {
     id: crypto.randomUUID(),
-    routineId: property(routine, 'id'),
+    routineId: routine.id,
     // Denormalized: the ledger outlives the routine it came from.
-    routineName: property(routine, 'name'),
-    version: property(routine, 'promptVersion') || 1,
-    trigger: property(fields, 'trigger') === 'schedule' ? 'schedule' : 'invoke',
-    source,
-    delivery: includes(DELIVERIES, delivery) ? delivery : 'prompt',
-    status: property(fields, 'status'),
-    skipReason: property(fields, 'skipReason') || null,
-    sessionId: property(fields, 'sessionId') || null,
+    routineName: routine.name,
+    version: routine.promptVersion || 1,
+    trigger,
+    source: source || null,
+    delivery,
+    status,
+    skipReason: skipReason || null,
+    sessionId: sessionId || null,
     startedAt,
     endedAt: terminal ? startedAt : null,
     durationMs: terminal ? 0 : null,
-    error: property(fields, 'error') || null,
-    input: RoutineInputAdmission.value(admission),
+    error: error || null,
+    input,
     summary: null,
     closed: false,
     closeError: null,
@@ -393,61 +442,46 @@ export function createInvocation(fields: unknown = {}): CreatedRoutineInvocation
   return invocation;
 }
 
-const MUTABLE_FIELDS: Readonly<Record<string, true>> = {
-  status: true, sessionId: true, endedAt: true, durationMs: true, error: true,
-  summary: true, closed: true, closeError: true, delivery: true, skipReason: true,
-};
-
 /** Read-modify-write of one entry. Every status change hits disk. */
-export function updateInvocation(id: unknown, patch: unknown = {}): RoutineInvocation | null {
+export function updateInvocation(id: string, patch: InvocationPatch): RoutineInvocation | null {
   const invocations = readInvocations();
   const index = invocations.findIndex((entry) => entry.id === id);
   if (index < 0) return null;
-  const updated: RoutineInvocation = { ...invocations[index] };
-  // Object.entries itself owns primitive boxing and nullish failure behavior.
-  const entries: [string, unknown][] = Object.entries(patch as object);
-  for (const [key, value] of entries) {
-    if (Object.hasOwn(MUTABLE_FIELDS, key)) updated[key] = value;
-  }
+  const updated: RoutineInvocation = { ...invocations[index], ...patch };
   if (updated.endedAt && !Number.isFinite(updated.durationMs)) {
-    // Preserve native subtraction coercions (including bigint/Symbol failures).
-    updated.durationMs = Math.max(0, (updated.endedAt as number) - (updated.startedAt as number));
+    updated.durationMs = Math.max(0, updated.endedAt - (updated.startedAt || 0));
   }
   invocations[index] = updated;
   writeInvocations(invocations);
   return updated;
 }
 
-export function getInvocation(id: unknown): RoutineInvocation | null {
+export function getInvocation(id: string): RoutineInvocation | null {
   return readInvocations().find((entry) => entry.id === id) || null;
 }
 
 /** Newest first; before is an exclusive startedAt cursor. */
-export function listInvocations(options: unknown = {}): RoutineInvocation[] {
-  const rawRoutineId = property(options, 'routineId');
-  const routineId = rawRoutineId === undefined ? null : rawRoutineId;
-  const rawLimit = property(options, 'limit');
-  const limit = rawLimit === undefined ? 50 : rawLimit;
-  const rawBefore = property(options, 'before');
-  const before = rawBefore === undefined ? null : rawBefore;
+export function listInvocations({ routineId = null, limit = 50, before = null }: ListInvocationOptions = {}): RoutineInvocation[] {
   let list = readInvocations();
   if (routineId) list = list.filter((entry) => entry.routineId === routineId);
-  // These assertions apply only to the operators, never to persisted row shapes.
-  if (isFiniteNumber(before)) list = list.filter((entry) => (entry.startedAt as number) < before);
-  return list.slice(0, Math.max(1, limit as number));
+  if (before !== null && Number.isFinite(before)) list = list.filter((entry) => entry.startedAt < before);
+  return list.slice(0, Math.max(1, limit));
 }
 
-export function countInvocations(routineId: unknown): number {
+export function countInvocations(routineId: string): number {
   return readInvocations().filter((entry) => entry.routineId === routineId).length;
 }
 
-export function lastInvocation(routineId: unknown, predicate: ((entry: RoutineInvocation) => unknown) | null = null): RoutineInvocation | null {
+export function lastInvocation(
+  routineId: string,
+  predicate: ((entry: RoutineInvocation) => boolean) | null = null,
+): RoutineInvocation | null {
   return readInvocations().find((entry) =>
     entry.routineId === routineId && (!predicate || predicate(entry))) || null;
 }
 
 /** The invocation currently occupying the routine, if any (busy := this). */
-export function activeInvocation(routineId: unknown): RoutineInvocation | null {
+export function activeInvocation(routineId: string): RoutineInvocation | null {
   return lastInvocation(routineId, (entry) => includes(ACTIVE_STATUSES, entry.status));
 }
 
@@ -455,50 +489,11 @@ export function activeInvocations(): RoutineInvocation[] {
   return readInvocations().filter((entry) => includes(ACTIVE_STATUSES, entry.status));
 }
 
-export function countActive(routineId: unknown): number {
-  return readInvocations()
-    .filter((entry) => entry.routineId === routineId && includes(ACTIVE_STATUSES, entry.status)).length;
-}
-
 /** Latest invocation per session id; presentation-only provenance, never authority. */
-export function invocationsBySessionId(): Map<unknown, RoutineInvocation> {
-  const bySession = new Map<unknown, RoutineInvocation>();
+export function invocationsBySessionId(): Map<string, RoutineInvocation> {
+  const bySession = new Map<string, RoutineInvocation>();
   for (const entry of readInvocations()) { // newest first, so the first wins
     if (entry.sessionId && !bySession.has(entry.sessionId)) bySession.set(entry.sessionId, entry);
   }
   return bySession;
-}
-
-/** Existing module surface, shared by consumers without a factory-derived port. */
-export interface RoutineStore {
-  readRoutines: typeof readRoutines;
-  listRoutines: typeof listRoutines;
-  getRoutine: typeof getRoutine;
-  createRoutine: typeof createRoutine;
-  updateRoutine: typeof updateRoutine;
-  deleteRoutine: typeof deleteRoutine;
-  markScheduled: typeof markScheduled;
-  readInvocations: typeof readInvocations;
-  createInvocation: typeof createInvocation;
-  updateInvocation: typeof updateInvocation;
-  getInvocation: typeof getInvocation;
-  listInvocations: typeof listInvocations;
-  countInvocations: typeof countInvocations;
-  lastInvocation: typeof lastInvocation;
-  activeInvocation: typeof activeInvocation;
-  activeInvocations: typeof activeInvocations;
-  countActive: typeof countActive;
-  invocationsBySessionId: typeof invocationsBySessionId;
-  RoutineInputAdmission: typeof RoutineInputAdmission;
-  MAX_INVOCATIONS: typeof MAX_INVOCATIONS;
-  MAX_VERSIONS: typeof MAX_VERSIONS;
-  MAX_PROMPT: typeof MAX_PROMPT;
-  MAX_INPUT_BYTES: typeof MAX_INPUT_BYTES;
-  MAX_SOURCE: typeof MAX_SOURCE;
-  THINKING_LEVELS: typeof THINKING_LEVELS;
-  MODES: typeof MODES;
-  ON_BUSY: typeof ON_BUSY;
-  DELIVERIES: typeof DELIVERIES;
-  STATUSES: typeof STATUSES;
-  NAME_RE: typeof NAME_RE;
 }

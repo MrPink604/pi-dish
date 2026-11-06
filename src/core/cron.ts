@@ -14,7 +14,7 @@
 const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 const DAY_NAMES = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 
-export const ALIASES: Record<string, string> = {
+const ALIASES: Record<string, string> = {
   '@hourly': '0 * * * *',
   '@daily': '0 0 * * *',
   '@midnight': '0 0 * * *',
@@ -42,7 +42,7 @@ const FIELDS: Field[] = [
 ];
 
 function parseValue(field: Field, token: string): number {
-  const text = String(token).trim().toLowerCase();
+  const text = token.trim().toLowerCase();
   if (field.names) {
     const index = field.names.indexOf(text.slice(0, 3));
     if (index >= 0 && /^[a-z]+$/.test(text)) return index + field.nameOffset;
@@ -61,7 +61,7 @@ function parseValue(field: Field, token: string): number {
 function parseField(field: Field, spec: string): { values: Set<number>; restricted: boolean } {
   const values = new Set<number>();
   let restricted = false;
-  for (const part of String(spec).split(',')) {
+  for (const part of spec.split(',')) {
     const chunk = part.trim();
     if (!chunk) throw new Error(`empty ${field.name} entry`);
     const [rangeText, stepText, ...extra] = chunk.split('/');
@@ -104,8 +104,8 @@ function parseField(field: Field, spec: string): { values: Set<number>; restrict
  * Parse a 5-field cron expression (or one of the `@` aliases).
  * Throws an Error whose message is safe to hand back as a 400.
  */
-export function parseCron(expression: unknown): ParsedCron {
-  if (typeof expression !== 'string' || !expression.trim()) {
+export function parseCron(expression: string): ParsedCron {
+  if (!expression.trim()) {
     throw new Error('a cron expression is required');
   }
   const raw = expression.trim();
@@ -140,8 +140,7 @@ function dayMatches(parsed: ParsedCron, date: Date): boolean {
   return dom && dow;
 }
 
-export function cronMatches(parsed: ParsedCron, date: Date | string | number): boolean {
-  const when = date instanceof Date ? date : new Date(date);
+export function cronMatches(parsed: ParsedCron, when: Date): boolean {
   return parsed.month.has(when.getMonth() + 1)
     && dayMatches(parsed, when)
     && parsed.hour.has(when.getHours())
@@ -156,8 +155,7 @@ const MAX_SEARCH_DAYS = 366;
  * month/day/hour rather than minute so a never-matching expression costs a few
  * hundred iterations, not half a million.
  */
-export function nextCronMatch(parsed: ParsedCron, fromDate: Date | string | number = new Date()): Date | null {
-  const from = fromDate instanceof Date ? fromDate : new Date(fromDate);
+export function nextCronMatch(parsed: ParsedCron, from: Date = new Date()): Date | null {
   const limit = from.getTime() + MAX_SEARCH_DAYS * 86400000;
   const cursor = new Date(from.getTime());
   cursor.setSeconds(0, 0);
@@ -185,14 +183,4 @@ export function nextCronMatch(parsed: ParsedCron, fromDate: Date | string | numb
     return cursor;
   }
   return null;
-}
-
-/** Convenience for callers that only hold the raw string. */
-export function describeCron(expression: unknown): string | null {
-  try {
-    parseCron(expression);
-    return null;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
 }

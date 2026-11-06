@@ -71,21 +71,29 @@ interface ShareExportCacheEntry {
 
 const PAGE_COMMENTS_HEADER = 'x-pi-dish-page-comments';
 
-// Boxing preserves the legacy property reads on primitive JSON bodies/rows;
-// members remain unknown until the consuming operation validates them.
+// Stored rows and HTTP bodies are external; members stay unknown until checked.
 function fields(value: unknown): Record<string, unknown> {
-  return Object(value) as Record<string, unknown>;
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function commentBody(value: unknown): string | null {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text && text.length <= 10000 ? text : null;
 }
 
 export function createPublicationHandlers(ports: PublicationPorts): PublicationHandlers {
   const { findSessionSource, liveSessionHistoryPending, listRegisteredSessions,
     enumerateSessionCandidates, getRPCSession, exportSessionHtml, getOmpShareSnapshot } = ports;
-  // { path, url } for a token. url is set only when PI_DISH_SHARE_BASE_URL is,
-  // so operators behind a proxy can hand out an absolute link.
+  // url is set only when PI_DISH_SHARE_BASE_URL is, so operators behind a
+  // proxy can hand out an absolute link.
+  function publicLink(pathname: string) {
+    const base = ports.publicBaseUrl();
+    return base ? base.replace(/\/+$/, '') + pathname : null;
+  }
+
   function sharePayload(token: string) {
     const sharePath = `/share/${token}`;
-    const base = ports.publicBaseUrl();
-    return { token, path: sharePath, url: base ? base.replace(/\/+$/, '') + sharePath : null };
+    return { token, path: sharePath, url: publicLink(sharePath) };
   }
 
   // Per-token export cache keyed on the JSONL's (mtimeMs, size) and live export
@@ -150,7 +158,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       const token = shares.createHtmlShare(req.body);
       return res.json(sharePayload(token));
     } catch (e) {
-      return res.status(500).json({ error: fields(e).message });
+      return res.status(500).json({ error: (e as Error).message });
     }
   };
 
@@ -186,11 +194,6 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   // Public route — always available on the main app (the share listener is opt-in).
 
-
-  // =========================================================================
-  // Anchored comments (lib/comments.js)
-  // =========================================================================
-  //
   // The browser creates comments from a selected file/prose range or diff
   // lines. When the user later asks the agent to read comments, the
   // pi-dish-comments skill lists the open index, fetches whichever related ids
@@ -202,19 +205,17 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   }
 
   function inferSessionForPath(absPath: unknown): string | null {
+    if (typeof absPath !== 'string' || !absPath) return null;
+    const targetPath = absPath;
     // Nested session cwds are normal here (a checkout under a workspace root
     // that another session sits in), so the most specific containing cwd wins.
     // Only a genuine tie — two sessions at the same depth, e.g. the same cwd —
     // is ambiguous enough to give up on.
     const candidates = listRegisteredSessions()
       .filter((entry): entry is BridgeRegistryEntry & { cwd: string } => {
-        if (!entry.cwd) return false;
-        // path.resolve retains validation of a malformed persisted observation;
-        // this input assertion does not validate or reclassify the registry row.
-        const cwd = path.resolve(entry.cwd as string);
-        if (absPath === cwd) return true;
-        if (typeof absPath !== 'string') throw new TypeError('absPath.startsWith is not a function');
-        return absPath.startsWith(cwd + path.sep);
+        if (typeof entry.cwd !== 'string' || !entry.cwd) return false;
+        const cwd = path.resolve(entry.cwd);
+        return targetPath === cwd || targetPath.startsWith(cwd + path.sep);
       })
       .sort((a, b) => path.resolve(b.cwd).length - path.resolve(a.cwd).length);
     if (!candidates.length) return null;
@@ -294,8 +295,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   const createComment: PublicationHandler = (req, res) => {
     const input = fields(req.body);
-    const rawBody = input.body;
-    const body = typeof rawBody === 'string' ? shortString(rawBody.trim(), 10000) : null;
+    const body = commentBody(input.body);
     const target = cleanCommentTarget(input.target);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     if (!target) return res.status(400).json({ error: 'valid anchored target required' });
@@ -313,13 +313,10 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   };
 
   function commentPreview(value: unknown, label: string): unknown {
-    // Persisted legacy values are not asserted to be strings. Arrays also
-    // supported slice in the old implementation; other values still fail.
-    if (value == null) throw new TypeError(`Cannot read properties of ${value} (reading 'slice')`);
-    const slice = fields(value).slice;
-    if (typeof slice !== 'function') throw new TypeError(`${label}.slice is not a function`);
-    const preview: unknown = slice.call(value, 0, 240);
-    return preview;
+    // JSON persists comment text as a string; arrays survive from the legacy
+    // store, and both carry a native slice.
+    if (typeof value === 'string' || Array.isArray(value)) return value.slice(0, 240);
+    throw new TypeError(`${label} is not a string or array`);
   }
 
   function commentIndexEntry(comment: comments.CommentDto) {
@@ -382,7 +379,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   // Editing/deleting is the user's own correction path from the views the
   // comment was written in. Acknowledged comments are the agent's record and
   // stay immutable — a late edit would silently change what was acted on.
-  function resolveOpenComment(req: PublicationRequest, res: PublicationResponse) {
+  function requestedComment(req: PublicationRequest, res: PublicationResponse, allowAcknowledged: boolean) {
     const existing = comments.getComment(req.params.id);
     if (!existing) {
       res.status(404).json({ error: 'comment not found' });
@@ -394,17 +391,19 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       res.status(403).json({ error: 'comment belongs to a different session' });
       return null;
     }
-    if (existing.acknowledgedAt) {
+    if (!allowAcknowledged && existing.acknowledgedAt) {
       res.status(409).json({ error: 'comment already acknowledged' });
       return null;
     }
     return existing;
   }
 
+  const resolveOpenComment = (req: PublicationRequest, res: PublicationResponse) =>
+    requestedComment(req, res, false);
+
   const updateComment: PublicationHandler = (req, res) => {
     if (!resolveOpenComment(req, res)) return;
-    const rawBody = fields(req.body).body;
-    const body = typeof rawBody === 'string' ? shortString(rawBody.trim(), 10000) : null;
+    const body = commentBody(fields(req.body).body);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     const comment = comments.updateComment(req.params.id, body);
     if (!comment) return res.status(409).json({ error: 'comment already acknowledged' });
@@ -420,20 +419,11 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   };
 
   const acknowledgeComment: PublicationHandler = (req, res) => {
-    const existing = comments.getComment(req.params.id);
-    if (!existing) return res.status(404).json({ error: 'comment not found' });
-    let requestedSessionId = null;
-    try { requestedSessionId = canonicalSessionId(fields(req.body).sessionId); } catch {}
-    if (!requestedSessionId || requestedSessionId !== existing.sessionId) {
-      return res.status(403).json({ error: 'comment belongs to a different session' });
-    }
-    const comment = comments.acknowledgeComment(req.params.id);
-    res.json(comment);
+    if (!requestedComment(req, res, true)) return;
+    res.json(comments.acknowledgeComment(req.params.id));
   };
 
-  // =========================================================================
   // Page-scoped comments (the published-page overlay)
-  // =========================================================================
   //
   // Published pages run in an opaque sandboxed origin (artifact-isolation), so
   // the overlay injected into them cannot use the session-wide comment API.
@@ -488,7 +478,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     const page = commentablePage(req, res);
     if (!page) return;
     const input = fields(req.body);
-    const body = typeof input.body === 'string' ? shortString(input.body.trim(), 10000) : null;
+    const body = commentBody(input.body);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     const target = cleanCommentTarget({ kind: 'page', pageToken: req.params.token, anchor: input.anchor });
     if (!target) return res.status(400).json({ error: 'a text anchor is required' });
@@ -500,8 +490,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   const updatePageComment: PublicationHandler = (req, res) => {
     if (!openPageComment(req, res)) return;
-    const rawBody = fields(req.body).body;
-    const body = typeof rawBody === 'string' ? shortString(rawBody.trim(), 10000) : null;
+    const body = commentBody(fields(req.body).body);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     const comment = comments.updateComment(req.params.id, body);
     if (!comment) return res.status(409).json({ error: 'comment already acknowledged' });
@@ -518,11 +507,10 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   function pagePayload(token: unknown, entry: pages.PageDto) {
     const pagePath = `/page/${token}`;
-    const base = ports.publicBaseUrl();
     return {
       token,
       path: pagePath,
-      url: base ? base.replace(/\/+$/, '') + pagePath : null,
+      url: publicLink(pagePath),
       root: entry.root,
       title: entry.title || null,
       sessionId: entry.sessionId || null,
@@ -538,8 +526,9 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   // rule would only be theater: an agent can copy any file into its cwd).
   // The public share listener never registers, only serves known tokens.
   const createPage: PublicationHandler = (req, res) => {
-    const { path: rawPath, title, sessionId, renderer } = fields(req.body);
-    const hasSessionId = Object.prototype.hasOwnProperty.call(req.body || {}, 'sessionId');
+    const input = fields(req.body);
+    const { path: rawPath, title, sessionId, renderer } = input;
+    const hasSessionId = Object.hasOwn(input, 'sessionId');
     if (typeof rawPath !== 'string' || !rawPath) {
       return res.status(400).json({ error: 'path required' });
     }

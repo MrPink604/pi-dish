@@ -82,9 +82,9 @@ export interface ListCommentsOptions {
   state?: unknown;
 }
 
-// Preserve JS access/spread for primitive legacy rows; all members stay unknown.
+// Stored rows are external; members stay unknown until the route validates them.
 function fields(value: unknown): Record<string, unknown> {
-  return Object(value) as Record<string, unknown>;
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 
 function canonical(value: unknown): unknown {
@@ -137,21 +137,18 @@ export function listComments({ sessionId = null, pageToken = null, state = 'open
 // record of what it was told: editing/deleting them would rewrite that history.
 export function updateComment(id: string, body: string): CommentDto | null {
   const comments = readComments();
-  const comment = comments[id];
-  if (!comment || fields(comment).acknowledgedAt) return null;
-  // The old non-strict JS silently ignored writes to primitive legacy rows.
-  // Do not turn those writes into strict-mode TypeErrors or persisted objects.
-  if (typeof comment === 'object' || typeof comment === 'function') fields(comment).body = body;
-  const updatedAt = Date.now();
-  if (typeof comment === 'object' || typeof comment === 'function') fields(comment).updatedAt = updatedAt;
+  const comment = fields(comments[id]);
+  if (!comments[id] || comment.acknowledgedAt) return null;
+  comment.body = body;
+  comment.updatedAt = Date.now();
+  comments[id] = comment;
   writeComments(comments);
-  return { ...fields(comment), sessionId: canonical(fields(comment).sessionId) };
+  return { ...comment, sessionId: canonical(comment.sessionId) };
 }
 
 export function deleteComment(id: string): boolean {
   const comments = readComments();
-  const comment = comments[id];
-  if (!comment || fields(comment).acknowledgedAt) return false;
+  if (!comments[id] || fields(comments[id]).acknowledgedAt) return false;
   delete comments[id];
   writeComments(comments);
   return true;
@@ -159,12 +156,12 @@ export function deleteComment(id: string): boolean {
 
 export function acknowledgeComment(id: string): CommentDto | null {
   const comments = readComments();
-  const comment = comments[id];
-  if (!comment) return null;
-  if (!fields(comment).acknowledgedAt) {
-    const acknowledgedAt = Date.now();
-    if (typeof comment === 'object' || typeof comment === 'function') fields(comment).acknowledgedAt = acknowledgedAt;
+  const comment = fields(comments[id]);
+  if (!comments[id]) return null;
+  if (!comment.acknowledgedAt) {
+    comment.acknowledgedAt = Date.now();
+    comments[id] = comment;
   }
   writeComments(comments);
-  return { ...fields(comment), sessionId: canonical(fields(comment).sessionId) };
+  return { ...comment, sessionId: canonical(comment.sessionId) };
 }

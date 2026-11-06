@@ -60,5 +60,3 @@ export declare function isPathCompletionToken(token: string): boolean;
  * the partial itself starts with a dot.
  */
 export declare function completePath(token: string, { cwd, limit }?: PathCompletionOptions): PathCompletionResult[];
-/** Test hook: drop caches so temp-HOME fixtures are re-read. */
-export declare function resetCaches(): void;
