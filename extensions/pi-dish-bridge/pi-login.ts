@@ -1,24 +1,13 @@
 import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-ai";
 import type { LoginAdapter, LoginEvent, LoginInteraction, LoginProvider } from "./login.js";
+import { hostMethod as method, isObject, type HostObject } from "./host.js";
 
 // Pi's extension API exposes no login. Its ModelRegistry facade wraps the
 // session's ModelRuntime in a private `runtime` field, which owns the same
 // provider catalog and login() the TUI's /login uses (verified pi 0.85.1 and
 // 1.3.0). Unexpected shapes make the capability unavailable rather than throw.
 
-type HostRecord = Record<PropertyKey, unknown>;
-type HostMethod = (this: unknown, ...args: unknown[]) => unknown;
-
-function isObject(value: unknown): value is HostRecord {
-  return value !== null && (typeof value === "object" || typeof value === "function");
-}
-
-function method(target: unknown, name: string): HostMethod | null {
-  const value = isObject(target) ? target[name] : undefined;
-  return typeof value === "function" ? value as HostMethod : null;
-}
-
-function runtime(ctx: unknown): HostRecord | null {
+function runtime(ctx: unknown): HostObject | null {
   const registry = isObject(ctx) ? ctx.modelRegistry : undefined;
   const value = isObject(registry) ? registry.runtime : undefined;
   return isObject(value) && method(value, "login") && method(value, "getProviders") ? value : null;

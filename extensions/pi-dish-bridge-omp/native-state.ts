@@ -1,4 +1,5 @@
 import { observeSendUserMessage } from "../pi-dish-bridge/send-observer.js";
+import { isHostMethod, isObject, type HostObject, type HostMethod } from "../pi-dish-bridge/host.js";
 
 export type OmpNativeProjection = {
   todos: unknown[];
@@ -9,8 +10,7 @@ export type OmpNativeProjection = {
   fastMode: { available: boolean; enabled: boolean; active: boolean } | null;
 };
 
-type HostSession = Record<PropertyKey, unknown>;
-type HostMethod = (this: HostSession, ...args: unknown[]) => unknown;
+type HostSession = HostObject;
 type Readers = {
   todos?: HostMethod;
   planMode?: HostMethod;
@@ -61,10 +61,6 @@ const state: ObserverState = isObserverState(cachedState) ? cachedState : {
 state.publish = publish;
 sharedGlobal[STATE_KEY] = state;
 
-function isObject(value: unknown): value is Record<PropertyKey, unknown> {
-  return !!value && typeof value === "object";
-}
-
 function isObserverState(value: unknown): value is ObserverState {
   return isObject(value) && value.sessions instanceof WeakMap && value.subscribers instanceof Set &&
     isObject(value.readers) && typeof value.patches === "number" && typeof value.publishes === "number";
@@ -85,10 +81,6 @@ function legacyReaders(value: unknown): Readers {
 
 function isHostConstructor(value: unknown): value is { prototype: HostSession } {
   return typeof value === "function" && "prototype" in value && !!value.prototype && typeof value.prototype === "object";
-}
-
-function isHostMethod(value: unknown): value is HostMethod {
-  return typeof value === "function";
 }
 
 // OMP's u0o(): an OpenAI-compatible direct provider (not fireworks or
@@ -236,7 +228,7 @@ function patchAgentSession(AgentSession: { prototype: HostSession }): void {
       const result = Reflect.apply(original, this, args);
       state.publish(this);
       return result;
-    } satisfies HostMethod;
+    };
   };
 
   capture("getTodoPhases", "todos");

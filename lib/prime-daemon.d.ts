@@ -1,15 +1,11 @@
 // Generated from src/core/prime-daemon.ts; edit that source and run npm run build:core.
-import type { ExtensionUIState, NativeSessionId, RunningToolCall } from './contracts';
+import type { NativeSessionId, PromptOptions } from './contracts';
 import { type ProtocolRecord } from './wire-protocol';
+import { TransportSession } from './transport-session';
 export declare const PRIME_DAEMON_PROTOCOL: Readonly<{
     name: "prime-agent.daemon";
     version: 7;
 }>;
-type Listener = (data: unknown) => void;
-interface PromptOptions {
-    deliverAs?: 'steer' | 'followUp';
-    images?: unknown[];
-}
 interface TreeOptions {
     summarize?: boolean;
     customInstructions?: string;
@@ -76,7 +72,7 @@ export declare class PrimeDaemonConnection {
     close(): void;
 }
 /** A live Prime root agent, as consumed by the session routes (LiveSession). */
-export declare class PrimeDaemonSession {
+export declare class PrimeDaemonSession extends TransportSession {
     readonly harnessId: 'prime';
     readonly activeSessionId: string;
     readonly daemonSocket: string;
@@ -85,30 +81,18 @@ export declare class PrimeDaemonSession {
     sessionFile: string;
     cwd: string | null;
     alive: boolean;
-    turnInProgress: boolean;
-    compacting: boolean;
-    lastActivityAt: Date;
     summary: PrimeAgentSummary;
     queueState: PrimeQueueState;
-    extUIState: ExtensionUIState;
-    runningToolCalls: Map<string, RunningToolCall>;
     state: ProtocolRecord;
-    lastStats?: unknown;
     attached: boolean;
     bounceExecuting?: boolean;
     bounceActivityRevision?: number;
-    private listeners;
     private daemon;
-    private streamingAssistantMessage;
     constructor(daemon: PrimeDaemon, summary: PrimeAgentSummary);
     /** Roster rows are authoritative for identity and the fields Prime emits no event for. */
     applySummary(summary: PrimeAgentSummary): void;
     _event(event: ProtocolRecord): void;
     _retire(): void;
-    _emit(event: string, data: unknown): void;
-    on(event: string, cb: Listener): () => void;
-    off(event: string, cb: Listener): void;
-    once(event: string, cb: Listener): () => void;
     send(command: string, params?: ProtocolRecord, { timeout }?: {
         timeout?: number | undefined;
     }): Promise<unknown>;
@@ -130,7 +114,6 @@ export declare class PrimeDaemonSession {
     /** Prime refuses the mutation unless `text` still names that queued entry. */
     cancelQueued(kind: 'steering' | 'followUp', index: number, text: string): Promise<unknown>;
     respondExtensionUI(): Promise<unknown>;
-    _refreshStats(): void;
 }
 export interface PrimeStopObservation {
     activeSessionId: string;

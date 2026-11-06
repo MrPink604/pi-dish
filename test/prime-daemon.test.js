@@ -110,6 +110,33 @@ test('routes session events: queue updates carry Prime action lanes', async (t) 
     await until(() => named.length > 0);
     assert.equal(session.state.sessionName, 'Renamed by Prime');
 });
+test('delta-only message updates are rebuilt into a whole assistant message', async (t) => {
+    const fake = await (0, fake_prime_daemon_js_1.startFakePrimeDaemon)(fixturePath('deltas'), { rows: [(0, fake_prime_daemon_js_1.primeRow)({ activeSessionId: 'root-a', sessionId: 'prime-root-a' })] });
+    cleanup(t, fake);
+    const [session] = await daemonFor(fake.socketPath).refresh();
+    const updates = [];
+    session.on('message_update', data => updates.push(data));
+    fake.emit('root-a', { type: 'message_start', message: { role: 'assistant', content: [], custom: 'kept' } });
+    for (const assistantMessageEvent of [
+        { type: 'text_start', contentIndex: 0 },
+        { type: 'text_delta', contentIndex: 0, delta: 'partial' },
+        { type: 'text_end', contentIndex: 0, content: 'whole answer' },
+        { type: 'thinking_start', contentIndex: 1 },
+        { type: 'thinking_delta', contentIndex: 1, delta: 'reasoning' },
+        { type: 'toolcall_end', contentIndex: 2, toolCall: { type: 'toolCall', id: 't1', name: 'Read' } },
+    ])
+        fake.emit('root-a', { type: 'message_update', assistantMessageEvent });
+    await until(() => updates.length === 6);
+    assert.deepEqual(updates.at(-1)?.message.content, [
+        { type: 'text', text: 'whole answer' },
+        { type: 'thinking', thinking: 'reasoning' },
+        { type: 'toolCall', id: 't1', name: 'Read' },
+    ]);
+    assert.equal(updates.at(-1)?.message.custom, 'kept', 'the snapshot keeps fields the deltas never touch');
+    const final = { role: 'assistant', content: [{ type: 'text', text: 'whole answer' }] };
+    fake.emit('root-a', { type: 'message_end', message: final });
+    await until(() => session.streamingAssistantMessage === null);
+});
 test('a prompt to a busy agent steers unless the caller asks for a follow-up', async (t) => {
     const busy = (0, fake_prime_daemon_js_1.primeRow)({ activeSessionId: 'busy-a', sessionId: 'prime-busy-a', isStreaming: true });
     const idle = (0, fake_prime_daemon_js_1.primeRow)({ activeSessionId: 'idle-a', sessionId: 'prime-idle-a', sessionActions: { queuedCount: 0, steering: [], followUps: [] } });

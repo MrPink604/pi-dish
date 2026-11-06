@@ -1,5 +1,6 @@
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { observeSendUserMessage } from "./send-observer.js";
+import { callHost, field, isHostMethod, isObject } from "./host.js";
 
 // Pi's extension runner omits queue/private compaction events. Capture the live
 // receiver once; the global holder survives extension reloads on the same session.
@@ -44,31 +45,12 @@ try {
 }
 
 type PrivateSession = Record<PropertyKey, unknown>;
-type PrivateMethod = (this: unknown, ...args: unknown[]) => unknown;
-
-function isObject(value: unknown): value is PrivateSession {
-  return value !== null && (typeof value === "object" || typeof value === "function");
-}
-
-function field(value: unknown, key: PropertyKey): unknown {
-  return isObject(value) ? value[key] : undefined;
-}
-
-function isMethod(value: unknown): value is PrivateMethod {
-  return typeof value === "function";
-}
-
-function call(target: unknown, name: string, ...args: unknown[]): unknown {
-  const method = field(target, name);
-  if (!isMethod(method)) throw new Error(`host does not expose ${name}`);
-  return Reflect.apply(method, target, args);
-}
 
 function capturedSession(): PrivateSession | null {
   try {
     const holder = sharedGlobal[HOLDER];
     const session = holder && typeof holder === "object" && "current" in holder ? holder.current : null;
-    if (isObject(session) && isMethod(session.subscribe)) return session;
+    if (isObject(session) && isHostMethod(session.subscribe)) return session;
   } catch {}
   return null;
 }
@@ -97,8 +79,8 @@ export const piPrivate: PiPrivateOperations = {
     if (!session) return null;
     try {
       return {
-        steering: [...stringArray(call(session, "getSteeringMessages"))],
-        followUp: [...stringArray(call(session, "getFollowUpMessages"))],
+        steering: [...stringArray(callHost(session, "getSteeringMessages"))],
+        followUp: [...stringArray(callHost(session, "getFollowUpMessages"))],
       };
     } catch {
       return null;
@@ -108,8 +90,8 @@ export const piPrivate: PiPrivateOperations = {
   followUpCount() {
     const session = capturedSession();
     try {
-      if (!isMethod(field(session, "getFollowUpMessages"))) return null;
-      const visible = call(session, "getFollowUpMessages");
+      if (!isHostMethod(field(session, "getFollowUpMessages"))) return null;
+      const visible = callHost(session, "getFollowUpMessages");
       return Array.isArray(visible) ? visible.length : null;
     } catch {
       return null;
@@ -137,14 +119,14 @@ export const piPrivate: PiPrivateOperations = {
     }
     display.splice(index, 1);
     messages.splice(index, 1);
-    call(session, "_emitQueueUpdate");
+    callHost(session, "_emitQueueUpdate");
   },
 
   subscribe(listener) {
     const session = capturedSession();
     if (!session) return null;
-    const unsubscribe = call(session, "subscribe", listener);
-    return isMethod(unsubscribe) ? () => { Reflect.apply(unsubscribe, undefined, []); } : null;
+    const unsubscribe = callHost(session, "subscribe", listener);
+    return isHostMethod(unsubscribe) ? () => { Reflect.apply(unsubscribe, undefined, []); } : null;
   },
 
   isCompacting() {
@@ -156,7 +138,7 @@ export const piPrivate: PiPrivateOperations = {
   abortCompactionIfRunning(buffering) {
     const session = capturedSession();
     if ((buffering || session?.isCompacting) && typeof session?.abortCompaction === "function") {
-      try { call(session, "abortCompaction"); } catch {}
+      try { callHost(session, "abortCompaction"); } catch {}
     }
   },
 
@@ -165,6 +147,6 @@ export const piPrivate: PiPrivateOperations = {
     if (!session || typeof session.prompt !== "function") return null;
     // Keep this receiver even if another session is captured before a deferred
     // reload runs. Resolve its method at invocation, as the original path did.
-    return () => call(session, "prompt", command);
+    return () => callHost(session, "prompt", command);
   },
 };

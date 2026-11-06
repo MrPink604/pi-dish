@@ -5,4 +5,5 @@ export interface HarnessLaunchSpec {
     argv: string[];
 }
 export declare function harnessLaunchSpec(descriptor: HarnessDescriptor): HarnessLaunchSpec;
+/** Explicit PI_DISH_PI_COMMAND wins; otherwise a simple `alias pi=…` is mirrored. */
 export declare function getPiLaunchSpec(): HarnessLaunchSpec;

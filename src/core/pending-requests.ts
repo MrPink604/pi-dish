@@ -1,57 +1,54 @@
 type RequestId = string | number;
+
 interface PendingRequest {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
 }
 
 /**
- * Id-correlated pending-request tracking shared by both session backends
- * (bridge Unix socket and RPC stdio). Owns the resolve/reject bookkeeping
- * and the per-request timeout so protocol guards can't drift between the
- * two transports — the bridge shipping without a timeout while RPC had one
- * was exactly that drift.
+ * Id-correlated pending-request bookkeeping shared by all transports (bridge
+ * socket, RPC stdio, Prime daemon), so their timeouts and settle rules cannot
+ * drift apart.
  */
 class PendingRequests {
-  declare private _map: Map<RequestId, PendingRequest>;
-  constructor() {
-    this._map = new Map(); // id -> { resolve, reject }
-  }
+  private readonly map = new Map<RequestId, PendingRequest>();
 
   /** Register a request under `id`; returns the promise its response settles. */
   track(id: RequestId, { timeout = 0, label = 'request' } = {}): Promise<unknown> {
     return new Promise<unknown>((resolve, reject) => {
       const timer = timeout > 0 ? setTimeout(() => {
-        if (this._map.delete(id)) reject(new Error(`${label} timed out after ${timeout}ms`));
-      }, timeout) : null;
-      this._map.set(id, {
-        resolve: (v) => { if (timer) clearTimeout(timer); resolve(v); },
-        reject: (e) => { if (timer) clearTimeout(timer); reject(e); },
+        if (this.map.delete(id)) reject(new Error(`${label} timed out after ${timeout}ms`));
+      }, timeout) : undefined;
+      this.map.set(id, {
+        resolve: (value) => { clearTimeout(timer); resolve(value); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
       });
     });
   }
 
   /** Settle from a {type:'response'} wire message; false when the id is unknown. */
   settle(id: RequestId | null | undefined, success: boolean, data?: unknown, error?: string, fallbackError = 'command failed'): boolean {
-    const pending = id != null ? this._map.get(id) : null;
+    if (id == null) return false;
+    const pending = this.map.get(id);
     if (!pending) return false;
-    this._map.delete(id!);
+    this.map.delete(id);
     if (success) pending.resolve(data);
     else pending.reject(new Error(error || fallbackError));
     return true;
   }
 
   /** Reject one tracked request (e.g. the transport write threw). */
-  fail(id: RequestId, err: unknown): void {
-    const pending = this._map.get(id);
+  fail(id: RequestId, error: unknown): void {
+    const pending = this.map.get(id);
     if (!pending) return;
-    this._map.delete(id);
-    pending.reject(err);
+    this.map.delete(id);
+    pending.reject(error);
   }
 
   /** Reject everything (socket closed / process exited). */
-  failAll(err: unknown): void {
-    for (const pending of this._map.values()) pending.reject(err);
-    this._map.clear();
+  failAll(error: unknown): void {
+    for (const pending of this.map.values()) pending.reject(error);
+    this.map.clear();
   }
 }
 

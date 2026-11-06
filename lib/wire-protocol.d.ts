@@ -27,6 +27,8 @@ export type BridgeFrame = ResponseFrame | {
     data: unknown;
 };
 export declare function isRecord(value: unknown): value is ProtocolRecord;
+/** Read-only view of wire data whose feature payloads stay unvalidated. */
+export declare function asRecord(value: unknown): ProtocolRecord;
 /**
  * Decode the side-chat snapshot carried by hello and the `side_chat` event.
  * A malformed root means "no chat"; a malformed turn is dropped so one bad

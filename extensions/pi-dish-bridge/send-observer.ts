@@ -10,35 +10,26 @@
 // The sink lives in the symbol registry because an extension reload evaluates
 // a new module copy against the already-patched prototype.
 
+import { isHostMethod, isObject, type HostMethod } from "./host.js";
+
 const PATCHED = Symbol.for("pi-dish-bridge.sendUserMessageObserved");
 const SINK = Symbol.for("pi-dish-bridge.sendUserMessageSink");
 const sharedGlobal = globalThis as unknown as Record<PropertyKey, unknown>;
 
-type HostRecord = Record<PropertyKey, unknown>;
-type HostMethod = (this: unknown, ...args: unknown[]) => unknown;
-
-function isObject(value: unknown): value is HostRecord {
-  return value !== null && (typeof value === "object" || typeof value === "function");
-}
-
-function isMethod(value: unknown): value is HostMethod {
-  return typeof value === "function";
-}
-
 function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return isObject(value) && isMethod(value.then);
+  return isObject(value) && isHostMethod(value.then);
 }
 
 export function observeSendUserMessage(AgentSession: unknown): void {
   const proto = isObject(AgentSession) ? AgentSession.prototype : undefined;
   if (!isObject(proto) || proto[PATCHED]) return;
   const original = proto.sendUserMessage;
-  if (!isMethod(original)) return;
+  if (!isHostMethod(original)) return;
   Object.defineProperty(proto, PATCHED, { value: true });
   proto.sendUserMessage = function (this: unknown, ...args: unknown[]) {
     const result = Reflect.apply(original, this, args);
     const sink = sharedGlobal[SINK];
-    if (isMethod(sink)) Reflect.apply(sink, undefined, [result]);
+    if (isHostMethod(sink)) Reflect.apply(sink, undefined, [result]);
     return result;
   } satisfies HostMethod;
 }

@@ -3,14 +3,10 @@ import net = require('net');
 import { EventEmitter } from 'events';
 import { PendingRequests } from './pending-requests';
 import { type ProtocolRecord } from './wire-protocol';
-import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, RunningToolCall, SideChatState } from './contracts';
+import type { AdvertisedCapabilities, BridgeRegistryEntry, ExtensionUIState, HarnessId, NativeSessionId, PromptOptions, RunningToolCall, SideChatState } from './contracts';
 type BridgeRequest = Promise<unknown> & {
     readonly requestId?: number;
 };
-interface PromptOptions {
-    deliverAs?: 'steer' | 'followUp';
-    images?: unknown[];
-}
 interface TreeOptions {
     summarize?: boolean;
     customInstructions?: string;
@@ -74,6 +70,8 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     bounceActivityRevision?: number;
     constructor(registryEntry: BridgeRegistryEntry);
     connect(): Promise<this>;
+    /** Legacy claims predate claim-bound identity; v2 claims are immutable and proved by hello. */
+    private get legacyClaim();
     _validateV2Hello(msg: unknown): NodeJS.ErrnoException | null;
     _handle(input: unknown): void;
     waitForHello({ timeout }?: {

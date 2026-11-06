@@ -236,18 +236,24 @@ function splitShellWords(input: unknown): string[] {
   return words;
 }
 
-function resolveLaunchSpec(descriptor: HarnessDescriptor, env: NodeJS.ProcessEnv = process.env) {
-  const configured = env[descriptor.commandEnv];
-  let words = splitShellWords(configured || descriptor.command);
-  // Descriptor defaults seed the launch env; env assignments parsed from the
-  // user's configured command below override them.
-  const launchEnv = { ...(descriptor.spawnEnv || {}) };
+/**
+ * One configured command line: bare `env`, then KEY=VALUE assignments (which
+ * override `baseEnv`), then the argv.
+ */
+function parseLaunchWords(input: unknown, baseEnv: Record<string, string> = {}) {
+  let words = splitShellWords(input);
   if (words[0] === 'env') words = words.slice(1);
+  const env: Record<string, string> = { ...baseEnv };
   while (words[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0])) {
     const [key, ...value] = words.shift()!.split('=');
-    launchEnv[key] = value.join('=');
+    env[key] = value.join('=');
   }
+  return { env, words };
+}
+
+function resolveLaunchSpec(descriptor: HarnessDescriptor, env: NodeJS.ProcessEnv = process.env) {
+  const { env: launchEnv, words } = parseLaunchWords(env[descriptor.commandEnv] || descriptor.command, descriptor.spawnEnv);
   return { env: launchEnv, argv: words.length ? words : [descriptor.command] };
 }
 
-export = { registry, getHarness, listHarnesses, resolveLaunchSpec };
+export = { registry, getHarness, listHarnesses, resolveLaunchSpec, parseLaunchWords };

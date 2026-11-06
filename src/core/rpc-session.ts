@@ -1,14 +1,6 @@
 /**
- * Manages pi sessions spawned via `pi --mode rpc`.
- * All session interaction goes through RPC — no control sockets or file polling.
- *
- * Pi's RPC protocol uses {"type":"command", ...} on stdin/stdout.
- * Responses: {"type":"response", "id":..., "command":"...", "success":true, "data":{...}}
- * Events: turn_start, message_start, message_update, message_end, turn_end, etc.
- *
- * Framing note: pi's docs require splitting on LF only — Node's readline also
- * splits on U+2028/U+2029 which are valid inside JSON strings, so we do our
- * own buffering.
+ * Manages pi sessions spawned via `pi --mode rpc`: {"type": command, ...} in,
+ * {"type":"response"|event, ...} out. Framing is LF-only, never readline's.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { once } from 'events';
@@ -17,21 +9,20 @@ import fs = require('fs');
 import os = require('os');
 import path = require('path');
 import crypto = require('crypto');
-import { createLineSplitter } from './line-splitter';
+import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
-import { decodeRPCFrame, isRecord, type ProtocolRecord } from './wire-protocol';
+import { asRecord, decodeRPCFrame, isRecord, type ProtocolRecord } from './wire-protocol';
 import { trackRunningToolCalls } from './running-tool-calls';
-import { createExtensionUIState, reduceExtensionUIState } from './extension-ui-state';
+import { reduceExtensionUIState } from './extension-ui-state';
 import { safeHeaderSessionId } from './session-discovery';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { createSessionObserver, type RecoveryObserver } from './session-recovery';
-import type { ExtensionUIState, LaunchOptions, NativeSessionId, RunningToolCall } from './contracts';
+import { promptParams, TransportSession } from './transport-session';
+import type { LaunchOptions, NativeSessionId, PromptOptions } from './contracts';
 import { validSessionId } from './session-key';
 import { getPiLaunchSpec } from './harness-launch-spec';
 
 interface RPCLaunchOptions extends LaunchOptions { cwd?: unknown; }
-interface PromptOptions { deliverAs?: 'steer' | 'followUp'; images?: unknown[]; }
-type Listener = (data: unknown) => void;
 
 class RPCIdentityError extends TypeError {}
 function validatedNativeId(value: unknown): NativeSessionId {
@@ -39,61 +30,37 @@ function validatedNativeId(value: unknown): NativeSessionId {
   return value;
 }
 
-function asRecord(value: unknown): ProtocolRecord { return isRecord(value) ? value : {}; }
 function errorCode(error: unknown): unknown { return isRecord(error) ? error.code : undefined; }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
-class RPCSession {
+class RPCSession extends TransportSession {
   declare id: NativeSessionId;
   declare proc: ChildProcessWithoutNullStreams;
   declare alive: boolean;
   declare pending: InstanceType<typeof PendingRequests>;
   declare nextRequestId: number;
-  declare listeners: Map<string, Listener[]>;
   declare state: ProtocolRecord | null;
   declare sessionFile: string | null;
   declare cwd: string | null;
-  declare turnInProgress: boolean;
-  declare compacting: boolean;
   declare stderrTail: string[];
-  declare lastActivityAt: Date;
-  declare streamingAssistantMessage: ProtocolRecord | null;
-  declare runningToolCalls: Map<string, RunningToolCall>;
   declare recoveryBridgeOwned: boolean;
   declare recoveryInstanceId: string;
   declare recoveryStartTime: string | null;
   declare recoveryObserver: RecoveryObserver;
   declare bounceExecuting?: boolean;
   declare bounceActivityRevision?: number;
-  declare extUIState: ExtensionUIState;
-  declare lastStats?: unknown;
 
   constructor(id: NativeSessionId, proc: ChildProcessWithoutNullStreams) {
+    super();
     this.id = id;
     this.proc = proc;
     this.alive = true;
     this.pending = new PendingRequests();
     this.nextRequestId = 1;
-    this.listeners = new Map(); // event -> [callback]
     this.state = null;
     this.sessionFile = null;
     this.cwd = null;
-    this.turnInProgress = false;
-    // Mirrors pi's compaction_start/compaction_end events (RPC mode forwards
-    // every AgentSession event, auto-compaction included); the /compact
-    // emulation also holds it for the in-flight request. Gates double-compact
-    // and feeds the SSE init frame + session list.
-    this.compacting = false;
     this.stderrTail = []; // last few stderr lines for error reporting
-    // Stable activity timestamp for the session list — bumped on turn/message
-    // boundaries, never minted per poll (that made sessions look forever-unread).
-    this.lastActivityAt = new Date();
-    // Pi >= 0.84 sends delta-only message_update events over JSON/RPC. Keep
-    // the current assistant snapshot so pi-dish's existing SSE contract can
-    // continue forwarding a complete message on every update.
-    this.streamingAssistantMessage = null;
-    this.runningToolCalls = new Map();
-    this.extUIState = createExtensionUIState();
     this.recoveryBridgeOwned = false;
     this.recoveryInstanceId = crypto.randomUUID();
     this.recoveryStartTime = processIdentity(proc.pid)?.startTime ?? null;
@@ -121,14 +88,7 @@ class RPCSession {
     proc.stdout.on('error', () => {});
     proc.stderr.on('error', () => {});
 
-    // Strict JSONL framing (LF only)
-    proc.stdout.on('data', createLineSplitter((line) => {
-      try {
-        this._handleMessage(JSON.parse(line));
-      } catch (e) {
-        // Ignore non-JSON output
-      }
-    }));
+    proc.stdout.on('data', createJsonLineSplitter((message) => { this._handleMessage(message); }));
 
     proc.on('exit', (code) => {
       this.recoveryObserver.event('shutdown');
@@ -136,7 +96,7 @@ class RPCSession {
       this.alive = false;
       const err = new Error(`pi exited with code ${code}${this.stderrTail.length ? ': ' + this.stderrTail.join(' | ') : ''}`);
       this.pending.failAll(err);
-      this._emit('exit', { code });
+      this.emitEvent('exit', { code });
     });
 
     proc.stderr.on('data', (data) => {
@@ -162,11 +122,10 @@ class RPCSession {
       if (!name.endsWith('.json')) continue;
       let claim: unknown;
       try { claim = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')); } catch { continue; }
-      // Preserve the legacy fail-closed outcome for a null ownership record.
+      // A null ownership record stays fail-closed.
       if (claim === null) throw new TypeError('Invalid bridge recovery claim');
       if (isRecord(claim) && claim.recoveryObservation === true && claim.harnessId === 'pi'
         && claim.sessionFile === this.sessionFile && processIdentityAlive({
-          // Preserve the core proof's existing numeric/string coercion of registry input.
           pid: Number(claim.pid), startTime: String(claim.startTime),
         })) {
         // Sticky for this process: bridge cleanup removes its registry before
@@ -187,48 +146,11 @@ class RPCSession {
       this.pending.settle(msg.id, msg.success, msg.data, msg.error ?? undefined, 'Command failed');
       return;
     }
-    let msg = frame.data;
+    const msg = this.assistantFrame(frame.data);
 
-    if (msg.type === 'message_start' && isRecord(msg.message) && msg.message.role === 'assistant') {
-      this.streamingAssistantMessage = structuredClone(msg.message);
-    } else if (msg.type === 'message_update' && !msg.message && msg.assistantMessageEvent) {
-      const event = asRecord(msg.assistantMessageEvent);
-      if (event.type === 'done') this.streamingAssistantMessage = isRecord(event.message) ? structuredClone(event.message) : null;
-      else if (event.type === 'error') this.streamingAssistantMessage = isRecord(event.error) ? structuredClone(event.error) : null;
-      else if (this.streamingAssistantMessage) {
-        const content: unknown[] = Array.isArray(this.streamingAssistantMessage.content)
-          ? this.streamingAssistantMessage.content : (this.streamingAssistantMessage.content = []);
-        const index = event.contentIndex;
-        if (typeof index === 'number' && Number.isInteger(index) && index >= 0) {
-          if (event.type === 'text_start') content[index] = { type: 'text', text: '' };
-          else if (event.type === 'text_delta' && typeof event.delta === 'string') {
-            const block = asRecord(content[index]);
-            if (block.type !== 'text' || typeof block.text !== 'string') content[index] = { type: 'text', text: event.delta };
-            else block.text += event.delta;
-          } else if (event.type === 'text_end' && typeof event.content === 'string') content[index] = { type: 'text', text: event.content };
-          else if (event.type === 'thinking_start') content[index] = { type: 'thinking', thinking: '' };
-          else if (event.type === 'thinking_delta' && typeof event.delta === 'string') {
-            const block = asRecord(content[index]);
-            if (block.type !== 'thinking' || typeof block.thinking !== 'string') content[index] = { type: 'thinking', thinking: event.delta };
-            else block.thinking += event.delta;
-          } else if (event.type === 'thinking_end' && typeof event.content === 'string') content[index] = { type: 'thinking', thinking: event.content };
-          else if (event.type === 'toolcall_end' && isRecord(event.toolCall)) content[index] = structuredClone(event.toolCall);
-        }
-      }
-      if (this.streamingAssistantMessage) {
-        msg = { ...msg, message: structuredClone(this.streamingAssistantMessage) };
-      }
-    }
-
-    trackRunningToolCalls(this.runningToolCalls, frame.event, {
-      toolCallId: typeof msg.toolCallId === 'string' ? msg.toolCallId : undefined,
-      toolName: typeof msg.toolName === 'string' ? msg.toolName : undefined,
-      startedAt: typeof msg.startedAt === 'number' || typeof msg.startedAt === 'string' ? msg.startedAt : undefined,
-      args: msg.args, partialResult: msg.partialResult,
-    });
+    trackRunningToolCalls(this.runningToolCalls, frame.event, msg);
     this.recoveryObserver.event(frame.event, msg);
 
-    // Track turn state
     if (msg.type === 'turn_start') {
       this.turnInProgress = true;
       this.lastActivityAt = new Date();
@@ -244,38 +166,9 @@ class RPCSession {
       this.compacting = false;
     }
 
-    // Stream all agent events
     reduceExtensionUIState(this.extUIState, frame.event, msg);
-    this._emit(frame.event, msg);
-    if (msg.type === 'message_end' && isRecord(msg.message) && msg.message.role === 'assistant') {
-      this.streamingAssistantMessage = null;
-    }
-  }
-
-  _emit(event: string, data: unknown) {
-    // Iterate a copy: a listener that unsubscribes itself from inside its own
-    // callback (routine observers finishing on turn_end, an SSE client
-    // disconnecting) splices the live array, and the loop would then skip the
-    // listener that shifted into its place. EventEmitter copies for the same
-    // reason, so BridgeSession never had this hazard.
-    for (const cb of [...(this.listeners.get(event) || [])]) cb(data);
-  }
-
-  on(event: string, cb: Listener) {
-    if (!this.listeners.has(event)) this.listeners.set(event, []);
-    this.listeners.get(event)!.push(cb);
-    return () => {
-      const arr = this.listeners.get(event)!;
-      const idx = arr.indexOf(cb);
-      if (idx >= 0) arr.splice(idx, 1);
-    };
-  }
-
-  off(event: string, cb: Listener) {
-    const arr = this.listeners.get(event);
-    if (!arr) return;
-    const idx = arr.indexOf(cb);
-    if (idx >= 0) arr.splice(idx, 1);
+    this.emitEvent(frame.event, msg);
+    this.endAssistantMessage(msg);
   }
 
   send(command: string, params: ProtocolRecord = {}, { timeout = 30000 } = {}) {
@@ -296,23 +189,15 @@ class RPCSession {
   }
 
   async prompt(message: string, opts: PromptOptions = {}) {
-    const params: ProtocolRecord = { message };
-    // Queue instead of erroring when the agent is mid-turn.
-    if (opts.deliverAs) params.streamingBehavior = opts.deliverAs;
-    else if (this.turnInProgress) params.streamingBehavior = 'steer';
-    if (opts.images?.length) params.images = opts.images;
-    // Prompts can legitimately take a moment to be accepted (extension
-    // commands execute inline) but should not hang forever.
-    return this.send('prompt', params, { timeout: 120000 });
+    return this.send('prompt', promptParams(message, opts, this.turnInProgress), { timeout: 120000 });
   }
   async steer(message: string, opts: PromptOptions = {}) {
     const params: ProtocolRecord = { message };
     if (opts.images?.length) params.images = opts.images;
     return this.send('steer', params);
   }
-  // setModel/setName keep this.state in sync themselves — getActiveSessions
-  // reads state.model/state.sessionName, and every caller used to have to
-  // remember the patch.
+  // The session list reads state.model/state.sessionName, so the setters patch
+  // it alongside the harness.
   async setModel(provider: string, modelId: string) {
     const model = await this.send('set_model', { provider, modelId });
     if (model) this.state = { ...(this.state || {}), model };
@@ -341,12 +226,6 @@ class RPCSession {
   async newSession() { return this.send('new_session'); }
   async exportHtml(outputPath?: string) { return this.send('export_html', outputPath ? { outputPath } : {}); }
 
-  _refreshStats() {
-    this.getSessionStats()
-      .then(stats => { this.lastStats = stats; })
-      .catch(() => {});
-  }
-
   respondExtensionUI(requestId: string, response: ProtocolRecord) {
     this.write({ type: 'extension_ui_response', id: requestId, ...response });
   }
@@ -358,14 +237,9 @@ class RPCSession {
   }
 }
 
-// Active RPC sessions managed by pi-dish
-const rpcSessions = new Map<NativeSessionId, RPCSession>(); // sessionId -> RPCSession
+const rpcSessions = new Map<NativeSessionId, RPCSession>();
 
-/**
- * Initialize an RPC session from a spawned process.
- * Polls get_state until pi responds (instead of a blind fixed sleep).
- * @returns {Promise<RPCSession>}
- */
+/** Poll get_state until pi answers rather than sleeping for a fixed guess. */
 async function _initRPCSession(proc: ChildProcessWithoutNullStreams, opts: { cwd?: string | null } = {}) {
   const tempId = validatedNativeId(`rpc-${Date.now()}`);
   const session = new RPCSession(tempId, proc);
@@ -431,11 +305,6 @@ async function _initRPCSession(proc: ChildProcessWithoutNullStreams, opts: { cwd
   throw new Error(`pi RPC session did not become ready: ${lastError ? errorMessage(lastError) : 'timeout'}`);
 }
 
-/**
- * Spawn a new pi session in RPC mode.
- * @param {object} opts - { cwd, model, thinking }
- * @returns {Promise<RPCSession>}
- */
 function shellQuote(s: unknown) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
@@ -496,17 +365,9 @@ async function createRPCSession(opts: RPCLaunchOptions = {}) {
   return _initRPCSession(proc, { cwd: metadataCwd });
 }
 
-/**
- * Resume an existing session by spawning pi --mode rpc --session <path>.
- * @param {string} sessionPath - Full path to the .jsonl session file
- * @param {string} cwd - Working directory to use
- * @returns {Promise<RPCSession>}
- */
-// Dedupe concurrent resumes of the same session file. Resuming takes up to
-// 20s (get_state polling) and the rpcSessions map isn't populated until it
-// finishes, so without this two rapid resume requests each spawn their own pi
-// against the same JSONL.
-const resumingByPath = new Map<string, Promise<RPCSession>>(); // sessionPath -> Promise<RPCSession>
+// Resuming takes up to 20s and the registry is only populated at the end, so
+// two rapid resumes would otherwise spawn two pis against one JSONL.
+const resumingByPath = new Map<string, Promise<RPCSession>>();
 
 async function resumeRPCSession(sessionPath: string, cwd?: string) {
   const inFlight = resumingByPath.get(sessionPath);

@@ -1,59 +1,36 @@
 // Generated from src/core/rpc-session.ts; edit that source and run npm run build:core.
 /**
- * Manages pi sessions spawned via `pi --mode rpc`.
- * All session interaction goes through RPC — no control sockets or file polling.
- *
- * Pi's RPC protocol uses {"type":"command", ...} on stdin/stdout.
- * Responses: {"type":"response", "id":..., "command":"...", "success":true, "data":{...}}
- * Events: turn_start, message_start, message_update, message_end, turn_end, etc.
- *
- * Framing note: pi's docs require splitting on LF only — Node's readline also
- * splits on U+2028/U+2029 which are valid inside JSON strings, so we do our
- * own buffering.
+ * Manages pi sessions spawned via `pi --mode rpc`: {"type": command, ...} in,
+ * {"type":"response"|event, ...} out. Framing is LF-only, never readline's.
  */
 import { type ChildProcessWithoutNullStreams } from 'child_process';
 import { PendingRequests } from './pending-requests';
 import { type ProtocolRecord } from './wire-protocol';
 import { type RecoveryObserver } from './session-recovery';
-import type { ExtensionUIState, LaunchOptions, NativeSessionId, RunningToolCall } from './contracts';
+import { TransportSession } from './transport-session';
+import type { LaunchOptions, NativeSessionId, PromptOptions } from './contracts';
 interface RPCLaunchOptions extends LaunchOptions {
     cwd?: unknown;
 }
-interface PromptOptions {
-    deliverAs?: 'steer' | 'followUp';
-    images?: unknown[];
-}
-type Listener = (data: unknown) => void;
-declare class RPCSession {
+declare class RPCSession extends TransportSession {
     id: NativeSessionId;
     proc: ChildProcessWithoutNullStreams;
     alive: boolean;
     pending: InstanceType<typeof PendingRequests>;
     nextRequestId: number;
-    listeners: Map<string, Listener[]>;
     state: ProtocolRecord | null;
     sessionFile: string | null;
     cwd: string | null;
-    turnInProgress: boolean;
-    compacting: boolean;
     stderrTail: string[];
-    lastActivityAt: Date;
-    streamingAssistantMessage: ProtocolRecord | null;
-    runningToolCalls: Map<string, RunningToolCall>;
     recoveryBridgeOwned: boolean;
     recoveryInstanceId: string;
     recoveryStartTime: string | null;
     recoveryObserver: RecoveryObserver;
     bounceExecuting?: boolean;
     bounceActivityRevision?: number;
-    extUIState: ExtensionUIState;
-    lastStats?: unknown;
     constructor(id: NativeSessionId, proc: ChildProcessWithoutNullStreams);
     _canObserveRecovery(): boolean;
     _handleMessage(input: unknown): void;
-    _emit(event: string, data: unknown): void;
-    on(event: string, cb: Listener): () => void;
-    off(event: string, cb: Listener): void;
     send(command: string, params?: ProtocolRecord, { timeout }?: {
         timeout?: number | undefined;
     }): Promise<unknown>;
@@ -71,7 +48,6 @@ declare class RPCSession {
     setThinkingLevel(level: string): Promise<unknown>;
     newSession(): Promise<unknown>;
     exportHtml(outputPath?: string): Promise<unknown>;
-    _refreshStats(): void;
     respondExtensionUI(requestId: string, response: ProtocolRecord): void;
     kill(): void;
 }

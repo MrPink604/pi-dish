@@ -1,6 +1,6 @@
 /**
  * Incremental LF-framed line splitting, shared by the JSONL socket/stdio
- * clients (rpc-session.js, bridge-session.js).
+ * clients (rpc-session.ts, bridge-session.ts, prime-daemon.ts).
  *
  * Splits on LF only — Node's readline also splits on U+2028/U+2029, which
  * are valid inside JSON strings. CR before the LF is stripped, empty lines
@@ -8,12 +8,14 @@
  * chunk boundaries intact.
  */
 import { StringDecoder } from 'string_decoder';
+import { isRecord, type ProtocolRecord } from './wire-protocol';
 
-/** Returns a feed(chunk) function that calls onLine per complete line. */
+type Chunk = string | Buffer | Uint8Array;
+
 function createLineSplitter(onLine: (line: string) => void) {
   const decoder = new StringDecoder('utf8');
   let buffer = '';
-  return (chunk: string | Buffer | Uint8Array) => {
+  return (chunk: Chunk) => {
     buffer += typeof chunk === 'string' ? chunk : decoder.write(chunk);
     let idx;
     while ((idx = buffer.indexOf('\n')) >= 0) {
@@ -25,4 +27,13 @@ function createLineSplitter(onLine: (line: string) => void) {
   };
 }
 
-export = { createLineSplitter };
+/** Line splitter for JSONL transports: non-JSON output is not a frame. */
+function createJsonLineSplitter(onMessage: (message: ProtocolRecord) => void) {
+  return createLineSplitter((line) => {
+    let message: unknown;
+    try { message = JSON.parse(line); } catch { return; }
+    if (isRecord(message)) onMessage(message);
+  });
+}
+
+export = { createLineSplitter, createJsonLineSplitter };

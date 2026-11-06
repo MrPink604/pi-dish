@@ -23,23 +23,20 @@ import os = require('os');
 import path = require('path');
 import crypto = require('crypto');
 import { setTimeout as delay } from 'timers/promises';
-import type { ExtensionUIState, NativeSessionId, RunningToolCall } from './contracts';
-import { createLineSplitter } from './line-splitter';
+import type { NativeSessionId, PromptOptions } from './contracts';
+import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
-import { isRecord, type ProtocolRecord } from './wire-protocol';
+import { asRecord, isRecord, type ProtocolRecord } from './wire-protocol';
 import { trackRunningToolCalls } from './running-tool-calls';
-import { createExtensionUIState } from './extension-ui-state';
 import { validSessionId } from './session-key';
 import { getHarness, resolveLaunchSpec } from './harnesses';
+import { promptParams, TransportSession } from './transport-session';
 
 export const PRIME_DAEMON_PROTOCOL = Object.freeze({ name: 'prime-agent.daemon', version: 7 });
 
-type Listener = (data: unknown) => void;
-interface PromptOptions { deliverAs?: 'steer' | 'followUp'; images?: unknown[]; }
 interface TreeOptions { summarize?: boolean; customInstructions?: string; label?: string; }
 export interface PrimeQueueState { steering: string[]; followUp: string[]; }
 
-function asRecord(value: unknown): ProtocolRecord { return isRecord(value) ? value : {}; }
 function text(value: unknown): string | null { return typeof value === 'string' && value ? value : null; }
 function strings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
@@ -141,10 +138,7 @@ export class PrimeDaemonConnection {
     this.sock = sock;
     sock.on('error', error => this._closed(error));
     sock.on('close', () => this._closed(new Error('Prime daemon connection closed')));
-    sock.on('data', createLineSplitter(line => {
-      let message: unknown;
-      try { message = JSON.parse(line); } catch { return; }
-      if (!isRecord(message)) return;
+    sock.on('data', createJsonLineSplitter(message => {
       if (message.type === 'daemon_hello') {
         const protocol = asRecord(message.protocol);
         if (protocol.name !== PRIME_DAEMON_PROTOCOL.name || protocol.version !== PRIME_DAEMON_PROTOCOL.version) {
@@ -197,7 +191,7 @@ export class PrimeDaemonConnection {
 }
 
 /** A live Prime root agent, as consumed by the session routes (LiveSession). */
-export class PrimeDaemonSession {
+export class PrimeDaemonSession extends TransportSession {
   declare readonly harnessId: 'prime';
   declare readonly activeSessionId: string;
   declare readonly daemonSocket: string;
@@ -206,34 +200,23 @@ export class PrimeDaemonSession {
   declare sessionFile: string;
   declare cwd: string | null;
   declare alive: boolean;
-  declare turnInProgress: boolean;
-  declare compacting: boolean;
-  declare lastActivityAt: Date;
   declare summary: PrimeAgentSummary;
   declare queueState: PrimeQueueState;
-  declare extUIState: ExtensionUIState;
-  declare runningToolCalls: Map<string, RunningToolCall>;
   declare state: ProtocolRecord;
-  declare lastStats?: unknown;
   declare attached: boolean;
   // Shared live-lifecycle bookkeeping (bulk bounce and hibernation guards).
   declare bounceExecuting?: boolean;
   declare bounceActivityRevision?: number;
-  declare private listeners: Map<string, Listener[]>;
   declare private daemon: PrimeDaemon;
-  declare private streamingAssistantMessage: ProtocolRecord | null;
 
   constructor(daemon: PrimeDaemon, summary: PrimeAgentSummary) {
+    super();
     this.harnessId = 'prime';
     this.daemon = daemon;
     this.daemonSocket = daemon.socketPath;
     this.activeSessionId = summary.activeSessionId;
     this.alive = true;
     this.attached = false;
-    this.listeners = new Map();
-    this.extUIState = createExtensionUIState();
-    this.runningToolCalls = new Map();
-    this.streamingAssistantMessage = null;
     this.turnInProgress = summary.isStreaming;
     this.compacting = summary.isCompacting;
     this.queueState = summary.queue;
@@ -266,41 +249,24 @@ export class PrimeDaemonSession {
     }
     // The route contract needs both sides: listeners re-key the spawn record and
     // retire the old route while still holding the previous native id.
-    if (switched) this._emit('session_switch', { sessionId: summary.nativeSessionId, previousSessionId });
+    if (switched) this.emitEvent('session_switch', { sessionId: summary.nativeSessionId, previousSessionId });
   }
 
   _event(event: ProtocolRecord): void {
     const type = typeof event.type === 'string' ? event.type : null;
     if (!type) return;
-    let msg = event;
-    if (type === 'message_start' && isRecord(msg.message) && msg.message.role === 'assistant') {
-      this.streamingAssistantMessage = structuredClone(msg.message);
-    } else if (type === 'message_update' && !isRecord(msg.message) && isRecord(msg.assistantMessageEvent) && this.streamingAssistantMessage) {
-      // Prime sends the full message today; keep a snapshot for delta-only frames.
-      const delta = msg.assistantMessageEvent;
-      const content: unknown[] = Array.isArray(this.streamingAssistantMessage.content)
-        ? this.streamingAssistantMessage.content : (this.streamingAssistantMessage.content = []);
-      const index = delta.contentIndex;
-      if (typeof index === 'number' && Number.isInteger(index) && index >= 0 && typeof delta.delta === 'string') {
-        const block = asRecord(content[index]);
-        if (delta.type === 'text_delta') content[index] = { type: 'text', text: String(block.text ?? '') + delta.delta };
-        else if (delta.type === 'thinking_delta') content[index] = { type: 'thinking', thinking: String(block.thinking ?? '') + delta.delta };
-      }
-      msg = { ...msg, message: structuredClone(this.streamingAssistantMessage) };
-    }
-    trackRunningToolCalls(this.runningToolCalls, type, {
-      toolCallId: typeof msg.toolCallId === 'string' ? msg.toolCallId : undefined,
-      toolName: typeof msg.toolName === 'string' ? msg.toolName : undefined,
-      startedAt: typeof msg.startedAt === 'number' || typeof msg.startedAt === 'string' ? msg.startedAt : undefined,
-      args: msg.args, partialResult: msg.partialResult,
-    });
+    const msg = this.assistantFrame(event);
+    trackRunningToolCalls(this.runningToolCalls, type, msg);
     if (type === 'agent_start' || type === 'turn_start') {
       this.turnInProgress = true;
       this.lastActivityAt = new Date();
     } else if (type === 'turn_end' || type === 'agent_end') {
-      if (type === 'agent_end') this.turnInProgress = false;
+      // Prime reports the end of a turn before the agent stops streaming.
+      if (type === 'agent_end') {
+        this.turnInProgress = false;
+        this._refreshStats();
+      }
       this.lastActivityAt = new Date();
-      if (type === 'agent_end') this._refreshStats();
     } else if (type === 'message_end') {
       this.lastActivityAt = new Date();
     } else if (type === 'compaction_start' || type === 'auto_compaction_start') {
@@ -309,13 +275,13 @@ export class PrimeDaemonSession {
       this.compacting = false;
     } else if (type === 'session_action_update') {
       this.queueState = queueFrom(msg.actions);
-      this._emit('queue_update', this.queueState);
+      this.emitEvent('queue_update', this.queueState);
       return;
     } else if (type === 'session_info_changed') {
       if (typeof msg.name === 'string') this.state = { ...this.state, sessionName: msg.name, name: msg.name };
     }
-    this._emit(type, msg);
-    if (type === 'message_end' && isRecord(msg.message) && msg.message.role === 'assistant') this.streamingAssistantMessage = null;
+    this.emitEvent(type, msg);
+    this.endAssistantMessage(msg);
   }
 
   _retire(): void {
@@ -323,29 +289,8 @@ export class PrimeDaemonSession {
     this.alive = false;
     this.attached = false;
     this.turnInProgress = false;
-    this._emit('exit', { code: null });
-    this._emit('close', {});
-  }
-
-  _emit(event: string, data: unknown): void {
-    for (const cb of [...(this.listeners.get(event) || [])]) cb(data);
-  }
-
-  on(event: string, cb: Listener): () => void {
-    if (!this.listeners.has(event)) this.listeners.set(event, []);
-    this.listeners.get(event)!.push(cb);
-    return () => this.off(event, cb);
-  }
-
-  off(event: string, cb: Listener): void {
-    const arr = this.listeners.get(event);
-    const index = arr ? arr.indexOf(cb) : -1;
-    if (arr && index >= 0) arr.splice(index, 1);
-  }
-
-  once(event: string, cb: Listener): () => void {
-    const off = this.on(event, data => { off(); cb(data); });
-    return off;
+    this.emitEvent('exit', { code: null });
+    this.emitEvent('close', {});
   }
 
   send(command: string, params: ProtocolRecord = {}, { timeout = 30000 } = {}): Promise<unknown> {
@@ -354,13 +299,8 @@ export class PrimeDaemonSession {
   }
 
   async prompt(message: string, opts: PromptOptions = {}): Promise<unknown> {
-    const params: ProtocolRecord = { message };
-    // Same contract as RPCSession: a busy agent receives an undecorated prompt as steering.
-    if (opts.deliverAs) params.streamingBehavior = opts.deliverAs;
-    else if (this.turnInProgress) params.streamingBehavior = 'steer';
-    if (opts.images?.length) params.images = opts.images;
     try {
-      return await this.send('prompt', params, { timeout: 120000 });
+      return await this.send('prompt', promptParams(message, opts, this.turnInProgress), { timeout: 120000 });
     } catch (error) {
       // An abort with queued messages restores them and pauses delivery until
       // the queue is edited (as in Prime's TUI); a plain prompt is refused.
@@ -424,10 +364,6 @@ export class PrimeDaemonSession {
 
   respondExtensionUI(): Promise<unknown> {
     return Promise.reject(new Error('Prime Agent has no extension UI'));
-  }
-
-  _refreshStats(): void {
-    this.getSessionStats().then(stats => { this.lastStats = stats; }).catch(() => {});
   }
 }
 
