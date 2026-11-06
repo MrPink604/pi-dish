@@ -66,50 +66,31 @@ export function createRoutinesView(options: {
     disposeRoutineCwdAutocomplete(); invocationToken = null; mutationToken = null; routineBusy = false;
     clearTimeout(routineDeleteArmTimer); routineDeleteArmed = false;
   }
-  async function httpError(response: Response): Promise<string> {
-    const data: unknown = await response.json().catch(() => null);
-    return record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`;
-  }
-  function payloadError(data: unknown, status: number) { return record(data) && typeof data.error === 'string' ? data.error : `HTTP ${status}`; }
+  const readJson = (response: Response): Promise<unknown> => response.json().catch(() => ({}));
+  function errorText(data: unknown, status: number) { return record(data) && typeof data.error === 'string' ? data.error : `HTTP ${status}`; }
 
 
-  // Routines takeover (main-pane, usage-view pattern)
-  // =========================================================================
-  // A routine is a session template; an invocation is a session. This surface
-  // edits the template (name, harness/cwd/model/thinking, schedule, prompt) and
-  // reads the ledger of runs it produced — the transcript, cost and duration of
-  // each run stay where every other session's do. See TASKS/routines.md.
-  //
-  // Fleet: GET /api/routines fans out per capable host exactly like the usage
-  // view (Promise.allSettled, 20s deadlines, progressive render). Every routine
-  // carries the host it lives on and every subsequent call for it goes through
-  // apiFetch(routine.host, …) — the client is the aggregator, there is no
-  // hub-side merged endpoint. On a single host none of the host chrome renders.
-
-  let routinesList: Routine[] = [];            // [{ ...RoutineSummary, host, hostLabel }]
-  let routinesHostErrors: string[] = [];      // labels of hosts that didn't answer
-  let routinesHostPending: string[] = [];     // labels still outstanding during a partial render
+  let routinesList: Routine[] = [];
+  let routinesHostErrors: string[] = [];
+  let routinesHostPending: string[] = [];
   let routinesSeq = 0;
   let routinesListError = '';
-  // Selection is (host, id) — two hosts may legitimately hold the same name.
   let routineSelKey: string | null = null;
   let routineSelectedHostId: string | null = null;
-  let routineSelected: Routine | null = null;       // GET /api/routines/:id (carries `versions`)
-  let routineCreating = false;      // detail pane holds a blank create form
-  let routineFormBaseline: string | null = null;   // JSON snapshot for the dirty guard
+  let routineSelected: Routine | null = null;
+  let routineCreating = false;
+  let routineFormBaseline: string | null = null;
   let routineFormError = '';
   let routineDeleteArmed = false;
-  let routineBusy = false;          // a save/invoke/delete is in flight
+  let routineBusy = false;
   let routineInvocations: RoutineInvocation[] = [];
   let routineInvocationsNextBefore: number | null = null;
 
   let routineInvocationsTimer: ReturnType<typeof setInterval> | null = null;
-  let routineVersionFilter: number | null = null;  // clicking a version row filters the table
-  let routineVersionShown: number | null = null;   // which version's prompt is expanded inline
-  let routineNotice = '';           // transient success line under the actions
-  // Per (host|harness|cwd) model catalogs. Deliberately *not* the global
-  // modelCatalog.rows(): that one belongs to the session header and the new-session
-  // takeover, and a routine's catalog is a different harness/cwd/host triple.
+  let routineVersionFilter: number | null = null;
+  let routineVersionShown: number | null = null;
+  let routineNotice = '';
+  /** Keyed by (host, harness, cwd): a routine's catalog is not the session header's. */
   const routineModelCatalogs = new Map<string, readonly CatalogModel[]>();
   const routineHarnessCatalogs = new Map<string, readonly HarnessRow[]>();
   let routineModelSeq = 0;
@@ -118,7 +99,7 @@ export function createRoutinesView(options: {
     routineCwdAutocomplete?.dispose();
     routineCwdAutocomplete = null;
   }
-  let routineCreateHostId: string | null = null;   // host picked in the create form
+  let routineCreateHostId: string | null = null;
 
   const ROUTINE_CRON_PRESETS = [
     ['', 'No schedule (manual only)'],
@@ -134,9 +115,7 @@ export function createRoutinesView(options: {
   ];
   const ROUTINE_THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-  function routineKey(host: string | null, id: string) { return sessionKey(host || null, id); }
-
-  /** Hosts that advertise `routines`. Absent capability = unsupported. */
+  /** Hosts that advertise `routines`; an absent capability means unsupported. */
   function routinesCapableHosts() {
     return options.hosts().filter(host => hostSupportsCapability(host, 'routines', options.config()));
   }
@@ -145,7 +124,6 @@ export function createRoutinesView(options: {
     return options.effectiveHosts().some(host => hostSupportsCapability(host, 'routines', options.config()));
   }
 
-  /** The sidebar icon exists only where the feature does. */
   function updateRoutinesButton() {
     if (disposed) return;
     const btn = document.getElementById('btnRoutines');
@@ -165,13 +143,9 @@ export function createRoutinesView(options: {
     if (isRoutinesViewOpen()) return;
     viewGeneration++;
     options.root.classList.add('routines-open');
-    // Re-opening restores the last selection (and its poll); with none, the
-    // detail pane is the placeholder and the phone starts on the list. The form
-    // is only repainted when the pane doesn't already hold it, so closing and
-    // reopening the takeover can't silently discard an unsaved edit.
     if (!routineSelected && !routineCreating) backToRoutinesList();
     const retained = readRoutineForm();
-    if (retained) wireRoutineForm(retained, false); else renderRoutineDetail();
+    if (retained) wireRoutineForm(retained); else renderRoutineDetail();
     loadRoutinesView();
     if (routineSelected) {
       renderRoutineInvocations();
@@ -210,8 +184,6 @@ export function createRoutinesView(options: {
     document.getElementById('routinesView')?.classList.remove('detail-open');
   }
 
-  // --- list (fleet fan-out) ------------------------------------------------
-
   async function loadRoutinesView() {
     if (!isRoutinesViewOpen()) return;
     listQueue?.dispose(); listQueue = null;
@@ -233,8 +205,7 @@ export function createRoutinesView(options: {
     const entries: Routine[][] = new Array(hosts.length);
     const reasons: unknown[] = new Array(hosts.length);
     const render = () => {
-      if (stale()) return;
-      if (!status.some((s, i) => s === 'ok' && entries[i])) return;
+      if (stale() || !status.some((s, i) => s === 'ok' && entries[i])) return;
       routinesHostErrors = hosts.filter((_, i) => status[i] === 'error').map(hostDisplayLabel);
       routinesHostPending = hosts.filter((_, i) => status[i] === 'pending').map(hostDisplayLabel);
       routinesListError = '';
@@ -246,7 +217,7 @@ export function createRoutinesView(options: {
       try {
         const res = await apiFetch(host, '/api/routines', { timeoutMs: 20000 });
         if (res.status === 401) { if (sameHost(host.hostId, host)) options.connection(host, 'blocked'); throw new Error('needs a token'); }
-        if (!res.ok) throw new Error(await httpError(res));
+        if (!res.ok) throw new Error(errorText(await readJson(res), res.status));
         const data: unknown = await res.json();
         if (!sameHost(host.hostId, host)) throw new Error('host connection changed');
         entries[i] = decodeRoutineList(data, { ...host, label: hostDisplayLabel(host) });
@@ -274,7 +245,6 @@ export function createRoutinesView(options: {
     return 'muted';
   }
 
-  /** "in 3h" / "in 12m" — the schedule line's forward-looking twin. */
   function formatRoutineCountdown(ts: number | null | undefined) {
     if (!ts) return '';
     const diff = new Date(ts).getTime() - Date.now();
@@ -290,10 +260,8 @@ export function createRoutinesView(options: {
   function routineScheduleLine(routine: Routine) {
     const cron = routine.schedule?.cron;
     if (!cron) return '<span class="rt-sched muted">manual only</span>';
-    if (routine.enabled === false) {
-      return `<span class="rt-sched paused"><code>${escapeHtml(cron)}</code> · paused</span>`;
-    }
-    const next = formatRoutineCountdown(routine.stats?.nextRunAt);
+    if (!routine.enabled) return `<span class="rt-sched paused"><code>${escapeHtml(cron)}</code> · paused</span>`;
+    const next = formatRoutineCountdown(routine.stats.nextRunAt);
     return `<span class="rt-sched"><code>${escapeHtml(cron)}</code>${next ? ` · ${escapeHtml(next)}` : ''}</span>`;
   }
 
@@ -309,24 +277,23 @@ export function createRoutinesView(options: {
     ].join('');
 
     const sorted = routinesList.slice().sort((a, b) =>
-      (b.stats?.lastInvocation?.startedAt || 0) - (a.stats?.lastInvocation?.startedAt || 0) ||
-      String(a.name || '').localeCompare(String(b.name || '')));
+      (b.stats.lastInvocation?.startedAt || 0) - (a.stats.lastInvocation?.startedAt || 0) || a.name.localeCompare(b.name));
 
     const rows = sorted.map(r => {
-      const key = routineKey(r.host, r.id);
-      const last = r.stats?.lastInvocation || null;
+      const key = sessionKey(r.host, r.id);
+      const last = r.stats.lastInvocation;
       const dot = `<span class="rt-dot ${last ? routineStatusClass(last.status) : 'none'}" title="${escapeHtml(last ? last.status : 'never run')}"></span>`;
       const lastLine = last
         ? `${dot}${escapeHtml(last.status)} · ${escapeHtml(formatRelativeTime(last.startedAt))}`
         : `${dot}never run`;
-      const count = r.stats?.invocations || 0;
+      const count = r.stats.invocations;
       return `<div class="rt-row${routineSelKey === key ? ' selected' : ''}" data-routine="${escapeHtml(r.id)}" data-host="${escapeHtml(r.host || '')}">
         <div class="rt-row-top">
           <span class="rt-name">${escapeHtml(r.name || r.id)}</span>
           ${hostChipHtml(r.host)}
         </div>
         <div class="rt-row-sched">${routineScheduleLine(r)}</div>
-        <div class="rt-row-meta">${escapeHtml(r.mode === 'continue' ? 'continue' : 'one-shot')} · on busy ${escapeHtml(r.onBusy || 'skip')}</div>
+        <div class="rt-row-meta">${escapeHtml(r.mode === 'continue' ? 'continue' : 'one-shot')} · on busy ${escapeHtml(r.onBusy)}</div>
         <div class="rt-row-last">${lastLine}<span class="rt-count">${count} run${count === 1 ? '' : 's'}</span></div>
       </div>`;
     }).join('');
@@ -347,7 +314,17 @@ export function createRoutinesView(options: {
     });
   }
 
-  // --- selection + detail --------------------------------------------------
+  /** Blank the detail pane's per-routine state before a new selection or a create. */
+  function resetRoutineDetail(): void {
+    routineFormError = '';
+    routineNotice = '';
+    routineDeleteArmed = false;
+    routineVersionFilter = null;
+    routineVersionShown = null;
+    routineInvocations = [];
+    routineInvocationsNextBefore = null;
+    stopRoutineInvocationPoll();
+  }
 
   function routineFormDirty() {
     if (!routineFormBaseline) return false;
@@ -355,7 +332,6 @@ export function createRoutinesView(options: {
     return now && JSON.stringify(now) !== routineFormBaseline;
   }
 
-  /** The unsaved-changes guard the spec asks for: a plain confirm, once. */
   function confirmLeaveRoutineForm() {
     if (!routineFormDirty()) return true;
     return confirm('This routine has unsaved changes. Discard them?');
@@ -365,7 +341,7 @@ export function createRoutinesView(options: {
     if (!isRoutinesViewOpen()) return;
     const resolved = options.host(host); if (!resolved) return;
     host = resolved.hostId;
-    const key = routineKey(host, id);
+    const key = sessionKey(host, id);
     if (routineSelKey === key && routineSelected && sameHost(host, routineSelected.endpoint)) {
       document.getElementById('routinesView')?.classList.add('detail-open');
       return;
@@ -376,14 +352,7 @@ export function createRoutinesView(options: {
     routineCreating = false;
     routineSelected = null;
     routineFormBaseline = null;
-    routineFormError = '';
-    routineNotice = '';
-    routineDeleteArmed = false;
-    routineVersionFilter = null;
-    routineVersionShown = null;
-    routineInvocations = [];
-    routineInvocationsNextBefore = null;
-    stopRoutineInvocationPoll();
+    resetRoutineDetail();
     renderRoutinesList();
     document.getElementById('routinesView')?.classList.add('detail-open');
     const owner = captureForm(); if (!ownsForm(owner)) return;
@@ -391,8 +360,8 @@ export function createRoutinesView(options: {
     if (detail) detail.innerHTML = '<div class="usage-state">Loading routine…</div>';
     try {
       const res = await apiFetch(owner.endpoint, `/api/routines/${encodeURIComponent(id)}`);
-      if (!res.ok) throw new Error(await httpError(res));
-      const data: unknown = await res.json();
+      if (!res.ok) throw new Error(errorText(await readJson(res), res.status));
+      const data = await readJson(res);
       if (!ownsForm(owner)) return;
       routineSelected = decodeRoutine(data, owner.endpoint);
       renderRoutineDetail();
@@ -413,15 +382,8 @@ export function createRoutinesView(options: {
     routineSelKey = null;
     routineSelected = null;
     routineCreating = true;
-    routineFormError = '';
-    routineNotice = '';
-    routineDeleteArmed = false;
-    routineVersionFilter = null;
-    routineVersionShown = null;
-    routineInvocations = [];
-    routineInvocationsNextBefore = null;
-    stopRoutineInvocationPoll();
-    routineCreateHostId = host ? (host.hostId || null) : null;
+    resetRoutineDetail();
+    routineCreateHostId = host.hostId ?? null;
     renderRoutinesList();
     document.getElementById('routinesView')?.classList.add('detail-open');
     renderRoutineDetail();
@@ -659,12 +621,12 @@ export function createRoutinesView(options: {
       ${routineCreating ? '' : renderRoutineVersions()}
       ${routineCreating ? '' : '<div class="rt-invocations" id="rtInvocations"></div>'}`;
 
-    if (baseline !== undefined) routineFormBaseline = baseline;
-    wireRoutineForm(v, baseline === undefined);
+    routineFormBaseline = baseline === undefined ? JSON.stringify(v) : baseline;
+    wireRoutineForm(v);
     if (!routineCreating) renderRoutineInvocations();
   }
 
-  function wireRoutineForm(values: RoutineForm, baseline = true) {
+  function wireRoutineForm(values: RoutineForm) {
     if (!isRoutinesViewOpen()) return;
     formEvents.abort(); formEvents = new AbortController(); disposeRoutineCwdAutocomplete();
     const owner = captureForm(), listener = { signal: formEvents.signal };
@@ -688,7 +650,7 @@ export function createRoutinesView(options: {
       // Everything under the picker is host-scoped — harnesses, catalogs, dirs.
       const harness = el.querySelector<HTMLSelectElement>('#rtHarness')?.value || values.harness;
       const current = readRoutineForm();
-      retireForm(); if (current) wireRoutineForm({ ...current, harness }, false);
+      retireForm(); if (current) wireRoutineForm({ ...current, harness });
     }, listener);
 
     const harnessSel = el.querySelector<HTMLSelectElement>('#rtHarness');
@@ -724,12 +686,6 @@ export function createRoutinesView(options: {
       }, listener);
     }
 
-    // The catalogs are fetched, so the selects only reach their saved values
-    // asynchronously. The dirty baseline therefore comes from the *defaults*
-    // object rather than from the DOM — same keys, same order — so the guard
-    // is correct from the first frame and a slow catalog can't rebaseline an
-    // edit the user already made.
-    if (baseline) routineFormBaseline = JSON.stringify(values);
     const actions: Record<string, () => unknown> = { back: backToRoutinesList, save: saveRoutine, run: runRoutineNow, delete: deleteRoutine, copy: copyRoutineCurl };
     for (const button of el.querySelectorAll<HTMLElement>('[data-rt-action]:not([data-rt-action="back"])')) {
       const action = actions[button.dataset.rtAction || ''];
@@ -752,8 +708,7 @@ export function createRoutinesView(options: {
     sel.innerHTML = available.map(h =>
       `<option value="${escapeHtml(h.id)}">${escapeHtml(h.label || h.id)}</option>`).join('')
       || `<option value="${escapeHtml(want)}">${escapeHtml(want)}</option>`;
-    // A routine may name a harness this host no longer reports; keep it rather
-    // than silently rewriting the record on the next save.
+    // Keep a harness this host no longer reports rather than rewriting the record on save.
     if (!available.some(h => h.id === want)) {
       sel.insertAdjacentHTML('afterbegin', `<option value="${escapeHtml(want)}">${escapeHtml(want)}</option>`);
     }
@@ -772,9 +727,7 @@ export function createRoutinesView(options: {
     if (!ownsForm(owner) || request !== modelRequest || field<HTMLSelectElement>('rtModel') !== sel || (field<HTMLSelectElement>('rtHarness')?.value || 'pi') !== harnessId || (field<HTMLInputElement>('rtCwd')?.value || '').trim() !== cwd) return;
     const { html, enabled, hidden } = modelSelectOptionsHtml(models);
     sel.innerHTML = html;
-    // A saved ref the catalog doesn't list stays selectable — the record is
-    // authoritative, and a model can disappear from a catalog for credential
-    // reasons that say nothing about what this routine should run.
+    // A saved ref the catalog does not list stays selectable: the record is authoritative.
     if (want && !enabled.some(m => (m.selector || `${m.provider}/${m.id}`) === want)) {
       sel.insertAdjacentHTML('beforeend', `<option value="${escapeHtml(want)}">${escapeHtml(want)}</option>`);
     }
@@ -783,13 +736,7 @@ export function createRoutinesView(options: {
     if (note) note.textContent = modelHiddenNote(hidden);
   }
 
-  // --- invoke box ----------------------------------------------------------
-
-  /**
-   * The invoke URL for the *owning* host, absolute so the curl works from
-   * anywhere: a fleet peer reached through this hub keeps its /hosts/<name>
-   * proxy prefix, because that is the address the reader can actually reach.
-   */
+  /** Absolute so the curl works from anywhere, keeping a peer's /hosts/<name> proxy prefix. */
   function routineInvokeUrl(routine: Routine) {
     const base = routine.endpoint.base || '';
     const path = `/api/routines/${encodeURIComponent(routine.id)}/invoke`;
@@ -825,10 +772,8 @@ export function createRoutinesView(options: {
     setStatus('Invoke command copied');
   }
 
-  // --- prompt versions -----------------------------------------------------
-
   function renderRoutineVersions() {
-    const versions = Array.isArray(routineSelected?.versions) ? routineSelected.versions.slice().reverse() : [];
+    const versions = (routineSelected?.versions || []).slice().reverse();
     if (!versions.length) return '';
     const rows = versions.map(entry => {
       const active = routineVersionFilter === entry.version;
@@ -852,7 +797,6 @@ export function createRoutinesView(options: {
     </details>`;
   }
 
-  // Delegated so the versions block can be re-rendered freely.
   function mountVersions() {
     versionEvents.abort(); versionEvents = new AbortController();
     const root = document.getElementById('rtVersions'), owner = captureForm();
@@ -895,8 +839,6 @@ export function createRoutinesView(options: {
     existing.outerHTML = renderRoutineVersions(); mountVersions();
   }
 
-  // --- invocations ---------------------------------------------------------
-
   function stopRoutineInvocationPoll() {
     if (routineInvocationsTimer !== null) clearInterval(routineInvocationsTimer);
     routineInvocationsTimer = null;
@@ -924,18 +866,16 @@ export function createRoutinesView(options: {
       const res = await apiFetch(owner.endpoint,
         `/api/routines/${encodeURIComponent(selected.id)}/invocations?${params}`, { timeoutMs: 20000 });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: unknown = await res.json();
+      const data = await readJson(res);
       if (!ownsForm(owner) || invocationToken !== token) return;
       const decoded = decodeRoutineInvocations(data), list = decoded.invocations;
       routineInvocations = reset ? list : routineInvocations.concat(list);
       routineInvocationsNextBefore = decoded.nextBefore;
       renderRoutineInvocations();
-      // The poll only asks for this routine's runs, so patch its list row's
-      // last-run line from the page rather than re-fanning out over the fleet
-      // every 10s. The run *count* still comes from the next full list load.
+      // Patch the list row from the page instead of re-fanning out every 10s.
       if (reset) {
-        const row = routinesList.find(r => routineKey(r.host, r.id) === key);
-        if (row && row.stats) {
+        const row = routinesList.find(r => sessionKey(r.host, r.id) === key);
+        if (row) {
           row.stats.lastInvocation = list[0] || null;
           renderRoutinesList();
         }
@@ -959,17 +899,10 @@ export function createRoutinesView(options: {
     return parts.join(' · ');
   }
 
-  /**
-   * Label for a run's session cell. Every run of a routine spawns on the same
-   * day, so the app's usual 8-character ref is all date and distinguishes
-   * nothing here — prefer the session's own name when this client has it.
-   */
+  /** Runs of one routine share a day, so a leading timestamp ref would not distinguish them. */
   function routineSessionLabel(sessionId: string) {
     const known = sessionState.findSession(sessionId, routineSelected?.host || null);
     if (known && known.name) return truncate(known.name, 28, '…');
-    // Pi's ids lead with a timestamp, so the app's usual first-8 ref would read
-    // "2026-09-" on every row; the distinguishing part is the tail. Uuid-shaped
-    // ids (OMP) keep the familiar leading form.
     return /^\d{4}-\d\d-\d\d/.test(sessionId) ? sessionId.slice(-8) : sessionId.slice(0, 8);
   }
 
@@ -988,7 +921,7 @@ export function createRoutinesView(options: {
       const started = inv.startedAt
         ? `<span title="${escapeHtml(new Date(inv.startedAt).toLocaleString())}">${escapeHtml(formatRelativeTime(inv.startedAt))}</span>`
         : '—';
-      const duration = Number.isFinite(inv.durationMs) ? formatDuration(inv.durationMs || 0) : '—';
+      const duration = inv.durationMs === null ? '—' : formatDuration(inv.durationMs);
       const session = inv.sessionId
         ? `<a class="rt-session-link" data-session="${escapeHtml(inv.sessionId)}" data-host="${escapeHtml(routineSelected?.host || '')}" title="${escapeHtml(inv.sessionId)}">${escapeHtml(routineSessionLabel(inv.sessionId))}</a>`
         : '—';
@@ -997,7 +930,7 @@ export function createRoutinesView(options: {
         <td class="rt-num">v${escapeHtml(String(inv.version ?? ''))}</td>
         <td>${escapeHtml(trigger)}</td>
         <td>${escapeHtml(inv.delivery || '')}</td>
-        <td><span class="rt-dot ${routineStatusClass(inv.status)}"></span>${escapeHtml(inv.status || '')}</td>
+        <td><span class="rt-dot ${routineStatusClass(inv.status)}"></span>${escapeHtml(inv.status)}</td>
         <td>${started}</td>
         <td class="rt-num">${escapeHtml(duration)}</td>
         <td>${session}</td>
@@ -1017,7 +950,7 @@ export function createRoutinesView(options: {
 
     const listener = { signal: invocationEvents.signal };
     el.querySelector('[data-rt-action="clear"]')?.addEventListener('click', () => { if (ownsForm(owner)) clearRoutineVersionFilter(); }, listener);
-    el.querySelector('[data-rt-action="more"]')?.addEventListener('click', () => { if (ownsForm(owner)) loadMoreRoutineInvocations(); }, listener);
+    el.querySelector('[data-rt-action="more"]')?.addEventListener('click', () => { if (ownsForm(owner)) void loadRoutineInvocations(); }, listener);
     el.querySelectorAll<HTMLElement>('.rt-session-link').forEach(link => {
       const id = link.dataset.session || '', host = link.dataset.host || null;
       link.addEventListener('click', () => { if (ownsForm(owner)) void openRoutineSession(id, host); }, listener);
@@ -1030,15 +963,7 @@ export function createRoutinesView(options: {
     renderRoutineInvocations();
   }
 
-  function loadMoreRoutineInvocations() {
-    loadRoutineInvocations({ reset: false });
-  }
-
-  /**
-   * Click-through to the run's session — the advanced-search pattern: the
-   * sidebar lists may be Active-only or narrowed by a filter right now, and
-   * selectSession validates against them.
-   */
+  /** The sidebar lists may be Active-only, so load previous sessions before selecting. */
   async function openRoutineSession(sessionId: string, host: string | null) {
     if (!isRoutinesViewOpen() || !sessionId) return;
     const resolved = options.host(host); if (!resolved) return;
@@ -1049,17 +974,13 @@ export function createRoutinesView(options: {
     await options.selectSession(sessionId, { host });
   }
 
-  // --- mutations -----------------------------------------------------------
-
   function routineFormBody(values: RoutineForm) {
     return {
       name: values.name,
       description: values.description,
       harness: values.harness,
       cwd: values.cwd,
-      // Explicit null, not undefined: JSON.stringify drops undefined keys, and
-      // a PUT is a partial update — a dropped key would leave the old model in
-      // place instead of clearing it back to the harness default.
+      // Null clears the field on a partial PUT; undefined would be dropped by JSON.stringify.
       model: values.model || null,
       thinking: values.thinking || null,
       prompt: values.prompt,
@@ -1085,20 +1006,33 @@ export function createRoutinesView(options: {
     if (el) el.textContent = routineNotice;
   }
 
+  interface Mutation { owner: FormOwner; token: symbol; button: HTMLButtonElement | null; label: string }
+  function beginMutation(buttonId: string, busyLabel: string, idleLabel: string): Mutation | null {
+    if (!isRoutinesViewOpen() || routineBusy) return null;
+    const owner = captureForm();
+    if (!ownsForm(owner)) return null;
+    const button = field<HTMLButtonElement>(buttonId);
+    const token = mutationToken = Symbol();
+    routineBusy = true;
+    if (button) { button.disabled = true; button.textContent = busyLabel; }
+    return { owner, token, button, label: idleLabel };
+  }
+  function endMutation(mutation: Mutation): void {
+    if (!ownsForm(mutation.owner) || mutationToken !== mutation.token) return;
+    mutationToken = null;
+    routineBusy = false;
+    if (mutation.button) { mutation.button.disabled = false; mutation.button.textContent = mutation.label; }
+  }
+
   async function saveRoutine() {
-    if (!isRoutinesViewOpen() || routineBusy) return;
     const values = readRoutineForm();
     if (!values) return;
-    const btn = field<HTMLButtonElement>('rtSaveBtn');
-    const creating = routineCreating;
-    const hostId = routineFormHostId(), owner = captureForm(), selected = routineSelected;
+    const creating = routineCreating, selected = routineSelected;
     if (!routineCreating && !selected) return;
-    if (!ownsForm(owner)) return;
-    const token = mutationToken = Symbol();
-    setRoutineFormError('');
-    setRoutineNotice('');
-    routineBusy = true;
-    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    const mutation = beginMutation('rtSaveBtn', 'Saving…', creating ? 'Create routine' : 'Save');
+    if (!mutation) return;
+    const { owner, token } = mutation;
+    setRoutineFormError(''); setRoutineNotice('');
     try {
       const path = creating ? '/api/routines' : `/api/routines/${encodeURIComponent(selected!.id)}`;
       const res = await apiFetch(owner.endpoint, path, {
@@ -1106,14 +1040,14 @@ export function createRoutinesView(options: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(routineFormBody(values)),
       });
-      const data: unknown = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payloadError(data, res.status));
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(errorText(data, res.status));
       if (!ownsForm(owner) || mutationToken !== token) return;
       const saved = decodeRoutine(data, owner.endpoint);
       const edited = readRoutineForm();
       routineCreating = false;
       routineSelected = saved;
-      routineSelKey = routineKey(hostId, saved.id);
+      routineSelKey = sessionKey(owner.id, saved.id);
       routineVersionShown = null;
       renderRoutineDetail(edited && JSON.stringify(edited) !== JSON.stringify(values) ? edited : undefined, JSON.stringify(values));
       setRoutineNotice(creating ? 'Routine created.' : `Saved (v${saved.promptVersion || 1}).`);
@@ -1127,19 +1061,17 @@ export function createRoutinesView(options: {
     } catch (e) {
       if (ownsForm(owner) && mutationToken === token) setRoutineFormError(errorMessage(e));
     } finally {
-      if (ownsForm(owner) && mutationToken === token) { mutationToken = null; routineBusy = false; if (btn) { btn.disabled = false; btn.textContent = creating ? 'Create routine' : 'Save'; } }
+      endMutation(mutation);
     }
   }
 
   async function runRoutineNow() {
-    if (!isRoutinesViewOpen() || routineBusy || !routineSelected) return;
-    const btn = field<HTMLButtonElement>('rtRunBtn'), owner = captureForm(), selected = routineSelected;
-    if (!ownsForm(owner)) return;
-    const token = mutationToken = Symbol();
-    setRoutineFormError('');
-    setRoutineNotice('');
-    routineBusy = true;
-    if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+    const selected = routineSelected;
+    if (!selected) return;
+    const mutation = beginMutation('rtRunBtn', 'Starting…', 'Run now');
+    if (!mutation) return;
+    const { owner, token } = mutation;
+    setRoutineFormError(''); setRoutineNotice('');
     try {
       const res = await apiFetch(owner.endpoint,
         `/api/routines/${encodeURIComponent(selected.id)}/invoke`, {
@@ -1147,11 +1079,11 @@ export function createRoutinesView(options: {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ source: 'pi-dish-ui' }),
         });
-      const data: unknown = await res.json().catch(() => ({}));
+      const data = await readJson(res);
       if (!res.ok) {
         // 409 busy / 429 rate-limited carry their own useful shapes.
         const extra = res.status === 429 && record(data) && typeof data.retryAfterSec === 'number' ? ` (retry in ${data.retryAfterSec}s)` : '';
-        throw new Error(payloadError(data, res.status) + extra);
+        throw new Error(errorText(data, res.status) + extra);
       }
       if (!ownsForm(owner) || mutationToken !== token) return;
       setRoutineNotice('Run started.');
@@ -1160,23 +1092,26 @@ export function createRoutinesView(options: {
     } catch (e) {
       if (ownsForm(owner) && mutationToken === token) setRoutineFormError(errorMessage(e));
     } finally {
-      if (ownsForm(owner) && mutationToken === token) { mutationToken = null; routineBusy = false; if (btn) { btn.disabled = false; btn.textContent = 'Run now'; } }
+      endMutation(mutation);
     }
   }
 
   let routineDeleteArmTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function deleteRoutine() {
-    if (!isRoutinesViewOpen() || routineBusy || !routineSelected) return;
-    const btn = field<HTMLButtonElement>('rtDeleteBtn'), owner = captureForm(), selected = routineSelected;
-    if (!ownsForm(owner)) return;
+    const selected = routineSelected;
+    if (!selected) return;
+    if (!isRoutinesViewOpen() || routineBusy) return;
+    const armedBy = captureForm();
+    if (!ownsForm(armedBy)) return;
     if (!routineDeleteArmed) {
       // Two-tap arm, like the sidebar's row-level close.
       routineDeleteArmed = true;
-      if (btn) btn.textContent = 'Delete?';
+      const arm = field<HTMLButtonElement>('rtDeleteBtn');
+      if (arm) arm.textContent = 'Delete?';
       clearTimeout(routineDeleteArmTimer);
       routineDeleteArmTimer = setTimeout(() => {
-        if (!ownsForm(owner)) return;
+        if (!ownsForm(armedBy)) return;
         routineDeleteArmed = false;
         const live = field<HTMLButtonElement>('rtDeleteBtn');
         if (live) live.textContent = 'Delete';
@@ -1184,16 +1119,16 @@ export function createRoutinesView(options: {
       return;
     }
     clearTimeout(routineDeleteArmTimer);
-    const token = mutationToken = Symbol();
     routineDeleteArmed = false;
-    routineBusy = true;
-    if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+    const mutation = beginMutation('rtDeleteBtn', 'Deleting…', 'Delete');
+    if (!mutation) return;
+    const { token } = mutation;
     try {
-      const res = await apiFetch(owner.endpoint,
+      const res = await apiFetch(mutation.owner.endpoint,
         `/api/routines/${encodeURIComponent(selected.id)}`, { method: 'DELETE' });
-      const data: unknown = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(payloadError(data, res.status));
-      if (!ownsForm(owner) || mutationToken !== token) return;
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(errorText(data, res.status));
+      if (!ownsForm(mutation.owner) || mutationToken !== token) return;
       stopRoutineInvocationPoll();
       routineSelected = null;
       routineSelKey = null;
@@ -1203,13 +1138,11 @@ export function createRoutinesView(options: {
       renderRoutineDetail();
       await loadRoutinesView();
     } catch (e) {
-      if (!ownsForm(owner) || mutationToken !== token) return;
-      mutationToken = null; routineBusy = false;
+      if (!ownsForm(mutation.owner) || mutationToken !== token) return;
       setRoutineFormError(errorMessage(e));
-      if (btn) { btn.disabled = false; btn.textContent = 'Delete'; }
-      return;
+    } finally {
+      endMutation(mutation);
     }
-    if (mutationToken === token) { mutationToken = null; routineBusy = false; }
   }
 
   return { open: openRoutinesView, close: closeRoutinesView, isOpen: isRoutinesViewOpen, refresh: refreshRoutinesView, escape: routinesViewEscape,

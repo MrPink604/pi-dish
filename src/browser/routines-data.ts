@@ -18,14 +18,16 @@ export interface RoutineForm {
 }
 const text = (value: unknown) => typeof value === 'string' ? value : '';
 const number = (value: unknown) => finite(value) ? value : 0;
+function decodeInvocation(row: unknown): RoutineInvocation | null {
+  if (!record(row) || typeof row.id !== 'string') return null;
+  return { id: row.id, version: finite(row.version) ? row.version : null, trigger: text(row.trigger), source: text(row.source), delivery: text(row.delivery), status: text(row.status),
+    startedAt: finite(row.startedAt) ? row.startedAt : null, durationMs: finite(row.durationMs) ? row.durationMs : null, sessionId: text(row.sessionId),
+    skipReason: text(row.skipReason), error: text(row.error), closeError: text(row.closeError), summary: text(row.summary) };
+}
 export function decodeRoutineInvocations(value: unknown): { invocations: RoutineInvocation[]; nextBefore: number | null } {
   if (!record(value)) throw new Error('Invalid routine invocation response');
-  return { invocations: Array.isArray(value.invocations) ? value.invocations.flatMap((row: unknown) => {
-    if (!record(row) || typeof row.id !== 'string') return [];
-    return [{ id: row.id, version: finite(row.version) ? row.version : null, trigger: text(row.trigger), source: text(row.source), delivery: text(row.delivery), status: text(row.status),
-      startedAt: finite(row.startedAt) ? row.startedAt : null, durationMs: finite(row.durationMs) ? row.durationMs : null, sessionId: text(row.sessionId),
-      skipReason: text(row.skipReason), error: text(row.error), closeError: text(row.closeError), summary: text(row.summary) }];
-  }) : [], nextBefore: finite(value.nextBefore) ? value.nextBefore : null };
+  return { invocations: Array.isArray(value.invocations) ? value.invocations.flatMap(row => decodeInvocation(row) ?? []) : [],
+    nextBefore: finite(value.nextBefore) ? value.nextBefore : null };
 }
 export function decodeRoutine(value: unknown, host: { hostId: string | null; label?: string | null; base: string; token?: string | null }): Routine {
   if (!record(value)) throw new Error('Invalid routine response');
@@ -38,7 +40,7 @@ export function decodeRoutine(value: unknown, host: { hostId: string | null; lab
     schedule: record(row.schedule) && typeof row.schedule.cron === 'string' ? { cron: row.schedule.cron } : null, enabled: row.enabled !== false,
     mode: row.mode === 'continue' ? 'continue' : 'oneShot', onBusy: row.onBusy === 'steer' || row.onBusy === 'followUp' ? row.onBusy : 'skip', minIntervalSec: number(row.minIntervalSec),
     prompt: text(row.prompt), promptVersion: number(row.promptVersion) || 1, versions,
-    stats: { invocations: number(stats.invocations), nextRunAt: finite(stats.nextRunAt) ? stats.nextRunAt : null, lastInvocation: decodeRoutineInvocations({ invocations: [stats.lastInvocation] }).invocations[0] || null },
+    stats: { invocations: number(stats.invocations), nextRunAt: finite(stats.nextRunAt) ? stats.nextRunAt : null, lastInvocation: decodeInvocation(stats.lastInvocation) },
     host: host.hostId, hostLabel: host.label || '', endpoint: Object.freeze({ base: host.base, token: host.token }) };
 }
 export function decodeRoutineList(value: unknown, host: Parameters<typeof decodeRoutine>[1]): Routine[] {

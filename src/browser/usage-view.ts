@@ -27,7 +27,6 @@ export function createUsageView(options: {
   const element = <T extends HTMLElement = HTMLElement>(id: string) => {
     const value = document.getElementById(id); if (!value) throw new Error('Missing usage element: ' + id); return value as T;
   };
-  const message = (error: unknown) => error instanceof Error ? error.message : String(error);
   let disposed = false, dataSequence = 0;
   let bodyEvents = new AbortController(), chartEvents = new AbortController(), detailEvents = new AbortController();
   const events = new AbortController();
@@ -38,8 +37,7 @@ export function createUsageView(options: {
   let usageData: UsageSummary | null = null, usageChart: UsageChart | null = null, usageSelectedDay: string | null = null;
   let usageHostErrors: string[] = [], usageHostPending: string[] = [], usageError: string | null = null;
   let usageLimitsEntries: UsageLimitEntry[] = [], usageLimitsLoading = false, usageFetchSeq = 0, limitsFetchSeq = 0;
-  // Cache lifetimes: per-host learner reports, the host being shown, and the
-  // expanded rows. The selection outlives refetches; it is view memory only.
+  // Cache-lifetime selection outlives refetches; it is view memory only.
   let cacheLifetimeHosts: CacheLifetimeHost[] = [], cacheLifetimeHostKey: string | null = null;
   const cacheLifetimeOpen = new Set<string>();
   let cacheLifetimeEvents = new AbortController();
@@ -50,17 +48,21 @@ export function createUsageView(options: {
     return sameCapturedHost(options.host(host.hostId), host);
   }
   function retireRender(): void { renderGeneration++; bodyEvents.abort(); chartEvents.abort(); detailEvents.abort(); cacheLifetimeEvents.abort(); hideUsageTooltip(); }
-  // --- Usage view (main-pane takeover) ---
-  // Global usage/spend overview: KPI headlines, a stacked-by-model daily chart,
-  // model share, and workspace/session breakdowns. Opened from the sidebar
-  // header; `.main.usage-open` hides the empty state and session view (the
-  // diff/file-view takeover pattern, one level up because usage isn't
-  // session-scoped). Data is /api/usage-summary — the range presets scope
-  // everything below them; the KPI row above is fixed headline windows.
-  // Chart series colors are the validated --chart-N theme tokens; the top five
-  // models in the range take slots 1–5 and the rest fold into "other".
+  // Chart series colors are the --chart-N theme tokens: the range's top five
+  // models take slots 1–5 and the rest fold into "other".
   const USAGE_RANGES = [['1', 'Today'], ['7', '7 days'], ['30', '30 days'], ['all', 'All time']];
   const USAGE_RANGE_LABELS: Readonly<Record<string, string>> = { 1: 'today', 7: 'the last 7 days', 30: 'the last 30 days', all: 'all time' };
+  function usageRangesHtml() {
+    return USAGE_RANGES.map(([value, label]) =>
+      `<button class="usage-range-btn${usageRange === value ? ' active' : ''}" data-range="${value}">${label}</button>`).join('');
+  }
+  /** Range buttons appear in two panes; a range switch outside the active pane is ignored. */
+  function wireRangeButtons(body: HTMLElement, owns: () => boolean) {
+    body.querySelectorAll<HTMLElement>('[data-range]').forEach(button => button.addEventListener('click', () => {
+      const range = button.dataset.range;
+      if (owns() && (range === '1' || range === '7' || range === '30' || range === 'all')) setUsageRange(range);
+    }, { signal: bodyEvents.signal }));
+  }
 
   function isUsageViewOpen() {
     return !disposed && options.root.classList.contains('usage-open');
@@ -105,8 +107,6 @@ export function createUsageView(options: {
     options.root.classList.add('usage-open');
     refreshUsageView();
   }
-  // Open and the Refresh button reload everything; range/sort/filter changes
-  // and the indexing poll reload only the summary (loadUsageView).
   function refreshUsageView() {
     if (!isUsageViewOpen()) return;
     void loadUsageLimits();
@@ -129,11 +129,7 @@ export function createUsageView(options: {
     loadUsageView();
   }
 
-  // The cost/tokens toggle is the view's metric: it re-ranks the breakdowns
-  // server-side (the groups are truncated to the top 20 there, so the client
-  // re-sorting its slice would show the wrong twenty) *and* switches what the
-  // chart, tooltip, and day detail plot. Device-local preference, like the
-  // response-metadata density.
+  // Re-ranks the breakdowns server-side: the groups arrive truncated to the top 20.
   function setUsageSort(sort: 'cost' | 'tokens') {
     if (!isUsageViewOpen()) return;
     if (usageSort === sort) return;
@@ -149,9 +145,7 @@ export function createUsageView(options: {
     if (usageData) renderUsageView(usageData);
   }
 
-  // Model filter (multi-select): clicking rows in the Models section toggles
-  // refs in/out. Applied server-side — the workspace/session groups only exist
-  // pre-truncated, so a filtered view needs a refetch, not a client re-slice.
+  // Applied server-side: the groups arrive pre-truncated, so a filter refetches.
   function usageModelsKey() { return [...usageModelFilter].join(','); }
   function toggleUsageModelFilter(ref: string) {
     if (!isUsageViewOpen()) return;
@@ -166,12 +160,9 @@ export function createUsageView(options: {
     loadUsageView();
   }
 
-  // Limits are range-independent and each host answers by running the harness
-  // usage CLI, so they load on open/Refresh only — never on range/sort/filter
-  // changes or the indexing poll, which used to blank and re-fill the tab
-  // every cycle. A reload keeps the last rows and swaps each host's rows as
-  // it answers; hosts that no longer answer drop out when the fan-out ends.
-  // Only the active limits pane needs painting when a host answers.
+  // Each host answers by running its harness usage CLI, so limits load on
+  // open/Refresh only. A reload keeps the last rows and swaps each host's rows
+  // as it answers; hosts that stop answering drop out when the fan-out ends.
   async function loadUsageLimits(): Promise<void> {
     const fetchSeq = ++limitsFetchSeq;
     const stale = () => fetchSeq !== limitsFetchSeq || !isUsageViewOpen();
@@ -206,9 +197,8 @@ export function createUsageView(options: {
     usageLimitsLoading = false;
     publish();
   }
-  // Learned cache lifetimes are per host (each learns from its own sessions)
-  // and range-independent, so they ride their own capability-gated fan-out
-  // and render into their own container without redrawing the chart.
+  // Learned cache lifetimes are per host and range-independent, so they ride
+  // their own capability-gated fan-out and never redraw the chart.
   async function loadCacheLifetimes(fetchSeq: number): Promise<void> {
     const stale = () => fetchSeq !== usageFetchSeq || !isUsageViewOpen();
     await options.fleetReady();
@@ -297,7 +287,7 @@ export function createUsageView(options: {
       if (indexing) usageTimer = setTimeout(() => { if (!stale()) void loadUsageView(); }, 1000);
     } catch (error) {
       if (stale()) return;
-      usageError = message(error);
+      usageError = error instanceof Error ? error.message : String(error);
       if (usageTab !== 'limits') renderActiveTab();
     }
   }
@@ -308,16 +298,14 @@ export function createUsageView(options: {
     return bucket.calls || 0;
   }
   const USAGE_METRIC_LABELS: Readonly<Record<UsageMetric, string>> = { cost: 'Estimated spend', tokens: 'Tokens', calls: 'Calls' };
-  // Cost attribution buckets, in legend/stack order: prompt-side reads split
-  // into uncached input and cached reads, then generation and cache writes.
+  // Costs split into uncached input and cached reads, then generation and cache writes.
   const USAGE_COST_BUCKETS = [
     ['input', 'Read', 'c1'],
     ['cacheRead', 'Cached read', 'c2'],
     ['output', 'Output', 'c3'],
     ['cacheWrite', 'Cache write', 'c4'],
   ] as const;
-  // Compact per-bucket cost list for titles and detail rows; null when nothing
-  // is priced so callers can fall back to the total-only display.
+  // Null when nothing is priced, so callers fall back to the total-only display.
   function usageCostBreakdown(costs?: Costs | null) {
     if (!costs || !finite(costs.total)) return null;
     const parts = USAGE_COST_BUCKETS.map(([key, label]) => `${label} ${formatEstimatedCost(costs[key])}`);
@@ -325,14 +313,20 @@ export function createUsageView(options: {
     if (unattributed > 1e-12) parts.push(`Unattributed ${formatEstimatedCost(unattributed)}`);
     return parts.join(' · ');
   }
-  function usageModelValue(m: Pick<UsageModel, 'cost' | 'tokens' | 'calls'> | undefined, metric: UsageMetric) {
-    if (metric === 'cost') return finite(m?.cost) ? m.cost : 0;
-    if (metric === 'tokens') return usageDisplayTokens(m?.tokens);
-    return m?.calls || 0;
+  function usageModelValue(m: Pick<UsageModel, 'cost' | 'tokens' | 'calls'>, metric: UsageMetric) {
+    if (metric === 'cost') return finite(m.cost) ? m.cost : 0;
+    if (metric === 'tokens') return usageDisplayTokens(m.tokens);
+    return m.calls || 0;
   }
-  // Compact per-row breakdown: "1.2M in / 800k out · 92% cached". The cached
-  // share is cacheRead over the whole prompt side (input + cache read + cache
-  // write) — the same denominator formatCacheStat uses in the stats modal.
+  function usageGroupValue(group: UsageGroup, metric: UsageMetric) {
+    return usageModelValue({ cost: group.costs?.total, calls: group.calls, tokens: group.tokens }, metric);
+  }
+  /** Chart palette slot for a model ref: the first five series, else "other". */
+  function usageSlot(ref: string | undefined) {
+    const index = (usageChart?.seriesRefs || []).indexOf(ref || '');
+    return index >= 0 ? `s${index + 1}` : 'sother';
+  }
+  // "1.2M in / 800k out · 92% cached"; the share is cacheRead over the prompt side.
   function usageTokensDetail(tokens?: Tokens) {
     const t = tokens || {};
     const parts = [`${formatTokens(t.input)} in / ${formatTokens(t.output)} out`];
@@ -374,8 +368,6 @@ export function createUsageView(options: {
     const generation = renderGeneration;
     const body = element('usageViewBody'), totals = d.totals || {};
     body.classList.remove('usage-refreshing');
-    const ranges = USAGE_RANGES.map(([value, label]) =>
-      `<button class="usage-range-btn${usageRange === value ? ' active' : ''}" data-range="${value}">${label}</button>`).join('');
     const prompt = (tokens?: Tokens) => (tokens?.input || 0) + (tokens?.cacheRead || 0) + (tokens?.cacheWrite || 0);
     const timing = (bucket: UsageBucket) => bucket.measured
       ? `${((bucket.durationMs || 0) / bucket.measured / 1000).toFixed(1)}s average · ${((bucket.slowestMs || 0) / 1000).toFixed(1)}s slowest · ${bucket.measured} measured`
@@ -386,7 +378,7 @@ export function createUsageView(options: {
         <span class="usage-row-name">${escapeHtml(shortModelName(model.model || model.key))}<small>${escapeHtml(model.provider || '')}</small></span>
         <span class="usage-row-meta">${formatCacheStat(model.tokens?.cacheRead, model.tokens?.cacheWrite, model.tokens?.input)} · ${timing(model)}</span>
       </div>`).join('');
-    body.innerHTML = `<div class="usage-ranges">${ranges}</div>
+    body.innerHTML = `<div class="usage-ranges">${usageRangesHtml()}</div>
       ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
       ${usageHostErrors.length ? `<div class="usage-notice">Not counted: ${escapeHtml(usageHostErrors.join(', '))} did not answer.</div>` : ''}
       ${usageHostPending.length ? `<div class="usage-notice">Still counting ${escapeHtml(usageHostPending.join(', '))}…</div>` : ''}
@@ -396,10 +388,7 @@ export function createUsageView(options: {
       ${usageModelFilter.size ? '<div class="usage-filter-note">Model filter from Usage applies here.</div>' : ''}
       <section class="usage-section"><h4>By model</h4>${rows || '<small class="usage-empty">No usage in this range.</small>'}</section>
       <div id="usageCacheLifetimes"></div>`;
-    body.querySelectorAll<HTMLElement>('[data-range]').forEach(button => button.addEventListener('click', () => {
-      const range = button.dataset.range;
-      if (generation === renderGeneration && (range === '1' || range === '7' || range === '30' || range === 'all')) setUsageRange(range);
-    }, { signal: bodyEvents.signal }));
+    wireRangeButtons(body, () => generation === renderGeneration);
     renderCacheLifetimes();
   }
 
@@ -418,7 +407,6 @@ export function createUsageView(options: {
     const hbb = d.headlineCostsByBucket || {};
     const kpis = [['Today', 'today'], ['Last 7 days', 'days7'], ['Last 30 days', 'days30'], ['This month', 'month']]
       .map(([label, key]) => {
-        // Hover pivots the window's spend into its four cost buckets.
         const title = [usageCostBreakdown(hbb[key]),
           hu[key] ? `${hu[key]} unpriced calls are omitted from this estimate` : null].filter(Boolean).join('\n');
         return `<div class="usage-kpi"${title ? ` title="${escapeHtml(title)}"` : ''}><small>${label}</small><strong>${formatUsageCost(h[key], hu[key])}</strong></div>`;
@@ -443,25 +431,19 @@ export function createUsageView(options: {
       ? `<div class="usage-filter-note">Filtered to ${[...usageModelFilter].map(r => `<b title="${escapeHtml(r)}">${escapeHtml(shortModelName(r))}</b>`).join(', ')}<button class="usage-range-btn" data-clear-models>✕ clear</button></div>`
       : '';
 
-    // One metric drives the whole view — chart, tooltip, day detail, and the
-    // breakdown bars all plot it: tokens when that toggle is chosen, else
-    // spend, else calls when nothing in range carries a cost.
+    // One metric drives the chart, tooltip, day detail and breakdown bars alike.
     const metric = usageSort === 'tokens' ? 'tokens' : finite(t.costs?.total) && t.costs.total > 0 ? 'cost' : 'calls';
-    const ranges = USAGE_RANGES
-      .map(([v, l]) => `<button class="usage-range-btn${usageRange === v ? ' active' : ''}" data-range="${v}">${l}</button>`).join('');
     const sortCtl = `<span class="usage-sort"><small>Show</small>${[['cost', 'Cost'], ['tokens', 'Tokens']]
       .map(([v, l]) => `<button class="usage-range-btn${usageSort === v ? ' active' : ''}" data-sort="${v}">${l}</button>`).join('')}</span>`;
-    // Chart model: series slots follow the range's top *active* models (server
-    // sort order; the model filter narrows the palette to the selected refs) so
-    // the chart, its legend, and the model-share section all agree on colors.
+    // Series slots follow the range's top active models so chart, legend and
+    // model-share agree on colors.
     const activeModels = (d.groups?.models || []).filter(m => !usageModelFilter.size || usageModelFilter.has(m.key || ''));
     const daily = d.daily || [];
     const buckets = daily.length > 90 ? aggregateUsageWeekly(daily) : daily;
     const seriesRefs = activeModels.slice(0, 5).map(m => m.key || '');
     usageChart = { buckets, seriesRefs, metric, activeModelCount: activeModels.length, stack: metric === 'cost' ? usageStack : 'models' };
     const showChart = d.range !== '1' && buckets.length > 1 && (t.calls || 0) > 0;
-    // The stack pivot only exists when the chart plots spend: bucket stacking
-    // of a token/call chart would be a second, different metric.
+    // Bucket stacking only exists for spend; a token/call stack would be a second metric.
     const stackCtl = showChart && metric === 'cost'
       ? `<span class="usage-sort"><small>Stack</small>${[['models', 'Models'], ['buckets', 'Cost buckets']]
         .map(([v, l]) => `<button class="usage-range-btn${usageChart?.stack === v ? ' active' : ''}" data-stack="${v}">${l}</button>`).join('')}</span>`
@@ -477,23 +459,20 @@ export function createUsageView(options: {
       ${d.indexing ? '<div class="usage-notice">History is indexing; totals will refresh…</div>' : ''}
       ${usageHostErrors.length ? `<div class="usage-notice">Not counted: ${escapeHtml(usageHostErrors.join(', '))} did not answer.</div>` : ''}
       ${usageHostPending.length ? `<div class="usage-notice">Still counting ${escapeHtml(usageHostPending.join(', '))}…</div>` : ''}
-      <div class="usage-ranges">${ranges}${sortCtl}${stackCtl}</div>
+      <div class="usage-ranges">${usageRangesHtml()}${sortCtl}${stackCtl}</div>
       ${(t.calls || 0) === 0 ? '<div class="usage-state">No usage in this range.</div>' : summary}
       ${filterNote}
       ${usageBucketShareHtml(t)}
       ${chartSection}
       <div id="usageDayDetail"></div>
-      ${usageModelShareHtml(d, metric, seriesRefs)}
+      ${usageModelShareHtml(d, metric)}
       <div class="usage-columns">
         ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', metric)}
         ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
       </div>
       ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? '' : 's'} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing and ${d.unpricedModelCalls === 1 ? 'is' : 'are'} omitted.</div>` : ''}
     `;
-    body.querySelectorAll<HTMLElement>('[data-range]').forEach(button => button.addEventListener('click', () => {
-      const range = button.dataset.range;
-      if (owns() && (range === '1' || range === '7' || range === '30' || range === 'all')) setUsageRange(range);
-    }, listener));
+    wireRangeButtons(body, owns);
     body.querySelectorAll<HTMLElement>('[data-sort]').forEach(button => button.addEventListener('click', () => {
       const sort = button.dataset.sort; if (owns() && (sort === 'cost' || sort === 'tokens')) setUsageSort(sort);
     }, listener));
@@ -519,8 +498,7 @@ export function createUsageView(options: {
     renderUsageDayDetail();
   }
 
-  // Chart geometry is computed against the holder's live width; redraw on
-  // resize instead of scaling a stale viewBox (bars keep their mark specs).
+  // Geometry uses the holder's live width; resize redraws rather than scaling a stale viewBox.
   function drawUsageChart() {
     if (!isUsageViewOpen()) return;
     chartEvents.abort(); chartEvents = new AbortController();
@@ -553,7 +531,6 @@ export function createUsageView(options: {
       parts.push(`<text class="tick" x="${margin.left - 6}" y="${y + 3}" text-anchor="end">${fmtTick(v)}</text>`);
     }
     parts.push(`<line class="axis" x1="${margin.left}" x2="${margin.left + plotW}" y1="${yFor(0)}" y2="${yFor(0)}"/>`);
-    // Sparse x labels, anchored so the newest bucket is always labeled.
     const stride = Math.max(1, Math.ceil(n / Math.max(3, Math.floor(plotW / 80))));
     for (let i = 0; i < n; i++) {
       if ((n - 1 - i) % stride !== 0) continue;
@@ -571,8 +548,7 @@ export function createUsageView(options: {
           const v = finite(b.costs?.[key]) ? b.costs[key] : 0;
           if (v > 0) segs.push({ cls, v });
         });
-        // Older recordings can carry a known total with no component split.
-        // Keep that spend visible instead of drawing a mysteriously short bar.
+        // Older recordings can carry a total with no component split.
         const unattributed = usageUnattributedCost(b.costs);
         if (unattributed > 1e-12) {
           segs.push({ cls: 'sother', v: unattributed });
@@ -582,7 +558,8 @@ export function createUsageView(options: {
         const byRef = new Map((b.models || []).map(m => [m.ref, m]));
         let known = 0;
         seriesRefs.forEach((ref, s) => {
-          const v = byRef.has(ref) ? usageModelValue(byRef.get(ref), metric) : 0;
+          const model = byRef.get(ref);
+          const v = model ? usageModelValue(model, metric) : 0;
           known += v;
           if (v > 0) segs.push({ cls: 's' + (s + 1), v });
         });
@@ -601,7 +578,6 @@ export function createUsageView(options: {
         const hPx = top > 0 ? segs[sI].v / top * plotH : 0;
         if (hPx <= 0) continue;
         const isTop = sI === segs.length - 1;
-        // 2px surface gap between stacked fills (shaved off each lower segment).
         const drawH = Math.max(0.75, hPx - (isTop ? 0 : 2));
         const yTop = cursor - hPx;
         if (isTop) {
@@ -621,7 +597,7 @@ export function createUsageView(options: {
         `<span class="usage-legend-item" title="${escapeHtml(ref)}"><i class="swatch s${i + 1}"></i>${escapeHtml(shortModelName(ref))}</span>`);
     if (stackBuckets && anyOther)
       legendItems.push('<span class="usage-legend-item"><i class="swatch sother"></i>Unattributed</span>');
-    else if (!stackBuckets && (anyOther || (usageChart.activeModelCount || 0) > seriesRefs.length))
+    else if (!stackBuckets && (anyOther || usageChart.activeModelCount > seriesRefs.length))
       legendItems.push('<span class="usage-legend-item"><i class="swatch sother"></i>other</span>');
 
     holder.innerHTML = `<svg width="${width}" height="${height}" role="img" aria-label="${USAGE_METRIC_LABELS[metric]} per ${(buckets[0]?.days || 1) > 1 ? 'week' : 'day'}">${parts.join('')}</svg>` +
@@ -668,7 +644,6 @@ export function createUsageView(options: {
       ['Calls', String(bucket.calls || 0)],
       ['Tokens in / out', `${formatTokens(tok.input)} / ${formatTokens(tok.output)}`],
       ['Cache', formatCacheStat(tok.cacheRead, tok.cacheWrite, tok.input)],
-      // Per-bucket spend keeps the day detail pivoted like the range totals.
       ...(finite(bucket.costs?.total)
         ? [
             ...USAGE_COST_BUCKETS.map(([key, label]) => [label, formatEstimatedCost(bucket.costs?.[key])]),
@@ -677,17 +652,13 @@ export function createUsageView(options: {
           ]
         : []),
     ].map(([k, v]) => `<div><small>${k}</small><strong>${v}</strong></div>`).join('');
-    const slotFor = (ref: string | undefined) => {
-      const i = (usageChart?.seriesRefs || []).indexOf(ref || '');
-      return i >= 0 ? 's' + (i + 1) : 'sother';
-    };
     const rows = (bucket.models || []).map(m => {
       const meta = [`${m.calls} calls`, `${formatTokens(usageDisplayTokens(m.tokens))} tok`];
       if (usageDisplayTokens(m.tokens) > 0) meta.push(usageTokensDetail(m.tokens));
       if (metric === 'cost') meta.push(formatUsageCost(m.cost, m.costUnavailable?.total));
       return `
       <div class="usage-row" title="${escapeHtml(m.ref)}">
-        <i class="swatch ${slotFor(m.ref)}"></i>
+        <i class="swatch ${usageSlot(m.ref)}"></i>
         <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.ref))}<small>${escapeHtml(m.provider || '')}</small></span>
         <span class="usage-row-meta">${meta.join(' · ')}</span>
       </div>`;
@@ -700,11 +671,8 @@ export function createUsageView(options: {
     holder.querySelector('[data-close-day]')?.addEventListener('click', () => { if (generation === renderGeneration && day === usageSelectedDay) toggleUsageDay(day); }, { signal: detailEvents.signal });
   }
 
-  // Part-to-whole share of the range total across the four cost buckets: one
-  // stacked bar plus per-bucket amounts, so every cost view answers "where did
-  // the spend go" (read vs cached read vs output vs cache write) without a
-  // hover. Follows the model filter through `totals`; unpriced calls stay out
-  // of the bar and are named in the heading, like the total line's `*`.
+  // Follows the model filter through `totals`; unpriced calls stay out of the
+  // bar and are named in the heading, like the total line's `*`.
   function usageBucketShareHtml(t: UsageBucket) {
     if (!finite(t.costs?.total) || t.costs.total <= 0) return '';
     const total = t.costs.total, unpriced = t.costUnavailable?.total || 0;
@@ -726,28 +694,20 @@ export function createUsageView(options: {
       <div class="usage-legend">${legend.join('')}</div></section>`;
   }
 
-  // Part-to-whole share of the range by model: one horizontal stacked bar
-  // (top five slots + other) over the per-model table that doubles as the
-  // chart's WCAG-clean twin. The rows are also the model filter's toggles —
-  // the list itself is never filtered (it's the facet control): with a filter
-  // active, selected rows keep their chart slot colors and share of the
-  // *selected* total while deselected rows dim with a hollow swatch.
-  function usageModelShareHtml(d: UsageSummary, metric: UsageMetric, seriesRefs: readonly string[]) {
+  // The per-model table doubles as the chart's WCAG twin and as the filter's
+  // facet control: it is never filtered, selected rows keep their slot color.
+  function usageModelShareHtml(d: UsageSummary, metric: UsageMetric) {
     const models = d.groups?.models || [];
     const filtered = usageModelFilter.size > 0;
     if (!models.length && !filtered) return '';
     const isOn = (ref: string | undefined) => !filtered || usageModelFilter.has(ref || '');
-    const val = (m: UsageGroup) => usageModelValue({ cost: m.costs?.total, calls: m.calls, tokens: m.tokens }, metric);
-    const slotFor = (ref: string | undefined) => {
-      const i = seriesRefs.indexOf(ref || '');
-      return i >= 0 ? 's' + (i + 1) : 'sother';
-    };
+    const val = (m: UsageGroup) => usageGroupValue(m, metric);
     const active = models.filter(m => isOn(m.key));
     const total = active.reduce((s, m) => s + val(m), 0);
     const segs = [];
     active.slice(0, 5).forEach(m => {
       const share = total > 0 ? val(m) / total : 0;
-      if (share > 0.004) segs.push(`<span class="${slotFor(m.key)}" style="flex-grow:${(share * 1000).toFixed(1)}" title="${escapeHtml(shortModelName(m.key))}"></span>`);
+      if (share > 0.004) segs.push(`<span class="${usageSlot(m.key)}" style="flex-grow:${(share * 1000).toFixed(1)}" title="${escapeHtml(shortModelName(m.key))}"></span>`);
     });
     const restShare = total > 0 ? active.slice(5).reduce((s, m) => s + val(m), 0) / total : 0;
     if (restShare > 0.004) segs.push(`<span class="sother" style="flex-grow:${(restShare * 1000).toFixed(1)}" title="other models"></span>`);
@@ -758,7 +718,7 @@ export function createUsageView(options: {
       const detail = usageDisplayTokens(m.tokens) > 0 ? ` · ${usageTokensDetail(m.tokens)}` : '';
       const breakdown = usageCostBreakdown(m.costs);
       return `<div class="usage-row model-toggle${filtered ? (on ? ' on' : ' off') : ''}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml([m.key, breakdown].filter(Boolean).join('\n'))} — click to toggle model filter">
-        <i class="swatch ${on ? slotFor(m.key) : 'soff'}"></i>
+        <i class="swatch ${on ? usageSlot(m.key) : 'soff'}"></i>
         <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || '')}</small></span>
         <span class="usage-row-meta">${pct} · ${m.calls} calls · ${formatTokens(usageDisplayTokens(m.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
       </div>`;
@@ -773,11 +733,10 @@ export function createUsageView(options: {
       ${rows}${missing}</section>`;
   }
 
-  // Workspace/session magnitude lists: single-hue micro-bars (share of the
-  // largest entry) under each row — magnitude, not identity, so no palette.
+  // Single-hue micro-bars (share of the largest entry): magnitude, not identity.
   function usageGroupListHtml(title: string, rows: readonly UsageGroup[] | undefined, kind: 'workspace' | 'session', metric: UsageMetric) {
     const list = (rows || []).slice(0, 12);
-    const val = (x: UsageGroup) => usageModelValue({ cost: x.costs?.total, calls: x.calls, tokens: x.tokens }, metric);
+    const val = (x: UsageGroup) => usageGroupValue(x, metric);
     const maxV = Math.max(1e-9, ...list.map(val));
     const items = list.map(x => {
       const name = kind === 'workspace' ? shortCwd(x.key) : (x.name || x.id);
@@ -786,8 +745,7 @@ export function createUsageView(options: {
       const attrs = kind === 'session'
         ? ` data-session-id="${escapeHtml(x.id)}"${x.host ? ` data-session-host="${escapeHtml(x.host)}"` : ''} role="button" tabindex="0"`
         : '';
-      // Merged rows keep their host: the same path (or session id) on two
-      // machines is two different rows.
+      // The same path on two machines is two different rows.
       const hostTag = isMultiHost() && x.hostLabel ? `<small class="usage-row-host">${escapeHtml(x.hostLabel)}</small>` : '';
       const detail = usageDisplayTokens(x.tokens) > 0 ? ` · ${usageTokensDetail(x.tokens)}` : '';
       const breakdown = usageCostBreakdown(x.costs);
@@ -811,8 +769,7 @@ export function createUsageView(options: {
     return el;
   }
 
-  // One tooltip, every series at that X; values lead, labels follow. Built
-  // with textContent — model names are untrusted strings.
+  // Every series at that X; built with textContent because model names are untrusted.
   function showUsageTooltip(bucket: UsageDay, e: PointerEvent) {
     if (!bucket) return;
     const el = ensureUsageTooltip();
