@@ -1,5 +1,4 @@
 import {
-  FEATURE_FACTORY_NAMES,
   FIXTURE_FEATURE_NAMES,
   FIXTURE_PORT_NAMES,
   type FixtureFactories,
@@ -30,15 +29,11 @@ function registry(): FixtureObservationRegistry {
 
 export function observeFeature<K extends FixtureFeatureName>(
   name: K,
-  factoryName: string,
   create: (...args: Parameters<FixtureFactories[K]>) => FixtureFeatures[K],
   ...args: Parameters<FixtureFactories[K]>
 ): FixtureFeatures[K] {
   const fixture = registry();
   if (Object.hasOwn(fixture.features, name)) throw new Error(`Duplicate application feature: ${name}`);
-  if (FEATURE_FACTORY_NAMES[name] !== factoryName) {
-    throw new Error(`Application feature ${name} expected ${FEATURE_FACTORY_NAMES[name]}, received ${factoryName}`);
-  }
   const value = create(...args);
   Reflect.set(fixture.features, name, value);
   Reflect.set(fixture.ports, name, args[0]);

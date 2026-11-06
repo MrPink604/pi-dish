@@ -1,8 +1,8 @@
-import type { Dialog, Page, Route } from '@playwright/test';
+import type { Dialog, Page } from '@playwright/test';
 import type { FleetFixture } from './fixtures.js';
 import fs = require('node:fs');
 import path = require('node:path');
-import { test, expect, ROOT } from './fixtures.js';
+import { test, expect, ROOT, heldRoute } from './fixtures.js';
 
 async function configureSession(page: Page, fleet: FleetFixture, mode: string, close = true, restart = false) {
   await fleet.select(fleet.peer);
@@ -44,19 +44,15 @@ test('Prime owned-agent close warns about the agent family and stays on its owni
   await page.locator('#statsClose').scrollIntoViewIfNeeded();
   await page.screenshot({ path: artifact });
 
-  let receive: ((route: Route) => void) | undefined;
-  const received = new Promise<Route>(resolve => { receive = resolve; });
-  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/close`, (route: Route) => {
-    if (!receive) throw new Error('Prime close route resolver not initialized');
-    receive(route);
-  });
+  const closeRequest = heldRoute();
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/close`, closeRequest.hold);
   const warning = new Promise<string>(resolve => page.once('dialog', async (dialog: Dialog) => {
     resolve(dialog.message());
     await dialog.accept();
   }));
   await page.locator('#sessionCloseBtn').click();
   expect(await warning).toBe('Stop this agent and its children? Any work in progress will be aborted; the transcript stays resumable.');
-  const route = await received;
+  const route = await closeRequest.received;
   expect(route.request().method()).toBe('POST');
 
   await fleet.select(fleet.self);
@@ -83,19 +79,15 @@ test('Prime restart warns about children and keeps the response bound to the own
   await expect(page.locator('#sessionCloseBtn')).toBeInViewport();
   await page.screenshot({ path: path.join(path.dirname(artifact), 'prime-restart-mobile.png') });
 
-  let receive: ((route: Route) => void) | undefined;
-  const received = new Promise<Route>(resolve => { receive = resolve; });
-  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/restart`, (route: Route) => {
-    if (!receive) throw new Error('Prime restart route resolver not initialized');
-    receive(route);
-  });
+  const restart = heldRoute();
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/restart`, restart.hold);
   const warning = new Promise<string>(resolve => page.once('dialog', async (dialog: Dialog) => {
     resolve(dialog.message());
     await dialog.accept();
   }));
   await page.locator('#sessionRestartBtn').click();
   expect(await warning).toBe('Restart this agent? This stops the root and its children, aborting any work in progress, then resumes the root in the same pane. The transcript is kept; other root agents keep running.');
-  const route = await received;
+  const route = await restart.received;
   expect(route.request().method()).toBe('POST');
   await expect(page.locator('#sessionRestartBtn')).toBeDisabled();
   await expect(page.locator('#sessionCloseBtn')).toBeDisabled();

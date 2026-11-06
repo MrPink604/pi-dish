@@ -18,15 +18,10 @@ fixtures_js_1.test.use({ liveSessions: true });
         host.emit('queue_update', { followUp: ['identical queued message'] });
         await (0, fixtures_js_1.expect)(page.locator('.queue-item')).toHaveAttribute('data-client-prompt-id', id);
     }
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
-    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/queue/cancel`, route => {
-        if (!receive)
-            throw new Error('Queue-cancel route resolver not initialized');
-        receive(route);
-    });
+    const edit = (0, fixtures_js_1.heldRoute)();
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/queue/cancel`, edit.hold);
     await page.evaluate(() => { window.editRequest = fixtureApp.features.promptDelivery.edit(fixtureElement(document.querySelector('.queue-item-edit'), '.queue-item-edit')); });
-    const route = await received;
+    const route = await edit.received;
     await fleet.select(fleet.self);
     await page.locator('#promptInput').fill('self work');
     await route.fulfill({ json: { success: true } });
@@ -51,16 +46,11 @@ fixtures_js_1.test.use({ liveSessions: true });
     (0, fixtures_js_1.expect)(await page.evaluate(id => fixtureApp.features.promptDelivery.has(id), id)).toBe(true);
 });
 (0, fixtures_js_1.test)('stopping one host does not block stopping its same-id peer', async ({ page, fleet }) => {
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
+    const abort = (0, fixtures_js_1.heldRoute)();
     await fleet.select(fleet.self);
-    await page.route(`${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/abort`, route => {
-        if (!receive)
-            throw new Error('Abort route resolver not initialized');
-        receive(route);
-    });
+    await page.route(`${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/abort`, abort.hold);
     await page.evaluate(() => { fixtureApp.features.sessionActivity.setTurn(true); window.selfAbort = fixtureApp.features.composerSubmit.abortTurn(); });
-    const pending = await received;
+    const pending = await abort.received;
     await fleet.select(fleet.peer);
     const endpoint = `${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/abort`;
     await page.route(endpoint, route => route.fulfill({ json: { success: true } }));

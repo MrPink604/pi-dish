@@ -4,19 +4,16 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fixtures_js_1 = require("./fixtures.js");
 (0, fixtures_js_1.test)('startup restoration cannot replace a selection made while initial lists are loading', async ({ page, fleet }) => {
     await page.evaluate(({ host, id }) => localStorage.setItem('pi-dish-session', `${host} ${id}`), { host: fleet.self.hostId, id: fixtures_js_1.ROOT });
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
+    const startup = (0, fixtures_js_1.heldRoute)();
     let held = false;
     await page.route(`${fleet.self.base}/api/sessions?*`, route => {
         if (held)
             return route.continue();
         held = true;
-        if (!receive)
-            throw new Error('Startup route resolver not initialized');
-        receive(route);
+        startup.hold(route);
     });
     await page.goto(fleet.self.base, { waitUntil: 'domcontentloaded' });
-    const route = await received;
+    const route = await startup.received;
     await page.evaluate(async ({ root, child, host }) => {
         fixtureApp.features.sessionState.setSessionLists({ previous: [{ id: root, name: 'saved' }, { id: child, name: 'selected' }] }, host);
         await fixtureApp.features.sessionView.select(child, { host });

@@ -103,7 +103,6 @@ const sidebar = async ({ desktop, registryState, check, SKILL_SESSION_ID, CWD, B
     await pinToggle(BETA_ID);
     await pinToggle(registryState.sessionId);
     await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
-    check(true, 'unpinning removes the pinned section');
     // A filtered result can contain only the child. Pinning that fragment must
     // still persist and later render the canonical parent family.
     await desktop.fill('#filterInput', 'use smoke skill');

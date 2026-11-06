@@ -1,6 +1,6 @@
-import type { Page, Route } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import type { BrowserHost, FleetFixture } from './fixtures.js';
-import { test, expect, ROOT } from './fixtures.js';
+import { test, expect } from './fixtures.js';
 test.use({ liveSessions: true });
 
 async function select(fleet: FleetFixture, page: Page, host: BrowserHost) {

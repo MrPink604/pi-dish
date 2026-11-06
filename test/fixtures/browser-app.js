@@ -70,7 +70,7 @@ function fixtureAppBundle() {
                                         throw new Error(`Application fixture cannot locate ${name}`);
                                     const [start, end] = call.range;
                                     const args = call.arguments.map(arg => source.slice(...arg.range));
-                                    edits.push({ start, end, text: `observeFeature(${JSON.stringify(name)}, ${JSON.stringify(call.callee.name)}, ${call.callee.name}${args.length ? ', ' + args.join(', ') : ''})` });
+                                    edits.push({ start, end, text: `observeFeature(${JSON.stringify(name)}, ${call.callee.name}${args.length ? ', ' + args.join(', ') : ''})` });
                                 }
                             }
                             if (!edits.length)

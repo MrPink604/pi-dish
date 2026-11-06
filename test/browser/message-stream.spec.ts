@@ -1,4 +1,4 @@
-import type { Page, Route } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import type { FleetFixture } from './fixtures.js';
 import { test, expect, ROOT, CHILD } from './fixtures.js';
 async function setup(page: Page, fleet: FleetFixture) {

@@ -3,6 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CHILD = exports.ROOT = exports.expect = exports.test = void 0;
 exports.requiredRoute = requiredRoute;
+exports.heldRoute = heldRoute;
 const test_1 = require("@playwright/test");
 Object.defineProperty(exports, "expect", { enumerable: true, get: function () { return test_1.expect; } });
 const node_child_process_1 = require("node:child_process");
@@ -16,23 +17,26 @@ const ROOT = '2026-09-09T00-00-00-shared-root';
 exports.ROOT = ROOT;
 const CHILD = '2026-09-09T00-01-00-shared-child';
 exports.CHILD = CHILD;
-function isStartedBrowserHost(host) {
-    return !!host.child && Array.isArray(host.commands) && typeof host.emit === 'function'
-        && typeof host.base === 'string' && typeof host.hostId === 'string';
-}
 function requiredRoute(route) {
     if (!route)
         throw new Error('Expected a held Playwright route');
     return route;
 }
-async function startHost(label, logs, hosts, origin, liveSessions) {
+// Holds the next matching request so the test can change selection first.
+function heldRoute() {
+    let settle;
+    const received = new Promise(resolve => { settle = resolve; });
+    return { received, hold: route => settle(route) };
+}
+async function startHost(label, logs, started, origin, liveSessions) {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-browser-'));
-    const host = { home, label, token: `browser-fixture-${label}` };
-    hosts.push(host); // Register before setup so partial failures also clean up.
+    const token = `browser-fixture-${label}`;
+    const stopping = { home };
+    started.push(stopping); // Register before setup so partial failures also clean up.
     const dish = path.join(home, '.pi/dish');
     fs.mkdirSync(dish, { recursive: true });
     if (origin) {
-        fs.writeFileSync(path.join(dish, 'token'), host.token);
+        fs.writeFileSync(path.join(dish, 'token'), token);
         fs.writeFileSync(path.join(dish, 'settings.json'), JSON.stringify({ allowedOrigins: [origin] }));
     }
     const dir = path.join(home, '.pi/agent/sessions/project');
@@ -54,12 +58,11 @@ async function startHost(label, logs, hosts, origin, liveSessions) {
             PI_DISH_OMP_COMMAND: `${process.execPath} ${path.join(__dirname, '../fixtures/fake-omp-export.js')}` },
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
-    host.child = child;
+    stopping.child = child;
     for (const stream of [child.stdout, child.stderr]) {
         stream?.on('data', (data) => logs.push(`${label}: ${data}`));
     }
     const commands = [];
-    host.commands = commands;
     child.on('message', (event) => {
         if (!(0, wire_protocol_js_1.isRecord)(event))
             throw new Error('Browser host sent an invalid event');
@@ -69,8 +72,8 @@ async function startHost(label, logs, hosts, origin, liveSessions) {
             commands.push(event.message);
         }
     });
-    host.emit = (event, data, entry) => child.send({ event, data, entry });
-    host.base = await new Promise((resolve, reject) => {
+    const emit = (event, data, entry) => child.send({ event, data, entry });
+    const base = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`${label} startup timed out`)), 15000);
         const failed = (err) => { clearTimeout(timer); reject(err); };
         child.once('error', failed);
@@ -78,7 +81,7 @@ async function startHost(label, logs, hosts, origin, liveSessions) {
         child.once('message', (message) => { if (!(0, wire_protocol_js_1.isRecord)(message) || typeof message.base !== 'string')
             return failed(new Error(`${label} returned an invalid base URL`)); clearTimeout(timer); resolve(message.base); });
     });
-    const response = await fetch(`${host.base}/api/host`);
+    const response = await fetch(`${base}/api/host`);
     if (!response.ok)
         throw new Error(`${label} descriptor: ${response.status}`);
     const descriptor = await response.json();
@@ -86,10 +89,7 @@ async function startHost(label, logs, hosts, origin, liveSessions) {
         throw new Error(`${label} descriptor is invalid`);
     if (typeof descriptor.hostId !== 'string')
         throw new Error(`${label} descriptor lacks hostId`);
-    host.hostId = descriptor.hostId;
-    if (!isStartedBrowserHost(host))
-        throw new Error(`${label} fixture did not finish initialization`);
-    return host;
+    return { home, label, token, child, commands, emit, base, hostId: descriptor.hostId };
 }
 async function stopHost(host) {
     const child = host.child;

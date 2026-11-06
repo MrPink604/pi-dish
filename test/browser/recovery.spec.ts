@@ -2,7 +2,7 @@ import type { Page, Route } from '@playwright/test';
 import type { BrowserHost } from './fixtures.js';
 import { test, expect, requiredRoute } from './fixtures.js';
 const report = (name: string, mode = 'restore') => ({ mode, sessions: [{ id: 'same-id', name, status: 'needs-review', excluded: false }] });
-async function preferences(page: Page, host: BrowserHost & { hostId: string }) {
+async function preferences(page: Page, host: BrowserHost) {
   await page.evaluate(() => fixtureApp.features.fleetController.open());
   await page.selectOption('#recoverySettingsHost', host.hostId);
   await expect(page.locator('#saveRecoveryMode')).toBeEnabled();

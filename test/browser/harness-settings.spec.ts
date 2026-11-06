@@ -19,7 +19,7 @@ async function pickModel(page: Page, selector: string, key: string) {
   await page.locator(selector).click();
   await page.locator('.hs-model-pick', { has: page.locator(selector) }).locator(`.cwd-option[data-key="${key}"]`).click();
 }
-async function open(page: Page, host: BrowserHost & { hostId: string }, cwd: string) {
+async function open(page: Page, host: BrowserHost, cwd: string) {
   await page.evaluate(({ hostId, cwd }) => fixtureApp.features.harnessSettingsController.open({ hostId, harnessId: 'omp', label: cwd, cwd }), { hostId: host.hostId, cwd });
   await expect(page.locator('#harnessSettingsDefaults')).toContainText(cwd);
 }

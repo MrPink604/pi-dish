@@ -7,15 +7,10 @@ const tree = { nodes: [{ id: 'fixture-entry', type: 'message', role: 'user', tex
 const menus = ['Model', 'Thinking'];
 (0, fixtures_js_1.test)('a delayed tree cannot open after changing to the same id on another host', async ({ page, fleet }) => {
     await fleet.select(fleet.peer);
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
-    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/tree`, route => {
-        if (!receive)
-            throw new Error('Tree route resolver not initialized');
-        receive(route);
-    });
+    const treeHold = (0, fixtures_js_1.heldRoute)();
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/tree`, treeHold.hold);
     await page.evaluate(() => { window.pendingTree = fixtureApp.features.transcriptTree.open(); });
-    const route = await received;
+    const route = await treeHold.received;
     await fleet.select(fleet.self);
     await route.fulfill({ json: tree });
     await page.evaluate(() => window.pendingTree);
@@ -28,15 +23,10 @@ const menus = ['Model', 'Thinking'];
     await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/tree`, route => route.fulfill({ json: tree }));
     await page.evaluate(() => fixtureApp.features.transcriptTree.open());
     await (0, fixtures_js_1.expect)(page.locator('#treeModal')).toBeVisible();
-    let receive;
-    const received = new Promise(resolve => { receive = resolve; });
-    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/branch`, route => {
-        if (!receive)
-            throw new Error('Branch route resolver not initialized');
-        receive(route);
-    });
+    const branchHold = (0, fixtures_js_1.heldRoute)();
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/branch`, branchHold.hold);
     await page.evaluate(() => { fixtureApp.features.transcriptTree.select('fixture-entry'); window.pendingBranch = fixtureApp.features.transcriptTree.confirm(); });
-    const route = await received;
+    const route = await branchHold.received;
     const branchPayload = route.request().postDataJSON();
     if (!(0, wire_protocol_js_1.isRecord)(branchPayload))
         throw new Error('Invalid branch payload');
@@ -105,15 +95,10 @@ fixtures_js_1.test.describe('live branch completion', () => {
                 throw new Error('Missing before');
             await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/tree`, route => route.fulfill({ json: tree }));
             await page.evaluate(() => fixtureApp.features.transcriptTree.open());
-            let receive;
-            const received = new Promise(resolve => { receive = resolve; });
-            await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/branch`, route => {
-                if (!receive)
-                    throw new Error('Live branch route resolver not initialized');
-                receive(route);
-            });
+            const branchHold = (0, fixtures_js_1.heldRoute)();
+            await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/branch`, branchHold.hold);
             await page.evaluate(() => { fixtureApp.features.transcriptTree.select('fixture-entry'); window.pendingBranch = fixtureApp.features.transcriptTree.confirm(); });
-            const route = await received;
+            const route = await branchHold.received;
             await page.keyboard.press('Escape');
             await (0, fixtures_js_1.expect)(page.locator('#treeModal')).toBeHidden();
             let reloads = 0;

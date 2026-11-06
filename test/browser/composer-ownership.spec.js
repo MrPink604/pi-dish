@@ -32,17 +32,12 @@ for (const kind of ['prompt', 'command', 'steer', 'followUp']) {
         if (kind !== 'command')
             await attach(page);
         const endpoint = `${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/${kind === 'followUp' ? 'prompt' : kind}`;
-        let receive;
-        const received = new Promise(resolve => { receive = resolve; });
-        await page.route(endpoint, route => {
-            if (!receive)
-                throw new Error('Composer route resolver not initialized');
-            receive(route);
-        });
+        const submission = (0, fixtures_js_1.heldRoute)();
+        await page.route(endpoint, submission.hold);
         await page.evaluate(kind => {
             window.testSend = kind === 'steer' ? fixtureApp.features.composerSubmit.sendSteer() : kind === 'followUp' ? fixtureApp.features.composerSubmit.sendFollowUp() : fixtureApp.features.composerSubmit.sendPrompt();
         }, kind);
-        const route = await received;
+        const route = await submission.received;
         await fleet.select(fleet.peer);
         await page.locator('#promptInput').fill('peer work');
         await route.fulfill({ status: 503, json: { error: 'fixture rejection' } });

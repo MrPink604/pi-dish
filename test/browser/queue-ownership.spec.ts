@@ -1,5 +1,4 @@
-import type { Route } from '@playwright/test';
-import { test, expect, ROOT } from './fixtures.js';
+import { test, expect, ROOT, heldRoute } from './fixtures.js';
 test.use({ liveSessions: true });
 
 test('identical queued prompts retain their own bubbles and cancellation owner', async ({ page, fleet }) => {
@@ -16,14 +15,10 @@ test('identical queued prompts retain their own bubbles and cancellation owner',
     host.emit('queue_update', { followUp: ['identical queued message'] });
     await expect(page.locator('.queue-item')).toHaveAttribute('data-client-prompt-id', id);
   }
-  let receive: ((route: Route) => void) | undefined;
-  const received = new Promise<Route>(resolve => { receive = resolve; });
-  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/queue/cancel`, route => {
-    if (!receive) throw new Error('Queue-cancel route resolver not initialized');
-    receive(route);
-  });
+  const edit = heldRoute();
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/queue/cancel`, edit.hold);
   await page.evaluate(() => { window.editRequest = fixtureApp.features.promptDelivery.edit(fixtureElement(document.querySelector<HTMLElement>('.queue-item-edit'), '.queue-item-edit')); });
-  const route = await received;
+  const route = await edit.received;
   await fleet.select(fleet.self);
   await page.locator('#promptInput').fill('self work');
   await route.fulfill({ json: { success: true } });
@@ -49,15 +44,11 @@ test('a peer echo cannot consume the selected host-independent pending prompt', 
 });
 
 test('stopping one host does not block stopping its same-id peer', async ({ page, fleet }) => {
-  let receive: ((route: Route) => void) | undefined;
-  const received = new Promise<Route>(resolve => { receive = resolve; });
+  const abort = heldRoute();
   await fleet.select(fleet.self);
-  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/abort`, route => {
-    if (!receive) throw new Error('Abort route resolver not initialized');
-    receive(route);
-  });
+  await page.route(`${fleet.self.base}/api/sessions/${ROOT}/abort`, abort.hold);
   await page.evaluate(() => { fixtureApp.features.sessionActivity.setTurn(true); window.selfAbort = fixtureApp.features.composerSubmit.abortTurn(); });
-  const pending = await received;
+  const pending = await abort.received;
   await fleet.select(fleet.peer);
   const endpoint = `${fleet.peer.base}/api/sessions/${ROOT}/abort`;
   await page.route(endpoint, route => route.fulfill({ json: { success: true } }));

@@ -32,7 +32,6 @@ const usage: UiScenario = async ({ desktop, check, SESSION_ID }) => {
   await desktop.waitForFunction(() =>
     [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('smoke-model')),
     null, { timeout: 5000 });
-  check(true, 'all-time range lists the fixture model with its share');
   // Token breakdowns: the totals line splits in/out with a cache rate
   // (fixture: 100 in, 45 out, 20 cacheRead over a 130-token prompt side =
   // 15% hit), and the model rows carry the compact per-row form.
@@ -97,7 +96,6 @@ const usage: UiScenario = async ({ desktop, check, SESSION_ID }) => {
   await desktop.waitForFunction(() =>
     [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent.includes('smoke-model')),
     null, { timeout: 5000 });
-  check(true, 'model stacking restores the per-model legend');
   // Event-driven: while the session index is still settling, the view
   // repolls at 1s and each re-render can shift the chart's day axis (the
   // 'all' range starts at the earliest *indexed* day), so a bucket index
@@ -128,7 +126,6 @@ const usage: UiScenario = async ({ desktop, check, SESSION_ID }) => {
   await desktop.waitForFunction(() =>
     document.querySelector('#usageChart svg')?.getAttribute('aria-label')?.startsWith('Tokens'),
     null, { timeout: 5000 });
-  check(true, 'tokens metric drives the daily chart, not just the tables');
   await desktop.click('.usage-sort [data-sort="cost"]');
   await desktop.waitForFunction(() =>
     document.querySelector('.usage-sort [data-sort="cost"]')?.classList.contains('active'),
@@ -156,11 +153,9 @@ const usage: UiScenario = async ({ desktop, check, SESSION_ID }) => {
   await desktop.waitForFunction(() =>
     [...document.querySelectorAll('#usageViewBody .usage-row')].some((r) => r.textContent.includes('proj-beta')),
     null, { timeout: 5000 });
-  check(true, 'multi-select re-adds a second model and the beta workspace returns');
   await desktop.click('[data-clear-models]');
   await desktop.waitForFunction(() => !document.querySelector('.usage-filter-note'),
     null, { timeout: 5000 });
-  check(true, 'clear removes the model filter');
   await desktop.click(`[data-session-id="${SESSION_ID}"]`);
   await desktop.waitForFunction(() => !fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('usage-open'),
     null, { timeout: 2000 });
@@ -171,7 +166,6 @@ const usage: UiScenario = async ({ desktop, check, SESSION_ID }) => {
   await desktop.keyboard.press('Escape');
   await desktop.waitForFunction(() => !fixtureElement(document.querySelector('.main'), "document.querySelector('.main')").classList.contains('usage-open'),
     null, { timeout: 2000 });
-  check(true, 'Escape closes the usage view');
 };
 
 export = usage;

@@ -1,4 +1,4 @@
-import { test as base, expect, type Locator, type Page, type TestInfo } from '@playwright/test';
+import { test as base, expect, type Locator, type Route, type TestInfo } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
 import { fork } from 'node:child_process';
 import fs = require('node:fs');
@@ -16,17 +16,17 @@ export interface BrowserHost {
   home: string;
   label: string;
   token: string;
-  child?: ChildProcess;
-  commands?: Record<string, unknown>[];
-  emit?: (event: string, data: unknown, entry?: unknown) => boolean;
-  base?: string;
-  hostId?: string;
+  child: ChildProcess;
+  commands: Record<string, unknown>[];
+  emit(event: string, data: unknown, entry?: unknown): boolean;
+  base: string;
+  hostId: string;
 }
 export interface FleetFixture {
-  self: Required<Pick<BrowserHost, 'home' | 'label' | 'token' | 'child' | 'commands' | 'emit' | 'base' | 'hostId'>>;
-  peer: Required<Pick<BrowserHost, 'home' | 'label' | 'token' | 'child' | 'commands' | 'emit' | 'base' | 'hostId'>>;
-  select(host: BrowserHost & { hostId?: string }, id?: string): Promise<unknown>;
-  row(host: BrowserHost & { hostId?: string }, id?: string): Locator;
+  self: BrowserHost;
+  peer: BrowserHost;
+  select(host: BrowserHost, id?: string): Promise<unknown>;
+  row(host: BrowserHost, id?: string): Locator;
 }
 interface BrowserFixtures {
   liveSessions: boolean;
@@ -34,33 +34,30 @@ interface BrowserFixtures {
   fleet: FleetFixture;
 }
 
+interface StoppingHost { home: string; child?: ChildProcess }
 
-interface StartedBrowserHost extends BrowserHost {
-  child: ChildProcess;
-  commands: Record<string, unknown>[];
-  emit(event: string, data: unknown, entry?: unknown): boolean;
-  base: string;
-  hostId: string;
-}
-function isStartedBrowserHost(host: BrowserHost): host is StartedBrowserHost {
-  return !!host.child && Array.isArray(host.commands) && typeof host.emit === 'function'
-    && typeof host.base === 'string' && typeof host.hostId === 'string';
-}
-
-function requiredRoute(route: import('@playwright/test').Route | null | undefined): import('@playwright/test').Route {
+function requiredRoute(route: Route | null | undefined): Route {
   if (!route) throw new Error('Expected a held Playwright route');
   return route;
 }
 
+// Holds the next matching request so the test can change selection first.
+function heldRoute(): { readonly received: Promise<Route>; hold(route: Route): void } {
+  let settle!: (route: Route) => void;
+  const received = new Promise<Route>(resolve => { settle = resolve; });
+  return { received, hold: route => settle(route) };
+}
 
-async function startHost(label: string, logs: string[], hosts: BrowserHost[], origin: string | null, liveSessions: boolean): Promise<StartedBrowserHost> {
+
+async function startHost(label: string, logs: string[], started: StoppingHost[], origin: string | null, liveSessions: boolean): Promise<BrowserHost> {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-browser-'));
-  const host: BrowserHost = { home, label, token: `browser-fixture-${label}` };
-  hosts.push(host); // Register before setup so partial failures also clean up.
+  const token = `browser-fixture-${label}`;
+  const stopping: StoppingHost = { home };
+  started.push(stopping); // Register before setup so partial failures also clean up.
   const dish = path.join(home, '.pi/dish');
   fs.mkdirSync(dish, { recursive: true });
   if (origin) {
-    fs.writeFileSync(path.join(dish, 'token'), host.token);
+    fs.writeFileSync(path.join(dish, 'token'), token);
     fs.writeFileSync(path.join(dish, 'settings.json'), JSON.stringify({ allowedOrigins: [origin] }));
   }
   const dir = path.join(home, '.pi/agent/sessions/project');
@@ -81,12 +78,11 @@ async function startHost(label: string, logs: string[], hosts: BrowserHost[], or
       PI_DISH_OMP_COMMAND: `${process.execPath} ${path.join(__dirname, '../fixtures/fake-omp-export.js')}` },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
-  host.child = child;
+  stopping.child = child;
   for (const stream of [child.stdout, child.stderr]) {
     stream?.on('data', (data: Buffer) => logs.push(`${label}: ${data}`));
   }
   const commands: Record<string, unknown>[] = [];
-  host.commands = commands;
   child.on('message', (event: unknown) => {
     if (!isRecord(event)) throw new Error('Browser host sent an invalid event');
     if (event.type === 'command') {
@@ -94,25 +90,23 @@ async function startHost(label: string, logs: string[], hosts: BrowserHost[], or
       commands.push(event.message);
     }
   });
-  host.emit = (event: string, data: unknown, entry?: unknown) => child.send({ event, data, entry });
-  host.base = await new Promise<string>((resolve, reject) => {
+  const emit = (event: string, data: unknown, entry?: unknown): boolean => child.send({ event, data, entry });
+  const base = await new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`${label} startup timed out`)), 15000);
     const failed = (err: Error) => { clearTimeout(timer); reject(err); };
     child.once('error', failed);
     child.once('exit', (code) => failed(new Error(`${label} exited (${code})`)));
     child.once('message', (message: unknown) => { if (!isRecord(message) || typeof message.base !== 'string') return failed(new Error(`${label} returned an invalid base URL`)); clearTimeout(timer); resolve(message.base); });
   });
-  const response = await fetch(`${host.base}/api/host`);
+  const response = await fetch(`${base}/api/host`);
   if (!response.ok) throw new Error(`${label} descriptor: ${response.status}`);
   const descriptor: unknown = await response.json();
   if (!isRecord(descriptor)) throw new Error(`${label} descriptor is invalid`);
   if (typeof descriptor.hostId !== 'string') throw new Error(`${label} descriptor lacks hostId`);
-  host.hostId = descriptor.hostId;
-  if (!isStartedBrowserHost(host)) throw new Error(`${label} fixture did not finish initialization`);
-  return host;
+  return { home, label, token, child, commands, emit, base, hostId: descriptor.hostId };
 }
 
-async function stopHost(host: BrowserHost): Promise<void> {
+async function stopHost(host: StoppingHost): Promise<void> {
   const child = host.child;
   if (child && child.exitCode === null && child.signalCode === null) {
     await new Promise<void>(resolve => {
@@ -128,7 +122,7 @@ const test = base.extend<BrowserFixtures>({
   liveSessions: [false, { option: true }],
   instrumentApp: [true, { option: true }],
   fleet: async ({ page, liveSessions, instrumentApp }, use, testInfo: TestInfo) => {
-    const hosts: BrowserHost[] = [], logs: string[] = [], errors: string[] = [];
+    const hosts: StoppingHost[] = [], logs: string[] = [], errors: string[] = [];
     page.on('pageerror', (error: Error) => errors.push(error.message));
     try {
       if (instrumentApp) await installFixtureApp(page);
@@ -154,8 +148,8 @@ const test = base.extend<BrowserFixtures>({
       await page.goto(self.base);
       await page.locator('#tabAll').click();
       await expect(page.locator(`.session-item[data-id="${ROOT}"]`)).toHaveCount(2);
-      const row = (host: BrowserHost & { hostId?: string }, id = ROOT): Locator => page.locator(`.session-item[data-id="${id}"][data-host="${host.hostId}"]`);
-      const select = async (host: BrowserHost & { hostId?: string }, id = ROOT): Promise<unknown> => {
+      const row = (host: BrowserHost, id = ROOT): Locator => page.locator(`.session-item[data-id="${id}"][data-host="${host.hostId}"]`);
+      const select = async (host: BrowserHost, id = ROOT): Promise<unknown> => {
         if (instrumentApp) return page.evaluate(({ id, host }) => fixtureApp.features.sessionView.select(id, { host }), { id, host: host.hostId });
         await row(host, id).click();
         await expect(row(host, id)).toHaveClass(/\bactive\b/);
@@ -170,5 +164,5 @@ const test = base.extend<BrowserFixtures>({
   },
 });
 
-export { test, expect, ROOT, CHILD, requiredRoute };
+export { test, expect, ROOT, CHILD, requiredRoute, heldRoute };
 

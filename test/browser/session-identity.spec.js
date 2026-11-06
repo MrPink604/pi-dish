@@ -31,13 +31,8 @@ for (const { action, field, value } of mutationCases) {
             isActive: true, capabilities: { setModel: true, setThinking: true, rename: true },
         }, host), { id: fixtures_js_1.ROOT, host: peer.hostId });
         const endpoint = `${peer.base}/api/sessions/${fixtures_js_1.ROOT}/${action}`;
-        let receive;
-        const received = new Promise(resolve => { receive = resolve; });
-        await page.route(endpoint, route => {
-            if (!receive)
-                throw new Error('Mutation route resolver not initialized');
-            receive(route);
-        });
+        const mutation = (0, fixtures_js_1.heldRoute)();
+        await page.route(endpoint, mutation.hold);
         const before = await page.evaluate(({ id, host, field }) => fixtureElement(fixtureApp.features.sessionState.findSession(id, host), 'self session')[field], { id: fixtures_js_1.ROOT, host: self.hostId, field });
         await page.evaluate(({ action, value }) => {
             if (action === 'rename') {
@@ -47,7 +42,7 @@ for (const { action, field, value } of mutationCases) {
             window.pendingMutation = action === 'model' ? fixtureApp.features.sessionControls.selectModel(value)
                 : action === 'thinking' ? fixtureApp.features.sessionControls.selectThinking(value) : fixtureApp.features.sessionControls.commitRename();
         }, { action, value });
-        const route = await received;
+        const route = await mutation.received;
         await select(self);
         await route.fulfill({ json: { success: true, level: value } });
         await page.evaluate(() => window.pendingMutation);

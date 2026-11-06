@@ -1,6 +1,5 @@
-import type { Route } from '@playwright/test';
+import { test, expect, ROOT, CHILD, heldRoute } from './fixtures.js';
 import type { SessionEntry } from '../../src/browser/session-state.js';
-import { test, expect, ROOT, CHILD } from './fixtures.js';
 
 test('row close still reports completion when no session is selected', async ({ page, fleet }) => {
   expect(await page.evaluate(() => fixtureApp.features.sessionState.captureSelection())).toBeNull();
@@ -11,14 +10,10 @@ test('row close still reports completion when no session is selected', async ({ 
 
 test('a delayed resume does not reselect the same-id session on another host', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);
-  let receive: ((route: Route) => void) | undefined;
-  const received = new Promise<Route>(resolve => { receive = resolve; });
-  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/resume`, route => {
-    if (!receive) throw new Error('Resume route resolver not initialized');
-    receive(route);
-  });
+  const resume = heldRoute();
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/resume`, resume.hold);
   await page.evaluate(() => { window.pendingResume = fixtureApp.features.sessionResume.resume(); });
-  const route = await received;
+  const route = await resume.received;
   await fleet.select(fleet.self);
   const before = await page.evaluate(() => fixtureApp.features.sessionState.captureSelection());
   await route.fulfill({ json: { id: ROOT } });
@@ -29,8 +24,7 @@ test('a delayed resume does not reselect the same-id session on another host', a
 
 test('a late missing-share response cannot prompt or publish after changing hosts', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);
-  let receive: ((route: Route) => void) | undefined;
-  const received = new Promise<Route>(resolve => { receive = resolve; });
+  const share = heldRoute();
   const posts: unknown[] = [];
   let dialogs = 0;
   page.on('dialog', async dialog => { dialogs += 1; await dialog.accept(); });
@@ -41,8 +35,7 @@ test('a late missing-share response cannot prompt or publish after changing host
         return route.fulfill({ json: { url: `${host.base}/fixture-share` } });
       }
       if (host === fleet.peer) {
-        if (!receive) throw new Error('Share route resolver not initialized');
-        receive(route); return;
+        share.hold(route); return;
       }
       return route.continue();
     });
@@ -52,7 +45,7 @@ test('a late missing-share response cannot prompt or publish after changing host
     button.dataset.entryId = 'fixture-message';
     window.pendingShareCopy = fixtureApp.features.sessionInfo.copyMessage(button);
   });
-  const route = await received;
+  const route = await share.received;
   await fleet.select(fleet.self);
   await route.fulfill({ status: 404, json: { error: 'No share' } });
   await page.evaluate(() => window.pendingShareCopy);
@@ -63,17 +56,13 @@ test('a late missing-share response cannot prompt or publish after changing host
 
 test('a delayed search cannot replace the query on a same-id peer', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);
-  let receive: ((route: Route) => void) | undefined;
-  const received = new Promise<Route>(resolve => { receive = resolve; });
-  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/search?q=peer-query`, route => {
-    if (!receive) throw new Error('Search route resolver not initialized');
-    receive(route);
-  });
+  const search = heldRoute();
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/search?q=peer-query`, search.hold);
   await page.evaluate(() => {
     fixtureApp.features.sessionSearch.open();
     window.pendingSessionSearch = fixtureApp.features.sessionSearch.run('peer-query');
   });
-  const route = await received;
+  const route = await search.received;
   await fleet.select(fleet.self);
   await page.evaluate(async () => { fixtureApp.features.sessionSearch.open(); await fixtureApp.features.sessionSearch.run('self-query'); });
   await route.fulfill({ json: { matches: [] } });

@@ -1,6 +1,5 @@
-import type { Route } from '@playwright/test';
 import { isRecord } from '../../lib/wire-protocol.js';
-import { test, expect, ROOT } from './fixtures.js';
+import { test, expect, ROOT, heldRoute } from './fixtures.js';
 
 const tree = { nodes: [{ id: 'fixture-entry', type: 'message', role: 'user', text: 'branch prompt' }], activePathIds: [], leafId: 'other-entry' };
 const menus: readonly ('Model' | 'Thinking')[] = ['Model', 'Thinking'];
@@ -8,14 +7,10 @@ const menus: readonly ('Model' | 'Thinking')[] = ['Model', 'Thinking'];
 
 test('a delayed tree cannot open after changing to the same id on another host', async ({ page, fleet }) => {
   await fleet.select(fleet.peer);
-  let receive: ((route: Route) => void) | undefined;
-  const received = new Promise<Route>(resolve => { receive = resolve; });
-  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/tree`, route => {
-    if (!receive) throw new Error('Tree route resolver not initialized');
-    receive(route);
-  });
+  const treeHold = heldRoute();
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/tree`, treeHold.hold);
   await page.evaluate(() => { window.pendingTree = fixtureApp.features.transcriptTree.open(); });
-  const route = await received;
+  const route = await treeHold.received;
   await fleet.select(fleet.self);
   await route.fulfill({ json: tree });
   await page.evaluate(() => window.pendingTree);
@@ -29,14 +24,10 @@ test('a delayed branch preserves the originating draft without reselecting anoth
   await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/tree`, route => route.fulfill({ json: tree }));
   await page.evaluate(() => fixtureApp.features.transcriptTree.open());
   await expect(page.locator('#treeModal')).toBeVisible();
-  let receive: ((route: Route) => void) | undefined;
-  const received = new Promise<Route>(resolve => { receive = resolve; });
-  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/branch`, route => {
-    if (!receive) throw new Error('Branch route resolver not initialized');
-    receive(route);
-  });
+  const branchHold = heldRoute();
+  await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/branch`, branchHold.hold);
   await page.evaluate(() => { fixtureApp.features.transcriptTree.select('fixture-entry'); window.pendingBranch = fixtureApp.features.transcriptTree.confirm(); });
-  const route = await received;
+  const route = await branchHold.received;
   const branchPayload: unknown = route.request().postDataJSON();
   if (!isRecord(branchPayload)) throw new Error('Invalid branch payload');
   expect(branchPayload.entryId).toBe('fixture-entry');
@@ -103,14 +94,10 @@ test.describe('live branch completion', () => {
       if (before === null) throw new Error('Missing before');
       await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/tree`, route => route.fulfill({ json: tree }));
       await page.evaluate(() => fixtureApp.features.transcriptTree.open());
-      let receive: ((route: Route) => void) | undefined;
-      const received = new Promise<Route>(resolve => { receive = resolve; });
-      await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/branch`, route => {
-        if (!receive) throw new Error('Live branch route resolver not initialized');
-        receive(route);
-      });
+      const branchHold = heldRoute();
+      await page.route(`${fleet.peer.base}/api/sessions/${ROOT}/branch`, branchHold.hold);
       await page.evaluate(() => { fixtureApp.features.transcriptTree.select('fixture-entry'); window.pendingBranch = fixtureApp.features.transcriptTree.confirm(); });
-      const route = await received;
+      const route = await branchHold.received;
       await page.keyboard.press('Escape');
       await expect(page.locator('#treeModal')).toBeHidden();
       let reloads = 0;
