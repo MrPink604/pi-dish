@@ -1,53 +1,31 @@
 // Generated tool from test/test-env.ts; edit that source and run npm run build:tools.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TEST_ENV_FILE = exports.DROP = exports.KEEP = void 0;
 exports.sanitizeTestEnv = sanitizeTestEnv;
 exports.applyTestEnv = applyTestEnv;
 /**
- * The environment every test process must start from.
- *
- * pi-dish is normally launched by a wrapper (`scripts/pi-dish-tmux.sh`) that
- * exports the operator's real deployment into the shell: `HOST` (often a
- * tailnet address), `PORT`, `PI_DISH_SHARE_PORT`, `PI_DISH_URL`, a token…
- * Run `npm test` from that shell and every suite that boots server.js
- * inherits it — the test server binds the tailnet address while the suite
- * fetches 127.0.0.1 (hundreds of `fetch failed`), or its share listener
- * collides with the running deployment's (`EADDRINUSE 3334`). Both looked
- * like product failures and neither was.
- *
- * So the harness owns its environment: everything `PI_DISH_*` is stripped
- * unless it names a *host binary or an opt-out* (a suite that wants a knob
- * sets it itself, right before requiring the server), and the bind target is
- * pinned to an ephemeral loopback port.
+ * The environment every test process must start from: the operator's live
+ * deployment variables (tailnet HOST, deployment PORT, share port, token) must
+ * not reach a suite that boots server.js, and the bind target is pinned to an
+ * ephemeral loopback port.
  */
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-// Kept because they point the suite at real host tooling or turn a suite off;
-// nothing here can retarget or rebind the server under test.
-// Preserve the exported mutable Set and its membership API.
-const KEEP = new Set([
-    'PI_DISH_SKIP_INTEGRATION',
-    'PI_DISH_PI_COMMAND',
-    'PI_DISH_OMP_COMMAND',
-    'PI_DISH_PRIME_COMMAND',
-    'PI_DISH_REAL_OMP_BIN',
-    'PI_DISH_REAL_PRIME_BIN',
-    'PI_DISH_REAL_BUN_BIN_DIR',
-]);
-exports.KEEP = KEEP;
-// Not PI_DISH_-prefixed, but read straight by server.js at listen time.
+// Each names a host binary or opts a suite out; none can retarget the server.
+const KEEP = {
+    PI_DISH_SKIP_INTEGRATION: true,
+    PI_DISH_PI_COMMAND: true,
+    PI_DISH_OMP_COMMAND: true,
+    PI_DISH_PRIME_COMMAND: true,
+    PI_DISH_REAL_OMP_BIN: true,
+    PI_DISH_REAL_PRIME_BIN: true,
+    PI_DISH_REAL_BUN_BIN_DIR: true,
+};
+// Read straight by server.js at listen time.
 const DROP = ['HOST', 'PORT'];
-exports.DROP = DROP;
-/**
- * bun is a *test dependency*: the OMP bridge suites run the extension under
- * the host it actually ships on (test/fixtures/fake-omp-bridge-host.ts). Its
- * standard install is `~/.bun/bin`, which a login shell exports and a
- * non-interactive one does not — the whole OMP bridge file then fails with
- * `spawn bun ENOENT`, which reads as ten broken product tests. Only ever
- * *added*, and only when nothing named bun is already resolvable.
- */
+// The OMP bridge suites spawn `bun`, which a non-interactive shell does not
+// find in its usual `~/.bun/bin`.
 function withBunOnPath(env) {
     const executable = (dir) => {
         try {
@@ -69,27 +47,22 @@ function withBunOnPath(env) {
         env.PATH = [found, ...entries].join(path.delimiter);
     return env;
 }
-/** A copy of `env` a test process can safely boot server.js from. */
 function sanitizeTestEnv(env = process.env) {
     const next = { ...env };
     for (const key of Object.keys(next)) {
-        if (key.startsWith('PI_DISH_') && !KEEP.has(key))
+        if (key.startsWith('PI_DISH_') && KEEP[key] !== true)
             delete next[key];
     }
     for (const key of DROP)
         delete next[key];
-    // Prime 0.10+ live rows come from a resident daemon socket outside HOME. Pin
-    // a nonexistent path inside a private temp dir so no test process ever
-    // attaches to the developer's real daemon (or lists their live agents as
-    // fixtures). A suite that needs a fake daemon sets its own path after this.
+    // Prime live rows come from a resident daemon socket outside HOME; pin a
+    // nonexistent path so no test attaches to the operator's daemon. A suite
+    // that needs a fake daemon sets its own path afterwards.
     next.PRIME_AGENT_DAEMON_SOCKET = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dish-prime-daemon-')), 'daemon.sock');
-    // Loopback + ephemeral: a test listener must never be reachable off-box and
-    // must never contend for the deployment's port.
     next.HOST = '127.0.0.1';
     next.PORT = '0';
     return withBunOnPath(next);
 }
-/** Same, applied to this process (for suites that boot the server in-process). */
 function applyTestEnv() {
     const sanitized = sanitizeTestEnv(process.env);
     for (const key of Object.keys(process.env)) {
@@ -99,5 +72,3 @@ function applyTestEnv() {
     Object.assign(process.env, sanitized);
     return process.env;
 }
-const TEST_ENV_FILE = path.basename(__filename);
-exports.TEST_ENV_FILE = TEST_ENV_FILE;
