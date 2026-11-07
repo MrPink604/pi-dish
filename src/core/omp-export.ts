@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { getHarness, resolveLaunchSpec } from './harnesses';
 import { record as isRecord } from './helper-values';
+import { errorMessage } from './http-boundary';
 
 export interface OmpShareTool {
   name: string;
@@ -42,7 +43,7 @@ function sessionDataMatch(html: string, policy: 'export' | 'import' = 'export'):
   try {
     data = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
   } catch (error) {
-    throw new Error(`Could not parse OMP export session data: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Could not parse OMP export session data: ${errorMessage(error)}`);
   }
   if (!isRecord(data) || !Array.isArray(data.entries)) {
     throw new Error('OMP export embedded session data has an invalid shape');

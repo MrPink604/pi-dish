@@ -1,21 +1,11 @@
 /**
- * Prime Agent (Rust, 0.10+) transport: pi-dish is one more client of Prime's
- * resident daemon, exactly like `prime-agent attach`. Prime no longer loads
- * TypeScript extensions, so there is no in-process bridge; every live Prime
- * root agent is read from the daemon roster and controlled over the daemon's
- * Unix socket.
- *
- * Wire format (protocol `prime-agent.daemon` v7, LF-delimited JSON):
- *   server → `{type:'daemon_hello', protocol:{name,version}, …}` on connect
- *   client → `{type:'command', id, protocol, clientId, command:{type, id, …}}`
- *   server → `{type:'response', id, command, success, data?, error?}`
- *   server → `{type:'session_event', activeSessionId, event:{type,…}, meta}`
- *            for agents this connection has `attach`ed to.
- * Supervisor commands: list, attach, detach, kill. Session commands carry an
- * `activeSessionId` and use Pi-RPC names (prompt, steer, follow_up, abort,
- * get_state, compact, set_model, get_queue, mutate_queued_message, …).
- * Events are Pi-shaped agent events plus `session_action_update` (queue) and
- * `session_info_changed` (name).
+ * Prime Agent transport: pi-dish is one more client of Prime's resident daemon,
+ * exactly like `prime-agent attach`. Prime loads no TypeScript extensions, so
+ * every live root is read from the daemon roster and driven over its Unix
+ * socket (protocol `prime-agent.daemon` v7, LF-delimited JSON). Supervisor
+ * commands: list, attach, detach, kill; session commands carry an
+ * `activeSessionId` and use Pi-RPC names. Events are Pi-shaped agent events
+ * plus `session_action_update` and `session_info_changed`.
  */
 import fs = require('fs');
 import net = require('net');
@@ -26,7 +16,8 @@ import { setTimeout as delay } from 'timers/promises';
 import type { NativeSessionId, PromptOptions } from './contracts';
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
-import { asRecord, isRecord, type ProtocolRecord } from './wire-protocol';
+import { asRecord, type ProtocolRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import { errorMessage } from './http-boundary';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { validSessionId } from './session-key';

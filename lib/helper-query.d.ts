@@ -21,10 +21,8 @@ export declare function parseSessionQuery(query?: string | null, now?: number): 
 /** The positive plain-text terms of a parsed query — what content search and
  * snippet highlighting act on (field terms and negations never touch content). */
 export declare function positiveQueryTokens(parsed: SessionQuery): string[];
-/** A session launched by a routine invocation — "automation". The stamp is
- * *presentation-only* provenance (annotateSessionRoutines in server.js), so
- * this answers listing questions ("is this a cron run?") and never control
- * ones. */
+/** A routine-launched session. Provenance is presentation-only, so this
+ * answers listing questions and never control ones. */
 export declare function isAutomationSession(session?: HelperSession | null): boolean;
 /** Does a parsed query *affirmatively* ask for automation sessions — a
  * positive `is:automation` test or a positive `routine:` term? Negations and

@@ -29,7 +29,6 @@ function primeResume({ file, model }: ResumeOptions = {}): (string | undefined)[
   return ['--resume', file, ...(model ? ['--model', model] : [])];
 }
 
-
 const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
   pi: {
     id: 'pi', label: 'Pi', wrapperEntrypoint: null, eventProfile: 'pi-v3', profileId: 'pi-v3', profileVersion: 1,

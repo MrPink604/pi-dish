@@ -1,27 +1,12 @@
 /**
- * Mine skill-activation records from a session JSONL's parsed content. Pure
- * and side-effect-free so the session-index parse pass can call it (never a
- * separate corpus walk) and unit tests can drive it directly.
+ * Mine skill-activation records from a session JSONL's parsed content. Pure,
+ * so the session-index parse pass can call it without a separate corpus walk.
  *
- * A record is the primitive the Skills view is built on:
- *
- *   { skill, file, kind, ranges, truncatedTo?, ts, sessionId, entryId, cwd, model }
- *
- * - `skill`   absolute SKILL.md path (stable identity, matches pi's `location`)
- * - `file`    which file under the skill dir was touched (relative)
- * - `kind`    'read' | 'targeted' | 'explicit'
- * - `ranges`  line ranges [[start,end], …] for ranged reads; 'all' for a
- *             full-content read; null for a grep-style touch (never fabricated
- *             line data). An open-ended read stores end === -1 (to EOF).
- * - `truncatedTo` last line the tool actually returned, parsed from the read
- *             result's truncation notice.
- *
- * Detection:
- * - read: a `read` tool call whose resolved path is SKILL.md under a known
- *   skill root, or any file under a skill directory.
- * - targeted: a `bash` call naming a skill-path token; cat/sed -n ranges are
- *   parsed when trivial, grep-style access records no ranges.
- * - explicit: a user message in pi's skill-block format.
+ * Detection kinds: `read` (a read tool call resolving inside a known skill
+ * root), `targeted` (a bash token naming a skill path; trivial cat/sed -n
+ * ranges are parsed, grep-style access records none), and `explicit` (a user
+ * message in pi's skill-block format). `ranges` is 'all', null (grep-style,
+ * never fabricated) or [[start,end], …] with end === -1 for an open-ended read.
  */
 import * as path from 'node:path';
 import * as os from 'node:os';

@@ -4,7 +4,7 @@ import { getPrimeDaemon } from './prime-daemon';
 import { removeExtensionUIDialog } from './extension-ui-state';
 import { getHarness } from './harnesses';
 import { routeIdentity, routeSessionId } from './session-ownership';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import { errorMessage } from './http-boundary';
 import type { LiveSession, SessionOwnership } from './session-ownership';
 

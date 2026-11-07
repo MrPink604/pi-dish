@@ -7,6 +7,7 @@ import { extractTextContent, getToolSummary } from './helper-content';
 import { collectActivePath, walkBranchTree } from './helper-tree';
 import { exportOmpSessionHtml } from './omp-export';
 import { getPiLaunchSpec } from './harness-launch-spec';
+import { errorMessage } from './http-boundary';
 
 export interface ModelPricing {
   input: number;
@@ -83,13 +84,11 @@ export interface BranchSessionResult {
   summarized: boolean;
 }
 
-// The pi package is ESM-only (exports map has no "require" condition), so
-// require.resolve() on the bare specifier fails. Resolve dist paths directly.
+// The pi package is ESM-only; require.resolve() on the bare specifier fails.
 const PKG_ROOT = path.join(__dirname, '..', 'node_modules', '@earendil-works', 'pi-coding-agent');
 const SDK_PATH = pathToFileURL(path.join(PKG_ROOT, 'dist', 'index.js')).href;
 const CLI_PATH = path.join(PKG_ROOT, 'dist', 'cli.js');
 
-// Lazy-loaded pi SDK (ESM module, loaded via dynamic import)
 let _sdk: typeof PiSDK | null = null;
 let _runtime: PiSDK.ModelRuntime | null = null;
 let _registry: PiSDK.ModelRegistry | null = null;
@@ -101,9 +100,7 @@ export async function getSDK(): Promise<typeof PiSDK> {
   return _sdk;
 }
 
-// pi 0.80.10 folded auth + model catalog into one ModelRuntime (AuthStorage
-// is no longer exported from the SDK index); ModelRegistry is now a
-// synchronous facade over it.
+// Auth and model catalog share one runtime; ModelRegistry is a synchronous facade.
 export async function getRuntime(): Promise<PiSDK.ModelRuntime> {
   if (!_runtime) {
     const sdk = await getSDK();
@@ -120,19 +117,9 @@ export async function getRegistry(): Promise<PiSDK.ModelRegistry> {
   return _registry;
 }
 
-// Get available models by parsing `pi --list-models` output
-// This matches exactly what the TUI shows (only accessible providers)
-// Cross-references with SDK registry for cost/free info
-//
-// The list comes from the HOST pi — the same launch spec sessions run with
-// (getPiLaunchSpec: PI_DISH_PI_COMMAND / alias / PATH) — because that's the
-// pi whose models the sessions can actually use. The vendored node_modules
-// CLI is only a fallback for hosts without pi on PATH; it lags behind host
-// upgrades (a new model in host pi never showed up here).
-//
-// Runs asynchronously — execSync here blocked the whole event loop (every
-// request, including SSE streams) for the duration of the subprocess
-// whenever the models cache went stale. Concurrent callers share one run.
+// Parse the HOST pi's `--list-models` table (the launch spec sessions use);
+// the vendored CLI is only a fallback because it lags host upgrades. Async so a
+// stale cache never blocks the event loop; concurrent callers share one run.
 let _listModelsInFlight: Promise<string> | null = null;
 
 function runListModels(): Promise<string> {
@@ -154,11 +141,9 @@ export async function getAvailableModels(): Promise<AvailableModel[]> {
   try {
     const output = await runListModels();
 
-    // Build a cost lookup from the SDK registry
     const costMap = await getCostMap();
 
     const lines = output.trim().split('\n');
-    // Skip header line
     const result = [];
     for (let i = 1; i < lines.length; i++) {
       const parts = lines[i].trim().split(/\s{2,}/);
@@ -166,7 +151,6 @@ export async function getAvailableModels(): Promise<AvailableModel[]> {
       const [provider, id, context, maxOut, ...rest] = parts;
       const isReasoning = rest[0] === 'yes'; // thinking column
 
-      // Check if free via SDK cost data
       const pricing = sanitizePricing(costMap.get(provider + '/' + id));
 
       result.push({
@@ -187,8 +171,7 @@ export async function getAvailableModels(): Promise<AvailableModel[]> {
     }
     return result;
   } catch (e) {
-    console.error('Failed to get models from pi --list-models:', e instanceof Error ? e.message : String(e));
-    // Fallback to SDK registry
+    console.error('Failed to get models from pi --list-models:', errorMessage(e));
     return getAvailableModelsFallback();
   }
 }
@@ -204,7 +187,6 @@ function sanitizePricing(cost: unknown): ModelPricing | null {
     ? pricing as ModelPricing : null;
 }
 
-// Build provider/id -> cost map from SDK registry
 async function getCostMap() {
   const registry = await getRegistry();
   const allModels = registry.getAll();
@@ -237,7 +219,7 @@ function parseContextSize(str: string): number {
   return num;
 }
 
-// Fallback: use SDK registry (returns all models, not just accessible ones)
+// All registered models, not only the accessible ones.
 async function getAvailableModelsFallback(): Promise<AvailableModel[]> {
   const runtime = await getRuntime();
   const registry = await getRegistry();
@@ -267,7 +249,6 @@ async function getAvailableModelsFallback(): Promise<AvailableModel[]> {
   return result;
 }
 
-// Rename a session by appending a session_info entry to its JSONL file
 export async function renameSession(sessionPath: string, newName: string): Promise<boolean> {
   const sdk = await getSDK();
   const sm = sdk.SessionManager.open(sessionPath);
@@ -275,7 +256,6 @@ export async function renameSession(sessionPath: string, newName: string): Promi
   return true;
 }
 
-// Switch model for a session by appending a model_change entry to its JSONL file
 export async function switchModel(sessionPath: string, provider: string, modelId: string): Promise<boolean> {
   const sdk = await getSDK();
   const sm = sdk.SessionManager.open(sessionPath);
@@ -309,7 +289,6 @@ const BUILTIN_COMMANDS: SessionCommand[] = [
   { name: 'quit', description: 'Quit pi', source: 'builtin' },
 ];
 
-// Get all slash commands: built-in + extension + skill
 export async function getCommands(): Promise<SessionCommand[]> {
   const sdk = await getSDK();
   const cwd = process.cwd();
@@ -341,20 +320,17 @@ export async function getCommands(): Promise<SessionCommand[]> {
   return discovery;
 }
 
-// Get session tree structure for /tree modal
 export async function getSessionTree(sessionPath: string): Promise<SessionTree> {
   const sdk = await getSDK();
   const sm = sdk.SessionManager.open(sessionPath);
   const tree = sm.getTree();
   const leafId = sm.getLeafId();
   
-  // Build active path (leaf → root)
   const entries = sm.getEntries();
   const byId = new Map<string, PiSDK.SessionEntry>();
   for (const e of entries) byId.set(e.id, e);
   const activePathIds = collectActivePath(leafId, id => byId.get(id)?.parentId);
   
-  // Flatten tree to serializable format
   function flattenNode(node: PiSDK.SessionTreeNode, depth: number): SessionTreeNode {
     const entry = node.entry;
     const result: SessionTreeNode = {
@@ -369,7 +345,6 @@ export async function getSessionTree(sessionPath: string): Promise<SessionTree> 
       childCount: node.children.length,
     };
     
-    // Add display info based on type
     if (entry.type === 'message') {
       const msg = entry.message;
       result.role = msg.role;
@@ -380,7 +355,6 @@ export async function getSessionTree(sessionPath: string): Promise<SessionTree> 
         result.model = msg.model;
         result.stopReason = msg.stopReason;
         result.errorMessage = msg.errorMessage;
-        // Collect tool calls for tool result display
         if (Array.isArray(msg.content)) {
           result.toolCalls = msg.content
             .filter(b => b.type === 'toolCall')

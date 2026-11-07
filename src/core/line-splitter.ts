@@ -8,7 +8,8 @@
  * chunk boundaries intact.
  */
 import { StringDecoder } from 'string_decoder';
-import { isRecord, type ProtocolRecord } from './wire-protocol';
+import { type ProtocolRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 
 type Chunk = string | Buffer | Uint8Array;
 

@@ -2,7 +2,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const test_1 = require("@playwright/test");
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const fs = require("node:fs");
 const path = require("node:path");
 const script = fs.readFileSync(path.resolve(__dirname, '../../public/artifact-comments.js'), 'utf8');
@@ -75,7 +75,7 @@ function listOnly(handler) {
     await page.route(`**${LIST}/comment-a{,/delete}`, async (route) => {
         const request = route.request();
         const body = request.postDataJSON();
-        if (!(0, wire_protocol_js_1.isRecord)(body))
+        if (!(0, helper_values_js_1.record)(body))
             throw new Error('Invalid comment request');
         // Safelisted: a cross-origin call from the sandboxed page is never
         // preflighted, which an auth proxy would answer with a login redirect.

@@ -180,7 +180,6 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
     ...(long ? { tier: '1h' as const } : {}) };
 }
 
-
 /** The model id a model_change entry records, in the profile's field. */
 export function entryModel(entry: Record<string, unknown>, profileId: string | undefined): string | null {
   const model = profileId === 'omp-v1' ? entry.model : entry.modelId;

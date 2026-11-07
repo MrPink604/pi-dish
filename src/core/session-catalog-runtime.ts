@@ -24,7 +24,7 @@ import {
   liveSessionSupports, primeLaunchAuthorityForRoute, registryIdentity, routeSessionId,
   spawnAllowsManagedClose, spawnAllowsRestart,
 } from './session-ownership';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import type { LiveSession, SessionOwnership } from './session-ownership';
 import type { AdvertisedCapabilities, BridgeRegistryEntry, NativeSessionId } from './contracts';
 import type { SessionInfo } from './session-metadata';

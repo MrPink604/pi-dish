@@ -1,5 +1,5 @@
 import type { Page, Route } from '@playwright/test';
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 import { test, expect, requiredRoute } from './fixtures.js';
 
 async function openForm(page: Page, base: string, label = '') {

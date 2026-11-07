@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const fs = require("node:fs");
 const path = require("node:path");
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const fixtures_js_1 = require("./fixtures.js");
 // A published page is served by the app's own listener. Its scripts, relative
 // assets and comment overlay must work, while the app origin's storage (fleet
@@ -48,7 +48,7 @@ async function selectProse(tab) {
         body: JSON.stringify({ path: site, sessionId: fixtures_js_1.ROOT, title: 'Isolated' }),
     });
     const published = await response.json();
-    if (!(0, wire_protocol_js_1.isRecord)(published) || typeof published.path !== 'string' || typeof published.token !== 'string') {
+    if (!(0, helper_values_js_1.record)(published) || typeof published.path !== 'string' || typeof published.token !== 'string') {
         throw new Error(`Page publish failed: ${JSON.stringify(published)}`);
     }
     const tab = await page.context().newPage();
@@ -98,8 +98,8 @@ async function selectProse(tab) {
         (0, fixtures_js_1.expect)(call).toContain('CF_Authorization=proxy-session');
     }
     const index = await (await fetch(`${self.base}/api/comments/index?sessionId=${fixtures_js_1.ROOT}`)).json();
-    const entries = (0, wire_protocol_js_1.isRecord)(index) && Array.isArray(index.comments) ? index.comments : [];
-    (0, fixtures_js_1.expect)(entries.map(entry => (0, wire_protocol_js_1.isRecord)(entry) && (0, wire_protocol_js_1.isRecord)(entry.target) ? entry.target.pageToken : null))
+    const entries = (0, helper_values_js_1.record)(index) && Array.isArray(index.comments) ? index.comments : [];
+    (0, fixtures_js_1.expect)(entries.map(entry => (0, helper_values_js_1.record)(entry) && (0, helper_values_js_1.record)(entry.target) ? entry.target.pageToken : null))
         .toEqual([published.token]);
     // The app origin still reads its own storage.
     await tab.goto(`${app}/api/host`);

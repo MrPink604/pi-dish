@@ -6,6 +6,7 @@ import type { Remote, ProbeResult } from './remote-hosts';
 import type { ArtifactKind, FleetArtifactRecord, FleetArtifactStore } from './fleet-artifacts';
 import type { HostDescriptor, TransportRequest, TransportResponse, TransportHandler } from './access-handlers';
 import { isolateArtifact } from './artifact-isolation';
+import { asRecord } from './wire-protocol';
 
 /** Public fallback only; callers retain local-first artifact ownership. */
 export interface PublicArtifactRelay {
@@ -41,9 +42,6 @@ interface FleetHostEntry {
   version?: string | null;
   capabilities?: Record<string, boolean>;
   error?: unknown;
-}
-function objectFields(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 const PROXY_TERMINAL_PATH_RE = /^\/hosts\/([^/]+)\/api\/sessions\/[^/]+\/terminal$/;
 const PROXY_RESPONSE_TIMEOUT_MS = 10_000;
@@ -213,8 +211,8 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       const kind = reqPath === '/pages' ? 'page' : 'share';
       return (status, body) => {
         if (status < 200 || status >= 300) return body;
-        if (!body || typeof body !== 'object' || !fleetArtifacts.record(objectFields(body).token, remote.name, kind)) return body;
-        return { ...body, ...fleetArtifactPayload(objectFields(body).token as string, kind) };
+        if (!body || typeof body !== 'object' || !fleetArtifacts.record(asRecord(body).token, remote.name, kind)) return body;
+        return { ...body, ...fleetArtifactPayload(asRecord(body).token as string, kind) };
       };
     }
 
@@ -225,7 +223,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       const pathToken = pageTokenMatch ? decodeURIComponent(pageTokenMatch[1]) : null;
       return (status, body) => {
         if (status < 200 || status >= 300) return body;
-        const token = pathToken || (body && typeof objectFields(body).token === 'string' ? objectFields(body).token : null);
+        const token = pathToken || (body && typeof asRecord(body).token === 'string' ? asRecord(body).token : null);
         if (token) fleetArtifacts.remove(token, remote.name);
         return body;
       };
@@ -275,7 +273,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   // agent talks only to its own server (which proxies this call), so it never
   // needs the hub's address or credential.
   const registerArtifact: TransportHandler = async (req, res) => {
-    const { token, kind, hostId } = objectFields(req.body);
+    const { token, kind, hostId } = asRecord(req.body);
     if (!fleetArtifacts.isValidToken(token)) {
       return res.status(400).json({ error: 'token required (base64url, max 128 characters)' });
     }

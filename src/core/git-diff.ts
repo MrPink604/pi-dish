@@ -7,11 +7,9 @@
  * diff against HEAD (staged + unstaged + untracked — everything not yet
  * committed). One response powers the diff modal in the UI.
  *
- * Every git invocation goes through execFile with a timeout and an argv
- * array (never a shell string) — same rules as lib/tmux.js. A repo that
- * fails (huge diff, index lock, weird state) degrades to an `error` field on
- * its entry; one broken repo must not blank the whole modal. Missing git
- * degrades to `{ gitAvailable: false }` like fff/node-pty do.
+ * Every git invocation is execFile with a timeout and argv (never a shell
+ * string). A failing repo degrades to an `error` field on its entry so one
+ * broken repo cannot blank the modal; missing git yields `{ gitAvailable: false }`.
  */
 import { execFile, execFileSync } from 'child_process';
 import * as crypto from 'crypto';
@@ -189,8 +187,6 @@ export function findGitRepos(root: string, { maxDepth = MAX_DEPTH, maxRepos = MA
   return repos;
 }
 
-// --- porcelain v2 parsing ------------------------------------------------
-
 // `git status --porcelain=v2 --branch -z`: NUL-terminated records. Rename
 // records ("2 ...") are followed by one extra NUL-terminated token — the
 // original path. XY is staged/unstaged; the display letter prefers the
@@ -225,8 +221,6 @@ export function parseStatusV2(out: string): GitStatusV2 {
   }
   return result;
 }
-
-// --- patch splitting -------------------------------------------------------
 
 // Strip git's C-style quoting from a header path ("a/x y" when quotepath
 // kicks in despite core.quotepath=false — e.g. embedded quotes).

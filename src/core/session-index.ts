@@ -21,7 +21,7 @@ import { loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
 import type { SessionInfo } from './session-metadata';
 import { sessionInfoFromEntries, extendSessionInfoFromEntries, decodeSessionInfo } from './session-metadata';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import { checkSearchLeaf, decodeUsage, decodeSkillRecords, decodeSkillState, finite } from './session-index-data';
 import type { IndexedUsage, SkillActivation, SkillState } from './session-index-data';
 import { encodeSessionKey, canonicalSessionId, resolveSessionRoute } from './session-key';
@@ -36,6 +36,7 @@ import type { UsageCostEstimator } from './harness-pricing.js';
 import {
   extendCacheLifetimeFromEntries, flushCacheLifetime, forgetCacheLifetimeFile, observeCacheLifetimeFromEntries,
 } from './cache-lifetime.js';
+import { errorMessage } from './http-boundary';
 
 export interface IndexedSessionInfo extends SessionInfo {
   sessionKey: SessionSource['sessionKey'];
@@ -173,7 +174,7 @@ class NdjsonLog {
       fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
       fs.appendFileSync(this.filePath, chunk);
     } catch (e) {
-      console.error(`session-index: append to ${this.filePath} failed:`, e instanceof Error ? e.message : String(e));
+      console.error(`session-index: append to ${this.filePath} failed:`, errorMessage(e));
     }
   }
 
@@ -195,7 +196,7 @@ class NdjsonLog {
       this.liveBytes = bytes;
       this.deadBytes = 0;
     } catch (e) {
-      console.error(`session-index: compact of ${this.filePath} failed:`, e instanceof Error ? e.message : String(e));
+      console.error(`session-index: compact of ${this.filePath} failed:`, errorMessage(e));
     }
   }
 

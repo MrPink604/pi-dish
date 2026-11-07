@@ -9,8 +9,9 @@ import fs = require('fs');
 import path = require('path');
 import dishStore = require('./dish-store');
 import { canonicalSessionId } from './session-key';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import type { HibernationState } from './session-api';
+import { errorMessage } from './http-boundary';
 
 export type HibernationMode = 'pressure' | 'off';
 
@@ -332,7 +333,7 @@ export function createSessionHibernation<Authority, Inspection extends Hibernati
       try { state = await attempt(row, pressure, at); }
       catch (error) {
         // A failed stop may have changed the host; never cascade within one sample.
-        log.error(`[hibernation] ${row.name || row.id}: ${error instanceof Error ? error.message : String(error)}`);
+        log.error(`[hibernation] ${row.name || row.id}: ${errorMessage(error)}`);
         return { skipped: 'Hibernation failed; retrying at the next sample.' };
       }
       if (!state) continue;
@@ -353,7 +354,7 @@ export function createSessionHibernation<Authority, Inspection extends Hibernati
     tick,
     start() {
       if (timer || stopped) return;
-      timer = setInterval(() => { tick().catch(error => log.error(`[hibernation] ${error instanceof Error ? error.message : String(error)}`)); }, SAMPLE_INTERVAL_MS);
+      timer = setInterval(() => { tick().catch(error => log.error(`[hibernation] ${errorMessage(error)}`)); }, SAMPLE_INTERVAL_MS);
       timer.unref?.();
     },
     stop() { stopped = true; clearInterval(timer); timer = undefined; },

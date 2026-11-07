@@ -5,7 +5,8 @@
  */
 import crypto = require('crypto');
 import { readStore, writeStore } from './dish-store';
-import { canonicalSessionId } from './session-key';
+import { asRecord } from './wire-protocol';
+import { canonicalSessionId, tryCanonicalSessionId as canonical } from './session-key';
 import type { SessionId } from './contracts';
 
 export interface CommentAnchor {
@@ -83,14 +84,6 @@ export interface ListCommentsOptions {
 }
 
 // Stored rows are external; members stay unknown until the route validates them.
-function fields(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
-
-function canonical(value: unknown): unknown {
-  try { return canonicalSessionId(value); } catch { return value; }
-}
-
 function readComments(): Record<string, unknown> {
   return readStore('comments.json');
 }
@@ -118,16 +111,16 @@ export function createComment({ sessionId, body, target }: CreateCommentOptions)
 
 export function getComment(id: string): CommentDto | null {
   const comment = readComments()[id];
-  return comment ? { ...fields(comment), sessionId: canonical(fields(comment).sessionId) } : null;
+  return comment ? { ...asRecord(comment), sessionId: canonical(asRecord(comment).sessionId) } : null;
 }
 
 export function listComments({ sessionId = null, pageToken = null, state = 'open' }: ListCommentsOptions = {}): CommentDto[] {
   if (sessionId) sessionId = canonical(sessionId);
   return Object.values(readComments())
-    .filter((comment) => comment && fields(comment).id)
-    .map((comment): CommentDto => ({ ...fields(comment), sessionId: canonical(fields(comment).sessionId) }))
+    .filter((comment) => comment && asRecord(comment).id)
+    .map((comment): CommentDto => ({ ...asRecord(comment), sessionId: canonical(asRecord(comment).sessionId) }))
     .filter((comment) => !sessionId || comment.sessionId === sessionId)
-    .filter((comment) => !pageToken || fields(comment.target).pageToken === pageToken)
+    .filter((comment) => !pageToken || asRecord(comment.target).pageToken === pageToken)
     .filter((comment) => state === 'all'
       || (state === 'acknowledged' ? !!comment.acknowledgedAt : !comment.acknowledgedAt))
     .sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
@@ -137,7 +130,7 @@ export function listComments({ sessionId = null, pageToken = null, state = 'open
 // record of what it was told: editing/deleting them would rewrite that history.
 export function updateComment(id: string, body: string): CommentDto | null {
   const comments = readComments();
-  const comment = fields(comments[id]);
+  const comment = asRecord(comments[id]);
   if (!comments[id] || comment.acknowledgedAt) return null;
   comment.body = body;
   comment.updatedAt = Date.now();
@@ -148,7 +141,7 @@ export function updateComment(id: string, body: string): CommentDto | null {
 
 export function deleteComment(id: string): boolean {
   const comments = readComments();
-  if (!comments[id] || fields(comments[id]).acknowledgedAt) return false;
+  if (!comments[id] || asRecord(comments[id]).acknowledgedAt) return false;
   delete comments[id];
   writeComments(comments);
   return true;
@@ -156,7 +149,7 @@ export function deleteComment(id: string): boolean {
 
 export function acknowledgeComment(id: string): CommentDto | null {
   const comments = readComments();
-  const comment = fields(comments[id]);
+  const comment = asRecord(comments[id]);
   if (!comments[id]) return null;
   if (!comment.acknowledgedAt) {
     comment.acknowledgedAt = Date.now();

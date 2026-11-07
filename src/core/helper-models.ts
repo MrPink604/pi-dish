@@ -27,7 +27,6 @@ export function formatModelRef(model?: ModelRef | string | null) {
  */
 export const THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
-
 export function stripThinkingSuffix(pattern: string) {
   const idx = pattern.lastIndexOf(':');
   if (idx === -1) return pattern;
@@ -128,7 +127,6 @@ export function globToRegExp(glob: string) {
   }
 }
 
-
 export function modelMatchesPattern(pattern: unknown, model?: ModelRef | null) {
   const patternText = stripThinkingSuffix(String(pattern || ''));
   if (!patternText || !model || !model.id) return false;
@@ -167,7 +165,6 @@ export const OMP_MODEL_ROLES = [
   { key: 'task', name: 'Subtask', description: 'Default model for subagent tasks' },
   { key: 'advisor', name: 'Advisor', description: 'Paired reviewer model that watches each turn' },
 ];
-
 
 export function modelRoleRecord(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};

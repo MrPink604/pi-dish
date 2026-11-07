@@ -71,8 +71,6 @@ interface HomeDirCache {
 
 type FffModule = typeof FffSdk;
 
-// --- fff finder pool ---------------------------------------------------------
-
 const MAX_FINDERS = 4;
 const finders = new Map<string, FinderEntry>();
 
@@ -143,8 +141,6 @@ export async function searchFiles(basePath: string | null | undefined, query: st
   }
   return walkerSearch(basePath, query, limit);
 }
-
-// --- $HOME directory search (walker only) -------------------------------------
 
 const SKIP_DIRS = new Set(['node_modules', 'target', 'dist', 'build', '__pycache__', 'venv']);
 const DIR_CACHE_MS = 60_000;
@@ -236,8 +232,6 @@ export function getDirChildren(inputPath: unknown): DirChildrenResult {
   return { path: resolved, dirs };
 }
 
-// --- path completion (absolute / ~ / ../ tokens) -------------------------------
-
 /** Does this @-mention token name a filesystem location rather than a
  *  cwd-relative fuzzy query? Matches /abs, ~ , ~/x, ./x, ../x. */
 export function isPathCompletionToken(token: string): boolean {
@@ -289,8 +283,6 @@ export function completePath(token: string, { cwd = null, limit = 20 }: PathComp
 
   return picked.map(c => ({ path: prefix + c.name, isDir: c.isDir, gitStatus: null }));
 }
-
-// --- walker fallback for file search ------------------------------------------
 
 function walkerSearch(basePath: string, query: string | null | undefined, limit: number): FileSearchResult[] {
   const out = walk(basePath, { maxDepth: 6, collect: 'files' })

@@ -44,4 +44,9 @@ function canonicalSessionId(value: unknown): SessionId {
   return harnessId === 'pi' ? nativeSessionId as string as SessionId : encodeSessionKey(harnessId, nativeSessionId);
 }
 
-export = { encodeSessionKey, decodeSessionKey, resolveSessionRoute, canonicalSessionId, validSessionId: validId, VERSION };
+// Callers that mirror an unvalidated stored id keep the raw value on failure.
+function tryCanonicalSessionId(value: unknown): unknown {
+  try { return canonicalSessionId(value); } catch { return value; }
+}
+
+export = { encodeSessionKey, decodeSessionKey, resolveSessionRoute, canonicalSessionId, tryCanonicalSessionId, validSessionId: validId, VERSION };

@@ -16,7 +16,7 @@ import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import net = require('node:net');
 import path = require('node:path');
-import { isRecord } from '../lib/wire-protocol.js';
+import { record as isRecord } from '../lib/helper-values.js';
 
 type FixtureEntry = Record<string, unknown>;
 interface FixtureModel {

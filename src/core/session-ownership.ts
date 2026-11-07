@@ -17,6 +17,7 @@ import { record } from './helper-values';
 import * as tmux from './tmux';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryRecord } from './session-recovery';
+import { errorMessage } from './http-boundary';
 
 /** The three live transports: bridge extension, Pi RPC child, Prime daemon root. */
 export type LiveSession = InstanceType<typeof BridgeSession> | InstanceType<typeof RPCSession> | PrimeDaemonSession;
@@ -498,7 +499,7 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     }
     try { await proveBridgeRegistryClaim(fresh); }
     catch (error) {
-      throw new OwnershipRefusal(`The live bridge could not re-prove its identity before restart: ${error instanceof Error ? error.message : String(error)}`);
+      throw new OwnershipRefusal(`The live bridge could not re-prove its identity before restart: ${errorMessage(error)}`);
     }
     const paneProcess = await tmux.paneProcessIdentity(capture.placement.socket, capture.placement.paneId);
     if (!sameProcessIdentity(paneProcess, capture.placement.paneProcess)
@@ -623,7 +624,7 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     }
     try { await proveBridgeRegistryClaim(fresh); }
     catch (error) {
-      throw new OwnershipRefusal(`The live ${descriptor.label} bridge could not re-prove its identity before close: ${error instanceof Error ? error.message : String(error)}`);
+      throw new OwnershipRefusal(`The live ${descriptor.label} bridge could not re-prove its identity before close: ${errorMessage(error)}`);
     }
     const finalPaneProcess = await tmux.paneProcessIdentity(placement.socket, placement.paneId);
     if (!sameProcessIdentity(finalPaneProcess, placement.paneProcess) || !spawnAllowsOwnedPaneClose(placement, fresh)) {
@@ -695,7 +696,7 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
       } catch (error) {
         if (error instanceof OwnershipRefusal) throw error;
         pruneUnreachableRegisteredSession(registry, error);
-        throw new OwnershipRefusal(`Refusing to signal legacy registry pid ${registry.pid} without a successful bridge identity handshake: ${error instanceof Error ? error.message : String(error)}. Reload or upgrade that pi bridge, then retry.`);
+        throw new OwnershipRefusal(`Refusing to signal legacy registry pid ${registry.pid} without a successful bridge identity handshake: ${errorMessage(error)}. Reload or upgrade that pi bridge, then retry.`);
       }
       if (!legacyProcess) {
         pruneRegisteredSession(registry);

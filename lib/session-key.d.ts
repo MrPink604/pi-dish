@@ -5,11 +5,13 @@ declare function encodeSessionKey(harnessId: HarnessId, nativeSessionId: NativeS
 declare function decodeSessionKey(key: unknown): SessionIdentity;
 declare function resolveSessionRoute(value: unknown): SessionIdentity;
 declare function canonicalSessionId(value: unknown): SessionId;
+declare function tryCanonicalSessionId(value: unknown): unknown;
 declare const _default: {
     encodeSessionKey: typeof encodeSessionKey;
     decodeSessionKey: typeof decodeSessionKey;
     resolveSessionRoute: typeof resolveSessionRoute;
     canonicalSessionId: typeof canonicalSessionId;
+    tryCanonicalSessionId: typeof tryCanonicalSessionId;
     validSessionId: typeof validId;
     VERSION: string;
 };

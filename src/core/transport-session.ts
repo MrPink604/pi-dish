@@ -1,6 +1,7 @@
 import type { ExtensionUIState, PromptOptions, RunningToolCall } from './contracts';
 import { createExtensionUIState } from './extension-ui-state';
-import { isRecord, type ProtocolRecord } from './wire-protocol';
+import { type ProtocolRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 
 export type SessionListener = (data: unknown) => void;
 

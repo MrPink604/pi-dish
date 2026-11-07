@@ -5,7 +5,7 @@ import { PrimeDaemonSession } from './prime-daemon';
 import { errorMessage, httpError } from './http-boundary';
 import * as piSDK from './pi-sdk';
 import { liveSessionSupports, routeIdentity } from './session-ownership';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import tmux = require('./tmux');
 import type { BridgeRegistryEntry } from './contracts';
 import type { BranchSessionOptions } from './pi-sdk';

@@ -2,7 +2,7 @@
 // fixtures. Released listeners still bind real sockets.
 import net = require('node:net');
 import { errorMonitor } from 'node:events';
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 const listen = net.Server.prototype.listen;
 let failedOnce = false;
 let observedError: Error | undefined;

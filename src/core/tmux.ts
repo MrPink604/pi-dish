@@ -1,17 +1,9 @@
 /**
- * Spawn pi sessions inside tmux windows instead of as web-server children.
- *
- * A pi-dish-managed RPC session (lib/rpc-session.js) dies when the pi-dish
- * server restarts — it's a child process. A pi TUI running in tmux with the
- * pi-dish-bridge extension survives independently (registry + Unix socket).
- * This module lets pi-dish open a new pi TUI as a tmux window on a chosen tmux
- * server; the bridge registers it and pi-dish drives it over the normal
- * BridgeSession path.
- *
- * The user may run several tmux servers, each a distinct socket under
- * $TMUX_TMPDIR (default /tmp/tmux-<uid>/). Every invocation uses execFile with
- * a short timeout and argv, never a shell string. Spawn placements persist
- * in ~/.pi/dish/tmux-spawns.json; HOME is resolved per call.
+ * Spawn pi sessions inside tmux windows instead of as server children: an RPC
+ * child dies with the server, while a TUI in tmux plus the bridge extension
+ * survives and is driven over the normal BridgeSession path. Servers are
+ * addressed by their $TMUX_TMPDIR socket. Every invocation is execFile with a
+ * timeout and argv, never a shell string; placements persist in dish-store.
  */
 import { execFile, execFileSync } from 'child_process';
 import fs = require('fs');
@@ -504,8 +496,6 @@ export async function getPrefixKey(socket: string): Promise<string | null> {
     return null;
   }
 }
-
-// --- Persisted spawn placements (~/.pi/dish/tmux-spawns.json) --------------
 
 const SPAWNS_STORE = 'tmux-spawns.json';
 

@@ -11,7 +11,8 @@ import crypto = require('crypto');
 import { dishDir } from './dish-store';
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
-import { asRecord, decodeRPCFrame, isRecord, type ProtocolRecord } from './wire-protocol';
+import { asRecord, decodeRPCFrame, type ProtocolRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import { errorMessage } from './http-boundary';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { reduceExtensionUIState } from './extension-ui-state';
@@ -87,7 +88,10 @@ class RPCSession extends TransportSession {
     proc.stdout.on('error', () => {});
     proc.stderr.on('error', () => {});
 
-    proc.stdout.on('data', createJsonLineSplitter((message) => { this._handleMessage(message); }));
+    // A throwing event listener must not escape the stdout emit and crash the server.
+    proc.stdout.on('data', createJsonLineSplitter((message) => {
+      try { this._handleMessage(message); } catch (error) { console.error(`[rpc] event handler failed: ${errorMessage(error)}`); }
+    }));
 
     proc.on('exit', (code) => {
       this.recoveryObserver.event('shutdown');

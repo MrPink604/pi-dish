@@ -96,10 +96,8 @@ export function positiveQueryTokens(parsed: SessionQuery) {
   return parsed.terms.filter(t => !t.neg && !t.field).map(t => t.value);
 }
 
-/** A session launched by a routine invocation — "automation". The stamp is
- * *presentation-only* provenance (annotateSessionRoutines in server.js), so
- * this answers listing questions ("is this a cron run?") and never control
- * ones. */
+/** A routine-launched session. Provenance is presentation-only, so this
+ * answers listing questions and never control ones. */
 export function isAutomationSession(session?: HelperSession | null) {
   return !!(session && (session.routine || session.routineId));
 }
@@ -243,7 +241,6 @@ export function fuzzyScore(indices: readonly number[] | null, str: string) {
   score -= str.length * 0.1; // shorter = better
   return score;
 }
-
 
 export function highlightFuzzy(str: string, indices: readonly number[] | null) {
   if (!indices || !indices.length) return escapeHtml(str);

@@ -17,6 +17,7 @@ import crypto = require('crypto');
 import fs = require('fs');
 import path = require('path');
 import dishStore = require('./dish-store');
+import { asRecord } from './wire-protocol';
 import type { NextFunction, Request, Response } from 'express';
 import type { PushPayload } from './push-notifications';
 
@@ -112,14 +113,10 @@ function optionalString(value: unknown, max: number): string | null | undefined 
   return boundedString(value, max) ?? undefined;
 }
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
 function decodeDevice(value: unknown): VaultDevice | null {
-  const device = record(value);
-  const name = boundedString(device?.name, 64);
-  const fingerprint = typeof device?.fingerprint === 'string' && FINGERPRINT_RE.test(device.fingerprint) ? device.fingerprint.toLowerCase() : null;
+  const device = asRecord(value);
+  const name = boundedString(device.name, 64);
+  const fingerprint = typeof device.fingerprint === 'string' && FINGERPRINT_RE.test(device.fingerprint) ? device.fingerprint.toLowerCase() : null;
   return name && fingerprint ? { name, fingerprint } : null;
 }
 
@@ -139,10 +136,10 @@ export function decodeFields(value: unknown): VaultField[] | null {
 
 function decodeSession(value: unknown): VaultSessionClaim | null | undefined {
   if (value === undefined || value === null) return null;
-  const session = record(value);
-  const ref = boundedString(session?.ref, 200);
-  const name = optionalString(session?.name, 200);
-  const host = optionalString(session?.host, 100);
+  const session = asRecord(value);
+  const ref = boundedString(session.ref, 200);
+  const name = optionalString(session.name, 200);
+  const host = optionalString(session.host, 100);
   if (!ref || name === undefined || host === undefined) return undefined;
   return { ref, name, host };
 }
@@ -199,12 +196,12 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
     },
 
     reportStatus(body) {
-      const status = record(body);
-      const state = status?.state;
+      const status = asRecord(body);
+      const state = status.state;
       if (state !== 'locked' && state !== 'ready') return fail(400, "state must be 'locked' or 'ready'");
-      const account = optionalString(status?.account, 200);
+      const account = optionalString(status.account, 200);
       if (account === undefined) return fail(400, 'account must be a short string');
-      const rawDevices = status?.devices ?? [];
+      const rawDevices = status.devices ?? [];
       if (!Array.isArray(rawDevices) || rawDevices.length > 64) return fail(400, 'devices must be a list');
       const devices = rawDevices.map(decodeDevice);
       if (devices.some(device => !device)) return fail(400, 'each device needs a name and a hex fingerprint');
@@ -214,22 +211,22 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
 
     createRequest(body) {
       sweep();
-      const input = record(body);
-      const id = typeof input?.id === 'string' && ID_RE.test(input.id) ? input.id : null;
+      const input = asRecord(body);
+      const id = typeof input.id === 'string' && ID_RE.test(input.id) ? input.id : null;
       if (!id) return fail(400, 'id must be 8-64 letters, digits or dashes');
       if (requests.has(id)) return fail(409, 'Duplicate vault request id');
-      const device = decodeDevice(input?.device);
+      const device = decodeDevice(input.device);
       if (!device) return fail(400, 'device needs a name and a hex fingerprint');
-      const item = boundedString(input?.item, 256);
+      const item = boundedString(input.item, 256);
       if (!item) return fail(400, 'item is required');
-      const fields = decodeFields(input?.fields);
+      const fields = decodeFields(input.fields);
       if (!fields) return fail(400, `fields must be distinct values from: ${VAULT_FIELDS.join(', ')}, field:<name>`);
-      const reason = optionalString(input?.reason, 500);
+      const reason = optionalString(input.reason, 500);
       if (reason === undefined) return fail(400, 'reason must be at most 500 characters');
-      const session = decodeSession(input?.session);
+      const session = decodeSession(input.session);
       if (session === undefined) return fail(400, 'session needs a ref (name and host optional)');
       const at = now();
-      const expiresAt = typeof input?.expiresAt === 'number' && Number.isFinite(input.expiresAt) ? input.expiresAt : NaN;
+      const expiresAt = typeof input.expiresAt === 'number' && Number.isFinite(input.expiresAt) ? input.expiresAt : NaN;
       if (!(expiresAt > at)) return fail(400, 'expiresAt must be a future epoch-millisecond time');
       const request: VaultRequest = {
         id, device, item, fields, reason, session,
@@ -339,7 +336,7 @@ export function createVaultHandlers(vault: VaultApprovals, token: () => string =
     bridgeGet: (req, res) => reply(res, vault.requestStatus(req.params.id), request => res.json({ status: request.status })),
     bridgeAbandon: (req, res) => reply(res, vault.abandon(req.params.id), () => res.status(204).end()),
     overview: (_req, res) => { res.json(vault.overview()); },
-    decide: (req, res) => reply(res, vault.decide(req.params.id, record(req.body)?.decision), request => res.json({ request })),
+    decide: (req, res) => reply(res, vault.decide(req.params.id, asRecord(req.body).decision), request => res.json({ request })),
     revokeGrant: (req, res) => reply(res, vault.revokeGrant(req.params.id), () => res.status(204).end()),
   };
 }

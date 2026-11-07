@@ -1,7 +1,7 @@
 // Generated test/tool from test/browser/host-settings.spec.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const fixtures_js_1 = require("./fixtures.js");
 async function openForm(page, base, label = '') {
     await page.evaluate(() => fixtureApp.features.fleetController.open());
@@ -92,7 +92,7 @@ for (const outcome of ['success', '401']) {
     const catalog = await page.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-hosts') ?? '[]'));
     if (!Array.isArray(catalog))
         throw new Error('Invalid stored host catalog');
-    (0, fixtures_js_1.expect)(catalog.find(host => (0, wire_protocol_js_1.isRecord)(host) && host.hostId === fleet.peer.hostId)).toEqual({ base: fleet.peer.base,
+    (0, fixtures_js_1.expect)(catalog.find(host => (0, helper_values_js_1.record)(host) && host.hostId === fleet.peer.hostId)).toEqual({ base: fleet.peer.base,
         hostId: fleet.peer.hostId, label: 'Custom label', token: 'fixture-token' });
     await (0, fixtures_js_1.expect)(page.locator('#addHostToken')).toHaveValue('');
 });

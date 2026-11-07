@@ -1,8 +1,6 @@
 import type { Timestamp } from './helper-types';
 
-
 export function record(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
-
 
 export function finite(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value); }
 

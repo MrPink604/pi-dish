@@ -91,7 +91,7 @@ export declare function sshArgv(remote: SshRemote, socketPath?: string, launch?:
  * Termux:API app; only a successful call writes the `scheduled` marker.
  */
 export declare function hostLaunchScript(hash: string, port: number): string;
-/** Kill every ssh child. Hooked into the server's close (server.js). */
+/** Kill every ssh child; the server calls this on close. */
 export declare function shutdown(): void;
 /**
  * Open a request to a peer. Returns the raw ClientRequest so bodies stream

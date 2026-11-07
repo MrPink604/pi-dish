@@ -1,5 +1,5 @@
 import assert = require('node:assert/strict');
-import { isRecord } from '../lib/wire-protocol.js';
+import { record as isRecord } from '../lib/helper-values.js';
 import sessionKey = require('../lib/session-key.js');
 import type { BridgeRegistryEntry, HarnessId, NativeSessionId, SessionId } from '../lib/contracts.js';
 

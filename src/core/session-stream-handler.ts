@@ -5,7 +5,7 @@ import { errorMessage } from './http-boundary';
 import { canonicalSessionId } from './session-key';
 import { sessionSwitchRouteData } from './session-ownership';
 import { createToolEventStream } from './tool-event-stream';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import type { LiveSession } from './session-ownership';
 
 export interface SessionStreamPorts {

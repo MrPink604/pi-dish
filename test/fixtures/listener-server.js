@@ -5,7 +5,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // fixtures. Released listeners still bind real sockets.
 const net = require("node:net");
 const node_events_1 = require("node:events");
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const listen = net.Server.prototype.listen;
 let failedOnce = false;
 let observedError;
@@ -38,7 +38,7 @@ net.Server.prototype.listen = function (...args) {
     if (held) {
         send({ type: `${held}-held` });
         const release = (message) => {
-            if (!(0, wire_protocol_js_1.isRecord)(message) || !message[held === 'main' ? 'releaseMain' : 'releaseAlias'])
+            if (!(0, helper_values_js_1.record)(message) || !message[held === 'main' ? 'releaseMain' : 'releaseAlias'])
                 return;
             process.off('message', release);
             start();
@@ -57,13 +57,13 @@ if (process.env.PI_DISH_TEST_OBSERVE_STARTUP) {
         },
         failed(error) {
             const message = error instanceof Error ? error.message : String(error);
-            const code = (0, wire_protocol_js_1.isRecord)(error) ? error.code : undefined;
+            const code = (0, helper_values_js_1.record)(error) ? error.code : undefined;
             send({ type: 'startup-failed', message, code, nativeErrorIdentity: error === observedError });
         },
     });
     observeServerStartup(initialServer, observer('startup-ready'));
     process.on('message', (message) => {
-        if ((0, wire_protocol_js_1.isRecord)(message) && message.observeLate)
+        if ((0, helper_values_js_1.record)(message) && message.observeLate)
             observeServerStartup(initialServer, observer('late-ready'));
     });
 }

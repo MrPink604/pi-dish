@@ -16,6 +16,7 @@ import type { SessionOperations } from './session-operations';
 import type { LiveSession, SessionOwnership } from './session-ownership';
 import type { RecoveryOutcome } from './recovery-runner';
 import type { BridgeCapability } from './contracts';
+import { errorMessage } from './http-boundary';
 
 export interface RoutineInvokeOptions {
   trigger?: RoutineTrigger;
@@ -58,10 +59,6 @@ const AGENT_END_GRACE_MS = 250;
 
 function coded(message: string, status: number, extra: Record<string, unknown> = {}): Error & { status: number } {
   return Object.assign(new Error(message), { status }, extra);
-}
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 interface WireMessage {
@@ -143,7 +140,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
         status,
         endedAt: now(),
         summary,
-        error: error ? message(error) : null,
+        error: error ? errorMessage(error) : null,
       });
       if (invocation && mode === 'oneShot') void scheduleClose(invocation);
     }
@@ -195,7 +192,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
         });
       }
     } catch (error) {
-      store.updateInvocation(invocation.id, { closed: false, closeError: message(error) });
+      store.updateInvocation(invocation.id, { closed: false, closeError: errorMessage(error) });
     }
   }
 
@@ -251,8 +248,8 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       routine, trigger, source, input, delivery, status: 'starting', startedAt: at,
     });
     run(routine, invocation, busy).catch((error) => {
-      log.error?.(`Routine ${routine.name} invocation failed: ${message(error)}`);
-      store.updateInvocation(invocation.id, { status: 'errored', endedAt: now(), error: message(error) });
+      log.error?.(`Routine ${routine.name} invocation failed: ${errorMessage(error)}`);
+      store.updateInvocation(invocation.id, { status: 'errored', endedAt: now(), error: errorMessage(error) });
     });
     return invocation;
   }
@@ -271,7 +268,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     } catch (error) {
       // A session that can no longer be resumed is not this run's failure:
       // spawn a fresh one rather than annotating a recovered run with an error.
-      log.warn?.(`Routine ${routine.name} could not resume ${previous.sessionId}: ${message(error)}`);
+      log.warn?.(`Routine ${routine.name} could not resume ${previous.sessionId}: ${errorMessage(error)}`);
       return null;
     }
   }
@@ -319,7 +316,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
     } catch (error) {
       observer.detach();
       const failed = store.updateInvocation(invocation.id, {
-        status: 'errored', endedAt: now(), error: message(error),
+        status: 'errored', endedAt: now(), error: errorMessage(error),
       });
       // A oneShot spawn whose delivery never landed would otherwise leave an
       // idle session nobody asked for. Only ever close what this run spawned.
@@ -333,7 +330,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       await sess.setName(`${routine.name} ${stamp(new Date(now()))}`);
     } catch (error) {
       // Naming is cosmetic; a harness that refuses it must not fail the run.
-      log.warn?.(`Routine ${routine.name} could not name its session: ${message(error)}`);
+      log.warn?.(`Routine ${routine.name} could not name its session: ${errorMessage(error)}`);
     }
   }
 
@@ -392,7 +389,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       try {
         invoke(routine, { trigger: 'schedule' });
       } catch (error) {
-        log.error?.(`Scheduled routine ${routine.name} failed to start: ${message(error)}`);
+        log.error?.(`Scheduled routine ${routine.name} failed to start: ${errorMessage(error)}`);
       }
     }
   }
@@ -446,7 +443,7 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
       try {
         tick();
       } catch (error) {
-        log.error?.(`Routine scheduler tick failed: ${message(error)}`);
+        log.error?.(`Routine scheduler tick failed: ${errorMessage(error)}`);
       }
     }, TICK_MS);
     timer.unref?.();

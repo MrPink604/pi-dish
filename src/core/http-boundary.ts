@@ -1,4 +1,4 @@
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import type { Request, RequestHandler, Response } from 'express';
 import type { ParsedQs } from 'qs';
 

@@ -1,27 +1,21 @@
 /**
  * Learned provider cache lifetimes. Providers report cache token activity, not
  * expiry timestamps, so each cache-active assistant message is a Bernoulli
- * probe of "did the cache survive the idle gap?": a hit lower-bounds the
- * lifetime, a hard miss upper-bounds it. Per (api, provider, model, tier) a
- * weighted ridge logistic fit of P(hit | gap) on log-gap yields a TTL (the
- * p=0.5 crossing) and a reliability slope, over a gap-stratified bounded
- * window with a 14-day half-life and a prior anchored on the built-in ladder.
- * A learned policy activates only with enough decayed support, both outcomes
- * observed, and the crossing bracketed by real hits and misses.
- *
- * Ingestion rides the session indexer and dedups by (file, timestamp), so a
- * restart's re-parse is idempotent. State persists to
- * ~/.pi/dish/cache-lifetime.json, resolved per call so tests' temp HOMEs work.
+ * probe of "did the cache survive the idle gap?"; a weighted ridge logistic fit
+ * of P(hit | gap) yields a TTL and a reliability slope, with a prior anchored
+ * on the built-in ladder. Ingestion rides the session indexer and dedups by
+ * (file, timestamp), so a restart's re-parse is idempotent; state persists via
+ * dish-store.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { dishDir } from './dish-store';
+import { dishDir, replaceFile } from './dish-store';
 import { MAX_TTL_MS, MIN_TTL_MS, configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
 import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, entryModel, hasCacheActivity, resolveCacheTarget } from './session-metadata';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import type { CacheExpiry, CacheExpiryBasis, SessionEntries } from './session-metadata';
 
 export interface CacheLifetimeStats {
@@ -247,10 +241,7 @@ export function flushCacheLifetime(): void {
     };
   }
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: STORE_VERSION, identities }) + '\n');
-    fs.renameSync(tmp, file);
+    replaceFile(file, JSON.stringify({ version: STORE_VERSION, identities }) + '\n');
     const stats = fs.statSync(file);
     store.stamp = `${stats.mtimeMs}:${stats.size}`;
     store.dirty = false;

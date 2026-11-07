@@ -31,11 +31,7 @@ declare function getRegisteredSession(sessionId: NativeSessionId): BridgeRegistr
 declare function getRegisteredSessionByNativeId(harnessId: HarnessId, nativeSessionId: NativeSessionId): BridgeRegistryEntry | null;
 declare function getRegisteredSessionByClaim(claim: unknown): BridgeRegistryEntry | null;
 declare function refreshRegisteredSession(sessionId: NativeSessionId): BridgeRegistryEntry | null;
-/**
- * A live connection to a bridge socket. Mirrors the surface that server.js
- * previously expected from RPCSession: on(event, cb), prompt, abort, setModel,
- * setName, plus a few state fields (alive, turnInProgress, sessionFile, cwd).
- */
+/** A live bridge socket with the prompt/abort/model surface RPCSession exposes. */
 declare class BridgeSession extends EventEmitter<BridgeEvents> {
     id: NativeSessionId;
     protocolVersion: unknown;

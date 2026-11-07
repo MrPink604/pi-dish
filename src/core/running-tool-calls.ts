@@ -1,5 +1,5 @@
 import type { RunningToolCall, ToolExecutionData } from './contracts';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 
 /** Agent events reach every transport as unvalidated wire records; narrow them once here. */
 function executionData(value: unknown): ToolExecutionData {

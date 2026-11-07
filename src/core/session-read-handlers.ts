@@ -6,7 +6,8 @@ import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
 import type { BridgeRegistryEntry } from './contracts';
 import { getHarness } from './harnesses';
-import { record } from './helper-values';
+import { asRecord } from './wire-protocol';
+import { errorMessage } from './http-boundary';
 import { extractTextContent, getToolSummary } from './helper-content.js';
 import { collectActivePath, walkBranchTree } from './helper-tree';
 import { refreshHarnessPricing } from './harness-pricing';
@@ -59,8 +60,6 @@ export interface SessionReadHandlers {
 const VALID_ENTRY_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?$/;
 const BLOB_REF_RE = /^blob:sha256:([0-9a-f]{64})$/;
 
-function object(value: unknown): Record<string, unknown> { return record(value) ? value : {}; }
-
 /** Copy only the projected image blocks; never mutate the borrowed parser cache. */
 function messageForClient(sessionId: string, message: SessionMessage, index: number) {
   if (!Array.isArray(message.content)) return { ...message, index };
@@ -68,7 +67,7 @@ function messageForClient(sessionId: string, message: SessionMessage, index: num
   const resourceId = typeof message.id === 'string' && VALID_ENTRY_ID_RE.test(message.id)
     ? message.id : String(index);
   const content = message.content.map((value: unknown, blockIndex: number) => {
-    const block = object(value);
+    const block = asRecord(value);
     if (block.type !== 'image' || typeof block.data !== 'string' || !block.data) return value;
     changed = true;
     const { data: _data, ...metadata } = block;
@@ -95,15 +94,15 @@ function imageBlockBytes(session: SessionSource, data: string): Buffer | null {
  * entries because the file can lag the leaf.
  */
 function primeSessionTree(value: unknown): piSDK.SessionTree {
-  const source = object(value);
+  const source = asRecord(value);
   const flatNodes = Array.isArray(source.flatNodes) ? source.flatNodes : [];
   interface PrimeTreeNode { entry: Record<string, unknown>; label: string | null; children: PrimeTreeNode[] }
   const byId = new Map<string, PrimeTreeNode>();
   const ordered: PrimeTreeNode[] = [];
   for (const flat of flatNodes) {
-    const entry = object(object(flat).entry);
+    const entry = asRecord(asRecord(flat).entry);
     if (typeof entry.id !== 'string' || !entry.id || byId.has(entry.id)) continue;
-    const label = object(flat).label;
+    const label = asRecord(flat).label;
     const node = { entry, label: typeof label === 'string' && label ? label : null, children: [] };
     byId.set(entry.id, node);
     ordered.push(node);
@@ -130,7 +129,7 @@ function primeSessionTree(value: unknown): piSDK.SessionTree {
       depth, active: activePathIds.has(id), isLeaf: id === leafId, label: node.label, childCount: node.children.length,
     };
     if (entry.type === 'message') {
-      const message = object(entry.message);
+      const message = asRecord(entry.message);
       result.role = typeof message.role === 'string' ? message.role : undefined;
       if (message.role === 'user' || message.role === 'assistant') result.text = preview(message.content);
       if (message.role === 'assistant') {
@@ -138,7 +137,7 @@ function primeSessionTree(value: unknown): piSDK.SessionTree {
         result.stopReason = typeof message.stopReason === 'string' ? message.stopReason : undefined;
         result.errorMessage = typeof message.errorMessage === 'string' ? message.errorMessage : undefined;
         result.toolCalls = Array.isArray(message.content) ? message.content.flatMap((block: unknown) => {
-          const call = object(block);
+          const call = asRecord(block);
           return call.type === 'toolCall' && typeof call.id === 'string'
             ? [{ id: call.id, name: String(call.name ?? ''), args: getToolSummary(String(call.name ?? ''), call.arguments) }]
             : [];
@@ -171,7 +170,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
   async function getOmpShareSnapshot(session: SessionSource): Promise<unknown> {
     if (session.profileId !== 'omp-v1') return undefined;
     const registered = getRegisteredSession(session.routeId);
-    if (object(registered?.capabilities).shareSnapshot !== true) return undefined;
+    if (asRecord(registered?.capabilities).shareSnapshot !== true) return undefined;
     try {
       const live = await getLiveSession(session.routeId);
       if (!(live instanceof BridgeSession) || !liveSessionSupports(live, 'shareSnapshot')) return undefined;
@@ -203,7 +202,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
       if (Number.isSafeInteger(legacyIndex)) message = readSessionMessages(session)[legacyIndex];
     }
     const content = message?.content;
-    const block = object(content == null ? undefined : Reflect.get(Object(content), String(blockIndex)));
+    const block = asRecord(content == null ? undefined : Reflect.get(Object(content), String(blockIndex)));
     if (block.type !== 'image' || typeof block.data !== 'string' || !block.data) {
       res.status(404).json({ error: 'Image not found' }); return;
     }
@@ -238,7 +237,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
     const info: Record<string, unknown> = { ...withSessionContext(getSessionInfo(source), getContextWindow) };
     const label = subsessionLabel(source);
     if (label) info.name = label;
-    const liveUsage = object(getLiveContextUsage(sessionId));
+    const liveUsage = asRecord(getLiveContextUsage(sessionId));
     if (liveUsage.tokens != null) info.contextTokens = liveUsage.tokens;
     if (liveUsage.percent != null) info.contextPercent = Math.round(Number(liveUsage.percent) * 10) / 10;
     if (liveUsage.contextWindow) info.contextWindow = liveUsage.contextWindow;
@@ -334,7 +333,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
           percent: info.contextPercent ?? null,
         },
       });
-    } catch (error) { res.status(500).json({ error: object(error).message }); }
+    } catch (error) { res.status(500).json({ error: errorMessage(error) }); }
   };
 
   const tree: ReadHandler = async (req, res) => {
@@ -360,11 +359,11 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
           res.status(409).json({ error: 'This Oh My Pi session has no live bridge connection for tree reads.' }); return;
         }
         try { res.json(await sess.readTree()); return; } catch (error) {
-          const message = object(error).message;
-          if (/unknown command/i.test(String(message || ''))) {
+          const message = errorMessage(error);
+          if (/unknown command/i.test(message)) {
             res.status(409).json({ error: 'The Oh My Pi session is running an older pi-dish bridge; reload or restart it to enable tree reads.' }); return;
           }
-          if (/unavailable|does not expose/i.test(String(message || ''))) {
+          if (/unavailable|does not expose/i.test(message)) {
             res.status(409).json({ error: message }); return;
           }
           throw error;
@@ -390,7 +389,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
       const source = findSessionSource(req.params.id);
       if (!source) { res.status(404).json({ error: 'Session not found' }); return; }
       res.json(await piSDK.getSessionTree(source.file));
-    } catch (error) { res.status(500).json({ error: object(error).message }); }
+    } catch (error) { res.status(500).json({ error: errorMessage(error) }); }
   };
 
   const exportHandler: ReadHandler = async (req, res) => {
@@ -408,7 +407,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
       const outPath = path.join(os.tmpdir(), `pi-dish-export-${req.params.id.slice(-12)}.html`);
       const htmlPath = await exportSessionHtml(source, outPath);
       res.download(htmlPath, path.basename(source.file, '.jsonl') + '.html');
-    } catch (error) { res.status(500).json({ error: object(error).message }); }
+    } catch (error) { res.status(500).json({ error: errorMessage(error) }); }
   };
 
   return { image, messages, search, stats, tree, export: exportHandler, exportSessionHtml, getOmpShareSnapshot };

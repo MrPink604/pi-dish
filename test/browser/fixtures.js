@@ -11,7 +11,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test_env_js_1 = require("../test-env.js");
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const browser_app_js_1 = require("../fixtures/browser-app.js");
 const ROOT = '2026-09-09T00-00-00-shared-root';
 exports.ROOT = ROOT;
@@ -64,10 +64,10 @@ async function startHost(label, logs, started, origin, liveSessions) {
     }
     const commands = [];
     child.on('message', (event) => {
-        if (!(0, wire_protocol_js_1.isRecord)(event))
+        if (!(0, helper_values_js_1.record)(event))
             throw new Error('Browser host sent an invalid event');
         if (event.type === 'command') {
-            if (!(0, wire_protocol_js_1.isRecord)(event.message))
+            if (!(0, helper_values_js_1.record)(event.message))
                 throw new Error('Browser host sent an invalid command');
             commands.push(event.message);
         }
@@ -78,14 +78,14 @@ async function startHost(label, logs, started, origin, liveSessions) {
         const failed = (err) => { clearTimeout(timer); reject(err); };
         child.once('error', failed);
         child.once('exit', (code) => failed(new Error(`${label} exited (${code})`)));
-        child.once('message', (message) => { if (!(0, wire_protocol_js_1.isRecord)(message) || typeof message.base !== 'string')
+        child.once('message', (message) => { if (!(0, helper_values_js_1.record)(message) || typeof message.base !== 'string')
             return failed(new Error(`${label} returned an invalid base URL`)); clearTimeout(timer); resolve(message.base); });
     });
     const response = await fetch(`${base}/api/host`);
     if (!response.ok)
         throw new Error(`${label} descriptor: ${response.status}`);
     const descriptor = await response.json();
-    if (!(0, wire_protocol_js_1.isRecord)(descriptor))
+    if (!(0, helper_values_js_1.record)(descriptor))
         throw new Error(`${label} descriptor is invalid`);
     if (typeof descriptor.hostId !== 'string')
         throw new Error(`${label} descriptor lacks hostId`);

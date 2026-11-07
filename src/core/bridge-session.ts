@@ -17,7 +17,8 @@ import { isDeepStrictEqual } from 'util';
 import { dishDir } from './dish-store';
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
-import { asRecord, decodeBridgeFrame, decodeSideChat, isRecord, type ProtocolRecord } from './wire-protocol';
+import { asRecord, decodeBridgeFrame, decodeSideChat, type ProtocolRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { createExtensionUIState, reduceExtensionUIState } from './extension-ui-state';
@@ -296,9 +297,8 @@ function scanRegistry() {
         continue;
       }
     } else if (entry.pid && !pidAlive(entry.pid)) {
-      // Legacy bridges did not publish a birth marker. Keep live legacy
-      // entries visible, but dead ones are still safe to discard. Destructive
-      // use of a legacy PID requires a bridge handshake in server.js.
+      // Legacy bridges publish no birth marker: keep live entries, discard
+      // dead ones. Destroying a legacy PID still requires a handshake.
       pruneRegisteredSession(entry);
       continue;
     }
@@ -336,11 +336,7 @@ function refreshRegisteredSession(sessionId: NativeSessionId) {
   return getRegisteredSession(sessionId);
 }
 
-/**
- * A live connection to a bridge socket. Mirrors the surface that server.js
- * previously expected from RPCSession: on(event, cb), prompt, abort, setModel,
- * setName, plus a few state fields (alive, turnInProgress, sessionFile, cwd).
- */
+/** A live bridge socket with the prompt/abort/model surface RPCSession exposes. */
 class BridgeSession extends EventEmitter<BridgeEvents> {
   declare id: NativeSessionId;
   declare protocolVersion: unknown;
@@ -670,10 +666,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     return this.send('run_command', { message, deliverAs });
   }
   readTree() { return this.send('tree_read', {}, { timeout: 10000 }); }
-  // Leaf id only — the transcript route needs just the live leaf, and
-  // tree_read serializes the whole session tree per call. Older running
-  // bridge extensions answer "unknown command"; callers fall back to
-  // readTree() (see server.js liveTreeLeafId).
+  // tree_read serializes the whole tree; older bridges answer "unknown
+  // command" and callers fall back to readTree().
   readTreeLeaf() { return this.send('tree_leaf', {}, { timeout: 10000 }); }
   // Branch-summary generation is a full LLM call over the abandoned branch —
   // give it the long prompt-style allowance, not the 30s default.

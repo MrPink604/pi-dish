@@ -11,7 +11,7 @@ import { liveSessionSupports, recoveryRouteId, validateRecoveryRecord } from './
 import type { LiveSession, SessionOwnership } from './session-ownership';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryAttempt, RecoveryRecord } from './session-recovery';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import { errorMessage } from './http-boundary';
 
 export type RecoveryMode = 'off' | 'restore' | 'continue';

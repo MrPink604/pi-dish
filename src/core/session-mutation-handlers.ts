@@ -7,7 +7,7 @@ import { removeExtensionUIDialog } from './extension-ui-state';
 import { ALL_THINKING_LEVEL_NAMES, parseModelId, thinkingLevelNamesFor } from './helper-models.js';
 import * as piSDK from './pi-sdk';
 import { thinkingResult } from './session-api';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import { liveSessionSupports, routeIdentity } from './session-ownership';
 import tmux = require('./tmux');
 import type { LiveSession } from './session-ownership';

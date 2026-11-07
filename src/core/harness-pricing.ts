@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-import { dishDir } from './dish-store';
+import { dishDir, replaceFile } from './dish-store';
 import { getHarness } from './harnesses';
 import { runHarnessModelCatalog } from './harness-feature-commands';
 import * as YAML from 'yaml';
@@ -156,11 +156,7 @@ function loadState(harnessId: string): PricingState {
 }
 
 function persist(harnessId: string, snapshot: PricingSnapshot): void {
-  const file = catalogFile(harnessId);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ updatedAt: snapshot.updatedAt, models: snapshot.models }, null, 2) + '\n', { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  replaceFile(catalogFile(harnessId), JSON.stringify({ updatedAt: snapshot.updatedAt, models: snapshot.models }, null, 2) + '\n', 0o600);
 }
 
 async function runCatalogCommand(harnessId: string, force: boolean): Promise<CatalogModel[]> {

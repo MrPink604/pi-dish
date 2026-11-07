@@ -16,7 +16,8 @@ import fs = require('fs');
 import path = require('path');
 import webpush = require('web-push');
 import dishStore = require('./dish-store');
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
+import { errorMessage } from './http-boundary';
 
 const VAPID_FILE = 'vapid.json';
 const SUBSCRIPTIONS_STORE = 'push-subscriptions.json';
@@ -241,7 +242,7 @@ export function createPushNotifier(ports: PushNotifierPorts): PushNotifier {
         if (!(await send(target, payload, vapid)).gone) return;
         if (now() - Date.parse(target.createdAt) >= GONE_GRACE_MS) { gone.add(target.endpoint); return; }
         message = 'the push service does not recognize this new subscription yet; retry in a minute';
-      } catch (error) { message = error instanceof Error ? error.message : String(error); }
+      } catch (error) { message = errorMessage(error); }
       message = `${new URL(target.endpoint).host}: ${message}`;
       logError(`[push] ${message}`);
       failures.push(message);
@@ -321,7 +322,7 @@ export function createPushNotifier(ports: PushNotifierPorts): PushNotifier {
     sample: tick,
     start() {
       if (timer || stopped) return;
-      timer = setInterval(() => { tick().catch(error => logError(`[push] ${error instanceof Error ? error.message : String(error)}`)); }, SAMPLE_INTERVAL_MS);
+      timer = setInterval(() => { tick().catch(error => logError(`[push] ${errorMessage(error)}`)); }, SAMPLE_INTERVAL_MS);
       timer.unref?.();
     },
     stop() { stopped = true; clearInterval(timer); timer = undefined; },

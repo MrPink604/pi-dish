@@ -5,7 +5,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 (async () => {
     if (process.env.PI_DISH_TEST_LIVE_SESSION) {
         const id = process.env.PI_DISH_TEST_LIVE_SESSION;
@@ -32,7 +32,7 @@ const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
                 while ((end = buffer.indexOf('\n')) >= 0) {
                     const message = JSON.parse(buffer.slice(0, end));
                     buffer = buffer.slice(end + 1);
-                    if (!(0, wire_protocol_js_1.isRecord)(message))
+                    if (!(0, helper_values_js_1.record)(message))
                         throw new Error('Invalid browser fixture command');
                     process.send?.({ type: 'command', message });
                     if (message.command === 'extension_ui_response')
@@ -50,7 +50,7 @@ const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
             sessionId: id, sessionFile, socketPath, pid: process.pid, cwd: '/fixture/project', name: 'Live fixture',
         }));
         process.on('message', (message) => {
-            if (!(0, wire_protocol_js_1.isRecord)(message))
+            if (!(0, helper_values_js_1.record)(message))
                 throw new Error('Invalid browser fixture event');
             const { event, data, entry } = message;
             if (entry)
@@ -59,7 +59,7 @@ const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
                 turnInProgress = true;
             if (event === 'turn_end' || event === 'agent_end')
                 turnInProgress = false;
-            const value = (0, wire_protocol_js_1.isRecord)(data) ? data : {};
+            const value = (0, helper_values_js_1.record)(data) ? data : {};
             if (event === 'extension_ui_request')
                 ui.set(String(value.id || value.widgetKey || value.statusKey), data);
             if (event === 'extension_ui_resolved')

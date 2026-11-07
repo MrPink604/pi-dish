@@ -2,7 +2,7 @@ import fs = require('fs');
 import path = require('path');
 import type { RouteHandler } from './http-boundary';
 import { dishDir } from './dish-store';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 
 const AGENT_DOC_TOPIC_RE = /^[a-z0-9-]{1,64}$/;
 const AGENT_DOC_DESCRIPTION_MAX = 160;

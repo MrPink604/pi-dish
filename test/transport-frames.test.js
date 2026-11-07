@@ -10,6 +10,7 @@ const net = require("node:net");
 const node_child_process_1 = require("node:child_process");
 const node_stream_1 = require("node:stream");
 const wire_protocol_js_1 = require("../lib/wire-protocol.js");
+const helper_values_js_1 = require("../lib/helper-values.js");
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-frames-'));
 process.env.HOME = tmp;
 const { BridgeSession } = require('../lib/bridge-session.js');
@@ -78,7 +79,7 @@ test('bridge socket ignores bad frames and continues through a valid response an
         sock.on('error', () => { });
         sock.on('data', (chunk) => {
             const command = JSON.parse(chunk.toString());
-            assert.ok((0, wire_protocol_js_1.isRecord)(command));
+            assert.ok((0, helper_values_js_1.record)(command));
             const frames = [null, [], { type: 'event', event: 17 },
                 { type: 'response', id: command.id, success: 'true', data: 'invalid' },
                 { type: 'response', id: command.id, success: true, data: 'valid' },
@@ -113,7 +114,7 @@ test('RPC stdio ignores bad response status and still forwards subsequent agent 
     const commandBytes = proc.stdin.read();
     assert.ok(Buffer.isBuffer(commandBytes));
     const command = JSON.parse(commandBytes.toString());
-    assert.ok((0, wire_protocol_js_1.isRecord)(command));
+    assert.ok((0, helper_values_js_1.record)(command));
     const event = { type: 'future_event', preserved: true };
     const frames = [null, [], { type: 'response', id: command.id, success: 'true', data: 'invalid' },
         { type: 'response', id: command.id, success: true, data: 'valid' }, event];
@@ -126,7 +127,7 @@ test('RPC reconstructs text, thinking and tool-call deltas without mutating prio
     const { session } = rpcFixture(t);
     const snapshots = [];
     session.on('message_update', data => {
-        assert.ok((0, wire_protocol_js_1.isRecord)(data) && (0, wire_protocol_js_1.isRecord)(data.message));
+        assert.ok((0, helper_values_js_1.record)(data) && (0, helper_values_js_1.record)(data.message));
         snapshots.push(data.message);
     });
     const start = { role: 'assistant', content: [], timestamp: 123, customMetadata: { kept: true } };
@@ -150,7 +151,7 @@ test('RPC reconstructs text, thinking and tool-call deltas without mutating prio
     const firstSnapshot = snapshots[0];
     assert.ok(firstSnapshot && Array.isArray(firstSnapshot.content));
     const firstBlock = firstSnapshot.content[0];
-    assert.ok((0, wire_protocol_js_1.isRecord)(firstBlock));
+    assert.ok((0, helper_values_js_1.record)(firstBlock));
     assert.equal(firstBlock.text, '', 'later deltas cannot mutate already emitted snapshots');
     for (const event of [
         { type: 'text_delta', contentIndex: -1, delta: 'bad' },

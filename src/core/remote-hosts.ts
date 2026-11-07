@@ -19,7 +19,7 @@ import type { Readable, Writable } from 'node:stream';
 import { dishDir, readStore } from './dish-store';
 import { hostBundle, type HostBundle } from './host-bundle';
 import { readVapidKeys } from './push-notifications';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 
 export interface DirectRemote {
   name: string;
@@ -616,7 +616,7 @@ async function deployForward(remote: SshRemote, st: RemoteState, forward: Forwar
   }
 }
 
-/** Kill every ssh child. Hooked into the server's close (server.js). */
+/** Kill every ssh child; the server calls this on close. */
 export function shutdown(): void {
   for (const st of states.values()) {
     if (st.forward) closeForward(st, st.forward);

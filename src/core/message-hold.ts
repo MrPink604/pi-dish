@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { dishDir } from './dish-store';
+import { dishDir, replaceFileDurably } from './dish-store';
 import type { LiveSession } from './session-ownership';
 
 export interface PeerSender { id: string; ref: string; name: string }
@@ -62,20 +62,8 @@ function readBatches(file: string): Batch[] {
 }
 
 function saveBatches(file: string, batches: Batch[]): void {
-  const dir = path.dirname(file);
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  try {
-    fs.writeFileSync(tmp, JSON.stringify({ batches }), { mode: 0o600 });
-    const fd = fs.openSync(tmp, 'r');
-    try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.renameSync(tmp, file);
-    const dirFd = fs.openSync(dir, 'r');
-    try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
-  } catch (error) {
-    try { fs.unlinkSync(tmp); } catch {}
-    throw error;
-  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  replaceFileDurably(file, JSON.stringify({ batches }));
 }
 
 function batchText(batch: Batch): string {

@@ -6,7 +6,8 @@ import path = require('node:path');
 import net = require('node:net');
 import { ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import { decodeRPCFrame, decodeBridgeFrame, isRecord, type ProtocolRecord } from '../lib/wire-protocol.js';
+import { decodeRPCFrame, decodeBridgeFrame, type ProtocolRecord } from '../lib/wire-protocol.js';
+import { record as isRecord } from '../lib/helper-values.js';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-frames-'));
 process.env.HOME = tmp;

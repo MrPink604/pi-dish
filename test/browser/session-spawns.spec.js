@@ -1,7 +1,7 @@
 // Generated test/tool from test/browser/session-spawns.spec.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const fixtures_js_1 = require("./fixtures.js");
 (0, fixtures_js_1.test)('a delayed spawn acceptance retains its submitted refine draft and leaves a newer takeover visible', async ({ page, fleet }) => {
     let post, status;
@@ -76,7 +76,7 @@ const fixtures_js_1 = require("./fixtures.js");
     const spawnRoute = (0, fixtures_js_1.requiredRoute)(post);
     (0, fixtures_js_1.expect)(new URL(spawnRoute.request().url()).origin).toBe(fleet.self.base);
     const payload = spawnRoute.request().postDataJSON();
-    if (!(0, wire_protocol_js_1.isRecord)(payload))
+    if (!(0, helper_values_js_1.record)(payload))
         throw new Error('Invalid workspace spawn payload');
     (0, fixtures_js_1.expect)(payload).toMatchObject({ cwd: '/old-workspace', harness: 'pi', async: true });
     (0, fixtures_js_1.expect)(payload.target).toBeUndefined();

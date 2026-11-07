@@ -1,12 +1,8 @@
 // Generated from src/core/helper-refs.ts; edit that source and run npm run build:core.
 import type { HelperSession, HelperHost, RefContextEntry } from './helper-types';
 /**
- * The shortest id prefix of at least `minLen` characters that no peer id
- * shares, falling back to the whole id. A blind 8-character slice is fine
- * for a uuid and useless for a timestamp corpus, where three sessions
- * started the same day all begin `2026-08-`; the owning server rejects an
- * ambiguous prefix, so a ref built without looking at the corpus can simply
- * fail to resolve. Every caller that *has* the corpus should widen with it.
+ * Shortest id prefix of `minLen`+ characters no peer shares. Blind slicing
+ * collides on timestamp corpora, and the server rejects ambiguous prefixes.
  */
 export declare function uniqueSessionPrefix(id: unknown, peerIds?: readonly unknown[] | null, minLen?: number): string;
 export declare const SESSION_ROUTE_KEY_PREFIX = "~sk1_";

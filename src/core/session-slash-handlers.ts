@@ -6,7 +6,7 @@ import { errorMessage, errorStatus, httpError } from './http-boundary';
 import { parseModelId, thinkingLevelNamesFor } from './helper-models.js';
 import { getHarness } from './harnesses';
 import { liveSessionSupports } from './session-ownership';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import tmux = require('./tmux');
 import { sideChatSupported } from './session-mutation-handlers';
 import type { HarnessDescriptor, HostBuiltin } from './contracts';

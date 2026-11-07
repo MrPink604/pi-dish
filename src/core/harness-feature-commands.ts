@@ -29,7 +29,7 @@ export function harnessCommandAvailable(descriptor: HarnessDescriptor): boolean 
 }
 
 function resolveHarnessCwd(value: unknown): string {
-  const home = process.env.HOME || os.homedir();
+  const home = os.homedir();
   if (typeof value !== 'string' || !value.trim()) return process.cwd();
   const trimmed = value.trim();
   const expanded = trimmed === '~' ? home

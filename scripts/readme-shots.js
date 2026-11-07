@@ -19,7 +19,7 @@ const node_events_1 = require("node:events");
 const promises_1 = require("node:timers/promises");
 const net = require("node:net");
 const path = require("node:path");
-const wire_protocol_js_1 = require("../lib/wire-protocol.js");
+const helper_values_js_1 = require("../lib/helper-values.js");
 const REPO = path.resolve(__dirname, '..');
 const OUT = process.argv[2] || path.join(REPO, 'docs', 'screenshots');
 fs.mkdirSync(OUT, { recursive: true });
@@ -139,7 +139,7 @@ function makeBridge(socketPath, { models, onPrompt } = {}) {
                 catch {
                     continue;
                 }
-                if (!(0, wire_protocol_js_1.isRecord)(message))
+                if (!(0, helper_values_js_1.record)(message))
                     continue;
                 let data = {};
                 if (message.command === 'get_available_models')

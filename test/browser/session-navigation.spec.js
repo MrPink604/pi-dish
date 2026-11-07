@@ -1,7 +1,7 @@
 // Generated test/tool from test/browser/session-navigation.spec.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const fixtures_js_1 = require("./fixtures.js");
 const lineageNode = (id, name, children = [], isActive = true) => ({
     session: { id, name, isActive, lastActivity: '2026-09-11T00:00:00Z' },
@@ -90,7 +90,7 @@ const lineagePayload = (childName = 'Related child') => ({
     await (0, fixtures_js_1.expect)(page.locator('#subagentsFollowUpBtn')).toBeVisible();
     await page.fill('#subagentsSignalInput', 'focus on src/auth');
     await page.locator('#subagentsSteerBtn').click();
-    await fixtures_js_1.expect.poll(() => steers.map(entry => (0, wire_protocol_js_1.isRecord)(entry) ? entry.message : undefined)).toEqual(['focus on src/auth']);
+    await fixtures_js_1.expect.poll(() => steers.map(entry => (0, helper_values_js_1.record)(entry) ? entry.message : undefined)).toEqual(['focus on src/auth']);
     await (0, fixtures_js_1.expect)(page.locator('#subagentsSignalStatus')).toContainText('Steered');
     await (0, fixtures_js_1.expect)(page.locator('#subagentsSignalInput')).toHaveValue('');
     await (0, fixtures_js_1.expect)(fleet.row(fleet.self, fixtures_js_1.ROOT)).toHaveClass(/\bactive\b/);

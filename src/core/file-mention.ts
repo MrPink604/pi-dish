@@ -1,23 +1,9 @@
 /**
- * Resolve a file mentioned in chat ("findings.md", `lib/tmux.js:42`) to a
- * real path using the session as context, and read it for the file viewer.
- *
- * Agents write intermediate outputs (findings.md, plan.md) deep inside the
- * project or in a scratchpad and then refer to them by bare filename. The
- * session's own tool calls know the full paths, so resolution mines them:
- * read/write/edit `path` args, `cwd` args, and absolute/`~` path tokens
- * inside bash command strings — most recent reference wins. A qualified
- * mention (contains '/') prefers the exact cwd-relative file; a bare
- * basename prefers the tool-call trail (the agent's "findings.md" means the
- * one it just wrote, not a stale one at the repo root). Last resort is the
- * fuzzy file search under the session cwd (files created via bash heredocs
- * never appear in structured tool args).
- *
- * Reads are gated to the session's reach: the cwd subtree plus paths/dirs
- * its tool calls touched. Containment is lexical (path.resolve normalizes
- * ".." before the check) — the threat model is a LAN client typing an
- * arbitrary ?path=, not a hostile agent planting symlinks; the agent
- * already has a shell.
+ * Resolve a chat-mentioned path ("findings.md", `lib/tmux.js:42`) via the
+ * session's own tool-call trail (most recent reference wins), falling back to
+ * fuzzy search under the cwd for files bash created. Reads are gated to the
+ * cwd subtree plus touched paths; containment is lexical, which stops a LAN
+ * client's arbitrary ?path=, not a hostile agent that already has a shell.
  */
 import * as fs from 'fs';
 import * as os from 'os';

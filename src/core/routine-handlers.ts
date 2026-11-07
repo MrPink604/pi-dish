@@ -2,6 +2,7 @@ import path = require('path');
 import os = require('os');
 import type { RequestHandler, Response } from 'express';
 import type { ParsedQs } from 'qs';
+import { requestBody } from './http-boundary';
 import { getHarness } from './harnesses';
 import * as routinesStore from './routines';
 import type { Routine, RoutineInvocation } from './routines';
@@ -33,10 +34,6 @@ interface RoutineError extends Error {
   invocation?: RoutineInvocation;
   retryAfterSec?: number;
   lastInvocation?: RoutineInvocation | null;
-}
-
-function bodyFields(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
 
 const INVOCATION_ATTR_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
@@ -102,7 +99,7 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
   };
 
   const create: RoutineHandler = async (req, res) => {
-    const input = bodyFields(req.body);
+    const input = requestBody(req);
     try {
       await validateRoutinePilot(input.harness, input.model, input.thinking, input.cwd);
       res.status(201).json({ routine: routinesStore.createRoutine(input) });
@@ -120,7 +117,7 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
   const update: RoutineHandler = async (req, res) => {
     const existing = routinesStore.getRoutine(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Routine not found' });
-    const patch = bodyFields(req.body);
+    const patch = requestBody(req);
     try {
       await validateRoutinePilot(
         patch.harness ?? existing.harness,
@@ -144,7 +141,7 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
   const invoke: RoutineHandler = async (req, res) => {
     const routine = routinesStore.getRoutine(req.params.id);
     if (!routine) return res.status(404).json({ error: 'Routine not found' });
-    const body = bodyFields(req.body);
+    const body = requestBody(req);
     const input = body.input === undefined ? null : body.input;
     if (routinesStore.inputBytes(input) > routinesStore.MAX_INPUT_BYTES) {
       return res.status(413).json({ error: `input must serialize to at most ${routinesStore.MAX_INPUT_BYTES} bytes` });

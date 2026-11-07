@@ -8,6 +8,7 @@ import * as shares from './shares';
 import * as comments from './comments';
 import { canonicalSessionId } from './session-key';
 import { registryIdentity, routeIdentity, routeSessionId } from './session-ownership';
+import { asRecord } from './wire-protocol';
 import { readFileForViewer } from './file-mention';
 import { renderFilePage } from './file-page';
 import { readOmpExportData } from './omp-export';
@@ -72,10 +73,6 @@ interface ShareExportCacheEntry {
 const PAGE_COMMENTS_HEADER = 'x-pi-dish-page-comments';
 
 // Stored rows and HTTP bodies are external; members stay unknown until checked.
-function fields(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
-
 function commentBody(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
   return text && text.length <= 10000 ? text : null;
@@ -244,7 +241,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   function cleanAnchor(value: unknown): comments.CommentAnchor | null {
     if (!value || typeof value !== 'object') return null;
-    const raw = fields(value);
+    const raw = asRecord(value);
     const type = raw.type === 'lines' ? 'lines' : raw.type === 'text' ? 'text' : null;
     if (!type) return null;
     const anchor: comments.CommentAnchor = { type };
@@ -261,7 +258,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   function cleanCommentTarget(value: unknown): comments.CommentTarget | null {
     if (!value || typeof value !== 'object') return null;
-    const raw = fields(value);
+    const raw = asRecord(value);
     const anchor = cleanAnchor(raw.anchor);
     if (!anchor) return null;
     if (raw.kind === 'file') {
@@ -294,7 +291,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   }
 
   const createComment: PublicationHandler = (req, res) => {
-    const input = fields(req.body);
+    const input = asRecord(req.body);
     const body = commentBody(input.body);
     const target = cleanCommentTarget(input.target);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
@@ -320,8 +317,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   }
 
   function commentIndexEntry(comment: comments.CommentDto) {
-    const target = fields(comment.target || {});
-    const anchor = fields(target.anchor || {});
+    const target = asRecord(comment.target || {});
+    const anchor = asRecord(target.anchor || {});
     const indexedAnchor: Record<string, unknown> = { type: anchor.type };
     for (const key of ['startLine', 'endLine', 'oldStart', 'oldEnd', 'newStart', 'newEnd']) {
       if (Number.isInteger(anchor[key])) indexedAnchor[key] = anchor[key];
@@ -360,7 +357,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   // Fetch an agent-selected group from the inventory. This is a state-free
   // read; acknowledgment remains a separate, explicit close operation.
   const getComments: PublicationHandler = (req, res) => {
-    const input = fields(req.body);
+    const input = asRecord(req.body);
     const sessionId = shortString(input.sessionId, 512);
     const rawIds = input.ids;
     if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
@@ -386,7 +383,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       return null;
     }
     let requestedSessionId = null;
-    try { requestedSessionId = canonicalSessionId(fields(req.body).sessionId); } catch {}
+    try { requestedSessionId = canonicalSessionId(asRecord(req.body).sessionId); } catch {}
     if (!requestedSessionId || requestedSessionId !== existing.sessionId) {
       res.status(403).json({ error: 'comment belongs to a different session' });
       return null;
@@ -403,7 +400,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   const updateComment: PublicationHandler = (req, res) => {
     if (!resolveOpenComment(req, res)) return;
-    const body = commentBody(fields(req.body).body);
+    const body = commentBody(asRecord(req.body).body);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     const comment = comments.updateComment(req.params.id, body);
     if (!comment) return res.status(409).json({ error: 'comment already acknowledged' });
@@ -436,7 +433,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   // them, and access-handlers' pageCommentTransport answers the opaque origin.
 
   function pageCommentView(comment: comments.CommentDto | comments.CommentRecord) {
-    const anchor = fields(fields(comment.target).anchor);
+    const anchor = asRecord(asRecord(comment.target).anchor);
     return {
       id: comment.id,
       body: comment.body,
@@ -456,7 +453,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   function openPageComment(req: PublicationRequest, res: PublicationResponse) {
     if (!commentablePage(req, res)) return null;
     const existing = comments.getComment(req.params.id);
-    const target = fields(existing?.target);
+    const target = asRecord(existing?.target);
     if (!existing || target.kind !== 'page' || target.pageToken !== req.params.token) {
       res.status(404).json({ error: 'comment not found' });
       return null;
@@ -477,7 +474,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   const createPageComment: PublicationHandler = (req, res) => {
     const page = commentablePage(req, res);
     if (!page) return;
-    const input = fields(req.body);
+    const input = asRecord(req.body);
     const body = commentBody(input.body);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     const target = cleanCommentTarget({ kind: 'page', pageToken: req.params.token, anchor: input.anchor });
@@ -490,7 +487,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   const updatePageComment: PublicationHandler = (req, res) => {
     if (!openPageComment(req, res)) return;
-    const body = commentBody(fields(req.body).body);
+    const body = commentBody(asRecord(req.body).body);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     const comment = comments.updateComment(req.params.id, body);
     if (!comment) return res.status(409).json({ error: 'comment already acknowledged' });
@@ -526,7 +523,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   // rule would only be theater: an agent can copy any file into its cwd).
   // The public share listener never registers, only serves known tokens.
   const createPage: PublicationHandler = (req, res) => {
-    const input = fields(req.body);
+    const input = asRecord(req.body);
     const { path: rawPath, title, sessionId, renderer } = input;
     const hasSessionId = Object.hasOwn(input, 'sessionId');
     if (typeof rawPath !== 'string' || !rawPath) {

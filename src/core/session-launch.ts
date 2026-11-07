@@ -175,7 +175,7 @@ function validateBridgeSocketConfig(env: HarnessEnvironment): void {
   if (override && !path.isAbsolute(override)) {
     throw new BridgeSocketConfigError('PI_DISH_SOCKET_DIR must be an absolute path');
   }
-  const socketDir = override ? path.resolve(override) : path.join(dishDir(), 'sockets');
+  const socketDir = override ? path.resolve(override) : path.join(env.HOME || os.homedir(), '.pi', 'dish', 'sockets');
   const socketPath = path.join(socketDir, BRIDGE_SOCKET_BASENAME);
   const bytes = Buffer.byteLength(socketPath);
   if (bytes > MAX_BRIDGE_SOCKET_PATH_BYTES) {
@@ -376,7 +376,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     if (!descriptor.rpcFallback) return true;
     if (mode === 'tmux') return true;
     if (headlessTmuxBroken) return false;
-    const home = process.env.HOME || os.homedir();
+    const home = os.homedir();
     return fs.existsSync(path.join(home, '.pi', 'agent', 'extensions', 'pi-dish-bridge'));
   }
 
@@ -407,7 +407,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     const env = { ...spec.env };
     // A persistent tmux server may carry stale HOME/socket settings. Command
     // assignments win, including an explicitly empty socket override.
-    if (!Object.hasOwn(env, 'HOME')) env.HOME = process.env.HOME || os.homedir();
+    if (!Object.hasOwn(env, 'HOME')) env.HOME = os.homedir();
     if (process.env.PI_DISH_URL) env.PI_DISH_URL = process.env.PI_DISH_URL;
     const launchCwd = cwd ? String(cwd) : env.HOME!;
     let spawnToken = '';

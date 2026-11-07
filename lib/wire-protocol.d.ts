@@ -26,7 +26,6 @@ export type BridgeFrame = ResponseFrame | {
     event: string;
     data: unknown;
 };
-export declare const isRecord: (value: unknown) => value is ProtocolRecord;
 /** Read-only view of wire data whose feature payloads stay unvalidated. */
 export declare function asRecord(value: unknown): ProtocolRecord;
 /**

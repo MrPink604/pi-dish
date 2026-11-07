@@ -2,7 +2,6 @@ import type { ImageBlock } from './helper-types';
 import { record } from './helper-values';
 import { truncate } from './helper-format';
 
-
 export function extractTextContent(content: unknown) {
   if (!content) return '';
   if (typeof content === 'string') return content;
@@ -38,7 +37,6 @@ export function ipythonCodeSummary(code: unknown) {
   return truncate(inner, 60);
 }
 
-
 export function getToolSummary(toolName: string, args: unknown) {
   if (!record(args)) return '';
   if (toolName === 'Bash' || toolName === 'bash') return typeof args.command === 'string' && args.command ? truncate(args.command.split('\n')[0], 60) : '';
@@ -69,7 +67,6 @@ export function parseIpythonResult(text: unknown) {
   return { exitCode: Number(m[1]), output: pythonReprUnescape(m[3]), durationMs: m[4] != null ? Math.round(Number(m[4]) * 1000) : null };
 }
 
-
 export function pythonReprUnescape(text: string) {
   return text.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (_all, seq) => {
     if (seq[0] === 'x') return String.fromCharCode(parseInt(seq.slice(1), 16));
@@ -91,7 +88,6 @@ export function messageHasVisibleText(msg: unknown) {
   if (typeof msg.content === 'string') return !!msg.content;
   return Array.isArray(msg.content) && msg.content.some((b: unknown) => record(b) && b.type === 'text' && typeof b.text === 'string' && !!b.text);
 }
-
 
 export function getToolOutputText(partialResult: unknown) {
   if (!record(partialResult) || !Array.isArray(partialResult.content)) return '';

@@ -7,6 +7,7 @@ import { record as isRecord } from './helper-values';
 import type { HarnessDescriptor, HarnessId, NativeSessionId } from './contracts';
 import type { DiscoveryCandidate, DiscoveryOptions, DiscoveryResult } from './session-source';
 import { readSessionTailEntry } from './session-files';
+import { errorMessage } from './http-boundary';
 
 interface SessionHeader { id: string | null; cwd: string | null; parentSession: string | null; }
 type Candidate = DiscoveryCandidate;
@@ -19,7 +20,6 @@ interface HarnessDiscoveryOptions extends DiscoveryOptions {
   privateRoots?: Partial<Record<HarnessId, string>>;
 }
 interface FindOptions extends DiscoveryOptions { allowPartial?: boolean; }
-
 
 const DEFAULT_MAX_DEPTH = 4;
 const DEFAULT_MAX_FILES = 20000;
@@ -490,7 +490,7 @@ function inspectSubsessionExits(parentFile: unknown, options: DiscoveryOptions =
       ids.add(id);
       return true;
     } catch (error) {
-      unknown(`Cannot inspect ${path.basename(file)}: ${error instanceof Error ? error.message : String(error)}`);
+      unknown(`Cannot inspect ${path.basename(file)}: ${errorMessage(error)}`);
       return false;
     }
   };
@@ -531,7 +531,7 @@ function inspectSubsessionExits(parentFile: unknown, options: DiscoveryOptions =
         }
       }
     } catch (error) {
-      unknown(`Cannot completely inspect descendants: ${error instanceof Error ? error.message : String(error)}`);
+      unknown(`Cannot completely inspect descendants: ${errorMessage(error)}`);
     } finally {
       if (dir) try { dir.closeSync(); } catch { unknown('Cannot finish descendant directory inspection.'); }
     }

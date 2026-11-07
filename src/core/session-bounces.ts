@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { setTimeout as delay } from 'timers/promises';
 import { BridgeSession, sameRegistryClaim } from './bridge-session';
 import { getHarness } from './harnesses';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import { errorMessage } from './http-boundary';
 import { inspectSubsessionExits } from './session-discovery';
 import { LifecycleInterruption, sameProcessIdentity } from './session-ownership';

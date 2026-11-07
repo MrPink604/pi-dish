@@ -1,4 +1,6 @@
 import type { RequestHandler } from 'express';
+import { requestBody } from './http-boundary';
+import { asRecord } from './wire-protocol';
 import * as harnessSettings from './harness-feature-settings';
 import * as stt from './stt';
 import { recoveryMode } from './recovery-runner';
@@ -85,15 +87,11 @@ function settingsForClient(settings: Record<string, unknown>) {
   };
 }
 
-function optionalRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
-
 function normalizeUsageLimit(value: unknown) {
   if (!value || typeof value !== 'object') return null;
-  const limit = optionalRecord(value);
-  const amount = optionalRecord(limit.amount);
-  const window = optionalRecord(limit.window);
+  const limit = asRecord(value);
+  const amount = asRecord(limit.amount);
+  const window = asRecord(limit.window);
   const usedFraction = Number(amount.usedFraction);
   if (typeof limit.label !== 'string' || !Number.isFinite(usedFraction)) return null;
   const resetsAt = Number(window.resetsAt);
@@ -112,9 +110,9 @@ function normalizeUsageLimit(value: unknown) {
 // the display fields — upstream ids/programs/limit maps stay off the wire.
 function normalizeResetCredits(value: unknown) {
   if (!value || typeof value !== 'object') return null;
-  const raw = optionalRecord(value);
+  const raw = asRecord(value);
   const credits = (Array.isArray(raw.credits) ? raw.credits as unknown[] : []).flatMap(item => {
-    const credit = optionalRecord(item);
+    const credit = asRecord(item);
     if (credit.status !== undefined && credit.status !== 'available') return [];
     const expiresAt = Date.parse(String(credit.expiresAt));
     const remainingCount = Number(credit.remainingCount);
@@ -136,11 +134,11 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
       try {
         const parsed = await runHarnessJsonCommand(d, d.argv.usage!);
         if (parsed === null || parsed === undefined) throw new TypeError(`Cannot read properties of ${parsed} (reading 'reports')`);
-        const rawReports = optionalRecord(parsed).reports;
+        const rawReports = asRecord(parsed).reports;
         // Even redacted upstream reports can contain account IDs/emails.
         const reports = (Array.isArray(rawReports) ? rawReports as unknown[] : []).map(value => {
-          const report = optionalRecord(value);
-          const metadata = optionalRecord(report.metadata);
+          const report = asRecord(value);
+          const metadata = asRecord(report.metadata);
           return {
             provider: String(report.provider || 'unknown').slice(0, 60),
             fetchedAt: Number.isFinite(Number(report.fetchedAt)) ? Number(report.fetchedAt) : null,
@@ -151,7 +149,7 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
         }).filter(report => report.limits.length);
         return { harness: d.id, label: d.label, reports };
       } catch (e) {
-        return { harness: d.id, label: d.label, error: optionalRecord(e).message };
+        return { harness: d.id, label: d.label, error: asRecord(e).message };
       }
     }));
     res.json({ generatedAt: Date.now(), harnesses: results });
@@ -163,7 +161,7 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
   };
   const settings: FeatureHandler = (_req, res) => res.json(settingsForClient(ports.readDishSettings()));
   const updateSettings: FeatureHandler = (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
+    const body = requestBody(req);
     const settings = ports.readDishSettings();
     if ('monthlyBudgetUsd' in body) {
       const value = body.monthlyBudgetUsd;

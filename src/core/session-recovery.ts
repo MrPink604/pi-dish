@@ -1,8 +1,8 @@
 import fs = require('fs');
 import path = require('path');
 import crypto = require('crypto');
-import { dishDir } from './dish-store';
-import { isRecord } from './wire-protocol';
+import { dishDir, replaceFileDurably, syncDirectory } from './dish-store';
+import { record as isRecord } from './helper-values';
 
 export type RecoveryActivity = 'idle' | 'running' | 'uncertain';
 export interface RecoveryCheckpoint {
@@ -124,11 +124,6 @@ function fileFor(kind: 'observations' | 'controls', harnessId: string, nativeSes
   return path.join(dishDir(), 'recovery', kind, `${key}.json`);
 }
 
-function syncDirectory(dir: string): void {
-  const fd = fs.openSync(dir, 'r');
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-}
-
 function privateDirectory(dir: string): void {
   const firstCreated = fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.chmodSync(dir, 0o700);
@@ -145,22 +140,8 @@ function privateDirectory(dir: string): void {
 }
 
 function atomicWrite(file: string, value: object): void {
-  const dir = path.dirname(file);
-  privateDirectory(dir);
-  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  let fd: number | undefined;
-  try {
-    fd = fs.openSync(tmp, 'wx', 0o600);
-    fs.writeFileSync(fd, JSON.stringify(value));
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = undefined;
-    fs.renameSync(tmp, file);
-    syncDirectory(dir);
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd);
-    try { fs.unlinkSync(tmp); } catch {}
-  }
+  privateDirectory(path.dirname(file));
+  replaceFileDurably(file, JSON.stringify(value));
 }
 
 function readJson(file: string): unknown {

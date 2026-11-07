@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import { cacheRetentionRevision, loadCacheRetentionConfig } from './cache-retention.js';
 import { cacheExpiryForMessage, hasCacheActivity, isHardCacheMiss, sessionInfoFromEntries } from './session-metadata.js';
-import { isRecord } from './wire-protocol.js';
+import { record as isRecord } from './helper-values.js';
 import { applyLearnedCacheExpiry } from './cache-lifetime.js';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata.js';
 import { COST_KEYS, TOKEN_KEYS } from './session-index-data.js';

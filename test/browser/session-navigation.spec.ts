@@ -1,5 +1,5 @@
 import type { Route } from '@playwright/test';
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 import { test, expect, ROOT, CHILD, requiredRoute } from './fixtures.js';
 interface FixtureLineageSession {
   id: string; name: string; isActive?: boolean; lastActivity?: string; agentId?: string;

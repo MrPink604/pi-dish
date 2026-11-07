@@ -6,12 +6,12 @@
  * sees a partial id.
  */
 import type { HostId } from './contracts';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import crypto = require('crypto');
 import fs = require('fs');
 import os = require('os');
 import path = require('path');
-import { dishDir, readDishSettings } from './dish-store';
+import { dishDir, readDishSettings, replaceFile } from './dish-store';
 
 const memo = new Map<string, HostId>(); // resolved host-id path -> uuid
 
@@ -37,10 +37,7 @@ function getHostId(): HostId {
   if (!id) {
     id = crypto.randomUUID() as HostId;
     try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-      fs.writeFileSync(tmp, id + '\n');
-      fs.renameSync(tmp, file);
+      replaceFile(file, id + '\n');
       // Two processes generating at once both rename; the loser must adopt
       // whichever id actually landed on disk, not the one it minted.
       id = readHostIdFile(file) || id;
