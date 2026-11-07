@@ -1,5 +1,4 @@
-import type { ApiRequest } from './api-client';
-import { errorMessage } from './api-client';
+import { errorMessage, type ApiRequest } from './api-client';
 import type { HostDirectory } from './host-directory';
 import type { createHostConnections } from './host-connections';
 import type { createHostDiscovery } from './host-discovery';

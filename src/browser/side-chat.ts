@@ -1,6 +1,5 @@
 import { record } from '../core/helper-values';
-import { ApiHttpError, errorMessage, sendJson } from './api-client';
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { ApiHttpError, errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 
 export type SideChatTurnStatus = 'running' | 'complete' | 'error' | 'cancelled';

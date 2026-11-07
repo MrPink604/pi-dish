@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint, RequestOptions } from './api-client';
-import { errorMessage } from './api-client';
+import { errorMessage, jsonResponse, type ApiRequest, type HostEndpoint, type RequestOptions } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { createFileViews } from './file-views';
 import type { AnchoredComment, CommentDraft, CommentAnchor } from './anchored-comment-data';
@@ -46,10 +45,7 @@ export function createAnchoredComments(options: {
   async function request(view: ViewOwner, path: string, init?: RequestOptions): Promise<unknown> {
     const endpoint = options.host(view.owner.host);
     if (!owns(view) || !endpoint || endpoint.base !== view.endpoint.base) throw new Error('Comment view changed');
-    const response = await options.request({ ...view.endpoint, token: endpoint.token }, path, init);
-    const data: unknown = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
-    return data;
+    return jsonResponse(await options.request({ ...view.endpoint, token: endpoint.token }, path, init));
   }
   function position() {
     const entry = bubble; if (!ownsBubble(entry)) return;

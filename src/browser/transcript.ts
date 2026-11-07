@@ -1,10 +1,8 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { errorMessage } from './api-client';
+import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { RenderMessage } from './message-data';
 import { sessionRefKey } from './helper-identity';
 import { escapeHtml } from '../core/helper-format';
-import { record } from '../core/helper-values';
 import { createTranscriptCache } from './transcript-cache';
 import type { TranscriptCursors } from './transcript-cache';
 import { splitToolGroupRanges } from './message-groups';
@@ -43,7 +41,7 @@ export function createTranscript(options: {
     const controller = new AbortController(); requests.add(controller);
     try {
       const response = await options.request({ ...owner.endpoint, token: endpoint.token }, `/api/sessions/${encodeURIComponent(owner.selection.id)}/messages?${suffix}`, { signal: controller.signal });
-      const value: unknown = await response.json(); if (!response.ok) throw new Error(record(value) && typeof value.error === 'string' ? value.error : `Transcript request failed (${response.status})`);
+      const value: unknown = await response.json(); if (!response.ok) throw new Error(responseError(response, value, `Transcript request failed (${response.status})`));
       return decodeTranscriptPage(value);
     } finally { requests.delete(controller); }
   }

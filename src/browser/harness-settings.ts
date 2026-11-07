@@ -1,5 +1,4 @@
-import type { ApiRequest } from './api-client';
-import { errorMessage, modelCatalogUrl } from './api-client';
+import { ApiHttpError, errorMessage, jsonResponse, modelCatalogUrl, type ApiRequest } from './api-client';
 import { sameDirectoryHost } from './directory-catalog';
 import type { DirectoryHost } from './directory-catalog';
 import { decodeModelCatalog } from '../core/session-api';
@@ -106,21 +105,14 @@ export function createHarnessSettings(options: {
         return { ...role, value, override: effectiveValue && effectiveValue !== value ? effectiveValue : null };
       });
   }
-  class RequestError extends Error {
-    constructor(message: string, readonly status: number) { super(message); }
-  }
   async function request(host: Readonly<DirectoryHost>, url: string, body?: unknown): Promise<unknown> {
-    const response = await options.request(host, url, body === undefined ? undefined : {
+    return jsonResponse(await options.request(host, url, body === undefined ? undefined : {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    const data: unknown = await response.json().catch(() => null);
-    if (!response.ok) throw new RequestError(data && typeof data === 'object' && 'error' in data
-      && typeof data.error === 'string' && data.error ? data.error : `HTTP ${response.status}`, response.status);
-    return data;
+    }));
   }
   async function settle<T>(promise: Promise<T>): Promise<{ value: T; error?: undefined; status?: undefined } | { value?: undefined; error: string; status: number | null }> {
     try { return { value: await promise }; } catch (error) {
-      return { error: errorMessage(error), status: error instanceof RequestError ? error.status : null };
+      return { error: errorMessage(error), status: error instanceof ApiHttpError ? error.status : null };
     }
   }
   function hostChanged(): void {

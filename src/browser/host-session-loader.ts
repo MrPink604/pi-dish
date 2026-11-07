@@ -1,5 +1,4 @@
-import { ApiHttpError } from './api-client';
-import type { HostEndpoint, RequestOptions } from './api-client';
+import { ApiHttpError, type HostEndpoint, type RequestOptions } from './api-client';
 import type { SessionList } from '../core/session-api';
 import { hostKeyOf } from './host-connections';
 import type { ConnectionHost, HostConnectionEvent } from './host-connections';

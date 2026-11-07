@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { sendJson, errorMessage, responseError, sameEndpoint } from './api-client';
+import { errorMessage, responseError, sameEndpoint, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import { requiredElement } from './dom';
 import type { SelectionOwner, SessionState } from './session-state';
 import { formatRelativeTime } from './helper-format';

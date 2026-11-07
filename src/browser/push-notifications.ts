@@ -1,5 +1,4 @@
-import { errorMessage, sendJson } from './api-client';
-import type { ApiRequest } from './api-client';
+import { errorMessage, sendJson, type ApiRequest } from './api-client';
 import type { BrowserHost } from './host-view';
 import { record } from '../core/helper-values';
 import { escapeHtml } from '../core/helper-format';

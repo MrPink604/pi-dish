@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint, RequestOptions } from './api-client';
-import { errorMessage, readJson, responseError } from './api-client';
+import { errorMessage, jsonResponse, responseError, type ApiRequest, type HostEndpoint, type RequestOptions } from './api-client';
 import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner, SessionEntry } from './session-state';
 import type { SessionShare, PublishedPage } from './session-info-data';
@@ -33,9 +32,7 @@ export function createSessionInfo(options: {
   }
   function sessionSupports(session: SessionEntry | undefined, capability: string) { return session?.capabilities?.[capability] !== false; }
   async function json(host: HostEndpoint, path: string, init?: RequestOptions): Promise<unknown> {
-    const response = await apiFetch(host, path, init), data = await readJson(response);
-    if (!response.ok) throw new Error(responseError(response, data));
-    return data;
+    return jsonResponse(await apiFetch(host, path, init));
   }
   async function shareFor(host: HostEndpoint, id: string): Promise<SessionShare | null> {
     const response = await apiFetch(host, `/api/sessions/${encodeURIComponent(id)}/share`);

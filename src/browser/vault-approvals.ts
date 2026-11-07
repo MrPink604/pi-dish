@@ -1,5 +1,4 @@
-import { ApiHttpError, sendJson, errorMessage } from './api-client';
-import type { ApiRequest } from './api-client';
+import { ApiHttpError, errorMessage, sendJson, type ApiRequest } from './api-client';
 import { decodeVaultOverview, vaultCardsHtml, vaultPanelHtml, vaultRequestSession } from './vault-approvals-data';
 import type { VaultOverviewView, VaultRequestView, VaultSessionCandidate } from './vault-approvals-data';
 

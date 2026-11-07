@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { errorMessage } from './api-client';
+import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from './api-client';
 import { record } from '../core/helper-values';
 import { escapeHtml } from '../core/helper-format';
 import { decodeSavedFilters } from './display-preferences';
@@ -39,7 +38,7 @@ export function createSidebarQuery(options: {
     try {
       const response = await options.request(target, '/api/settings'), data: unknown = await response.json();
       if (disposed || generation !== settingsGeneration || options.host().base !== target.base) return;
-      if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : 'Failed to load filters');
+      if (!response.ok) throw new Error(responseError(response, data, 'Failed to load filters'));
       commitFilters(decodeSavedFilters(record(data) ? data.savedFilters : undefined)); refreshViews(false);
     } catch (error) { if (!disposed && generation === settingsGeneration && options.host().base === target.base) console.error('Failed to load saved filters:', error); }
   }
@@ -47,7 +46,7 @@ export function createSidebarQuery(options: {
     if (disposed) return; const generation = ++settingsGeneration, target = Object.freeze({ ...host });
     const response = await options.request(target, '/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ savedFilters: decodeSavedFilters(next) }) });
     const data: unknown = await response.json();
-    if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : 'save failed');
+    if (!response.ok) throw new Error(responseError(response, data, 'save failed'));
     if (disposed || generation !== settingsGeneration || options.host().base !== target.base) return;
     commitFilters(decodeSavedFilters(record(data) ? data.savedFilters : undefined)); refreshViews();
   }

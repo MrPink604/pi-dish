@@ -1,11 +1,10 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage, jsonResponse, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SessionState } from './session-state';
 import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel, sessionKey } from './helper-identity';
 import { record } from '../core/helper-values';
 import { bounceMode, decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } from './bounce-data';
 import type { BounceMode, BounceTarget, BounceOperation, BounceResult } from './bounce-data';
-import { errorMessage, readJson, responseError } from './api-client';
 import { requiredElement } from './dom';
 export interface BounceHost extends HostEndpoint {
   readonly hostId: string | null; readonly name?: string | null; readonly label?: string | null;
@@ -91,8 +90,7 @@ export function createBounce(options: {
   async function loadBouncePreview(state: BounceHostState) {
     try {
       const res = await apiFetch(state.host, `/api/session-bounces/preview?mode=${state.mode}`, { timeoutMs: 20000 });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(responseError(res, data));
+      const data = await jsonResponse(res);
       if (!bounceHostElement(state)) return;
       state.targets = decodeBouncePreview(data);
     } catch (error) {
@@ -171,8 +169,7 @@ export function createBounce(options: {
           method: 'POST', timeoutMs: 20000, headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode: state.mode, sessionIds }),
         });
-        const data = await readJson(res);
-        if (!res.ok) throw new Error(responseError(res, data));
+        const data = await jsonResponse(res);
         const operation = decodeBounceOperation(record(data) ? data.operation : null);
         ++state.readSeq;
         state.operations = [operation, ...state.operations.filter(op => op.id !== operation.id)];
@@ -195,9 +192,7 @@ export function createBounce(options: {
     state.polling = true;
     const seq = ++state.readSeq;
     try {
-      const res = await apiFetch(state.host, '/api/session-bounces', { timeoutMs: 20000 });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(responseError(res, data));
+      const data = await jsonResponse(await apiFetch(state.host, '/api/session-bounces', { timeoutMs: 20000 }));
       const operations = decodeBounceOperations(data);
       if (seq === state.readSeq && bounceHostElement(state)) {
         state.operations = operations;
@@ -244,9 +239,7 @@ export function createBounce(options: {
     state.cancelling.add(operation.id);
     renderBounceOperations(state);
     try {
-      const res = await apiFetch(state.host, `/api/session-bounces/${encodeURIComponent(operation.id)}`, { method: 'DELETE', timeoutMs: 20000 });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(responseError(res, data));
+      const data = await jsonResponse(await apiFetch(state.host, `/api/session-bounces/${encodeURIComponent(operation.id)}`, { method: 'DELETE', timeoutMs: 20000 }));
       const updated = decodeBounceOperation(record(data) ? data.operation : null);
       ++state.readSeq;
       state.operations = state.operations.map(op => op.id === operation.id ? updated : op);

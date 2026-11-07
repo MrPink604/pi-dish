@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { errorMessage } from './api-client';
+import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from './api-client';
 import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { record, finite } from '../core/helper-values';
@@ -184,7 +183,7 @@ export function createFleetView(options: FleetViewOptions) {
       const response = await options.request(endpoint, '/api/host/health', { timeoutMs: 8000 });
       if (response.status === 401) { options.noteConnection(host, 'blocked'); throw new Error('Needs a token'); }
       const data: unknown = await response.json();
-      if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(responseError(response, data));
       const health = decodeFleetHealth(data);
       options.noteConnection(host, 'success');
       if (!owns()) return;

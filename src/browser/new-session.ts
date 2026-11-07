@@ -1,5 +1,4 @@
-import type { ApiRequest } from './api-client';
-import { errorMessage } from './api-client';
+import { errorMessage, type ApiRequest } from './api-client';
 import type { DirectoryHost } from './directory-catalog';
 import { createDirectoryCatalog, sameDirectoryHost } from './directory-catalog';
 import { createDirectoryTree } from './directory-tree';

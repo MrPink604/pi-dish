@@ -1,6 +1,7 @@
 import { decodeSessionList, decodeModelCatalog, decodeMutationResult, decodeThinkingResult, decodeFastModeResult,
   decodeEnabledModelsResult } from '../core/session-api';
 import type { ModelChangeRequest, ThinkingChangeRequest, EnabledModelsRequest } from '../core/session-api';
+import { record } from '../core/helper-values';
 
 export interface HostEndpoint { base: string; token?: string | null }
 export type HostTarget = string | HostEndpoint | null;
@@ -22,15 +23,14 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Unparseable bodies read as `null`, so no decoder mistakes them for an empty object. */
 export function readJson(response: Response): Promise<unknown> {
-  return response.json().catch(() => ({}));
+  return response.json().catch(() => null);
 }
 
-/** The server's `error` text, else `label (status)`; no label means a bare `HTTP status`. */
-export function responseError(response: Response, data: unknown, label?: string): string {
-  const error = data && typeof data === 'object' && 'error' in data ? data.error : null;
-  if (typeof error === 'string' && error) return error;
-  return label ? `${label} (${response.status})` : `HTTP ${response.status}`;
+/** The server's `error` text, else `fallback`. */
+export function responseError(response: Response, data: unknown, fallback = `HTTP ${response.status}`): string {
+  return record(data) && typeof data.error === 'string' && data.error ? data.error : fallback;
 }
 
 export class ApiHttpError extends Error {
@@ -63,15 +63,17 @@ export function createHostTransport(options: {
   return { request };
 }
 
-async function jsonResponse(response: Response, fallback: string): Promise<unknown> {
+/** Parsed body of a successful response (`null` when unparseable); failures throw the server's error text. */
+export async function jsonResponse(response: Response, fallback?: string): Promise<unknown> {
   const data = await readJson(response);
   if (!response.ok) throw new ApiHttpError(responseError(response, data, fallback), response.status);
   return data;
 }
 
+/** Generic mutations accept successful empty or non-JSON replies as `{}`. */
 export async function sendJson(request: ApiRequest, host: HostTarget, path: string, body: unknown, method = 'POST'): Promise<unknown> {
   const response = await request(host, path, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body ?? {}) });
-  return jsonResponse(response, 'request failed');
+  return await jsonResponse(response, `request failed (${response.status})`) ?? {};
 }
 
 export function modelCatalogUrl(harnessId: string, cwd?: string | null): string {
@@ -101,13 +103,15 @@ export async function renameSession(request: ApiRequest, endpoint: HostEndpoint,
 export function createSessionApi(request: ApiRequest) {
   return {
     async list(host: HostTarget, path: string, options?: RequestOptions) {
-      return decodeSessionList(await jsonResponse(await request(host, path, options), 'HTTP request failed'));
+      const response = await request(host, path, options);
+      return decodeSessionList(await jsonResponse(response, `HTTP request failed (${response.status})`));
     },
     async models(host: HostTarget, options: { sessionId?: string | null; harnessId?: string; cwd?: string | null } = {}) {
       const { sessionId, harnessId = 'pi', cwd } = options;
       const path = sessionId ? '/api/models?sessionId=' + encodeURIComponent(sessionId)
         : harnessId !== 'pi' ? modelCatalogUrl(harnessId, cwd) : '/api/models';
-      return decodeModelCatalog(await jsonResponse(await request(host, path), 'Model catalog request failed'));
+      const response = await request(host, path);
+      return decodeModelCatalog(await jsonResponse(response, `Model catalog request failed (${response.status})`));
     },
     async setEnabledModels(enabledIds: string[] | null) {
       // This setting belongs to the serving Pi instance, independently of selection.

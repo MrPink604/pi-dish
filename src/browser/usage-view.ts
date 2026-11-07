@@ -1,6 +1,5 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { sameCapturedHost } from './api-client';
-import { errorMessage } from './api-client';
+import { errorMessage, responseError, sameCapturedHost, type ApiRequest, type HostEndpoint } from './api-client';
+import type { HostConnectionEvent } from './host-connections';
 import { requiredElement } from './dom';
 import type { HelperHost } from '../core/helper-types';
 import type { Costs, Tokens, UsageBucket, UsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry } from './shared-helper-types';
@@ -8,7 +7,7 @@ import { escapeHtml } from '../core/helper-format';
 import { formatEstimatedCost, formatUsageCost, formatTokens, formatCacheStat, shortCwd } from './helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { mergeUsageSummaries, createFanoutRenderQueue, aggregateUsageWeekly, niceTicks, formatUsageDay, usageUnattributedCost, usageLimitsHtml, shortModelName } from './helper-usage';
-import { finite, record } from '../core/helper-values';
+import { finite } from '../core/helper-values';
 import { usageDisplayTokens } from '../core/helper-usage-math';
 import { decodeUsageSummary, decodeUsageLimits } from './usage-data';
 import { decodeCacheLifetimes, cacheLifetimesHtml } from './cache-lifetimes';
@@ -21,7 +20,7 @@ export function createUsageView(options: {
   root: HTMLElement; request: ApiRequest; storage: Pick<Storage, 'getItem' | 'setItem'>;
   fleetReady: () => Promise<unknown>; hosts: () => readonly UsageHost[]; host: (id: string | null) => UsageHost | null;
   multiHost: () => boolean; closeOtherViews: () => void;
-  connection: (host: UsageHost, event: 'blocked' | 'success' | 'failure', error?: unknown) => void;
+  connection: (host: UsageHost, event: HostConnectionEvent) => void;
   selectSession: (id: string, options: { host: string | null }) => Promise<unknown>;
 }) {
   const document = options.root.ownerDocument, window = document.defaultView!;
@@ -276,10 +275,10 @@ export function createUsageView(options: {
           if (response.status === 401) { if (sameHost(host)) options.connection(host, 'blocked'); throw new Error('needs a token'); }
           const data: unknown = await response.json();
           if (!sameHost(host)) throw new Error('host connection changed');
-          if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
+          if (!response.ok) throw new Error(responseError(response, data));
           entries[i] = { hostId: host.hostId, hostLabel: hostDisplayLabel(host), summary: decodeUsageSummary(data, { hostId: host.hostId, label: hostDisplayLabel(host) }) };
           status[i] = 'ok'; options.connection(host, 'success');
-        } catch (error) { status[i] = 'error'; reasons[i] = error; if (!host.self && sameHost(host)) options.connection(host, 'failure', error); }
+        } catch (error) { status[i] = 'error'; reasons[i] = error; if (!host.self && sameHost(host)) options.connection(host, { type: 'failure', error }); }
         queueRender();
       }));
       if (!status.some(state => state === 'ok')) throw reasons.find(Boolean) || new Error('no hosts answered');

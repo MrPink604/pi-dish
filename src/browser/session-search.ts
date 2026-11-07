@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { sameEndpoint } from './api-client';
+import { responseError, sameEndpoint, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 import { record } from '../core/helper-values';
 import { requiredElement } from './dom';
@@ -62,7 +61,7 @@ export function createSessionSearch(options: {
       const response = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/search?${params}`);
       const data: unknown = await response.json();
       if (!owns()) return;
-      if (!response.ok || (record(data) && typeof data.error === 'string' && data.error)) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
+      if (!response.ok || (record(data) && typeof data.error === 'string' && data.error)) throw new Error(responseError(response, data));
       query = value;
       const decoded = decodeSessionSearch(data);
       matches = options.focusMode() ? decoded.filter(match => match.role !== 'toolResult') : decoded;

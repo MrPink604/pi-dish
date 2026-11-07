@@ -1,5 +1,5 @@
-import type { ApiRequest } from './api-client';
-import { sameEndpoint, errorMessage } from './api-client';
+import type { HostConnectionEvent } from './host-connections';
+import { errorMessage, responseError, sameCapturedHost, type ApiRequest } from './api-client';
 import { requiredElement } from './dom';
 import type { SessionState } from './session-state';
 import type { createSessionSearch } from './session-search';
@@ -7,14 +7,13 @@ import { escapeHtml } from '../core/helper-format';
 import { formatRelativeTime, shortCwd } from './helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { parseSessionQuery, stripQueryField, applyHostTerms, positiveQueryTokens, highlightTokens } from '../core/helper-query';
-import { record } from '../core/helper-values';
 import { queryHosts, mergeSearchPayloads, decodeSearchPayload } from './search-data';
 import type { SearchHost, SearchPayload, SearchViewData } from './search-data';
 export function createSearchView(options: {
   root: HTMLElement; request: ApiRequest; sessionState: SessionState;
   hosts: () => readonly SearchHost[]; fanout: () => readonly SearchHost[];
   host: (id: string | null) => SearchHost | null; scope: () => string;
-  connection: (host: SearchHost, event: 'blocked' | 'success' | 'failure', error?: unknown) => void;
+  connection: (host: SearchHost, event: HostConnectionEvent) => void;
   hostChip: (hostId: string | null) => string; closeOtherViews: () => void;
   loadPrevious: () => Promise<unknown>; selectSession: (id: string, options: { host: string | null }) => Promise<unknown>;
   sessionSearch: ReturnType<typeof createSessionSearch>;
@@ -29,7 +28,7 @@ export function createSearchView(options: {
   const events = new AbortController();
   let view = 0;
   function sameHost(host: SearchHost): boolean {
-    return sameEndpoint(options.host(host.hostId), host);
+    return sameCapturedHost(options.host(host.hostId), host);
   }
   // --- Advanced search (main-pane takeover) ---
   // Full-width search over every session: the sidebar grammar verbatim (one
@@ -143,14 +142,14 @@ export function createSearchView(options: {
           if (r.status === 401) { if (sameHost(host)) options.connection(host, 'blocked'); throw new Error('needs a token'); }
           const data: unknown = await r.json();
           if (!sameHost(host)) throw new Error('host connection changed');
-          if (!r.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${r.status}`);
+          if (!r.ok) throw new Error(responseError(r, data));
           payloads[i] = decodeSearchPayload(data);
           status[i] = 'ok';
           options.connection(host, 'success');
         } catch (e) {
           status[i] = 'error';
           reasons[i] = e;
-          if (!host.self && sameHost(host)) options.connection(host, 'failure', e);
+          if (!host.self && sameHost(host)) options.connection(host, { type: 'failure', error: e });
         }
         // Until one host has answered there is nothing to show: keep the
         // previous render (or "Searching…") instead of flashing an empty list.

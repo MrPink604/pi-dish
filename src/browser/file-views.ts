@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint, RequestOptions } from './api-client';
-import { errorMessage, readJson, responseError } from './api-client';
+import { errorMessage, jsonResponse, responseError, type ApiRequest, type HostEndpoint, type RequestOptions } from './api-client';
 import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { PublishedPage } from './session-info-data';
@@ -44,11 +43,6 @@ export function createFileViews(options: {
     if (disposed || !current || current.base !== endpoint.base) return Promise.reject(new Error('Host connection changed; reopen this view'));
     return options.request({ ...endpoint, token: current.token }, path, init);
   }
-  async function json(response: Response): Promise<unknown> {
-    const value = await readJson(response);
-    if (!response.ok) throw new Error(responseError(response, value));
-    return value;
-  }
   function closeFile() {
     file.generation++; file.owner = null; file.endpoint = null; file.sessionId = null; file.raw = null; file.path = null; file.relPath = null;
     fileEvents.abort(); pageEvents.abort(); pageSequence++; copySequence++;
@@ -80,7 +74,7 @@ export function createFileViews(options: {
     revoke.addEventListener('click', () => {
       if (!current() || revoke.disabled) return;
       revoke.disabled = true;
-      void request(owner, endpoint, `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' }).then(json).then(() => {
+      void request(owner, endpoint, `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' }).then(jsonResponse).then(() => {
         if (!current()) return;
         pageSequence++; clearPage(); options.refreshArtifacts(owner);
       }).catch(e => { if (current()) { revoke.disabled = false; options.status('Failed to unpublish: ' + errorMessage(e), 'error'); } });
@@ -94,7 +88,7 @@ export function createFileViews(options: {
     const sequence = ++pageSequence; pageEvents.abort(); button.disabled = true;
     const current = () => ownsFile(id, generation) && pageSequence === sequence;
     try {
-      const value = await json(await request(owner, endpoint, '/api/pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, sessionId: id, title: path.split('/').pop(), renderer: 'file' }) }));
+      const value = await jsonResponse(await request(owner, endpoint, '/api/pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, sessionId: id, title: path.split('/').pop(), renderer: 'file' }) }));
       if (!current()) return;
       const page = decodePublishedPages([value])[0]; if (!page) throw new Error('Invalid published page');
       button.disabled = false; renderPage(page, id, generation); options.refreshArtifacts(owner);
@@ -120,13 +114,13 @@ export function createFileViews(options: {
     const body = element('fileViewBody'), title = element('fileViewTitle'), path = element('fileViewPath'), rawLink = element<HTMLAnchorElement>('fileViewRaw');
     title.textContent = mention.replace(/:\d+(?::\d+)?$/, '').split('/').pop() || ''; path.textContent = ''; path.title = ''; body.innerHTML = '<div class="loading">Loading…</div>';
     try {
-      const data = decodeFilePreview(await json(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(mention)}`)));
+      const data = decodeFilePreview(await jsonResponse(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(mention)}`)));
       if (!ownsFile(id, generation)) return;
       title.textContent = data.path.split('/').pop() || ''; file.path = data.path; file.relPath = data.relPath;
       rawLink.href = endpoint.base + `/api/sessions/${encodeURIComponent(id)}/file/content?path=${encodeURIComponent(data.path)}&v=${data.mtime}-${data.size}`;
       rawLink.style.display = ''; element('fileViewPublish').style.display = '';
       const sequence = pageSequence;
-      void request(owner, endpoint, '/api/pages').then(json).then(value => {
+      void request(owner, endpoint, '/api/pages').then(jsonResponse).then(value => {
         if (!ownsFile(id, generation) || file.path !== data.path || sequence !== pageSequence) return;
         const page = decodePublishedPages(value).find(page => page.root === data.path); if (page) renderPage(page, id, generation);
       }).catch(() => {});
@@ -151,7 +145,7 @@ export function createFileViews(options: {
     const { owner, endpoint, id, generation } = captured; diffEvents.abort(); diffEvents = new AbortController();
     const body = element('diffViewBody'); options.closeComments(); body.innerHTML = '<div class="loading">Loading…</div>';
     try {
-      const data = decodeDiffView(await json(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/diff`)));
+      const data = decodeDiffView(await jsonResponse(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/diff`)));
       if (!ownsDiff(id, generation)) return;
       element('diffViewRoot').textContent = shortCwd(data.root); body.innerHTML = renderDiffViewHtml(data);
       body.querySelectorAll<HTMLDetailsElement>('details.diff-file').forEach(details => {

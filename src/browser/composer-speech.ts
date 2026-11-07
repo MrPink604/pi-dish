@@ -1,5 +1,4 @@
-import type { ApiRequest } from './api-client';
-import { errorMessage } from './api-client';
+import { errorMessage, jsonResponse, type ApiRequest } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { EffectiveHost } from './host-catalog';
 import { sttUnavailableReason, formatDuration, insertAtCaret } from './helper-format';
@@ -106,8 +105,7 @@ export function createComposerSpeech(options: {
     updateButton(); options.status('Transcribing…');
     try {
       const response = await options.request(entry.host, '/api/stt', { method: 'POST', headers: { 'Content-Type': mime }, body: blob, signal: entry.events.signal });
-      const value: unknown = await response.json().catch(() => null); if (!current()) return;
-      if (!response.ok) throw new Error(record(value) && typeof value.error === 'string' ? value.error : `Transcription failed (HTTP ${response.status})`);
+      const value = await jsonResponse(response, `Transcription failed (HTTP ${response.status})`); if (!current()) return;
       const text = record(value) && typeof value.text === 'string' ? value.text.trim() : '';
       if (!text) { options.showNote('No speech detected.'); return; }
       insert(text);

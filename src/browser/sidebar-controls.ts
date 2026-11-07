@@ -1,6 +1,5 @@
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { errorMessage, sendJson } from './api-client';
+import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import { sessionKey, sessionRefKey, parseSessionKey } from './helper-identity';
 import { buildSessionFamilies } from './helper-sessions';
 import { escapeHtml } from '../core/helper-format';

@@ -2,6 +2,7 @@ import type { MermaidRuntime, MermaidConfig } from './rich-text-vendors';
 import type { createBrowserAssets } from './browser-assets';
 import { resolveColorToHex } from './host-presentation';
 import { isDarkColorHex } from './helper-markdown';
+import { errorMessage } from './api-client';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 /**
  * The theme tokens agents are told to color SVG with (omp's rendering
@@ -216,7 +217,7 @@ async function renderDiagramBlock(m: MermaidRuntime, block: HTMLElement, owner: 
     // mermaid's message is a multi-line parser dump; its first line ("Parse
     // error on line 2:") is the only part worth a quiet note.
     if (!owns(block, owner)) return;
-    setDiagramError(block, String(err instanceof Error ? err.message : err).split('\n')[0].replace(/:\s*$/, ''));
+    setDiagramError(block, errorMessage(err).split('\n')[0].replace(/:\s*$/, ''));
   }
 }
 

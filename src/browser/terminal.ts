@@ -1,8 +1,7 @@
 import type { VendorAttributes } from './browser-assets';
 import type { Terminal, ITerminalOptions, ITheme } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
-import type { HostEndpoint } from './api-client';
-import { sameEndpoint } from './api-client';
+import { sameEndpoint, type HostEndpoint } from './api-client';
 import { requiredElement } from './dom';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import { shortCwd, tmuxPrefixSeq } from './helper-format';

@@ -3,8 +3,7 @@ import { escapeHtml } from '../core/helper-format';
 import { sessionRefKey } from './helper-identity';
 import { splitSessionRefContext } from '../core/helper-refs';
 import { extractTextBlocks } from '../core/helper-content';
-import { errorMessage, sendJson } from './api-client';
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 type PromptStatus = 'sending' | 'queued' | 'accepted' | 'cancelling';
 interface PendingPrompt { key: string; message: string; element: Element | null; status: PromptStatus }

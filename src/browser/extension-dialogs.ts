@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { errorMessage, sendJson } from './api-client';
+import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { ExtensionRequest, ExtensionResponse, ExtensionAuth } from './extension-ui-data';
 import { authCallbackMatches, authUrlState, parseAuthCallback } from './extension-auth';

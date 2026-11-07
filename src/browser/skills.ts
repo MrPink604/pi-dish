@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { errorMessage, sameCapturedHost, responseError } from './api-client';
+import { errorMessage, responseError, sameCapturedHost, type ApiRequest, type HostEndpoint } from './api-client';
 import { requiredElement } from './dom';
 import type { SessionState } from './session-state';
 import { escapeHtml } from '../core/helper-format';

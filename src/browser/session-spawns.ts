@@ -1,5 +1,4 @@
-import type { ApiRequest } from './api-client';
-import { errorMessage, sendJson } from './api-client';
+import { errorMessage, jsonResponse, sendJson, type ApiRequest } from './api-client';
 import type { DirectoryHost } from './directory-catalog';
 import type { SpawnTarget } from './spawn-targets';
 import { record } from '../core/helper-values';
@@ -73,8 +72,7 @@ export function createSessionSpawns(options: {
         let response: Response;
         try { response = await options.request(spawn.endpoint, `/api/session-spawns/${encodeURIComponent(spawn.spawnId)}`); }
         catch { await options.delay(attempt); continue; }
-        const data: unknown = await response.json().catch(() => null);
-        if (!response.ok && response.status !== 202) throw new Error(record(data) && typeof data.error === 'string' && data.error ? data.error : `spawn status failed (${response.status})`);
+        const data = await jsonResponse(response, `spawn status failed (${response.status})`);
         const status = decodeSpawnStatus(data);
         if (status.status === 'starting') { await options.delay(attempt); continue; }
         if (status.status === 'error') throw new Error(status.error);

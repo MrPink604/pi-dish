@@ -8,8 +8,7 @@ import { harnessBadgeInfo, hostDisplayLabel, hostSupportsCapability, hostSupport
 import { shortCwd } from './helper-format';
 import { createHostView } from './host-view';
 import { createHostDirectory } from './host-directory';
-import { createHostTransport, createSessionApi, sendJson } from './api-client';
-import type { ApiRequest, HostTarget } from './api-client';
+import { createHostTransport, createSessionApi, sendJson, type ApiRequest, type HostTarget } from './api-client';
 import { createHostConnections, hostKeyOf } from './host-connections';
 import { createHostDiscovery } from './host-discovery';
 import { createHostPresentation, resolveColorToHex } from './host-presentation';
@@ -121,7 +120,6 @@ function hostAssetUrl(host: HostTarget | undefined, path: string) {
   return resolveHost(host).base + path;
 }
 
-/** ws(s) URL for a host path — scheme/authority come from the host's base. */
 function hostWsUrl(host: HostTarget, path: string) {
   const base = resolveHost(host).base;
   const localProto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -186,7 +184,6 @@ function effectiveHosts() { return hostDirectory.effectiveHosts().map(hostView);
 function isMultiHost() { return effectiveHosts().length > 1; }
 function selfHostEntry() { return effectiveHosts()[0]; }
 
-/** Effective entry for a host id — null when nothing in the list claims it. */
 function hostEntryFor(hostId?: string | null) { const host = hostDirectory.entryFor(hostId); return host ? hostView(host) : null; }
 
 function hostLabelFor(hostId?: string | null) {
@@ -199,10 +196,6 @@ function hostIdIsDown(hostId?: string | null) {
   return entry ? hostConnections.isDown(entry) : false;
 }
 
-// Connection observations and poll eligibility share the typed retry policy.
-function noteConnection(host: Parameters<typeof hostConnections.note>[0], event: 'success' | 'blocked' | 'failure', error?: unknown) {
-  hostConnections.note(host, event === 'failure' ? { type: 'failure', error } : event);
-}
 function seedHostConnFromFleet() { hostConnections.seed(effectiveHosts()); }
 function pollableHosts() { return hostConnections.pollable(effectiveHosts()); }
 
@@ -250,15 +243,12 @@ const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscover
   },
 });
 
-/** Drop cached rows/state for hosts that left the effective list. */
 function pruneHostCaches() {
   const live = new Set(effectiveHosts().map(hostKeyOf));
   hostConnections.prune(live);
   hostSessionLoader.prune(live);
 }
 
-// One stable color per host across the sidebar; auto colors follow the theme
-// and their persisted first-seen order, so they never reshuffle.
 const HOST_COLORS_KEY = 'pi-dish-host-colors';
 const HOST_COLOR_ORDER_KEY = 'pi-dish-host-color-order';
 const hostPresentation: ReturnType<typeof createHostPresentation> = createHostPresentation({
@@ -274,8 +264,6 @@ const hostPresentation: ReturnType<typeof createHostPresentation> = createHostPr
   escapeHtml, displayLabel: host => hostDisplayLabel(hostView(host)), isDown: hostDown,
 });
 
-// All session list/selection writes and their rendering hooks share one store.
-// Mutate it only through its state writers.
 const sessionState: ReturnType<typeof createSessionState> = createSessionState({
   getSelfHostId: () => hostDirectory.self.hostId,
   getHostLabel: hostLabelFor,
@@ -348,7 +336,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       var sel = window.getSelection();
       if (!sel || sel.isCollapsed) { e.preventDefault(); composerSubmit.abortTurn(); }
     }
-    // Ctrl+F opens in-session search when a session is showing
     if (e.ctrlKey && e.key === 'f' && sessionState.currentSession) {
       e.preventDefault();
       sessionSearch.open();
@@ -362,7 +349,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     composerDrafts.saveSoon();
   });
 
-  // Pasted screenshots become attachments instead of getting dropped.
   promptInput.addEventListener('paste', (e) => {
     const files = Array.from(e.clipboardData?.items || [])
       .filter((it) => it.type && it.type.startsWith('image/'))
@@ -377,7 +363,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     input.value = ''; // allow re-picking the same file
   });
 
-  // Tap any transcript image to view it full-size.
   document.addEventListener('click', (e) => {
     const img = (e.target instanceof Element ? e.target.closest<HTMLImageElement>('img.msg-image') : null);
     if (img) composerDrafts.images.openLightbox(img.src);
@@ -394,7 +379,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     fileViews.openFile(link.dataset.filePath || (link.textContent || '').trim());
   });
 
-  // Per-message header actions: share link 🔗, branch ⑂, and the touch ⋯ menu.
   document.addEventListener('click', (e) => {
     const target = e.target instanceof Element ? e.target : null;
     const link = target?.closest<HTMLElement>('.msg-link-btn');
@@ -432,16 +416,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     sessionView.select(session.id, { host: session.host || null });
   });
 
-  // Restore focus mode (hide tool calls/results) preference
   appChrome.setFocus(localStorage.getItem('pi-dish-focus') === '1');
 
-  // Coming back to the tab: refresh the list so unread dots resolve against
-  // what's now actually on screen. A backgrounded phone (or a slept laptop)
-  // also kills the event stream without an error the browser acts on — the
-  // socket sits half-open, or the EventSource stalls in CONNECTING with its
-  // retry timer frozen — so reconnect for the selected session. The server
-  // replays init and running state on connect, and the init catch-up pulls
-  // whatever finished while we were away.
+  // A backgrounded phone or slept laptop can leave the event stream half-open
+  // without an error, so returning to the tab reconnects the selected session.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     sidebarLists.refresh();
@@ -524,7 +502,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   sidebarLists.mount();
 });
 
-// Reference syntax is relative to the server owning the composing session.
 const sessionReferences: ReturnType<typeof createSessionReferences> = createSessionReferences({
   sessionState, selfId: () => hostDirectory.self.hostId, host: hostEntryFor, hostLabel: hostLabelFor, config: () => appConfig,
 });
@@ -536,11 +513,7 @@ const composerAutocomplete: ReturnType<typeof createComposerAutocomplete> = crea
   loadModels: (id, harness) => appModels.load(id, harness),
 });
 
-// =========================================================================
-// Sidebar
-// =========================================================================
 
-// Query, list fan-out and seen activity have separate typed owners.
 const sidebarActivity: ReturnType<typeof createSidebarActivity> = createSidebarActivity({ document, storage: localStorage, sessionState });
 const sidebarQuery: ReturnType<typeof createSidebarQuery> = createSidebarQuery({
   document, storage: localStorage, request, host: () => hostEntryFor(null)!,
@@ -560,7 +533,6 @@ const sidebarLists: ReturnType<typeof createSidebarLists> = createSidebarLists({
 const hostSessionLoader = sidebarLists.loader;
 const loadPrevious = () => sidebarLists.load(undefined, { withPrevious: true });
 
-// Sidebar row controls own preferences, family pins, confirmation, drag and menus.
 const sidebarControls: ReturnType<typeof createSidebarControls> = createSidebarControls({
   document, storage: localStorage, sessionState, request,
   host: hostEntryFor, render: () => renderSessions(), closeSidebar: () => sidebarQuery.close(),
@@ -602,11 +574,7 @@ function renderSessions() {
   });
 }
 
-// =========================================================================
-// Session Selection
-// =========================================================================
 
-// Thinking/model, terminal and mic buttons all read the selected session.
 function refreshSessionControls() {
   sessionControls.updateThinking();
   terminalController.updateButtons();
@@ -628,9 +596,6 @@ const sessionResume: ReturnType<typeof createSessionResume> = createSessionResum
   target: host => savedResumeTarget(host), refresh: refreshSessions, select: selectSession, status: setStatus,
 });
 
-// =========================================================================
-// Models
-// =========================================================================
 
 const modelCatalog: ReturnType<typeof createModelCatalog> = createModelCatalog({
   read: scope => sessionApi.models(scope.host, scope),
@@ -641,9 +606,6 @@ const modelCatalog: ReturnType<typeof createModelCatalog> = createModelCatalog({
 
 const appModels = createAppModels({ sessions: sessionState, catalog: modelCatalog, host: hostEntryFor });
 
-// =========================================================================
-// Session Header
-// =========================================================================
 
 const sessionRelationsController: ReturnType<typeof createSessionRelations> = createSessionRelations({
   document, window, sessionState, request, endpoint: hostEntryFor,
@@ -655,29 +617,21 @@ const sessionRelationsController: ReturnType<typeof createSessionRelations> = cr
   selectSession, status: setStatus,
 });
 
-/**
- * Most model signal that fits the chip. The provider slug is the least
- * informative part, so it is dropped before the name is allowed to
- * ellipsize (CSS does the truncation). Full ref stays in the tooltip.
- */
 const sessionHeader: ReturnType<typeof createSessionHeader> = createSessionHeader({ document, sessionState, multi: isMultiHost, host: hostEntryFor, down: hostIdIsDown, color: hostColor, label: hostLabelFor,
   settings: harnessSupportsSettings, ensureHarness: ensureHarnessRows, controls: refreshSessionControls,
 });
 
-// Header actions capture their selection before opening editors or dispatching.
 const sessionControls: ReturnType<typeof createSessionControls> = createSessionControls({
   document, sessionState, catalog: modelCatalog, request, host: hostEntryFor,
   loadModels: (id, harness) => appModels.load(id, harness), status: setStatus,
 });
 
-// Whole-transcript search owns query requests, marks and bounded hit-window jumps.
 const sessionSearch: ReturnType<typeof createSessionSearch> = createSessionSearch({
   document, sessionState, request, endpoint: hostEntryFor,
   focusMode: () => appChrome.focus, ensureMessage: (index, owns) => transcriptController.ensureMessage(index, owns),
   stopFollowing: () => appChrome.stopFollowing(), updateJumpButton: chromeScroll.jump,
 });
 
-// Display preferences own modal requests, rendered controls and device readouts.
 const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDisplayPreferences({
   document, storage: localStorage, request, host: () => hostEntryFor(null)!,
   beforeOpen: () => { sidebarQuery.close(); },
@@ -690,7 +644,6 @@ const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDi
   sentPrompts: (container, signal) => promptHistory.renderSettings(container, signal),
 });
 
-// Web Push registration and the service worker that makes the app installable.
 const pushNotifications: PushNotifications = createPushNotifications({
   window, storage: localStorage, request, hosts: effectiveHosts,
   supports: host => hostSupportsCapability(host, 'push', appConfig), label: host => hostDisplayLabel(host),
@@ -707,7 +660,6 @@ const pushNotifications: PushNotifications = createPushNotifications({
   openVault: requestId => vaultApprovals.open(requestId),
 });
 
-// Vault approvals answer in the requesting session's view (TASKS/vault-approvals.md).
 const vaultApprovals: VaultApprovalsController = createVaultApprovals({
   document, window, request,
   sessions: () => [...sessionState.sessions.active, ...sessionState.sessions.previous],
@@ -724,7 +676,6 @@ function revealSession(id: string, host: string | null) {
   return sessionView.select(id, { host });
 }
 
-// Recovery owns its preferences/report views and captured host endpoints.
 const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
   root: document.querySelector<HTMLElement>('.main')!, request, hosts: effectiveHosts,
   supports: host => hostSupportsCapability(host, 'recovery', appConfig), down: hostDown,
@@ -735,10 +686,6 @@ const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
   confirm: message => confirm(message),
 });
 
-// --- Hosts (a section of the Fleet takeover: a short list plus one add
-// form). The catalog is device-local by design — a browser's own list of
-// machines it can reach, tokens included; fleet entries come from the
-// server's config and are shown read-only. ---------------------------------
 
 const hostSettings: ReturnType<typeof createHostSettings> = createHostSettings({
   directory: hostDirectory, connections: hostConnections, discovery: hostDiscovery,
@@ -762,8 +709,6 @@ function renderHostsSection() {
   fleetController.render();
 }
 
-// Fleet owns per-host capacity polling while open, and hosts the fleet-wide
-// controls (connections, bounce, recovery preferences) that it mounts.
 const fleetController: ReturnType<typeof createFleetView> = createFleetView({
   root: document.querySelector<HTMLElement>('.main')!, request, hosts: effectiveHosts,
   connection: host => hostConnections.stateOf(host), supports: host => hostSupportsCapability(host, 'hostHealth', appConfig),
@@ -786,18 +731,16 @@ const fleetController: ReturnType<typeof createFleetView> = createFleetView({
   closeBounce: () => bounceController.close(),
 });
 
-// Advanced search owns fleet query results, facet controls and click-through.
 const searchViewController: ReturnType<typeof createSearchView> = createSearchView({
   root: document.querySelector<HTMLElement>('.main')!, request, sessionState,
   hosts: effectiveHosts, fanout: pollableHosts, host: hostEntryFor, scope: () => sidebarQuery.scope(),
-  connection: noteConnection,
+  connection: noteHost,
   hostChip,
   closeOtherViews: () => mainPane.beforeTakeover('search'),
   loadPrevious,
   selectSession, sessionSearch,
 });
 
-// The skills directory and coverage view retain their entry-host ownership.
 const skillsController: ReturnType<typeof createSkills> = createSkills({
   root: document.querySelector<HTMLElement>('.main')!, request, self: selfHostEntry, origin: () => location.origin,
   sessionState, loadPrevious,
@@ -807,23 +750,20 @@ const skillsController: ReturnType<typeof createSkills> = createSkills({
   copy: copyTextToClipboard, status: setStatus,
 });
 
-// Usage owns range/filter state, progressive fleet results and chart controls.
 const usageController: ReturnType<typeof createUsageView> = createUsageView({
   root: document.querySelector<HTMLElement>('.main')!, request, storage: localStorage,
   fleetReady: () => hostFleetReady, hosts: pollableHosts, host: hostEntryFor, multiHost: isMultiHost,
   closeOtherViews: () => mainPane.beforeTakeover('usage'),
-  connection: noteConnection,
+  connection: noteHost,
   selectSession,
 });
 
-// Session information owns stats/process/share controls and artifact discovery.
 const sessionInfo: ReturnType<typeof createSessionInfo> = createSessionInfo({
   document, request, sessionState, host: hostEntryFor,
   reference: session => sessionRefFor(session), copy: copyTextToClipboard, status: setStatus, confirm: text => confirm(text),
   loadPrevious, refreshSessions, selectSession,
 });
 
-// File and diff takeovers share a typed owner and keep comment coordination explicit.
 const fileViews: ReturnType<typeof createFileViews> = createFileViews({
   document, sessionState, request, host: hostEntryFor,
   markdown: text => richText.format(text), highlight: root => richText.highlight(root), copy: copyTextToClipboard,
@@ -832,15 +772,11 @@ const fileViews: ReturnType<typeof createFileViews> = createFileViews({
   refreshComments: () => anchoredCommentController.refresh(), markComments: () => anchoredCommentController.applyMarks(),
 });
 
-// Anchored comments retain their view, request and editor lifetimes.
 const anchoredCommentController: ReturnType<typeof createAnchoredComments> = createAnchoredComments({
   document, sessionState, views: fileViews, request, host: hostEntryFor,
   status: setStatus, loadPatch: details => fileViews.loadPatch(details),
 });
 
-// =========================================================================
-// Messages
-// =========================================================================
 
 const transcriptController: ReturnType<typeof createTranscript> = createTranscript({
   document, sessionState, request, host: hostEntryFor,
@@ -850,15 +786,11 @@ const transcriptController: ReturnType<typeof createTranscript> = createTranscri
   consumeEcho: (id, content) => promptDelivery.consume(keyForSessionId(id), content),
 });
 
-// Typed message projection and telemetry retain only their own render data.
 const messageRenderer: ReturnType<typeof createMessageRenderer> = createMessageRenderer({
   document, sessionState, details: responseDetailsController, markdown: text => richText.format(text),
   assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), ...chromeScroll, follow: () => appChrome.following,
 });
 
-// Session-scoped takeover: family tree + trace peek + signaling, opened from
-// the header's "Subagents · N" link. Created late — it borrows the rich-text
-// and details plumbing of the main transcript renderer.
 const subagentsController: ReturnType<typeof createSubagentsView> = createSubagentsView({
   root: document.querySelector<HTMLElement>('.main')!, request, sessionState, endpoint: hostEntryFor,
   closeOtherViews: () => mainPane.beforeTakeover('subagents'),
@@ -867,9 +799,6 @@ const subagentsController: ReturnType<typeof createSubagentsView> = createSubage
   markdown: text => richText.format(text), assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), details: responseDetailsController,
 });
 
-// =========================================================================
-// Live Tool Panels (streaming tool execution)
-// =========================================================================
 
 const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools({
   document, sessionState, started: (id, name) => sessionActivity.toolStarted(id, name),
@@ -877,9 +806,6 @@ const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools(
   images: (content, alt) => messageRenderer.images(content, alt), mood: (name, args) => moodController.fromTool(name, args),
 });
 
-// =========================================================================
-// SSE Streaming (RPC events only)
-// =========================================================================
 
 const messageStreamController: ReturnType<typeof createMessageStream> = createMessageStream({ document, sessionState, endpoint: resolveHost, ticket: host => mintHostTicket(host, 'stream'),
   get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
@@ -888,18 +814,13 @@ const messageStreamController: ReturnType<typeof createMessageStream> = createMe
   select: selectSession, deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => sidebarLists.load(query, options),
 });
 
-// =========================================================================
-// Prompt / Turn / Abort
-// =========================================================================
 
-// Drafts and attachments share a host-qualified composer owner.
 const composerDrafts: ReturnType<typeof createComposerDrafts> = createComposerDrafts({
   document, storage: localStorage, keyForSession: keyForSessionId, currentSessionId: () => sessionState.currentSession?.id || null,
   autosize: input => autosizePromptInput(input), status: setStatus,
   historyChanged: () => promptHistory.update(),
 });
 
-// Touch recall and settings management of sent prompts; rows capture their owner.
 const promptHistory: PromptHistoryController = createPromptHistory({
   document, storage: localStorage, drafts: composerDrafts, copy: copyTextToClipboard, status: setStatus, confirm: text => confirm(text),
   label: owner => {
@@ -909,7 +830,6 @@ const promptHistory: PromptHistoryController = createPromptHistory({
   },
 });
 
-// Dictation retains the composer that requested permission and transcription.
 const composerNotes: ReturnType<typeof createComposerNotes> = createComposerNotes(document);
 const composerSpeech: ReturnType<typeof createComposerSpeech> = createComposerSpeech({
   document, sessionState, composerKey: () => composerDrafts.key, hosts: effectiveHosts, config: () => appConfig,
@@ -924,12 +844,6 @@ const promptDelivery: ReturnType<typeof createPromptDelivery> = createPromptDeli
 const sessionActivity: ReturnType<typeof createSessionActivity> = createSessionActivity({ document, sessionState, clearQueue: () => promptDelivery.render(null), status: setStatus,
   sideChatActive: () => !!sideChat.active() });
 
-// ---------------------------------------------------------------------------
-// Side chat — ephemeral multi-turn conversation forked from this session.
-// Turns never enter the transcript; the bridge owns the state and streams
-// snapshots, so a reload or another device shows the same conversation.
-// Selection changes reset the panel; the new stream replays its state.
-// ---------------------------------------------------------------------------
 function syncComposerMode(active: boolean) {
   sessionActivity.syncComposerButtons();
   const input = document.getElementById('promptInput') as HTMLTextAreaElement | null;
@@ -958,7 +872,6 @@ const pendingSessionSpawns: ReturnType<typeof createSessionSpawns> = createSessi
   discardPrompt: key => { const owner = pendingComposerKey(key); composerDrafts.clearDraft(owner); composerDrafts.images.discard(owner); },
   showFailure: (...args) => sessionView.failure(...args), status: setStatus,
 });
-// The typed takeover owns form state, controls, caches and launch view tokens.
 const newSessionController: ReturnType<typeof createNewSession> = createNewSession({
   root: document.querySelector<HTMLElement>('.main')!, storage: localStorage, request,
   self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown, multiHost: isMultiHost,
@@ -981,7 +894,6 @@ function harnessSupportsSettings(session: SessionEntry | null) {
   return !!session?.harnessId && !!harnessDiscovery.row(sessionReferences.hostId(session), session.harnessId)?.pilotConfig;
 }
 
-// One typed editor serves session settings and the new-session takeover.
 const harnessSettingsController: ReturnType<typeof createHarnessSettings> = createHarnessSettings({
   root: (document.getElementById('harnessSettingsModal') as HTMLElement), host: hostEntryFor, request,
   fallbackModels: (host, harness) => modelCatalog.scope?.harnessId === harness
@@ -1019,9 +931,6 @@ function createCwdAutocomplete({
   });
 }
 
-// =========================================================================
-// Utilities
-// =========================================================================
 
 function readJSONPref(key: string, fallback: unknown): unknown {
   try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch { return fallback; }
@@ -1043,14 +952,6 @@ function finalizeRender(container: HTMLElement, { stripLive = true, inserted }: 
   } else richText.highlight(container);
 }
 
-// =========================================================================
-// Streaming assistant renderer — incremental, block-level, throttled.
-//
-// Every message_update carries the full message so far, so we keep one
-// streaming DOM element and update only the content blocks that changed
-// (the growing tail block in practice). No outerHTML swaps: <details>
-// open/closed state survives naturally and layout work stays minimal.
-// =========================================================================
 
 const streamingRenderer: ReturnType<typeof createStreamingRenderer> = createStreamingRenderer({
   document, sessionState, markdown: text => richText.format(text), ...chromeScroll,
@@ -1063,23 +964,15 @@ function setStatus(message: string, type = '') {
   status.className = `status ${type}`;
 }
 
-// =========================================================================
-// Mood indicator — web fallback for the mood extension's custom editor
-// =========================================================================
 
 const moodController: ReturnType<typeof createMood> = createMood(document);
 
-// =========================================================================
-// Extension UI — unobtrusive hidable cards
-// =========================================================================
 
 const extensionUI: ReturnType<typeof createExtensionUI> = createExtensionUI({
   document, sessionState, storage: localStorage, request, host: hostEntryFor,
   status: setStatus,
 });
 
-// Rich text keeps the local vendor loaders, final render passes and diagram
-// lifetimes separate from the transcript's streaming and retained DOM state.
 const browserAssets: ReturnType<typeof createBrowserAssets> = createBrowserAssets(document);
 const diagramRenderer: ReturnType<typeof createDiagrams> = createDiagrams({
   document, assets: browserAssets, runtime: () => typeof mermaid === 'undefined' ? null : mermaid,
@@ -1092,9 +985,6 @@ const richText: ReturnType<typeof createRichText> = createRichText({
   matchRef: ref => sessionReferences.match(ref),
 });
 
-// =========================================================================
-// Tree Modal
-// =========================================================================
 const transcriptTree: ReturnType<typeof createTranscriptTree> = createTranscriptTree({
   document, storage: localStorage, sessionState, request, host: hostEntryFor,
   status: setStatus, selectSession,
@@ -1158,11 +1048,6 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// =========================================================================
-// Terminal (feature-flagged: /api/config .terminal → PI_DISH_TERMINAL=1).
-// One panel, one PTY per session server-side. The PTY survives socket drops
-// (phone screen lock), so reopening reattaches and replays scrollback.
-// =========================================================================
 
 let appConfig: Record<string, unknown> = { terminal: false };
 async function loadConfig() {
@@ -1191,15 +1076,12 @@ function sessionHostSupportsTmux(session: SessionEntry | null) {
   return hostSupportsCapability(hostEntryFor(session?.host), 'tmux', appConfig);
 }
 
-// =========================================================================
-// Theme payloads and pre-paint cache restoration share typed token decoding.
 const themesController: ReturnType<typeof createThemes> = createThemes({ document, storage: localStorage, request, host: () => hostEntryFor(null)!,
   changed: () => { terminalController.refreshTheme(); diagramRenderer.refreshTheme(); },
 });
 
 function terminalTheme() { return terminalThemeBase(document); }
 
-// Terminal lifecycle owns pending opens, host endpoints, sockets and reconnects.
 const terminalController: ReturnType<typeof createTerminalController> = createTerminalController({
   document, storage: localStorage, sessionState, host: host => hostEntryFor(host),
   supportsTerminal: session => sessionHostSupportsTerminal(session), supportsTmux: session => sessionHostSupportsTmux(session),
@@ -1210,28 +1092,23 @@ const terminalController: ReturnType<typeof createTerminalController> = createTe
   theme: () => terminalTheme(), applySize: panel => panelResize.terminalSize(panel), confirm: message => confirm(message),
 });
 
-// Resize controllers own each pointer capture and release listeners on disposal.
 const panelResize: ReturnType<typeof createPanelResize> = createPanelResize({ document, storage: localStorage, fitTerminal: () => terminalController.fit() });
 
-// =========================================================================
-// Routines own their host-qualified form, catalogs, mutations and run ledger.
 const routinesController: ReturnType<typeof createRoutinesView> = createRoutinesView({
   root: document.querySelector<HTMLElement>('.main')!, request, storage: localStorage, sessionState,
   hosts: pollableHosts, effectiveHosts, host: hostEntryFor, fleetReady: () => hostFleetReady, config: () => appConfig, multiHost: isMultiHost,
   hostChip,
   closeOtherViews: () => mainPane.beforeTakeover('routines'),
-  connection: noteConnection,
+  connection: noteHost,
   autocomplete: options => createCwdAutocomplete(options), copy: copyTextToClipboard, status: setStatus, confirm: text => confirm(text),
   loadPrevious, selectSession,
 });
 
-// Bounce owns host snapshots, selected targets, status polling and view disposal.
 const bounceController: ReturnType<typeof createBounce> = createBounce({
   document, request, hosts: effectiveHosts, fleetReady: () => hostFleetReady,
   sessionState, refreshSessions, loadPrevious, selectSession,
 });
 
-// Register exclusion policy once; close callbacks keep controller ownership lazy.
 const mainPane = createMainPane({
   takeovers: {
     usage: { close: () => usageController.close() },

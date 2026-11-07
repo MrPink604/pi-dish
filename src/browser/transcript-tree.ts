@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { sendJson, errorMessage } from './api-client';
+import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { TranscriptTree, TranscriptTreeBranch, TranscriptTreeFilter, TranscriptTreeNode, TranscriptTreeProjection, TranscriptTreeTool } from './transcript-tree-data';

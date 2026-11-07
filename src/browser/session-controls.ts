@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { setSessionModel, setSessionThinking, setSessionFast, renameSession, sendJson, errorMessage, readJson, responseError } from './api-client';
+import { errorMessage, readJson, renameSession, responseError, sendJson, setSessionFast, setSessionModel, setSessionThinking, type ApiRequest, type HostEndpoint } from './api-client';
 import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { createModelCatalog } from './model-catalog';

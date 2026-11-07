@@ -1,8 +1,7 @@
 import { formatTime } from './helper-format';
 import { sessionRefKey } from './helper-identity';
 import { record } from '../core/helper-values';
-import { errorMessage, sendJson } from './api-client';
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SessionState } from './session-state';
 import type { createComposerDrafts } from './composer-drafts';
 import type { createPromptDelivery } from './prompt-delivery';

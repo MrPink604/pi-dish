@@ -1,5 +1,4 @@
-import type { ApiRequest } from './api-client';
-import { createSessionApi } from './api-client';
+import { createSessionApi, type ApiRequest } from './api-client';
 import type { SessionState, HostSessionLists, SessionEntry } from './session-state';
 import { createHostSessionLoader } from './host-session-loader';
 import type { SessionHost } from './host-session-loader';

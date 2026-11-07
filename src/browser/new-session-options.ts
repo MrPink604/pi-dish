@@ -1,7 +1,6 @@
 import { record } from '../core/helper-values';
 import type { CatalogModel } from '../core/session-api';
-import type { ApiRequest } from './api-client';
-import { errorMessage } from './api-client';
+import { errorMessage, responseError, type ApiRequest } from './api-client';
 import { sameDirectoryHost } from './directory-catalog';
 import type { DirectoryHost } from './directory-catalog';
 import { catalogModelSelector, modelHiddenNote } from './model-catalog';
@@ -133,7 +132,7 @@ export function createNewSessionConfigPreview(options: {
       if (!owns()) return;
       const data: unknown = await response.json();
       if (!owns()) return;
-      if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' && data.error ? data.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(responseError(response, data));
       config = decodeHarnessConfigPreview(data, target.cwd);
       owner = target;
       options.values.textContent = `Model: ${config.defaultModel || 'auto-select'} · Thinking: ${config.defaultThinkingLevel || 'host default'}`;

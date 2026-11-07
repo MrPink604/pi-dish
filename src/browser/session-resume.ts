@@ -1,6 +1,5 @@
 import type { SessionState, SessionEntry } from './session-state';
-import type { HostEndpoint, ApiRequest } from './api-client';
-import { createSessionApi, errorMessage, sendJson } from './api-client';
+import { createSessionApi, errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SpawnTarget } from './spawn-targets';
 import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';

@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { errorMessage, responseError, sendJson } from './api-client';
+import { errorMessage, responseError, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { record } from '../core/helper-values';
