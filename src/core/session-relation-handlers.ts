@@ -50,12 +50,16 @@ const INVALID_SESSION_RE = /Invalid session ID|Unknown harness/;
 
 // OMP files a task subagent beside its parent as `<parent-stem>/<AgentId>.jsonl`;
 // that stem is the id job and wait rows name it by.
+function parentPathOf(session: CatalogSession | null | undefined): string | null {
+  if (!session?.parentSession || !session.sessionFile) return null;
+  return path.isAbsolute(session.parentSession)
+    ? session.parentSession : path.resolve(path.dirname(session.sessionFile), session.parentSession);
+}
+
 function nativeAgentId(session: CatalogSession): string | null {
-  if (!session.sessionFile || !session.parentSession) return null;
-  const parentFile = path.isAbsolute(session.parentSession) ? session.parentSession
-    : path.resolve(path.dirname(session.sessionFile), session.parentSession);
-  return path.resolve(path.dirname(session.sessionFile)) === path.resolve(parentFile).replace(/\.jsonl$/, '')
-    ? path.basename(session.sessionFile, '.jsonl') : null;
+  const parentFile = parentPathOf(session);
+  return parentFile && path.resolve(path.dirname(session.sessionFile!)) === path.resolve(parentFile).replace(/\.jsonl$/, '')
+    ? path.basename(session.sessionFile!, '.jsonl') : null;
 }
 
 function relationSessionSummary(session: CatalogSession): CatalogRelationSummary {
@@ -79,12 +83,6 @@ function relationSessionSummary(session: CatalogSession): CatalogRelationSummary
 
 export function createSessionRelationHandlers(ports: SessionRelationPorts) {
   const { catalog: runtime } = ports;
-
-  function parentPathOf(session: CatalogSession | null | undefined): string | null {
-    if (!session?.parentSession || !session.sessionFile) return null;
-    return path.isAbsolute(session.parentSession)
-      ? session.parentSession : path.resolve(path.dirname(session.sessionFile), session.parentSession);
-  }
 
   // Advisory relationships only: native parentSession headers, OMP's nested
   // subsession layout, and pi-dish launch provenance. None implies control.
