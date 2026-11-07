@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import path = require('node:path');
 import { spawnSync } from 'node:child_process';
 import esbuild = require('esbuild');

@@ -6,8 +6,5 @@
     "noEmit": true,
     "lib": ["ES2022"]
   },
-  "files": [
-    "eslint.config.js",
-    "playwright.config.ts"
-  ]
+  "files": ["eslint.config.js", "playwright.config.ts"]
 }

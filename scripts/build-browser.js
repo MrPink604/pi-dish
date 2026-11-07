@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Generated tool from scripts/build-browser.ts; edit that source and run npm run build:tools.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
