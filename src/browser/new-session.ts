@@ -15,7 +15,6 @@ import { escapeHtml } from '../core/helper-format';
 import { shortCwd } from './helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { formatModelRoleSummary } from '../core/helper-models';
-import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
 
 export const NEW_SESSION_HARNESS_KEY = 'pi-dish-new-harness';
 const NEW_SESSION_MODEL_CHOICES = [{ key: '', label: '(default)' }] as const;
@@ -97,13 +96,12 @@ export function createNewSession(options: {
   let modelPicker: ModelPicker | null = null;
   const preferences = createNewSessionPreferences({
     thinking: thinkingSelect, hiddenNote: element('nsModelHidden'), thinkingNote: element('nsThinkingNote'),
-    rows: () => models.rows(), read: key => storage.getItem(key), write: (key, value) => storage.setItem(key, value), escapeHtml,
+    rows: () => models.rows(), read: key => storage.getItem(key), write: (key, value) => storage.setItem(key, value),
     rendered: () => modelPicker?.sync(),
   });
   modelPicker = createModelPicker({
     input: modelInput, dropdown: modelDropdown, rows: () => models.rows(), choices: () => NEW_SESSION_MODEL_CHOICES,
     selected: () => preferences.selectedModel(), onPick: value => preferences.selectModel(value),
-    match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
   });
   const config = createNewSessionConfigPreview({
     wrap: element('nsHarnessConfig'), values: element('nsHarnessConfigValues'), roles: element('nsHarnessRoles'),
@@ -119,7 +117,6 @@ export function createNewSession(options: {
   const targetPicker = createSpawnTargetPicker({
     input: input('newSessionTarget'), nameInput: input('newSessionTmuxName'), wrap: element('newSessionTargetWrap'),
     dropdown: element('spawnTargetDropdown'), targets,
-    match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
   });
   const selectedTarget = () => targets.selected(input('newSessionTmuxName').value);
   async function readHarnesses(target: string | null): Promise<unknown> {
@@ -138,7 +135,7 @@ export function createNewSession(options: {
   const harnessLabel = (id: string) => harnesses.rows().find(row => row.id === id)?.label || (id === 'pi' ? 'Pi' : id);
   const autocomplete = createCwdAutocomplete({
     input: cwdInput, dropdown: element('cwdDropdown'), host, request,
-    known: () => directories.current(), match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
+    known: () => directories.current(),
     onPick: value => { storage.setItem('pi-dish-cwd', value); scheduleRefresh(); },
     onBlur: scheduleRefresh, onSubmit: () => { void spawn(); },
   });

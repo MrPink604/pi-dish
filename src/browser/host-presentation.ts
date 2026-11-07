@@ -1,3 +1,4 @@
+import { escapeHtml } from '../core/helper-format';
 import { assignHostColor, rgbStringToHex, sanitizeHostColorOrder, sanitizeHostColors } from '../core/host-colors';
 import type { EffectiveHost } from './host-catalog';
 import type { HostDirectory } from './host-directory';
@@ -10,7 +11,6 @@ export interface HostPresentationOptions {
   persistColors: (colors: Readonly<Record<string, string>>) => void;
   persistOrder: (order: readonly string[]) => void;
   onColorChanged: (renderRows: boolean) => void;
-  escapeHtml: (value: unknown) => string;
   displayLabel: (host: Readonly<EffectiveHost>) => string;
   isDown: (host: Readonly<EffectiveHost>) => boolean;
 }
@@ -43,7 +43,7 @@ export function createHostPresentation(options: HostPresentationOptions) {
     options.onColorChanged(rows);
   }
   function dotHtml(hostId: HostId, className = 'host-chip-dot'): string {
-    return `<span class="${className}" style="--host-color:${options.escapeHtml(colorFor(hostId))}"></span>`;
+    return `<span class="${className}" style="--host-color:${escapeHtml(colorFor(hostId))}"></span>`;
   }
 
   /** Color dot plus label; dimmed when unreachable, empty on a single host. */
@@ -54,8 +54,8 @@ export function createHostPresentation(options: HostPresentationOptions) {
     const down = options.isDown(entry);
     const label = options.displayLabel(entry);
     const title = label + (down ? ' — unreachable, showing last known sessions' : '');
-    return `<span class="host-chip${down ? ' offline' : ''}" style="--host-color:${options.escapeHtml(colorFor(hostId))}" title="${options.escapeHtml(title)}">` +
-      `<span class="host-chip-dot"></span>${options.escapeHtml(label)}</span>`;
+    return `<span class="host-chip${down ? ' offline' : ''}" style="--host-color:${escapeHtml(colorFor(hostId))}" title="${escapeHtml(title)}">` +
+      `<span class="host-chip-dot"></span>${escapeHtml(label)}</span>`;
   }
   return { colorFor, isCustom, setColor, dotHtml, chipHtml };
 }

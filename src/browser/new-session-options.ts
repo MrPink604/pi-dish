@@ -1,3 +1,4 @@
+import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';
 import type { CatalogModel } from '../core/session-api';
 import { errorMessage, responseError, type ApiRequest } from './api-client';
@@ -19,7 +20,6 @@ export function createNewSessionPreferences(options: {
   rows: () => readonly Readonly<CatalogModel>[];
   read: (key: string) => string | null;
   write: (key: string, value: string) => void;
-  escapeHtml: (text: string) => string;
   rendered: () => void;
 }) {
   let harness = 'pi', model = '', thinking = '';
@@ -49,7 +49,7 @@ export function createNewSessionPreferences(options: {
       else note = `Valid for this model: ${levels.map(thinkingLabel).join(', ')}`;
     }
     options.thinking.innerHTML = '<option value="">(default)</option>' + levels.map(level =>
-      `<option value="${options.escapeHtml(level)}">${options.escapeHtml(thinkingLabel(level))}</option>`).join('');
+      `<option value="${escapeHtml(level)}">${escapeHtml(thinkingLabel(level))}</option>`).join('');
     if (!levels.includes(thinking)) { thinking = ''; persist('thinking', ''); }
     options.thinking.disabled = disabled;
     options.thinking.value = disabled ? '' : thinking;

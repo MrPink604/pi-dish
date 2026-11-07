@@ -5,7 +5,6 @@ const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createHostDirectory, createHostPresentation, assignHostColor, sanitizeHostColors } = (0, browser_vm_js_1.loadBrowser)();
-const { escapeHtml } = require('../lib/helper-format');
 const { hostDisplayLabel } = require('../public/helpers');
 function fixture(extra = {}) {
     const directory = createHostDirectory({ initialCatalog: [{ base: '/hosts/peer', hostId: 'peer' }],
@@ -14,7 +13,7 @@ function fixture(extra = {}) {
     const presentation = createHostPresentation({ directory, initialColors: {}, initialOrder: [],
         persistColors: colors => writes.push({ colors: { ...colors } }),
         persistOrder: order => writes.push({ order: [...order] }),
-        onColorChanged: value => rows.push(value), escapeHtml,
+        onColorChanged: value => rows.push(value),
         displayLabel: host => hostDisplayLabel({ base: host.base,
             label: typeof host.label === 'string' ? host.label : '', name: typeof host.name === 'string' ? host.name : '' }),
         isDown: () => false, ...extra });

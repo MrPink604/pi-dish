@@ -1,3 +1,5 @@
+import { escapeHtml } from '../core/helper-format';
+import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
 import { countLabel } from './helper-format';
 import type { CatalogModel } from '../core/session-api';
 import { decodeModelCatalog } from '../core/session-api';
@@ -158,10 +160,6 @@ export function createModelPicker(options: {
   includeDisabled?: boolean;
   selected: () => string;
   onPick: (selector: string) => void;
-  match: (query: string, text: string) => readonly number[] | null;
-  score: (indices: readonly number[], text: string) => number;
-  highlight: (text: string, indices: readonly number[]) => string;
-  escapeHtml: (text: string) => string;
 }) {
   const { input, dropdown } = options;
   const listeners = new AbortController();
@@ -204,13 +202,13 @@ export function createModelPicker(options: {
     const q = query.trim();
     const matched = (label: string, ref: string) => {
       if (!q) return { indices: [] as readonly number[], score: 0, onLabel: false };
-      const onLabel = options.match(q, label);
-      const indices = onLabel || options.match(q, ref);
-      return indices ? { indices, score: options.score(indices, label), onLabel: !!onLabel } : null;
+      const onLabel = fuzzyMatch(q, label);
+      const indices = onLabel || fuzzyMatch(q, ref);
+      return indices ? { indices, score: fuzzyScore(indices, label), onLabel: !!onLabel } : null;
     };
     const rowHtml = (label: string, ref: string, hit: { indices: readonly number[]; onLabel: boolean }) => {
-      const text = hit.indices.length && hit.onLabel ? options.highlight(label, hit.indices) : options.escapeHtml(label);
-      return !ref || ref === label ? text : `${text} <span class="model-picker-ref">${options.escapeHtml(ref)}</span>`;
+      const text = hit.indices.length && hit.onLabel ? highlightFuzzy(label, hit.indices) : escapeHtml(label);
+      return !ref || ref === label ? text : `${text} <span class="model-picker-ref">${escapeHtml(ref)}</span>`;
     };
     const fixed = options.choices().flatMap(choice => {
       const hit = choice.key ? matched(choice.label, choice.key) : { indices: [], score: 0, onLabel: false };
@@ -224,7 +222,7 @@ export function createModelPicker(options: {
     if (q) named = named.sort((a, b) => b.score - a.score);
     const rows = fixed.concat(named.map(({ ref, html }) => ({ key: ref, html })));
     dropdown.innerHTML = rows.map(row =>
-      `<div class="cwd-option" data-key="${options.escapeHtml(row.key)}">${row.html}</div>`).join('');
+      `<div class="cwd-option" data-key="${escapeHtml(row.key)}">${row.html}</div>`).join('');
     dropdown.style.display = 'block';
     rowListeners = new AbortController();
     for (const row of Array.from(dropdown.querySelectorAll<HTMLElement>('.cwd-option'))) {

@@ -7,7 +7,7 @@ declare const directory: HostDirectory;
 declare const settings: Omit<HostSettingsOptions, 'directory' | 'color' | 'customColor' | 'resolveColor' | 'setColor'>;
 const presentation = createHostPresentation({
   directory, initialColors: {}, initialOrder: [],
-  escapeHtml: settings.escapeHtml, displayLabel: settings.displayLabel, isDown: settings.connections.isDown,
+  displayLabel: settings.displayLabel, isDown: settings.connections.isDown,
   persistColors: colors => {
     // @ts-expect-error Persistence receives a readonly preference snapshot.
     colors.peer = '#ffffff';

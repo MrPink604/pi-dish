@@ -1,3 +1,5 @@
+import { escapeHtml } from '../core/helper-format';
+import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
 import { record } from '../core/helper-values';
 import type { ApiRequest } from './api-client';
 import { sameDirectoryHost } from './directory-catalog';
@@ -113,10 +115,6 @@ export function createSpawnTargetPicker(options: {
   wrap: HTMLElement;
   dropdown: HTMLElement;
   targets: ReturnType<typeof createSpawnTargets>;
-  match: (query: string, text: string) => readonly number[] | null;
-  score: (indices: readonly number[], text: string) => number;
-  highlight: (text: string, indices: readonly number[]) => string;
-  escapeHtml: (text: string) => string;
 }) {
   const { input, nameInput, wrap, dropdown, targets } = options;
   const listeners = new AbortController();
@@ -151,13 +149,13 @@ export function createSpawnTargetPicker(options: {
     rendered = choices;
     const q = query.trim();
     let named = choices.filter(choice => !choice.pinned).flatMap(choice => {
-      const indices = q ? options.match(q, choice.label) : [];
-      return indices ? [{ choice, indices, score: q ? options.score(indices, choice.label) : 0 }] : [];
+      const indices = q ? fuzzyMatch(q, choice.label) : [];
+      return indices ? [{ choice, indices, score: q ? fuzzyScore(indices, choice.label) : 0 }] : [];
     });
     if (q) named = named.sort((a, b) => b.score - a.score);
     const rows = [...choices.filter(choice => choice.pinned).map(choice => ({ choice, indices: [] })), ...named];
     dropdown.innerHTML = rows.map(({ choice, indices }) =>
-      `<div class="cwd-option" data-key="${options.escapeHtml(spawnTargetKey(choice))}">${indices.length ? options.highlight(choice.label, indices) : options.escapeHtml(choice.label)}</div>`).join('');
+      `<div class="cwd-option" data-key="${escapeHtml(spawnTargetKey(choice))}">${indices.length ? highlightFuzzy(choice.label, indices) : escapeHtml(choice.label)}</div>`).join('');
     dropdown.style.display = 'block';
     rowListeners = new AbortController();
     for (const row of Array.from(dropdown.querySelectorAll<HTMLElement>('.cwd-option'))) {
