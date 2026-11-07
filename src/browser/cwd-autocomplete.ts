@@ -1,3 +1,5 @@
+import { escapeHtml } from '../core/helper-format';
+import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
 import type { ApiRequest } from './api-client';
 import { decodeKnownDirectories, sameDirectoryHost } from './directory-catalog';
 import type { DirectoryHost, KnownDirectory } from './directory-catalog';
@@ -8,10 +10,6 @@ export interface CwdAutocompleteOptions {
   host: () => Readonly<DirectoryHost> | null;
   request: ApiRequest;
   known: () => readonly KnownDirectory[];
-  match: (query: string, text: string) => readonly number[] | null;
-  score: (indices: readonly number[], text: string) => number;
-  highlight: (text: string, indices: readonly number[]) => string;
-  escapeHtml: (text: string) => string;
   onPick?: (path: string) => void;
   onSubmit?: (() => void) | null;
   onBlur?: (() => void) | null;
@@ -59,9 +57,9 @@ export function createCwdAutocomplete(options: CwdAutocompleteOptions) {
     for (const row of candidates) {
       if (seen.has(row.short)) continue;
       seen.add(row.short);
-      const indices = query ? options.match(query, row.short) : [];
+      const indices = query ? fuzzyMatch(query, row.short) : [];
       if (!indices) continue;
-      results.push({ ...row, indices, score: query ? options.score(indices, row.short) + (row.known ? 5 : 0) : 0 });
+      results.push({ ...row, indices, score: query ? fuzzyScore(indices, row.short) + (row.known ? 5 : 0) : 0 });
     }
     if (query) results.sort((a, b) => b.score - a.score);
     results = results.slice(0, 15);
@@ -71,7 +69,7 @@ export function createCwdAutocomplete(options: CwdAutocompleteOptions) {
     resultOwner = ownsRows;
     if (!results.length) { dropdown.style.display = 'none'; return; }
     dropdown.innerHTML = results.map(row =>
-      `<div class="cwd-option" data-path="${options.escapeHtml(row.short)}">${row.known ? '<span class="cwd-known">★</span>' : ''}${options.highlight(row.short, row.indices)}</div>`).join('');
+      `<div class="cwd-option" data-path="${escapeHtml(row.short)}">${row.known ? '<span class="cwd-known">★</span>' : ''}${highlightFuzzy(row.short, row.indices)}</div>`).join('');
     dropdown.style.display = 'block';
     for (const row of Array.from(dropdown.querySelectorAll<HTMLElement>('.cwd-option'))) {
       row.addEventListener('mousedown', event => {

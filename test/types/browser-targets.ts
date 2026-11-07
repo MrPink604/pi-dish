@@ -15,5 +15,4 @@ const currentTarget = controller.current().target;
 if (currentTarget) currentTarget.socket = '/retarget';
 // @ts-expect-error resume requires the host route, not an ambiguous id
 controller.resume('host-a');
-createSpawnTargetPicker({ input, nameInput: input, wrap: container, dropdown: container, targets: controller,
-  match: () => [], score: () => 0, highlight: text => text, escapeHtml: text => text });
+createSpawnTargetPicker({ input, nameInput: input, wrap: container, dropdown: container, targets: controller });

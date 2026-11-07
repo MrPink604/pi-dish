@@ -3,7 +3,9 @@ import { sameDirectoryHost } from './directory-catalog';
 import type { DirectoryHost } from './directory-catalog';
 import { decodeModelCatalog } from '../core/session-api';
 import type { CatalogModel } from '../core/session-api';
-import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
+import { escapeHtml } from '../core/helper-format';
+import { OMP_MODEL_ROLES, composeModelRoleRef, modelRoleLevels, parseModelRoleRef } from '../core/helper-models';
+import { shortCwd } from './helper-format';
 import { catalogModelSelector, createModelPicker } from './model-catalog';
 import type { ModelPicker, ModelPickerChoice } from './model-catalog';
 import { decodeHarnessConfig, decodeHarnessAgents, decodeHarnessSettings, stringRecord } from './harness-settings-data';
@@ -16,7 +18,6 @@ export interface HarnessSettingsScope {
   readonly label: string;
   readonly tab?: string;
 }
-interface RoleDefinition { readonly key: string; readonly name: string; readonly description: string }
 interface SettingsView {
   agents: HarnessAgents['agents'];
   settings: HarnessAgents['settings'];
@@ -35,16 +36,10 @@ export function createHarnessSettings(options: {
   host: (id: string | null) => Readonly<DirectoryHost> | null;
   request: ApiRequest;
   fallbackModels: (host: Readonly<DirectoryHost>, harness: string) => readonly Readonly<CatalogModel>[];
-  escapeHtml: (text: string) => string;
-  shortCwd: (cwd: string) => string;
-  roleDefinitions: readonly RoleDefinition[];
-  parseModelRoleRef: (value: string, known: readonly string[]) => { model: string; level: string };
-  composeModelRoleRef: (model: string, level: string) => string;
-  modelRoleLevels: (model: Readonly<CatalogModel> | undefined) => readonly string[];
   onSaved: (scope: HarnessSettingsScope) => void;
 }) {
-  const { root, escapeHtml, shortCwd, parseModelRoleRef, composeModelRoleRef, modelRoleLevels } = options;
-  const AGENT_MODEL_ROLE_REFS = options.roleDefinitions.map(role => `@${role.key}`);
+  const { root } = options;
+  const AGENT_MODEL_ROLE_REFS = OMP_MODEL_ROLES.map(role => `@${role.key}`);
   let harnessSettings: SettingsView | null = null;
   let sequence = 0;
   let activeTab = 'agents';
@@ -91,15 +86,14 @@ export function createHarnessSettings(options: {
       input, dropdown, rows: () => harnessSettings?.models || [], choices: () => choices, includeDisabled: true,
       selected: () => input.dataset.value || '',
       onPick: value => { input.dataset.value = value; picked(); },
-      match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
     });
     picker.sync();
     pickers.push({ input, picker });
   }
   function buildRoleRows(config: HarnessConfig | null | undefined) {
     const global = stringRecord(config?.globalModelRoles), effective = stringRecord(config?.modelRoles);
-    const canonical = new Set(options.roleDefinitions.map(role => role.key));
-    return [...options.roleDefinitions, ...Object.keys(global).filter(key => !canonical.has(key)).sort()
+    const canonical = new Set(OMP_MODEL_ROLES.map(role => role.key));
+    return [...OMP_MODEL_ROLES, ...Object.keys(global).filter(key => !canonical.has(key)).sort()
       .map(key => ({ key, name: key, description: 'Custom role' }))].map(role => {
         const value = global[role.key] || '', effectiveValue = effective[role.key] || '';
         return { ...role, value, override: effectiveValue && effectiveValue !== value ? effectiveValue : null };

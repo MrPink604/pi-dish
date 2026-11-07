@@ -2,7 +2,6 @@ import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
 const { createHostDirectory, createHostPresentation, assignHostColor, sanitizeHostColors } = loadBrowser();
-const { escapeHtml }: typeof import('../src/core/helper-format.js') = require('../lib/helper-format');
 const { hostDisplayLabel }: typeof import('../src/browser/shared-helpers.js') = require('../public/helpers');
 type PresentationOptions = Parameters<typeof createHostPresentation>[0];
 function fixture(extra: Partial<PresentationOptions> = {}) {
@@ -12,7 +11,7 @@ function fixture(extra: Partial<PresentationOptions> = {}) {
   const presentation = createHostPresentation({ directory, initialColors: {}, initialOrder: [],
     persistColors: colors => writes.push({ colors: { ...colors } }),
     persistOrder: order => writes.push({ order: [...order] }),
-    onColorChanged: value => rows.push(value), escapeHtml,
+    onColorChanged: value => rows.push(value),
     displayLabel: host => hostDisplayLabel({ base: host.base,
       label: typeof host.label === 'string' ? host.label : '', name: typeof host.name === 'string' ? host.name : '' }),
     isDown: () => false, ...extra });

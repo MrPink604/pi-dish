@@ -1,3 +1,4 @@
+import { escapeHtml } from '../core/helper-format';
 import { errorMessage, type ApiRequest } from './api-client';
 import type { HostDirectory } from './host-directory';
 import type { createHostConnections } from './host-connections';
@@ -25,7 +26,6 @@ export interface HostSettingsOptions {
   protocol: () => string;
   promptToken: (label: string) => string | null;
   displayLabel: (host: { base: string; label?: unknown; name?: unknown }) => string;
-  escapeHtml: (value: unknown) => string;
   color: (hostId: HostId) => string;
   customColor: (hostId: HostId) => boolean;
   resolveColor: (color: string) => string | null;
@@ -54,7 +54,7 @@ export function createHostSettings(options: HostSettingsOptions) {
   let view: HostSettingsView | null = null;
   let sequence = 0;
   let checking = false;
-  const { directory, connections, escapeHtml, displayLabel } = options;
+  const { directory, connections, displayLabel } = options;
   function status(owner: HostSettingsView, message: string, error = false): void {
     if (view !== owner) return;
     owner.status.textContent = message;

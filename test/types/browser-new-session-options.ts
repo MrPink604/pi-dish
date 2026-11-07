@@ -4,7 +4,7 @@ declare const select: HTMLSelectElement;
 declare const note: HTMLElement;
 declare const rows: readonly Readonly<CatalogModel>[];
 const preferences = createNewSessionPreferences({ thinking: select, hiddenNote: note, thinkingNote: note,
-  rows: () => rows, read: () => null, write: () => {}, escapeHtml: text => text, rendered: () => {} });
+  rows: () => rows, read: () => null, write: () => {}, rendered: () => {} });
 preferences.restore('omp'); preferences.render();
 const selected: string = preferences.selectedModel();
 void selected;

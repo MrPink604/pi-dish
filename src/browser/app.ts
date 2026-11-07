@@ -1,11 +1,7 @@
 import { createAppModels } from './app-models';
-import { OMP_MODEL_ROLES, composeModelRoleRef, modelRoleLevels, parseModelRoleRef } from '../core/helper-models';
-import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';
-import { fuzzyMatch, fuzzyScore, highlightFuzzy } from '../core/helper-query';
 import { sessionRef } from '../core/helper-refs';
 import { harnessBadgeInfo, hostDisplayLabel, hostSupportsCapability, hostSupportsTerminal, parseSessionKey, sessionKey, sessionRefKey } from './helper-identity';
-import { shortCwd } from './helper-format';
 import { createHostView } from './host-view';
 import { createHostDirectory } from './host-directory';
 import { createHostTransport, createSessionApi, sendJson, type ApiRequest, type HostTarget } from './api-client';
@@ -252,7 +248,7 @@ const hostPresentation: ReturnType<typeof createHostPresentation> = createHostPr
     if (rows) renderHostsSection();
     renderSessions();
   },
-  escapeHtml, displayLabel: host => hostDisplayLabel(hostView(host)), isDown: hostDown,
+  displayLabel: host => hostDisplayLabel(hostView(host)), isDown: hostDown,
 });
 
 const sessionState: ReturnType<typeof createSessionState> = createSessionState({
@@ -677,7 +673,7 @@ const hostSettings: ReturnType<typeof createHostSettings> = createHostSettings({
   directory: hostDirectory, connections: hostConnections, discovery: hostDiscovery,
   request, protocol: () => location.protocol,
   promptToken: label => prompt(`Token for ${label}`, ''),
-  displayLabel: host => hostDisplayLabel({ base: host.base, label: host.label ? String(host.label) : '', name: host.name ? String(host.name) : '' }), escapeHtml,
+  displayLabel: host => hostDisplayLabel({ base: host.base, label: host.label ? String(host.label) : '', name: host.name ? String(host.name) : '' }),
   color: hostColor, customColor: hostId => hostPresentation.isCustom(hostId), resolveColor: resolveColorToHex,
   setColor: (...args) => hostPresentation.setColor(...args),
   onCatalogSaved: () => {
@@ -878,7 +874,6 @@ const harnessSettingsController: ReturnType<typeof createHarnessSettings> = crea
   root: (document.getElementById('harnessSettingsModal') as HTMLElement), host: hostEntryFor, request,
   fallbackModels: (host, harness) => modelCatalog.scope?.harnessId === harness
     && sameDirectoryHost(modelCatalog.scope?.host || null, host) ? modelCatalog.rows() : [],
-  escapeHtml, shortCwd, roleDefinitions: OMP_MODEL_ROLES, parseModelRoleRef, composeModelRoleRef, modelRoleLevels,
   onSaved: scope => {
     if (newSessionController.isOpen() && newSessionController.selectedHarness() === scope.harnessId
         && newSessionController.hostId() === scope.hostId && newSessionController.cwd() === scope.cwd) void newSessionConfigPreview.load(newSessionController.cwd());
@@ -906,7 +901,6 @@ function createCwdAutocomplete({
 }: Pick<CwdAutocompleteOptions, 'input' | 'dropdown' | 'known' | 'onPick' | 'onSubmit' | 'onBlur'> & { hostId?: () => string | null }) {
   return createCwdAutocompleteBase({ input, dropdown,
     host: () => hostEntryFor(hostId()), request, known,
-    match: fuzzyMatch, score: fuzzyScore, highlight: highlightFuzzy, escapeHtml,
     onPick, onSubmit, onBlur,
   });
 }
