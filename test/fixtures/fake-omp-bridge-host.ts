@@ -3,11 +3,8 @@ import * as path from 'node:path';
 import { createBridge } from '../../extensions/pi-dish-bridge/core.js';
 import { bridgeDescriptor, createHarnessBridge } from '../../extensions/pi-dish-bridge-omp/index.js';
 import { patchOmpAgentSession } from '../../extensions/pi-dish-bridge-omp/native-state.js';
+import { isObject, type HostObject as HostRecord } from '../../extensions/pi-dish-bridge/host.js';
 
-type HostRecord = Record<PropertyKey, unknown>;
-function record(value: unknown): value is HostRecord {
-  return value !== null && (typeof value === 'object' || typeof value === 'function');
-}
 interface FixtureUI {
   askDialog(questions: unknown): Promise<unknown>;
 }
@@ -251,19 +248,19 @@ if (stepFile) {
     if (!fs.existsSync(stepFile)) return;
     let step: unknown;
     try { step = JSON.parse(fs.readFileSync(stepFile, 'utf8')); } catch { return; }
-    if (!record(step) || step.seq === appliedSeq) return;
+    if (!isObject(step) || step.seq === appliedSeq) return;
     appliedSeq = step.seq;
     const session = nativeSession!;
     if (step.subagentRead === true) subagentSession!.getTodoPhases();
     if (Array.isArray(step.todos)) session.setTodoPhases(step.todos);
     if (typeof step.fastMode === 'boolean') session.setFastMode(step.fastMode);
-    if (record(step.fastModeModel)) session.model = step.fastModeModel;
+    if (isObject(step.fastModeModel)) session.model = step.fastModeModel;
     if ('fastModeSettable' in step) session.fastModeSettable = step.fastModeSettable === true;
     if ('goal' in step) session.setGoalModeState(step.goal ?? undefined);
-    if (record(step.advisor)) {
+    if (isObject(step.advisor)) {
       session.advisor.active = step.advisor.active === true;
       session.advisor.advisors = Array.isArray(step.advisor.advisors)
-        ? step.advisor.advisors.flatMap((value: unknown) => record(value) && typeof value.name === 'string' && typeof value.status === 'string'
+        ? step.advisor.advisors.flatMap((value: unknown) => isObject(value) && typeof value.name === 'string' && typeof value.status === 'string'
           ? [{ name: value.name, status: value.status }] : [])
         : [];
       if (step.advisor.readOnly) {
