@@ -27,36 +27,21 @@ export interface PathCompletionOptions {
     cwd?: string | null;
     limit?: number;
 }
-/**
- * Fuzzy-search files under basePath. Returns [{ path, gitStatus }] with
- * paths relative to basePath. Empty query returns the index's
- * frecency/recency ordering — a useful "recent files" list.
- */
+/** Paths relative to basePath. An empty query returns frecency order ("recent files"). */
 export declare function searchFiles(basePath: string | null | undefined, query: string | null | undefined, limit?: number): Promise<FileSearchResult[]>;
-/**
- * Fuzzy-search directories under $HOME for the new-session cwd picker.
- * Returns [{ path, short }] best-first; `short` is the ~-relative form the
- * match was scored against.
- */
+/** Best-first; `short` is the ~-relative form the match was scored against. */
 export declare function searchHomeDirs(query: string | null | undefined, limit?: number): HomeDirSearchResult[];
 /**
- * List the immediate subdirectories of `inputPath` for the new-session cwd
- * tree. Expands a leading `~`, then requires an absolute path (throws a
- * badRequest error otherwise — the route turns it into a 400). Directories
- * only, dotdirs and SKIP_DIRS excluded, locale-sorted, capped at 500. An
- * unreadable/nonexistent dir degrades to `{ path, dirs: [], error }` (200) so
- * the tree never blanks.
+ * Subdirectories for the new-session cwd tree. Non-absolute paths throw
+ * badRequest (400); an unreadable dir degrades to `{ path, dirs: [], error }`
+ * so the tree never blanks.
  */
 export declare function getDirChildren(inputPath: unknown): DirChildrenResult;
-/** Does this @-mention token name a filesystem location rather than a
- *  cwd-relative fuzzy query? Matches /abs, ~ , ~/x, ./x, ../x. */
+/** A filesystem location rather than a cwd-relative fuzzy query: /abs, ~, ~/x, ./x, ../x. */
 export declare function isPathCompletionToken(token: string): boolean;
 /**
- * Complete one path segment, shell-style. The directory part of the token is
- * kept verbatim in the results (so accepting a suggestion preserves the form
- * the user typed — ~/x stays ~-relative, /x stays absolute); only the partial
- * basename after the last slash is matched. Directories come back with
- * isDir:true so the client can drill into them. Dotfiles are hidden unless
- * the partial itself starts with a dot.
+ * Shell-style completion of the partial basename after the last slash. The
+ * typed directory part is kept verbatim (~/x stays ~-relative). Dotfiles are
+ * hidden unless the partial starts with a dot.
  */
 export declare function completePath(token: string, { cwd, limit }?: PathCompletionOptions): PathCompletionResult[];

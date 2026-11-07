@@ -1,14 +1,9 @@
 /**
- * Entrypoint of the host bundle a hub deploys over ssh (remote-hosts.ts,
- * `deploy: true`). The bundle lives at `<root>/lib/pi-dish-host.js`, so the
- * application root is this file's parent directory, the same layout every
- * `path.resolve(__dirname, '..')` resource lookup already assumes.
- *
- * The hub owns this process's lifetime through the ssh channel's stdin:
- *   - the first line is the bearer token the hub will present; it travels
- *     on stdin rather than in argv or the environment of the remote command;
- *   - end of input means the hub's ssh session is gone, and the host exits
- *     through the ordinary SIGTERM path. Agents keep running in tmux.
+ * Entrypoint of the host bundle a hub deploys over ssh, installed at
+ * `<root>/lib/pi-dish-host.js` so `path.resolve(__dirname, '..')` is the app root.
+ * The hub owns this process via stdin: the first line is its bearer token (kept
+ * out of argv/env); EOF means the ssh session is gone and the host exits via
+ * the SIGTERM path. Agents keep running in tmux.
  */
 import path = require('node:path');
 import { startServer } from './server-app';

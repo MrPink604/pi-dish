@@ -19,7 +19,7 @@ export interface TmuxServer {
         attached: boolean;
     }[];
 }
-/** Retain legacy environment interpolation, including undefined values. */
+/** Values are interpolated as-is, including undefined. */
 export type SpawnEnvironment = Readonly<Record<string, unknown>>;
 interface PaneCommand {
     cwd?: unknown;
@@ -38,9 +38,8 @@ export interface RespawnOptions extends PaneTarget, PaneCommand {
     beforeAction?: (() => (() => undefined) | Promise<() => undefined>) | null;
 }
 /**
- * A decoded placement is still only persisted evidence, never live authority.
- * Optional observations are retained verbatim; consumers must narrow tokens or
- * wrapper paths before using them. Legacy process numbers/strings are not coerced.
+ * Persisted evidence, never live authority. Optional observations are kept
+ * verbatim and uncoerced; consumers must narrow them before use.
  */
 export interface SpawnPlacement extends PaneTarget, Record<string, unknown> {
     createdAt?: unknown;
@@ -51,10 +50,7 @@ export interface SpawnPlacement extends PaneTarget, Record<string, unknown> {
     /** Prime daemon transport: the root agent this pane's launch created or resumed. */
     primeAgent?: unknown;
 }
-/**
- * A Prime root agent as recorded by a pi-dish launch: the daemon that owns it
- * and the exact root/worker identity observed at registration time.
- */
+/** Daemon owning a pi-dish-launched Prime root agent, plus the root/worker identity seen at registration. */
 export interface PrimeAgentPlacement {
     daemonSocket: string;
     activeSessionId: string;
@@ -79,7 +75,6 @@ export interface PaneCleanupError extends Error {
 }
 export declare function isTmuxAvailable(): boolean;
 export declare function tmuxTmpdir(): string;
-/** Enumerate live socket servers under the tmux tmpdir, skipping stale sockets. */
 export declare function listServers(): Promise<TmuxServer[]>;
 export declare function isSocketAllowed(socket: unknown): socket is string;
 /** Open a detached window or session with child argv and tmux -e KEY=VALUE flags. */
@@ -100,7 +95,6 @@ export declare function killPane(socket: string, paneId: string): Promise<void>;
  * exits and they are reparented; never mistake PID reuse for the old writer.
  */
 export declare function paneProcessState(socket: string, paneId: string, { knownProcesses }?: PaneProcessOptions): Promise<PaneProcessState>;
-/** Exact birth identity of the process currently anchoring a tmux pane. */
 export declare function paneProcessIdentity(socket: string, paneId: string): Promise<ProcessIdentity | null>;
 /**
  * Kill the pane, then wait for both tmux and its captured process tree to exit.
@@ -116,17 +110,15 @@ export declare function paneLocation(socket: string, paneId: string): Promise<Pa
 export declare function findPaneByPid(pid: number | string | null | undefined): Promise<(PaneTarget & PaneLocation) | null>;
 export declare function paneExists(socket: string, paneId: string): Promise<boolean>;
 /**
- * Clients attached to the pane's session, including grouped viewer sessions
- * (attachPaneArgv). Null when the pane cannot be read: callers treat that as
- * "possibly watched", never as "nobody is looking".
+ * Clients attached to the pane's session, including grouped viewer sessions.
+ * Null (unreadable) means "possibly watched", never "nobody is looking".
  */
 export declare function paneAttachedClients(socket: string, paneId: string): Promise<number | null>;
 /**
- * A viewer gets a throwaway grouped session: independent current window, same
- * windows, destroyed on detach, without stealing the desktop client's focus.
+ * Viewers get a throwaway grouped session (own current window, destroyed on
+ * detach) so the desktop client's focus is not stolen.
  */
 export declare function attachPaneArgv(socket: string, paneId: string): Promise<string[] | null>;
-/** Server prefix key, or null when unavailable. */
 export declare function getPrefixKey(socket: string): Promise<string | null>;
 /** Persisted placements by route id. Evidence only: callers re-read live state before acting. */
 export declare function listSpawns(): Record<string, SpawnPlacement>;

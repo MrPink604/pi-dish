@@ -1,11 +1,8 @@
 /**
  * Learned provider cache lifetimes. Providers report cache token activity, not
- * expiry timestamps, so each cache-active assistant message is a Bernoulli
- * probe of "did the cache survive the idle gap?"; a weighted ridge logistic fit
- * of P(hit | gap) yields a TTL and a reliability slope, with a prior anchored
- * on the built-in ladder. Ingestion rides the session indexer and dedups by
- * (file, timestamp), so a restart's re-parse is idempotent; state persists via
- * dish-store.
+ * expiry, so each cache-active assistant message is a Bernoulli probe of "did
+ * the cache survive the idle gap?"; a weighted ridge logistic fit of P(hit | gap)
+ * yields a TTL. Ingestion dedups by (file, timestamp) so re-parses are idempotent.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -107,12 +104,9 @@ interface LifetimeStore {
 
 const STORE_VERSION = 1;
 // The window is stratified by idle gap: at most WINDOW_BUCKET_OBS probes per
-// doubling of the gap (<15s, 15-30s, 30s-1m, … ≥17h), then WINDOW_MAX_OBS in
-// total, always evicting the oldest probe of the fullest bucket. A plain FIFO
-// filled with seconds-apart tool-loop probes and evicted the rare long-idle
-// returns — the only evidence of where a cache expires — so almost no
-// identity ever observed a miss. Retention conditioned on the gap alone,
-// never on the outcome, leaves the fitted P(hit | gap) unbiased.
+// doubling of the gap, then WINDOW_MAX_OBS total, evicting the oldest probe of
+// the fullest bucket. A plain FIFO fills with tool-loop probes and evicts the
+// rare long-idle misses; retaining by gap alone keeps P(hit | gap) unbiased.
 const WINDOW_MAX_OBS = 240;
 const WINDOW_BUCKET_OBS = 24;
 const WINDOW_BUCKET_BASE_MS = 15_000;
@@ -125,10 +119,9 @@ const FALLBACK_PRIOR_TTL_MS = 10 * 60_000;
 const MIN_EFFECTIVE_OBS = 20;
 const MIN_EFFECTIVE_OUTCOMES = 3;
 const MIN_SLOPE = 0.5;
-// The crossing must be covered by real data on both sides, loosely: a clean
-// deterministic cliff is separable (max hit gap < min miss gap), so exact
-// bracketing would never activate. A factor two still rejects crossings
-// extrapolated past anything the user's usage pattern ever probed.
+// The crossing must be bracketed by real data, loosely: a clean cliff is
+// separable (max hit gap < min miss gap), so exact bracketing would never
+// activate. A factor two still rejects crossings extrapolated past the data.
 const BRACKET_TOLERANCE = 2;
 const BRIER_ALPHA = 0.15;
 const REFIT_MS = 60_000;
@@ -196,8 +189,7 @@ function decodeStore(value: unknown): Map<string, IdentityState> {
   const now = Date.now();
   for (const [key, raw] of Object.entries(rawIdentities)) {
     if (key.length > 500 || !isRecord(raw)) continue;
-    // Re-admitting in time order applies the current window policy to stores
-    // written under an older one.
+    // Re-admit in time order so the current window policy applies to old stores.
     const obs: Observation[] = [];
     for (const o of decodeObservations(raw.obs).sort((a, b) => a.t - b.t)) admitObservation(obs, o, now);
     if (!obs.length) continue;
@@ -249,10 +241,8 @@ export function flushCacheLifetime(): void {
 }
 
 /**
- * Weighted ridge logistic fit of P(hit | gap) = σ(α + β·ln gap). Newton
- * iterations on the 2-parameter model; the L2 prior pulls toward a steep
- * cliff at the built-in ladder's TTL so sparse data shrinks to the status
- * quo instead of extrapolating.
+ * Newton iterations on P(hit | gap) = σ(α + β·ln gap); the L2 prior pulls toward
+ * a steep cliff at the built-in TTL so sparse data shrinks to the status quo.
  */
 function fitObservations(obs: readonly Observation[], now: number, priorTtlMs: number): Fit | null {
   if (obs.length < 4) return null;
@@ -299,9 +289,8 @@ function fitObservations(obs: readonly Observation[], now: number, priorTtlMs: n
 }
 
 /**
- * Activation gates, in the order the UI explains them. `value`/`need` are the
- * decayed quantity and its threshold; the bracket gate is pass/fail only.
- * Without a fit (fewer than four usable probes) only support can be judged.
+ * Activation gates in UI order. `value`/`need` are the decayed quantity and
+ * threshold; the bracket gate is pass/fail. Without a fit only support is judged.
  */
 function fitGates(fit: Fit | null, rawObservations: number): CacheLifetimeGate[] {
   if (!fit) {
@@ -467,11 +456,9 @@ function splitIdentity(identity: string): { api: string; provider: string; model
 }
 
 /**
- * Serve-time overlay: substitute an active learned TTL for built-in
- * 'estimate'/'minimum' projections, and supply one where no built-in window
- * exists at all ('unknown' — never served itself). Documented 'fixed'
- * retentions and user cacheTtlOverrides rules always win; the learner only
- * replaces guesses.
+ * Substitute an active learned TTL for built-in 'estimate'/'minimum'
+ * projections, or supply one for 'unknown'. Documented 'fixed' retentions and
+ * user overrides always win; the learner only replaces guesses.
  */
 export function applyLearnedCacheExpiry(expiry: CacheExpiry | null,
   config?: CacheRetentionConfig): ServedCacheExpiry | null {
@@ -486,7 +473,6 @@ export function applyLearnedCacheExpiry(expiry: CacheExpiry | null,
     expiresAt: expiry.refreshedAt + learned.retentionMs, basis: 'learned' };
 }
 
-/** Per-identity fitted state for diagnostics and the provider-stats surface. */
 export function cacheLifetimeSnapshot(): CacheLifetimeSnapshotEntry[] {
   const store = getStore();
   const now = Date.now();
@@ -506,11 +492,8 @@ export function cacheLifetimeSnapshot(): CacheLifetimeSnapshotEntry[] {
   return out;
 }
 
-/**
- * Everything the cache-lifetimes view explains per identity: the policy
- * sessions are served (with the same precedence as applyLearnedCacheExpiry),
- * the fitted curve, each activation gate, and the window's probes.
- */
+/** Per identity: the served policy (same precedence as applyLearnedCacheExpiry),
+ * fitted curve, activation gates, and window probes. */
 export function cacheLifetimeReport(config: CacheRetentionConfig = loadCacheRetentionConfig()): CacheLifetimeReportEntry[] {
   const store = getStore();
   const now = Date.now();

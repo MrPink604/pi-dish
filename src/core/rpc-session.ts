@@ -1,7 +1,4 @@
-/**
- * Manages pi sessions spawned via `pi --mode rpc`: {"type": command, ...} in,
- * {"type":"response"|event, ...} out. Framing is LF-only, never readline's.
- */
+/** `pi --mode rpc` sessions. Framing is LF-only, never readline's. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { once } from 'events';
 import { fileURLToPath } from 'url';
@@ -60,7 +57,7 @@ class RPCSession extends TransportSession {
     this.state = null;
     this.sessionFile = null;
     this.cwd = null;
-    this.stderrTail = []; // last few stderr lines for error reporting
+    this.stderrTail = [];
     this.recoveryBridgeOwned = false;
     this.recoveryInstanceId = crypto.randomUUID();
     this.recoveryStartTime = processIdentity(proc.pid)?.startTime ?? null;
@@ -80,10 +77,8 @@ class RPCSession extends TransportSession {
       },
     });
 
-    // pi can die (crash/OOM) before the 'exit' event flips this.alive, so a
-    // stdin.write() can hit a broken pipe and emit an async 'error'. Without
-    // a listener that throws and crashes the server; swallow it — the 'exit'
-    // handler below rejects any pending requests with the real cause.
+    // pi can die before 'exit' flips this.alive; swallow broken-pipe errors so
+    // they don't crash the server. The 'exit' handler rejects pending requests.
     proc.stdin.on('error', () => {});
     proc.stdout.on('error', () => {});
     proc.stderr.on('error', () => {});
@@ -143,7 +138,6 @@ class RPCSession extends TransportSession {
   _handleMessage(input: unknown) {
     const frame = decodeRPCFrame(input);
     if (!frame) return;
-    // Response to a command — correlate by id.
     if (frame.kind === 'response') {
       const msg = frame.response;
       this.pending.settle(msg.id, msg.success, msg.data, msg.error ?? undefined, 'Command failed');
@@ -199,8 +193,7 @@ class RPCSession extends TransportSession {
     if (opts.images?.length) params.images = opts.images;
     return this.send('steer', params);
   }
-  // The session list reads state.model/state.sessionName, so the setters patch
-  // it alongside the harness.
+  // The session list reads state.model/state.sessionName, so setters patch it too.
   async setModel(provider: string, modelId: string) {
     const model = await this.send('set_model', { provider, modelId });
     if (model) this.state = { ...(this.state || {}), model };
@@ -251,11 +244,8 @@ async function _initRPCSession(proc: ChildProcessWithoutNullStreams, opts: { cwd
   const spawnError = new Promise<never>((_, reject) => {
     proc.on('error', reject); // e.g. ENOENT: pi not on PATH
   });
-  // The 'error' listener stays attached for the process's lifetime (removing
-  // it would turn a late 'error' event into an uncaught exception), so this
-  // promise can reject long after the startup race stopped listening — give
-  // it a permanent handler or that late rejection kills the whole server
-  // under Node's default unhandled-rejection policy.
+  // The 'error' listener stays attached for the process lifetime, so this can
+  // reject after startup; an unhandled late rejection would kill the server.
   spawnError.catch(() => {});
 
   const deadline = Date.now() + 20000;
@@ -274,11 +264,8 @@ async function _initRPCSession(proc: ChildProcessWithoutNullStreams, opts: { cwd
         throw new TypeError('Invalid RPC session file');
       }
       const sessionFile = state.sessionFile || null;
-      // Use the session file basename as the id — same convention as the
-      // bridge registry, so a spawned pi that also loads the bridge extension
-      // doesn't show up twice under two different ids. Generic session.jsonl
-      // files are the exception: their stable identity is the validated Pi
-      // header id, matching bridge and historical discovery behavior.
+      // Id = session file basename, matching the bridge registry so a bridged
+      // pi isn't listed twice; generic session.jsonl uses the Pi header id.
       const basenameId = sessionFile ? path.basename(sessionFile, '.jsonl') : null;
       const headerId = safeHeaderSessionId(state?.sessionId);
       const realId = validatedNativeId(basenameId === 'session' && headerId
@@ -289,16 +276,13 @@ async function _initRPCSession(proc: ChildProcessWithoutNullStreams, opts: { cwd
       session.compacting = !!state?.isCompacting;
       session.recoveryObserver.initialize();
       rpcSessions.set(realId, session);
-      // Only clear the map if it still points at *this* session — otherwise a
-      // stale duplicate's exit would evict a newer live session under the same
-      // id (they share the session-file basename).
+      // Only evict if still ours: duplicates share the basename id.
       session.on('exit', () => { if (rpcSessions.get(realId) === session) rpcSessions.delete(realId); });
       session._refreshStats();
       return session;
     } catch (e) {
       lastError = e;
-      // Retrying a permanent route-id failure cannot make this child usable.
-      // Leave through the common kill path below, never leak a failed startup.
+      // A route-id failure is permanent; break to the common kill path.
       if (e instanceof RPCIdentityError) break;
       if (errorCode(e) === 'ENOENT') throw new Error(`failed to spawn pi: ${errorMessage(e)}`);
       await new Promise(r => setTimeout(r, 500));
@@ -322,15 +306,13 @@ function spawnPi(args: unknown[], cwd: unknown) {
   // Escape hatch for complex aliases/functions. Off by default because
   // interactive shell startup files often assume a TTY.
   if (env.PI_DISH_USE_PI_ALIAS === '1' && shell && ['zsh', 'bash'].includes(shellName)) {
-    // Leave the command word unquoted so the interactive shell expands the
-    // `pi` alias — quoting it (`'pi'`) suppresses alias expansion, defeating
-    // the whole point of this escape hatch. Args are still quoted.
+    // Command word unquoted so the shell expands the `pi` alias; args stay quoted.
     const command = ['pi', ...args.map(shellQuote)].join(' ');
     // Native spawn owns cwd validation; no first-party coercion before it.
     return spawn(shell, ['-ic', command], { cwd: cwd as string | undefined, stdio: ['pipe', 'pipe', 'pipe'], env });
   }
 
-  // Native spawn retains legacy argument coercion/rejection; this does not validate saved selections.
+  // Native spawn does the argument coercion/rejection; saved selections are not validated here.
   return spawn(argv[0], [...argv.slice(1), ...args] as string[], {
     cwd: cwd as string | undefined,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -348,18 +330,15 @@ async function createRPCSession(opts: RPCLaunchOptions = {}) {
   const proc = spawnPi(args, cwd);
 
   if (typeof cwd === 'string' || cwd === undefined) return _initRPCSession(proc, { cwd });
-  // A failed native spawn has no pid. Retain the initializer's existing native
-  // error path before attempting any metadata conversion.
+  // A failed native spawn has no pid; keep the initializer's native error path.
   if (proc.pid === undefined) return _initRPCSession(proc);
   let metadataCwd: string;
   try {
-    // File URL metadata is a path, not a URL string. Native-accepted byte cwd
-    // does not have matching decoding in async spawn; never guess its metadata.
+    // Byte-buffer cwd has no faithful decoding; never guess its metadata.
     if (!(cwd instanceof URL)) throw new TypeError('Cannot faithfully represent native RPC cwd metadata');
     metadataCwd = fileURLToPath(cwd);
   } catch (error) {
-    // No RPCSession owns this successfully spawned child yet. Await its actual
-    // close, and let any native error take precedence over the metadata failure.
+    // No RPCSession owns this child yet; await its close so native errors take precedence.
     const closed = once(proc, 'close');
     proc.kill('SIGKILL');
     await closed;
@@ -368,8 +347,7 @@ async function createRPCSession(opts: RPCLaunchOptions = {}) {
   return _initRPCSession(proc, { cwd: metadataCwd });
 }
 
-// Resuming takes up to 20s and the registry is only populated at the end, so
-// two rapid resumes would otherwise spawn two pis against one JSONL.
+// Resume takes up to 20s before registering; dedupe so two resumes don't spawn two pis on one JSONL.
 const resumingByPath = new Map<string, Promise<RPCSession>>();
 
 async function resumeRPCSession(sessionPath: string, cwd?: string) {

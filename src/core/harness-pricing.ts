@@ -9,9 +9,8 @@ import * as YAML from 'yaml';
 import { getPricingModels } from './pi-sdk';
 import { finite, record } from './helper-values';
 
-// Catalog refreshes are opportunistic. A snapshot older than six hours is
-// refreshed on the next pricing-backed request, but remains the last-known
-// source if the harness is offline or the command fails.
+// A snapshot older than six hours is refreshed on the next pricing-backed
+// request, but stays the last-known source if the refresh fails.
 export const CATALOG_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const FAILED_REFRESH_RETRY_MS = 5 * 60 * 1000;
 const COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite'] as const;
@@ -24,8 +23,7 @@ export interface UsageCost {
   total: number;
 }
 interface CatalogModel {
-  // External catalogs historically accept truthy identities; matching stringifies
-  // them rather than imposing the SDK registry's stricter identity contract.
+  // External catalogs accept truthy identities; matching stringifies them.
   provider: unknown;
   id: unknown;
   cost: Partial<Record<CostKey, number>>;
@@ -44,12 +42,9 @@ interface PricingState {
 interface OverridesCacheEntry { stats: fs.Stats; entries: CatalogModel[] }
 type HarnessInput = string | null | undefined;
 const PRICED_HARNESSES: Readonly<Record<string, true>> = { pi: true, omp: true };
-// Subscription-backed providers whose catalogs deliberately carry zero rates
-// because there is no per-request price to calculate (ZAI Coding Plan, Kimi
-// for Coding, Antigravity, ChatGPT-backed openai-codex). A zero-rate entry
-// for one of these is unpriced, never evidence that the usage was free —
-// unlike genuinely free tiers (opencode-zen community models), which keep
-// their authoritative $0.
+// Subscription providers whose catalogs carry zero rates because there is no
+// per-request price: a zero rate there is unpriced, not free (unlike genuinely
+// free tiers, which keep their authoritative $0).
 const ZAI_PLAN_PROVIDERS: Readonly<Record<string, true>> = { zai: true, 'zai-coding-cn': true };
 const PLAN_PROVIDERS: Readonly<Record<string, Readonly<Record<string, true>> | undefined>> = {
   pi: ZAI_PLAN_PROVIDERS,
@@ -57,11 +52,9 @@ const PLAN_PROVIDERS: Readonly<Record<string, Readonly<Record<string, true>> | u
 };
 const states = new Map<string, PricingState>();
 
-// OMP's models.yml modelOverrides are the user's rate card for
-// subscription-backed providers. OMP itself merges them into its catalog but
-// drops override-only ids (renamed or dead models), so pi-dish reads the file
-// directly: user entries win over catalog rows and revive ids the catalog no
-// longer carries. Revalidated by mtime, size, ctime, device and inode.
+// OMP's models.yml modelOverrides are the user's rate card. OMP drops
+// override-only ids from its catalog, so pi-dish reads the file directly:
+// user entries win and revive missing ids. Revalidated by full file stats.
 const MODEL_OVERRIDES_FILE: Readonly<Record<string, string | undefined>> = { omp: path.join('.omp', 'agent', 'models.yml') };
 const overridesCache = new Map<string, OverridesCacheEntry>();
 
@@ -245,8 +238,7 @@ function costAtRates(harnessId: HarnessInput, provider: unknown, model: unknown,
 }
 
 export function isPlanProvider(harnessId: HarnessInput, provider: unknown): boolean {
-  // Unknown and candidate-less callers keep the legacy Pi semantics; only OMP
-  // diverges (its catalog also zero-rates Kimi, Antigravity and Codex).
+  // Unknown callers get Pi semantics; OMP also zero-rates Kimi, Antigravity and Codex.
   const providers = (harnessId != null && Object.hasOwn(PLAN_PROVIDERS, harnessId) && PLAN_PROVIDERS[harnessId]) || ZAI_PLAN_PROVIDERS;
   return typeof provider === 'string' && Object.hasOwn(providers, provider);
 }

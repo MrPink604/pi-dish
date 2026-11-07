@@ -220,8 +220,8 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
       seen.add(rpc.id);
     }
 
-    // Prime 0.10+ roots exist only in the resident daemon roster, so this
-    // projection is also where their lifecycle listeners get attached.
+    // Prime roots exist only in the daemon roster, so their lifecycle
+    // listeners are attached here.
     for (const prime of loadPrimeRoster()) {
       const routeId = routeSessionId('prime', prime.nativeSessionId);
       if (seen.has(routeId)) continue;

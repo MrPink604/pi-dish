@@ -1,14 +1,7 @@
 /**
- * A five-field cron parser/matcher, hand-rolled.
- *
- * No dependency on purpose: pi-dish must run on a hand-built Node on an old
- * glibc (no native modules), and the whole feature needs exactly three things
- * from cron — "is this minute a match", "when is the next one", and a parse
- * error message good enough to hand back as a 400.
- *
- * Everything is evaluated in **local time** (the user's schedules read as
- * wall-clock times), which is why matching and the next-match walk both go
- * through Date's local getters rather than UTC arithmetic.
+ * Hand-rolled five-field cron: no dependency so pi-dish runs on old-glibc Node
+ * without native modules. Evaluated in local time (schedules are wall-clock),
+ * hence Date's local getters rather than UTC arithmetic.
  */
 
 const MONTH_NAMES = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
@@ -57,7 +50,6 @@ function parseValue(field: Field, token: string): number {
   return value;
 }
 
-/** One field → matching values and whether it restricts anything. */
 function parseField(field: Field, spec: string): { values: Set<number>; restricted: boolean } {
   const values = new Set<number>();
   let restricted = false;
@@ -76,9 +68,8 @@ function parseField(field: Field, spec: string): { values: Set<number>; restrict
     let start;
     let end;
     if (rangeText.trim() === '*') {
-      // A `*`-rooted entry stays "unrestricted" even with a step, matching
-      // Vixie cron: the dom/dow either-rule keys on the literal star, so
-      // `*/2` in day-of-month still ANDs with a named day-of-week.
+      // `*`-rooted stays unrestricted even with a step (Vixie cron): `*/2`
+      // day-of-month still ANDs with a named day-of-week.
       start = field.min;
       end = field.max;
     } else if (rangeText.includes('-')) {
@@ -100,10 +91,7 @@ function parseField(field: Field, spec: string): { values: Set<number>; restrict
   return { values, restricted };
 }
 
-/**
- * Parse a 5-field cron expression (or one of the `@` aliases).
- * Throws an Error whose message is safe to hand back as a 400.
- */
+/** Throws an Error whose message is safe to return as a 400. */
 export function parseCron(expression: string): ParsedCron {
   if (!expression.trim()) {
     throw new Error('a cron expression is required');
@@ -130,9 +118,7 @@ export function parseCron(expression: string): ParsedCron {
   return parsed;
 }
 
-// The classic dom/dow rule: when both fields are restricted a date matches if
-// *either* does ("first of the month, and every Monday"); otherwise the one
-// unrestricted field is `*` and matches anyway.
+// Classic dom/dow rule: when both are restricted, either one matching suffices.
 function dayMatches(parsed: ParsedCron, date: Date): boolean {
   const dom = parsed.dayOfMonth.has(date.getDate());
   const dow = parsed.dayOfWeek.has(date.getDay());
@@ -150,10 +136,8 @@ export function cronMatches(parsed: ParsedCron, when: Date): boolean {
 const MAX_SEARCH_DAYS = 366;
 
 /**
- * The first minute strictly after `fromDate` that matches, or null when the
- * expression cannot fire within a year (`0 0 30 2 *`, say). The walk skips by
- * month/day/hour rather than minute so a never-matching expression costs a few
- * hundred iterations, not half a million.
+ * First matching minute strictly after `from`, or null if none within a year.
+ * Skips by month/day/hour so a never-matching expression costs a few hundred iterations.
  */
 export function nextCronMatch(parsed: ParsedCron, from: Date = new Date()): Date | null {
   const limit = from.getTime() + MAX_SEARCH_DAYS * 86400000;

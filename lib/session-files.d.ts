@@ -1,10 +1,8 @@
 // Generated from src/core/session-files.ts; edit that source and run npm run build:core.
 /**
- * Session JSONL readers. Session files run to tens of MB, so each reader
- * caches its projection keyed by (mtimeMs, size, ctimeMs, device, inode) and
- * re-parses only changed files. `getSessionInfo` returns a fresh shallow copy
- * per call (callers overlay live usage); the other readers return cached
- * arrays — treat them as immutable.
+ * Session JSONL readers. Files run to tens of MB, so each reader caches its
+ * projection by file stamp. `getSessionInfo` returns a fresh shallow copy (callers
+ * overlay live usage); other readers return cached arrays — treat as immutable.
  */
 import fs from 'node:fs';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata.js';
@@ -85,10 +83,8 @@ export declare function readSessionMessages(filePath: string | SessionFileSource
 export declare function readSessionMessagesAtLeaf(filePath: string | SessionFileSource, leafId: unknown): readonly SessionMessage[];
 export declare function readSessionMessageById(filePath: string | SessionFileSource, entryId: unknown): SessionMessage | null;
 /**
- * Lowercased per-message text, index-aligned with readSessionMessages ('' for
- * a message with no text). Memoized on the shared message cache entry so a
- * repeated search over an unchanged file is a plain string scan, and both are
- * returned from one revalidation.
+ * Lowercased text index-aligned with readSessionMessages, memoized on the shared
+ * cache entry so both come from one revalidation.
  */
 export declare function readSessionSearchText(filePath: string | SessionFileSource): {
     readonly messages: readonly SessionMessage[];
@@ -98,27 +94,19 @@ export declare const SEARCH_TEXT_SESSION_CAP = 4000000;
 export declare function buildSearchTextFromContent(content: string): string;
 export declare function buildSearchIndexFromEntries(entries: SessionEntries): SessionSearchProjection;
 export declare function extendSearchIndexFromEntries(entries: SessionEntries, tree: boolean, leafId: string | null): SessionSearchProjection | null;
-/** Compact corpus-index usage, derived during the same read as metadata/text. */
+/** Derived during the same read as metadata/text. */
 export declare function buildIndexedUsageFromContent(content: string, candidate?: SessionFileProfile): IndexedUsage;
 export declare function buildIndexedUsageFromEntries(entries: SessionEntries, candidate?: SessionFileProfile, estimateCost?: UsageCostEstimator): IndexedUsage;
-/**
- * O(delta) usage extension for an append-only session file. Only valid for
- * usage objects that carry `state` (built by this schema); mutates and
- * returns `usage`.
- */
+/** O(delta) for append-only files; requires `state` and mutates `usage`. */
 export declare function extendIndexedUsageFromEntries(usage: IndexedUsage, entries: SessionEntries, candidate?: SessionFileProfile, estimateCost?: UsageCostEstimator): IndexedUsage;
 export declare function getSessionStats(filePath: string | SessionFileSource): Readonly<SessionStats>;
-/** cwd from the session header line via a bounded read; null when unreadable/absent. */
+/** Bounded header read; null when unreadable/absent. */
 export declare function readSessionCwd(filePath: string | SessionFileSource): unknown;
 /**
- * The session JSONL's last complete entry via a bounded tail read: harnesses
- * stamp a terminal bookkeeping entry when they dispose a session.
- *
- * Null when the tail holds no complete line; callers treat "unknown" as "not
- * finished". Never grep the whole file for a marker: a transcript that merely
- * discusses one contains the string, and a revived session appends past its
- * own exit entry.
+ * Bounded tail read: harnesses stamp a terminal entry on dispose. Null ("not
+ * finished") when no complete line. Never grep the whole file for a marker: a
+ * transcript may discuss it, and a revived session appends past its exit entry.
  */
 export declare function readSessionTailEntry(input: string | SessionFileSource): unknown;
-/** Test hook: drop caches so fixtures rewritten in place are re-read. */
+/** Test hook: fixtures rewritten in place are re-read. */
 export declare function resetCaches(): void;

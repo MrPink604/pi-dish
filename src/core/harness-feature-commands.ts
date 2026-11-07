@@ -224,8 +224,8 @@ function modelCatalogSignature(cwd: string, argv: string[], env: NodeJS.ProcessE
     }
     digest.update('\0');
   }
-  // External provider discovery and extension-owned inputs keep the existing
-  // 60s bound; never reuse a result across changed local auth/config inputs.
+  // Provider discovery and extension-owned inputs rely on the 60s cache bound;
+  // changed local auth/config inputs always change the key.
   return digest.digest('hex');
 }
 

@@ -161,15 +161,11 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     }
     next();
   };
-  // A published page's sandboxed document has an opaque origin, so its
-  // overlay's calls carry `Origin: null` and are cross-origin. Behind an auth
-  // proxy (Cloudflare Access) they must carry the proxy's session cookie, and
-  // they must never be preflighted: the proxy answers an OPTIONS request,
-  // which carries no cookie, with its login redirect. So the overlay sends
-  // only CORS-safelisted GETs and text/plain POSTs with credentials, parsed
-  // here as JSON. Only the page-scoped comment routes answer `null` — their
-  // page token, not the origin, is the capability — so no other API becomes
-  // readable to pages.
+  // Sandboxed published pages have an opaque origin (`Origin: null`). Behind an
+  // auth proxy their calls need its cookie and must never be preflighted (the
+  // proxy answers cookieless OPTIONS with a login redirect), so the overlay sends
+  // only safelisted GETs and text/plain POSTs, parsed here as JSON. Only the
+  // page-token-scoped comment routes answer `null`; no other API is readable.
   const parsePlainJson = express.json({ type: 'text/plain', limit: '1mb' });
   const pageCommentTransport: TransportHandler = (req, res, next) => {
     if (req.headers.origin === 'null') {

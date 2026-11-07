@@ -72,9 +72,8 @@ export type { ServerStartupObserver } from './server-startup';
 export function startServer(rootDirectory: string): Server {
   const app = express();
   const PORT = Number.isFinite(Number(process.env.PORT)) ? Number(process.env.PORT) : 3333;
-  // Localhost-only by default; opt in to LAN/VPN exposure explicitly. Auth is
-  // opt-in too: without a token, anything that can reach the port can drive
-  // agents with shell access.
+  // Localhost-only by default. Auth is opt-in: without a token, anything that
+  // reaches the port can drive agents with shell access.
   const HOST = process.env.HOST || '127.0.0.1';
   const packageVersion: string = require(path.join(rootDirectory, 'package.json')).version;
 
@@ -170,8 +169,7 @@ export function startServer(rootDirectory: string): Server {
     return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive || !!findSessionSource(sessionId, { exact: true });
   }
 
-  // Best-known working directory for a session: live registry first, then the
-  // JSONL header. Null when neither knows (terminal + file search fall back).
+  // Live registry first, then the JSONL header; null when neither knows.
   function resolveSessionCwd(sessionId: string): unknown {
     const registered = getRegisteredSession(sessionId);
     if (registered?.cwd) return registered.cwd;
@@ -239,8 +237,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/messages', sessionReadHandlers.messages);
   app.get('/api/sessions/:id/search', sessionReadHandlers.search);
 
-  // The catalog is only read once a prompt actually carries a `#ref`, so these
-  // dependency bundles are built lazily.
+  // Built lazily: the catalog is only read once a prompt carries a `#ref`.
   function sessionRefDeps(): SessionRefDependencies {
     let built: SessionCatalog | null = null;
     return {
@@ -273,18 +270,16 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/stats', sessionReadHandlers.stats);
   app.get('/api/sessions/:id/export', sessionReadHandlers.export);
 
-  // A share is a random token referencing a session or an immutable native HTML
-  // snapshot. Management lives on the main app; GET /share/:token is mounted on
-  // both the main app and the optional share listener. Every miss is a bare 404.
+  // GET /share/:token is mounted on both the main app and the optional share
+  // listener; management stays on the main app. Every miss is a bare 404.
   app.post('/api/shares/import', express.text({ type: 'text/html', limit: '20mb' }), publicationHandlers.importShare);
   app.post('/api/sessions/:id/share', publicationHandlers.createShare);
   app.delete('/api/sessions/:id/share', publicationHandlers.revokeShare);
   app.get('/api/sessions/:id/share', publicationHandlers.getShare);
   app.get('/share/:token', publicationHandlers.serveSharedSession);
 
-  // Published pages reach their own comments only through these page-scoped
-  // routes. Every route is a GET or POST so the overlay's cross-origin calls
-  // are never preflighted.
+  // Published pages reach their own comments only through these routes; GET/POST
+  // only so the overlay's cross-origin calls are never preflighted.
   app.use('/api/page-comments/:token', relayHandlers.pageComments);
   app.get('/api/page-comments/:token', publicationHandlers.listPageComments);
   app.post('/api/page-comments/:token', publicationHandlers.createPageComment);
@@ -303,8 +298,7 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/pages', publicationHandlers.createPage);
   app.get('/api/pages', publicationHandlers.listPages);
   app.delete('/api/pages/:token', publicationHandlers.revokePage);
-  // The public serving routes: directory roots serve index.html and contained
-  // assets; every failure is a bare 404.
+  // Public serving routes; every failure is a bare 404.
   app.get('/page/:token', publicationHandlers.page);
   app.get('/page/:token/*', publicationHandlers.pageAsset);
 
@@ -354,9 +348,8 @@ export function startServer(rootDirectory: string): Server {
     }
   });
 
-  // Feature flags the client needs before rendering chrome. `terminal` is
-  // opt-in and additionally requires node-pty to have loaded: a missing native
-  // binary must hide the button, not break the UI.
+  // `terminal` also requires node-pty to have loaded: a missing native binary
+  // must hide the button, not break the UI.
   app.get('/api/config', (_req: ApplicationRequest, res: ApplicationResponse) => {
     res.json({
       terminal: terminal.isTerminalEnabled(),
@@ -367,8 +360,7 @@ export function startServer(rootDirectory: string): Server {
     });
   });
 
-  // The browser posts raw audio; the server holds the endpoint and its key and
-  // relays a multipart transcription request.
+  // The server holds the STT endpoint and key; the browser only posts raw audio.
   const parseAudioBody = express.raw({ type: ['audio/*', 'video/webm'], limit: '25mb' });
   app.post('/api/stt', parseAudioBody, featureHandlers.transcribe);
 
@@ -377,14 +369,12 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/agent-docs/:topic', agentDocs.topic);
   app.get('/api/themes', themesHandler);
 
-  // tmux spawn targets: the running tmux servers and their sessions. 200 with
-  // available:false when tmux is missing (the client hides the control).
+  // 200 with available:false when tmux is missing (the client hides the control).
   app.get('/api/tmux/targets', async (_req: ApplicationRequest, res: ApplicationResponse) => {
     if (!tmux.isTmuxAvailable()) return res.json({ available: false, servers: [] });
     try {
       const servers = await tmux.listServers();
-      // Opportunistically drop spawn placements whose pane and session are both
-      // gone, so tmux-spawns.json doesn't grow without bound.
+      // Prune placements whose pane and session are gone so tmux-spawns.json stays bounded.
       try {
         const registered = new Set(listRegisteredSessions().map((entry) => {
           const identity = registryIdentity(entry);
@@ -492,7 +482,6 @@ export function startServer(rootDirectory: string): Server {
     },
   });
 
-  // Web Push: this host notifies subscribed devices about its own sessions.
   const pushNotifier = createPushNotifier({
     sessions: () => catalog.getActiveSessions(),
     agentLaunched: id => {
@@ -551,8 +540,7 @@ export function startServer(rootDirectory: string): Server {
     res.json({ operation });
   });
 
-  // A routine is a session template and an invocation is a session: each run
-  // stamps its session with routine provenance.
+  // Each routine run stamps its session with routine provenance.
   const routineRunner = createRoutineRunner({
     createSession: sessionOperations.createSession,
     resumeSession: sessionOperations.resumeSessionById,
@@ -605,8 +593,7 @@ export function startServer(rootDirectory: string): Server {
     pushNotifier.stop();
   }
 
-  // Fleet relay takes precedence even when this host's terminal is disabled.
-  // Keep ordinary unbound handler calls and destroy every unclaimed socket.
+  // Fleet relay takes precedence even when the terminal is disabled; unclaimed sockets are destroyed.
   function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     let url: URL;
     try { url = new URL(req.url || '', 'http://localhost'); } catch { socket.destroy(); return; }
@@ -627,8 +614,7 @@ export function startServer(rootDirectory: string): Server {
       sessionBounces.start();
       hibernation.start();
       pushNotifier.start();
-      // Prime roots appear in the daemon roster, not the bridge registry: poll
-      // it so the active list and capability projections track attaches/exits.
+      // Prime roots live in the daemon roster, not the bridge registry, so poll it.
       getPrimeDaemon().start();
       // A restored idle session is interrupted work, not a completed oneShot.
       recoveryRunner.start()

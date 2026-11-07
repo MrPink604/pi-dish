@@ -79,7 +79,7 @@ export interface CommentDto extends Record<string, unknown> {
 export interface ListCommentsOptions {
   sessionId?: unknown;
   pageToken?: unknown;
-  // Historically any value other than 'all'/'acknowledged' selects open.
+  // Any value other than 'all'/'acknowledged' selects open.
   state?: unknown;
 }
 

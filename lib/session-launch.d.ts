@@ -28,7 +28,7 @@ export interface NewSessionLaunchOptions {
     descriptor: HarnessDescriptor;
     name?: string | null;
     target?: HarnessLaunchTarget | null;
-    /** Keep the transcript in the harness's private root (outside fleet backups). */
+    /** Harness private root, outside fleet backups. */
     private?: boolean;
 }
 export interface ResumeSessionLaunchOptions extends PilotSelectionOptions {
@@ -107,7 +107,6 @@ export declare class LaunchError extends Error {
     constructor(message: string, status: number);
 }
 export declare const HEADLESS_TMUX_SERVER = "pi-dish";
-/** Live processes named by a tmux cleanup failure; null when the error carries no evidence. */
 export declare function cleanupProcesses(error: unknown): ProcessIdentity[] | null;
 export declare function createSessionLaunch(observations: SessionLaunchObservations): SessionLaunch;
 export {};

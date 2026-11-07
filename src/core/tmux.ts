@@ -1,9 +1,7 @@
 /**
- * Spawn pi sessions inside tmux windows instead of as server children: an RPC
- * child dies with the server, while a TUI in tmux plus the bridge extension
- * survives and is driven over the normal BridgeSession path. Servers are
- * addressed by their $TMUX_TMPDIR socket. Every invocation is execFile with a
- * timeout and argv, never a shell string; placements persist in dish-store.
+ * pi sessions in tmux windows survive a server restart (an RPC child would
+ * not). Servers are addressed by their $TMUX_TMPDIR socket; every tmux call is
+ * execFile with argv and a timeout, never a shell string.
  */
 import { execFile, execFileSync } from 'child_process';
 import fs = require('fs');
@@ -32,7 +30,7 @@ export interface TmuxServer {
   sessions: { name: string; windows: number; attached: boolean }[];
 }
 
-/** Retain legacy environment interpolation, including undefined values. */
+/** Values are interpolated as-is, including undefined. */
 export type SpawnEnvironment = Readonly<Record<string, unknown>>;
 
 interface PaneCommand {
@@ -55,9 +53,8 @@ export interface RespawnOptions extends PaneTarget, PaneCommand {
 }
 
 /**
- * A decoded placement is still only persisted evidence, never live authority.
- * Optional observations are retained verbatim; consumers must narrow tokens or
- * wrapper paths before using them. Legacy process numbers/strings are not coerced.
+ * Persisted evidence, never live authority. Optional observations are kept
+ * verbatim and uncoerced; consumers must narrow them before use.
  */
 export interface SpawnPlacement extends PaneTarget, Record<string, unknown> {
   createdAt?: unknown;
@@ -69,10 +66,7 @@ export interface SpawnPlacement extends PaneTarget, Record<string, unknown> {
   primeAgent?: unknown;
 }
 
-/**
- * A Prime root agent as recorded by a pi-dish launch: the daemon that owns it
- * and the exact root/worker identity observed at registration time.
- */
+/** Daemon owning a pi-dish-launched Prime root agent, plus the root/worker identity seen at registration. */
 export interface PrimeAgentPlacement {
   daemonSocket: string;
   activeSessionId: string;
@@ -118,7 +112,7 @@ function cleanupError(error: unknown, remainingProcesses: ProcessIdentity[]): Pa
 
 function runTmux(args: readonly unknown[], { timeout = 3000 } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    // No shell quoting precedes this call: native execFile owns legacy argv coercion/rejection.
+    // No shell quoting: execFile owns argv coercion/rejection.
     execFile('tmux', args as readonly string[], { timeout, encoding: 'utf8' }, (err, stdout, stderr) => {
       if (err) { err.stderr = stderr; return reject(err); }
       resolve(stdout);
@@ -164,7 +158,6 @@ function socketPaths(): { socket: string; name: string }[] {
   });
 }
 
-/** Enumerate live socket servers under the tmux tmpdir, skipping stale sockets. */
 export async function listServers(): Promise<TmuxServer[]> {
   if (!isTmuxAvailable()) return [];
   const servers: TmuxServer[] = [];
@@ -342,7 +335,6 @@ export async function paneProcessState(socket: string, paneId: string, { knownPr
   };
 }
 
-/** Exact birth identity of the process currently anchoring a tmux pane. */
 export async function paneProcessIdentity(socket: string, paneId: string): Promise<ProcessIdentity | null> {
   const pid = await paneProcessId(socket, paneId);
   return pid ? processIdentity(pid) : null;
@@ -458,9 +450,8 @@ export async function paneExists(socket: string, paneId: string): Promise<boolea
 }
 
 /**
- * Clients attached to the pane's session, including grouped viewer sessions
- * (attachPaneArgv). Null when the pane cannot be read: callers treat that as
- * "possibly watched", never as "nobody is looking".
+ * Clients attached to the pane's session, including grouped viewer sessions.
+ * Null (unreadable) means "possibly watched", never "nobody is looking".
  */
 export async function paneAttachedClients(socket: string, paneId: string): Promise<number | null> {
   const out = await paneField(socket, paneId, '#{session_attached} #{session_group_attached}');
@@ -471,8 +462,8 @@ export async function paneAttachedClients(socket: string, paneId: string): Promi
 }
 
 /**
- * A viewer gets a throwaway grouped session: independent current window, same
- * windows, destroyed on detach, without stealing the desktop client's focus.
+ * Viewers get a throwaway grouped session (own current window, destroyed on
+ * detach) so the desktop client's focus is not stolen.
  */
 export async function attachPaneArgv(socket: string, paneId: string): Promise<string[] | null> {
   const loc = await paneLocation(socket, paneId);
@@ -486,7 +477,6 @@ export async function attachPaneArgv(socket: string, paneId: string): Promise<st
   ];
 }
 
-/** Server prefix key, or null when unavailable. */
 export async function getPrefixKey(socket: string): Promise<string | null> {
   try {
     const out = await runTmuxOn(socket, ['show-options', '-g', 'prefix']);

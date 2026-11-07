@@ -17,7 +17,6 @@ export interface SideChatTurn {
   question: string;
   answer: string;
   status: SideChatTurnStatus;
-  /** Present only when `status` is `error`. */
   error?: string;
   startedAt: number;
   updatedAt: number;
@@ -71,7 +70,7 @@ export interface ProcessIdentity {
   startTime: string;
 }
 
-/** Registry/OS input retains the legacy numeric-string coercion at the boundary. */
+/** Registry/OS input may carry numeric strings; coerce at the boundary. */
 export interface ProcessIdentityInput {
   pid?: number | string;
   startTime?: number | string;
@@ -82,7 +81,6 @@ export interface ProcessAncestry {
   processes: ProcessIdentity[];
 }
 
-/** Saved new-session selections reach the harness/native argv boundary unchanged. */
 export interface LaunchOptions {
   model?: unknown;
   thinking?: unknown;
@@ -90,13 +88,12 @@ export interface LaunchOptions {
   sessionDir?: string;
 }
 
-/** Every transport accepts a queue lane preference and inline images on a prompt. */
 export interface PromptOptions {
   deliverAs?: 'steer' | 'followUp';
   images?: unknown[];
 }
 
-/** Missing file remains representable: the legacy argv builders accept an empty options object. */
+/** `file` may be absent: argv builders accept an empty options object. */
 export interface ResumeOptions {
   file?: string;
   model?: string;
@@ -131,11 +128,7 @@ export interface HarnessDescriptor {
   profileId: string;
   profileVersion: number;
   rootPath: () => string;
-  /**
-   * Alternate session directory that the fleet session backup never captures.
-   * Present only for harnesses whose CLI accepts `--session-dir`; resolved per
-   * call so tests can swap HOME. See src/core/private-sessions.ts.
-   */
+  /** `--session-dir` root the fleet backup never captures; resolved per call so tests can swap HOME. */
   privateRootPath?: () => string;
   layout: 'nested' | 'flat';
   commandEnv: string;
@@ -146,31 +139,22 @@ export interface HarnessDescriptor {
   nestedSubsessions?: boolean;
   sessionExitCustomType?: string;
   /**
-   * Prime-style RLM subagent artifacts: children persist outside the sessions
-   * root at `<root>/../session-artifacts/<parentId>/sub-<id8>/<child>.jsonl`,
-   * recursively (a child's own children interleave another
-   * `session-artifacts/<childId>` segment). Child session headers carry
-   * `parentSession`/`rlmDepth`; liveness comes from the per-child
-   * `rlm-subagent.json` display entry, not an in-file exit marker.
+   * Prime RLM subagents persist at `<root>/../session-artifacts/<parentId>/sub-<id8>/<child>.jsonl`,
+   * nesting recursively. Headers carry `parentSession`/`rlmDepth`; liveness comes
+   * from the per-child `rlm-subagent.json`, not an in-file exit marker.
    */
   subagentArtifacts?: boolean;
   blobsPath?: () => string;
   spawnTokenMode?: 'wrapper';
   discoveryExtensionsDir?: (env?: HarnessEnvironment) => string;
   /**
-   * Where live sessions come from. Absent: the pi-dish bridge extension
-   * registry (plus Pi's RPC fallback). `'prime-daemon'`: the harness loads
-   * no extensions; live root agents are read from its resident daemon roster
-   * and controlled over the daemon socket (src/core/prime-daemon.ts).
+   * Absent: live sessions come from the bridge extension registry (plus Pi RPC).
+   * `'prime-daemon'`: no extensions; roots come from the daemon roster and socket.
    */
   liveTransport?: 'prime-daemon';
   spawnEnv?: Record<string, string>;
   pilotConfig?: Record<string, string>;
-  /**
-   * Schema-driven settings editor (OMP's /settings): the CLI's tab order. The
-   * schema itself comes from `argv.configList`/`configSchema` at request time,
-   * so settings a newer harness adds appear without a pi-dish change.
-   */
+  /** CLI tab order for the settings editor; the schema is read at request time so new settings need no pi-dish change. */
   settingsTabs?: readonly string[];
   taskAgents?: {
     unpack: (dir: string) => string[];
@@ -179,11 +163,9 @@ export interface HarnessDescriptor {
   };
   hostBuiltins?: HostBuiltin[];
   /**
-   * Bare package specifier the generated launch wrapper must import itself
-   * and pass to createHarnessBridge. OMP's extension loader only rewrites
-   * bare host-package specifiers inside the extension entry's own directory
-   * tree — the generated wrapper lives under ~/.pi/dish/launch-wrappers/, so
-   * the same import inside the repo's nested modules resolves nothing there.
+   * Bare specifier the generated launch wrapper imports itself: OMP only rewrites
+   * bare host-package imports inside the extension entry's own tree, and the
+   * wrapper lives under ~/.pi/dish/launch-wrappers/.
    */
   wrapperHostPackage?: string;
   /** Host auth package the wrapper imports and passes after the host package (remote /login). */

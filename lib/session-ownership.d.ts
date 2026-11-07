@@ -155,7 +155,6 @@ export interface PrimeLaunchAuthority {
     readonly closeAllowed: boolean;
     readonly restartAllowed: boolean;
 }
-/** Resolve the cached roster root for a Prime route, then apply primeLaunchAuthority. */
 export declare function primeLaunchAuthorityForRoute(sessionId: string): PrimeLaunchAuthority;
 export declare function spawnAllowsManagedClose(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined, closeMode: HarnessDescriptor['closeMode']): boolean;
 export declare function spawnAllowsRestart(spawn: tmux.SpawnPlacement | null | undefined, registryEntry: BridgeRegistryEntry | null | undefined, closeMode: HarnessDescriptor['closeMode']): boolean;

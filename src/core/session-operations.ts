@@ -220,10 +220,8 @@ export function createSessionOperations(observations: SessionOperationObservatio
     sessionSpawnOperations.set(spawnId, operation);
     Promise.resolve()
       .then(async () => {
-        // Model/thinking discovery shells out to the harness CLI (OMP:
-        // `omp models --json`, seconds cold). The HTTP handler answers 202
-        // before this runs, so the browser can show the pending pane at once
-        // and a bad pilot selection arrives as a spawn error it already renders.
+        // Pilot discovery shells out to the harness CLI (seconds cold), so it runs
+        // after the 202; a bad selection surfaces as a spawn error.
         const descriptor = getHarness(options.harness || 'pi');
         if (!descriptor) throw new SessionOperationError(400, `Unknown harness: ${options.harness}`);
         try { await launch.validateHarnessPilotSelection(descriptor, { model: options.model, thinking: options.thinking, cwd: options.cwd }); }
@@ -553,7 +551,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
       }
       const thinking = recovery && ['pi', 'omp'].includes(descriptor.id) ? recovery.thinkingLevel ?? undefined : undefined;
       await launch.validateHarnessPilotSelection(descriptor, { model, thinking, cwd });
-      // Validation and quarantine cleanup may await for seconds; repeat the existing final guards.
+      // Validation and quarantine cleanup may await for seconds; repeat the final guards.
       invalidateRegistryCache();
       if (activeSessionClearsQuarantine(sessionId)) return { success: true, id: sessionId, alreadyActive: true };
       assertNoConflictingWriter(sessionId, sessionFile);

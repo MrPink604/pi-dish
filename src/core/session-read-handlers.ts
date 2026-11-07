@@ -294,7 +294,7 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
 
   const search: ReadHandler = (req, res) => {
     const rawQuery = req.query.q || '';
-    // Express permits structured query values; retain the old non-string error path.
+    // Express permits structured query values; those fail like a string method call would.
     if (typeof rawQuery !== 'string') throw new TypeError('query.trim is not a function');
     const query = rawQuery.trim().toLowerCase();
     if (!query) { res.json({ matches: [], totalMessages: 0 }); return; }

@@ -1,11 +1,7 @@
 import type { KatexRenderer, MathExtension } from './helper-types';
 import { escapeHtml } from './helper-format';
 /**
- * Marked extensions for LaTeX math rendering via KaTeX.
- * Supports:
- * - Block math: $$...$$ and \[...\] (multiline or single-line)
- * - Inline math: $...$, \(...\), and $$...$$ (within paragraphs)
- *
+ * KaTeX math for marked: block $$…$$ / \[…\], inline $…$ / \(…\) / $$…$$.
  * Avoids false positives on currency ($10 to $20) and escaped dollars (\$100).
  */
 export function createMathExtensions(getKatex: () => KatexRenderer | null | undefined) {

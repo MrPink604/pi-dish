@@ -1,15 +1,8 @@
 // Generated from src/core/cron.ts; edit that source and run npm run build:core.
 /**
- * A five-field cron parser/matcher, hand-rolled.
- *
- * No dependency on purpose: pi-dish must run on a hand-built Node on an old
- * glibc (no native modules), and the whole feature needs exactly three things
- * from cron — "is this minute a match", "when is the next one", and a parse
- * error message good enough to hand back as a 400.
- *
- * Everything is evaluated in **local time** (the user's schedules read as
- * wall-clock times), which is why matching and the next-match walk both go
- * through Date's local getters rather than UTC arithmetic.
+ * Hand-rolled five-field cron: no dependency so pi-dish runs on old-glibc Node
+ * without native modules. Evaluated in local time (schedules are wall-clock),
+ * hence Date's local getters rather than UTC arithmetic.
  */
 type FieldName = 'minute' | 'hour' | 'dayOfMonth' | 'month' | 'dayOfWeek';
 export type ParsedCron = Record<FieldName, Set<number>> & {
@@ -17,17 +10,12 @@ export type ParsedCron = Record<FieldName, Set<number>> & {
     domRestricted: boolean;
     dowRestricted: boolean;
 };
-/**
- * Parse a 5-field cron expression (or one of the `@` aliases).
- * Throws an Error whose message is safe to hand back as a 400.
- */
+/** Throws an Error whose message is safe to return as a 400. */
 export declare function parseCron(expression: string): ParsedCron;
 export declare function cronMatches(parsed: ParsedCron, when: Date): boolean;
 /**
- * The first minute strictly after `fromDate` that matches, or null when the
- * expression cannot fire within a year (`0 0 30 2 *`, say). The walk skips by
- * month/day/hour rather than minute so a never-matching expression costs a few
- * hundred iterations, not half a million.
+ * First matching minute strictly after `from`, or null if none within a year.
+ * Skips by month/day/hour so a never-matching expression costs a few hundred iterations.
  */
 export declare function nextCronMatch(parsed: ParsedCron, from?: Date): Date | null;
 export {};

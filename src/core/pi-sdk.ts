@@ -117,9 +117,8 @@ export async function getRegistry(): Promise<PiSDK.ModelRegistry> {
   return _registry;
 }
 
-// Parse the HOST pi's `--list-models` table (the launch spec sessions use);
-// the vendored CLI is only a fallback because it lags host upgrades. Async so a
-// stale cache never blocks the event loop; concurrent callers share one run.
+// Parse the HOST pi's `--list-models` (the vendored CLI lags host upgrades).
+// Async so a stale cache never blocks the event loop; callers share one run.
 let _listModelsInFlight: Promise<string> | null = null;
 
 function runListModels(): Promise<string> {
@@ -163,8 +162,7 @@ export async function getAvailableModels(): Promise<AvailableModel[]> {
         free: !!pricing && pricing.input === 0 && pricing.output === 0,
       });
     }
-    // Unparseable rows are skipped, not errors — a CLI table-format change
-    // would otherwise degrade silently to an empty model list.
+    // An all-unparseable table falls back to the SDK registry rather than an empty list.
     if (!result.length) {
       console.warn('pi --list-models output was not parseable, using SDK registry fallback');
       return getAvailableModelsFallback();
@@ -197,12 +195,7 @@ async function getCostMap() {
   return map;
 }
 
-/**
- * Complete Pi rate card, including providers that are not currently
- * authenticated. Historical sessions still need those rates after a key or
- * subscription is removed, so usage pricing cannot use the accessible-model
- * list returned by getAvailableModels().
- */
+/** Full rate card incl. unauthenticated providers: historical sessions still need removed providers' rates. */
 export async function getPricingModels(): Promise<PricingModel[]> {
   const registry = await getRegistry();
   return registry.getAll().flatMap(model => {
@@ -219,7 +212,6 @@ function parseContextSize(str: string): number {
   return num;
 }
 
-// All registered models, not only the accessible ones.
 async function getAvailableModelsFallback(): Promise<AvailableModel[]> {
   const runtime = await getRuntime();
   const registry = await getRegistry();
@@ -263,11 +255,9 @@ export async function switchModel(sessionPath: string, provider: string, modelId
   return true;
 }
 
-// Only concurrent discovery is shared. Resource edits must be visible on the
-// next request; the browser owns its short-lived presentation cache.
+// Only concurrent discovery is shared; resource edits must show on the next request.
 const commandsInFlight = new Map<string, Promise<SessionCommand[]>>();
 
-// Built-in interactive commands (handled by pi's interactive mode, not extensions)
 const BUILTIN_COMMANDS: SessionCommand[] = [
   { name: 'compact', description: 'Manually compact context, optional custom instructions', source: 'builtin', args: '[prompt]' },
   { name: 'model', description: 'Switch models', source: 'builtin' },
@@ -297,9 +287,7 @@ export async function getCommands(): Promise<SessionCommand[]> {
   const pending = commandsInFlight.get(key);
   if (pending) return pending;
   const discovery = (async () => {
-    // Commands are resource metadata: constructing an AgentSession also
-    // resolves provider credentials/models, builds tools, and retains a live
-    // session that was never disposed. Use the same SDK loader without them.
+    // A resource loader alone: an AgentSession would resolve credentials, build tools and leak a live session.
     const loader = new sdk.DefaultResourceLoader({ cwd, agentDir, noThemes: true, noContextFiles: true });
     await loader.reload();
     const commands: SessionCommand[] = [...BUILTIN_COMMANDS];
@@ -377,12 +365,11 @@ export async function getSessionTree(sessionPath: string): Promise<SessionTree> 
     return result;
   }
   
-  // Single-line preview of a message's text (shared extractor + tidy-up).
   function extractText(content: unknown, maxLen: number): string {
     return extractTextContent(content).replace(/[\n\t]/g, ' ').trim().substring(0, maxLen);
   }
 
-  // Flatten tree — only increase depth at actual branch points (like TUI)
+  // Depth increases only at real branch points (like the TUI).
   const nodes: SessionTreeNode[] = [];
   walkBranchTree(tree, (node, depth) => {
     nodes.push(flattenNode(node, depth));
@@ -392,9 +379,7 @@ export async function getSessionTree(sessionPath: string): Promise<SessionTree> 
   return { nodes, leafId, activePathIds: [...activePathIds] };
 }
 
-// Export a session JSONL to a standalone HTML file using the owning harness's
-// renderer. OMP's transcript contains additional entry types and metadata, so
-// feeding it through pi's otherwise-compatible exporter loses information.
+// Uses the owning harness's renderer: pi's exporter drops OMP-only entry types and metadata.
 export async function exportSessionHtml(sessionPath: string, outputPath: string, profileId = 'pi-v3', { shareSnapshot }: SessionHtmlExportOptions = {}): Promise<string> {
   if (profileId === 'omp-v1') {
     return exportOmpSessionHtml(sessionPath, outputPath, { snapshot: shareSnapshot });
@@ -408,9 +393,8 @@ export async function exportSessionHtml(sessionPath: string, outputPath: string,
   return mod.exportSessionToHtml(sm, undefined, { outputPath });
 }
 
-// The model an inactive session was last using — bills its branch summary.
-// Last model_change entry wins; else the last assistant message's
-// provider/model pair (assistant messages carry both since session v3).
+// The model that bills an inactive session's branch summary: last model_change,
+// else the last assistant message's provider/model.
 function findSessionModelRef(entries: readonly PiSDK.SessionEntry[]): { provider: string; id: string } | null {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
@@ -425,19 +409,12 @@ function findSessionModelRef(entries: readonly PiSDK.SessionEntry[]): { provider
 }
 
 /**
- * Navigate an *inactive* session's tree (the TUI's /tree without a live pi
- * process — live sessions go through the bridge's navigate_tree instead).
- * Mirrors AgentSession.navigateTree semantics: a user-message target moves
- * the leaf to its parent and returns the message text for the composer;
- * `summarize` generates an LLM summary of the abandoned branch (using the
- * session's own model + stored auth) and appends it as a branch_summary
- * entry at the new leaf, where pi injects it as context on resume.
+ * The TUI's /tree for an *inactive* session (live ones use the bridge's
+ * navigate_tree), mirroring AgentSession.navigateTree semantics.
  *
- * Persistence gotcha: sm.branch() only moves an in-memory pointer — a
- * reopened file re-derives its leaf from the *last entry*, so an external
- * branch must append something. branchWithSummary persists that way by
- * nature; the summary-less path appends a no-op label entry (labels
- * contribute nothing to the LLM context) purely to anchor the new leaf.
+ * sm.branch() only moves an in-memory pointer; a reopened file derives its
+ * leaf from the last entry, so the summary-less path appends a no-op label
+ * entry purely to anchor the new leaf.
  */
 export async function branchSession(sessionPath: string, entryId: string, options: BranchSessionOptions = {}): Promise<BranchSessionResult> {
   const sdk = await getSDK();
@@ -472,9 +449,7 @@ export async function branchSession(sessionPath: string, entryId: string, option
       const result = await sdk.generateBranchSummary(entries, {
         model,
         apiKey: auth.apiKey,
-        // SDK 1.3.0 declares string-only summary headers, but its implementation
-        // forwards them unchanged through completeSummarization to completeSimple.
-        // Preserve ProviderHeaders nulls: they suppress provider default headers.
+        // SDK types say string-only, but nulls pass through and suppress provider default headers.
         headers: auth.headers as PiSDK.GenerateBranchSummaryOptions['headers'],
         env: auth.env,
         signal: new AbortController().signal,

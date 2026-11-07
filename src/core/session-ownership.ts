@@ -215,11 +215,7 @@ function primeAgentMatchesSummary(agent: tmux.PrimeAgentPlacement, summary: Prim
     && agent.sessionFile === summary.sessionFile;
 }
 
-/**
- * The same resident worker. A Prime `/new` moves the agent to a new transcript
- * while `activeSessionId` and `workerInstanceId` survive, so transcript equality
- * is not part of worker identity.
- */
+/** Prime `/new` changes the transcript but keeps `activeSessionId`/`workerInstanceId`, so transcripts are not identity. */
 function primeAgentSameWorker(agent: tmux.PrimeAgentPlacement, summary: PrimeAgentSummary): boolean {
   return agent.activeSessionId === summary.activeSessionId
     && agent.workerInstanceId === (summary.workerInstanceId || null);
@@ -231,11 +227,7 @@ interface PrimeSpawnRecord {
   readonly agent: tmux.PrimeAgentPlacement;
 }
 
-/**
- * The recorded Prime launch for this route, falling back to the spawn record
- * whose worker matches the roster when the route key moved while pi-dish was
- * down (a TUI `/new` pi-dish never observed).
- */
+/** Falls back to the spawn record matching the roster worker when the route key moved while pi-dish was down. */
 function findPrimeSpawn(sessionId: string, summary: PrimeAgentSummary | null): PrimeSpawnRecord | null {
   if (!summary) return null;
   const direct = tmux.getSpawn(sessionId);
@@ -254,7 +246,6 @@ function findPrimeSpawn(sessionId: string, summary: PrimeAgentSummary | null): P
   return fallback;
 }
 
-/** Roster evidence refreshed onto the launch record a route keeps. */
 function primeAgentOf(found: PrimeSpawnRecord, summary: PrimeAgentSummary): tmux.PrimeAgentPlacement {
   return {
     daemonSocket: found.agent.daemonSocket,
@@ -264,10 +255,7 @@ function primeAgentOf(found: PrimeSpawnRecord, summary: PrimeAgentSummary): tmux
   };
 }
 
-/**
- * Adopt a route key whose launch record still names the same worker: re-key
- * the record and refresh its agent evidence to the live roster row.
- */
+/** Re-key a launch record that still names the same worker and refresh its agent evidence. */
 function adoptPrimeSpawn(sessionId: string, found: PrimeSpawnRecord, summary: PrimeAgentSummary): tmux.SpawnPlacement {
   const agent = primeAgentOf(found, summary);
   if (found.spawnKey === sessionId && primeAgentMatchesSummary(found.agent, summary)) return found.placement;
@@ -325,9 +313,8 @@ export interface PrimeLaunchAuthority {
 }
 
 /**
- * Prime launch authority for one route id: a recorded launch must name the
- * same resident worker as the roster summary, even when the route key moved.
- * Synchronous by design; callers refresh the roster before projecting a row.
+ * A recorded launch must name the same resident worker as the roster summary.
+ * Synchronous by design; callers refresh the roster first.
  */
 function primeLaunchAuthority(sessionId: string, summary: PrimeAgentSummary | null): PrimeLaunchAuthority {
   const found = findPrimeSpawn(sessionId, summary);
@@ -340,7 +327,6 @@ function primeLaunchAuthority(sessionId: string, summary: PrimeAgentSummary | nu
   };
 }
 
-/** Resolve the cached roster root for a Prime route, then apply primeLaunchAuthority. */
 export function primeLaunchAuthorityForRoute(sessionId: string): PrimeLaunchAuthority {
   const identity = routeIdentity(sessionId);
   const summary = identity?.harnessId === 'prime'
@@ -364,14 +350,13 @@ export function spawnAllowsRestart(spawn: tmux.SpawnPlacement | null | undefined
 }
 
 export function liveSessionSupports(session: LiveSession, capability: BridgeCapability): boolean {
-  // A Prime daemon root has no bridge advertisement: the transport itself fixes
-  // which commands exist (no extension UI, side chat, fast mode or share snapshot).
+  // Prime daemon roots have no bridge advertisement; the transport fixes the command set.
   if (session instanceof PrimeDaemonSession) return PRIME_DAEMON_CAPABILITIES[capability] === true;
   if (!(session instanceof BridgeSession)) return true;
   return bridgeSupports(session.harnessId, session.capabilities, capability);
 }
 
-/** A Prime route's live root. Prime 0.10+ never registers with the bridge. */
+/** Prime never registers with the bridge; the daemon roster is its only live root. */
 function primeDaemonSessionFor(identity: SessionIdentity): PrimeDaemonSession | null {
   return getHarness(identity.harnessId)?.liveTransport === 'prime-daemon'
     ? getPrimeDaemon().byNativeId(identity.nativeSessionId) : null;
@@ -748,8 +733,7 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
   function liveSourceObservations(sessionId: unknown): LiveSourceObservation[] {
     const identity = routeIdentity(sessionId);
     if (!identity) return [];
-    // Prime's roster is the only live source for its routes: an old-style
-    // registry claim for a 0.10+ agent cannot prove a daemon worker.
+    // Prime's roster is the only live source for its routes; a registry claim cannot prove a daemon worker.
     if (getHarness(identity.harnessId)?.liveTransport === 'prime-daemon') {
       const live = primeDaemonSessionFor(identity);
       return live ? [{ kind: 'prime-daemon', ...identity, file: typeof live.sessionFile === 'string' ? live.sessionFile || null : null }] : [];
@@ -793,8 +777,7 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
       const daemon = getPrimeDaemon();
       const cached = daemon.byNativeId(identity.nativeSessionId);
       if (cached) return track(cached);
-      // The roster may be cold (first request after start, or an agent that has
-      // not been polled yet): read it once more before declaring the route dead.
+      // The roster may be cold; read it once more before declaring the route dead.
       await daemon.refresh();
       const fresh = daemon.byNativeId(identity.nativeSessionId);
       return fresh ? track(fresh) : null;

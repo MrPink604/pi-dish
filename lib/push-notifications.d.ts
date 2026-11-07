@@ -1,12 +1,7 @@
 // Generated from src/core/push-notifications.ts; edit that source and run npm run build:core.
 export declare const SAMPLE_INTERVAL_MS = 3000;
-/** Consecutive idle samples before a working session counts as finished. */
 export declare const FINISHED_IDLE_SAMPLES = 2;
-/**
- * A push service may answer "gone" for a subscription it has not finished
- * provisioning (observed with FCM right after subscribe). Pruning then would
- * silently drop a working device, so young subscriptions are only reported.
- */
+/** Push services (FCM) may report "gone" for a just-provisioned subscription; young ones are only reported, not pruned. */
 export declare const GONE_GRACE_MS: number;
 export interface VapidKeys {
     readonly publicKey: string;
@@ -51,27 +46,18 @@ export interface SessionTransition {
     readonly kind: PushEventKind;
     readonly row: PushSessionRow;
 }
-/**
- * Pure transition step. `previous === null` is a baseline sample: it records
- * state and never reports. Sessions absent from `rows` are dropped silently —
- * a session that closed or crashed did not finish.
- */
+/** `previous === null` is a silent baseline. Sessions absent from `rows` closed or crashed; they did not finish. */
 export declare function sessionTransitions(previous: SessionWatchState | null, rows: readonly PushSessionRow[]): {
     readonly state: SessionWatchState;
     readonly transitions: readonly SessionTransition[];
 };
-/**
- * The host's VAPID keys, generated on first use. The private key is a signing
- * secret: written 0600 and created exclusively, so two racing first uses
- * cannot leave the host with a key its earlier subscriptions don't match.
- */
+/** Private key is written 0600 and created exclusively so racing first uses can't orphan earlier subscriptions. */
 export declare function readVapidKeys(): VapidKeys;
 export interface PushSendResult {
     readonly gone: boolean;
 }
 export type PushSender = (subscription: PushSubscriptionRecord, payload: PushPayload, vapid: VapidKeys) => Promise<PushSendResult>;
 export interface PushNotifierPorts {
-    /** Current live sessions on this host. */
     sessions(): readonly PushSessionRow[];
     /** Agent-launched peers report to the agent that launched them, not the user. */
     agentLaunched(sessionId: string): boolean;
@@ -104,7 +90,6 @@ export interface PushNotifier {
     test(endpoint: unknown): Promise<boolean>;
     /** Delivers a host-level notification (not a session transition) to every registered device; `tag` is host-relative. */
     notify(payload: Omit<PushPayload, 'hostId'>): Promise<void>;
-    /** One sampling step (exposed for tests). */
     sample(): Promise<void>;
     start(): void;
     stop(): void;

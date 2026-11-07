@@ -56,8 +56,8 @@ export interface RecoveryControlPatch {
   attempt?: RecoveryAttempt | null;
 }
 
-/** Observation input is not a decoded store record. Metadata is nullable and
- * untrusted; the writer retains its existing normalization and startTime coercion.
+/** Observation input, not a decoded store record: metadata is nullable and
+ * untrusted; the writer normalizes it and coerces startTime.
  */
 export interface RecoverySnapshot {
   harnessId: string;

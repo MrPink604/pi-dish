@@ -1,11 +1,7 @@
 /**
- * Incremental LF-framed line splitting, shared by the JSONL socket/stdio
- * clients (rpc-session.ts, bridge-session.ts, prime-daemon.ts).
- *
- * Splits on LF only — Node's readline also splits on U+2028/U+2029, which
- * are valid inside JSON strings. CR before the LF is stripped, empty lines
- * are skipped, and a StringDecoder keeps multibyte characters that straddle
- * chunk boundaries intact.
+ * Incremental LF-only line splitting for JSONL transports: Node's readline
+ * also splits on U+2028/U+2029, which are valid inside JSON strings. CR before
+ * LF is stripped, empty lines skipped; StringDecoder keeps split multibyte chars.
  */
 import { StringDecoder } from 'string_decoder';
 import { type ProtocolRecord } from './wire-protocol';

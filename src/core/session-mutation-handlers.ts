@@ -22,8 +22,6 @@ function sideChatSnapshot(data: unknown) {
 
 export function sideChatSupported(sess: InstanceType<typeof BridgeSession>, res: Parameters<RouteHandler>[1]): boolean {
   if (liveSessionSupports(sess, 'sideChat')) return true;
-  // A harness started before side chats still runs the old blocking /btw
-  // bridge; only a restart loads the new extension.
   res.status(409).json({
     error: asRecord(sess.capabilities).btw === true
       ? 'This session runs an older pi-dish bridge; restart it to use side chats.'

@@ -1,9 +1,6 @@
 /**
- * Stable per-host identity: a uuid generated once into ~/.pi/dish/host-id.
- * Clients pin a session to it and fail a (re)connect that lands elsewhere.
- * HOME is resolved per call so a test's temp HOME gets its own identity, and
- * the write goes through a temp file + rename so a concurrent reader never
- * sees a partial id.
+ * Stable per-host uuid in ~/.pi/dish/host-id. Clients pin a session to it and
+ * fail a (re)connect that lands elsewhere. HOME is resolved per call (tests).
  */
 import type { HostId } from './contracts';
 import { record as isRecord } from './helper-values';

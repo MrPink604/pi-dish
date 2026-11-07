@@ -12,7 +12,6 @@ export interface MemorySample {
     readonly swapFreeBytes: number;
 }
 export declare function parseMeminfo(text: string | null): MemorySample | null;
-/** Human-readable pressure description, or null when the host is not under pressure. */
 export declare function memoryPressure(sample: MemorySample): string | null;
 export interface ProcReader {
     pids(): number[];
@@ -22,19 +21,13 @@ export interface ProcessTreeSummary {
     readonly processes: number;
     readonly rssBytes: number;
     readonly swapBytes: number;
-    /** One label per live eval kernel process. */
     readonly kernels: readonly string[];
     /** Processes supervised by an OMP launch broker inside this tree. */
     readonly serviceProcesses: number;
     readonly browserProcesses: number;
 }
-/** Memory and stateful children of one agent process tree; null when the root is gone. */
 export declare function inspectProcessTree(rootPid: number, proc?: ProcReader): ProcessTreeSummary | null;
-/**
- * Whether the transcript called `eval` at or after `sinceMs`, reading backwards
- * only as far as the window. An unreadable file or a window larger than the
- * scan bound answers true: unknown kernel use keeps the session alive.
- */
+/** Unreadable files or windows past the scan bound answer true: unknown kernel use keeps the session alive. */
 export declare function evalUsedSince(file: string | null, sinceMs: number, maxBytes?: number): boolean;
 export interface HibernationCandidate {
     readonly id: string;
@@ -59,9 +52,7 @@ export interface HibernationInspection {
 export interface SessionHibernationPorts<Authority, Inspection extends HibernationInspection> {
     readSettings(): Record<string, unknown>;
     readMeminfo(): string | null;
-    /** Current live sessions only. */
     candidates(): readonly HibernationCandidate[];
-    /** Open browser event streams for a canonical session id. */
     viewers(sessionId: string): number;
     capture(row: HibernationCandidate): Authority | null;
     /** true unless the agent's tmux pane is provably unwatched. */
@@ -90,7 +81,6 @@ export interface SessionHibernation {
     records(): ReadonlyMap<string, HibernationState>;
     isHibernated(sessionId: string): boolean;
     forget(sessionId: string): void;
-    /** Resumes a hibernated session; false when the session was not hibernated. */
     wake(sessionId: string): Promise<boolean>;
 }
 export declare function createSessionHibernation<Authority, Inspection extends HibernationInspection>(ports: SessionHibernationPorts<Authority, Inspection>): SessionHibernation;

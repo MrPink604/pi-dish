@@ -1,17 +1,9 @@
 /**
- * Persistent, incrementally-updated index of derived session data: the list
- * metadata `getSessionInfo` computes plus the lowercased search text behind
- * server-side list search. The in-memory caches in session-files.js are
- * LRU-capped, so a whole-corpus scan would evict every entry before the next
- * request revisits it; this index persists `(mtimeMs, size)`-validated
- * projections under ~/.pi/dish/session-index/ and re-parses only changed
- * files.
- *
- * `scanSessions` serves fresh entries, synchronously re-indexes at most
- * `PI_DISH_INDEX_SYNC_BUDGET` (default 20) stale files, and queues the rest
- * for a background build. A file that only grew is extended from the
- * appended byte range, so a sidebar poll or search keystroke never re-parses
- * a streaming multi-MB JSONL.
+ * Persistent index of derived session data (list metadata, search text,
+ * skill activations), validated by `(mtimeMs, size)` under
+ * ~/.pi/dish/session-index/ so only changed files are re-parsed. Stale files
+ * beyond `PI_DISH_INDEX_SYNC_BUDGET` are queued for a background build; a file
+ * that only grew is extended from the appended byte range.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -47,12 +39,7 @@ export interface IndexedSessionInfo extends SessionInfo {
   usage: IndexedUsage;
 }
 interface CacheStamp { mtimeMs: number; size: number; version: number; _bytes?: number }
-/**
- * Freshness inputs resolved once per scan instead of once per file:
- * `pricingRevision` re-hashes the harness's whole override catalog on every
- * call, which dominated a warm scan. A queued backlog item resolves its own
- * context when drained.
- */
+/** Freshness inputs resolved once per scan: `pricingRevision` re-hashes the whole override catalog per call. */
 interface ScanContext {
   cacheConfig: CacheRetentionConfig;
   harnessRevision: (harnessId: SessionSource['harnessId']) => string;
@@ -96,15 +83,13 @@ function persistedFlag(value: unknown): boolean {
 const SYNC_BUDGET_DEFAULT = 20;
 const FLUSH_MS = 500;
 const COMPACT_MIN_DEAD_BYTES = 1_000_000;
-// Each projection carries a schema version; bumping it re-indexes stale
-// entries through the bounded backlog. v13 is the current meta projection.
+// Bumping a schema version re-indexes stale entries through the bounded backlog.
 const META_SCHEMA_VERSION = 13;
 const TEXT_SCHEMA_VERSION = 3;
 const SKILLS_SCHEMA_VERSION = 1;
 
-// Known skill directories (dir -> SKILL.md path) for attributing a read of
-// `references/foo.md` to its skill. A roots change deliberately does not
-// re-mine indexed files; attribution catches up when a file next changes.
+// Skill dir -> SKILL.md path, to attribute reads of `references/foo.md`. A roots
+// change does not re-mine indexed files; attribution catches up on next change.
 let skillCtx = { roots: new Map<string, string>() };
 
 export function setSkillRoots(skillFilePaths: readonly string[] | null | undefined): void {
@@ -221,10 +206,10 @@ function getState(): IndexState {
       metaLog: new NdjsonLog(path.join(dir, 'meta.ndjson')),
       textLog: new NdjsonLog(path.join(dir, 'text.ndjson')),
       skillsLog: new NdjsonLog(path.join(dir, 'skills.ndjson')),
-      meta: new Map(), // file -> { mtimeMs, size, info }
-      text: new Map(), // file -> { mtimeMs, size, text, indexedAt }
-      skills: new Map(), // file -> { mtimeMs, size, records, salt }
-      backlog: new Map(), // file -> candidate (pending background indexing)
+      meta: new Map(),
+      text: new Map(),
+      skills: new Map(),
+      backlog: new Map(), // file -> candidate pending background indexing
       building: false,
     };
     for (const [f, e] of st.metaLog.load()) {
@@ -283,10 +268,8 @@ function compactText(st: IndexState) { st.textLog.compact(st.text, encodeText); 
 function compactSkills(st: IndexState) { st.skillsLog.compact(st.skills, encodeSkills); }
 
 /**
- * Route -> validated identity tuple. The route functions are pure string
- * transforms and normalize() runs once per session per list search; the
- * harness registry is static, so a resolved route never becomes invalid and
- * a throwing one is never cached.
+ * Route -> validated identity. Routes are pure and the harness registry is
+ * static, so a resolved route never becomes invalid; throwing ones aren't cached.
  */
 interface RouteIdentity {
   harnessId: SessionSource['harnessId'];
@@ -372,7 +355,6 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
   return info;
 }
 
-/** The all-tables freshness test scanSessions and getSessionInfo share. */
 function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, stats: fs.Stats,
   ctx: ScanContext): boolean {
   const cached = st.meta.get(file);
@@ -394,10 +376,8 @@ function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, st
 }
 
 /**
- * O(delta) refresh for a session file that only grew. Extends all three
- * tables in memory when the appended range is a plain chain from the indexed
- * leaf; anything else (tree jump, shrink/rewrite, schema or pricing mismatch,
- * missing continuity state) returns null so the caller re-indexes fully.
+ * O(delta) refresh for a file that only grew along a plain chain from the
+ * indexed leaf; anything else returns null so the caller re-indexes fully.
  * Extensions are not logged: hot files churn too fast to persist per delta.
  */
 function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs.Stats,
@@ -416,8 +396,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
       meta.mtimeMs !== skills.mtimeMs || meta.size !== skills.size) return null;
   if (!(stats.size > meta.size) || !text.endsNl) return null;
   if (meta.dev !== stats.dev || meta.ino !== stats.ino) return null; // replaced, not appended
-  // Continuity state (running provider/model/cwd) is required to accumulate
-  // a delta; entries persisted before it existed re-index fully once.
+  // Continuity state (running provider/model/cwd) is required to accumulate a delta.
   if (!meta.info?.usage?.state || !skills.state) return null;
   let delta, entries, extension;
   try {
@@ -439,8 +418,7 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
     if (mined.records.length) skills.records = skills.records.concat(mined.records);
     skills.state = mined.state;
   } catch {
-    // A half-applied extension must not survive; drop the entry so the next
-    // scan rebuilds it from the file.
+    // A half-applied extension must not survive; the next scan rebuilds it.
     dropEntry(st, file);
     return null;
   }
@@ -507,9 +485,8 @@ function kickBuilder(st: IndexState) {
 }
 
 /**
- * The scan behind the historical session list. A file missing from `infos`
- * is queued for background indexing, so `indexing` is exactly "a backlog
- * remains". Entries for files gone from disk are tombstoned.
+ * Files missing from `infos` are queued for background indexing, so `indexing`
+ * means "a backlog remains". Entries for files gone from disk are tombstoned.
  */
 export function scanSessions(files: readonly SessionSource[]): { infos: ReadonlyMap<string, Readonly<IndexedSessionInfo>>; indexing: boolean } {
   const st = getState();
@@ -545,8 +522,7 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
     }
   }
 
-  // Sessions deleted on disk: drop their index entries. (Absent-from-`files`
-  // but still existing is fine — e.g. an active session the caller excluded.)
+  // Drop entries for files deleted on disk; absent-from-`files` but existing is fine.
   for (const file of [...st.meta.keys()]) {
     if (!seen.has(file) && !fs.existsSync(file)) dropEntry(st, file);
   }
@@ -556,11 +532,7 @@ export function scanSessions(files: readonly SessionSource[]): { infos: Readonly
   return { infos, indexing: st.backlog.size > 0 };
 }
 
-/**
- * Search text for one session file: fresh from the index, extended in
- * O(delta) when the file only grew, fully re-indexed otherwise. '' when the
- * file is unreadable.
- */
+/** '' when the file is unreadable. */
 export function getSearchText(input: SessionSource): string {
   const candidate = normalize(input);
   const file = candidate.file;
@@ -585,11 +557,7 @@ export function getSearchText(input: SessionSource): string {
   return st.text.get(file)!.text;
 }
 
-/**
- * Index-backed single-file session info with session-files' shape. Serves
- * fresh entries, extends append-only growth in O(delta), fully re-indexes
- * anything else, and throws when the file is unreadable.
- */
+/** Throws when the file is unreadable. */
 export function getSessionInfo(input: SessionSource): SessionInfo {
   const candidate = normalize(input);
   const st = getState();
@@ -602,8 +570,7 @@ export function getSessionInfo(input: SessionSource): SessionInfo {
     info = tryExtendIndexEntry(st, candidate, stats, ctx) || indexFile(st, candidate, stats, ctx);
   }
   st.backlog.delete(candidate.file); // just indexed/served; a queued rebuild is stale
-  // Strip index-internal fields so callers (and responses spreading info) see
-  // the plain session-files shape.
+  // Strip index-internal fields so callers see the plain session-files shape.
   const { usage, sessionKey, harnessId, nativeSessionId, profileId, profileVersion, ...pub } = info;
   return pub;
 }
@@ -620,9 +587,8 @@ function readByteRange(file: string, start: number, end: number): string {
 }
 
 /**
- * Mined skill-activation records across every indexed session, filtered by
- * absolute SKILL.md path, kind, cwd or time. Reads only the in-memory index;
- * files still in the backlog are simply absent.
+ * Filtered skill-activation records from the in-memory index only; files
+ * still in the backlog are absent.
  */
 export function getSkillActivations(filter: { skill?: string; sinceMs?: number; cwd?: string; kind?: string } = {}): SkillActivation[] {
   const st = getState();

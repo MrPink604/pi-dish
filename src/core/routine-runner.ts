@@ -1,12 +1,7 @@
 /**
- * The routine runner: trigger → spawn/deliver → observe → close.
- *
- * Every side effect it can have arrives as an injected dep, so the whole
- * lifecycle (including the restart-recovery and watchdog paths, which are hard
- * to provoke against a real pi) is testable without booting a spawn backend.
- * Nothing here branches on a harness id — capability questions go through the
- * `supports` dep, exactly as the spawn/prompt routes go through
- * `liveSessionSupports`.
+ * Routine lifecycle: trigger → spawn/deliver → observe → close. Every side
+ * effect is an injected dep (testable without a spawn backend), and capability
+ * checks go through `supports`, never a harness id.
  */
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseCron, cronMatches, nextCronMatch } from './cron';
@@ -51,10 +46,8 @@ export interface RoutineRunnerPorts {
 export const DEFAULT_CLOSE_GRACE_MS = 10000;
 export const STARTING_WATCHDOG_MS = 2 * 60 * 1000;
 export const TICK_MS = 30000;
-// An aborted turn is `agent_end` with no paired `turn_end`, but the two can
-// legitimately arrive back to back on a turn that *did* complete. Give a
-// turn_end this long to claim the invocation before agent_end calls it
-// interrupted.
+// An aborted turn is `agent_end` with no paired `turn_end`, but a completed
+// turn can deliver both back to back: give turn_end this long to claim it.
 const AGENT_END_GRACE_MS = 250;
 
 function coded(message: string, status: number, extra: Record<string, unknown> = {}): Error & { status: number } {
@@ -173,10 +166,9 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   }
 
   /**
-   * oneShot's auto-close. The grace period exists because a turn ending is not
-   * the same as pi being done writing; a harness that refuses or cannot prove
-   * the close records `closeError` and leaves the session live — never
-   * escalate, a routine is not a process manager.
+   * oneShot auto-close after a grace period (turn end ≠ pi done writing). A
+   * refused/unprovable close records `closeError` and leaves the session live:
+   * never escalate, a routine is not a process manager.
    */
   async function scheduleClose(invocation: RoutineInvocation) {
     if (!invocation.sessionId) return;
@@ -197,10 +189,8 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   }
 
   /**
-   * Record the run and start it. Returns the persisted invocation (status
-   * `starting`, or `skipped`) or throws a coded error for the 409/413/429
-   * cases. The body runs detached — callers that want the outcome poll the
-   * ledger (`waitForInvocation`).
+   * Returns the persisted invocation (`starting` or `skipped`) or throws a coded
+   * 409/413/429 error. The body runs detached; callers poll the ledger.
    */
   function invoke(routine: Routine, { trigger = 'invoke', source = null, input = null }: RoutineInvokeOptions = {}): RoutineInvocation {
     const at = now();
@@ -366,10 +356,8 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   }
 
   /**
-   * One scheduler pass. Only the *current* minute is evaluated — minutes the
-   * server slept through are not caught up, and `lastScheduledMinute` is
-   * persisted before the fire so a restart inside the same minute cannot
-   * double-run.
+   * Only the *current* minute is evaluated (slept-through minutes are not caught
+   * up); `lastScheduledMinute` persists before the fire so a restart can't double-run.
    */
   function tick(at = now()) {
     sweepStarting(at);
@@ -395,9 +383,8 @@ export function createRoutineRunner(deps: RoutineRunnerPorts): RoutineRunner {
   }
 
   /**
-   * Nothing in the ledger survives a restart as a live observation, so every
-   * unfinished record is reconciled against the session that is (or isn't)
-   * still there.
+   * No live observation survives a restart, so every unfinished record is
+   * reconciled against the session that is (or isn't) still there.
    */
   async function recoverAfterRestart(at = now()) {
     for (const invocation of store.activeInvocations()) {

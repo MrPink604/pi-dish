@@ -12,30 +12,20 @@ export interface IndexedSessionInfo extends SessionInfo {
 }
 export declare function setSkillRoots(skillFilePaths: readonly string[] | null | undefined): void;
 /**
- * The scan behind the historical session list. A file missing from `infos`
- * is queued for background indexing, so `indexing` is exactly "a backlog
- * remains". Entries for files gone from disk are tombstoned.
+ * Files missing from `infos` are queued for background indexing, so `indexing`
+ * means "a backlog remains". Entries for files gone from disk are tombstoned.
  */
 export declare function scanSessions(files: readonly SessionSource[]): {
     infos: ReadonlyMap<string, Readonly<IndexedSessionInfo>>;
     indexing: boolean;
 };
-/**
- * Search text for one session file: fresh from the index, extended in
- * O(delta) when the file only grew, fully re-indexed otherwise. '' when the
- * file is unreadable.
- */
+/** '' when the file is unreadable. */
 export declare function getSearchText(input: SessionSource): string;
-/**
- * Index-backed single-file session info with session-files' shape. Serves
- * fresh entries, extends append-only growth in O(delta), fully re-indexes
- * anything else, and throws when the file is unreadable.
- */
+/** Throws when the file is unreadable. */
 export declare function getSessionInfo(input: SessionSource): SessionInfo;
 /**
- * Mined skill-activation records across every indexed session, filtered by
- * absolute SKILL.md path, kind, cwd or time. Reads only the in-memory index;
- * files still in the backlog are simply absent.
+ * Filtered skill-activation records from the in-memory index only; files
+ * still in the backlog are absent.
  */
 export declare function getSkillActivations(filter?: {
     skill?: string;

@@ -173,9 +173,8 @@ function decodeFields(value: Record<string, unknown>): SessionFields {
   return fields;
 }
 /**
- * Browser ingress. Keep the established fatal control checks; malformed
- * newly named presentation fields are omitted, never smuggled into extras.
- * This accepts serialized wire timestamps. Server Date projection stays separate.
+ * Browser ingress with fatal control checks; malformed presentation fields are
+ * omitted, never smuggled into extras. Accepts serialized wire timestamps.
  */
 export function decodeSessionRow(value: unknown): SessionRow {
   if (!record(value) || !Object.hasOwn(value, 'id')) return invalid('session');
@@ -236,12 +235,11 @@ export function decodeSessionList(value: unknown): SessionList {
     ...(finite(value.discoverySkipped) ? { discoverySkipped: value.discoverySkipped } : {}) };
 }
 
-/** Preserve the existing client projection; full API rows retain provenance. */
+/** Client projection; full API rows retain provenance. */
 type ClientPrivateField = 'sessionKey' | 'nativeSessionId' | 'profileId' | 'profileVersion'
   | 'sessionFile' | 'parentSession' | 'parentSessionSource' | 'pid';
 export function sessionForClient<T extends SessionFields<Date | string | number> & { id: string }>(session: T): Omit<T, ClientPrivateField> {
-  // Catalog rows have already established named metadata. This is only a wire
-  // projection: preserve Date values until JSON serialization and opaque extras.
+  // Wire projection only: Date values stay until JSON serialization.
   const { sessionKey, nativeSessionId, profileId, profileVersion, sessionFile,
     parentSession, parentSessionSource, pid, ...client } = session as T & Partial<Record<ClientPrivateField, unknown>>;
   return client;

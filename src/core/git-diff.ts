@@ -1,15 +1,8 @@
 /**
- * Aggregate git diffs for every repo under a session's cwd.
- *
- * The user works in polyrepo workspaces: the agent cwd is a parent directory
- * holding several git checkouts side by side, so "what did the agent change"
- * means walking the tree for repos and collecting each one's working-tree
- * diff against HEAD (staged + unstaged + untracked — everything not yet
- * committed). One response powers the diff modal in the UI.
- *
- * Every git invocation is execFile with a timeout and argv (never a shell
- * string). A failing repo degrades to an `error` field on its entry so one
- * broken repo cannot blank the modal; missing git yields `{ gitAvailable: false }`.
+ * Aggregate uncommitted git diffs (staged + unstaged + untracked vs HEAD) for
+ * every repo under a session's cwd: polyrepo workspaces hold several checkouts
+ * side by side. Every git call is execFile with argv and a timeout. A failing
+ * repo degrades to an `error` field so one broken repo cannot blank the modal.
  */
 import { execFile, execFileSync } from 'child_process';
 import * as crypto from 'crypto';
@@ -119,8 +112,7 @@ interface PatchSection {
 type UntrackedPatch = GitFilePatch & { status: '?'; oldPath: null };
 type UntrackedFile = GitDiffFile & { status: '?'; oldPath: null };
 
-// Same heavies the file-search walker skips; a repo hiding inside one of
-// these is vendored code, not the user's workspace.
+// A repo inside one of these is vendored code, not the user's workspace.
 const SKIP_DIRS = new Set(['node_modules', 'target', 'dist', 'build', '__pycache__', 'venv', '.git']);
 const MAX_DEPTH = 3;       // cwd + 2 levels — polyrepos sit directly under the workspace dir
 const MAX_DIRS = 2000;     // hard stop for huge trees
@@ -159,10 +151,9 @@ export function isGitAvailable(): boolean {
 }
 
 /**
- * Find git repos under `root` (including root itself): any directory holding
- * a `.git` entry — dir or file, so worktrees count. Found repos are not
- * descended into (submodules show as pointer changes in the parent). BFS,
- * bounded depth and dir count; symlinked dirs are skipped (no cycles).
+ * Any dir holding a `.git` entry (dir or file, so worktrees count). Found repos
+ * are not descended into (submodules show as pointer changes in the parent);
+ * symlinked dirs are skipped (no cycles).
  */
 export function findGitRepos(root: string, { maxDepth = MAX_DEPTH, maxRepos = MAX_REPOS }: GitRepoDiscoveryOptions = {}): string[] {
   const repos: string[] = [];
@@ -235,11 +226,9 @@ function unquotePath(p: string): string {
 }
 
 /**
- * Split one `git diff` output into per-file entries with counts. Content
- * lines can't collide with the "diff --git " sentinel — they always start
- * with ' ', '+', '-', or '\'. Returns [{ path, oldPath, additions,
- * deletions, binary, patch }]; `path` is the post-change side (the pre-change
- * side for deletions).
+ * Content lines can't collide with the "diff --git " sentinel: they always
+ * start with ' ', '+', '-', or '\'. `path` is the post-change side (the
+ * pre-change side for deletions).
  */
 export function splitPatch(patchText: string): GitFilePatch[] {
   const files: PatchSection[] = [];
@@ -359,11 +348,7 @@ function untrackedEntry(repoPath: string, relPath: string, { includePatch = true
   return { ...base, additions: lines.length, deletions: 0, patch };
 }
 
-/**
- * One repo's uncommitted state: branch, ahead/behind upstream, per-file
- * entries with patches. Never throws — failures land in `error` (with
- * whatever file list still resolved).
- */
+/** Never throws: failures land in `error` alongside whatever file list resolved. */
 async function getRepoState(repoPath: string): Promise<GitRepoState> {
   const repo: GitRepoDiff = { branch: null, ahead: 0, behind: 0, files: [], additions: 0, deletions: 0 };
   let status: GitStatusV2, statusRaw: string;
@@ -387,10 +372,9 @@ async function getRepoState(repoPath: string): Promise<GitRepoState> {
 }
 
 /**
- * Cheap but conservative working-tree identity. Porcelain v2 carries exact
- * HEAD/index object ids; worktree and untracked bytes are represented by
- * nanosecond stat identity. A mere touch may mark a pane stale, which is safe
- * and far cheaper than materializing every large patch up front.
+ * Cheap, conservative working-tree identity: exact HEAD/index oids from
+ * porcelain v2 plus nanosecond stat identity for worktree/untracked bytes. A
+ * mere touch may mark a pane stale, which is safe and far cheaper than diffing.
  */
 function repoStateVersion(repoPath: string, statusRaw: string, status: GitStatusV2): string {
   const hash = crypto.createHash('sha256').update(statusRaw);
@@ -442,9 +426,8 @@ async function buildRepoDiff(repoPath: string, state: GitRepoState, { includePat
   const { repo, status, hasHead } = state;
   if (!status) return repo;
 
-  // Tracked changes: one diff against HEAD covers staged + unstaged. An
-  // unborn branch (no commits yet) has no HEAD — everything meaningful is in
-  // the untracked/added lists, synthesized below.
+  // One diff against HEAD covers staged + unstaged. An unborn branch has no
+  // HEAD; its files are synthesized via the untracked path below.
   if (hasHead && status.changed.size > 0) {
     try {
       const out = await runGit(repoPath, includePatches
@@ -504,11 +487,7 @@ async function getFilePatch(repoPath: string, file: GitFilePatchSelection | null
     (file.oldPath && item.oldPath === file.oldPath)) || null;
 }
 
-/**
- * The full aggregate for the diff modal: every repo under `root` with its
- * uncommitted changes. Repo paths are root-relative ('.' for root itself);
- * dirty repos sort before clean ones, then by path.
- */
+/** Repo paths are root-relative ('.' for root); dirty repos sort first, then by path. */
 export async function aggregateDiffs(root: string, { inlineLimit = null }: GitDiffOptions = {}): Promise<GitDiffAggregate> {
   if (!isGitAvailable()) return { root, gitAvailable: false, repos: [], version: null };
   const repoPaths = findGitRepos(root);

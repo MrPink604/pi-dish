@@ -184,7 +184,7 @@ export function attachClient(sessionId: string, cwd: string | null | undefined, 
   ws.on('message', (raw) => {
     let msg: unknown;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
-    // Preserve the legacy null-frame failure; other non-object JSON has no type.
+    // A null frame throws as a property read would; other non-object JSON has no type.
     if (msg === null) throw new TypeError("Cannot read properties of null (reading 'type')");
     if (!record(msg)) return;
     if (msg.type === 'restart') return void restartTerminal(sessionId, cwd, opts);
@@ -193,8 +193,7 @@ export function attachClient(sessionId: string, cwd: string | null | undefined, 
     if (msg.type === 'input' && typeof msg.data === 'string') {
       t.proc.write(msg.data);
     } else if (msg.type === 'resize') {
-      // JSON strings, booleans, arrays, null and absent dimensions retain the
-      // original bitwise ToInt32 coercion before the size bounds are applied.
+      // Non-numeric dimensions use bitwise ToInt32 coercion before bounds.
       const cols = Math.max(2, Math.min(500, Number(msg.cols) | 0));
       const rows = Math.max(2, Math.min(300, Number(msg.rows) | 0));
       try { t.proc.resize(cols, rows); } catch {}

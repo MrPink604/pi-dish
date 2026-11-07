@@ -1,13 +1,9 @@
 /**
  * Hub-side public artifact reachability, not ownership or authorization.
- * Stores are re-read through dish-store for each operation and written atomically.
- *
- * An entry is either a live mapping `{ host, kind, createdAt }` or a
- * suppression tombstone `{ unmapped: true, createdAt }`. The hub discovers
- * unmapped tokens by asking its remotes, so an explicit unmap has to be
- * remembered or the next request would simply rediscover it. Only an explicit
- * record() (creation through the proxy, or POST /api/fleet-artifacts) clears
- * a tombstone; discovery never records over one.
+ * An entry is a live mapping `{ host, kind, createdAt }` or a tombstone
+ * `{ unmapped: true, createdAt }`: the hub rediscovers tokens from its remotes,
+ * so an explicit unmap must be remembered. Only an explicit record() clears a
+ * tombstone; discovery never records over one.
  */
 import { readStore, writeStore } from './dish-store';
 import { isValidRemoteName } from './remote-hosts';
@@ -26,7 +22,7 @@ export interface FleetArtifactListEntry {
   createdAt: number | null;
 }
 
-/** M3-owned port consumed by M5 relay; untrusted inputs stay unknown. */
+/** Store port consumed by the relay; untrusted inputs stay unknown. */
 export interface FleetArtifactStore {
   get(token: unknown): FleetArtifactRecord | null;
   record(token: unknown, host: unknown, kind: unknown): FleetArtifactRecord | null;
