@@ -13,8 +13,9 @@ test('core build detects stale runtime/declarations and never repairs them in ch
     fs.mkdirSync(path.join(root, 'scripts'));
     fs.mkdirSync(path.join(root, 'src', 'core'), { recursive: true });
     fs.mkdirSync(path.join(root, 'lib'));
-    fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'build-core.js'), path.join(root, 'scripts', 'build-core.js'));
-    fs.copyFileSync(path.join(__dirname, '..', 'tsconfig.core.json'), path.join(root, 'tsconfig.core.json'));
+    for (const file of ['scripts/build-core.js', 'scripts/build-output.js', 'tsconfig.core.json', 'tsconfig.node.json', 'tsconfig.base.json']) {
+      fs.copyFileSync(path.join(__dirname, '..', file), path.join(root, file));
+    }
     fs.symlinkSync(path.join(__dirname, '..', 'node_modules'), path.join(root, 'node_modules'), 'junction');
     fs.writeFileSync(path.join(root, 'package.json'), '{"type":"commonjs"}');
     const source = path.join(root, 'src', 'core', 'example.ts');

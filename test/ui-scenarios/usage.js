@@ -1,11 +1,8 @@
 // Generated test/tool from test/ui-scenarios/usage.ts; edit that source and run npm run build:tests.
 "use strict";
 const usage = async ({ desktop, check, SESSION_ID }) => {
-    // Usage view: the global usage overview as a main-pane takeover (sidebar
-    // header bar-chart button). Range presets re-scope the sections, a bar
-    // click opens that day's per-model detail, a session row jumps into the
-    // session, and Escape closes the pane. Asserted on the all-time range so
-    // the fixed fixture dates stay in-window whenever the smoke runs.
+    // Usage overview takeover; asserted on the all-time range so the fixed
+    // fixture dates stay in-window whenever the smoke runs.
     console.log('usage view:');
     await desktop.click('[title="Usage and spend"]');
     await desktop.waitForSelector('.usage-kpis', { timeout: 5000 });
@@ -68,11 +65,9 @@ const usage = async ({ desktop, check, SESSION_ID }) => {
     check(await desktop.evaluate(() => localStorage.getItem('pi-dish-usage-stack') === 'buckets'), 'bucket stacking re-pivots the chart and persists device-locally');
     await desktop.click('[data-stack="models"]');
     await desktop.waitForFunction(() => [...document.querySelectorAll('#usageChart .usage-legend-item')].some(el => el.textContent.includes('smoke-model')), null, { timeout: 5000 });
-    // Event-driven: while the session index is still settling, the view
-    // repolls at 1s and each re-render can shift the chart's day axis (the
-    // 'all' range starts at the earliest *indexed* day), so a bucket index
-    // captured mid-indexing goes stale by click time. Wait for indexing to
-    // settle with the smoke model present, then resolve the index once.
+    // Each re-render during indexing can shift the chart's day axis (the 'all'
+    // range starts at the earliest indexed day), so resolve the bucket index once
+    // indexing has settled.
     await desktop.waitForFunction(() => {
         const { data, chart } = fixtureApp.features.usageController;
         return data && !data.indexing && chart?.buckets.some(bucket => bucket.models?.some(model => model.ref === 'test/smoke-model'));

@@ -1,6 +1,6 @@
 import { AgentSession } from "@earendil-works/pi-coding-agent";
 import { observeSendUserMessage } from "./send-observer.js";
-import { callHost, field, isHostMethod, isObject } from "./host.js";
+import { callHost, field, isHostMethod, isObject, type HostObject } from "./host.js";
 
 // Pi's extension runner omits queue/private compaction events. Capture the live
 // receiver once; the global holder survives extension reloads on the same session.
@@ -44,12 +44,9 @@ try {
   try { process.stderr.write(`[pi-dish-bridge] AgentSession capture patch failed (queue editing disabled): ${e}\n`); } catch {}
 }
 
-type PrivateSession = Record<PropertyKey, unknown>;
-
-function capturedSession(): PrivateSession | null {
+function capturedSession(): HostObject | null {
   try {
-    const holder = sharedGlobal[HOLDER];
-    const session = holder && typeof holder === "object" && "current" in holder ? holder.current : null;
+    const session = field(sharedGlobal[HOLDER], "current");
     if (isObject(session) && isHostMethod(session.subscribe)) return session;
   } catch {}
   return null;

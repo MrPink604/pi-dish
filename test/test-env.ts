@@ -1,8 +1,7 @@
 /**
- * The environment every test process must start from: the operator's live
- * deployment variables (tailnet HOST, deployment PORT, share port, token) must
- * not reach a suite that boots server.js, and the bind target is pinned to an
- * ephemeral loopback port.
+ * The environment every test process starts from: the operator's deployment
+ * variables (tailnet HOST, PORT, share port, token) must not reach a suite that
+ * boots server.js, and the bind target is pinned to an ephemeral loopback port.
  */
 import fs = require('fs');
 import os = require('os');

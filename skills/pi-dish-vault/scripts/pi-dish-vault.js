@@ -9,16 +9,11 @@ exports.aacInvocation = aacInvocation;
 exports.decodeSearchReply = decodeSearchReply;
 /**
  * Ask the operator for one Bitwarden item through Bitwarden Agent Access
- * (`aac`), approved from pi-dish (TASKS/vault-approvals.md).
- *
- * `run` wraps `aac run`: the request travels end-to-end encrypted to the
- * hub's pi-dish-vault-listener, which asks pi-dish for the operator's
- * decision; on approval aac injects the requested fields into one command's
- * environment. The value never passes through this process's output.
- *
- * The aac `--domain` query carries a pi-dish envelope naming the item, the
- * fields, the reason and this session, so the approval card can say who is
- * asking and why.
+ * (`aac`), approved from pi-dish. `run` wraps `aac run`: the hub's
+ * pi-dish-vault-listener asks pi-dish for the decision, and on approval aac
+ * injects the fields into one command's environment — never into our output.
+ * The `--domain` query carries an envelope naming the item, fields, reason and
+ * session, so the approval card can say who is asking and why.
  */
 const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
@@ -27,8 +22,7 @@ try {
     core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
 }
 catch (e) {
-    process.stderr.write('pi-dish-vault: could not load the shared pi-dish client library '
-        + `(${e instanceof Error && e.message ? e.message : e}).\n`
+    process.stderr.write(`pi-dish-vault: could not load the shared pi-dish client library (${e instanceof Error && e.message ? e.message : e}).\n`
         + 'Install the skills by symlinking the skill directories from the pi-dish repo '
         + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n');
     process.exit(1);
@@ -304,7 +298,7 @@ function search(args) {
         return;
     const listing = decodeSearchReply(reply);
     if (json)
-        return void process.stdout.write(JSON.stringify(listing, null, 2) + '\n');
+        return core.print(listing, true);
     for (const entry of listing.results) {
         process.stdout.write(`${entry.id}\t${entry.kind}\t${entry.name}\t${entry.uris.join(' ')}\n`);
         if (entry.fields.length)

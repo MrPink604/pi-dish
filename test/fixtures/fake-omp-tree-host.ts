@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createBridge, type BridgeDescriptor } from '../../extensions/pi-dish-bridge/core.js';
+import { isHostMethod, isObject, type HostObject as HostRecord } from '../../extensions/pi-dish-bridge/host.js';
 
 const mode = process.env.FAKE_OMP_TREE_MODE || 'normal';
 const sessionId = 'fake-omp-tree';
@@ -8,7 +9,6 @@ const sessionFile = path.join(process.env.HOME!, '.omp', 'agent', 'sessions', 'f
 const operationLog = process.env.FAKE_OMP_TREE_LOG!;
 fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
 
-type HostRecord = Record<PropertyKey, unknown>;
 interface TreeEntry extends HostRecord {
   type: string;
   id: string;
@@ -27,12 +27,6 @@ interface CommandRegistration extends HostRecord {
 interface ShortcutRegistration extends HostRecord {
   chord: string;
   handler(context: HostRecord): unknown;
-}
-function record(value: unknown): value is HostRecord {
-  return value !== null && (typeof value === 'object' || typeof value === 'function');
-}
-function callable(value: unknown): value is (this: unknown, ...args: unknown[]) => unknown {
-  return typeof value === 'function';
 }
 
 const entries: TreeEntry[] = [
@@ -138,7 +132,7 @@ const fakePi = {
     eventHandlers.set(event, handlers);
   },
   registerCommand(name: string, options: unknown) {
-    if (!record(options) || !callable(options.handler)) throw new Error('invalid command registration');
+    if (!isObject(options) || !isHostMethod(options.handler)) throw new Error('invalid command registration');
     const handler = options.handler;
     commands.set(name, {
       ...options,
@@ -148,7 +142,7 @@ const fakePi = {
     });
   },
   registerShortcut(chord: string, options: unknown) {
-    if (!record(options) || !callable(options.handler)) throw new Error('invalid shortcut registration');
+    if (!isObject(options) || !isHostMethod(options.handler)) throw new Error('invalid shortcut registration');
     const handler = options.handler;
     shortcuts.set(chord, {
       ...options,

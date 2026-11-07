@@ -3,12 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHarnessBridge } from '../../extensions/pi-dish-bridge-omp/index.js';
 import { patchOmpAgentSession, getOmpNativeCaptureStats } from '../../extensions/pi-dish-bridge-omp/native-state.js';
+import { isObject, type HostObject as HostRecord } from '../../extensions/pi-dish-bridge/host.js';
 
-type HostRecord = Record<PropertyKey, unknown>;
 type HostHandler = (event: HostRecord, context: HostRecord) => unknown | Promise<unknown>;
-function record(value: unknown): value is HostRecord {
-  return value !== null && (typeof value === 'object' || typeof value === 'function');
-}
 
 const before = getOmpNativeCaptureStats(null);
 for (const malformed of [null, 1, {}, { prototype: {} }, () => {}]) patchOmpAgentSession(malformed);
@@ -56,7 +53,7 @@ try {
   const files = fs.readdirSync(registry).filter(name => name.endsWith('.json'));
   assert.equal(files.length, 1);
   const claim: unknown = JSON.parse(fs.readFileSync(path.join(registry, files[0]!), 'utf8'));
-  if (!record(claim) || !record(claim.capabilities)) throw new Error('native boundary fixture received invalid claim');
+  if (!isObject(claim) || !isObject(claim.capabilities)) throw new Error('native boundary fixture received invalid claim');
   assert.equal(claim.spawnToken, null);
   assert.equal(claim.harnessId, 'omp');
   assert.equal(claim.thinkingLevel, 'max');

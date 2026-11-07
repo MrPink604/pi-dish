@@ -3,7 +3,7 @@
 import type { ContextUsage, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { PiPrivateOperations } from "./pi-private.js";
 import { createLoginController, type LoginAdapter } from "./login.js";
-import { callHost, field, isHostMethod, isObject, optionalHostCall, type HostMethod, type HostObject } from "./host.js";
+import { asRecord, callHost, field, isHostMethod, isObject, optionalHostCall, type HostMethod, type HostObject } from "./host.js";
 import { captureSendUserMessage } from "./send-observer.js";
 import * as cp from "node:child_process";
 import * as crypto from "node:crypto";
@@ -64,10 +64,8 @@ function isContextUsage(value: unknown): value is ContextUsage {
     typeof value.contextWindow === "number" && (value.percent === null || typeof value.percent === "number");
 }
 
-// Exact process-birth identity for registry consumers. A PID alone can be
-// reused after this pi exits; Linux proc field 22 is stable for this process's
-// lifetime. On platforms without /proc the marker is omitted, preserving the
-// legacy handshake-required behavior instead of publishing false identity.
+// Process-birth identity for registry consumers: a PID alone can be reused.
+// Omitted where /proc is absent, so consumers fall back to the handshake.
 function processStartTime(pid: number): string | null {
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -85,13 +83,9 @@ const ROOT = path.join(os.homedir(), ".pi", "dish");
 const REGISTRY_DIR = path.join(ROOT, "sessions");
 const DEFAULT_SOCKET_DIR = path.join(ROOT, "sockets");
 const SOCKET_DIR_OVERRIDE = process.env.PI_DISH_SOCKET_DIR || null;
-// Opt-in projection churn logging (PI_DISH_BRIDGE_DEBUG=1): the web client's
-// widget removal grace absorbs clear/set churn under ~500ms, so a visibly
-// flickering Todos frame means the host projection itself oscillates with
-// longer gaps. Transitions append to ~/.pi/dish/projection-debug.log (a file,
-// not stderr, because harness TUIs own the pane) with timing and whether the
-// raw todos value was even an array — distinguishing "harness emptied the
-// list" from "reader fell back to []".
+// Opt-in projection churn logging (PI_DISH_BRIDGE_DEBUG=1). Writes to a file
+// rather than stderr because harness TUIs own the pane, and records whether the
+// raw todos value was an array: "harness emptied the list" vs "reader fell back".
 const DEBUG_PROJECTION_LOG = process.env.PI_DISH_BRIDGE_DEBUG
   ? path.join(ROOT, "projection-debug.log")
   : null;
@@ -122,10 +116,9 @@ function assertSocketPathLength(socketPath: string): void {
   throw new Error(`[pi-dish-bridge] Unix socket path is ${bytes} bytes (maximum ${MAX_SOCKET_PATH_BYTES}) using ${source}: ${socketPath}. ${action}`);
 }
 
-// bind() caps a Unix socket path at sun_path (~104-108 bytes), and session ids
-// (JSONL basenames) can be long enough to blow it. The socket file is named by
-// a hash of the id — nothing derives this path from the session name; every
-// consumer reads socketPath from the registry entry.
+// bind() caps a Unix socket path at sun_path (~104 bytes) and session ids can
+// exceed it, so the socket file is named by a hash; consumers read socketPath
+// from the registry entry, never derive it.
 function socketPathFor(sessionId: string): string {
   const digest = crypto.createHash("sha256").update(sessionId).digest("hex").slice(0, 24);
   const socketPath = path.join(SOCKET_DIR, `${digest}.sock`);
@@ -171,11 +164,8 @@ function ensureSocketDirectory(): void {
 // with the session it registers. Harmless (and undefined) otherwise.
 const SPAWN_TOKEN = process.env.PI_DISH_SPAWN_TOKEN || null;
 
-// Where this pi lives, for pi-dish's "Running in" display: $TMUX is
-// "socketPath,serverPid,sessionIdx" and $TMUX_PANE the %pane id. Stamped into
-// the registry entry so even sessions pi-dish didn't spawn report their tmux
-// location. Null outside tmux (a plain terminal, or an RPC child — the server
-// distinguishes its own children before trusting this).
+// tmux location for pi-dish's "Running in" display, stamped into the registry
+// entry so even externally spawned sessions report it. Null outside tmux.
 const TMUX_LOCATION = process.env.TMUX
   ? { socket: process.env.TMUX.split(",")[0], pane: process.env.TMUX_PANE || null }
   : null;
@@ -273,8 +263,7 @@ export interface SideTurnInput {
 // bridge's ctx.sessionManager, identifying which host session to run against.
 export type SideTurnRunner = (input: SideTurnInput, sessionManager: unknown) => Promise<string>;
 
-// --- Prompt template arg substitution (mirrors pi's prompt-templates.ts) ---
-
+// Prompt template argument substitution mirrors pi's prompt-templates.ts.
 function parseCommandArgs(argsString: string): string[] {
   const args: string[] = [];
   let current = "";
@@ -351,14 +340,10 @@ export type BridgeDescriptor = {
   sessionSwitchEvents?: boolean;
   publicCompactionEvents?: boolean;
   compactArgument?: (instructions: string) => unknown;
-  // OMP permits branch()/navigateTree() only while an extension command
-  // handler is executing. When enabled, socket requests are queued and an
-  // internal command services them instead of reusing a command context from
-  // an arbitrary socket callback. Registered extension *shortcuts* get the
-  // same command context (the host TUI builds one per keypress), so the
-  // service is also bound to a key chord — pi-dish presses it instead of
-  // typing the command, which would append to whatever the user has in the
-  // composer and get sent to the model.
+  // OMP permits branch()/navigateTree() only inside an extension command
+  // handler. Socket requests are queued for an internal command to service.
+  // Shortcuts get the same command context, so the service is also bound to a
+  // key chord: pi-dish presses it rather than typing into the user's composer.
   treeCommandContext?: boolean;
   treeCommandAcquireTimeoutMs?: number;
   treeCommandOperationTimeoutMs?: number;
@@ -382,19 +367,10 @@ export type BridgeDescriptor = {
   login?: LoginAdapter;
 };
 
-// Identifying the OMP host from inside an extension is subtler than it
-// sounds — signals verified against the real host (bun 1.3.14 / OMP 17.3.0,
-// extension-loaded diagnostics):
-//   - process.execPath is the bun runtime, NOT an omp binary (omp is a bun
-//     script, not a compiled executable).
-//   - process.argv[1] is also NOT the omp shim path: the ~/.bun/bin/omp
-//     launcher re-execs bun against the global install, so argv[1] resolves
-//     to .../node_modules/@oh-my-pi/pi-coding-agent/dist/cli.js. A future
-//     compiled omp executable would instead surface its own basename.
-//   - OMP's Symbol.for("omp.*") registry symbols exist in the bundle but are
-//     not stamped on globalThis by the time user extensions load.
-//   - PI_CODING_AGENT / PI_* env vars are plain-pi markers (pi sets them for
-//     children too) and cannot distinguish the host.
+// Identifying the OMP host from inside an extension, verified against bun
+// 1.3.14 / OMP 17.3.0: execPath is bun, argv[1] is the global install's cli.js,
+// the Symbol.for("omp.*") registry is not on globalThis yet, and PI_* env vars
+// are plain-pi markers that pi also sets for children.
 function foreignWrapperHost(): string | null {
   try {
     const entry = process.argv[1] || "";
@@ -592,28 +568,21 @@ export function createBridge(descriptor: BridgeDescriptor) {
   fs.mkdirSync(REGISTRY_DIR, { recursive: true });
 
   // Session-control methods (ctx.navigateTree, ctx.reload, …) exist only on
-  // command contexts, which pi supplies when it executes an extension
-  // command — events get a plain ctx without them. A command context stays
-  // valid until the extension runner is replaced (reload / session switch),
-  // so every bridge command stashes its ctx for the socket handlers to
-  // reuse. RPC sessions can be primed remotely (`prompt` with "/dish-prime"
-  // goes through pi's command executor — the server does this on demand);
-  // upstream Pi TUI sessions need the captured private AgentSession self-prime
-  // below. OMP's public sendUserMessage() deliberately bypasses extension
-  // command handling, so pi-dish queues each operation over the socket and
-  // triggers the internal service through the exact tmux pane — by pressing
-  // the service shortcut, never by typing the command name.
+  // command contexts, which events never get. A command context stays valid
+  // until the runner is replaced, so every bridge command stashes its ctx for
+  // socket handlers to reuse. RPC sessions prime remotely through pi's command
+  // executor; TUI sessions use the captured AgentSession self-prime below. OMP's
+  // sendUserMessage() bypasses command handling, so pi-dish queues the
+  // operation and presses the service shortcut in the tmux pane.
   let commandCtx: HostObject | null = null;
   function stashCommandCtx(ctx: HostObject) {
     if (ctx && typeof ctx.navigateTree === "function") commandCtx = ctx;
   }
 
   const TREE_SERVICE_COMMAND = "dish-tree-service";
-  // Shortcut handlers receive a full command context, and a keypress cannot
-  // disturb the composer: typing "/dish-tree-service" into a pane whose
-  // composer already holds a draft concatenates with it and OMP sends the
-  // result to the model. F12 with every modifier is inert in a TUI and is
-  // encodable by tmux send-keys; pi-dish reads the chord from the registry.
+  // A keypress cannot disturb the composer, unlike typing the command name into
+  // a pane holding a draft. F12 with every modifier is inert and tmux-encodable;
+  // pi-dish reads the chord from the registry.
   const TREE_SERVICE_SHORTCUT = "ctrl+alt+shift+f12";
   // Null until the host accepts the registration — the registry entry only
   // advertises a chord pi-dish can actually press.
@@ -726,13 +695,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
     });
   }
 
-  // Self-prime: the extension API alone has no remote path to a command
-  // context, but the captured AgentSession's own prompt() executes extension
-  // commands immediately (pi builds each command a fresh context carrying the
-  // session-control methods, bound to the running mode's handlers — so a TUI
-  // gets its own re-rendering navigateTree). Running our /dish-prime through
-  // it stashes that ctx without the user ever typing in the TUI.
-  // Feature-detected: no captured session, no self-prime.
+  // The captured AgentSession's own prompt() executes extension commands with a
+  // fresh command context, so running /dish-prime through it stashes that ctx
+  // without the user typing in the TUI. Feature-detected: no session, no prime.
   async function acquireCommandCtx(): Promise<void> {
     if (commandCtx) return;
     if (!descriptor.selfPrime) return;
@@ -825,16 +790,13 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let sessionFile: string | null = null;
   let cwd: string | null = null;
   const clients = new Set<net.Socket>();
-  const wrappedUIs = new Map<object, Map<string, { original: unknown; wrapped: unknown }>>();
+  const wrappedUIs = new Map<Record<string, unknown>, Map<string, { original: unknown; wrapped: unknown }>>();
   const UI_METHOD_WRAPPER = Symbol("pi-dish-ui-method-wrapper");
 
-  // OMP creates a fresh Proxy around the shared UI object for every extension
-  // handler. Reading proxy.method returns a new handler-scoped delegate, while
-  // assigning proxy.method writes through to the shared target. Wrapping the
-  // value returned by ordinary property access therefore builds another layer
-  // on every event and eventually overflows the stack (most visibly in ask).
-  // Own property descriptors pass through OMP's Proxy and expose the stable
-  // target method, which lets us recognize an already-installed bridge wrapper.
+  // OMP hands every extension handler a fresh Proxy over the shared UI object:
+  // reading proxy.method yields a new delegate, so wrapping ordinary property
+  // access stacks layers until the stack overflows (most visibly in ask). Own
+  // property descriptors pass through and expose the stable target method.
   function underlyingUIMethod(ui: Record<string, unknown>, name: string): unknown {
     try {
       const property = Reflect.getOwnPropertyDescriptor(ui, name);
@@ -1004,7 +966,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     broadcast({ type: "event", event: "queue_update", data: mergedQueue() });
   }
 
-  // --- Side chat (asynchronous, multi-turn /btw replacement) ---
+  // Side chat: an asynchronous, multi-turn /btw replacement.
   // The provider turn is ephemeral: it never enters the transcript and its
   // answer only ever reaches socket/SSE clients. State lives here so a reload
   // or a second device replays the same chat through stateSnapshot/hello.
@@ -1150,16 +1112,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
     broadcastSideChat();
   }
 
-  // Subscribe to the live AgentSession's own event stream once. Idempotent
-  // and lazy: called from session_start and whenever a client connects, so a
-  // session captured after the bridge loaded (or re-captured across /reload)
-  // still gets wired up. Carries two event families pi's extension runner
-  // never delivers:
-  //  - queue_update (steering/follow-up queues)
-  //  - compaction_start/compaction_end — unlike the extension-facing
-  //    session_before_compact/session_compact pair, these also fire when a
-  //    compaction fails or is aborted, so the send gate releases the moment
-  //    compaction actually stops instead of waiting out the stuck timer.
+  // Subscribe to the live AgentSession's event stream once, lazily: two event
+  // families never reach the extension runner. queue_update carries the
+  // steering/follow-up queues; compaction_start/compaction_end also fire on
+  // failure or abort, so the send gate releases without waiting out its timer.
   function ensureSessionSubscription(): void {
     if (queueUnsub) return;
     try {
@@ -1257,10 +1213,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
       blocked: "[!]",
     };
     for (const phaseValue of value) {
-      if (!phaseValue || typeof phaseValue !== "object") continue;
-      const phase = phaseValue as Record<string, unknown>;
-      if (typeof phase.name !== "string" || !Array.isArray(phase.tasks)) continue;
-      const tasks = phase.tasks.filter(task => !!task && typeof task === "object") as Array<Record<string, unknown>>;
+      const phase = asRecord(phaseValue);
+      if (!phase || typeof phase.name !== "string" || !Array.isArray(phase.tasks)) continue;
+      const tasks = phase.tasks.map(asRecord).filter((task): task is Record<string, unknown> => task !== null);
       const closed = tasks.filter(task => task.status === "completed" || task.status === "abandoned").length;
       lines.push(`${phase.name}  ${closed}/${tasks.length}`);
       for (const task of tasks) {
@@ -1277,7 +1232,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
   let debugTodoProjection: { signature: string; count: number } | null = null;
 
   function projectNativeState(value: unknown): void {
-    const projection = value && typeof value === "object" ? value as Record<string, unknown> : {};
+    const projection = asRecord(value) ?? {};
     const todoLines = renderNativeTodoLines(projection.todos);
     if (DEBUG_PROJECTION_LOG) {
       const signature = JSON.stringify(todoLines);
@@ -1297,17 +1252,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
       widgetPlacement: "aboveEditor",
     });
 
-    const plan = projection.planMode && typeof projection.planMode === "object"
-      ? projection.planMode as Record<string, unknown> : null;
+    const plan = asRecord(projection.planMode);
     const planText = plan?.enabled === true
       ? `Plan mode${typeof plan.workflow === "string" ? ` · ${plan.workflow}` : ""}`
       : undefined;
     emitExtensionUIRequest({ method: "setStatus", statusKey: "planmode", statusText: planText });
 
-    const prewalk = projection.prewalk && typeof projection.prewalk === "object"
-      ? projection.prewalk as Record<string, unknown> : null;
-    const target = prewalk?.target && typeof prewalk.target === "object"
-      ? prewalk.target as Record<string, unknown> : null;
+    const prewalk = asRecord(projection.prewalk);
+    const target = asRecord(prewalk?.target);
     const targetName = target && typeof target.provider === "string" && typeof target.id === "string"
       ? `${target.provider}/${target.id}` : null;
     const thinking = typeof prewalk?.thinkingLevel === "string" ? ` · ${prewalk.thinkingLevel}` : "";
@@ -1325,9 +1277,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // a completed goal is history, not status. Projection values arrive as
   // untrusted unknowns, so every field is checked before it is read.
   function renderGoalStatus(value: unknown): string | undefined {
-    const state = value && typeof value === "object" ? value as Record<string, unknown> : null;
+    const state = asRecord(value);
     if (state?.enabled !== true) return undefined;
-    const goal = state.goal && typeof state.goal === "object" ? state.goal as Record<string, unknown> : null;
+    const goal = asRecord(state.goal);
     if (!goal) return undefined;
     const status = typeof goal.status === "string" ? goal.status : "active";
     if (status === "complete" || status === "dropped") return undefined;
@@ -1343,11 +1295,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // Advisor: on/off plus the one failure mode worth a status line — configured
   // but with no model resolved, where nothing is actually watching.
   function renderAdvisorStatus(value: unknown): string | undefined {
-    const advisor = value && typeof value === "object" ? value as Record<string, unknown> : null;
+    const advisor = asRecord(value);
     if (advisor?.enabled !== true) return undefined;
     if (advisor.active !== true) return "Advisor · no model";
-    const overview = advisor.overview && typeof advisor.overview === "object"
-      ? advisor.overview as Record<string, unknown> : null;
+    const overview = asRecord(advisor.overview);
     const count = Array.isArray(overview?.advisors) ? overview.advisors.length : 0;
     return count > 1 ? `Advisor on · ${count} advisors` : "Advisor on";
   }
@@ -1452,12 +1403,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
       return ret;
     });
 
-    // Every OMP dialog renderer (#R) wires options.signal to a teardown that
-    // disposes the TUI component, restores the editor and resolves the dialog
-    // promise with undefined. Injecting a per-dialog controller and aborting
-    // it when the remote answer wins therefore dismisses the tmux-side dialog
-    // instead of leaving it over the composer. Hosts that ignore signal keep
-    // the old behavior: the late local result is simply discarded.
+    // Every OMP dialog renderer wires options.signal to a teardown that
+    // disposes the TUI component and resolves the dialog with undefined, so
+    // aborting a per-dialog controller when the remote answer wins dismisses
+    // the tmux-side dialog. Hosts that ignore signal just discard the late
+    // local result.
     const withDismissSignal = (options: unknown, dismiss: AbortController): Record<string, unknown> => {
       const caller = field(options, "signal");
       const signal = caller instanceof AbortSignal ? AbortSignal.any([caller, dismiss.signal]) : dismiss.signal;
@@ -1595,14 +1545,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // assistant message and usually only moves contextUsage).
   let lastRegistrySig: string | null = null;
 
-  // The load sentinel can't stop bridge copies that predate it: an old copy
-  // loading after us unlinks and re-binds our socket path once, at its
-  // session_start. Detect that by probing the path and matching the hello's
-  // instanceId (old bridges send a hello without one, so they're caught too;
-  // an inode check can't work here — listen() completes asynchronously, so
-  // the theft can land before we could ever stat our own socket file). This
-  // runs from writeRegistry, i.e. on every turn/message event, and the old
-  // copy never re-checks, so one reclaim wins durably.
+  // A bridge copy predating the load sentinel unlinks and re-binds our socket
+  // once, at its session_start. Detect it by matching the hello's instanceId
+  // (an inode check cannot work: listen() completes asynchronously). Runs from
+  // writeRegistry, and the old copy never re-checks, so one reclaim lasts.
   const instanceId = crypto.randomUUID();
   let recoverySuppressedByWrapper = false;
   function makeRecoveryObserver() {
@@ -1739,8 +1685,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       try { resolve({ cancelled: true }); } catch {}
       broadcast({ type: "event", event: "extension_ui_resolved", data: { id, source: "shutdown" } });
     }
-    for (const [uiValue, methods] of wrappedUIs) {
-      const ui = uiValue as unknown as Record<string, unknown>;
+    for (const [ui, methods] of wrappedUIs) {
       for (const [name, method] of methods) {
         if (underlyingUIMethod(ui, name) === method.wrapped) ui[name] = method.original;
       }
@@ -1930,7 +1875,6 @@ export function createBridge(descriptor: BridgeDescriptor) {
       }
       return loginController.start(lastCtx, args);
     }
-    // --- Emulated built-ins ---
     if (name === "compact") {
       if (!lastCtx) return { ok: false, error: "no active context" };
       // pi's compact() starts by aborting the agent and rewriting its message
@@ -1954,14 +1898,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
           ? (descriptor.compactArgument?.(args) ?? { customInstructions: args })
           : undefined;
         const invocation = callHost(lastCtx, "compact", argument);
-        // Interactive OMP resolves this promise when compaction settles —
-        // success or failure alike — but reports failures only to its own TUI
-        // (executeCompaction catches the error, shows it, and resolves void),
-        // and "nothing to compact" throws before session_before_compact, so
-        // no extension event ever fires. Success emits session_compact before
-        // resolution and releases the gate; if this attempt's gate is still
-        // up shortly after resolution, the host swallowed a failure/cancel —
-        // release it instead of silently queueing prompts until the stuck net.
+        // OMP resolves this promise on success or failure but reports failures
+        // only to its TUI, and "nothing to compact" throws before any extension
+        // event. Success emits session_compact first, so a gate still up shortly
+        // after resolution means the host swallowed a failure: release it.
         optionalHostCall(invocation, "then", () => {
           setTimeout(() => {
             if (!compacting || attempt !== compactionGeneration) return;
@@ -2032,14 +1972,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
 
     if (name === "reload") {
-      // ctx.reload() lives on command contexts only; the captured
-      // AgentSession's prompt() executes our /dish-reload to get one, so this
-      // works on TUI sessions too. Fire-and-forget like /compact: reload
-      // tears this module down and re-evaluates it, so awaiting completion
-      // would race our own socket shutting down. The trigger is deferred a
-      // beat further: fired in this tick, the teardown outruns the
-      // run_command response frame and the server sees "socket closed" for a
-      // reload that ran.
+      // ctx.reload() lives on command contexts only, so the captured session's
+      // prompt() runs /dish-reload to get one. Fire-and-forget: reload tears
+      // this module down. Deferred a beat, or the teardown outruns the
+      // run_command response and the server reports a closed socket.
       const reload = descriptor.piPrivate?.captureCommand("/dish-reload");
       if (!reload) {
         return { ok: false, error: "pi's extension API can't trigger /reload on this session remotely — run /reload in the TUI." };
@@ -2050,7 +1986,6 @@ export function createBridge(descriptor: BridgeDescriptor) {
       return { ok: true, info: "Reload started" };
     }
 
-    // --- Skills / prompt templates / extension commands via pi.getCommands() ---
     const commands = hostCommands(pi);
     const skillCmd = commands.find((c) => c.source === "skill" && c.name === name);
     if (skillCmd) {
@@ -2324,10 +2259,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
         }
 
         case "tree_leaf": {
-          // Leaf-only tree read. The transcript endpoint needs just the live
-          // leaf id to pick the active branch; serializing the entire session
-          // tree (tree_read) costs O(session bytes) per request, which made
-          // long live OMP sessions crawl on every page/catch-up fetch.
+          // Leaf-only tree read: the transcript endpoint needs just the live
+          // leaf id, while tree_read costs O(session bytes) per request.
           if (!lastCtx) return respond(false, undefined, "tree leaf unavailable: no active context");
           const manager = lastCtx.sessionManager;
           if (!manager || !isHostMethod(field(manager, "getLeafId"))) {
@@ -2886,17 +2819,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }, 0);
   });
 
-  // Tree navigation (pi's /tree — from the TUI, the web UI, or an extension).
-  // Two jobs:
-  //  1. Anchor the new leaf on disk. pi's no-summary branch() only moves an
-  //     in-memory pointer; a reopened JSONL — and every external reader,
-  //     pi-dish's transcript included — re-derives the leaf from the file's
-  //     *last entry*. When the navigation appended nothing (no branch_summary,
-  //     no label), append a no-op label entry, the same anchor lib/pi-sdk.js
-  //     writes for inactive-session branches. Skipped automatically when the
-  //     last entry already is the leaf.
-  //  2. Broadcast the event so connected clients re-render the transcript
-  //     from the (now anchored) file.
+  // Tree navigation (pi's /tree): anchor the new leaf on disk — a no-summary
+  // branch() only moves an in-memory pointer while readers re-derive the leaf
+  // from the file's last entry, so append the same no-op label lib/pi-sdk.js
+  // writes — then broadcast so clients re-render from the anchored file.
   if (descriptor.piLifecycleEvents) on("session_tree", (event: HostObject, ctx: HostObject) => {
     wrapExtensionUI(ctx);
     lastCtx = ctx ?? lastCtx;

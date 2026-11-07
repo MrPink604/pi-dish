@@ -204,6 +204,8 @@ const BANNERS: Record<string, (source: string) => string> = {
   edges: source => `// Generated edge from ${source};`,
   browser: () => '// Generated from src/browser/;',
 };
+const ORPHAN_BANNERS = ['// Generated from src/core/', '// Generated tool from ', '// Generated test/tool from ',
+  '// Generated edge from ', '// Generated from src/browser/;'];
 
 function expectedBanner(output: GeneratedOutput): string | undefined {
   return BANNERS[output.group]?.(output.source);
@@ -354,7 +356,7 @@ function checkGeneratedOutputs(
     const absolute = path.join(root, file);
     if (!fs.existsSync(absolute)) continue;
     const content = fs.readFileSync(absolute, 'utf8').replace(/^#![^\n]*\n/, '');
-    if (content.startsWith('// Generated')) failures.push(`${file}: orphan generated output`);
+    if (ORPHAN_BANNERS.some(banner => content.startsWith(banner))) failures.push(`${file}: orphan generated output`);
   }
   return { runtime, declarations };
 }

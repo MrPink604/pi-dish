@@ -1,4 +1,3 @@
-// Shared by the full smoke and a fresh --scenario fleet run.
 import type { Page } from 'playwright';
 import type { UiScenario } from './contracts.js';
 

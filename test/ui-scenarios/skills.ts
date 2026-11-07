@@ -1,9 +1,7 @@
-// Shared by the full smoke and a fresh --scenario skills run.
 import type { UiScenario } from './contracts.js';
 
 const skills: UiScenario = async ({ desktop, check }) => {
-  // Skills view: the observational directory + in-takeover detail + refine
-  // launcher. Opened from the sidebar-header shield button.
+  // Skills directory, detail page and refine launcher.
   console.log('skills view:');
   await desktop.click('[title="Skills"]');
   await desktop.waitForFunction(() =>

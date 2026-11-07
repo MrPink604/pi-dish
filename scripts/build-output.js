@@ -3,6 +3,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.root = void 0;
 exports.checkRequested = checkRequested;
+exports.filesUnder = filesUnder;
 exports.programFiles = programFiles;
 exports.siblingOutputs = siblingOutputs;
 exports.buildProgram = buildProgram;
@@ -10,10 +11,9 @@ exports.verifyMapping = verifyMapping;
 exports.orphanedOutputs = orphanedOutputs;
 exports.generatedOutputs = generatedOutputs;
 exports.writeOutputs = writeOutputs;
-// Shared plumbing for the checked-in build outputs: map a TypeScript source to
-// its sibling runtime/declaration files, compile one program into a temporary
-// directory, then either verify or rewrite the tracked output. Compiling first
-// means a type error can never leave a partially updated tree behind.
+// Shared plumbing for the checked-in build outputs: every builder compiles
+// into a temporary directory first, so a type error can never leave a
+// partially updated tree behind.
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -24,6 +24,13 @@ function checkRequested(script) {
     if (args.some(arg => arg !== '--check'))
         throw new Error(`Usage: node scripts/${script} [--check]`);
     return args.includes('--check');
+}
+/** Files below `directory`, as sorted repository-style paths. */
+function filesUnder(directory) {
+    return fs.readdirSync(directory, { recursive: true, withFileTypes: true })
+        .filter(entry => entry.isFile())
+        .map(entry => path.relative(directory, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'))
+        .sort();
 }
 function programFiles(config) {
     const parsed = JSON.parse(fs.readFileSync(path.join(exports.root, config), 'utf8'));
@@ -61,10 +68,7 @@ function buildProgram(project, prefix, step) {
             process.exitCode = result.status || 1;
             return false;
         }
-        const files = fs.readdirSync(out, { recursive: true, withFileTypes: true })
-            .filter(entry => entry.isFile())
-            .map(entry => path.relative(out, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'));
-        step(files, file => fs.readFileSync(path.join(out, file), 'utf8'));
+        step(filesUnder(out), file => fs.readFileSync(path.join(out, file), 'utf8'));
         return true;
     }
     finally {
@@ -117,15 +121,20 @@ function generatedOutputs(outputs, options) {
 function writeOutputs(prepared, options) {
     if (!options.check) {
         for (const { target, content, mode } of prepared) {
+            fs.mkdirSync(path.dirname(target), { recursive: true });
             fs.writeFileSync(target, content);
             fs.chmodSync(target, mode);
         }
         console.log(options.writeOk);
         return;
     }
-    const stale = prepared.filter(({ target, content, mode }) => !fs.existsSync(target)
-        || fs.readFileSync(target, 'utf8') !== content
-        || (fs.statSync(target).mode & 0o777) !== mode);
+    const stale = prepared.filter(({ target, content, mode }) => {
+        if (!fs.existsSync(target))
+            return true;
+        const current = fs.readFileSync(target);
+        const matches = typeof content === 'string' ? current.toString('utf8') === content : current.equals(content);
+        return !matches || (fs.statSync(target).mode & 0o777) !== mode;
+    });
     if (!stale.length) {
         console.log(options.checkOk);
         return;

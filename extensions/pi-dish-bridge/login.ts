@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import { field } from "./host.js";
 
 // Remote /login: the harness owns credentials and the provider flows; the
 // bridge only relays each flow step to pi-dish as an `auth` dialog. Wrappers
@@ -46,10 +47,6 @@ export type LoginDialogPort = {
 
 class LoginCancelled extends Error {
   constructor() { super("Login cancelled"); }
-}
-
-function field(value: unknown, key: string): unknown {
-  return value !== null && typeof value === "object" ? Reflect.get(value, key) : undefined;
 }
 
 // Links are rendered as clickable anchors in the browser; only web pages.

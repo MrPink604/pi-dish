@@ -1,9 +1,8 @@
-// Shared by the full smoke and a fresh --scenario models run.
 import type { UiScenario } from './contracts.js';
 
 const models: UiScenario = async ({ path, tmpHome, desktop, check, fs }) => {
-  // Scoped models: dropdown edit mode toggles models and persists to
-  // pi's settings.json (enabledModels), normal view hides disabled ones
+  // Edit mode toggles models into pi's settings.json; the normal view hides
+  // disabled ones.
   console.log('scoped models:');
   const settingsFile = path.join(tmpHome, '.pi', 'agent', 'settings.json');
   const readSettings = () => { try { return JSON.parse(fs.readFileSync(settingsFile, 'utf-8')); } catch { return {}; } };

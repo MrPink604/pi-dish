@@ -1,45 +1,35 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * pi-dish-sessions — read and control peer pi coding-agent sessions through
- * the pi-dish HTTP API.
- *
- * The plumbing (session discovery, HTTP, ref resolution, transcript
- * rendering) lives in skills/lib/pi-dish-client.js. Skills are installed by
- * symlinking each skill directory into ~/.pi/agent/skills/, and Node resolves
- * requires through the realpath, so this relative path reaches the pi-dish
- * repo's own copy even when invoked through the link.
+ * Read and control peer pi coding-agent sessions through the pi-dish HTTP API.
+ * Plumbing (discovery, HTTP, refs, transcript rendering) is skills/lib.
  */
 import path = require('node:path');
 import os = require('node:os');
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
+import type * as Client from '../../lib/pi-dish-client.js';
 import type { FleetHost, SessionRow, SessionCatalog, SearchResponse, SearchBucket, RequestOptions, HttpResult } from '../../lib/pi-dish-client.js';
 
-let core: typeof import('../../lib/pi-dish-client.js');
+let core: typeof Client;
 try {
   core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
 } catch (e) {
-  process.stderr.write(
-    'pi-dish-sessions: could not load the shared pi-dish client library '
-    + `(${e instanceof Error && e.message ? e.message : e}).\n`
+  process.stderr.write(`pi-dish-sessions: could not load the shared pi-dish client library (${e instanceof Error && e.message ? e.message : e}).\n`
     + 'Install the skills by symlinking the skill directories from the pi-dish repo '
-    + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n',
-  );
+    + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n');
   process.exit(1);
 }
 
 const {
   makeFail, print, defaultBase, discoverSession, fleetCallerId, request, api, jsonInit,
   requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef,
-  mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef,
+  mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef, wireArray,
 } = core;
 
 const fail = makeFail('pi-dish-sessions');
 
-// Agents are expected to learn this CLI from `--help` rather than from the
-// skill doc, so every entry carries a usage line, a sentence, its own flags
-// with value hints, and one realistic example. Parsing reads the same table
-// (aliases, whether a ref is required), so the two cannot drift.
+// Agents learn this CLI from `--help`, and parsing reads the same table, so
+// usage text and argument handling cannot drift.
 
 interface CommandSpec {
   name: string;
@@ -94,7 +84,6 @@ interface TmuxEntry extends TmuxTarget {
   harness: unknown; name: unknown; state: string; cwd: string; model: unknown;
   sessionId: unknown; routeId: unknown; pid: unknown; updatedAt: unknown;
 }
-function wireArray(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 
 const SHARED_FLAGS: [string, string][] = [
   ['--json', 'machine-readable JSON instead of tab-separated lines'],
@@ -401,15 +390,10 @@ function sessionLine(session: SessionRow, ref?: string) {
 }
 
 /**
- * The handle each row prints, per host. A non-Pi route id is ~100 base64
- * characters whose first ~30 are identical for every session of that harness
- * on the host, so printing it invites an agent to retype it — and a mistyped
- * key still decodes, leaving the server nothing to say but "not found".
- * `stableSessionRef` picks the shortest *identifier* that still resolves
- * there (normally the uuid tail) and leaves a route id whole rather than
- * printing a snapshot-unique truncation of it.
- * A host that predates ref aliases resolves route-id prefixes only, so its
- * rows keep printing full ids.
+ * The handle each row prints, per host: a non-Pi route id is ~100 base64
+ * characters that invite a mistyped retype, so prefer the shortest identifier
+ * the host still resolves (normally the uuid tail). Hosts predating ref aliases
+ * resolve route-id prefixes only and keep printing full ids.
  */
 function refIndex(sessions: readonly SessionRow[] | null | undefined, entry: unknown): Map<string, string> {
   const rows = sessions || [];
@@ -442,18 +426,10 @@ async function localHostIdentity(base: string): Promise<{ id: string; label: str
   } catch { return null; }
 }
 
-// The identity stamped on a peer `send`/`follow-up` so the target's owning
-// host may hold it for its configured window (`messageHoldWindowMs`) instead
-// of interrupting a busy session. `steer` carries none: it is an explicit
-// interruption and always delivers immediately.
-//
-// The sender is the calling session. Its name comes from the local bridge
-// registry, falling back to the host's resolved session (and to the same
-// `Unnamed` placeholder the rest of the CLI prints for a nameless session).
-// A caller the CLI cannot identify at all yields null, and the route then
-// delivers immediately — the old, unheld behavior. Cross-host sends qualify
-// the durable identity with the host id and the display ref with this host's
-// fleet label (falling back to the host id when no usable label is configured).
+// The identity stamped on a peer `send`/`follow-up` so the owning host may hold
+// it for `messageHoldWindowMs` instead of interrupting a busy session. `steer`
+// carries none. An unidentifiable caller yields null and delivers immediately;
+// cross-host sends qualify the identity with the host id and this host's label.
 async function peerSenderIdentity(base: string, targetHost: unknown, sourceSessionId: unknown): Promise<PeerSender | null> {
   if (sourceSessionId == null || sourceSessionId === '') return null;
   const self = String(sourceSessionId);
@@ -478,11 +454,9 @@ async function peerSenderIdentity(base: string, targetHost: unknown, sourceSessi
   return { id: `${host.id}:${self}`, ref: `${host.label || host.id}/${ref}`, name };
 }
 
-// A peer spawned from an OMP session should be an OMP session: the harness is
-// inherited from the caller, not defaulted to Pi (the HTTP route's own default,
-// kept for the web UI's explicit selection). `--harness` overrides. The target
-// host is asked what it actually has, so a missing harness fails here naming
-// the alternatives instead of dying inside a launch.
+// A peer spawned from an OMP session is an OMP session: the harness is
+// inherited, `--harness` overrides, and the target host's installed set is
+// checked here so a missing harness names the alternatives.
 async function resolveSpawnHarness(base: string, host: string | null, explicit: string | undefined, callerSessionId: unknown): Promise<string> {
   const wanted = explicit || sessionHarnessId(callerSessionId);
   if (!wanted) throw new Error(`could not tell which harness ${callerSessionId} runs; pass --harness <id>`);
@@ -885,7 +859,7 @@ async function main() {
     if (spec.name === 'hosts') {
       const { data } = await request(base, '/api/hosts');
       if (args.json) return print(data, true);
-      const hosts = core.fleetRows(core.record(data).hosts);
+      const hosts = wireArray(core.record(data).hosts);
       for (const entry of hosts) process.stdout.write(hostLine(entry) + '\n');
       const remotes = hosts.filter(entry => !core.fleetHost(entry).self);
       if (remotes.length) process.stdout.write('# Add --host <name> to any command to act on that host.\n');

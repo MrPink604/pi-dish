@@ -222,15 +222,10 @@ test('peer-session CLI attach command lists active tmux entries with --json', as
     assert.equal((0, test_types_js_1.present)(entries[0]).socket, '/tmp/tmux-test');
     assert.equal((0, test_types_js_1.present)(entries[0]).pane, '%42');
 });
-// =========================================================================
-// Short refs for encoded route ids
-//
 // An OMP route id is ~100 base64 characters whose leading ~30 are shared by
-// every OMP session on the host: printing it invites an agent to retype it,
-// and a mistyped key still decodes, so the server can only answer "not
-// found". The CLI therefore prints the shortest handle the *owning* host can
-// resolve, and a host too old to resolve aliases is handled client-side.
-// =========================================================================
+// every OMP session on the host, and a mistyped key still decodes. The CLI
+// prints the shortest handle the owning host can resolve; a host too old to
+// resolve aliases is handled client-side.
 const ALIAS_NATIVE = '2026-09-05T09-07-03-291Z_01a070d2-43fb-7360-aaba-a4ddf8d1deb0';
 const ALIAS_ROUTE = encodeSessionKey('omp', (0, test_types_js_1.nativeId)(ALIAS_NATIVE));
 function aliasServer({ refAliases }) {

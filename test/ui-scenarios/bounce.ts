@@ -1,4 +1,3 @@
-// Shared by the full smoke and a fresh --scenario bounce run.
 import type { UiScenario } from './contracts.js';
 import { record, records } from '../test-types.js';
 

@@ -8,20 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const node_events_1 = require("node:events");
 const node_perf_hooks_1 = require("node:perf_hooks");
-const sessionKeys = require('../lib/session-key');
-const checkedNativeId = (value) => {
-    if (!sessionKeys.validSessionId(value))
-        throw new TypeError('Invalid fixture session id');
-    return value;
-};
-const record = (value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-        throw new TypeError('Expected object');
-    const out = {};
-    for (const [key, item] of Object.entries(value))
-        out[key] = item;
-    return out;
-};
+const test_types_js_1 = require("../test/test-types.js");
 const { sanitizeTestEnv } = require('../test/test-env');
 const scenario = process.argv[2] ?? '';
 if (!scenario) {
@@ -199,14 +186,14 @@ async function main() {
         const response = await fetch(base + route);
         if (!response.ok)
             throw new Error(`${route}: HTTP ${response.status}`);
-        const body = record(await response.json());
+        const body = (0, test_types_js_1.record)(await response.json());
         return { active: Array.isArray(body.active) ? body.active.length : undefined,
             previous: Array.isArray(body.previous) ? body.previous.length : undefined,
             children: Array.isArray(body.children) ? body.children.length : undefined,
             indexing: body.indexing, totalMessages: body.totalMessages };
     };
     if (scenario === 'routes') {
-        const route = `/api/sessions/${encodeSessionKey('prime', checkedNativeId('fixture-0'))}/messages?limit=1`;
+        const route = `/api/sessions/${encodeSessionKey('prime', (0, test_types_js_1.nativeId)('fixture-0'))}/messages?limit=1`;
         await measure('cold-route-and-transcript', () => get(route));
         await measure('warm-route-and-transcript', () => get(route));
     }
@@ -228,7 +215,7 @@ async function main() {
         index.resetForTests();
         await measure('persisted-index-list', () => get('/api/sessions?view=client'));
         const sourceApi = require('../lib/session-source');
-        const candidate = sourceApi.sourceForIdentity('pi', checkedNativeId('streaming'), large);
+        const candidate = sourceApi.sourceForIdentity('pi', (0, test_types_js_1.nativeId)('streaming'), large);
         index.getSessionInfo(candidate);
         const delta = JSON.stringify({ type: 'message', id: 'm6000', parentId: 'm5999', message: { role: 'user', content: [{ type: 'text', text: 'ordinary append' }] } }) + '\n';
         fs.appendFileSync(large, delta);

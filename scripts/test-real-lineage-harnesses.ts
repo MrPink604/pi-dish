@@ -28,28 +28,9 @@ import net = require('node:net');
 import os = require('node:os');
 import path = require('node:path');
 import { execFileSync } from 'node:child_process';
-const sessionKeys: typeof import('../lib/session-key') = require('../lib/session-key');
-const checkedNativeId = (value: unknown) => {
-  if (!sessionKeys.validSessionId(value)) throw new TypeError('Invalid fixture session id');
-  return value;
-};
+import { nativeId, present, record, records, type TestRecord } from '../test/test-types.js';
 const idleChild = path.join(__dirname, '..', 'test', 'fixtures', 'idle-child.js');
 type Harness = 'omp' | 'prime';
-type TestRecord = Record<string, unknown>;
-const record = (value: unknown): TestRecord => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected object');
-  const out: TestRecord = {};
-  for (const [key, item] of Object.entries(value)) out[key] = item;
-  return out;
-};
-const records = (value: unknown): TestRecord[] => {
-  if (!Array.isArray(value)) throw new TypeError('Expected array');
-  return value.map(record);
-};
-const present = <T>(value: T | null | undefined): T => {
-  if (value === null || value === undefined) throw new TypeError('Expected value');
-  return value;
-};
 const text = (value: unknown): string => String(value ?? '');
 const tmuxApi = () => {
   if (!tmux) throw new Error('tmux module not loaded');
@@ -409,7 +390,7 @@ async function testOmp() {
       message: { role: 'user', content: [{ type: 'text', text: 'real OMP resume canary' }], timestamp: now } },
   ].map(value => JSON.stringify(value)).join('\n') + '\n');
 
-  const resumeId = encodeSessionKey('omp', checkedNativeId(resumeNativeId));
+  const resumeId = encodeSessionKey('omp', nativeId(resumeNativeId));
   const resumed = await post(`/api/sessions/${encodeURIComponent(resumeId)}/resume`, { target: target() });
   assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
   assert.equal(resumed.body.id, resumeId);

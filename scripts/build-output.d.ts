@@ -1,6 +1,8 @@
 // Generated tool from scripts/build-output.ts; edit that source and run npm run build:tools.
 export declare const root: string;
 export declare function checkRequested(script: string): boolean;
+/** Files below `directory`, as sorted repository-style paths. */
+export declare function filesUnder(directory: string): string[];
 export declare function programFiles(config: string): string[];
 export interface OutputEntry {
     source: string;
@@ -22,7 +24,7 @@ export declare function orphanedOutputs(directories: readonly string[], banner: 
 export interface GeneratedOutput {
     file: string;
     target: string;
-    content: string;
+    content: string | Uint8Array;
     mode: number;
 }
 export interface GeneratedOptions {

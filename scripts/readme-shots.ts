@@ -1,11 +1,8 @@
 #!/usr/bin/env node
 /**
- * README screenshot generator — same fake-bridge pattern as test/ui-smoke.js,
- * but with realistic (entirely fabricated) session content. Everything on
- * screen comes from fixtures under a temp HOME with cwds like
- * /home/demo/projects/webapp, so no real username/path/host can leak.
- *
- * Run: npm run shots — then strip metadata before committing, e.g.
+ * README screenshots from the fake-bridge pattern of test/ui-smoke.js with
+ * entirely fabricated session content, so no real username, path or host can
+ * leak. Run: npm run shots — then strip metadata before committing:
  *   magick shot.png -strip -define png:exclude-chunks=tIME,tEXt,zTXt,iTXt,date shot.png
  */
 // Resolve the browser cache before the fixture replaces HOME.
@@ -33,8 +30,6 @@ interface BridgeOptions {
 const REPO = path.resolve(__dirname, '..');
 const OUT = process.argv[2] || path.join(REPO, 'docs', 'screenshots');
 fs.mkdirSync(OUT, { recursive: true });
-
-// --- temp HOME ----------------------------------------------------------------
 // The operator's deployment env would bind this server off-box and fight the
 // running share listener (see test/test-env.js).
 const testEnv: typeof import('../test/test-env.js') = require('../test/test-env.js');
@@ -62,8 +57,6 @@ const asst = (content: unknown, timestamp: string): FixtureEntry => ({ type: 'me
 const toolCall = (id: string, name: string, args: Record<string, unknown>, timestamp: string): FixtureEntry =>
   asst([{ type: 'toolCall', id, name, arguments: args }], timestamp);
 const toolResult = (name: string, text: string, timestamp: string): FixtureEntry => ({ type: 'message', message: { role: 'toolResult', toolName: name, content: [{ type: 'text', text }], timestamp } });
-
-// --- main live session: webapp / rate limiting ---------------------------------
 const MAIN_ID = '2026-07-07T08-41-00-demo0001';
 const MAIN_CWD = '/home/demo/projects/webapp';
 
@@ -111,8 +104,6 @@ const mainFile = writeSession('--home-demo-projects-webapp--', MAIN_ID, [
   toolResult('bash', '> webapp@1.4.2 test\n> node --test test/\n\n✔ upload accepts a small file (48ms)\n✔ upload rejects the 31st request in a minute (102ms)\n\n42 passing (1.8s)', ts(34, 45)),
   { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: finalAnswer }], usage: { totalTokens: 61400 }, timestamp: ts(34) } },
 ]);
-
-// --- second live session: api-server -------------------------------------------
 const API_ID = '2026-07-07T07-55-00-demo0002';
 const API_CWD = '/home/demo/projects/api-server';
 const apiFile = writeSession('--home-demo-projects-api-server--', API_ID, [
@@ -122,8 +113,6 @@ const apiFile = writeSession('--home-demo-projects-api-server--', API_ID, [
   user('Walk the schema migration in migrations/007 and check it against staging.', ts(84)),
   { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'The migration adds the `accounts.plan` column with a backfill — staging schema matches after a dry run.' }], usage: { totalTokens: 112300 }, timestamp: ts(80) } },
 ]);
-
-// --- historical sessions (dimmed on the All tab) --------------------------------
 writeSession('--home-demo-projects-webapp--', '2026-07-06T21-12-00-demo0003', [
   { type: 'session', cwd: MAIN_CWD, timestamp: ts(11 * 60) },
   { type: 'model_change', modelId: 'claude-sonnet-5', timestamp: ts(11 * 60) },
@@ -136,8 +125,6 @@ writeSession('--home-demo-dotfiles--', '2026-07-05T18-03-00-demo0004', [
   user('Port my tmux config to the new machine', ts(38 * 60)),
   { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Copied and updated the prefix binding.' }], usage: { totalTokens: 9100 }, timestamp: ts(38 * 60 - 2) } },
 ]);
-
-// --- fake bridges ----------------------------------------------------------------
 function makeBridge(socketPath: string, { models, onPrompt }: BridgeOptions = {}) {
   const clients = new Set<net.Socket>();
   const server = net.createServer(sock => {
@@ -215,7 +202,6 @@ const sleep = (ms: number): Promise<void> => delay(ms);
   const browser = await chromium.launch({ executablePath: process.env.CHROME_BIN || undefined, headless: true });
 
   try {
-    // ---- desktop: main overview -------------------------------------------------
     const desktop = await browser.newPage({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
     await desktop.goto(base, { waitUntil: 'networkidle' });
     await desktop.waitForSelector('.session-item');
@@ -231,8 +217,6 @@ const sleep = (ms: number): Promise<void> => delay(ms);
     await desktop.waitForTimeout(300);
     await desktop.screenshot({ path: path.join(OUT, 'desktop-main.png') });
     console.log('shot: desktop-main.png');
-
-    // ---- desktop: live streaming turn -------------------------------------------
     appendMain(user('Yes — and add a test for the burst case.', new Date().toISOString()));
     main.emit('turn_start', {});
     const streamText = "Adding the header and a burst test.\n\nThe `429` response now carries `Retry-After` with the seconds left in the window, so well-behaved clients can back off instead of hammering:";
@@ -257,8 +241,6 @@ const sleep = (ms: number): Promise<void> => delay(ms);
     main.emit('message_end', { message: doneMsg });
     main.emit('turn_end', {});
     await sleep(1200);
-
-    // ---- desktop: extension widget card -------------------------------------------
     main.emit('extension_ui_request', {
       method: 'setWidget', widgetKey: 'pi-procs',
       widgetLines: [
@@ -275,8 +257,6 @@ const sleep = (ms: number): Promise<void> => delay(ms);
     await desktop.waitForTimeout(300);
     await desktop.screenshot({ path: path.join(OUT, 'desktop-widget.png') });
     console.log('shot: desktop-widget.png');
-
-    // ---- mobile ------------------------------------------------------------------
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
     await mobile.goto(base, { waitUntil: 'networkidle' });
     await mobile.waitForSelector('.session-item, .empty-menu-btn');

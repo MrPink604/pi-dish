@@ -112,8 +112,8 @@ export declare function errorMessage(value: unknown): string;
 export declare function errorStatus(value: unknown): unknown;
 export declare function errorBody(value: unknown): Record<string, unknown>;
 export declare function sessionRows(value: unknown): SessionRow[];
-/** Fleet arrays are opaque until a particular operation consumes a row. */
-export declare function fleetRows(value: unknown): unknown[];
+/** Wire arrays stay opaque until a particular operation consumes a row. */
+export declare function wireArray(value: unknown): unknown[];
 export declare function fleetHost(value: unknown): FleetHost;
 /** Check only when a caller actually invokes a string operation. */
 export declare function stringValue(value: unknown, message: string): string;
@@ -130,10 +130,8 @@ export interface CommandLine {
     values: Record<string, string | undefined>;
 }
 /**
- * Parse `<command> [args] [flags]` as the skill CLIs accept it: the command is
- * the first word, everything else is a positional argument or `--flag value`.
- * `--json`, `--session` and `--url` are common; `flags` adds command-specific
- * value flags.
+ * Parse `<command> [args] [flags]`: `--json`, `--session` and `--url` are
+ * common, `flags` adds command-specific value flags.
  */
 declare function parseCommandLine(argv: readonly string[], fallback: string, flags?: readonly string[]): CommandLine;
 declare function registryEntries(): RegistryEntry[];
@@ -172,30 +170,21 @@ declare function fleetHosts(base: string): Promise<unknown[] | null>;
 /** Absent capability means unsupported — mixed-version fleets are the norm. */
 declare function hostSupports(value: unknown, capability: string): boolean;
 /**
- * Parse a session ref. Pure — the host part is only *named* here, resolving it
- * against the fleet needs the server.
- *
- *   8f3ab2c1              → { hostPart: null,    hostIdForm: false, id: '8f3ab2c1' }
- *   tycho/8f3ab2c1        → { hostPart: 'tycho', hostIdForm: false, id: '8f3ab2c1' }
- *   self/8f3ab2c1         → { hostPart: 'self',  hostIdForm: false, id: '8f3ab2c1' }
- *   <uuid>:<sessionId>    → { hostPart: uuid,    hostIdForm: true,  id: '<sessionId>' }
+ * Parse a session ref: `[host/]id`, where a `<uuid>:<id>` head is the
+ * machine-produced provenance form. Pure — the host part is only named here.
  */
 declare function parseRef(raw: unknown): ParsedRef;
 /**
- * The calling session in the fleet-global provenance form
- * (`<hostId>:<sessionId>`), qualified with the host id this machine's pi-dish
- * persisted beside the bridge registry. Every server accepts it — this host
- * strips its own qualifier — so the CLI need not know whether PI_DISH_URL or
- * `--host` lands on its own host. Without a local host id the id stays bare.
+ * The calling session as `<hostId>:<sessionId>`, qualified with this machine's
+ * persisted host id. Every server accepts that form, so the CLI need not know
+ * whether its URL lands on its own host. Without a host id the id stays bare.
  */
 declare function fleetCallerId(sessionId: unknown): string;
 /** The fleet entry a `--host NAME` flag names, when the fleet is readable. */
 declare function entryForHostName(base: string, host: unknown): Promise<FleetHost | null>;
 /**
- * Client-side ref resolution: for hosts that predate GET
- * /api/sessions/resolve, and for hosts whose resolver predates ref aliases —
- * resolving locally turns a short alias into the full route id the host does
- * understand, so short refs work across a mixed-version fleet.
+ * Resolve locally for hosts that predate /api/sessions/resolve or its ref
+ * aliases: a short alias becomes the full route id the host does understand.
  */
 declare function resolveSessionClientSide(base: string, host: unknown, id: string, exactOnly?: boolean): Promise<SessionRow>;
 /**

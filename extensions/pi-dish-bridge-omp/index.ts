@@ -1,7 +1,7 @@
 import { createBridge, PUBLIC_EVENT_PROFILE, type BridgeDescriptor, type SideTurnInput } from "../pi-dish-bridge/core.js";
 import { getOmpNativeProjection, subscribeOmpNativeProjection, ompFastModeState, setOmpFastMode, getOmpNativeCaptureStats, getOmpNativeSession, patchOmpAgentSession } from "./native-state.js";
 import { ompLogin, useOmpAuthModule } from "./login.js";
-import { isObject } from "../pi-dish-bridge/host.js";
+import { field, isObject } from "../pi-dish-bridge/host.js";
 
 // OMP's own /btw prompt ($bunfs/root/btw-user-*.md, verified 18.1.16). The
 // embedded asset is unreadable from an extension, so the text is mirrored
@@ -77,7 +77,7 @@ async function runOmpSideTurn(input: SideTurnInput, sessionManager: unknown): Pr
     onTextDelta: input.onTextDelta,
     signal: input.signal,
   }]);
-  const replyText = result && typeof result === "object" && "replyText" in result ? result.replyText : undefined;
+  const replyText = field(result, "replyText");
   return String(replyText ?? "").trim();
 }
 

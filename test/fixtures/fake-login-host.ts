@@ -3,12 +3,12 @@ import * as path from 'node:path';
 import { createBridge } from '../../extensions/pi-dish-bridge/core.js';
 import { piLogin } from '../../extensions/pi-dish-bridge/pi-login.js';
 import { createHarnessBridge } from '../../extensions/pi-dish-bridge-omp/index.js';
+import type { HostObject as HostRecord } from '../../extensions/pi-dish-bridge/host.js';
 
 // Stands in for the two host login APIs the bridge adapts: Pi's private
 // ModelRuntime (FAKE_LOGIN_PROFILE=pi) and OMP's authStorage.oauth (omp).
 // Every host-side call is appended to FAKE_LOGIN_LOG as JSON lines.
 
-type HostRecord = Record<PropertyKey, unknown>;
 type HostHandler = (event: HostRecord, context: HostRecord) => unknown | Promise<unknown>;
 type Interaction = {
   signal: AbortSignal;

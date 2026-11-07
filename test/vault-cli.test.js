@@ -6,8 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
  * decodes — item, fields, reason and the calling session as the approval card
  * shows it. `aac` is a stub that records its argv (AAC_BIN), so nothing here
  * talks to Bitwarden or a relay.
- *
- * Run with: npm test
  */
 const test = require("node:test");
 const assert = require("node:assert/strict");

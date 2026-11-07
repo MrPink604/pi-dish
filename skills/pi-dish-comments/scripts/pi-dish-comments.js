@@ -3,14 +3,8 @@
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
 /**
- * pi-dish-comments — read and acknowledge the anchored review comments the
- * user left for this session in the pi-dish UI.
- *
- * The plumbing (session discovery, HTTP) lives in
- * skills/lib/pi-dish-client.js. Skills are installed by symlinking each skill
- * directory into ~/.pi/agent/skills/, and Node resolves requires through the
- * realpath, so this relative path reaches the pi-dish repo's own copy even
- * when invoked through the link.
+ * Read and acknowledge the anchored review comments the user left for this
+ * session in the pi-dish UI. Plumbing is skills/lib.
  */
 const path = require("node:path");
 let core;
@@ -18,8 +12,7 @@ try {
     core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
 }
 catch (e) {
-    process.stderr.write('pi-dish-comments: could not load the shared pi-dish client library '
-        + `(${e instanceof Error && e.message ? e.message : e}).\n`
+    process.stderr.write(`pi-dish-comments: could not load the shared pi-dish client library (${e instanceof Error && e.message ? e.message : e}).\n`
         + 'Install the skills by symlinking the skill directories from the pi-dish repo '
         + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n');
     process.exit(1);

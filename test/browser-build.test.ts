@@ -11,8 +11,9 @@ test('browser build detects stale output and preserves it on type failure', () =
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-browser-build-'));
   try {
     for (const dir of ['scripts', 'src/browser', 'public']) fs.mkdirSync(path.join(root, dir), { recursive: true });
-    fs.copyFileSync(path.join(__dirname, '../scripts/build-browser.js'), path.join(root, 'scripts/build-browser.js'));
-    fs.copyFileSync(path.join(__dirname, '../tsconfig.browser.json'), path.join(root, 'tsconfig.browser.json'));
+    for (const file of ['scripts/build-browser.js', 'scripts/build-output.js', 'tsconfig.browser.json', 'tsconfig.base.json']) {
+      fs.copyFileSync(path.join(__dirname, '..', file), path.join(root, file));
+    }
     fs.symlinkSync(path.join(__dirname, '../node_modules'), path.join(root, 'node_modules'), 'junction');
     fs.writeFileSync(path.join(root, 'src/browser/theme-prepaint.ts'), 'const themeAnswer: number = 3; console.log(themeAnswer);');
     const appSource = path.join(root, 'src/browser/app.ts');

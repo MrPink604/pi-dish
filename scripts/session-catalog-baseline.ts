@@ -6,18 +6,7 @@ import path = require('node:path');
 import { once } from 'node:events';
 import { performance } from 'node:perf_hooks';
 import type { Server } from 'node:http';
-const sessionKeys: typeof import('../lib/session-key') = require('../lib/session-key');
-const checkedNativeId = (value: unknown) => {
-  if (!sessionKeys.validSessionId(value)) throw new TypeError('Invalid fixture session id');
-  return value;
-};
-type TestRecord = Record<string, unknown>;
-const record = (value: unknown): TestRecord => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('Expected object');
-  const out: TestRecord = {};
-  for (const [key, item] of Object.entries(value)) out[key] = item;
-  return out;
-};
+import { nativeId, record, type TestRecord } from '../test/test-types.js';
 const { sanitizeTestEnv }: typeof import('../test/test-env') = require('../test/test-env')
 
 const scenario = process.argv[2] ?? '';
@@ -187,7 +176,7 @@ async function main() {
       indexing: body.indexing, totalMessages: body.totalMessages };
   };
   if (scenario === 'routes') {
-  const route = `/api/sessions/${encodeSessionKey('prime', checkedNativeId('fixture-0'))}/messages?limit=1`;
+  const route = `/api/sessions/${encodeSessionKey('prime', nativeId('fixture-0'))}/messages?limit=1`;
   await measure('cold-route-and-transcript', () => get(route));
   await measure('warm-route-and-transcript', () => get(route));
   }
@@ -208,7 +197,7 @@ async function main() {
   index.resetForTests();
   await measure('persisted-index-list', () => get('/api/sessions?view=client'));
   const sourceApi: typeof import('../lib/session-source') = require('../lib/session-source');
-  const candidate = sourceApi.sourceForIdentity('pi', checkedNativeId('streaming'), large);
+  const candidate = sourceApi.sourceForIdentity('pi', nativeId('streaming'), large);
   index.getSessionInfo(candidate);
   const delta = JSON.stringify({ type: 'message', id: 'm6000', parentId: 'm5999', message: { role: 'user', content: [{ type: 'text', text: 'ordinary append' }] } }) + '\n';
   fs.appendFileSync(large, delta);

@@ -29,31 +29,8 @@ const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
-const sessionKeys = require('../lib/session-key');
-const checkedNativeId = (value) => {
-    if (!sessionKeys.validSessionId(value))
-        throw new TypeError('Invalid fixture session id');
-    return value;
-};
+const test_types_js_1 = require("../test/test-types.js");
 const idleChild = path.join(__dirname, '..', 'test', 'fixtures', 'idle-child.js');
-const record = (value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-        throw new TypeError('Expected object');
-    const out = {};
-    for (const [key, item] of Object.entries(value))
-        out[key] = item;
-    return out;
-};
-const records = (value) => {
-    if (!Array.isArray(value))
-        throw new TypeError('Expected array');
-    return value.map(record);
-};
-const present = (value) => {
-    if (value === null || value === undefined)
-        throw new TypeError('Expected value');
-    return value;
-};
 const text = (value) => String(value ?? '');
 const tmuxApi = () => {
     if (!tmux)
@@ -142,7 +119,7 @@ const fakeOpenAi = http.createServer((req, res) => {
     req.on('end', async () => {
         let request;
         try {
-            request = record(JSON.parse(body));
+            request = (0, test_types_js_1.record)(JSON.parse(body));
         }
         catch {
             res.writeHead(400).end();
@@ -207,7 +184,7 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 let base = '';
 const getArray = async (route) => {
     const response = await fetch(base + route);
-    return { status: response.status, body: records(await response.json()) };
+    return { status: response.status, body: (0, test_types_js_1.records)(await response.json()) };
 };
 async function request(method, route, body) {
     const response = await fetch(base + route, {
@@ -215,7 +192,7 @@ async function request(method, route, body) {
         headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
     });
-    const data = record(await response.json().catch(() => ({})));
+    const data = (0, test_types_js_1.record)(await response.json().catch(() => ({})));
     return { status: response.status, body: data };
 }
 const get = (route) => request('GET', route);
@@ -260,7 +237,7 @@ async function openSessionStream(sessionId) {
                     const data = lines.find(line => line.startsWith('data: '))?.slice(6);
                     if (data) {
                         try {
-                            payloads.push({ event, data: record(JSON.parse(data)) });
+                            payloads.push({ event, data: (0, test_types_js_1.record)(JSON.parse(data)) });
                         }
                         catch { }
                     }
@@ -300,7 +277,7 @@ async function runStreamedTurn(sessionId, prompt) {
         const transcript = await waitFor(async () => {
             const messages = await get(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
             return fakeRequestCount > requestCountBefore
-                && records(messages.body.messages).some(message => JSON.stringify(message.content).includes(expectedAssistantText))
+                && (0, test_types_js_1.records)(messages.body.messages).some(message => JSON.stringify(message.content).includes(expectedAssistantText))
                 ? messages : null;
         }, 'persisted streamed assistant message', 30000);
         return {
@@ -326,10 +303,10 @@ async function testOmp() {
     assert.match(id, /^~sk1_/);
     const active = await waitFor(async () => {
         const list = await get('/api/sessions?active=1');
-        return records(list.body.active).find(session => session.id === id);
+        return (0, test_types_js_1.records)(list.body.active).find(session => session.id === id);
     }, 'real OMP active session');
     assert.equal(active.harnessId, 'omp');
-    const capabilities = record(active.capabilities);
+    const capabilities = (0, test_types_js_1.record)(active.capabilities);
     assert.equal(capabilities.prompt, true);
     assert.equal(capabilities.close, true);
     assert.equal(capabilities.queueCancel, false);
@@ -349,7 +326,7 @@ async function testOmp() {
     // real streamed turn while /fast is on, then assert it drops once /fast is off.
     const fastOn = await post(`/api/sessions/${encodeURIComponent(id)}/fast`, { enabled: true });
     assert.equal(fastOn.status, 200, JSON.stringify(fastOn.body));
-    const fastOnState = record(present(fastOn.body.fastMode));
+    const fastOnState = (0, test_types_js_1.record)((0, test_types_js_1.present)(fastOn.body.fastMode));
     assert.equal(fastOnState.available, true, `real OMP fast mode availability after /fast on: ${JSON.stringify(fastOn.body)}`);
     assert.equal(fastOnState.enabled, true, `real OMP fast mode enabled after /fast on: ${JSON.stringify(fastOn.body)}`);
     assert.equal(fastOnState.active, true, `real OMP fast mode active after /fast on: ${JSON.stringify(fastOn.body)}`);
@@ -357,7 +334,7 @@ async function testOmp() {
     assert.equal(turn.providerServiceTier, 'priority', 'fast mode must send service_tier=priority on the real streamed provider request');
     const fastOff = await post(`/api/sessions/${encodeURIComponent(id)}/fast`, { enabled: false });
     assert.equal(fastOff.status, 200, JSON.stringify(fastOff.body));
-    const fastOffState = record(present(fastOff.body.fastMode));
+    const fastOffState = (0, test_types_js_1.record)((0, test_types_js_1.present)(fastOff.body.fastMode));
     assert.equal(fastOffState.available, true, `real OMP fast mode availability after /fast off: ${JSON.stringify(fastOff.body)}`);
     assert.equal(fastOffState.enabled, false, `real OMP fast mode enabled after /fast off: ${JSON.stringify(fastOff.body)}`);
     assert.equal(fastOffState.active, false, `real OMP fast mode active after /fast off: ${JSON.stringify(fastOff.body)}`);
@@ -372,21 +349,21 @@ async function testOmp() {
         assert.equal(state.status, 200, JSON.stringify(state.body));
         if (state.body.sideChat == null)
             return null;
-        const chat = record(state.body.sideChat);
-        const turns = records(chat.turns);
+        const chat = (0, test_types_js_1.record)(state.body.sideChat);
+        const turns = (0, test_types_js_1.records)(chat.turns);
         const last = turns[turns.length - 1];
         if (last?.status === 'error')
             throw new Error(`real OMP side chat failed: ${text(last.error)}`);
         return last?.status === 'complete' ? chat : null;
     }, 'real OMP side chat answer', 30000);
-    const sideChatTurns = records(sideChat.turns);
+    const sideChatTurns = (0, test_types_js_1.records)(sideChat.turns);
     const sideChatAnswer = text(sideChatTurns[sideChatTurns.length - 1].answer);
     assert.match(sideChatAnswer, /^pi-dish fake provider response \d+$/, 'real OMP side chat answer');
     const tree = await get(`/api/sessions/${encodeURIComponent(id)}/tree`);
     assert.equal(tree.status, 200, JSON.stringify(tree.body));
-    assert.ok(records(tree.body.nodes).some(node => node.role === 'assistant' && node.text === plainTurn.assistantText && node.active), 'the real OMP live tree includes the persisted assistant response on its active path');
-    const closeSpawn = present(tmuxApi().getSpawn(id));
-    assert.ok(record(closeSpawn.paneProcess).startTime, 'real OMP close has an owned pane identity');
+    assert.ok((0, test_types_js_1.records)(tree.body.nodes).some(node => node.role === 'assistant' && node.text === plainTurn.assistantText && node.active), 'the real OMP live tree includes the persisted assistant response on its active path');
+    const closeSpawn = (0, test_types_js_1.present)(tmuxApi().getSpawn(id));
+    assert.ok((0, test_types_js_1.record)(closeSpawn.paneProcess).startTime, 'real OMP close has an owned pane identity');
     const close = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
     assert.equal(close.status, 200, JSON.stringify(close.body));
     assert.equal(await tmuxApi().paneExists(text(closeSpawn.socket), text(closeSpawn.paneId)), false);
@@ -411,14 +388,14 @@ async function testOmp() {
         { type: 'message', id: 'user-1', parentId: null, timestamp: now,
             message: { role: 'user', content: [{ type: 'text', text: 'real OMP resume canary' }], timestamp: now } },
     ].map(value => JSON.stringify(value)).join('\n') + '\n');
-    const resumeId = encodeSessionKey('omp', checkedNativeId(resumeNativeId));
+    const resumeId = encodeSessionKey('omp', (0, test_types_js_1.nativeId)(resumeNativeId));
     const resumed = await post(`/api/sessions/${encodeURIComponent(resumeId)}/resume`, { target: target() });
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
     assert.equal(resumed.body.id, resumeId);
     const messages = await get(`/api/sessions/${encodeURIComponent(resumeId)}/messages`);
     assert.equal(messages.status, 200, JSON.stringify(messages.body));
-    assert.equal(record(messages.body.session).harnessId, 'omp');
-    assert.ok(records(messages.body.messages).some(message => JSON.stringify(message.content).includes('real OMP resume canary')), JSON.stringify({ session: messages.body.session, messages: messages.body.messages, file: fs.readFileSync(resumeFile, 'utf8') }));
+    assert.equal((0, test_types_js_1.record)(messages.body.session).harnessId, 'omp');
+    assert.ok((0, test_types_js_1.records)(messages.body.messages).some(message => JSON.stringify(message.content).includes('real OMP resume canary')), JSON.stringify({ session: messages.body.session, messages: messages.body.messages, file: fs.readFileSync(resumeFile, 'utf8') }));
     return {
         version: (0, node_child_process_1.execFileSync)(String(ompBin), ['--version'], { encoding: 'utf8', timeout: 10000 }).trim(),
         routeNamespace: id.slice(0, 5),
@@ -456,7 +433,7 @@ function primeDaemonRequest(socketPath, command, timeoutMs = 20000) {
                 buffer = buffer.slice(newline + 1);
                 let message;
                 try {
-                    message = record(JSON.parse(line));
+                    message = (0, test_types_js_1.record)(JSON.parse(line));
                 }
                 catch {
                     continue;
@@ -476,7 +453,7 @@ function primeDaemonRequest(socketPath, command, timeoutMs = 20000) {
                         reject(new Error(`Prime daemon ${String(command.type)} failed: ${JSON.stringify(message.error)}`));
                         return;
                     }
-                    resolve(record(message.data ?? {}));
+                    resolve((0, test_types_js_1.record)(message.data ?? {}));
                 }
             }
         });
@@ -502,7 +479,7 @@ function primeDaemonRoster() {
         timeout: 20000,
         env: { ...process.env, HOME: home, PRIME_AGENT_DAEMON_SOCKET: primeDaemon },
     });
-    return records(record(JSON.parse(output)).sessions);
+    return (0, test_types_js_1.records)((0, test_types_js_1.record)(JSON.parse(output)).sessions);
 }
 function rosterHasAgent(predicate) {
     return primeDaemonRoster().some(predicate);
@@ -514,10 +491,10 @@ async function testPrime() {
     assert.match(id, /^~sk1_/);
     const active = await waitFor(async () => {
         const list = await get('/api/sessions?active=1');
-        return records(list.body.active).find(session => session.id === id);
+        return (0, test_types_js_1.records)(list.body.active).find(session => session.id === id);
     }, 'real Prime active session');
     assert.equal(active.harnessId, 'prime');
-    const capabilities = record(active.capabilities);
+    const capabilities = (0, test_types_js_1.record)(active.capabilities);
     // Prime 0.10's daemon exposes the full session command surface; the
     // extension-era capability holes are gone.
     assert.equal(capabilities.close, true, 'owned Prime roots can stop through their daemon');
@@ -533,7 +510,7 @@ async function testPrime() {
     const turn = await runStreamedTurn(id, 'pi-dish managed Prime integration canary');
     const tree = await get(`/api/sessions/${encodeURIComponent(id)}/tree`);
     assert.equal(tree.status, 200, JSON.stringify(tree.body));
-    assert.ok(records(tree.body.nodes).some(node => node.role === 'assistant' && node.text === turn.assistantText && node.active), 'the real Prime live tree includes the persisted assistant response on its active path');
+    assert.ok((0, test_types_js_1.records)(tree.body.nodes).some(node => node.role === 'assistant' && node.text === turn.assistantText && node.active), 'the real Prime live tree includes the persisted assistant response on its active path');
     // A held provider turn is Prime-busy: queue a follow-up, prove it shows up
     // in the SSE queue_update, cancel it through the queue route, then abort.
     const heldText = 'pi-dish queued follow-up for the Prime canary';
@@ -566,26 +543,26 @@ async function testPrime() {
     assert.notEqual(peerId, id);
     await waitFor(async () => {
         const list = await get('/api/sessions?active=1');
-        return records(list.body.active).find(session => session.id === peerId);
+        return (0, test_types_js_1.records)(list.body.active).find(session => session.id === peerId);
     }, 'real Prime peer active session');
-    const spawnBefore = record(present(tmuxApi().getSpawn(id)));
-    const agentBefore = record(spawnBefore.primeAgent);
+    const spawnBefore = (0, test_types_js_1.record)((0, test_types_js_1.present)(tmuxApi().getSpawn(id)));
+    const agentBefore = (0, test_types_js_1.record)(spawnBefore.primeAgent);
     assert.ok(agentBefore.activeSessionId, 'the Prime spawn record names its daemon agent');
     assert.ok(agentBefore.sessionFile, 'the Prime spawn record names its transcript');
     const paneLocationBefore = await tmuxApi().paneLocation(text(spawnBefore.socket), text(spawnBefore.paneId));
     const restarted = await post(`/api/sessions/${encodeURIComponent(id)}/restart`);
     assert.equal(restarted.status, 200, JSON.stringify(restarted.body));
-    const spawnAfter = record(present(tmuxApi().getSpawn(id)));
-    const agentAfter = record(spawnAfter.primeAgent);
+    const spawnAfter = (0, test_types_js_1.record)((0, test_types_js_1.present)(tmuxApi().getSpawn(id)));
+    const agentAfter = (0, test_types_js_1.record)(spawnAfter.primeAgent);
     assert.equal(spawnAfter.paneId, spawnBefore.paneId, 'restart keeps the original client pane');
     assert.deepEqual(await tmuxApi().paneLocation(text(spawnAfter.socket), text(spawnAfter.paneId)), paneLocationBefore, 'restart keeps the pane where it was');
     assert.notEqual(agentAfter.activeSessionId, agentBefore.activeSessionId, 'restart starts a new Prime agent');
     assert.equal(agentAfter.sessionFile, agentBefore.sessionFile, 'restart resumes the same transcript');
     const restartedTurn = await runStreamedTurn(id, 'Prime answers after same-pane restart');
-    assert.ok(records(restartedTurn.transcript.body.messages).some(message => JSON.stringify(message.content).includes(turn.assistantText)), 'pre-restart transcript survives');
+    assert.ok((0, test_types_js_1.records)(restartedTurn.transcript.body.messages).some(message => JSON.stringify(message.content).includes(turn.assistantText)), 'pre-restart transcript survives');
     await runStreamedTurn(peerId, 'Prime peer still answers after another root restarts');
-    const peerSpawn = record(present(tmuxApi().getSpawn(peerId)));
-    const peerAgent = record(peerSpawn.primeAgent);
+    const peerSpawn = (0, test_types_js_1.record)((0, test_types_js_1.present)(tmuxApi().getSpawn(peerId)));
+    const peerAgent = (0, test_types_js_1.record)(peerSpawn.primeAgent);
     assert.ok(peerAgent.activeSessionId, 'the peer spawn record names its daemon agent');
     const closed = await post(`/api/sessions/${encodeURIComponent(id)}/close`);
     assert.equal(closed.status, 200, JSON.stringify(closed.body));
@@ -596,20 +573,20 @@ async function testPrime() {
     const resumed = await post(`/api/sessions/${encodeURIComponent(id)}/resume`, { target: target() });
     assert.equal(resumed.status, 200, JSON.stringify(resumed.body));
     assert.equal(resumed.body.id, id);
-    const resumedSpawn = record(present(tmuxApi().getSpawn(id)));
-    assert.equal(record(resumedSpawn.primeAgent).sessionFile, agentBefore.sessionFile, 'resume reopens the closed transcript');
+    const resumedSpawn = (0, test_types_js_1.record)((0, test_types_js_1.present)(tmuxApi().getSpawn(id)));
+    assert.equal((0, test_types_js_1.record)(resumedSpawn.primeAgent).sessionFile, agentBefore.sessionFile, 'resume reopens the closed transcript');
     const messages = await get(`/api/sessions/${encodeURIComponent(id)}/messages`);
     assert.equal(messages.status, 200, JSON.stringify(messages.body));
-    assert.equal(record(messages.body.session).harnessId, 'prime');
+    assert.equal((0, test_types_js_1.record)(messages.body.session).harnessId, 'prime');
     const resumedTurn = await runStreamedTurn(id, 'pi-dish managed Prime post-resume integration canary');
     assert.ok(resumedTurn.providerRequestSequence > turn.providerRequestSequence);
-    assert.ok(records(resumedTurn.transcript.body.messages).some(message => JSON.stringify(message.content).includes(turn.assistantText)), 'resume keeps the earlier transcript');
-    assert.ok(records(resumedTurn.transcript.body.messages).some(message => JSON.stringify(message.content).includes(resumedTurn.assistantText)));
+    assert.ok((0, test_types_js_1.records)(resumedTurn.transcript.body.messages).some(message => JSON.stringify(message.content).includes(turn.assistantText)), 'resume keeps the earlier transcript');
+    assert.ok((0, test_types_js_1.records)(resumedTurn.transcript.body.messages).some(message => JSON.stringify(message.content).includes(resumedTurn.assistantText)));
     // A manually started TUI on the same isolated daemon socket must appear as
     // an unowned Prime row: prompts work, close/restart are refused.
     const manualWork = path.join(root, 'prime-manual-work');
     fs.mkdirSync(manualWork, { recursive: true });
-    const beforeManual = new Set(records((await get('/api/sessions?active=1')).body.active).map(row => text(row.id)));
+    const beforeManual = new Set((0, test_types_js_1.records)((await get('/api/sessions?active=1')).body.active).map(row => text(row.id)));
     (0, node_child_process_1.execFileSync)('tmux', ['-S', tmuxSocket, 'new-session', '-d', '-s', 'prime-manual', '-c', manualWork, [
             'env', `HOME=${shellWord(home)}`, `PRIME_AGENT_DAEMON_SOCKET=${shellWord(primeDaemon)}`,
             shellWord(primeBin), '--offline', '--daemon-socket', shellWord(primeDaemon),
@@ -620,10 +597,10 @@ async function testPrime() {
     try {
         const manual = await waitFor(async () => {
             const list = await get('/api/sessions?active=1');
-            return records(list.body.active).find(row => row.harnessId === 'prime' && !beforeManual.has(text(row.id)));
+            return (0, test_types_js_1.records)(list.body.active).find(row => row.harnessId === 'prime' && !beforeManual.has(text(row.id)));
         }, 'manually started Prime TUI as an active row', 30000);
         manualId = text(manual.id);
-        assert.equal(record(manual.capabilities).close, false, 'a manual Prime session is not closeable');
+        assert.equal((0, test_types_js_1.record)(manual.capabilities).close, false, 'a manual Prime session is not closeable');
         assert.equal((await post(`/api/sessions/${encodeURIComponent(manualId)}/close`)).status, 409, 'pi-dish refuses to close a Prime session it did not launch');
         await runStreamedTurn(manualId, 'pi-dish can prompt a manually started Prime TUI');
     }
@@ -712,9 +689,9 @@ async function cleanup() {
         base = `http://127.0.0.1:${serverAddress.port}`;
         const harnesses = await get('/api/harnesses');
         assert.equal(harnesses.status, 200);
-        const installed = records(harnesses.body.harnesses);
+        const installed = (0, test_types_js_1.records)(harnesses.body.harnesses);
         for (const id of selected) {
-            const harness = present(installed.find(item => item.id === id));
+            const harness = (0, test_types_js_1.present)(installed.find(item => item.id === id));
             assert.equal(harness.available, true, `${id} must be reported installed`);
             assert.equal(harness.rpcFallback, false);
         }

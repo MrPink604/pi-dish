@@ -2,19 +2,7 @@ import assert from 'node:assert/strict';
 import { AgentSession } from '@earendil-works/pi-coding-agent';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { piPrivate } from '../../extensions/pi-dish-bridge/pi-private.js';
-
-type HostRecord = Record<PropertyKey, unknown>;
-function record(value: unknown): value is HostRecord {
-  return value !== null && (typeof value === 'object' || typeof value === 'function');
-}
-function method(target: HostRecord, name: PropertyKey): (...args: unknown[]) => unknown {
-  const value = target[name];
-  if (typeof value !== 'function') throw new Error(`native queue fixture requires ${String(name)}`);
-  return (...args: unknown[]) => Reflect.apply(value, target, args);
-}
-function call(target: HostRecord, name: PropertyKey, ...args: unknown[]): unknown {
-  return method(target, name)(...args);
-}
+import { callHost, isObject } from '../../extensions/pi-dish-bridge/host.js';
 
 const reply = {
   role: 'assistant',
@@ -37,14 +25,14 @@ for (const kind of kinds) {
       async result() { return reply; },
     }),
   }]);
-  if (!record(agent)) throw new Error('native queue fixture failed to create agent');
+  if (!isObject(agent)) throw new Error('native queue fixture failed to create agent');
   // Use the actual SDK queue producers and capture patch, without creating
   // a provider-backed session. Only the malformed mirror is fixture-owned.
   const session: unknown = Object.assign(Object.create(AgentSession.prototype), {
     agent, _eventListeners: [], _steeringMessages: [], _followUpMessages: [],
   });
-  if (!record(session)) throw new Error('native queue fixture failed to create session');
-  const release = call(session, 'subscribe', () => {});
+  if (!isObject(session)) throw new Error('native queue fixture failed to create session');
+  const release = callHost(session, 'subscribe', () => {});
   if (typeof release !== 'function') throw new Error('native queue fixture subscription is invalid');
   const queued: Array<{ text: string; images: Array<{ type: string; mimeType: string; data: string }> }> = [
     { text: 'duplicate', images: [{ type: 'image', mimeType: 'image/png', data: 'first' }] },
@@ -52,7 +40,7 @@ for (const kind of kinds) {
     { text: 'duplicate', images: [{ type: 'image', mimeType: 'image/gif', data: 'second' }] },
   ];
   for (const { text, images } of queued) {
-    await call(session, kind === 'steering' ? '_queueSteer' : '_queueFollowUp', text, images);
+    await callHost(session, kind === 'steering' ? '_queueSteer' : '_queueFollowUp', text, images);
   }
   const queue = session[kind === 'steering' ? '_steeringMessages' : '_followUpMessages'];
   if (!Array.isArray(queue)) throw new Error('native queue fixture queue is invalid');
@@ -65,13 +53,13 @@ for (const kind of kinds) {
     kind === 'steering' ? /queues are out of sync/ : /message already delivered or queue changed/,
   );
   assert.deepEqual(piPrivate.readQueue(), before, 'a rejected edit leaves the displayed queue intact');
-  await call(agent, 'prompt', 'drain queued messages');
+  await callHost(agent, 'prompt', 'drain queued messages');
   const state = agent.state;
-  if (!record(state) || !Array.isArray(state.messages)) throw new Error('native queue fixture agent state is invalid');
+  if (!isObject(state) || !Array.isArray(state.messages)) throw new Error('native queue fixture agent state is invalid');
   const delivered = state.messages.flatMap((message: unknown) => {
-    if (!record(message) || message.role !== 'user' || !Array.isArray(message.content)) return [];
+    if (!isObject(message) || message.role !== 'user' || !Array.isArray(message.content)) return [];
     const first = message.content[0];
-    return record(first) && first.text === 'drain queued messages' ? [] : [message.content];
+    return isObject(first) && first.text === 'drain queued messages' ? [] : [message.content];
   });
   assert.deepEqual(delivered, queued.map(({ text, images }) =>
     [{ type: 'text', text }, ...images]), 'a rejected edit preserves delivery order and both duplicate images');

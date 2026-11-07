@@ -1,18 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * Publish an HTML artifact through the local pi-dish server, optionally
- * asking a fleet hub to front it publicly (TASKS/multi-host.md block 7).
- *
- * The agent only ever talks to its own host on loopback: `--via <hub>` goes
- * out through this server's /hosts/<hub> proxy, so no hub address or
- * credential lives in the agent's environment.
- *
- * The plumbing (session discovery, HTTP) lives in
- * skills/lib/pi-dish-client.js. Skills are installed by symlinking each skill
- * directory into ~/.pi/agent/skills/, and Node resolves requires through the
- * realpath, so this relative path reaches the pi-dish repo's own copy even
- * when invoked through the link.
+ * Publish an HTML artifact through the local pi-dish server, optionally asking
+ * a fleet hub to front it publicly. The agent only talks to its own host on
+ * loopback: `--via <hub>` goes through this server's /hosts/<hub> proxy, so no
+ * hub address or credential reaches the agent's environment. Plumbing is
+ * skills/lib.
  */
 import fs = require('node:fs');
 import path = require('node:path');
@@ -22,12 +15,9 @@ let core: typeof Client;
 try {
   core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
 } catch (e) {
-  process.stderr.write(
-    'pi-dish-pages: could not load the shared pi-dish client library '
-    + `(${e instanceof Error && e.message ? e.message : e}).\n`
+  process.stderr.write(`pi-dish-pages: could not load the shared pi-dish client library (${e instanceof Error && e.message ? e.message : e}).\n`
     + 'Install the skills by symlinking the skill directories from the pi-dish repo '
-    + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n',
-  );
+    + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n');
   process.exit(1);
 }
 

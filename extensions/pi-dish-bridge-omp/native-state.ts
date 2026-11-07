@@ -1,5 +1,5 @@
 import { observeSendUserMessage } from "../pi-dish-bridge/send-observer.js";
-import { isHostMethod, isObject, type HostObject, type HostMethod } from "../pi-dish-bridge/host.js";
+import { field, isHostMethod, isObject, type HostObject, type HostMethod } from "../pi-dish-bridge/host.js";
 
 export type OmpNativeProjection = {
   todos: unknown[];
@@ -262,19 +262,14 @@ function patchAgentSession(AgentSession: { prototype: HostSession }): void {
   observeSendUserMessage(AgentSession);
 }
 
-// Runtime plugin boundary: OMP's standalone executable provides this package,
-// while pi-dish's fake lineage hosts intentionally do not install it — the
-// dynamic import stays inside try/catch so those hosts can exercise the
-// wrapper. The specifier MUST be a string literal: OMP's extension loader
-// statically rewrites literal bare pi-package specifiers to its bundled
-// modules, and a variable specifier falls through to plain filesystem
-// resolution, which cannot find the package and silently disabled the whole
-// projection in real sessions.
+// OMP's executable provides this package; fake lineage hosts do not, so the
+// dynamic import stays inside try/catch. The specifier MUST stay a string
+// literal: OMP's loader rewrites literal bare specifiers to bundled modules,
+// while a variable one resolves on disk and silently disables the projection.
 try {
   const host: unknown = await import("@oh-my-pi/pi-coding-agent");
-  if (host && typeof host === "object" && "AgentSession" in host && isHostConstructor(host.AgentSession)) {
-    patchAgentSession(host.AgentSession);
-  }
+  const AgentSession = field(host, "AgentSession");
+  if (isHostConstructor(AgentSession)) patchAgentSession(AgentSession);
 } catch {}
 
 // Exported for pi-dish's fake OMP host, which cannot install OMP's package and
