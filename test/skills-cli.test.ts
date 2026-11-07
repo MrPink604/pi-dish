@@ -1,13 +1,7 @@
 /**
- * End-to-end tests for the pi-dish-sessions CLI against a real server.
- *
- * Boot pattern is test/server.test.js's: HOME is pointed at a temp dir holding
- * fixture session JSONL *before* server.js loads, so both the historical scan
- * and the bridge registry read the fixtures. The CLI is then run as a real
- * child process with PI_DISH_URL aimed at that server — what is under test is
- * the binary an agent actually invokes, including its exit codes and stderr.
- *
- * Run with: npm test
+ * End-to-end tests for the pi-dish-sessions CLI against a real server: HOME
+ * points at fixture session JSONL before server.js loads, and the CLI runs as
+ * the child process an agent invokes, so exit codes and stderr are covered.
  */
 import test = require('node:test');
 import { errorMessage, present, record, records } from './test-types.js';

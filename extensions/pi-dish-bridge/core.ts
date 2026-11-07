@@ -263,8 +263,7 @@ export interface SideTurnInput {
 // bridge's ctx.sessionManager, identifying which host session to run against.
 export type SideTurnRunner = (input: SideTurnInput, sessionManager: unknown) => Promise<string>;
 
-// --- Prompt template arg substitution (mirrors pi's prompt-templates.ts) ---
-
+// Prompt template argument substitution mirrors pi's prompt-templates.ts.
 function parseCommandArgs(argsString: string): string[] {
   const args: string[] = [];
   let current = "";
@@ -967,7 +966,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     broadcast({ type: "event", event: "queue_update", data: mergedQueue() });
   }
 
-  // --- Side chat (asynchronous, multi-turn /btw replacement) ---
+  // Side chat: an asynchronous, multi-turn /btw replacement.
   // The provider turn is ephemeral: it never enters the transcript and its
   // answer only ever reaches socket/SSE clients. State lives here so a reload
   // or a second device replays the same chat through stateSnapshot/hello.
@@ -1404,12 +1403,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
       return ret;
     });
 
-    // Every OMP dialog renderer (#R) wires options.signal to a teardown that
-    // disposes the TUI component, restores the editor and resolves the dialog
-    // promise with undefined. Injecting a per-dialog controller and aborting
-    // it when the remote answer wins therefore dismisses the tmux-side dialog
-    // instead of leaving it over the composer. Hosts that ignore signal keep
-    // the old behavior: the late local result is simply discarded.
+    // Every OMP dialog renderer wires options.signal to a teardown that
+    // disposes the TUI component and resolves the dialog with undefined, so
+    // aborting a per-dialog controller when the remote answer wins dismisses
+    // the tmux-side dialog. Hosts that ignore signal just discard the late
+    // local result.
     const withDismissSignal = (options: unknown, dismiss: AbortController): Record<string, unknown> => {
       const caller = field(options, "signal");
       const signal = caller instanceof AbortSignal ? AbortSignal.any([caller, dismiss.signal]) : dismiss.signal;
@@ -1877,7 +1875,6 @@ export function createBridge(descriptor: BridgeDescriptor) {
       }
       return loginController.start(lastCtx, args);
     }
-    // --- Emulated built-ins ---
     if (name === "compact") {
       if (!lastCtx) return { ok: false, error: "no active context" };
       // pi's compact() starts by aborting the agent and rewriting its message
@@ -1989,7 +1986,6 @@ export function createBridge(descriptor: BridgeDescriptor) {
       return { ok: true, info: "Reload started" };
     }
 
-    // --- Skills / prompt templates / extension commands via pi.getCommands() ---
     const commands = hostCommands(pi);
     const skillCmd = commands.find((c) => c.source === "skill" && c.name === name);
     if (skillCmd) {
@@ -2263,10 +2259,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
         }
 
         case "tree_leaf": {
-          // Leaf-only tree read. The transcript endpoint needs just the live
-          // leaf id to pick the active branch; serializing the entire session
-          // tree (tree_read) costs O(session bytes) per request, which made
-          // long live OMP sessions crawl on every page/catch-up fetch.
+          // Leaf-only tree read: the transcript endpoint needs just the live
+          // leaf id, while tree_read costs O(session bytes) per request.
           if (!lastCtx) return respond(false, undefined, "tree leaf unavailable: no active context");
           const manager = lastCtx.sessionManager;
           if (!manager || !isHostMethod(field(manager, "getLeafId"))) {

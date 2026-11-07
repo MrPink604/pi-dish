@@ -2,20 +2,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 /**
- * Fleet awareness in the peer-sessions skill (TASKS/multi-host.md block 6).
- *
- * The agent CLI never grows a host catalog: it talks to its own server and
- * reaches the fleet through that server's /hosts/<name> proxy. So these tests
- * drive the real CLI binary against a real hub that knows a real peer — the
- * hub+peer boot pattern of test/remote-hosts.test.js — rather than a mock,
- * because what is being asserted is that the existing routes compose behind a
- * path prefix and that one bearer token gets the CLI through.
- *
- * The hub is token-gated here, and the peer holds a *different* token that
- * only the hub knows: a CLI that made it to the peer's sessions did so with
- * one env var and the hub's own credential handling.
- *
- * Run with: npm test
+ * Fleet awareness in the peer-sessions skill. The CLI reaches the fleet only
+ * through its own server's /hosts/<name> proxy, so these tests drive the real
+ * CLI against a real hub that knows a real peer. The peer holds a token only
+ * the hub knows: reaching the peer's sessions proves one env var suffices.
  */
 const test = require("node:test");
 const test_types_js_1 = require("./test-types.js");
@@ -190,11 +180,9 @@ test('PI_DISH_TOKEN is what gets the CLI through a token-gated server', async ()
     assert.match((await runCli(['list', '--host', 'peer'])).stdout, new RegExp(PEER_SESSION_ID));
     await assert.rejects(runCli(['hosts'], { token: null }), (error) => { assert.match(String((0, test_types_js_1.record)(error).stderr ?? ''), /Unauthorized/); return true; });
 });
-// --- fleet-qualified launch provenance -----------------------------------
-//
-// A spawn's body names the caller, and a live spawn needs a real pi. A
-// reflecting server stands in for the hub so the request the CLI builds can
-// be read directly. It answers spawns both locally and behind /hosts/peer.
+// A live spawn needs a real pi, so a reflecting server stands in for the hub
+// and the spawn body the CLI builds is read directly, locally and behind
+// /hosts/peer.
 const CALLER_HOST_ID = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
 function callerHome() {
     const home = makeHome();
@@ -253,7 +241,7 @@ test('a cross-host spawn attributes the caller host-qualified', async (t) => {
     const create = (0, test_types_js_1.present)(requests.find(request => request.url === '/hosts/peer/api/sessions/new'));
     const body = (0, test_types_js_1.present)(create.body);
     // Same advisory fields as a local spawn; the host id only says whose
-    // session id this is (TASKS/multi-host.md block 6).
+    // session id this is.
     assert.equal(body.requestedBySessionId, `${CALLER_HOST_ID}:caller-session`);
     assert.equal(create.caller, body.requestedBySessionId);
     assert.equal(body.cwd, '/work');
