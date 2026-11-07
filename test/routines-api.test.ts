@@ -442,7 +442,8 @@ test('stored launch selections are validated at the file boundary', async () => 
   const routine = record((await post('/api/routines', definition({ name: 'stored-launch-routine', prompt: 'slow: verify stored launch selections' }))).body.routine)
   const file = path.join(tmpHome, '.pi', 'dish', 'routines.json');
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
-  Object.assign(record(record(record(saved).routines)[text(routine.id)]), { model: 42, thinking: ['one', 'two'], cwd: 42 });
+  const storedRow = record(record(record(saved).routines)[text(routine.id)]);
+  Object.assign(storedRow, { model: 42, thinking: ['one', 'two'] });
   fs.writeFileSync(file, JSON.stringify(saved));
 
   const run = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
@@ -453,11 +454,18 @@ test('stored launch selections are validated at the file boundary', async () => 
   const started = fs.readFileSync(START_LOG, 'utf8').trim().split('\n').map(line => record(JSON.parse(line)));
   const child = present(started.find(row => path.basename(text(row.sessionFile), '.jsonl') === invoked.sessionId));
   assert.deepEqual(child.args, ['--mode', 'rpc'], 'a non-string model/thinking selection is not launched');
-  const header = record(JSON.parse(present(fs.readFileSync(text(child.sessionFile), 'utf8').split('\n')[0])));
-  assert.equal(header.cwd, tmpHome, 'a non-string cwd falls back to the default');
 
   await waitForStatus(invoked.id, 'completed');
   await waitFor(async () => (await invocation(invoked.id)).closed);
+
+  const cwd = storedRow.cwd;
+  Object.assign(storedRow, { cwd: 42 });
+  fs.writeFileSync(file, JSON.stringify(saved));
+  const before = fs.readFileSync(START_LOG, 'utf8');
+  assert.equal((await post(`/api/routines/${routine.id}/invoke?wait=1`, {})).status, 404, 'a non-string cwd is not a routine');
+  assert.equal(fs.readFileSync(START_LOG, 'utf8'), before, 'nothing launches');
+  Object.assign(storedRow, { cwd });
+  fs.writeFileSync(file, JSON.stringify(saved));
   await del(`/api/routines/${routine.id}`);
 });
 

@@ -5,8 +5,10 @@
  */
 import crypto = require('crypto');
 import { readStore, writeStore } from './dish-store';
+import { asRecord } from './wire-protocol';
 import { getHarness } from './harnesses';
 import { parseCron } from './cron';
+import { errorMessage } from './http-boundary';
 
 export type RoutineMode = 'oneShot' | 'continue';
 export type RoutineDelivery = 'prompt' | 'steer' | 'followUp';
@@ -106,11 +108,6 @@ function fail(message: string, status = 400): Error & { status: number } {
   return Object.assign(new Error(message), { status });
 }
 
-/** A JSON body or stored row; a non-object carries no fields. */
-function fields(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
-
 function stringOr(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback;
 }
@@ -127,7 +124,7 @@ function includes<T>(allowed: readonly T[], value: unknown): value is T {
 function parseVersions(value: unknown, promptVersion: number, prompt: string, createdAt: number): RoutineVersion[] {
   const rows = Array.isArray(value) ? value : [];
   const versions = rows.flatMap((row): RoutineVersion[] => {
-    const entry = fields(row);
+    const entry = asRecord(row);
     return typeof entry.version === 'number' && typeof entry.prompt === 'string'
       ? [{ version: entry.version, prompt: entry.prompt, savedAt: numberOr(entry.savedAt, 0) }]
       : [];
@@ -137,16 +134,16 @@ function parseVersions(value: unknown, promptVersion: number, prompt: string, cr
 
 /** A stored row is validated once here; everything downstream sees a Routine. */
 function parseRoutine(id: string, value: unknown): Routine | null {
-  const row = fields(value);
-  if (row.id !== id || typeof row.name !== 'string' || typeof row.prompt !== 'string') return null;
+  const row = asRecord(value);
+  if (row.id !== id || typeof row.name !== 'string' || typeof row.prompt !== 'string' || typeof row.cwd !== 'string') return null;
   const promptVersion = numberOr(row.promptVersion, 1);
-  const cron = fields(row.schedule).cron;
+  const cron = asRecord(row.schedule).cron;
   return {
     id,
     name: row.name,
     description: stringOr(row.description, ''),
     harness: stringOr(row.harness, 'pi'),
-    cwd: stringOr(row.cwd, ''),
+    cwd: row.cwd,
     model: typeof row.model === 'string' && row.model.trim() ? row.model.trim() : undefined,
     thinking: includes(THINKING_LEVELS, row.thinking) ? row.thinking : undefined,
     prompt: row.prompt,
@@ -163,18 +160,27 @@ function parseRoutine(id: string, value: unknown): Routine | null {
   };
 }
 
-function readRoutines(): Record<string, Routine> {
-  const source = fields(readStore(ROUTINES_FILE).routines);
+/** Raw rows, so a write leaves rows and fields this version cannot parse on disk. */
+function storedRoutines(): Record<string, unknown> {
+  return asRecord(readStore(ROUTINES_FILE).routines);
+}
+
+function parseRoutines(stored: Record<string, unknown>): Record<string, Routine> {
   const routines: Record<string, Routine> = {};
-  for (const [id, value] of Object.entries(source)) {
+  for (const [id, value] of Object.entries(stored)) {
     const routine = parseRoutine(id, value);
     if (routine) routines[id] = routine;
   }
   return routines;
 }
 
-function writeRoutines(routines: Record<string, Routine>): void {
-  writeStore(ROUTINES_FILE, { version: 1, routines });
+function readRoutines(): Record<string, Routine> {
+  return parseRoutines(storedRoutines());
+}
+
+function saveRoutine(stored: Record<string, unknown>, routine: Routine): void {
+  stored[routine.id] = { ...asRecord(stored[routine.id]), ...routine };
+  writeStore(ROUTINES_FILE, { version: 1, routines: stored });
 }
 
 export function listRoutines(): Routine[] {
@@ -224,12 +230,12 @@ function validateSchedule(schedule: unknown): { cron: string } | null {
   if (typeof schedule !== 'object' || Array.isArray(schedule)) {
     throw fail('schedule must be null or { cron }');
   }
-  const cron = fields(schedule).cron;
+  const cron = asRecord(schedule).cron;
   if (typeof cron !== 'string' || !cron.trim()) throw fail('schedule.cron is required');
   try {
     parseCron(cron);
   } catch (error) {
-    throw fail(`Invalid schedule: ${error instanceof Error ? error.message : String(error)}`);
+    throw fail(`Invalid schedule: ${errorMessage(error)}`);
   }
   return { cron: cron.trim() };
 }
@@ -261,8 +267,9 @@ function validateHarness(harness: unknown): string {
 }
 
 export function createRoutine(input: unknown = {}): Routine {
-  const body = fields(input);
-  const routines = readRoutines();
+  const body = asRecord(input);
+  const stored = storedRoutines();
+  const routines = parseRoutines(stored);
   const id = crypto.randomUUID();
   const name = validateName(body.name, routines, id);
   const prompt = validatePrompt(body.prompt);
@@ -287,17 +294,17 @@ export function createRoutine(input: unknown = {}): Routine {
     createdAt: now,
     updatedAt: now,
   };
-  routines[id] = routine;
-  writeRoutines(routines);
+  saveRoutine(stored, routine);
   return routine;
 }
 
 /** Only changed prompt text appends a version; ordinary edits do not. */
 export function updateRoutine(ref: string, patch: unknown = {}): Routine | null {
-  const routines = readRoutines();
+  const stored = storedRoutines();
+  const routines = parseRoutines(stored);
   const existing = lookupRoutine(routines, ref);
   if (!existing) return null;
-  const body = fields(patch);
+  const body = asRecord(patch);
   const routine: Routine = { ...existing };
 
   if (body.name !== undefined) routine.name = validateName(body.name, routines, routine.id);
@@ -332,33 +339,31 @@ export function updateRoutine(ref: string, patch: unknown = {}): Routine | null 
     }
   }
   routine.updatedAt = now;
-  routines[routine.id] = routine;
-  writeRoutines(routines);
+  saveRoutine(stored, routine);
   return routine;
 }
 
 export function deleteRoutine(ref: string): Routine | null {
-  const routines = readRoutines();
-  const existing = lookupRoutine(routines, ref);
+  const stored = storedRoutines();
+  const existing = lookupRoutine(parseRoutines(stored), ref);
   if (!existing) return null;
-  delete routines[existing.id];
-  writeRoutines(routines);
+  delete stored[existing.id];
+  writeStore(ROUTINES_FILE, { version: 1, routines: stored });
   return existing;
 }
 
 /** Persist the fired minute to prevent double-firing after a same-minute restart. */
 export function markScheduled(id: string, minuteMs: number): Routine | null {
-  const routines = readRoutines();
-  const existing = routines[id];
+  const stored = storedRoutines();
+  const existing = parseRoutine(id, stored[id]);
   if (!existing) return null;
   const routine: Routine = { ...existing, lastScheduledMinute: minuteMs };
-  routines[id] = routine;
-  writeRoutines(routines);
+  saveRoutine(stored, routine);
   return routine;
 }
 
 function parseInvocation(value: unknown): RoutineInvocation | null {
-  const row = fields(value);
+  const row = asRecord(value);
   if (typeof row.id !== 'string' || !includes(STATUSES, row.status)) return null;
   return {
     id: row.id,
@@ -382,17 +387,20 @@ function parseInvocation(value: unknown): RoutineInvocation | null {
   };
 }
 
-export function readInvocations(): RoutineInvocation[] {
+function storedInvocations(): unknown[] {
   const stored = readStore(INVOCATIONS_FILE).invocations;
-  const rows: unknown[] = Array.isArray(stored) ? stored : [];
-  return rows.flatMap((row) => {
+  return Array.isArray(stored) ? stored : [];
+}
+
+export function readInvocations(): RoutineInvocation[] {
+  return storedInvocations().flatMap((row) => {
     const invocation = parseInvocation(row);
     return invocation ? [invocation] : [];
   });
 }
 
-function writeInvocations(invocations: RoutineInvocation[]): void {
-  writeStore(INVOCATIONS_FILE, { version: 1, invocations: invocations.slice(0, MAX_INVOCATIONS) });
+function writeInvocations(rows: unknown[]): void {
+  writeStore(INVOCATIONS_FILE, { version: 1, invocations: rows.slice(0, MAX_INVOCATIONS) });
 }
 
 /** UTF-8 size of the JSON form callers persist; null and undefined are empty. */
@@ -438,22 +446,25 @@ export function createInvocation({
     closed: false,
     closeError: null,
   };
-  writeInvocations([invocation, ...readInvocations()]);
+  writeInvocations([invocation, ...storedInvocations()]);
   return invocation;
 }
 
 /** Read-modify-write of one entry. Every status change hits disk. */
 export function updateInvocation(id: string, patch: InvocationPatch): RoutineInvocation | null {
-  const invocations = readInvocations();
-  const index = invocations.findIndex((entry) => entry.id === id);
-  if (index < 0) return null;
-  const updated: RoutineInvocation = { ...invocations[index], ...patch };
-  if (updated.endedAt && !Number.isFinite(updated.durationMs)) {
-    updated.durationMs = Math.max(0, updated.endedAt - (updated.startedAt || 0));
+  const rows = storedInvocations();
+  for (const [index, row] of rows.entries()) {
+    const current = parseInvocation(row);
+    if (current?.id !== id) continue;
+    const updated: RoutineInvocation = { ...current, ...patch };
+    if (updated.endedAt && !Number.isFinite(updated.durationMs)) {
+      updated.durationMs = Math.max(0, updated.endedAt - (updated.startedAt || 0));
+    }
+    rows[index] = { ...asRecord(row), ...updated };
+    writeInvocations(rows);
+    return updated;
   }
-  invocations[index] = updated;
-  writeInvocations(invocations);
-  return updated;
+  return null;
 }
 
 export function getInvocation(id: string): RoutineInvocation | null {

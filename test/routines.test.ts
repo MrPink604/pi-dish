@@ -17,7 +17,7 @@ import type * as Routines from '../lib/routines.js';
 import type * as Runner from '../lib/routine-runner.js';
 import type * as Bridge from '../lib/bridge-session.js';
 import type * as SessionKeys from '../lib/session-key.js';
-import type * as Protocol from '../lib/wire-protocol.js';
+import { record as isRecord } from '../lib/helper-values.js';
 
 const originalHome = process.env.HOME;
 const originalCloseGrace = process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS;
@@ -31,7 +31,6 @@ const store: typeof Routines = require('../lib/routines.js');
 const { createRoutineRunner, STARTING_WATCHDOG_MS }: typeof Runner = require('../lib/routine-runner.js');
 const { BridgeSession }: typeof Bridge = require('../lib/bridge-session.js');
 const { validSessionId }: typeof SessionKeys = require('../lib/session-key.js');
-const { isRecord }: typeof Protocol = require('../lib/wire-protocol.js');
 const runners = new Set<Runner.RoutineRunner>();
 test.after(() => {
   for (const runner of runners) runner.stop();
@@ -218,7 +217,13 @@ test('stored records are validated and normalized at the file boundary', () => {
   assert.equal(partial.harness, 'ghost', 'the harness is a launch selection, not a registry member');
   assert.deepEqual(partial.schedule, { cron: '@daily' });
   assert.deepEqual(partial.versions, [{ version: 1, prompt: 'old', savedAt: 0 }]);
-  assert.equal(Object.hasOwn(partial, 'extra'), false, 'unknown keys are dropped');
+  assert.equal(Object.hasOwn(partial, 'extra'), false, 'unknown keys are not part of a routine');
+
+  updateRoutine('partial', { description: 'edited' });
+  const savedRoutines = JSON.parse(fs.readFileSync(path.join(dishDir, 'routines.json'), 'utf8')).routines;
+  assert.deepEqual(Object.keys(savedRoutines).sort(), ['external', 'partial', 'wrongKey'], 'a write keeps rows it cannot parse');
+  assert.deepEqual(savedRoutines.partial.extra, { retained: true }, 'a write keeps unknown fields of the edited row');
+  assert.equal(savedRoutines.partial.description, 'edited');
 
   fs.writeFileSync(path.join(dishDir, 'routine-invocations.json'), JSON.stringify({
     invocations: [
@@ -231,6 +236,9 @@ test('stored records are validated and normalized at the file boundary', () => {
   const completed = store.updateInvocation('external-run', { status: 'completed', endedAt: 150 });
   assert.ok(completed);
   assert.equal(completed.startedAt, 0, 'a non-numeric start falls back to 0');
+  const savedRuns = JSON.parse(fs.readFileSync(path.join(dishDir, 'routine-invocations.json'), 'utf8')).invocations;
+  assert.deepEqual(savedRuns.map((row: { id: unknown }) => row.id), ['external-run', 'bad-status', 1], 'a write keeps rows it cannot parse');
+  assert.equal(savedRuns[0].extra, 'kept');
 });
 
 test('the ledger rejects input over the cap without persisting', () => {

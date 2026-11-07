@@ -245,6 +245,7 @@ test('a bogus local caller id is rejected, a host-qualified one is advisory-acce
     const rejected = await post('/api/sessions/new', { requestedBySessionId: 'no-such-session' });
     assert.equal(rejected.status, 400);
     assert.match(text(rejected.body.error), /must identify an existing session/);
+    assert.equal((await post('/api/sessions/new', { requestedBySessionId: 42 })).status, 400, 'a non-string caller id is not a session');
     // A fleet caller (TASKS/multi-host.md block 6) names a session this host
     // cannot verify; provenance is advisory, so the spawn proceeds and the
     // qualified id is recorded as-is.

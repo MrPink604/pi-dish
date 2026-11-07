@@ -53,9 +53,10 @@ export function createSessionCreateHandlers(ports: SessionCreatePorts) {
     // advisory and grants nothing, so a foreign id is recorded as-is.
     const sourceSessionId = typeof claimedSource === 'string'
       ? sessionProvenance.localizeCallerId(claimedSource) : null;
-    if (sourceSessionId && !sessionProvenance.isHostQualified(sourceSessionId)
-        && !ports.getRegisteredSession(sourceSessionId) && !ports.getRPCSession(sourceSessionId)?.alive
-        && !ports.findSessionFile(sourceSessionId, { exact: true })) {
+    const unknownSource = sourceSessionId && !sessionProvenance.isHostQualified(sourceSessionId)
+      && !ports.getRegisteredSession(sourceSessionId) && !ports.getRPCSession(sourceSessionId)?.alive
+      && !ports.findSessionFile(sourceSessionId, { exact: true });
+    if (unknownSource || (claimedSource !== null && typeof claimedSource !== 'string')) {
       return res.status(400).json({
         error: 'requestedBySessionId must identify an existing session on this host; name a session on another fleet host as <hostId>:<sessionId>',
       });
