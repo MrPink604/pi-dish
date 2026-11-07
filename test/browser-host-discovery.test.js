@@ -5,13 +5,7 @@ const test_types_js_1 = require("./test-types.js");
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { createHostDiscovery, decodeHostDescriptor, reconcileHostCatalog } = context.PiDishBrowser;
+const { createHostDiscovery, decodeHostDescriptor, reconcileHostCatalog } = (0, browser_vm_js_1.loadBrowser)();
 const response = (data, status = 200) => new Response(JSON.stringify(data), {
     status,
     headers: { 'Content-Type': 'application/json' },

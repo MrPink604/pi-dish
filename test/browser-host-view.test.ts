@@ -1,11 +1,9 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { browserSandbox } from './browser-vm.js';
 import { record } from './test-types.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
 import fs = require('node:fs');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = vm.createContext({}); vm.runInContext(fs.readFileSync(require.resolve('../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
+const context = browserSandbox();
 test('host presentation narrows labels and capabilities without mutating discovery metadata', () => {
   const project = context.PiDishBrowser.createHostView();
   const projectUnknown = (value: unknown) => record(Reflect.apply(project, undefined, [value]));

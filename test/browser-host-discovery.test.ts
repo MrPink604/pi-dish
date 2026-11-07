@@ -3,16 +3,10 @@ import type { EffectiveHost } from '../src/browser/host-catalog.js';
 import type { HostConnectionEvent } from '../src/browser/host-connections.js';
 import type { HostDescriptor, HostDiscoveryOptions, HostDiscoverySource } from '../src/browser/host-discovery.js';
 import { present, record } from './test-types.js';
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { createHostDiscovery, decodeHostDescriptor, reconcileHostCatalog } = context.PiDishBrowser;
+const { createHostDiscovery, decodeHostDescriptor, reconcileHostCatalog } = loadBrowser();
 const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), {
   status,
   headers: { 'Content-Type': 'application/json' },

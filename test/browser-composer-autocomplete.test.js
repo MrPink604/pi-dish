@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = { atob };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeSlashCommands, decodeFileCompletions, createSessionState, createSessionReferences } = context.PiDishBrowser;
+const { decodeSlashCommands, decodeFileCompletions, createSessionState, createSessionReferences } = (0, browser_vm_js_1.loadBrowser)({ atob });
 test('autocomplete wire data narrows command and file fields without mutating input', () => {
     const wire = [null, { name: 1 }, { name: 'valid', args: {}, source: 'extension', description: ['bad'] }];
     const commands = decodeSlashCommands(wire);

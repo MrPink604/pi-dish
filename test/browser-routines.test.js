@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeRoutine, decodeRoutineList, decodeRoutineInvocations } = context.PiDishBrowser;
+const { decodeRoutine, decodeRoutineList, decodeRoutineInvocations } = (0, browser_vm_js_1.loadBrowser)();
 const host = { hostId: 'peer', base: '/hosts/peer', label: 'Peer' };
 test('routine decoding retains literal prompt versions and stamps immutable host endpoints', () => {
     const routine = decodeRoutine({ id: 'routine', host: 'forged', onBusy: 'bad', prompt: 'Text <xml>', versions: [{ version: 1, prompt: 'old', savedAt: 3 }, { version: 'wrong', prompt: 'bad' }], stats: { lastInvocation: { id: 'run', status: 'completed', startedAt: 4 } } }, host);

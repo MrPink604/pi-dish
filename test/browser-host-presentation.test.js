@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { createHostDirectory, createHostPresentation, assignHostColor, sanitizeHostColors } = context.PiDishBrowser;
+const { createHostDirectory, createHostPresentation, assignHostColor, sanitizeHostColors } = (0, browser_vm_js_1.loadBrowser)();
 const { escapeHtml } = require('../lib/helper-format');
 const { hostDisplayLabel } = require('../public/helpers');
 function fixture(extra = {}) {

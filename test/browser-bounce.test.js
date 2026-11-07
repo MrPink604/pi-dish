@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } = context.PiDishBrowser;
+const { decodeBouncePreview, decodeBounceOperation, decodeBounceOperations } = (0, browser_vm_js_1.loadBrowser)();
 const plain = (value) => JSON.parse(JSON.stringify(value));
 test('bounce previews narrow eligibility and copy valid blocker text', () => {
     const wire = { targets: [null, { sessionId: '' }, { sessionId: 's', name: 7, eligible: 'true', blockers: ['busy', false] }] };

@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { createHostDirectory, createHostPresentation, assignHostColor, sanitizeHostColors } = context.PiDishBrowser;
+const { createHostDirectory, createHostPresentation, assignHostColor, sanitizeHostColors } = loadBrowser();
 const { escapeHtml }: typeof import('../src/core/helper-format.js') = require('../lib/helper-format');
 const { hostDisplayLabel }: typeof import('../src/browser/shared-helpers.js') = require('../public/helpers');
 type PresentationOptions = Parameters<typeof createHostPresentation>[0];

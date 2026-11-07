@@ -4,17 +4,12 @@ import type { SessionHost } from '../src/browser/host-session-loader.js';
 import type { SessionLists } from '../src/browser/session-state.js';
 import { DOMParser } from '@xmldom/xmldom';
 import { present, record } from './test-types.js';
-import { assertBrowserApiContext } from './browser-vm.js';
+import { browserSandbox } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
 const { stripQueryField }: typeof import('../lib/helper-query') = require('../lib/helper-query')
 const { decodeSessionList }: typeof import('../lib/session-api') = require('../lib/session-api')
-const context = { URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
+const context = browserSandbox({ URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval });
 const { createHostSessionLoader, createSessionState, createSidebarLists, ApiHttpError } = context.PiDishBrowser;
 
 interface LoaderCall {

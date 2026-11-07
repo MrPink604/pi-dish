@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeTranscriptPage } = context.PiDishBrowser;
+const { decodeTranscriptPage } = loadBrowser();
 test('transcript pages require message arrays and narrow cursors without accepting wire identity', () => {
   assert.throws(() => decodeTranscriptPage({ error: 'no messages' }), /Invalid transcript page/);
   const data = decodeTranscriptPage({ messages: [{ role: 'user', index: 1, content: 'ok' }], firstIndex: 'bad', lastIndex: 1, totalMessages: Infinity, hasMore: 'true', session: { id: 'wrong', host: 'wrong', name: 'kept' } });

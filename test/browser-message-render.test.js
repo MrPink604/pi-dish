@@ -5,12 +5,8 @@ const browser_vm_js_1 = require("./browser-vm.js");
 const test_types_js_1 = require("./test-types.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
 const vm = require('node:vm');
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
+const context = (0, browser_vm_js_1.browserSandbox)();
 const { decodeRenderMessage } = context.PiDishBrowser;
 test('message projection preserves text/image content but narrows identifiers and telemetry', () => {
     const raw = { role: 'assistant', index: '0" onclick="bad', timestamp: 'literal', content: ['plain', { type: 'text', text: 'text' }, { type: 'image', url: '/image', mimeType: 'image/png' }, null],

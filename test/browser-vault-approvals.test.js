@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require("node:vm");
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeVaultOverview, vaultCardsHtml, vaultPanelHtml, vaultListenerText, vaultRequestSession } = context.PiDishBrowser;
+const { decodeVaultOverview, vaultCardsHtml, vaultPanelHtml, vaultListenerText, vaultRequestSession } = (0, browser_vm_js_1.loadBrowser)();
 const NOW = Date.parse('2026-10-19T00:00:00Z');
 const wire = {
     listener: { state: 'ready', account: 'me@example.com', stale: false },

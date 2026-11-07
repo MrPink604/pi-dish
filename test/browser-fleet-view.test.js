@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeFleetHealth, formatBytes, formatUptime, meterLevel, fleetSessionsHtml, fleetHealthHtml } = context.PiDishBrowser;
+const { decodeFleetHealth, formatBytes, formatUptime, meterLevel, fleetSessionsHtml, fleetHealthHtml } = (0, browser_vm_js_1.loadBrowser)();
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const GB = 1024 ** 3;
 test('host health wire data narrows numbers and degrades malformed parts to absent', () => {

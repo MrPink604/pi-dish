@@ -5,13 +5,7 @@ const browser_vm_js_1 = require("./browser-vm.js");
 const test_types_js_1 = require("./test-types.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = { encodeURIComponent };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { createSessionSpawns, decodeSpawnId, decodeSpawnStatus, sessionSpawnKey } = context.PiDishBrowser;
+const { createSessionSpawns, decodeSpawnId, decodeSpawnStatus, sessionSpawnKey } = (0, browser_vm_js_1.loadBrowser)({ encodeURIComponent });
 const plain = (value) => JSON.parse(JSON.stringify(value));
 function deferred() {
     let resolve;

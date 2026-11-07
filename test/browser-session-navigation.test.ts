@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeSessionLineage, decodeSessionSearch } = context.PiDishBrowser;
+const { decodeSessionLineage, decodeSessionSearch } = loadBrowser();
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 test('session lineage narrows nested identities and decodes the tree recursively', () => {
   const node = (id: unknown, children: unknown = [], edge: unknown = null) => ({ session: { id, name: [], isActive: 'true', subagentLive: 1, lastActivity: false, harnessId: 9, model: {}, agentId: 7 }, children, edge });

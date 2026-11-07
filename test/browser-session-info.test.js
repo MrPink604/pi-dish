@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeSessionStats, decodeSessionShare, decodePublishedPages } = context.PiDishBrowser;
+const { decodeSessionStats, decodeSessionShare, decodePublishedPages } = (0, browser_vm_js_1.loadBrowser)();
 test('session stats retain unavailable prices and narrow context and runtime metadata', () => {
     const stats = decodeSessionStats({ hardCacheMisses: 3, costs: { total: null, input: 0.25 }, costUnavailable: { total: 1 }, contextUsage: { tokens: 100, percent: 'bad' }, runtime: { kind: 'tmux', pid: 'bad', windowIndex: 0 } });
     assert.equal(stats.costs.total, null);

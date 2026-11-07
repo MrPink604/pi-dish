@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeAnchoredComments, decodeCommentIndex, findQuoteOffset } = context.PiDishBrowser;
+const { decodeAnchoredComments, decodeCommentIndex, findQuoteOffset } = loadBrowser();
 test('anchored comment decoders narrow target kinds, identity and positive line coordinates', () => {
   const values = [null, { id: 'bad', sessionId: 's', body: 'b', target: { kind: 'execute', path: 'a' } }, { id: 'good', sessionId: 's', body: 'b', target: { kind: 'diff', repo: 'r', path: 'a', anchor: { type: 'lines', quote: 'q', oldStart: 0, oldEnd: 1.5, newStart: 2, newEnd: Infinity } } }];
   const decoded = decodeAnchoredComments(values); assert.equal(decoded.length, 1); assert.equal(decoded[0].target.anchor.newStart, 2);
