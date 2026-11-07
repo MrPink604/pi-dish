@@ -1,4 +1,4 @@
-import type { ApiRequest } from './api-client';
+import { errorMessage, type ApiRequest } from './api-client';
 import type { HostDirectory } from './host-directory';
 import type { createHostConnections } from './host-connections';
 import type { createHostDiscovery } from './host-discovery';
@@ -136,7 +136,7 @@ export function createHostSettings(options: HostSettingsOptions) {
       descriptor = decodeHostDescriptor(data);
       if (!descriptor) throw new Error('no host descriptor');
     } catch (error) {
-      if (owns()) status(owner, `Could not reach that host: ${error instanceof Error ? error.message : String(error)}. A host on another origin must allowlist this one (allowedOrigins in its settings).`, true);
+      if (owns()) status(owner, `Could not reach that host: ${errorMessage(error)}. A host on another origin must allowlist this one (allowedOrigins in its settings).`, true);
       return;
     } finally {
       if (owns()) checking = false;

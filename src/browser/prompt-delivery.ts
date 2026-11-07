@@ -3,8 +3,7 @@ import { escapeHtml } from '../core/helper-format';
 import { sessionRefKey } from './helper-identity';
 import { splitSessionRefContext } from '../core/helper-refs';
 import { extractTextBlocks } from '../core/helper-content';
-import { sendJson } from './api-client';
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 type PromptStatus = 'sending' | 'queued' | 'accepted' | 'cancelling';
 interface PendingPrompt { key: string; message: string; element: Element | null; status: PromptStatus }
@@ -68,7 +67,7 @@ export function createPromptDelivery(options: {
     } catch (error) {
       if (disposed) return;
       if (prompt && row.clientId && pending.get(row.clientId) === prompt && previous) prompt.status = previous;
-      if (sessionState.ownsSelection(row.owner) && options.endpoint(row.owner.host).base === row.endpoint.base) { render(data); options.status(error instanceof Error ? error.message : String(error), 'error'); }
+      if (sessionState.ownsSelection(row.owner) && options.endpoint(row.owner.host).base === row.endpoint.base) { render(data); options.status(errorMessage(error), 'error'); }
     } finally { cancelling.delete(row); if (owns(row) && button instanceof HTMLButtonElement) button.disabled = false; }
   }
   function dispose() { if (disposed) return; disposed = true; generation++; events.abort(); pending.clear(); cancelling.clear(); }

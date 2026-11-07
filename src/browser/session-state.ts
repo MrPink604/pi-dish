@@ -58,10 +58,7 @@ export function createSessionState(options: SessionStateOptions) {
     return findSession(id)?.host || options.getSelfHostId();
   }
 
-  /**
-   * Stamping happens only in the state writers. Labels refresh on each write
-   * because the host can be relabelled while its sessions remain in state.
-   */
+  /** Labels refresh on each write because a host can be relabelled while its sessions stay. */
   function stampSessionHost(session: MutableSessionEntry, hostId = options.getSelfHostId()) {
     session.host = hostId || null;
     const label = options.getHostLabel(session.host);
@@ -81,9 +78,6 @@ export function createSessionState(options: SessionStateOptions) {
     return copy;
   }
 
-  /**
-   * Polls replace lists and fold fresh metadata into the detached selection.
-   */
   function setSessionLists(next: HostSessionLists, hostId?: string | null): SessionLists;
   function setSessionLists(next: readonly HostSessionLists[]): readonly SessionLists[];
   function setSessionLists(next: HostSessionLists | readonly HostSessionLists[], hostId = options.getSelfHostId()): SessionLists | readonly SessionLists[] {
@@ -113,19 +107,13 @@ export function createSessionState(options: SessionStateOptions) {
     return fanout ? published : merged;
   }
 
-  /**
-   * Selection returns a detached copy. The caller owns its broader view reset
-   * and rendering, including invalidation before that reset starts.
-   */
+  /** Returns a detached copy; the caller owns invalidation, view reset and rendering. */
   function setCurrentSession(id: string | null, host?: string | null): SessionEntry | null {
     const entry = findSession(id, host);
     currentSession = entry ? stampSessionHost({ ...entry }, entry.host || options.getSelfHostId()) : null;
     return currentSession;
   }
 
-  /**
-   * Local mutations patch both lists and the selected copy for one host.
-   */
   function applyPatch(id: string, patch: SessionMutationPatch | SessionActivityPatch, host: string | null) {
     const matches = (session: SessionEntry | null) => session !== null && session.id === id && (session.host || null) === (host || null);
     for (const list of [sessions.active, sessions.previous]) {
@@ -156,9 +144,7 @@ export function createSessionState(options: SessionStateOptions) {
     options.onCurrentChanged();
   }
 
-  // Every selection owns a new generation, including forced reloads and
-  // provisional spawns. Invalidate before the view reset: an id alone cannot
-  // prove that asynchronous work still owns the pane.
+  // Invalidate before the view reset: an id alone can't prove async work still owns the pane.
   function advanceSelection() { generation += 1; }
 
   function captureSelection(): SelectionOwner | null {

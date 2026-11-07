@@ -5,13 +5,7 @@ const browser_vm_js_1 = require("./browser-vm.js");
 const test_types_js_1 = require("./test-types.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { createHostDirectory } = context.PiDishBrowser;
+const { createHostDirectory } = (0, browser_vm_js_1.loadBrowser)();
 function fixture(initialCatalog = [{ base: '/hosts/peer', hostId: 'peer', token: 'fixture' }]) {
     const descriptors = new Map(), writes = [];
     const directory = createHostDirectory({ initialCatalog, descriptor: id => descriptors.get(id),

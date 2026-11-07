@@ -1,4 +1,4 @@
-import { record, finite } from '../core/helper-values';
+import { record, finite, text } from '../core/helper-values';
 export interface TranscriptTreeTool { readonly id: string; readonly name: string; readonly args: string }
 export interface TranscriptTreeNode {
   readonly id: string; readonly parentId: string | null; readonly type: string; readonly role: string; readonly isLeaf: boolean; readonly time: number;
@@ -6,7 +6,6 @@ export interface TranscriptTreeNode {
   readonly stopReason: string; readonly errorMessage: string; readonly isError: boolean; readonly tokensBefore: number; readonly toolCalls: readonly TranscriptTreeTool[];
 }
 export interface TranscriptTree { readonly nodes: readonly TranscriptTreeNode[]; readonly activePathIds: readonly string[]; readonly leafId: string | null }
-const text = (value: unknown) => typeof value === 'string' ? value : '';
 const count = (value: unknown) => finite(value) ? Math.max(0, Math.floor(value)) : 0;
 function millis(value: unknown): number {
   const ms = typeof value === 'string' ? Date.parse(value) : finite(value) ? value : NaN;

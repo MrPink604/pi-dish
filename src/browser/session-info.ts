@@ -1,9 +1,10 @@
-import type { ApiRequest, HostEndpoint, RequestOptions } from './api-client';
+import { errorMessage, jsonResponse, responseError, type ApiRequest, type HostEndpoint, type RequestOptions } from './api-client';
+import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner, SessionEntry } from './session-state';
 import type { SessionShare, PublishedPage } from './session-info-data';
 import { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './session-info-data';
 import { escapeHtml } from '../core/helper-format';
-import { formatTokSpeed, formatTokens, formatDuration, formatUsageCost, formatCacheStat, formatRuntime, formatRelativeTime } from './helper-format';
+import { countLabel, formatTokSpeed, formatTokens, formatDuration, formatUsageCost, formatCacheStat, formatRuntime, formatRelativeTime } from './helper-format';
 
 import { record } from '../core/helper-values';
 export function createSessionInfo(options: {
@@ -14,8 +15,7 @@ export function createSessionInfo(options: {
   const { document, sessionState } = options, location = document.defaultView!.location;
   const copyTextToClipboard = options.copy, setStatus = options.status, confirm = options.confirm, sessionRefFor = options.reference;
   const apiFetch = options.request, refreshSessions = options.refreshSessions, selectSession = options.selectSession;
-  const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing session info element: ' + id); return value as T; };
+  const element = requiredElement(document, 'session info');
   let disposed = false;
   let statsEndpoint: Readonly<HostEndpoint> | null = null;
   let statsEvents = new AbortController(), shareEvents = new AbortController(), pagesEvents = new AbortController(), processEvents = new AbortController(), artifactEvents = new AbortController();
@@ -32,19 +32,16 @@ export function createSessionInfo(options: {
   }
   function sessionSupports(session: SessionEntry | undefined, capability: string) { return session?.capabilities?.[capability] !== false; }
   async function json(host: HostEndpoint, path: string, init?: RequestOptions): Promise<unknown> {
-    const response = await apiFetch(host, path, init); const data: unknown = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
-    return data;
+    return jsonResponse(await apiFetch(host, path, init));
   }
   async function shareFor(host: HostEndpoint, id: string): Promise<SessionShare | null> {
     const response = await apiFetch(host, `/api/sessions/${encodeURIComponent(id)}/share`);
     if (response.status === 404) return null;
     const value: unknown = await response.json();
-    if (!response.ok) throw new Error(record(value) && typeof value.error === 'string' ? value.error : `HTTP ${response.status}`);
+    if (!response.ok) throw new Error(responseError(response, value));
     return decodeSessionShare(value);
   }
 
-  // --- Session stats modal ---
   let statsModalGeneration = 0;
   let statsModalOwner: SelectionOwner | null = null;
 
@@ -57,8 +54,7 @@ export function createSessionInfo(options: {
     if (disposed || !sessionState.currentSession) return;
     const owner = sessionState.captureSelection(); if (!owner) return;
     const sessionId = owner.id;
-    // Resolved now, while the selection is certainly this session — the stats
-    // response lands a round-trip later.
+    // Resolve now; the stats response lands after the selection may have changed.
     const host = endpoint(owner); if (!host) return;
     closeStatsModal(); statsEndpoint = host;
     const ref = sessionRefFor(sessionState.currentSession);
@@ -83,15 +79,10 @@ export function createSessionInfo(options: {
       .then(s => {
         if (!ownsStatsModal(owner, generation)) return;
         const cu = s.contextUsage || {};
-        // Session-wide effective speed: output tokens over the summed
-        // per-message response time (only messages with measurable timing).
+        // Only messages with measurable timing count toward speed.
         const avgSpeed = formatTokSpeed(s.genOutput, s.genMs);
-        // [key, value, copyable?] — copyable rows render the value as a
-        // click-to-copy button (paths, handy for jumping to the file in a shell).
         const rows: ([string, string, boolean?] | null)[] = [
           ['__section', 'Summary'],
-          // The pasteable handle for this session, click-to-copy like the paths
-          // below it — the modal-side twin of the sidebar row's context menu.
           ['Ref', ref, !!ref],
           ['Model', s.model || '—'],
           ['Thinking', s.thinkingLevel || '—'],
@@ -99,8 +90,7 @@ export function createSessionInfo(options: {
             ' / ' + (cu.contextWindow ? formatTokens(cu.contextWindow) : '—') +
             (cu.percent != null ? ` (${Math.round(cu.percent * 10) / 10}%)` : '')],
           ['Messages', `${s.userMessages} user · ${s.assistantMessages} assistant · ${s.toolCalls} tool calls`],
-          // Always shown, including zero: how often the context was rebuilt is
-          // read together with the Context row above it.
+          // Always shown, including zero.
           ['Compactions', String(s.compactions ?? 0)],
           ['__section', 'Performance'],
           s.responseTiming?.medianMs ? ['Response time', `${formatDuration(s.responseTiming.medianMs)} median · ${formatDuration(s.responseTiming.slowestMs)} slowest`] : null,
@@ -108,7 +98,7 @@ export function createSessionInfo(options: {
           ['__section', 'Tokens & cache'],
           ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
           s.reasoningTokens ? ['Reasoning', formatTokens(s.reasoningTokens)] : null,
-          ['Cache', `${formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)} · ${s.hardCacheMisses} hard ${s.hardCacheMisses === 1 ? 'miss' : 'misses'}`],
+          ['Cache', `${formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)} · ${countLabel(s.hardCacheMisses, 'hard miss', 'hard misses')}`],
           ['__section', 'Estimated spend'],
           ['Estimated total', formatUsageCost(s.costs?.total ?? s.cost, s.costUnavailable?.total)],
           ['Components', `input ${formatUsageCost(s.costs?.input, s.costUnavailable?.input)} · output ${formatUsageCost(s.costs?.output, s.costUnavailable?.output)} · cache read ${formatUsageCost(s.costs?.cacheRead, s.costUnavailable?.cacheRead)} · write ${formatUsageCost(s.costs?.cacheWrite, s.costUnavailable?.cacheWrite)}`],
@@ -136,9 +126,7 @@ export function createSessionInfo(options: {
       });
   }
 
-  // Public share link section of the stats modal. Fetches current state (404 =
-  // no share) and renders either a "Create share link" button or the existing
-  // link as a click-to-copy row plus a Revoke button.
+  // 404 means no share exists.
   async function loadShareSection(owner: SelectionOwner, generation: number): Promise<void> {
     if (!ownsStatsModal(owner, generation) || !statsEndpoint) return;
     const host = statsEndpoint, sequence = ++shareSequence, holder = document.getElementById('statsShare'); if (!holder) return;
@@ -193,10 +181,7 @@ export function createSessionInfo(options: {
     finally { if (messageCopies.get(button) === token) messageCopies.delete(button); }
   }
 
-  // Shared post-close handling (stats-modal close and the sidebar row ✕):
-  // re-fetch both lists (the session just moved from active to previous) and,
-  // when it was the selected session, re-select so the view flips to its
-  // inactive state (resume bar).
+  // After a close, re-fetch lists and re-select if selected so the view shows the resume bar.
   async function finishSessionClose(sessionId: string, host: string | null, owner: SelectionOwner | null) {
     if (disposed) return;
     if (!owner || sessionState.ownsSelection(owner)) setStatus('Session closed');
@@ -206,10 +191,7 @@ export function createSessionInfo(options: {
     }
   }
 
-  // Session-process controls in the stats modal. Restart is advertised only for
-  // a pi-dish-owned tmux pane or RPC child; the server replaces that exact
-  // placement so startup-only CLI code/settings refresh without creating a new
-  // tmux session or window.
+  // Restart is offered only for a pi-dish-owned tmux pane or RPC child, which the server replaces in place.
   function renderCloseSection(owner: SelectionOwner, generation: number) {
     if (!ownsStatsModal(owner, generation) || !statsEndpoint) return;
     processEvents.abort(); processEvents = new AbortController();
@@ -336,12 +318,8 @@ export function createSessionInfo(options: {
     } catch { if (current()) holder.innerHTML = ''; }
   }
 
-  // --- Shared artifacts (header 📦: everything published/shared from the
-  // session in one place) ---
-  // Pages the agent (or the file viewer's 🌐) published plus the session share
-  // link. The badge count keeps them discoverable without opening the stats
-  // modal; refreshed on session select, turn end (agents publish mid-turn),
-  // and after any publish/revoke in the UI.
+  // The badge count keeps published pages discoverable; refreshed on select, turn end
+  // (agents publish mid-turn) and after any publish/revoke.
   let sessionArtifacts: { pages: readonly PublishedPage[]; share: SessionShare | null } = { pages: [], share: null };
   let artifactsSeq = 0; // drops stale responses on fast session switches
 

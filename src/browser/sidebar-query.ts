@@ -1,4 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from './api-client';
 import { record } from '../core/helper-values';
 import { escapeHtml } from '../core/helper-format';
 import { decodeSavedFilters } from './display-preferences';
@@ -38,7 +38,7 @@ export function createSidebarQuery(options: {
     try {
       const response = await options.request(target, '/api/settings'), data: unknown = await response.json();
       if (disposed || generation !== settingsGeneration || options.host().base !== target.base) return;
-      if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : 'Failed to load filters');
+      if (!response.ok) throw new Error(responseError(response, data, 'Failed to load filters'));
       commitFilters(decodeSavedFilters(record(data) ? data.savedFilters : undefined)); refreshViews(false);
     } catch (error) { if (!disposed && generation === settingsGeneration && options.host().base === target.base) console.error('Failed to load saved filters:', error); }
   }
@@ -46,7 +46,7 @@ export function createSidebarQuery(options: {
     if (disposed) return; const generation = ++settingsGeneration, target = Object.freeze({ ...host });
     const response = await options.request(target, '/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ savedFilters: decodeSavedFilters(next) }) });
     const data: unknown = await response.json();
-    if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : 'save failed');
+    if (!response.ok) throw new Error(responseError(response, data, 'save failed'));
     if (disposed || generation !== settingsGeneration || options.host().base !== target.base) return;
     commitFilters(decodeSavedFilters(record(data) ? data.savedFilters : undefined)); refreshViews();
   }
@@ -55,7 +55,7 @@ export function createSidebarQuery(options: {
     if (disposed) return; const captured = query.trim(); if (!captured) return;
     const name = options.prompt('Name this filter:', ''); if (!name?.trim()) return; const trimmed = name.trim().slice(0, 60), next = filters.filter(filter => filter.name !== trimmed).concat([{ name: trimmed, query: captured }]);
     scopes.add(trimmed); store('pi-dish-active-scopes', [...scopes]); cancelDebounce(); options.invalidateLists(); options.busy(false); input.value = ''; query = ''; const generation = queryGeneration;
-    try { await persistFilters(next); } catch (error) { if (!disposed && generation === queryGeneration) options.alert('Could not save filter: ' + (error instanceof Error ? error.message : String(error))); }
+    try { await persistFilters(next); } catch (error) { if (!disposed && generation === queryGeneration) options.alert('Could not save filter: ' + errorMessage(error)); }
   }
   function renderChips() {
     if (disposed) return; chipEvents.abort(); chipEvents = new AbortController(); const { signal } = chipEvents;

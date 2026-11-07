@@ -1,12 +1,13 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { sameCapturedHost } from './api-client';
+import { errorMessage, responseError, sameCapturedHost, type ApiRequest, type HostEndpoint } from './api-client';
+import type { HostConnectionEvent } from './host-connections';
+import { requiredElement } from './dom';
 import type { HelperHost } from '../core/helper-types';
 import type { Costs, Tokens, UsageBucket, UsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry } from './shared-helper-types';
 import { escapeHtml } from '../core/helper-format';
-import { formatEstimatedCost, formatUsageCost, formatTokens, formatCacheStat, shortCwd } from './helper-format';
+import { countLabel, formatEstimatedCost, formatUsageCost, formatTokens, formatCacheStat, shortCwd } from './helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { mergeUsageSummaries, createFanoutRenderQueue, aggregateUsageWeekly, niceTicks, formatUsageDay, usageUnattributedCost, usageLimitsHtml, shortModelName } from './helper-usage';
-import { finite, record } from '../core/helper-values';
+import { finite } from '../core/helper-values';
 import { usageDisplayTokens } from '../core/helper-usage-math';
 import { decodeUsageSummary, decodeUsageLimits } from './usage-data';
 import { decodeCacheLifetimes, cacheLifetimesHtml } from './cache-lifetimes';
@@ -19,14 +20,12 @@ export function createUsageView(options: {
   root: HTMLElement; request: ApiRequest; storage: Pick<Storage, 'getItem' | 'setItem'>;
   fleetReady: () => Promise<unknown>; hosts: () => readonly UsageHost[]; host: (id: string | null) => UsageHost | null;
   multiHost: () => boolean; closeOtherViews: () => void;
-  connection: (host: UsageHost, event: 'blocked' | 'success' | 'failure', error?: unknown) => void;
+  connection: (host: UsageHost, event: HostConnectionEvent) => void;
   selectSession: (id: string, options: { host: string | null }) => Promise<unknown>;
 }) {
   const document = options.root.ownerDocument, window = document.defaultView!;
   const localStorage = options.storage, isMultiHost = options.multiHost;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => {
-    const value = document.getElementById(id); if (!value) throw new Error('Missing usage element: ' + id); return value as T;
-  };
+  const element = requiredElement(document, 'usage');
   let disposed = false, dataSequence = 0;
   let bodyEvents = new AbortController(), chartEvents = new AbortController(), detailEvents = new AbortController();
   const events = new AbortController();
@@ -160,9 +159,8 @@ export function createUsageView(options: {
     loadUsageView();
   }
 
-  // Each host answers by running its harness usage CLI, so limits load on
-  // open/Refresh only. A reload keeps the last rows and swaps each host's rows
-  // as it answers; hosts that stop answering drop out when the fan-out ends.
+  // Each host runs its harness usage CLI, so limits load on open/Refresh only;
+  // hosts that stop answering drop out when the fan-out ends.
   async function loadUsageLimits(): Promise<void> {
     const fetchSeq = ++limitsFetchSeq;
     const stale = () => fetchSeq !== limitsFetchSeq || !isUsageViewOpen();
@@ -276,10 +274,10 @@ export function createUsageView(options: {
           if (response.status === 401) { if (sameHost(host)) options.connection(host, 'blocked'); throw new Error('needs a token'); }
           const data: unknown = await response.json();
           if (!sameHost(host)) throw new Error('host connection changed');
-          if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
+          if (!response.ok) throw new Error(responseError(response, data));
           entries[i] = { hostId: host.hostId, hostLabel: hostDisplayLabel(host), summary: decodeUsageSummary(data, { hostId: host.hostId, label: hostDisplayLabel(host) }) };
           status[i] = 'ok'; options.connection(host, 'success');
-        } catch (error) { status[i] = 'error'; reasons[i] = error; if (!host.self && sameHost(host)) options.connection(host, 'failure', error); }
+        } catch (error) { status[i] = 'error'; reasons[i] = error; if (!host.self && sameHost(host)) options.connection(host, { type: 'failure', error }); }
         queueRender();
       }));
       if (!status.some(state => state === 'ok')) throw reasons.find(Boolean) || new Error('no hosts answered');
@@ -287,7 +285,7 @@ export function createUsageView(options: {
       if (indexing) usageTimer = setTimeout(() => { if (!stale()) void loadUsageView(); }, 1000);
     } catch (error) {
       if (stale()) return;
-      usageError = error instanceof Error ? error.message : String(error);
+      usageError = errorMessage(error);
       if (usageTab !== 'limits') renderActiveTab();
     }
   }
@@ -298,7 +296,6 @@ export function createUsageView(options: {
     return bucket.calls || 0;
   }
   const USAGE_METRIC_LABELS: Readonly<Record<UsageMetric, string>> = { cost: 'Estimated spend', tokens: 'Tokens', calls: 'Calls' };
-  // Costs split into uncached input and cached reads, then generation and cache writes.
   const USAGE_COST_BUCKETS = [
     ['input', 'Read', 'c1'],
     ['cacheRead', 'Cached read', 'c2'],
@@ -321,7 +318,6 @@ export function createUsageView(options: {
   function usageGroupValue(group: UsageGroup, metric: UsageMetric) {
     return usageModelValue({ cost: group.costs?.total, calls: group.calls, tokens: group.tokens }, metric);
   }
-  /** Chart palette slot for a model ref: the first five series, else "other". */
   function usageSlot(ref: string | undefined) {
     const index = (usageChart?.seriesRefs || []).indexOf(ref || '');
     return index >= 0 ? `s${index + 1}` : 'sother';
@@ -470,7 +466,7 @@ export function createUsageView(options: {
         ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', metric)}
         ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
       </div>
-      ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? '' : 's'} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing and ${d.unpricedModelCalls === 1 ? 'is' : 'are'} omitted.</div>` : ''}
+      ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${countLabel(d.unpricedModelCalls, 'call')} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing and ${d.unpricedModelCalls === 1 ? 'is' : 'are'} omitted.</div>` : ''}
     `;
     wireRangeButtons(body, owns);
     body.querySelectorAll<HTMLElement>('[data-sort]').forEach(button => button.addEventListener('click', () => {
@@ -689,7 +685,7 @@ export function createUsageView(options: {
       if (share > 0.004) segs.push(`<span class="sother" style="flex-grow:${(share * 1000).toFixed(1)}" title="Unattributed"></span>`);
       legend.push(`<span class="usage-legend-item"><i class="swatch sother"></i>Unattributed <b>${formatEstimatedCost(unattributed)}</b> <small>${Math.round(share * 100)}%</small></span>`);
     }
-    return `<section class="usage-section"><h4>Spend by bucket${unpriced ? ` <small class="usage-hint">${unpriced} unpriced call${unpriced === 1 ? '' : 's'} omitted</small>` : ''}</h4>
+    return `<section class="usage-section"><h4>Spend by bucket${unpriced ? ` <small class="usage-hint">${countLabel(unpriced, 'unpriced call')} omitted</small>` : ''}</h4>
       <div class="usage-share-bar">${segs.join('')}</div>
       <div class="usage-legend">${legend.join('')}</div></section>`;
   }
@@ -802,7 +798,7 @@ export function createUsageView(options: {
       for (const m of bucket.models || []) {
         if (!seriesRefs.includes(m.ref)) { otherV += usageModelValue(m, metric); extra++; }
       }
-      if (extra) rows.push(['sother', `other (${extra} model${extra > 1 ? 's' : ''})`, otherV]);
+      if (extra) rows.push(['sother', `other (${countLabel(extra, 'model')})`, otherV]);
     }
     for (const [cls, name, v] of rows) {
       const row = document.createElement('div');

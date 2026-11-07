@@ -1,4 +1,4 @@
-import type { ApiRequest, HostEndpoint, RequestOptions } from './api-client';
+import { errorMessage, jsonResponse, type ApiRequest, type HostEndpoint, type RequestOptions } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { createFileViews } from './file-views';
 import type { AnchoredComment, CommentDraft, CommentAnchor } from './anchored-comment-data';
@@ -6,13 +6,14 @@ import { decodeAnchoredComments, decodeCommentIndex } from './anchored-comment-d
 import { selectionTextAnchor, clearCommentMarks, markCommentQuote, positionCommentCard } from './comment-anchors';
 import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';
+import { requiredElement } from './dom';
 export function createAnchoredComments(options: {
   document: Document; sessionState: SessionState; views: ReturnType<typeof createFileViews>; request: ApiRequest;
   host: (id: string | null) => HostEndpoint | null; status: (message: string, type?: string) => void;
   loadPatch: (details: HTMLDetailsElement) => Promise<unknown>;
 }) {
   const { document, views } = options, window = document.defaultView!;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing comment element: ' + id); return value as T; };
+  const element = requiredElement(document, 'comment');
   interface ViewOwner { kind: 'file' | 'diff'; owner: SelectionOwner; endpoint: Readonly<HostEndpoint>; id: string; generation: number; path: string | null }
   interface Bubble { view: ViewOwner; draft: CommentDraft | null; editing: AnchoredComment | null; range: Range; busy: boolean }
   let disposed = false, mounted = false, refreshSequence = 0, focusSequence = 0;
@@ -44,10 +45,7 @@ export function createAnchoredComments(options: {
   async function request(view: ViewOwner, path: string, init?: RequestOptions): Promise<unknown> {
     const endpoint = options.host(view.owner.host);
     if (!owns(view) || !endpoint || endpoint.base !== view.endpoint.base) throw new Error('Comment view changed');
-    const response = await options.request({ ...view.endpoint, token: endpoint.token }, path, init);
-    const data: unknown = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
-    return data;
+    return jsonResponse(await options.request({ ...view.endpoint, token: endpoint.token }, path, init));
   }
   function position() {
     const entry = bubble; if (!ownsBubble(entry)) return;
@@ -130,7 +128,7 @@ export function createAnchoredComments(options: {
       if (!owns(view)) return;
       if (ownsBubble(entry)) { close(); window.getSelection()?.removeAllRanges(); }
       options.status(editing ? 'Comment updated' : 'Comment saved'); void refresh();
-    } catch (error) { if (ownsBubble(entry)) element('commentStatus').textContent = error instanceof Error ? error.message : String(error); }
+    } catch (error) { if (ownsBubble(entry)) element('commentStatus').textContent = errorMessage(error); }
     finally { entry.busy = false; if (ownsBubble(entry)) { element<HTMLButtonElement>('commentSendBtn').disabled = false; element<HTMLButtonElement>('commentDeleteBtn').disabled = false; } }
   }
   async function removeComment() {
@@ -142,7 +140,7 @@ export function createAnchoredComments(options: {
       await request(view, `/api/comments/${encodeURIComponent(editing.id)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: editing.sessionId }) });
       if (!owns(view)) return;
       if (ownsBubble(entry)) close(); options.status('Comment deleted'); void refresh();
-    } catch (error) { if (ownsBubble(entry)) { element('commentStatus').textContent = error instanceof Error ? error.message : String(error); disarmDelete(); } }
+    } catch (error) { if (ownsBubble(entry)) { element('commentStatus').textContent = errorMessage(error); disarmDelete(); } }
     finally { entry.busy = false; if (ownsBubble(entry)) { button.disabled = false; element<HTMLButtonElement>('commentSendBtn').disabled = false; } }
   }
   function set(value: unknown) {

@@ -1,6 +1,7 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { responseError, sameEndpoint, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 import { record } from '../core/helper-values';
+import { requiredElement } from './dom';
 export interface SessionSearchMatch { readonly index: number; readonly role: string }
 export interface SessionSearchOptions { readonly mode?: 'message' | 'any'; readonly closeIfEmpty?: boolean }
 export function decodeSessionSearch(value: unknown): readonly SessionSearchMatch[] {
@@ -15,9 +16,7 @@ export function createSessionSearch(options: {
   stopFollowing: () => void; updateJumpButton: (container: HTMLElement) => void;
 }) {
   const { document, sessionState } = options;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => {
-    const value = document.getElementById(id); if (!value) throw new Error('Missing search element: ' + id); return value as T;
-  };
+  const element = requiredElement(document, 'search');
   let query = '', matches: readonly SessionSearchMatch[] = [], pos = -1;
   let sequence = 0, disposed = false;
   let navigation: { owner: SelectionOwner; sequence: number; done: Promise<void> } | null = null;
@@ -50,23 +49,19 @@ export function createSessionSearch(options: {
   }
   function reset(): void { close(); navigation = null; }
   function toggle(): void { if (element('searchBar').style.display === 'none') open(); else close(); }
-  function sameEndpoint(owner: SelectionOwner, endpoint: HostEndpoint): boolean {
-    const current = options.endpoint(owner.host);
-    return !!current && current.base === endpoint.base && (current.token || '') === (endpoint.token || '');
-  }
   async function run(value: string, { mode = 'message', closeIfEmpty = false }: SessionSearchOptions = {}): Promise<void> {
     const owner = sessionState.captureSelection();
     const resolved = owner && options.endpoint(owner.host);
     if (disposed || !owner || !resolved) return;
     const endpoint = Object.freeze({ ...resolved }), seq = ++sequence;
-    const owns = () => !disposed && seq === sequence && sessionState.ownsSelection(owner) && sameEndpoint(owner, endpoint);
+    const owns = () => !disposed && seq === sequence && sessionState.ownsSelection(owner) && sameEndpoint(options.endpoint(owner.host), endpoint);
     updateCount('searching…');
     try {
       const params = new URLSearchParams({ q: value }); if (mode !== 'message') params.set('mode', mode);
       const response = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/search?${params}`);
       const data: unknown = await response.json();
       if (!owns()) return;
-      if (!response.ok || (record(data) && typeof data.error === 'string' && data.error)) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
+      if (!response.ok || (record(data) && typeof data.error === 'string' && data.error)) throw new Error(responseError(response, data));
       query = value;
       const decoded = decodeSessionSearch(data);
       matches = options.focusMode() ? decoded.filter(match => match.role !== 'toolResult') : decoded;
@@ -82,7 +77,7 @@ export function createSessionSearch(options: {
     const resolved = owner && options.endpoint(owner.host);
     if (disposed || !owner || !match || !resolved) return;
     const endpoint = Object.freeze({ ...resolved });
-    const owns = () => !disposed && seq === sequence && sessionState.ownsSelection(owner) && sameEndpoint(owner, endpoint);
+    const owns = () => !disposed && seq === sequence && sessionState.ownsSelection(owner) && sameEndpoint(options.endpoint(owner.host), endpoint);
     if (navigation?.sequence === seq) {
       const pending = navigation;
       await pending.done;

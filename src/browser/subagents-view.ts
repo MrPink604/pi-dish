@@ -1,5 +1,5 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { sendJson } from './api-client';
+import { errorMessage, responseError, sameEndpoint, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
+import { requiredElement } from './dom';
 import type { SelectionOwner, SessionState } from './session-state';
 import { formatRelativeTime } from './helper-format';
 import { record } from '../core/helper-values';
@@ -21,13 +21,7 @@ export function createSubagentsView(options: {
   details: ReturnType<typeof createResponseDetails>;
 }) {
   const document = options.root.ownerDocument, sessionState = options.sessionState;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => {
-    const value = document.getElementById(id); if (!value) throw new Error('Missing subagents view element: ' + id); return value as T;
-  };
-  const message = (error: unknown) => error instanceof Error ? error.message : String(error);
-  function failure(data: unknown, status: number) {
-    return record(data) && typeof data.error === 'string' && data.error ? data.error : `HTTP ${status}`;
-  }
+  const element = requiredElement(document, 'subagents view');
   let disposed = false;
   let viewOwner: SelectionOwner | null = null;
   let viewEndpoint: HostEndpoint | null = null;
@@ -58,11 +52,7 @@ export function createSubagentsView(options: {
     peek: () => peekTarget ? { host: viewOwner?.host ?? null, model: peekTarget.model || null } : null,
   });
 
-  function sameEndpoint(host: string | null, endpoint: HostEndpoint | null): boolean {
-    const current = options.endpoint(host);
-    return !!endpoint && !!current && current.base === endpoint.base && (current.token || '') === (endpoint.token || '');
-  }
-  const owns = () => !disposed && !!viewOwner && sessionState.ownsSelection(viewOwner) && sameEndpoint(viewOwner.host, viewEndpoint);
+  const owns = () => !disposed && !!viewOwner && sessionState.ownsSelection(viewOwner) && sameEndpoint(options.endpoint(viewOwner.host), viewEndpoint);
   const isOpen = () => !disposed && options.root.classList.contains('subagents-open');
 
   function findNode(node: LineageNode | null, match: (session: LineageSession) => boolean): LineageNode | null {
@@ -96,7 +86,7 @@ export function createSubagentsView(options: {
     void loadLineage();
     focusPendingAgent();
     // Repoll while the viewed session can still gain relatives (active or the
-    // catalog is still indexing) — the rule the tree view has always had.
+    // catalog is still indexing).
     pollTimer = setInterval(() => {
       if (!owns() || loadInFlight) return;
       if (!sessionState.currentSession?.isActive && !lastIndexing) return;
@@ -125,7 +115,7 @@ export function createSubagentsView(options: {
       const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
       const data: unknown = await res.json();
       if (!current()) return;
-      if (!res.ok) throw new Error(failure(data, res.status));
+      if (!res.ok) throw new Error(responseError(res, data));
       lastIndexing = record(data) && data.indexing === true;
       lineage = decodeSessionLineage(data);
       renderTree();
@@ -319,7 +309,7 @@ export function createSubagentsView(options: {
       const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(target.id)}/messages${query}`);
       const data: unknown = await res.json();
       if (stale()) return;
-      if (!res.ok) throw new Error(failure(data, res.status));
+      if (!res.ok) throw new Error(responseError(res, data));
       const payload = record(data) ? data : {};
       const messages = Array.isArray(payload.messages) ? payload.messages : [];
       const trace = element('subagentsTrace');
@@ -350,7 +340,7 @@ export function createSubagentsView(options: {
         trace.replaceChildren();
         const failure = document.createElement('div');
         failure.className = 'subagents-state';
-        failure.textContent = `Trace unavailable: ${message(error)}`;
+        failure.textContent = `Trace unavailable: ${errorMessage(error)}`;
         trace.appendChild(failure);
       }
     }
@@ -372,7 +362,7 @@ export function createSubagentsView(options: {
       status.textContent = kind === 'steer' ? 'Steered' : kind === 'followUp' ? 'Follow-up queued' : 'Sent';
     } catch (error) {
       if (!owns() || seq !== peekSeq || peekTarget !== target) return;
-      status.textContent = message(error);
+      status.textContent = errorMessage(error);
     }
   }
 
@@ -381,7 +371,7 @@ export function createSubagentsView(options: {
     const id = peekTarget.id, owner = viewOwner, endpoint = viewEndpoint;
     close();
     if (!sessionState.findSession(id, owner.host)) await options.loadPrevious();
-    if (disposed || !sessionState.ownsSelection(owner) || !sameEndpoint(owner.host, endpoint)) return;
+    if (disposed || !sessionState.ownsSelection(owner) || !sameEndpoint(options.endpoint(owner.host), endpoint)) return;
     if (!sessionState.findSession(id, owner.host)) { options.status('Related session is not available yet', 'error'); return; }
     await options.selectSession(id, { host: owner.host });
   }

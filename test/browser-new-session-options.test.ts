@@ -1,17 +1,11 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import { present } from './test-types.js';
 import type { NewSessionConfigScope } from '../src/browser/new-session-options.js';
 import type { HostTarget } from '../src/browser/api-client.js';
 import { DOMParser } from '@xmldom/xmldom';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = { URL, encodeURIComponent };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { createNewSessionConfigPreview, decodeHarnessConfigPreview } = context.PiDishBrowser;
+const { createNewSessionConfigPreview, decodeHarnessConfigPreview } = loadBrowser({ encodeURIComponent });
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 interface Deferred<T> { promise: Promise<T>; resolve(value: T): void }
 function deferred<T>(): Deferred<T> {

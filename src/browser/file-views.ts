@@ -1,4 +1,5 @@
-import type { ApiRequest, HostEndpoint, RequestOptions } from './api-client';
+import { errorMessage, jsonResponse, responseError, type ApiRequest, type HostEndpoint, type RequestOptions } from './api-client';
+import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { PublishedPage } from './session-info-data';
 import { decodePublishedPages } from './session-info-data';
@@ -7,7 +8,6 @@ import { renderDiffViewHtml } from './file-view-render';
 import { renderDiffHtml } from './helper-markdown';
 import { escapeHtml } from '../core/helper-format';
 import { shortCwd } from './helper-format';
-import { record } from '../core/helper-values';
 export function createFileViews(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
   markdown: (text: string) => string; highlight: (root: HTMLElement) => void; copy: (text: string) => Promise<unknown>;
@@ -15,8 +15,7 @@ export function createFileViews(options: {
   closeComments: () => void; clearComments: () => void; refreshComments: () => void; markComments: () => void;
 }) {
   const { document, sessionState } = options;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing file view element: ' + id); return value as T; };
-  const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
+  const element = requiredElement(document, 'file view');
   interface View { owner: SelectionOwner | null; endpoint: Readonly<HostEndpoint> | null; sessionId: string | null; generation: number }
   const file: View & { raw: string | null; path: string | null; relPath: string | null } = { owner: null, endpoint: null, sessionId: null, generation: 0, raw: null, path: null, relPath: null };
   const diff: View = { owner: null, endpoint: null, sessionId: null, generation: 0 };
@@ -43,11 +42,6 @@ export function createFileViews(options: {
     const current = options.host(owner.host);
     if (disposed || !current || current.base !== endpoint.base) return Promise.reject(new Error('Host connection changed; reopen this view'));
     return options.request({ ...endpoint, token: current.token }, path, init);
-  }
-  async function json(response: Response): Promise<unknown> {
-    const value: unknown = await response.json().catch(() => null);
-    if (!response.ok) throw new Error(record(value) && typeof value.error === 'string' ? value.error : `HTTP ${response.status}`);
-    return value;
   }
   function closeFile() {
     file.generation++; file.owner = null; file.endpoint = null; file.sessionId = null; file.raw = null; file.path = null; file.relPath = null;
@@ -80,10 +74,10 @@ export function createFileViews(options: {
     revoke.addEventListener('click', () => {
       if (!current() || revoke.disabled) return;
       revoke.disabled = true;
-      void request(owner, endpoint, `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' }).then(json).then(() => {
+      void request(owner, endpoint, `/api/pages/${encodeURIComponent(page.token)}`, { method: 'DELETE' }).then(jsonResponse).then(() => {
         if (!current()) return;
         pageSequence++; clearPage(); options.refreshArtifacts(owner);
-      }).catch(e => { if (current()) { revoke.disabled = false; options.status('Failed to unpublish: ' + errorText(e), 'error'); } });
+      }).catch(e => { if (current()) { revoke.disabled = false; options.status('Failed to unpublish: ' + errorMessage(e), 'error'); } });
     }, { signal: events.signal });
   }
   async function publish() {
@@ -94,11 +88,11 @@ export function createFileViews(options: {
     const sequence = ++pageSequence; pageEvents.abort(); button.disabled = true;
     const current = () => ownsFile(id, generation) && pageSequence === sequence;
     try {
-      const value = await json(await request(owner, endpoint, '/api/pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, sessionId: id, title: path.split('/').pop(), renderer: 'file' }) }));
+      const value = await jsonResponse(await request(owner, endpoint, '/api/pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, sessionId: id, title: path.split('/').pop(), renderer: 'file' }) }));
       if (!current()) return;
       const page = decodePublishedPages([value])[0]; if (!page) throw new Error('Invalid published page');
       button.disabled = false; renderPage(page, id, generation); options.refreshArtifacts(owner);
-    } catch (e) { if (current()) { button.disabled = false; if (previousPage) renderPage(previousPage, id, generation); options.status('Publish failed: ' + errorText(e), 'error'); } }
+    } catch (e) { if (current()) { button.disabled = false; if (previousPage) renderPage(previousPage, id, generation); options.status('Publish failed: ' + errorMessage(e), 'error'); } }
   }
   function copy(button: HTMLElement) {
     const { sessionId: id, generation, raw } = file;
@@ -120,13 +114,13 @@ export function createFileViews(options: {
     const body = element('fileViewBody'), title = element('fileViewTitle'), path = element('fileViewPath'), rawLink = element<HTMLAnchorElement>('fileViewRaw');
     title.textContent = mention.replace(/:\d+(?::\d+)?$/, '').split('/').pop() || ''; path.textContent = ''; path.title = ''; body.innerHTML = '<div class="loading">Loading…</div>';
     try {
-      const data = decodeFilePreview(await json(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(mention)}`)));
+      const data = decodeFilePreview(await jsonResponse(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/file?path=${encodeURIComponent(mention)}`)));
       if (!ownsFile(id, generation)) return;
       title.textContent = data.path.split('/').pop() || ''; file.path = data.path; file.relPath = data.relPath;
       rawLink.href = endpoint.base + `/api/sessions/${encodeURIComponent(id)}/file/content?path=${encodeURIComponent(data.path)}&v=${data.mtime}-${data.size}`;
       rawLink.style.display = ''; element('fileViewPublish').style.display = '';
       const sequence = pageSequence;
-      void request(owner, endpoint, '/api/pages').then(json).then(value => {
+      void request(owner, endpoint, '/api/pages').then(jsonResponse).then(value => {
         if (!ownsFile(id, generation) || file.path !== data.path || sequence !== pageSequence) return;
         const page = decodePublishedPages(value).find(page => page.root === data.path); if (page) renderPage(page, id, generation);
       }).catch(() => {});
@@ -141,7 +135,7 @@ export function createFileViews(options: {
       if (ext === 'md' || ext === 'markdown') body.innerHTML = `<div class="markdown-body">${options.markdown(data.content)}</div>`;
       else body.innerHTML = `<div class="markdown-body"><pre><code${ext ? ` class="language-${escapeHtml(ext)}"` : ''}${data.content.length > 80000 ? ' data-highlighted="skip"' : ''}>${escapeHtml(data.content)}</code></pre></div>`;
       options.highlight(body); options.refreshComments();
-    } catch (e) { if (ownsFile(id, generation)) body.innerHTML = `<div class="error">${escapeHtml(errorText(e))}</div>`; }
+    } catch (e) { if (ownsFile(id, generation)) body.innerHTML = `<div class="error">${escapeHtml(errorMessage(e))}</div>`; }
   }
   async function openDiff() { if (disposed || !sessionState.currentSession) return; closeFile(); element('sessionView').classList.add('diff-open'); element('btnDiff').classList.add('active'); await loadDiff(); }
   function toggleDiff() { if (isOpen('diff')) closeDiff(); else void openDiff(); }
@@ -151,7 +145,7 @@ export function createFileViews(options: {
     const { owner, endpoint, id, generation } = captured; diffEvents.abort(); diffEvents = new AbortController();
     const body = element('diffViewBody'); options.closeComments(); body.innerHTML = '<div class="loading">Loading…</div>';
     try {
-      const data = decodeDiffView(await json(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/diff`)));
+      const data = decodeDiffView(await jsonResponse(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/diff`)));
       if (!ownsDiff(id, generation)) return;
       element('diffViewRoot').textContent = shortCwd(data.root); body.innerHTML = renderDiffViewHtml(data);
       body.querySelectorAll<HTMLDetailsElement>('details.diff-file').forEach(details => {
@@ -159,7 +153,7 @@ export function createFileViews(options: {
         details.addEventListener('toggle', () => { if (ownsDiff(id, generation) && body.contains(details) && details.open) void loadPatch(details); }, { signal: diffEvents.signal });
       });
       options.refreshComments();
-    } catch (e) { if (ownsDiff(id, generation)) body.innerHTML = `<div class="error">${escapeHtml(errorText(e))}</div>`; }
+    } catch (e) { if (ownsDiff(id, generation)) body.innerHTML = `<div class="error">${escapeHtml(errorMessage(e))}</div>`; }
   }
   async function loadPatch(details: HTMLDetailsElement) {
     const patch = details.querySelector<HTMLElement>('.diff-patch[data-deferred="1"]');
@@ -175,13 +169,13 @@ export function createFileViews(options: {
       const value: unknown = await response.json(); const data = decodeDiffPatch(value);
       if (!current()) return;
       if (response.status === 409 && data.stale) { patch.innerHTML = '<div class="diff-file-note">Working tree changed — refreshing the diff…</div>'; await loadDiff(); return; }
-      if (!response.ok) throw new Error(record(value) && typeof value.error === 'string' ? value.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(responseError(response, value));
       patch.innerHTML = renderDiffHtml(data.patch) + (data.truncated ? '<div class="diff-file-note">… patch truncated</div>' : '');
       delete patch.dataset.deferred; delete patch.dataset.loading; owned.request = null; options.markComments();
     } catch (e) {
       if (!current()) return;
       delete patch.dataset.loading; owned.request = null;
-      patch.innerHTML = `<div class="diff-file-note diff-patch-missing">Could not load patch: ${escapeHtml(errorText(e))}. Collapse and reopen to retry.</div>`;
+      patch.innerHTML = `<div class="diff-file-note diff-patch-missing">Could not load patch: ${escapeHtml(errorMessage(e))}. Collapse and reopen to retry.</div>`;
     }
   }
   return { openFile, closeFile, publish, copy, openDiff, closeDiff, toggleDiff, loadDiff, loadPatch, ownsFile, ownsDiff,

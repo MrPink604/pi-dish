@@ -1,7 +1,8 @@
 import type { VendorAttributes } from './browser-assets';
 import type { Terminal, ITerminalOptions, ITheme } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
-import type { HostEndpoint } from './api-client';
+import { sameEndpoint, type HostEndpoint } from './api-client';
+import { requiredElement } from './dom';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import { shortCwd, tmuxPrefixSeq } from './helper-format';
 import { sessionKey } from './helper-identity';
@@ -35,12 +36,12 @@ export function createTerminalController(options: {
   theme: () => ITheme; applySize: (panel: HTMLElement) => void; confirm: (message: string) => boolean;
 }) {
   const { document, storage, sessionState } = options, window = document.defaultView!;
-  const element = (id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing terminal element: ' + id); return value; };
+  const element = requiredElement(document, 'terminal');
   let state: TerminalState | null = null, disposed = false, generation = 0, ctrlLatch = false;
   let assets: Promise<void> | null = null, cancelOpen: (() => void) | null = null;
   const events = new AbortController(); let keybarMounted = false;
   function sameHost(owner: SelectionOwner, endpoint: Readonly<HostEndpoint>) {
-    const host = options.host(owner.host); return !!host && host.base === endpoint.base && (host.token || '') === (endpoint.token || '');
+    return sameEndpoint(options.host(owner.host), endpoint);
   }
   function owns(value: TerminalState): boolean { return !disposed && value === state && sessionState.ownsSelection(value.owner) && sameHost(value.owner, value.endpoint); }
   function modeKey(id: string, host = sessionState.sessionHostId(id)): string { return 'pi-dish-terminal-mode-' + sessionKey(host, id); }

@@ -1,10 +1,9 @@
+import { countLabel } from './helper-format';
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
-import { record } from '../core/helper-values';
+import { record, text } from '../core/helper-values';
 
-// The subagents viewer: one header link sized by the family count, opening a
-// recursive tree of the session's whole family (native subagent edges plus
-// pi-dish launch provenance), assembled server-side by /api/sessions/:id/lineage.
+// The family tree is assembled server-side by /api/sessions/:id/lineage.
 export interface LineageCapabilities { readonly prompt: boolean; readonly steer: boolean; readonly followUp: boolean; }
 export interface LineageSession {
   readonly id: string; readonly name: string; readonly cwd: string;
@@ -27,7 +26,6 @@ export interface SessionLineage {
 }
 const EMPTY_LINEAGE: SessionLineage = { session: null, tree: null, members: 0, truncated: false };
 
-const text = (value: unknown) => typeof value === 'string' ? value : '';
 
 function decodeLineageSession(value: unknown): LineageSession | null {
   if (!record(value) || typeof value.id !== 'string' || !value.id) return null;
@@ -136,7 +134,7 @@ export function createSessionRelations(options: {
     const link = document.createElement('button');
     link.type = 'button';
     link.className = 'session-relation-chip session-relation-tree-link';
-    link.title = `View the session family tree (${others} related session${others === 1 ? '' : 's'})`;
+    link.title = `View the session family tree (${countLabel(others, 'related session')})`;
     const icon = document.createElement('span');
     icon.className = 'session-relation-kind';
     icon.textContent = '⎇';
@@ -150,11 +148,8 @@ export function createSessionRelations(options: {
     el.appendChild(link);
   }
 
-  // The family keeps growing while the session runs, and the chip is the
-  // glanceable count: repoll on the takeover view's cadence so spawned
-  // subagents appear without a reselect or refresh. Stands down once the
-  // session can no longer gain relatives (ended, catalog indexed) and while
-  // the takeover polls for its own — hidden-header — copy.
+  // Repoll so spawned subagents appear without a reselect; stands down once the session
+  // can't gain relatives and while the takeover polls its own copy.
   function startPoll(owner: SelectionOwner, endpoint: HostEndpoint) {
     clearInterval(pollTimer);
     pollTimer = setInterval(() => {

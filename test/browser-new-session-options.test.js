@@ -6,13 +6,7 @@ const test_types_js_1 = require("./test-types.js");
 const xmldom_1 = require("@xmldom/xmldom");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = { URL, encodeURIComponent };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { createNewSessionConfigPreview, decodeHarnessConfigPreview } = context.PiDishBrowser;
+const { createNewSessionConfigPreview, decodeHarnessConfigPreview } = (0, browser_vm_js_1.loadBrowser)({ encodeURIComponent });
 const plain = (value) => JSON.parse(JSON.stringify(value));
 function deferred() {
     let resolve;

@@ -1,4 +1,5 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { createSessionApi, errorMessage, jsonResponse, readJson, responseError, type ApiRequest, type HostEndpoint } from './api-client';
+import type { HostConnectionEvent } from './host-connections';
 import type { HelperHost } from '../core/helper-types';
 import type { SessionState } from './session-state';
 import type { CatalogModel } from '../core/session-api';
@@ -6,11 +7,10 @@ import type { HarnessRow } from './harness-discovery';
 import type { CwdAutocompleteOptions, createCwdAutocomplete } from './cwd-autocomplete';
 import type { Routine, RoutineForm, RoutineInvocation } from './routines-data';
 import { decodeRoutine, decodeRoutineList, decodeRoutineInvocations } from './routines-data';
-import { createSessionApi } from './api-client';
 import { modelSelectOptionsHtml as selectOptions, modelHiddenNote } from './model-catalog';
 import { NS_THINKING_LABELS } from './new-session-options';
 import { escapeHtml, truncate } from '../core/helper-format';
-import { formatRelativeTime, shortCwd, formatDuration } from './helper-format';
+import { countLabel, formatRelativeTime, shortCwd, formatDuration } from './helper-format';
 import { sessionKey, hostDisplayLabel, hostSupportsCapability } from './helper-identity';
 import { createFanoutRenderQueue } from './helper-usage';
 import { record } from '../core/helper-values';
@@ -20,7 +20,7 @@ export function createRoutinesView(options: {
   hosts: () => readonly RoutineHost[]; effectiveHosts: () => readonly RoutineHost[]; host: (id: string | null) => RoutineHost | null;
   fleetReady: () => Promise<unknown>; config: () => Record<string, unknown>; multiHost: () => boolean;
   hostChip: (id: string | null) => string; closeOtherViews: () => void;
-  connection: (host: RoutineHost, event: 'success' | 'blocked' | 'failure', error?: unknown) => void;
+  connection: (host: RoutineHost, event: HostConnectionEvent) => void;
   autocomplete: (options: Pick<CwdAutocompleteOptions, 'input' | 'dropdown' | 'known' | 'onPick' | 'onBlur'> & { hostId: () => string | null }) => ReturnType<typeof createCwdAutocomplete>;
   copy: (text: string) => Promise<unknown>; status: (message: string) => void; confirm: (message: string) => boolean;
   loadPrevious: () => Promise<unknown>; selectSession: (id: string, options: { host: string | null }) => Promise<unknown>;
@@ -42,7 +42,6 @@ export function createRoutinesView(options: {
   const createCwdAutocomplete = options.autocomplete;
   const modelSelectOptionsHtml = (models: readonly CatalogModel[]) => selectOptions(models, escapeHtml);
   const field = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T | null;
-  const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
   let disposed = false;
   let viewGeneration = 0, formGeneration = 0, harnessRequest = 0, modelRequest = 0;
   let listEvents = new AbortController(), formEvents = new AbortController(), versionEvents = new AbortController(), invocationEvents = new AbortController();
@@ -66,10 +65,6 @@ export function createRoutinesView(options: {
     disposeRoutineCwdAutocomplete(); invocationToken = null; mutationToken = null; routineBusy = false;
     clearTimeout(routineDeleteArmTimer); routineDeleteArmed = false;
   }
-  const readJson = (response: Response): Promise<unknown> => response.json().catch(() => ({}));
-  function errorText(data: unknown, status: number) { return record(data) && typeof data.error === 'string' ? data.error : `HTTP ${status}`; }
-
-
   let routinesList: Routine[] = [];
   let routinesHostErrors: string[] = [];
   let routinesHostPending: string[] = [];
@@ -217,7 +212,7 @@ export function createRoutinesView(options: {
       try {
         const res = await apiFetch(host, '/api/routines', { timeoutMs: 20000 });
         if (res.status === 401) { if (sameHost(host.hostId, host)) options.connection(host, 'blocked'); throw new Error('needs a token'); }
-        if (!res.ok) throw new Error(errorText(await readJson(res), res.status));
+        if (!res.ok) throw new Error(responseError(res, await readJson(res)));
         const data: unknown = await res.json();
         if (!sameHost(host.hostId, host)) throw new Error('host connection changed');
         entries[i] = decodeRoutineList(data, { ...host, label: hostDisplayLabel(host) });
@@ -226,7 +221,7 @@ export function createRoutinesView(options: {
       } catch (e) {
         status[i] = 'error';
         reasons[i] = e;
-        if (!host.self && sameHost(host.hostId, host)) options.connection(host, 'failure', e);
+        if (!host.self && sameHost(host.hostId, host)) options.connection(host, { type: 'failure', error: e });
       }
       queueRender();
     }));
@@ -294,7 +289,7 @@ export function createRoutinesView(options: {
         </div>
         <div class="rt-row-sched">${routineScheduleLine(r)}</div>
         <div class="rt-row-meta">${escapeHtml(r.mode === 'continue' ? 'continue' : 'one-shot')} · on busy ${escapeHtml(r.onBusy)}</div>
-        <div class="rt-row-last">${lastLine}<span class="rt-count">${count} run${count === 1 ? '' : 's'}</span></div>
+        <div class="rt-row-last">${lastLine}<span class="rt-count">${countLabel(count, 'run')}</span></div>
       </div>`;
     }).join('');
 
@@ -314,7 +309,6 @@ export function createRoutinesView(options: {
     });
   }
 
-  /** Blank the detail pane's per-routine state before a new selection or a create. */
   function resetRoutineDetail(): void {
     routineFormError = '';
     routineNotice = '';
@@ -360,8 +354,8 @@ export function createRoutinesView(options: {
     if (detail) detail.innerHTML = '<div class="usage-state">Loading routine…</div>';
     try {
       const res = await apiFetch(owner.endpoint, `/api/routines/${encodeURIComponent(id)}`);
-      if (!res.ok) throw new Error(errorText(await readJson(res), res.status));
-      const data = await readJson(res);
+      if (!res.ok) throw new Error(responseError(res, await readJson(res)));
+      const data: unknown = await res.json();
       if (!ownsForm(owner)) return;
       routineSelected = decodeRoutine(data, owner.endpoint);
       renderRoutineDetail();
@@ -389,16 +383,11 @@ export function createRoutinesView(options: {
     renderRoutineDetail();
   }
 
-  /** The host the detail pane's calls go to — the routine's, or the create pick. */
   function routineFormHostId() {
     return routineCreating ? routineCreateHostId : (routineSelected?.host ?? routineSelectedHostId);
   }
 
-  /**
-   * Known cwds for the form's host, taken from the client's own session lists.
-   * The new-session takeover's /api/cwds cache belongs to *its* host; deriving
-   * from `sessions` keeps a peer's routine from suggesting this machine's paths.
-   */
+  /** Derived from session lists, not /api/cwds (another host's cache), so a peer's routine never suggests this machine's paths. */
   function routineKnownCwds() {
     const hostId = routineFormHostId();
     const seen = new Set<string>();
@@ -444,7 +433,6 @@ export function createRoutinesView(options: {
     return models;
   }
 
-  /** Current form values, normalized to the wire shape the routes take. */
   function readRoutineForm(): RoutineForm | null {
     const detail = document.getElementById('routinesDetail');
     if (!detail || !detail.querySelector('#rtName')) return null;
@@ -866,7 +854,7 @@ export function createRoutinesView(options: {
       const res = await apiFetch(owner.endpoint,
         `/api/routines/${encodeURIComponent(selected.id)}/invocations?${params}`, { timeoutMs: 20000 });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await readJson(res);
+      const data: unknown = await res.json();
       if (!ownsForm(owner) || invocationToken !== token) return;
       const decoded = decodeRoutineInvocations(data), list = decoded.invocations;
       routineInvocations = reset ? list : routineInvocations.concat(list);
@@ -1040,8 +1028,7 @@ export function createRoutinesView(options: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(routineFormBody(values)),
       });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(errorText(data, res.status));
+      const data = await jsonResponse(res);
       if (!ownsForm(owner) || mutationToken !== token) return;
       const saved = decodeRoutine(data, owner.endpoint);
       const edited = readRoutineForm();
@@ -1083,12 +1070,12 @@ export function createRoutinesView(options: {
       if (!res.ok) {
         // 409 busy / 429 rate-limited carry their own useful shapes.
         const extra = res.status === 429 && record(data) && typeof data.retryAfterSec === 'number' ? ` (retry in ${data.retryAfterSec}s)` : '';
-        throw new Error(errorText(data, res.status) + extra);
+        throw new Error(responseError(res, data) + extra);
       }
       if (!ownsForm(owner) || mutationToken !== token) return;
       setRoutineNotice('Run started.');
       await loadRoutineInvocations({ reset: true });
-      if (ownsForm(owner)) void loadRoutinesView(); // the row's run count and last-run line just changed
+      if (ownsForm(owner)) void loadRoutinesView();
     } catch (e) {
       if (ownsForm(owner) && mutationToken === token) setRoutineFormError(errorMessage(e));
     } finally {
@@ -1124,10 +1111,7 @@ export function createRoutinesView(options: {
     if (!mutation) return;
     const { token } = mutation;
     try {
-      const res = await apiFetch(mutation.owner.endpoint,
-        `/api/routines/${encodeURIComponent(selected.id)}`, { method: 'DELETE' });
-      const data = await readJson(res);
-      if (!res.ok) throw new Error(errorText(data, res.status));
+      await jsonResponse(await apiFetch(mutation.owner.endpoint, `/api/routines/${encodeURIComponent(selected.id)}`, { method: 'DELETE' }));
       if (!ownsForm(mutation.owner) || mutationToken !== token) return;
       stopRoutineInvocationPoll();
       routineSelected = null;

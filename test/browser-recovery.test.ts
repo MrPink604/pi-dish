@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeRecoveryMode, decodeRecoveryReport } = context.PiDishBrowser;
+const { decodeRecoveryMode, decodeRecoveryReport } = loadBrowser();
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 
 test('recovery wire data narrows rows and mode values without borrowing malformed payloads', () => {

@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeFilePreview, decodeDiffView, renderDiffViewHtml } = context.PiDishBrowser;
+const { decodeFilePreview, decodeDiffView, renderDiffViewHtml } = loadBrowser();
 test('file and diff wire decoding rejects missing file paths and narrows nested fields', () => {
   assert.throws(() => decodeFilePreview({ content: 'text' }), /Invalid file preview/);
   const file = decodeFilePreview({ path: '/tmp/a', content: {}, size: Infinity, image: { url: '/image', data: {} } });

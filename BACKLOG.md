@@ -159,13 +159,13 @@ tracked separately in the checkpoint log.
 | `session-controls.ts` | Header menu lifetimes, owned rename/model/thinking mutations and export resources |
 | `composer-speech.ts`, `composer-notes.ts` | Dictation permission/recording/transcription ownership and persistent composer notes |
 | `composer-drafts.ts`, `composer-images.ts` | Host-qualified drafts/history, spawn migration and asynchronous image batches |
-| `composer-autocomplete.ts`, `composer-autocomplete-data.ts`, `session-references.ts` | Composer query/menu ownership and typed session references |
+| `composer-autocomplete.ts`, `session-references.ts` | Composer query/menu ownership and typed session references |
 | `sidebar-render.ts` | Explicit row metadata and sidebar family, host, workspace and date projection |
 | `sidebar-controls.ts` | Preferences, family pins, captured close endpoints, clipboard menus and pointer drag ownership |
 | `sidebar-query.ts`, `sidebar-lists.ts`, `sidebar-activity.ts` | Query/scopes, list fan-out/indexing/polls and host-qualified seen tracking |
 | `message-data.ts`, `message-render.ts`, `response-details.ts`, `message-groups.ts` | Narrowed message projection, retained response telemetry and deterministic tool groups |
 | `live-tools.ts`, `streaming-render.ts`, `mood.ts` | Live tool lifecycle, coalesced owned frames and mood projection |
-| `transcript.ts`, `transcript-data.ts`, `transcript-cache.ts` | Tail/older/catch-up request ownership, pagination cursors and retained DOM |
+| `transcript.ts`, `transcript-cache.ts` | Tail/older/catch-up request ownership, pagination cursors and retained DOM |
 | `session-activity.ts`, `side-chat.ts` | Turn/compaction timers, abort gate ownership and side chat views |
 | `composer-submit.ts`, `prompt-delivery.ts` | Captured prompt/command/abort requests, optimistic ledger and owned queue rows |
 | `message-stream.ts` | Captured stream tickets, event ownership, deduplication and reconnect timing |

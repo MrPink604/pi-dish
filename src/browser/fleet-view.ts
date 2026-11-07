@@ -1,7 +1,8 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from './api-client';
 import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { record, finite } from '../core/helper-values';
+import { countLabel } from './helper-format';
 
 export interface FleetHost extends HostEndpoint {
   readonly hostId: string | null;
@@ -89,7 +90,7 @@ export function fleetSessionsHtml(sessions: FleetSessions | null, fallback: { li
   const parts = [`<strong>${s.live}</strong> live`];
   if (s.working) parts.push(`<span class="fleet-working">${s.working} working</span>`);
   if (s.waiting) parts.push(`${s.waiting} waiting on you`);
-  if (s.subagents) parts.push(`${s.subagents} subagent${s.subagents === 1 ? '' : 's'}`);
+  if (s.subagents) parts.push(countLabel(s.subagents, 'subagent'));
   return `<div class="fleet-sessions">${parts.join(' · ')}</div>`;
 }
 
@@ -183,7 +184,7 @@ export function createFleetView(options: FleetViewOptions) {
       const response = await options.request(endpoint, '/api/host/health', { timeoutMs: 8000 });
       if (response.status === 401) { options.noteConnection(host, 'blocked'); throw new Error('Needs a token'); }
       const data: unknown = await response.json();
-      if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(responseError(response, data));
       const health = decodeFleetHealth(data);
       options.noteConnection(host, 'success');
       if (!owns()) return;
@@ -191,7 +192,7 @@ export function createFleetView(options: FleetViewOptions) {
     } catch (error) {
       if (!(error instanceof Error && error.message === 'Needs a token')) options.noteConnection(host, { type: 'failure', error });
       if (!owns()) return;
-      state.error = error instanceof Error ? error.message : String(error);
+      state.error = errorMessage(error);
     } finally {
       if (owns()) render();
     }

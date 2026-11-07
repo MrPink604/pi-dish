@@ -78,7 +78,7 @@ This stage closes compiler contract gaps, not a demonstrated application defect.
 
 | Seam | Current source and observed contract | Bounded change |
 | --- | --- | --- |
-| HTTP transcript ingress | [`decodeTranscriptPage`](../src/browser/transcript-data.ts) maps `decodeRenderMessage` already. [`createTranscript`](../src/browser/transcript.ts) then declares `renderMessage`, `render` and `updateMood` using `unknown`. | Preserve decoded message types through page, render, catch-up and mood ports. |
+| HTTP transcript ingress | [`decodeTranscriptPage`](../src/browser/transcript.ts) maps `decodeRenderMessage` already. [`createTranscript`](../src/browser/transcript.ts) then declares `renderMessage`, `render` and `updateMood` using `unknown`. | Preserve decoded message types through page, render, catch-up and mood ports. |
 | SSE ingress | [`createMessageStream`](../src/browser/message-stream.ts) parses external event JSON and decodes messages before dispatch. | Keep decoding there; pass the result without another projection. |
 | Subagent trace ingress | [`createSubagentsView.loadPeek`](../src/browser/subagents-view.ts) loads another session's message tail/catch-up and passes raw rows to its own message renderer. | Decode message rows at this HTTP ingress before calling the narrowed render port; preserve the independent target/view owner. |
 | Rendering and telemetry | [`createMessageRenderer`](../src/browser/message-render.ts) exposes unknown-taking message/user/assistant/custom/upsert ports; [`createStreamingRenderer`](../src/browser/streaming-render.ts), [`createResponseDetails`](../src/browser/response-details.ts) and [`createMood`](../src/browser/mood.ts) decode again. | Internal ports consume `RenderMessage`; decoder remains the external boundary. |
@@ -101,7 +101,7 @@ work, not a measured rendering slowdown. Record measurements before claiming one
   types, nullable pricing, valid timestamps and opaque tool arguments compatible.
   No universal schema for harness events or tool payloads.
 - Keep [`message-data.ts`](../src/browser/message-data.ts) as the browser message
-  owner. A proposed named transcript-page type may live in `transcript-data.ts`;
+  owner. A proposed named transcript-page type may live in `transcript.ts`;
   do not add a second message DTO, nominal validation brand or wrapper hierarchy.
 - Expose readonly session fields, host/label, list containers/arrays, lookup and
   selection results, including the first-party `capabilities` map. Keep mutable

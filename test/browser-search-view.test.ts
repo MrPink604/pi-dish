@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeSearchPayload, mergeSearchPayloads, queryHosts } = context.PiDishBrowser;
+const { decodeSearchPayload, mergeSearchPayloads, queryHosts } = loadBrowser();
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 test('search payloads narrow rows and merge with the actual host identity', () => {
   const value = decodeSearchPayload({ results: [null, { id: 3 }, { id: 's', host: 'forged', name: 'Name', snippets: ['hit', 3], searchScore: 'bad' }] });

@@ -1,3 +1,4 @@
+import { countLabel } from './helper-format';
 /** The group skeleton (summary + body) is shared so eviction splitting and the grouping pass cannot drift apart. */
 function createToolGroup(document: Document) {
   const group = document.createElement('details');
@@ -16,7 +17,6 @@ export function groupToolActivity(container: HTMLElement | null) {
   const isToolNoise = (el: Element) =>
     el.matches('.message.tool-result[data-msg-index], .message.assistant.no-text[data-msg-index], [hidden][data-msg-index]');
 
-  // Pass 1: wrap each maximal run of ungrouped tool activity.
   let run: Element[] = [];
   const wrapRun = () => {
     if (!run.length) return;
@@ -40,9 +40,7 @@ export function groupToolActivity(container: HTMLElement | null) {
   }
   wrapRun();
 
-  // Pass 2: merge adjacent groups (a turn split across pages/catch-ups).
-  // The later group survives so an element being used as a scroll anchor
-  // (loadOlderMessages) isn't removed from the DOM.
+  // Merge adjacent groups; the later survives so a scroll anchor isn't removed.
   container.querySelectorAll<HTMLDetailsElement>(':scope > details.tool-group').forEach(group => {
     const next = group.nextElementSibling;
     if (!next || !next.matches('details.tool-group')) return;
@@ -55,11 +53,8 @@ export function groupToolActivity(container: HTMLElement | null) {
 }
 
 /**
- * Re-wrap a tool group whose indexed children are no longer contiguous.
- * Bounding the transcript evicts a middle range, and a gap that lands inside
- * a group cannot be marked there (gaps are top-level siblings), so the
- * surviving runs become separate groups and refreshPaging can place the gap
- * between them.
+ * Eviction can leave a gap inside a group, but gaps are top-level siblings, so
+ * surviving runs become separate groups with the gap placed between them.
  */
 export function splitToolGroupRanges(container: HTMLElement | null) {
   if (!container) return; const document = container.ownerDocument;
@@ -86,7 +81,7 @@ export function updateToolGroupSummary(group: HTMLElement) {
     [...group.querySelectorAll('.tool-call-name')].map(el => (el.textContent || '').trim())
   )];
   group.querySelector('.tool-group-label')!.textContent =
-    n ? `⚡ ${n} tool use${n === 1 ? '' : 's'}` : '🧠 thinking';
+    n ? `⚡ ${countLabel(n, 'tool use')}` : '🧠 thinking';
   group.querySelector('.tool-group-preview')!.textContent =
     names.slice(0, 4).join(', ') + (names.length > 4 ? '…' : '');
 }

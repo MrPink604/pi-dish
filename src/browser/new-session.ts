@@ -1,4 +1,4 @@
-import type { ApiRequest } from './api-client';
+import { errorMessage, type ApiRequest } from './api-client';
 import type { DirectoryHost } from './directory-catalog';
 import { createDirectoryCatalog, sameDirectoryHost } from './directory-catalog';
 import { createDirectoryTree } from './directory-tree';
@@ -86,7 +86,6 @@ export function createNewSession(options: {
   let directoryTree: ReturnType<typeof createDirectoryTree> | null = null;
   let workspaceEvents = new AbortController();
   let disposed = false;
-  const message = (error: unknown) => error instanceof Error ? error.message : String(error);
   const isOpen = () => !disposed && root.classList.contains('new-session-open');
   const host = () => (selectedHostId ? options.host(selectedHostId) : null) || options.self();
   const hostId = () => host().hostId || null;
@@ -292,20 +291,20 @@ export function createNewSession(options: {
       const directory = cwdValue === undefined ? cwd() : cwdValue;
       if (directory) storage.setItem('pi-dish-cwd', directory);
       await submit({ cwd: directory, target, harness, host: endpoint, ownsView, draft: null, private: isPrivate });
-    } catch (error) { if (ownsView()) options.status(`Error: ${message(error)}`, 'error'); }
+    } catch (error) { if (ownsView()) options.status(`Error: ${errorMessage(error)}`, 'error'); }
   }
   async function spawn(): Promise<void> {
     if (disposed || spawnButton.disabled) return;
     const view = generation, ownsView = captureView();
     let target;
-    try { target = selectedTarget(); } catch (caught) { error(message(caught)); return; }
+    try { target = selectedTarget(); } catch (caught) { error(errorMessage(caught)); return; }
     const name = nameInput.value.trim(), directory = cwd();
     error(''); spawnButton.disabled = true; spawnButton.textContent = 'Starting…';
     try {
       if (directory) storage.setItem('pi-dish-cwd', directory);
       await submit({ name, cwd: directory, model: preferences.selectedModel() || undefined, thinking: thinkingSelect.value || undefined,
         target, harness: selectedHarness(), ownsView, private: privateSupported && privateToggle.checked });
-    } catch (caught) { if (ownsView()) error(message(caught)); }
+    } catch (caught) { if (ownsView()) error(errorMessage(caught)); }
     finally { if (view === generation) { spawnButton.disabled = false; spawnButton.textContent = '+ New session'; } }
   }
   return { open, close, isOpen, host, hostId, hostOptions, supports, setHostId, changeHost,

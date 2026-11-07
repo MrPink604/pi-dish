@@ -7,10 +7,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const vm = require('node:vm');
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeThemes, decodeSavedFilters, responseMode, clampSidebarWidth, clampTerminalHeight } = context.PiDishBrowser;
+const { decodeThemes, decodeSavedFilters, responseMode, clampSidebarWidth, clampTerminalHeight } = (0, browser_vm_js_1.loadBrowser)();
 const plain = (value) => JSON.parse(JSON.stringify(value));
 test('display payloads narrow theme tokens, filters and supported metadata modes', () => {
     assert.deepEqual(plain(decodeThemes({ themes: [null, { id: 9 }, { id: 'custom', tokens: { '--accent': '#123456', color: 'red', '--wrong': 3 } }] })), [{ id: 'custom', builtin: false, tokens: { '--accent': '#123456' } }]);

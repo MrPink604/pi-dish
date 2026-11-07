@@ -3,12 +3,12 @@ import type { CacheExpiryProjection } from '../core/session-api';
 import type { RuntimeInfo, ResponseMetadata } from './shared-helper-types';
 import { finite } from '../core/helper-values';
 
+/** `1 run`, `2 runs`; irregular plurals pass `many`. */
+export function countLabel(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
 
-/**
- * Remove ANSI escape sequences (CSI colors, OSC titles, stray escapes).
- * Extension UI strings arrive styled for the terminal via pi's theme.fg();
- * a browser renders those codes as literal "[38;2;…m" garbage.
- */
+/** Extension UI strings arrive ANSI-styled for the terminal; browsers would show the codes literally. */
 export function stripAnsi(text: unknown) {
   if (text == null || text === '') return '';
   return String(text)
@@ -29,12 +29,8 @@ export function formatTokens(tokens?: number | null) {
   return `${tokens}`;
 }
 
-// Stats-modal "Cache" cell. OpenAI-style completions APIs report cache reads
-// but have no write metric, so pi logs cacheWrite:0 even when writes clearly
-// happened (a later nonzero cacheRead proves it). Writes therefore only show
-// when actually reported; the hit rate — reads over all prompt tokens — is
-// computable from logged data on every provider and is the number that says
-// whether caching is working.
+// OpenAI-style APIs report cache reads but no writes (pi logs cacheWrite:0), so
+// writes show only when reported; the hit rate is computable on every provider.
 export function formatCacheStat(cacheRead?: number | null, cacheWrite?: number | null, input?: number | null) {
   const read = cacheRead || 0;
   const write = cacheWrite || 0;
@@ -75,10 +71,7 @@ export function cacheExpiryPresentation(expiry?: CacheExpiryProjection | null, n
   return { compact: `~${duration}`, detail: `About ${duration} remaining · ${expiry.retention} ${qualifier}`, severity };
 }
 
-// One line for the stats modal's "Running in" row, from the server's runtime
-// object (GET /stats): rpc = headless child of the pi-dish server, tmux = a
-// TUI pane (session/window fields are null when the live pane query failed —
-// the server name alone still locates it), terminal = a TUI outside tmux.
+// tmux session/window may be null when the live pane query failed; the server name still locates it.
 export function formatRuntime(r?: RuntimeInfo | null) {
   if (!r || !r.kind) return '—';
   const pid = r.pid ? ` · pid ${r.pid}` : '';
@@ -101,9 +94,7 @@ export function formatRuntime(r?: RuntimeInfo | null) {
   return `terminal${pid}`;
 }
 
-// Generation speed for one assistant message or a whole session. Null when
-// the sample can't mean anything: no tokens, or under a second of generation
-// (sub-second bursts read as absurd rates).
+// Null under a second of generation: sub-second bursts read as absurd rates.
 export function formatTokSpeed(outputTokens?: number | null, durationMs?: number | null) {
   if (!outputTokens || !durationMs || durationMs < 1000) return null;
   const rate = outputTokens / (durationMs / 1000);
@@ -190,18 +181,13 @@ export function formatDuration(ms: number) {
   return (h ? `${h}:${mm}` : mm) + ':' + String(s).padStart(2, '0');
 }
 
-/** Shorten cwd for display */
 export function shortCwd(cwd?: string | null) {
   if (!cwd) return '';
   return cwd.replace(/^\/home\/[^/]+\//, '~/').replace(/^\/home\/[^/]+$/, '~');
 }
 
 
-/**
- * Severity class for a context-usage percentage. One scale everywhere the
- * number appears (sidebar rows, the composer readout): white to a third,
- * warning to two thirds, error beyond.
- */
+/** One scale wherever context usage appears (sidebar, composer readout). */
 export function contextClass(percent: number) {
   return percent > 66 ? 'critical' : percent > 33 ? 'high' : '';
 }
@@ -214,10 +200,7 @@ export function normalizeMood(description: unknown, face: unknown) {
   return { description, face };
 }
 
-/**
- * Append a sent prompt to a history list: trims, skips empties, dedupes an
- * immediate repeat, and caps the list (oldest dropped). Returns a new array.
- */
+/** Dedupes an immediate repeat and caps the list (oldest dropped). Returns a new array. */
 export function pushPromptHistory(list: unknown, message: unknown, cap?: number) {
   const out: string[] = Array.isArray(list) ? list.filter((value: unknown): value is string => typeof value === 'string') : [];
   const msg = String(message || '').trim();
@@ -228,15 +211,10 @@ export function pushPromptHistory(list: unknown, message: unknown, cap?: number)
   return out.length > max ? out.slice(out.length - max) : out;
 }
 
-// --- Speech to text (composer mic) ---------------------------------------
 /**
- * Why the mic can't run *here*, independent of whether a host offers the
- * feature. Browsers gate getUserMedia on a secure context, and a phone
- * reaching pi-dish over plain LAN http is not one — the same class of
- * failure as navigator.clipboard being absent there, and worth explaining
- * rather than silently disabling, because the workaround is a browser
- * setting the user can actually apply. Checked in escalating order: no point
- * reporting a missing API that the insecure origin is withholding.
+ * Browsers gate getUserMedia on a secure context (plain LAN http is not one);
+ * explain rather than silently disable, since the user can change a browser
+ * setting. Insecure origin is checked first: it withholds the APIs.
  */
 export function sttUnavailableReason({ isSecureContext, hasGetUserMedia, hasMediaRecorder, origin }: { isSecureContext?: boolean; hasGetUserMedia?: boolean; hasMediaRecorder?: boolean; origin?: string } = {}) {
   if (!isSecureContext) {
@@ -254,12 +232,7 @@ export function sttUnavailableReason({ isSecureContext, hasGetUserMedia, hasMedi
   return null;
 }
 
-/**
- * Drop `text` into `value` at the caret (replacing any selection), padding
- * with single spaces only where the neighbours would otherwise run into it.
- * Pure so the spacing rule is testable; app.js applies the result and the
- * caret to the textarea.
- */
+/** Pads with single spaces only where neighbours would otherwise run into the text. */
 export function insertAtCaret(value: unknown, selectionStart: unknown, selectionEnd: unknown, text: unknown) {
   const source = typeof value === 'string' ? value : '';
   const insert = typeof text === 'string' ? text : '';
@@ -276,11 +249,7 @@ export function insertAtCaret(value: unknown, selectionStart: unknown, selection
   return { value: before + middle + after, caret: before.length + prefix.length + insert.length };
 }
 
-/**
- * tmux prefix key notation ("C-b", "C-a", "M-x", "C-Space") → the raw byte
- * sequence a terminal sends for it. Null when unmappable — the on-screen
- * prefix button hides rather than sending the wrong bytes.
- */
+/** Null when unmappable, so the prefix button hides rather than sending wrong bytes. */
 export function tmuxPrefixSeq(prefix: unknown) {
   if (typeof prefix !== 'string') return null;
   if (/^C-Space$/i.test(prefix)) return '\x00';
@@ -296,14 +265,9 @@ export function tmuxPrefixSeq(prefix: unknown) {
 }
 
 /**
- * Filename for a downloaded attachment: the one the response names in its
- * Content-Disposition, else `fallback`. RFC 5987 `filename*` wins over the
- * plain `filename`, matching what browsers do for a real navigation.
- *
- * The value arrives over the wire, and on a fleet that wire ends at a *peer* —
- * a fleet mapping is reachability, never authority — so it is reduced to a
- * bare basename with no separators, traversal or control characters before
- * it can reach an <a download>.
+ * RFC 5987 `filename*` wins over `filename`, as in browsers. The header may
+ * come from a peer (reachability, never authority), so reduce it to a bare
+ * basename before it reaches an <a download>.
  */
 export function filenameFromContentDisposition(header: unknown, fallback: string) {
   const clean = (raw: unknown) => {

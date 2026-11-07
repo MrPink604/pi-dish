@@ -1,12 +1,8 @@
 export interface TranscriptCursors { oldestIndex: number | null; lastIndex: number | null; hasOlder: boolean; total: number }
 interface Entry extends TranscriptCursors { fragment: DocumentFragment; base: string; scrollTop: number; anchor: number | null; anchorOffset: number; moodDescription: string; moodFace: string; lastUsed: number; nodes: number; characters: number }
 /**
- * Cache budgets stay deliberately conservative so one tool-heavy transcript
- * cannot pin megabytes: five sessions, fifteen minutes, plus an indexed,
- * element-node and character ceiling per entry and across the cache. Trimming
- * drops the oldest messages, which is exactly the region paging reloads, so a
- * smaller cache never makes content unreachable — and an entry that cannot fit
- * even after that trim is refused outright rather than cached misleadingly.
+ * Conservative so one tool-heavy transcript cannot pin megabytes. Trimming drops
+ * the oldest messages, the region paging reloads, so nothing becomes unreachable.
  */
 const MAX_ENTRIES = 5, MAX_AGE = 15 * 60 * 1000, MAX_INDEXED = 300,
   MAX_ENTRY_NODES = 2000, MAX_ENTRY_CHARACTERS = 1_000_000,
@@ -20,12 +16,7 @@ function childCost(child: Element) {
   return { nodes: descendants.length + 1, characters,
     indexed: child.querySelectorAll('[data-msg-index]').length + (child.matches('[data-msg-index]') ? 1 : 0) };
 }
-/**
- * Plan the leading messages to drop so the surviving entry fits its
- * indexed/node/character budgets. The plan is computed before anything is
- * removed so the caller can refuse the entry when even the last message alone
- * exceeds a budget, or when the drop would discard the reader's anchor.
- */
+/** Planned before removing anything so the caller can refuse an entry that cannot fit or would lose the anchor. */
 function planTrim(fragment: DocumentFragment) {
   const children = Array.from(fragment.children), costs = children.map(childCost);
   let nodes = 0, characters = 0, indexed = 0;

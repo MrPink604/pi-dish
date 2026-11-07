@@ -1,9 +1,9 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { sendJson } from './api-client';
+import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
+import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { TranscriptTree, TranscriptTreeBranch, TranscriptTreeFilter, TranscriptTreeNode, TranscriptTreeProjection, TranscriptTreeTool } from './transcript-tree-data';
 import { TRANSCRIPT_TREE_FILTERS, decodeTranscriptTree, nodePreview, projectTranscriptTree, transcriptTreeDescend, transcriptTreePath, transcriptTreeVisibleAnchor } from './transcript-tree-data';
-import { formatRelativeTime } from './helper-format';
+import { countLabel, formatRelativeTime } from './helper-format';
 import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';
 
@@ -21,8 +21,7 @@ export function createTranscriptTree(options: {
   copyMessageLink: (button: HTMLElement) => void;
 }) {
   const { document, sessionState, storage, status: setStatus } = options;
-  const element = <T extends HTMLElement = HTMLElement>(id: string) => { const value = document.getElementById(id); if (!value) throw new Error('Missing tree element: ' + id); return value as T; };
-  const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
+  const element = requiredElement(document, 'tree');
   const hoverPointer = () => document.defaultView?.matchMedia?.('(hover: hover)').matches ?? true;
   let disposed = false, treeViewGeneration = 0, branchGeneration = 0, operationGeneration = 0;
   let treeData: TranscriptTree | null = null, treeOwner: SelectionOwner | null = null, treeEndpoint: Readonly<HostEndpoint> | null = null;
@@ -182,7 +181,7 @@ function renderTree(locate: string | null = null) {
   }, { signal });
   const strip = element('treeStrip'), tipBranch = tipId ? view.branches.get(view.branchOf.get(tipId)!) : undefined;
   strip.innerHTML = `<span class="tree-strip-title">⑂ ${escapeHtml(tipBranch?.title || 'Conversation')}</span>`
-    + `<span class="tree-strip-meta">${view.forkCount} ${view.forkCount === 1 ? 'fork' : 'forks'} ▾</span>`;
+    + `<span class="tree-strip-meta">${countLabel(view.forkCount, 'fork')} ▾</span>`;
   renderFooter(rows.length, !!matches);
 
   if (locate) {

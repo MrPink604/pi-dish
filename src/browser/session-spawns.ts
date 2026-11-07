@@ -1,5 +1,4 @@
-import type { ApiRequest } from './api-client';
-import { sendJson } from './api-client';
+import { errorMessage, jsonResponse, sendJson, type ApiRequest } from './api-client';
 import type { DirectoryHost } from './directory-catalog';
 import type { SpawnTarget } from './spawn-targets';
 import { record } from '../core/helper-values';
@@ -73,19 +72,15 @@ export function createSessionSpawns(options: {
         let response: Response;
         try { response = await options.request(spawn.endpoint, `/api/session-spawns/${encodeURIComponent(spawn.spawnId)}`); }
         catch { await options.delay(attempt); continue; }
-        const data: unknown = await response.json().catch(() => null);
-        if (!response.ok && response.status !== 202) throw new Error(record(data) && typeof data.error === 'string' && data.error ? data.error : `spawn status failed (${response.status})`);
+        const data = await jsonResponse(response, `spawn status failed (${response.status})`);
         const status = decodeSpawnStatus(data);
         if (status.status === 'starting') { await options.delay(attempt); continue; }
         if (status.status === 'error') throw new Error(status.error);
         sessionId = status.sessionId;
         break;
       }
-      // Registration may finish during an older list request. Wait for the
+      // Registration may finish during an older list request; wait for the
       // authoritative host-qualified row before transferring composer state.
-      // Only the spawning host is refreshed: a fleet fan-out also awaits
-      // unrelated peers, and one slow peer would hold this pane unready for
-      // that request's whole timeout.
       for (let attempt = 0; ; attempt++) {
         await options.loadHost(spawn.host);
         if (options.hasSession(sessionId, spawn.host)) {
@@ -103,7 +98,7 @@ export function createSessionSpawns(options: {
     } catch (error) {
       pending.delete(key);
       options.changed();
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       if (options.current() === key) {
         options.showFailure(key, message, spawn);
         options.status(`Session start failed: ${message}`, 'error');

@@ -1,4 +1,5 @@
 import { record } from '../core/helper-values';
+import { errorMessage } from './api-client';
 export interface ComposerImage { readonly data: string; readonly mimeType: string }
 export function decodeComposerImages(value: unknown): ComposerImage[] {
   return Array.isArray(value) ? value.flatMap((image: unknown) => record(image) && typeof image.data === 'string' && typeof image.mimeType === 'string' && image.mimeType.startsWith('image/') ? [{ data: image.data, mimeType: image.mimeType }] : []) : [];
@@ -69,7 +70,7 @@ export function createComposerImages(options: { document: Document; owner: () =>
         if (disposed || batch.retired) break;
         if (!file?.type?.startsWith('image/')) continue;
         try { const image = await prepare(file); if (!disposed && !batch.retired) append(batch.key, [image], false); }
-        catch (error) { if (!disposed && !batch.retired && currentKey() === batch.key) options.status(`Could not attach ${file.name || 'image'}: ${error instanceof Error ? error.message : String(error)}`, 'error'); }
+        catch (error) { if (!disposed && !batch.retired && currentKey() === batch.key) options.status(`Could not attach ${file.name || 'image'}: ${errorMessage(error)}`, 'error'); }
       }
     } finally { batches.delete(batch); }
   }

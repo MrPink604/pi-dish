@@ -5,16 +5,9 @@ const browser_vm_js_1 = require("./browser-vm.js");
 const test_types_js_1 = require("./test-types.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
 const timers = new Map();
 let nextTimer = 0;
-const context = { URL, setTimeout: (fn) => { timers.set(++nextTimer, fn); return nextTimer; }, clearTimeout: (id) => timers.delete(id) };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/helpers.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertSharedHelpersContext)(context);
+const context = (0, browser_vm_js_1.loadSharedHelpers)((0, browser_vm_js_1.browserSandbox)({ setTimeout: (fn) => { timers.set(++nextTimer, fn); return nextTimer; }, clearTimeout: (id) => timers.delete(id) }));
 const { decodeUsageSummary, decodeUsageLimits, decodeCacheLifetimes, cacheLifetimeStatus, cacheLifetimesHtml, formatGap } = context.PiDishBrowser;
 const plain = (value) => JSON.parse(JSON.stringify(value));
 test('usage decoding preserves unavailable prices and qualifies even a single answering host', () => {

@@ -121,8 +121,7 @@ export function createHostDirectory(options: HostDirectoryOptions) {
     }
     if (user) {
       user.hostId = data.hostId;
-      // The persisted catalog has always projected labels to strings. Keep that
-      // contract true immediately, including after an untrusted descriptor read.
+      // Persisted labels are strings, even after an untrusted descriptor read.
       if (!user.label && typeof data.label === 'string' && data.label) user.label = data.label;
     }
     if (remote) {

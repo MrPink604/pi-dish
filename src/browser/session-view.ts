@@ -4,6 +4,7 @@ import { hibernationSummary } from './hibernation';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import type { HostEndpoint } from './api-client';
 import { pendingComposerKey, type PendingSessionSpawn } from './session-spawns';
+import { requiredElement } from './dom';
 /** Operations selection may consume; collaborators retain their other authority. */
 export interface SessionViewDrafts {
   stash(): void;
@@ -44,7 +45,7 @@ export function createSessionView(options: {
   seen: (session: SessionEntry) => void; artifacts: (owner: SelectionOwner) => unknown; header: () => void; relations: (owner: SelectionOwner) => unknown;
   models: (id: string, harness?: string) => unknown; commands: (id: string) => unknown;
 }) {
-  const { document, sessionState } = options; const element = (id: string) => document.getElementById(id)!;
+  const { document, sessionState } = options; const element = requiredElement(document, 'session view');
   let currentSessionSpawnId: string | null = null, disposed = false;
 
 // Ordered retirement phases: advance/stash draft, stash DOM, retire transports,
@@ -82,9 +83,7 @@ function resetSelectionActivity(current: SessionEntry | null) {
   options.resetArtifacts();
 }
 
-// Show a usable pane before the bridge has produced a real session id. Keep
-// currentSession null so no transcript/stream/action can accidentally target
-// the operation id; only the composer is owned by the provisional key.
+// currentSession stays null so nothing can target the operation id; only the composer uses the provisional key.
 function showPendingSessionView(spawnId: string) {
   if (disposed) return; const spawn = options.spawn(spawnId);
   if (!spawn) return;
@@ -146,17 +145,15 @@ function showPendingSessionFailure(spawnId: string, message: string, spawn?: Pic
     <p>${escapeHtml(harnessLabel)} could not start.</p>
     <small>${escapeHtml(message)}</small>
   </div>`;
-  const input = element('promptInput') as HTMLTextAreaElement;
+  const input = element<HTMLTextAreaElement>('promptInput');
   input.placeholder = 'Your draft is preserved here so you can copy it';
-  const btn = element('btnSend') as HTMLButtonElement;
+  const btn = element<HTMLButtonElement>('btnSend');
   btn.disabled = true;
   btn.title = message;
 }
 
 async function selectSession(id: string, { forceTranscriptReload = false, host = null, keepBounceView = false }: SessionSelectOptions = {}) {
-  // Validate the target before tearing anything down: a stale id (a resume
-  // racing a filtered refresh, a pruned session) must leave the current view
-  // intact instead of stashing the transcript and then bailing on a blank pane.
+  // Validate before teardown: a stale id must leave the current view intact, not a blank pane.
   if (disposed || !sessionState.findSession(id, host)) return;
   beginSelectionRetirement();
   currentSessionSpawnId = null;
@@ -168,7 +165,6 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   const owns = () => !disposed && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === endpoint.base;
   if (forceTranscriptReload) options.transcript.deleteCached(sessionRefKey(current));
   options.reveal(id, current.host);
-  // Retire the previous stream before awaiting new transcript hydration.
   retireSessionResources();
   options.storage.setItem('pi-dish-session', sessionRefKey(current));
   options.seen(current);
@@ -176,7 +172,6 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   element('emptyState').style.display = 'none';
   element('sessionView').style.display = 'flex';
   
-  // Show/hide input area vs resume bar based on active state
   const inputArea = document.querySelector<HTMLElement>('.input-area')!;
   const resumeBar = element('resumeBar');
   const sessionActions = document.querySelector<HTMLElement>('.session-actions')!;
@@ -193,10 +188,7 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
     const hibernation = current.hibernation;
     if (hibernation) options.drafts.restore(); else options.drafts.clear();
     if (inputArea) inputArea.style.display = hibernation ? '' : 'none';
-    // A live subagent's transcript belongs to the session running it, so
-    // resuming would put a second harness process on a file that process
-    // keeps appending to. The bar keeps the read-only label and Stats; only
-    // the Resume affordance goes.
+    // Resuming a live subagent would put a second harness on a file its parent keeps appending to.
     const resumable = current.capabilities?.resume !== false;
     if (resumeBar) {
       resumeBar.style.display = '';
@@ -221,16 +213,13 @@ async function selectSession(id: string, { forceTranscriptReload = false, host =
   options.render();
   options.header();
   if (current.isActive) {
-    // Fire-and-forget: nothing below needs the results, and both can ask the
-    // live session over its socket — don't stall the transcript on them.
+    // Fire-and-forget so the transcript isn't stalled on them.
     options.models(id, current.harnessId);
     options.commands(id); // refresh autocomplete with this session's commands
   }
   await options.transcript.load(owner);
   if (!owns()) return;
-  // Lineage and artifact counts are ancillary chrome, and the lineage handler
-  // scans the whole session catalog synchronously — server-side it would delay
-  // the transcript page request dispatched with it. Hydrate first.
+  // The lineage handler scans the catalog synchronously server-side; hydrate first.
   options.artifacts(owner);
   options.relations(owner);
   

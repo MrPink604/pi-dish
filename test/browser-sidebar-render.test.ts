@@ -1,12 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { browserSandbox } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
+const context = browserSandbox();
 const { renderSidebar } = context.PiDishBrowser;
 type SidebarRenderOptions = Parameters<typeof renderSidebar>[0];
 function options(overrides = {}): SidebarRenderOptions {

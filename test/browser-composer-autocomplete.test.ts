@@ -1,13 +1,8 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
 import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = { atob };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeSlashCommands, decodeFileCompletions, createSessionState, createSessionReferences } = context.PiDishBrowser;
+const { decodeSlashCommands, decodeFileCompletions, createSessionState, createSessionReferences } = loadBrowser({ atob });
 test('autocomplete wire data narrows command and file fields without mutating input', () => {
   const wire = [null, { name: 1 }, { name: 'valid', args: {}, source: 'extension', description: ['bad'] }];
   const commands = decodeSlashCommands(wire); const command = commands[0]; assert.ok(command); assert.equal(commands.length, 1); assert.equal(command.args, ''); assert.equal(command.description, '');

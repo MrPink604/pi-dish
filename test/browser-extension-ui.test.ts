@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeExtensionRequest } = context.PiDishBrowser;
+const { decodeExtensionRequest } = loadBrowser();
 test('extension payloads narrow malformed fields and strip ANSI without mutating the wire object', () => {
   const value = { id: 'ask', method: 'ask', title: '\x1b[31mTitle\x1b[0m', questions: [null, { id: 2 }, { id: 'q', question: '\x1b[32mQuestion\x1b[0m', multi: 'yes', recommended: 0.5, options: ['\x1b[31mFirst\x1b[0m', { label: 'Second', preview: '\x1b[31mPreview\x1b[0m' }] }] };
   const result = decodeExtensionRequest(value);

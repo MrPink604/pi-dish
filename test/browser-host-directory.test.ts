@@ -1,16 +1,10 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import { present, record } from './test-types.js';
 import type { CatalogHost } from '../src/browser/host-catalog.js';
 import type { HostDescriptor } from '../src/browser/host-discovery.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { createHostDirectory } = context.PiDishBrowser;
+const { createHostDirectory } = loadBrowser();
 function fixture(initialCatalog: unknown = [{ base: '/hosts/peer', hostId: 'peer', token: 'fixture' }]) {
   const descriptors = new Map<string, HostDescriptor>(), writes: Array<readonly Readonly<CatalogHost>[]> = [];
   const directory = createHostDirectory({ initialCatalog, descriptor: id => descriptors.get(id),

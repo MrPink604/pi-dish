@@ -1,10 +1,6 @@
 import type { HarnessSetting, HarnessSettingsList } from './harness-settings-data';
 
-/**
- * The harness's own settings panel (OMP's /settings): one section per tab,
- * rows grouped by key prefix in the CLI's order. Every control carries its
- * serialized initial value, so a save sends only the rows the user moved.
- */
+// Every control carries its serialized initial value, so a save sends only moved rows.
 const SECRET_KEY = /(api.?key|token|password|secret)$/i;
 
 function humanize(segment: string): string {
@@ -86,7 +82,6 @@ export function renderHarnessSettingsPane(list: HarnessSettingsList, escapeHtml:
   }).join('');
 }
 
-/** Show one tab, or every tab's rows matching a non-empty query. */
 export function filterHarnessSettings(pane: HTMLElement, tab: string, query: string): void {
   const q = query.trim().toLowerCase();
   pane.classList.toggle('searching', !!q);

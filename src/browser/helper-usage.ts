@@ -4,11 +4,8 @@ import { escapeHtml } from '../core/helper-format';
 import { USAGE_COST_KEYS, addUsage, addUsageTokens, addUsageCosts, addUsageUnavailable, addUsageCount, addKnownUsageCost, compareUsageBuckets, compareUsageModels } from '../core/helper-usage-math';
 export { addUsage as addMergedUsage, usageDisplayTokens, compareUsageBuckets, USAGE_COST_KEYS as USAGE_MERGE_COST_KEYS, USAGE_TOKEN_KEYS as USAGE_MERGE_TOKEN_KEYS } from '../core/helper-usage-math';
 
-// --- Usage summary merging (multi-host) ----------------------------------
-// The usage view fans /api/usage-summary out to every reachable host and
-// merges the payloads here. Costs retain the known subtotal while
-// costUnavailable counts the calls omitted from it; the renderer marks those
-// partial estimates instead of presenting them as complete or free.
+// costUnavailable counts calls omitted from the cost subtotal; the renderer
+// marks those partial estimates rather than presenting them as complete or free.
 /**
  * Coalesce a burst of healthy fan-out responses into one complete render.
  * If a peer is genuinely slow, the delayed call still publishes the useful
@@ -61,22 +58,10 @@ export function usageUnattributedCost(costs?: Costs | null) {
 }
 
 /**
- * Merge per-host /api/usage-summary payloads into one view.
- *
- * `list` items are either a bare payload or `{ hostId, hostLabel, summary }`
- * - the host is needed because a workspace path and a session id are only
- * unique *within* a host, while a model ref means the same thing everywhere
- * and so merges across hosts.
- *
- * A single payload passes through untouched, which is what keeps the
- * single-host view exactly what the server sent.
- *
- * Approximation, deliberately accepted: each host truncates its group lists
- * to its own top 20 before answering, so a workspace/model/session sitting
- * just below the cut on several hosts can be under-counted (or missing) in
- * the merged tail. Totals, headline KPIs, and the daily series are exact -
- * they are whole-corpus aggregates on each host. Don't "fix" this with a
- * hub-side merged endpoint; see TASKS/multi-host.md.
+ * Workspace paths and session ids are only unique within a host; model refs
+ * merge across hosts. A single payload passes through untouched.
+ * Accepted approximation: each host truncates groups to its top 20, so the
+ * merged tail may under-count; totals and daily series are exact.
  */
 export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSummary)[] | null) {
   const items: readonly (UsageSummary | HostUsageSummary)[] = Array.isArray(list) ? list : [];
@@ -207,7 +192,6 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
   };
 }
 
-// --- Usage view (chart math and labels) ---
 /**
  * Readable model name from a model id (provider stripped): drops
  * bedrock-style vendor prefixes ("us.anthropic."), trailing wire-format
@@ -313,20 +297,10 @@ export function formatLimitReset(resetsAt: unknown, now = Date.now()) {
 }
 
 /**
- * Merge /api/usage-limits payloads across hosts into one provider view.
- * Hosts in a fleet often hold the *same* provider accounts, so per-host
- * rendering duplicates every window. Entries: [{ hostLabel, payload }].
- * Reports are grouped by provider, limits by label+window; rows that agree
- * collapse to one, rows that genuinely differ stay separate and carry their
- * host label(s). "Agree" is tolerant on purpose — fetch times and rolling
- * windows shift values slightly between hosts, and exact-equality would
- * split every row: usedFraction within `fractionTolerance`, resetsAt within
- * `resetToleranceMs` (null only equals null), and the same planType (a plan
- * mismatch almost certainly means different accounts). Errors pass through
- * per host. Harness labels ride along so a future second reporting harness
- * still attributes correctly. Reset credits ("resets available") dedupe by
- * title+expiry — the same account seen from two hosts is one grant — and
- * carry host labels on the same rule as limit rows.
+ * Fleet hosts often share provider accounts, so rows that agree (within
+ * tolerances; exact equality would split on fetch-time drift) collapse to one
+ * and only disagreeing rows carry host labels. A planType mismatch means
+ * different accounts. Reset credits dedupe by title+expiry.
  */
 export function mergeUsageLimits(entries: readonly UsageLimitEntry[] | null | undefined, { fractionTolerance = 0.02, resetToleranceMs = 15 * 60000 } = {}) {
   const providers = new Map<string, { provider: string; planTypes: Set<string>; groups: Map<string, { rows: HostUsageLimit[] }>; credits: Map<string, { credit: UsageResetCredit; hosts: Set<string> }>; availableCount: number | null }>();
@@ -392,14 +366,7 @@ export function mergeUsageLimits(entries: readonly UsageLimitEntry[] | null | un
   return { reports, errors };
 }
 
-/**
- * "Subscription limits" section of the usage view: provider quota windows
- * (5h/7d utilization + reset) as reported by the harness CLIs, merged across
- * hosts by mergeUsageLimits — a row shows its host label only when hosts
- * disagree about it — then each provider's unexpired reset credits with
- * their expiry. Returns '' when there is nothing to show, so the
- * section vanishes on hosts/fleets with no supporting harness.
- */
+/** Returns '' when there is nothing to show, so the section vanishes on hosts without a supporting harness. */
 export function usageLimitsHtml(entries: readonly UsageLimitEntry[] | null | undefined, { now = Date.now() } = {}) {
   const { reports, errors } = mergeUsageLimits(entries);
   if (!reports.length && !errors.length) return '';

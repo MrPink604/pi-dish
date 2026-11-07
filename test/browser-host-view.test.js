@@ -6,10 +6,7 @@ const test_types_js_1 = require("./test-types.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const vm = require('node:vm');
-const context = vm.createContext({});
-vm.runInContext(fs.readFileSync(require.resolve('../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
+const context = (0, browser_vm_js_1.browserSandbox)();
 test('host presentation narrows labels and capabilities without mutating discovery metadata', () => {
     const project = context.PiDishBrowser.createHostView();
     const projectUnknown = (value) => (0, test_types_js_1.record)(Reflect.apply(project, undefined, [value]));

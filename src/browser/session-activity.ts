@@ -10,19 +10,13 @@ let turnInProgress = false, disposed = false;
 let owner: SelectionOwner | null = null;
 
 
-// --- Live activity: elapsed turn time + currently running tool -----------
-// The working badge reads "Working 1:42 · Bash" so a glance says what the
-// agent is doing and for how long (mobile badge shows just the timer).
-// Client-side by nature: opening a session mid-turn counts from connect.
+// Client-side: opening a session mid-turn counts from connect.
 let turnStartedAt: number | null = null;
 let workingTicker: ReturnType<typeof setInterval> | null = null;
 const runningTools = new Map<string, string>(); // toolCallId -> toolName
 
-// Compaction state, tracked separately from the turn: manual compaction has
-// no turn at all, while auto-compaction runs inside one. Whichever is on,
-// the badge must say so — a send during compaction is held by the bridge,
-// and the user needs to see why nothing is streaming (and must not fire a
-// second /compact into it).
+// Tracked apart from the turn (manual compaction has none). Sends are held during
+// compaction, so the badge must explain why nothing streams.
 let compactingNow = false;
 let compactingStartedAt: number | null = null;
 
@@ -53,9 +47,7 @@ function updateWorkingIndicator() {
   if (mobile) mobile.textContent = elapsed + (tool ? ` · ${tool}` : '');
 }
 
-// One place decides whether the pulsing badge, its ticker, and the Stop
-// button are on: a running turn or a running compaction (or both, during
-// auto-compaction) keeps them alive. Text comes from updateWorkingIndicator.
+// A running turn or compaction keeps the badge, ticker and Stop button alive.
 function syncActivityIndicator() {
   const active = turnInProgress || compactingNow;
   if (active) {
@@ -68,9 +60,7 @@ function syncActivityIndicator() {
   var workingMobile = document.getElementById('sessionWorkingMobile');
   if (workingDesktop) workingDesktop.classList.toggle('active', active);
   if (workingMobile) workingMobile.classList.toggle('active', active);
-  // Stop stays reachable during compaction — the bridge cancels a running
-  // compaction on abort. Steer/follow-up only make sense against a turn,
-  // so they remain setTurnInProgress's business.
+  // The bridge cancels a running compaction on abort, so Stop stays reachable.
   var btnStop = document.getElementById('btnStop');
   // visibility, not display: the context readout beside it keeps its
   // position whether or not a turn is running.
@@ -78,9 +68,7 @@ function syncActivityIndicator() {
   updateWorkingIndicator();
 }
 
-// Send stays available while a side chat is open even mid-turn: the side
-// conversation is independent of the main turn, and composer-submit routes
-// the text there. Steer/follow-up would deliver to the wrong conversation.
+// Side chats are independent of the main turn, so Send stays; Steer/follow-up would misdeliver.
 function syncComposerButtons() {
   if (disposed) return;
   const sideChat = !!options.sideChatActive(), steering = turnInProgress && !sideChat;
@@ -103,15 +91,12 @@ function setTurnInProgress(active: boolean) {
     runningTools.clear();
   }
   syncActivityIndicator();
-  // Reflect in the sidebar immediately — the working dot shouldn't wait for
-  // the next 10s poll. (turn events only stream for the viewed session.)
+  // Turn events only stream for the viewed session, so don't wait for the poll.
   if (sessionState.currentSession && !!sessionState.currentSession.turnInProgress !== !!active) {
     sessionState.patchSessionActivity(sessionState.currentSession.id, { turnInProgress: !!active }, owner?.host);
   }
   syncComposerButtons();
-  // A turn ending mid-compaction (manual /compact aborts the agent first;
-  // auto-compaction holds queued sends) must not wipe the compaction badge,
-  // the held-message strip, or the status line.
+  // A turn ending mid-compaction must not wipe the compaction badge, held strip or status.
   if (!active && !compactingNow) {
     options.clearQueue();
     options.status('');
@@ -124,8 +109,7 @@ function setCompacting(active: boolean) {
   compactingNow = on;
   compactingStartedAt = on ? (compactingStartedAt || Date.now()) : null;
   syncActivityIndicator();
-  // Sidebar dot immediately, same as the turn dot (compaction events only
-  // stream for the viewed session; other rows update via the poll).
+  // Compaction events only stream for the viewed session; other rows update via the poll.
   if (sessionState.currentSession && !!sessionState.currentSession.compacting !== on) {
     sessionState.patchSessionActivity(sessionState.currentSession.id, { compacting: on }, owner?.host);
   }

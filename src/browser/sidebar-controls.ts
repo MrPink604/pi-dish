@@ -1,6 +1,5 @@
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { sendJson } from './api-client';
+import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import { sessionKey, sessionRefKey, parseSessionKey } from './helper-identity';
 import { buildSessionFamilies } from './helper-sessions';
 import { escapeHtml } from '../core/helper-format';
@@ -162,7 +161,7 @@ export function createSidebarControls(options: {
       else await options.finishClose(id, host, entry.owner);
     } catch (error) {
       if (busy !== entry || !endpoint(entry)) return;
-      if (ownsFeedback(entry)) options.status('Close failed: ' + (error instanceof Error ? error.message : String(error)), 'error');
+      if (ownsFeedback(entry)) options.status('Close failed: ' + errorMessage(error), 'error');
     } finally { if (busy === entry) busy = null; render(); }
   }
   function closeClick(id: string, host = sessionState.sessionHostId(id)) {

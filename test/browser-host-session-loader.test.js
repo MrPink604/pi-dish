@@ -6,14 +6,9 @@ const test_types_js_1 = require("./test-types.js");
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
 const { stripQueryField } = require('../lib/helper-query');
 const { decodeSessionList } = require('../lib/session-api');
-const context = { URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
+const context = (0, browser_vm_js_1.browserSandbox)({ URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval });
 const { createHostSessionLoader, createSessionState, createSidebarLists, ApiHttpError } = context.PiDishBrowser;
 const at = (values, index) => (0, test_types_js_1.present)(values[index]);
 function fixture() {

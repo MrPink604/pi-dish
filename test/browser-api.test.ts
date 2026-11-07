@@ -1,15 +1,9 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import { present, record } from './test-types.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
 import http = require('node:http');
-const context = { Headers, Response, AbortSignal, URLSearchParams };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { createHostTransport, createSessionApi, setSessionModel, setSessionThinking, renameSession, sendJson, withFetchTimeout } = context.PiDishBrowser;
+const { createHostTransport, createSessionApi, setSessionModel, setSessionThinking, renameSession, sendJson, withFetchTimeout } = loadBrowser({ Headers, Response, AbortSignal, URLSearchParams });
 
 test('browser transport snapshots host routing and preserves supported header/signal forms', async () => {
   const endpoint = { base: 'https://peer.invalid', token: 'fixture-token' };

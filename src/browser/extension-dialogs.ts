@@ -1,5 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
-import { sendJson } from './api-client';
+import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { ExtensionRequest, ExtensionResponse, ExtensionAuth } from './extension-ui-data';
 import { authCallbackMatches, authUrlState, parseAuthCallback } from './extension-auth';
@@ -16,12 +15,11 @@ interface DialogEntry {
   readonly supersededIds: Set<string>;
   readonly identity: string | null; readonly loginId?: string; readonly authKind?: string;
 }
-/** Stable decision identity for a re-issued dialog, ignoring volatile detail text. */
+/**
+ * Hosts re-issue a pending prompt with changing detail text ("expires in 6d 23h"),
+ * so identity is the question line plus offered options.
+ */
 function dialogIdentity(req: ExtensionRequest): string | null {
-  // Hosts re-issue the same prompt while their earlier request is still
-  // pending (OMP's expiring-reset sweep does this every minute) and the detail
-  // line changes ("expires in 6d 23h" → "6d 22h"). Grouping by the question
-  // line plus the offered options keeps that a single pending decision.
   const question = (req.title || req.message).split('\n')[0].trim();
   switch (req.method) {
     case 'select': return `select:${JSON.stringify([question, req.options.map(option => [option.label, option.description])])}`;
@@ -45,9 +43,8 @@ function dialogCollapsedLabel(req: ExtensionRequest): string {
   return `${dialogTitle(req)} pending — click to answer`;
 }
 /**
- * Closing a select that offers Yes/No answers No. Hosts that only persist the
- * choice when they receive one (OMP's expiring-reset sweep) otherwise re-ask on
- * every sweep, so a dismissal that merely cancelled would never stop the loop.
+ * Closing a Yes/No select answers No: hosts that persist only a received choice
+ * would otherwise re-ask on every sweep.
  */
 function dialogCloseResponse(req: ExtensionRequest): ExtensionResponse {
   if (req.method === 'select') {
@@ -86,11 +83,7 @@ export function createExtensionDialogs(options: {
     return [...openExtDialogs.entries()].find(([, entry]) =>
       entry.sessionKey === key && entry.requestIds.includes(requestId)) || null;
   }
-  /**
-   * Resolve the card a replayed request belongs to: null when there is nothing
-   * left to build (no id, no endpoint, an already-docked card, or a card this
-   * request supersedes). Auth steps skip the reissue match — they replace by loginId.
-   */
+  /** Null when there is nothing to build. Auth steps skip the reissue match; they replace by loginId. */
   function beginDialog(req: ExtensionRequest, session: ExtensionSession, reissue = true) {
     if (!req.id) return null;
     const { id: sessionId, host: hostId } = session;
@@ -133,8 +126,7 @@ export function createExtensionDialogs(options: {
     return dock;
   }
 
-  // Drop the dock element once it empties. The composer stays put either way —
-  // the dock sits above it like an extension widget and caps its own height.
+  // The dock sits above the composer like a widget and caps its own height.
   function updateExtDialogDock() {
     const dock = document.getElementById('extUiDialogs');
     if (dock && !dock.children.length) dock.remove();
@@ -167,7 +159,7 @@ export function createExtensionDialogs(options: {
     void sendJson(options.request, Object.freeze({ ...host }), `/api/sessions/${encodeURIComponent(entry.sessionId)}/ui-response`, { requestId, ...response })
       .catch(error => {
         onFailure?.();
-        if (!silent && !disposed && sessionState.ownsSelection(owner)) options.status(`Dialog response failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+        if (!silent && !disposed && sessionState.ownsSelection(owner)) options.status(`Dialog response failed: ${errorMessage(error)}`, 'error');
       });
   }
 
@@ -178,10 +170,8 @@ export function createExtensionDialogs(options: {
     dismissExtDialog(dialogKey);
   }
 
-  // A host may re-issue the same decision while its first request is still
-  // pending (OMP's expiring-reset sweep does this on every usage tick). Keep the
-  // existing card, cancel the superseded request so the host queue advances, and
-  // move the answer to the newest request instead of stacking another prompt.
+  // Keep the existing card for a re-issued decision, cancel the superseded
+  // request so the host queue advances, and move the answer to the newest id.
   function supersedeExtDialog(entry: DialogEntry, req: ExtensionRequest) {
     const host = options.host(entry.hostId); if (!host || host.base !== entry.endpoint.base) return;
     // A reconnect replay can arrive out of order or repeat an older id after it
@@ -212,8 +202,7 @@ export function createExtensionDialogs(options: {
     updateExtDialogDock();
   }
 
-  // Shared chrome: title row with minimize (background) and close (cancel),
-  // then the per-method body, then the label shown while minimized.
+  // Minimize backgrounds the card; close cancels.
   function buildExtDialogCard(requestId: string, events: AbortController, { title, bodyHtml, footerHtml, collapsedLabel, onClose }: { title: string; bodyHtml: string; footerHtml?: string; collapsedLabel: string; onClose: () => void }) {
     const card = document.createElement('div');
     card.className = 'ext-ui-dialog-modal ext-ui-docked-dialog';
@@ -443,9 +432,8 @@ export function createExtensionDialogs(options: {
     if (field) field.focus();
   }
 
-  // Remote /login step. A later step with the same loginId replaces this card in
-  // place (new request id); answers keep the card in a Submitting state until the
-  // bridge supersedes or resolves the step.
+  // A later step with the same loginId replaces this card in place; answers stay
+  // Submitting until the bridge supersedes or resolves the step.
   function showExtAuthDialog(req: ExtensionRequest, auth: ExtensionAuth, session: ExtensionSession) {
     const opened = beginDialog(req, session, false);
     if (!opened) return;
@@ -590,9 +578,7 @@ export function createExtensionDialogs(options: {
       if (typeof id !== 'string') return;
       const entry = entryForRequest(id, session);
       if (!entry) return;
-      // The active request was answered elsewhere (TUI or another client):
-      // the whole card is stale. An older coalesced request resolving only
-      // drops that id and leaves the currently active prompt in place.
+      // Active request answered elsewhere: the card is stale. An older coalesced id only drops out.
       if (id === entry[1].requestId) { dismissExtDialog(entry[0]); return; }
       entry[1].requestIds = entry[1].requestIds.filter(requestId => requestId !== id);
     },

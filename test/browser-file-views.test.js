@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeFilePreview, decodeDiffView, renderDiffViewHtml } = context.PiDishBrowser;
+const { decodeFilePreview, decodeDiffView, renderDiffViewHtml } = (0, browser_vm_js_1.loadBrowser)();
 test('file and diff wire decoding rejects missing file paths and narrows nested fields', () => {
     assert.throws(() => decodeFilePreview({ content: 'text' }), /Invalid file preview/);
     const file = decodeFilePreview({ path: '/tmp/a', content: {}, size: Infinity, image: { url: '/image', data: {} } });

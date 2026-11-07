@@ -1,6 +1,5 @@
 import { record } from '../core/helper-values';
-import { ApiHttpError, sendJson } from './api-client';
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { ApiHttpError, errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 
 export type SideChatTurnStatus = 'running' | 'complete' | 'error' | 'cancelled';
@@ -59,7 +58,6 @@ interface TurnView {
 }
 interface Shell { stop: HTMLButtonElement; close: HTMLButtonElement; turns: HTMLElement }
 
-/** The panel's consumer contract: no caller supplies a question owner. */
 export interface SideChatController {
   ask(question: string, askOptions?: { fresh?: boolean }): Promise<boolean>;
   apply(value: unknown, session: SideChatSession | null | undefined): void;
@@ -107,7 +105,7 @@ export function createSideChat(options: {
       && options.endpoint(captured.owner.host).base === captured.endpoint.base;
   }
   function sessionPath(owner: SelectionOwner) { return `/api/sessions/${encodeURIComponent(owner.id)}/side-chat`; }
-  // A host still on a pre-side-chat pi-dish has no route at all.
+  // Hosts predating side chat have no route.
   async function post(captured: { owner: SelectionOwner; endpoint: Readonly<HostEndpoint> }, suffix: string, body: unknown) {
     try {
       return await sendJson(options.request, captured.endpoint, sessionPath(captured.owner) + suffix, body);
@@ -287,7 +285,7 @@ export function createSideChat(options: {
       setState(decodeSideChat(record(value) ? value.sideChat : null), captured.owner);
     } catch (error) {
       if (!owns(captured)) return;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorMessage(error);
       options.status(`Could not ${kind === 'cancel' ? 'stop' : 'close'} the side chat: ${message}`, 'error');
     }
   }

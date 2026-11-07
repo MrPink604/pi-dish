@@ -40,10 +40,7 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-/**
- * Existing prefixable URL/path policy. Null means invalid; empty means self.
- * A mistyped base must fail at add time, never resolve against the serving origin.
- */
+/** Null means invalid; empty means self. A mistyped base must fail, not resolve against the origin. */
 export function normalizeHostBase(input: unknown): string | null {
   if (input == null) return '';
   const raw = String(input).trim();
@@ -64,10 +61,7 @@ export function normalizeHostBase(input: unknown): string | null {
   return url.origin + path;
 }
 
-/**
- * Corrupt localStorage rows are dropped; self remains implicit. A broken catalog
- * must degrade to fewer hosts rather than prevent the client from booting.
- */
+/** A broken catalog degrades to fewer hosts rather than blocking boot. */
 export function sanitizeHostCatalog(raw: unknown): CatalogHost[] {
   const out: CatalogHost[] = [];
   const seen = new Set<string>();
@@ -93,11 +87,7 @@ export function sanitizeHostCatalog(raw: unknown): CatalogHost[] {
   return out;
 }
 
-/**
- * Catalog saves must not retire discovery for unrelated, unchanged rows. Keep
- * their object identity only when every own field exactly matches projection;
- * changed/extra fields still produce a clean normalized row.
- */
+/** Unchanged rows keep object identity so saves don't retire their discovery. */
 export function reconcileHostCatalog(current: readonly CatalogHost[]): CatalogHost[] {
   return sanitizeHostCatalog(current).map(normalized => {
     const source = current.find(row => row.base === normalized.base);
@@ -112,10 +102,7 @@ export function reconcileHostCatalog(current: readonly CatalogHost[]): CatalogHo
   });
 }
 
-/**
- * Self, then runtime fleet, then persisted catalog. First route wins by id or
- * base; duplicates only fill missing metadata. No input row is mutated.
- */
+/** Self, then fleet, then catalog; first route wins by id or base, duplicates only fill gaps. */
 export function mergeHostEntries(self: SelfHostMetadata | null | undefined, fleet: unknown, catalog: unknown): EffectiveHost[] {
   const out: EffectiveHost[] = [];
   const byId = new Map<string, EffectiveHost>();

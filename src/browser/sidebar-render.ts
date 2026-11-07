@@ -3,7 +3,7 @@ import type { HelperHost } from '../core/helper-types';
 import type { SessionFamily, WorkspaceNode } from './shared-helper-types';
 import type { PendingSessionSpawn } from './session-spawns';
 import { escapeHtml } from '../core/helper-format';
-import { cacheExpiryPresentation, contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
+import { countLabel, cacheExpiryPresentation, contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
 import { shortModelName } from './helper-usage';
 import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDisplayLabel, sortHostSections, hostSectionKey } from './helper-identity';
 import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
@@ -40,19 +40,12 @@ export function renderHarnessBadge(harnessId?: string | null, harnessLabel?: str
   return `<span class="harness-badge harness-badge-${escapeHtml(id)}" title="${escapeHtml(title)} harness" aria-label="${escapeHtml(title)} harness">${harnessBadgeInnerHtml(info)}</span>`;
 }
 
-/**
- * Caller-owned memo for one sidebar instance. The fingerprint is an explicit
- * list of the display-affecting inputs — row fields, the expanded/collapsed/
- * pinned/roots sets, host health, and the minute/day clock buckets that move
- * relative-time and cache labels. An unchanged fingerprint reuses the previous
- * projection verbatim, so a poll that confirms the current list builds no card.
- */
+/** An unchanged fingerprint reuses the previous projection verbatim. */
 export interface SidebarProjectionMemo {
   fingerprint?: readonly unknown[] | null;
   projection?: SidebarProjection | null;
 }
 
-/** Render established metadata; no DOM, requests, timers or retained row closures. */
 export function renderSidebar(options: SidebarRenderOptions, memo?: SidebarProjectionMemo): SidebarProjection {
   if (!memo) return buildSidebar(options);
   const fingerprint = sidebarFingerprint(options);
@@ -63,13 +56,7 @@ export function renderSidebar(options: SidebarRenderOptions, memo?: SidebarProje
   return projection;
 }
 
-/**
- * Every read `renderSidebar` makes, in a flat primitive list. Clocks are
- * bucketed at the boundary each label switches on (a minute for "5m ago" and
- * the cache countdown, local midnight for date sections and Today/Yesterday),
- * so a poll inside a bucket is provably unchanged while the next bucket
- * invalidates. Collections contribute size plus members in iteration order.
- */
+/** Clocks are bucketed at each label's switch boundary so polls inside a bucket hit the memo. */
 function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
   const now = Date.now();
   const parts: unknown[] = [
@@ -97,8 +84,7 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
   }
   for (const list of [options.active, options.previous]) for (const session of list) chipHosts.add(session.host || null);
   for (const [, spawn] of options.pending) chipHosts.add(spawn.host || null);
-  // The chip is the presentation layer's own formatting of host identity and
-  // colour, so its output — not just the host rows — is part of the input.
+  // The chip's formatted output is itself a render input.
   for (const host of chipHosts) parts.push(host, options.hostChip(host));
   for (const list of [options.active, options.previous]) {
     parts.push(list.length);
@@ -127,7 +113,6 @@ function sameFingerprint(previous: readonly unknown[], next: readonly unknown[])
   return true;
 }
 
-/** The boundary `formatRelativeTime` switches its label on, never the second. */
 function relativeTimeFingerprint(ts: SessionEntry['lastActivity'], now: number): string {
   if (!ts) return '';
   const seconds = Math.floor(Math.max(0, now - new Date(ts).getTime()) / 1000);
@@ -137,12 +122,10 @@ function relativeTimeFingerprint(ts: SessionEntry['lastActivity'], now: number):
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `h${hours}`;
   const days = Math.floor(hours / 24);
-  // Past a week the label is the session's own calendar date — it stops moving
-  // with the clock, so one constant bucket is exact.
+  // Past a week the label is a fixed date.
   return days < 7 ? `d${days}` : 'dated';
 }
 
-/** The minute `cacheExpiryPresentation` rolls over on, plus the cold step. */
 function cacheExpiryFingerprint(expiry: SessionEntry['cacheExpiry'], now: number): string {
   if (!expiry) return '';
   const remaining = expiry.expiresAt - now;
@@ -164,20 +147,15 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const ctxClass = contextClass(contextPercent);
   const key = sessionRefKey(session);
   const activeClass = selectedKey === key ? 'active' : '';
-  // A live subagent has no bridge of its own (its parent's process owns it),
-  // so `isActive` is false — but it is a running session, not history, and
-  // must not read as dimmed.
+  // Live subagents have no bridge (isActive false) but aren't history.
   const inactiveClass = session.isActive || session.subagentLive ? '' : 'inactive';
   const familyNode = opts.familyNode || null;
   const hasChildren = !!familyNode?.children?.length;
   const familyExpanded = hasChildren && options.expanded.has(key);
   const statusSessions = hasChildren && !familyExpanded
     ? flattenSessionFamilies(familyNode ? [familyNode] : []) : [session];
-  // One dot, best signal wins: waiting on a question (bubble) > working
-  // (pulsing) > unread (accent) > live-in-All > live subagent. A collapsed
-  // parent aggregates its descendants so hiding rows never hides the fact
-  // that a child is blocked, working, has unread activity, or is still
-  // running inside it.
+  // One dot, best signal wins: asking > working > unread > live > live subagent.
+  // Collapsed parents aggregate descendants so hidden children stay visible.
   let liveDot = '';
   if (statusSessions.some(s => s.askPending)) {
     liveDot = '<span class="session-item-status asking" title="Waiting for an answer to a question">?</span>';
@@ -188,14 +166,11 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   } else if (options.tab === 'all' && statusSessions.some(s => s.isActive)) {
     liveDot = '<span class="live-dot" title="Active session family"></span>';
   } else if (statusSessions.some(s => s.subagentLive)) {
-    // Deliberately the static dot: the file says the session is still loaded
-    // in its parent, never whether it is mid-turn.
+    // Static dot: the session is loaded in its parent, not necessarily mid-turn.
     liveDot = '<span class="live-dot" title="Subagent still loaded in its parent session"></span>';
   }
   const displayName = session.name || 'Unnamed';
-  // One context readout, not three: percent or absolute tokens per the device
-  // setting (tokens falls back to percent when the session has no token
-  // count). The colour still comes from the percent — that's the warning.
+  // Colour always comes from the percent; that's the warning.
   const ctxText = options.contextMetric === 'tokens' && session.contextTokens
     ? `${formatTokens(session.contextTokens)} tok`
     : `${contextPercent}%`;
@@ -213,8 +188,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const familyToggle = hasChildren
     ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}" title="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}"><span>${familyExpanded ? '▾' : '▸'}</span><small>${familyNode!.size - 1}</small></button>`
     : ((opts.familyDepth || 0) > 0 ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '');
-  // Live rows only; the confirm/busy states read the module vars so a poll
-  // re-render restores an armed confirm rather than silently clearing it.
+  // Read confirm/busy from options so a poll re-render keeps an armed confirm.
   const closeArmed = options.closeConfirm === key;
   const closeBusy = options.closeBusy === key;
   const detachClient = session.closeMode === 'client-only';
@@ -227,43 +201,31 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const badgeKey = JSON.stringify([session.harnessId, session.harnessLabel]);
   let harnessBadge = badges.get(badgeKey);
   if (harnessBadge === undefined) { harnessBadge = renderHarnessBadge(session.harnessId, session.harnessLabel); badges.set(badgeKey, harnessBadge); }
-  // Provenance stamp from the routine ledger (server-side, presentation only,
-  // like the parent hints): this session is one routine's run.
   const routineChip = session.routine
     ? `<span class="routine-chip" title="Started by the &quot;${escapeHtml(session.routine)}&quot; routine">⏱ ${escapeHtml(session.routine)}</span>`
     : '';
   const hibernationChip = session.hibernation
     ? `<span class="hibernation-chip" title="${escapeHtml(hibernationSummary(session.hibernation))}">hibernated</span>`
     : '';
-  // The transcript lives outside every backed-up session folder; the chip is
-  // the only on-row signal of that, since privacy is a launch decision.
+  // Private transcripts live outside backed-up folders; this chip is the only on-row signal.
   const privateChip = session.private
     ? '<span class="private-chip" title="Private session — stored outside backed-up session folders">private</span>'
     : '';
-  // Rows in the pinned section get a drag handle (reorder); pinned and
-  // Recent-view rows get a cwd hint — they've left their workspace group,
-  // so the group label isn't there.
+  // Pinned rows get a drag handle; out-of-group rows get a cwd hint.
   const dragHandle = opts.pinnedRow ? '<span class="session-drag-handle" title="Drag to reorder">⠿</span>' : '';
   const cwdHint = (opts.pinnedRow || opts.showCwd) ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || '~'))}</span>` : '';
-  // Rows that have left their workspace group (pinned, Recent, search) name
-  // their host too — in the workspace tree the group header carries it.
+  // Out-of-group rows name their host; in the tree the group header does.
   let hostChip = '';
   if (opts.pinnedRow || opts.showCwd) {
     const host = session.host || null;
     if (!hostChips.has(host)) hostChips.set(host, options.hostChip(host));
     hostChip = hostChips.get(host)!;
   }
-  // Rows served from a host that stopped answering are last-known, not live.
   const staleHost = downHosts.has(session.host || null) ? ' stale-host' : '';
-  // Server search attaches a snippet when a session matched on message
-  // content the row's metadata doesn't show — render it so the match
-  // doesn't look arbitrary. Only positive plain terms can cause a content
-  // match, so only they get marked.
+  // Snippet explains content-only matches; only positive plain terms are highlighted.
   const snippetLine = session.searchSnippet
     ? `<div class="session-item-snippet">${highlightTokens(session.searchSnippet, queryTokens)}</div>`
     : '';
-  // Live sessions report their thinking level; historical rows have none to
-  // show, so the chip simply doesn't render there.
   const thinkingChip = session.thinkingLevel
     ? `<span class="session-item-thinking" title="Thinking level: ${escapeHtml(session.thinkingLevel)}">${escapeHtml(session.thinkingLevel)}</span>`
     : '';
@@ -298,8 +260,7 @@ function renderSessionFamily(node: SessionFamily<SessionEntry>, opts: FamilyOpti
   const expanded = node.children.length > 0 && options.expanded.has(sessionRefKey(node.session));
   const row = renderSessionItem(node.session, {
     familyNode: node,
-    // Carried down so a row never has to look its root's host back up: the
-    // sidebar renders thousands of rows and findSession is a linear scan.
+    // Avoids findSession's linear scan per row.
     familyRootKey: rootKey,
     familyDepth: depth,
     familyPinned: !!opts.pinnedFamily,
@@ -337,21 +298,14 @@ function renderPendingSessionItem(spawnId: string, spawn: PendingSessionSpawn) {
 function renderSessions() {
   hostSectionsShown = null; // only the workspace view builds host sections
   const { active, previous } = options;
-  // A live subagent runs inside a live session's process, so it belongs on
-  // the Active tab even though it is a historical row everywhere else (its
-  // parent owns it; pi-dish has no socket to it). The count badge stays a
-  // count of *controllable* sessions.
+  // Live subagents belong on the Active tab; the count badge still counts only controllable sessions.
   const showing = options.tab === 'active'
     ? [...active, ...previous.filter(session => session.subagentLive)]
     : [...active, ...previous];
   const pending = options.pending;
 
-  // Routine-invoked sessions are automation: every cron tick is one, so the
-  // historical list fills with them. They stay out of the sidebar unless the
-  // typed query or an active scope affirmatively asks (`is:automation`,
-  // `routine:name`); a live one is real work in flight and stays. Hidden
-  // rows remain in `sessions` — selection, refs, restore and the search
-  // facets all keep working; only this render skips them.
+  // Routine runs flood history, so they're hidden unless the query/scope asks for
+  // them; live ones stay. Hidden rows remain in `sessions` for selection and refs.
   const sq = options.scope;
   const scopeParsed = sq ? parseSessionQuery(sq) : null;
   const asksAutomation = queryAsksForAutomation(parsedQuery)
@@ -364,26 +318,17 @@ function renderSessions() {
       return false;
     });
   }
-  // Once the lists reflect the typed query, the server's filtering (which
-  // includes message content) is authoritative — re-filtering locally would
-  // drop content-only matches, since the local pass is metadata-only. Until
-  // that response lands, narrow locally so typing feels instant.
-  // `host:` is the exception: it never reached the server, so it is applied
-  // here on top of what the server-filtered lists came back with (the
-  // debounce-window evaluation includes host terms).
+  // Once the server answered this query it is authoritative (it matches content;
+  // the local pass is metadata-only). `host:` never reaches the server, so apply it here.
   const authoritative = !!options.query && options.queriedFor === options.query;
-  // Do not call applyLocalFilter: it scores/sorts, then this renderer must
-  // score/sort again after scopes and the server-score override.
+  // Not applyLocalFilter: it would sort, and we re-sort after scopes anyway.
   const queried = authoritative ? applyHostTerms(visible, options.query)
     : options.query ? visible.filter(session => evaluateSessionQuery(parsedQuery, session)) : visible;
-  // Active scopes apply client-side on top of whatever the query kept —
-  // metadata/date-only by design, so they behave identically on both tabs.
+  // Scopes are metadata/date-only so they behave identically on both tabs.
   const filtered = scopeParsed ? queried.filter(s => evaluateSessionQuery(scopeParsed, s)) : queried;
   const scopesHidden = queried.length - filtered.length;
 
   let html = '';
-  // First boot over a big corpus: the server is still indexing and the list
-  // below is partial — say so (loadSessions re-polls until it settles).
   if (options.tab === 'all' && options.indexing) {
     html += '<div class="indexing-note">Indexing sessions…</div>';
   }
@@ -397,26 +342,21 @@ function renderSessions() {
     </div>`;
   }
   if (filtered.length === 0 && pending.length === 0) {
-    // With a query, `active` is the server-filtered list — an empty one
-    // means "no matches", not "no sessions running".
+    // With a query, `active` is server-filtered: empty means "no matches".
     const msg = options.tab === 'active'
       ? (active.length === 0 && !options.query ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
       : (visible.length === 0 && !options.query ? 'No sessions found' : 'No matches');
     html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
   } else if (options.query) {
-    // Search results are one flat relevance-ranked list — grouping (and the
-    // pinned section, a navigation aid for the unfiltered list) would scatter
-    // the best matches across workspace/date buckets. The server's
-    // searchScore counts transcript occurrences too, so it wins where present;
-    // the interim local-filter pass scores metadata only. Recency breaks ties.
+    // Search results are one flat ranked list; server searchScore (which counts
+    // transcript hits) wins where present, recency breaks ties.
     const ranked = filtered
       .map(session => {
         const localScore = authoritative ? 0 : scoreSessionMatch(parsedQuery, session);
         return { session, localScore, score: session.searchScore ?? (authoritative ? scoreSessionMatch(parsedQuery, session) : localScore),
           activity: new Date(session.lastActivity || 0).getTime() };
       })
-      // Retain the local ordering of equal server scores/recencies during
-      // debounce, without running a separate metadata sort first.
+      // Equal server scores fall back to the local ordering during debounce.
       .sort((a, b) => b.score - a.score || b.activity - a.activity || b.localScore - a.localScore);
     html += `<div class="session-segment ranked-segment">
       ${ranked.map(({ session }) => renderSessionItem(session, { showCwd: true })).join('')}
@@ -434,56 +374,36 @@ function renderSessions() {
       </div>`;
     }
     if (options.view === 'recent') {
-      // A family belongs to the date bucket of its newest member, so a recent
-      // child moves the whole parent-first block instead of splitting it.
+      // A family sits in its newest member's bucket so it isn't split.
       html += groupSessionsByDate(restFamilies).map(renderDateBucket).join('');
     } else {
       html += renderWorkspaceTrees(flattenSessionFamilies(restFamilies));
     }
   }
-  // A host that is down and has no cached rows would otherwise vanish
-  // silently. One quiet line, no retry button: the poll keeps trying.
+  // Down hosts with no cached rows would otherwise vanish silently.
   html += hostOfflineNotesHtml();
-  // Sessions a forgotten chip silently removed must stay discoverable — the
-  // note is the audit trail for "why isn't my session in the list?".
+  // Keep automation-hidden rows discoverable.
   if (automationHidden > 0) {
-    html += `<div class="scope-hidden-note">${automationHidden} automation run${automationHidden === 1 ? '' : 's'} hidden (is:automation shows them)</div>`;
+    html += `<div class="scope-hidden-note">${countLabel(automationHidden, 'automation run')} hidden (is:automation shows them)</div>`;
   }
   if (scopesHidden > 0) {
     html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;
   }
 
   return { layout: html, rows, count: active.length + pending.length,
-    // String consumers (including the pure projection fixtures) retain the
-    // complete markup; the DOM controller only parses changed rows.
+    // String consumers get complete markup; the DOM controller only parses changed rows.
     get html() { let index = 0; return html.replace(/<template data-sidebar-row="[^"]*"><\/template>/g, () => rows[index++].html); } };
 }
 
-/**
- * Collapse-state key for a workspace node. With several hosts in the list the
- * same cwd on two machines is two different workspaces (the doc's rule), so
- * the key — and therefore the tree, the count, and the collapse state — is
- * host-qualified. Single-host keys stay the bare path they have always been,
- * which is what keeps existing collapse state valid.
- */
+/** Multi-host keys are host-qualified; single-host keys stay bare so existing collapse state stays valid. */
 function workspaceGroupKey(hostId: string | null, path: string) {
   return options.multiHost && hostId ? sessionKey(hostId, path) : path;
 }
 
-// Host ids that got their own section in the current render — the offline
-// notes below are the fallback for hosts *without* one, so a down host is
-// never announced twice.
+// Hosts with their own section; offline notes skip them so nothing is announced twice.
 let hostSectionsShown: Set<string> | null = null;
 
-/**
- * The workspace view. One host: exactly the tree it always built. Several:
- * one **host section** per host — a prominent heading (color dot, label,
- * count, reachability, collapse chevron) over that host's own workspace tree.
- * Sections, not interleaved top-level nodes: a fleet is read machine-first,
- * and a heading that names the host makes the per-node chips redundant.
- * Order is self first then by label — stable, deliberately not recency, so
- * the headings don't shuffle under the cursor.
- */
+/** Multi-host: one section per host, self first then by label (not recency, so headings stay put). */
 function renderWorkspaceTrees(list: readonly SessionEntry[]) {
   if (!options.multiHost) {
     const tree = buildWorkspaceTree(groupByWorkspace(list, options.collapsed), options.collapsed);
@@ -495,17 +415,14 @@ function renderWorkspaceTrees(list: readonly SessionEntry[]) {
     const hostId = host.hostId || null;
     const mine = list.filter(s => (s.host || null) === hostId);
     const down = hostIsDown(host);
-    // A reachable host with nothing in the list is simply absent. A *down*
-    // one still gets its heading — with the state on it — so "where did that
-    // machine go?" is answered in place rather than in a footnote.
+    // A down host keeps its heading so its absence is explained in place.
     if (!mine.length && !down) continue;
     hostSectionsShown.add(host.key);
     const key = hostSectionKey(host.key);
     const isCollapsed = options.collapsed.has(key);
     let body = '';
     if (!isCollapsed) {
-      // A collapsed-set view over the host-qualified keys: groupByWorkspace and
-      // buildWorkspaceTree only ever ask `has(path)`, so no helper change.
+      // groupByWorkspace/buildWorkspaceTree only ask `has(path)`; strip the host prefix.
       const collapsedView = hostId ? new Set([...options.collapsed].filter(key => key.startsWith(hostId + ' ')).map(key => key.slice((hostId + ' ').length))) : options.collapsed;
       body = buildWorkspaceTree(groupByWorkspace(mine, collapsedView), collapsedView)
         .map(node => renderWorkspaceNode(node, { hostId })).join('');
@@ -514,8 +431,7 @@ function renderWorkspaceTrees(list: readonly SessionEntry[]) {
           ? 'Enter this host’s token in Settings.' : 'Nothing cached from this host yet.')}</div>`;
       }
     }
-    // Collapsing a section hides the whole machine, so the heading must not
-    // hide activity — same rule (and same signals) as a workspace node.
+    // A collapsed section must not hide activity.
     let headerDot = '';
     if (isCollapsed && mine.length) {
       if (mine.some(s => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
@@ -537,11 +453,7 @@ function renderWorkspaceTrees(list: readonly SessionEntry[]) {
   return html;
 }
 
-/**
- * Hosts that are down and have nothing to show in the current view — one
- * quiet line each. In the workspace view their section heading already says
- * it, so those are skipped.
- */
+/** Down hosts without a workspace section heading get one quiet line each. */
 function hostOfflineNotesHtml() {
   if (!options.multiHost) return '';
   return options.hosts.filter(host => {
@@ -552,16 +464,7 @@ function hostOfflineNotesHtml() {
     host.state === 'blocked' ? 'needs a token (Settings)' : 'unreachable'}</div>`).join('');
 }
 
-/**
- * One workspace-tree node → a .session-segment: header (collapse toggle via
- * data-cwd, the node's path prefix), child nodes nested in an indented
- * .workspace-children, then this node's own sessions — folders before loose
- * sessions, file-manager style. Collapsing a node hides its whole subtree,
- * so the header must not hide activity: surface the best signal
- * (working > unread) from all descendant sessions as a header dot. Multi-host
- * trees sit inside a .host-section whose heading names the machine, so no
- * node header carries a host chip.
- */
+/** Collapsing hides the subtree, so the header surfaces the best descendant signal. */
 function renderWorkspaceNode(node: WorkspaceNode<SessionEntry>, opts: { hostId?: string | null } = {}): string {
   const hostId = opts.hostId || null;
   const groupKey = workspaceGroupKey(hostId, node.path);
@@ -590,14 +493,7 @@ function renderWorkspaceNode(node: WorkspaceNode<SessionEntry>, opts: { hostId?:
   </div>`;
 }
 
-/**
- * One Recent-view date bucket → a .session-segment sharing the workspace
- * header chrome (same collapse delegation via data-cwd, keyed 'date:<key>' so
- * the two views' collapse states can't collide). Unlike workspace groups,
- * collapsed buckets stay in chronological place — sinking "Today" below
- * "May" would break the timeline. Rows carry the cwd hint: the workspace
- * label isn't above them in this view.
- */
+/** Date buckets key collapse state as 'date:<key>' so it can't collide with workspace paths. */
 function renderDateBucket(bucket: { key: string; label: string; sessions: readonly SessionFamily<SessionEntry>[] }) {
   const key = 'date:' + bucket.key;
   const isCollapsed = options.collapsed.has(key);

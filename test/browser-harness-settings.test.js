@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeHarnessConfig, decodeHarnessAgents } = context.PiDishBrowser;
+const { decodeHarnessConfig, decodeHarnessAgents } = (0, browser_vm_js_1.loadBrowser)();
 const plain = (value) => JSON.parse(JSON.stringify(value));
 test('harness settings decode owned string role records and reject malformed top levels', () => {
     const wire = { defaultModel: 'p/main', defaultThinkingLevel: [], globalModelRoles: { smol: 'p/fast', bad: false }, modelRoles: { constructor: 'p/custom' } };

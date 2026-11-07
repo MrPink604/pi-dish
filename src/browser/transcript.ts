@@ -1,13 +1,27 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
-import type { RenderMessage } from './message-data';
+import { decodeRenderMessage, type RenderMessage } from './message-data';
+import { decodeSessionTranscriptPatch, type SessionTranscriptPatch } from '../core/session-api';
+import { record, finite } from '../core/helper-values';
 import { sessionRefKey } from './helper-identity';
 import { escapeHtml } from '../core/helper-format';
-import { record } from '../core/helper-values';
 import { createTranscriptCache } from './transcript-cache';
 import type { TranscriptCursors } from './transcript-cache';
 import { splitToolGroupRanges } from './message-groups';
-import { decodeTranscriptPage, type TranscriptPage } from './transcript-data';
+export interface TranscriptPage {
+  readonly messages: readonly RenderMessage[];
+  readonly session: Readonly<SessionTranscriptPatch>;
+  readonly firstIndex: number | null;
+  readonly lastIndex: number | null;
+  readonly hasMore: boolean;
+  readonly totalMessages: number | null;
+}
+const cursor = (value: unknown) => finite(value) && Number.isInteger(value) && value >= 0 ? value : null;
+export function decodeTranscriptPage(value: unknown): TranscriptPage {
+  if (!record(value) || !Array.isArray(value.messages)) throw new Error('Invalid transcript page');
+  const session = record(value.session) ? decodeSessionTranscriptPatch(value.session) : {};
+  return { messages: value.messages.map(decodeRenderMessage), session, firstIndex: cursor(value.firstIndex), lastIndex: cursor(value.lastIndex), hasMore: value.hasMore === true, totalMessages: cursor(value.totalMessages) };
+}
 /** The selected transcript owns its paging cursors, endpoint, requests and retained DOM. */
 export function createTranscript(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
@@ -42,7 +56,7 @@ export function createTranscript(options: {
     const controller = new AbortController(); requests.add(controller);
     try {
       const response = await options.request({ ...owner.endpoint, token: endpoint.token }, `/api/sessions/${encodeURIComponent(owner.selection.id)}/messages?${suffix}`, { signal: controller.signal });
-      const value: unknown = await response.json(); if (!response.ok) throw new Error(record(value) && typeof value.error === 'string' ? value.error : `Transcript request failed (${response.status})`);
+      const value: unknown = await response.json(); if (!response.ok) throw new Error(responseError(response, value, `Transcript request failed (${response.status})`));
       return decodeTranscriptPage(value);
     } finally { requests.delete(controller); }
   }
@@ -73,12 +87,7 @@ export function createTranscript(options: {
     if (before) container.insertBefore(template.content, before); else container.appendChild(template.content);
     return nodes;
   }
-  /**
-   * Bound the active transcript to MAX_ACTIVE indexed messages while keeping
-   * the oldest retained pages (where paging arrives), the live tail, and the
-   * context around the reader or a search hit. Evicted messages become gaps
-   * the existing paging controls reload, so nothing is lost irretrievably.
-   */
+  /** Keeps the oldest pages, live tail and reader/search context; evicted messages become reloadable gaps. */
   function boundActive() {
     const indexed = Array.from(container.querySelectorAll<HTMLElement>('[data-msg-index]'));
     if (indexed.length <= MAX_ACTIVE) return false;
@@ -162,7 +171,7 @@ export function createTranscript(options: {
     } catch (error) {
       if (owns(owner) && container.contains(gap)) {
         const label = gap.querySelector('span');
-        if (label) label.textContent = `Failed: ${error instanceof Error ? error.message : String(error)} — retry`;
+        if (label) label.textContent = `Failed: ${errorMessage(error)} — retry`;
       }
     } finally {
       delete gap.dataset.loading;
@@ -215,7 +224,7 @@ export function createTranscript(options: {
       const data = await page(owner, 'limit=50'); if (!owns(owner)) return;
       sessionState.mergeCurrentSession(owner.selection, data.session); loaded = { key: sessionRefKey(owner.selection), base: owner.endpoint.base };
       cursors = { oldestIndex: data.firstIndex, lastIndex: data.lastIndex, hasOlder: data.hasMore, total: data.totalMessages || 0 }; render(data.messages);
-    } catch (error) { if (owns(owner)) container.innerHTML = `<div class="error">Failed to load messages: ${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`; }
+    } catch (error) { if (owns(owner)) container.innerHTML = `<div class="error">Failed to load messages: ${escapeHtml(errorMessage(error))}</div>`; }
   }
   async function loadOlder() {
     // Concurrent consumers join the existing request; the original operation
@@ -241,7 +250,7 @@ export function createTranscript(options: {
         if (!document.getElementById('moodIndicator')) options.updateMood(data.messages);
         if (anchor?.isConnected && container.contains(anchor)) container.scrollTop += anchor.getBoundingClientRect().top - offset;
       } else if (cursors.oldestIndex === before) { cursors.hasOlder = false; container.querySelector('#loadOlderBar')?.remove(); bindBar(); }
-    } catch (error) { if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${error instanceof Error ? error.message : String(error)} — retry`; }
+    } catch (error) { if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${errorMessage(error)} — retry`; }
   }
   async function catchup(selection = sessionState.captureSelection()): Promise<void> {
     const owner = capture(selection); if (!owner) return; if (cursors.lastIndex == null) return load(selection);

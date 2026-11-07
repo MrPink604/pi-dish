@@ -1,16 +1,9 @@
-import { assertBrowserApiContext, assertSharedHelpersContext } from './browser-vm.js';
+import { browserSandbox, loadSharedHelpers } from './browser-vm.js';
 import { present } from './test-types.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
 const timers = new Map(); let nextTimer = 0;
-const context = { URL, setTimeout: (fn: unknown) => { timers.set(++nextTimer, fn); return nextTimer; }, clearTimeout: (id: string) => timers.delete(id) };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/helpers.js'), 'utf8'), context);
-assertSharedHelpersContext(context);
+const context = loadSharedHelpers(browserSandbox({ setTimeout: (fn: unknown) => { timers.set(++nextTimer, fn); return nextTimer; }, clearTimeout: (id: string) => timers.delete(id) }));
 const { decodeUsageSummary, decodeUsageLimits, decodeCacheLifetimes, cacheLifetimeStatus, cacheLifetimesHtml, formatGap } = context.PiDishBrowser;
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 test('usage decoding preserves unavailable prices and qualifies even a single answering host', () => {

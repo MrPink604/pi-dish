@@ -4,13 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require('node:vm');
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-(0, browser_vm_js_1.assertBrowserApiContext)(context);
-const { decodeSearchPayload, mergeSearchPayloads, queryHosts } = context.PiDishBrowser;
+const { decodeSearchPayload, mergeSearchPayloads, queryHosts } = (0, browser_vm_js_1.loadBrowser)();
 const plain = (value) => JSON.parse(JSON.stringify(value));
 test('search payloads narrow rows and merge with the actual host identity', () => {
     const value = decodeSearchPayload({ results: [null, { id: 3 }, { id: 's', host: 'forged', name: 'Name', snippets: ['hit', 3], searchScore: 'bad' }] });

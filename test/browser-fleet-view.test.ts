@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm');
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeFleetHealth, formatBytes, formatUptime, meterLevel, fleetSessionsHtml, fleetHealthHtml } = context.PiDishBrowser;
+const { decodeFleetHealth, formatBytes, formatUptime, meterLevel, fleetSessionsHtml, fleetHealthHtml } = loadBrowser();
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
 const GB = 1024 ** 3;
 

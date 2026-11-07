@@ -1,5 +1,5 @@
-import { ApiHttpError, sendJson } from './api-client';
-import type { ApiRequest } from './api-client';
+import { countLabel } from './helper-format';
+import { errorMessage, sendJson, type ApiRequest } from './api-client';
 import type { BrowserHost } from './host-view';
 import { record } from '../core/helper-values';
 import { escapeHtml } from '../core/helper-format';
@@ -83,7 +83,7 @@ export function createPushNotifications(options: {
         await sendJson(options.request, host, '/api/push/subscriptions', body);
         states.set(host.key, { state: 'on' });
       } catch (error) {
-        states.set(host.key, { state: 'failed', message: error instanceof ApiHttpError || error instanceof Error ? error.message : String(error) });
+        states.set(host.key, { state: 'failed', message: errorMessage(error) });
       }
     }));
   }
@@ -92,7 +92,7 @@ export function createPushNotifications(options: {
     if (!enabled() || !registration || notifications().permission !== 'granted') return Promise.resolve();
     if (syncing) { resync = true; return syncing; }
     syncing = syncHosts()
-      .catch(error => { for (const host of pushHosts()) if (!states.has(host.key)) states.set(host.key, { state: 'failed', message: error instanceof Error ? error.message : String(error) }); })
+      .catch(error => { for (const host of pushHosts()) if (!states.has(host.key)) states.set(host.key, { state: 'failed', message: errorMessage(error) }); })
       .finally(() => {
         syncing = null; options.changed();
         if (resync) { resync = false; void sync(); }
@@ -127,8 +127,8 @@ export function createPushNotifications(options: {
     const targets = pushHosts().filter(host => states.get(host.key)?.state === 'on');
     const results = await Promise.allSettled(targets.map(host => sendJson(options.request, host, '/api/push/test', { endpoint: existing.endpoint })));
     const failures = results.flatMap((result, i) => result.status === 'rejected'
-      ? [`${options.label(targets[i])}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`] : []);
-    return failures.length ? failures.join(' ') : `Sent a test from ${targets.length} host${targets.length === 1 ? '' : 's'}.`;
+      ? [`${options.label(targets[i])}: ${errorMessage(result.reason)}`] : []);
+    return failures.length ? failures.join(' ') : `Sent a test from ${countLabel(targets.length, 'host')}.`;
   }
 
   function mount(): void {
@@ -163,7 +163,7 @@ export function createPushNotifications(options: {
       button.addEventListener('click', async () => {
         button.disabled = true; status.textContent = pending;
         try { const message = await action(); if (!signal.aborted) status.textContent = message || ''; }
-        catch (error) { if (!signal.aborted) status.textContent = error instanceof Error ? error.message : String(error); }
+        catch (error) { if (!signal.aborted) status.textContent = errorMessage(error); }
         finally { button.disabled = false; }
       }, { signal });
     };

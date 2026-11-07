@@ -94,7 +94,7 @@ export { createComposerDrafts, mergeComposerText } from './composer-drafts';
 
 export { createSessionReferences } from './session-references';
 export { createComposerAutocomplete } from './composer-autocomplete';
-export { decodeSlashCommands, decodeFileCompletions } from './composer-autocomplete-data';
+export { decodeSlashCommands, decodeFileCompletions } from './composer-autocomplete';
 
 export { renderSidebar, harnessBadgeInnerHtml, renderHarnessBadge } from './sidebar-render';
 
@@ -115,7 +115,7 @@ export { createMood } from './mood';
 
 export { createTranscript } from './transcript';
 export { createTranscriptCache } from './transcript-cache';
-export { decodeTranscriptPage } from './transcript-data';
+export { decodeTranscriptPage } from './transcript';
 
 export { createSessionActivity } from './session-activity';
 export { createSideChat } from './side-chat';

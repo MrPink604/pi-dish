@@ -45,10 +45,8 @@ export function clearCommentMarks(root: HTMLElement, selector = 'mark.comment-ma
   });
 }
 
-// A rendered quote routinely spans several text nodes (markdown turns one
-// sentence into text + <code> + text), so markSearchTokens' per-node scan
-// can't find it. Flatten the subtree into one string with per-node offsets,
-// locate the quote there, then wrap the covered slice of each node.
+// A rendered quote spans several text nodes (text + <code> + text), so flatten
+// with per-node offsets, locate the quote, then wrap each covered slice.
 function collectTextRuns(root: HTMLElement, exclude: string) {
   const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode: (node) => (node.parentElement?.closest(exclude)

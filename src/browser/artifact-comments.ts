@@ -1,15 +1,11 @@
-import { decodePageComments, responseError } from './artifact-comment-data';
+import { decodePageComments } from './artifact-comment-data';
 import type { PageComment, TextAnchor } from './artifact-comment-data';
+import { errorMessage, responseError } from './api-client';
 import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comment-anchors';
 
-/* Anchored comments for pi-dish published pages.
- *
- * Injected only when a page is viewed through the main pi-dish server.  It
- * lives in a shadow root so generated artifacts cannot accidentally restyle
- * the controls (and these controls cannot restyle the artifact).  The page
- * runs in an opaque sandboxed origin, so every call goes to the page-scoped
- * comment routes, which the page token alone addresses.
- */
+/* Lives in a shadow root so artifacts and controls cannot restyle each other.
+ * The page runs in an opaque sandboxed origin, so every call goes to the
+ * page-scoped comment routes, which the page token alone addresses. */
 (() => {
   const script = document.currentScript;
   const pageToken = script instanceof HTMLScriptElement ? script.dataset.pageToken : undefined;
@@ -184,7 +180,7 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
         ? await send(`/${encodeURIComponent(submittedEdit.id)}`, { body: commentBody })
         : await send('', { body: commentBody, anchor: submittedSelection });
       const result: unknown = await response.json();
-      if (!response.ok) throw new Error(responseError(result, response.status));
+      if (!response.ok) throw new Error(responseError(response, result));
       if (submittedVersion === draftVersion
           && (submittedEdit ? editing === submittedEdit : selected === submittedSelection)) {
         close();
@@ -193,7 +189,7 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
       toast(submittedEdit ? 'Comment updated' : 'Comment saved');
       refreshComments();
     } catch (error) {
-      if (submittedVersion === draftVersion) status.textContent = error instanceof Error ? error.message : String(error);
+      if (submittedVersion === draftVersion) status.textContent = errorMessage(error);
     } finally {
       if (submittedVersion === draftVersion) sendButton.disabled = false;
     }
@@ -216,12 +212,12 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
     try {
       const response = await send(`/${encodeURIComponent(target.id)}/delete`, {});
       const result: unknown = await response.json();
-      if (!response.ok) throw new Error(responseError(result, response.status));
+      if (!response.ok) throw new Error(responseError(response, result));
       if (submittedVersion === draftVersion) close();
       toast('Comment deleted');
       refreshComments();
     } catch (error) {
-      if (submittedVersion === draftVersion) { status.textContent = error instanceof Error ? error.message : String(error); disarmDelete(); }
+      if (submittedVersion === draftVersion) { status.textContent = errorMessage(error); disarmDelete(); }
     } finally {
       if (submittedVersion === draftVersion) deleteButton.disabled = false;
     }
@@ -243,9 +239,6 @@ import { clearCommentMarks, markCommentQuote, positionCommentCard } from './comm
     if (event.key === 'Escape' && card.style.display !== 'none') close();
   });
 
-  // --- Open comments, anchored back into the artifact ------------------
-  // Saved feedback stays visible on the page it was written on until the
-  // agent acknowledges it, and stays editable/deletable that whole time.
   // The marks live in the artifact document, out of reach of the shadow
   // stylesheet, so they get one attribute-scoped rule of their own.
   const markStyle = document.createElement('style');

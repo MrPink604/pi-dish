@@ -1,4 +1,4 @@
-import { record, finite } from '../core/helper-values';
+import { record, finite, text, count } from '../core/helper-values';
 import type { HostEndpoint } from './api-client';
 export interface RoutineInvocation {
   readonly id: string; readonly version: number | null; readonly trigger: string; readonly source: string; readonly delivery: string; readonly status: string;
@@ -16,8 +16,6 @@ export interface RoutineForm {
   name: string; description: string; harness: string; cwd: string; model: string; thinking: string; cron: string; enabled: boolean;
   mode: 'oneShot' | 'continue'; onBusy: 'skip' | 'steer' | 'followUp'; minIntervalSec: number; prompt: string;
 }
-const text = (value: unknown) => typeof value === 'string' ? value : '';
-const number = (value: unknown) => finite(value) ? value : 0;
 function decodeInvocation(row: unknown): RoutineInvocation | null {
   if (!record(row) || typeof row.id !== 'string') return null;
   return { id: row.id, version: finite(row.version) ? row.version : null, trigger: text(row.trigger), source: text(row.source), delivery: text(row.delivery), status: text(row.status),
@@ -35,12 +33,12 @@ export function decodeRoutine(value: unknown, host: { hostId: string | null; lab
   if (typeof row.id !== 'string' || !row.id) throw new Error('Invalid routine identity');
   const stats = record(row.stats) ? row.stats : {};
   const versions = Array.isArray(row.versions) ? row.versions.flatMap((version: unknown) => record(version) && finite(version.version) && typeof version.prompt === 'string'
-    ? [{ version: version.version, savedAt: number(version.savedAt), prompt: version.prompt }] : []) : [];
+    ? [{ version: version.version, savedAt: count(version.savedAt), prompt: version.prompt }] : []) : [];
   return { id: row.id, name: text(row.name), description: text(row.description), harness: text(row.harness) || 'pi', cwd: text(row.cwd), model: text(row.model), thinking: text(row.thinking),
     schedule: record(row.schedule) && typeof row.schedule.cron === 'string' ? { cron: row.schedule.cron } : null, enabled: row.enabled !== false,
-    mode: row.mode === 'continue' ? 'continue' : 'oneShot', onBusy: row.onBusy === 'steer' || row.onBusy === 'followUp' ? row.onBusy : 'skip', minIntervalSec: number(row.minIntervalSec),
-    prompt: text(row.prompt), promptVersion: number(row.promptVersion) || 1, versions,
-    stats: { invocations: number(stats.invocations), nextRunAt: finite(stats.nextRunAt) ? stats.nextRunAt : null, lastInvocation: decodeInvocation(stats.lastInvocation) },
+    mode: row.mode === 'continue' ? 'continue' : 'oneShot', onBusy: row.onBusy === 'steer' || row.onBusy === 'followUp' ? row.onBusy : 'skip', minIntervalSec: count(row.minIntervalSec),
+    prompt: text(row.prompt), promptVersion: count(row.promptVersion) || 1, versions,
+    stats: { invocations: count(stats.invocations), nextRunAt: finite(stats.nextRunAt) ? stats.nextRunAt : null, lastInvocation: decodeInvocation(stats.lastInvocation) },
     host: host.hostId, hostLabel: host.label || '', endpoint: Object.freeze({ base: host.base, token: host.token }) };
 }
 export function decodeRoutineList(value: unknown, host: Parameters<typeof decodeRoutine>[1]): Routine[] {

@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-import vm = require('node:vm');
-const context = { URL };
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeVaultOverview, vaultCardsHtml, vaultPanelHtml, vaultListenerText, vaultRequestSession } = context.PiDishBrowser;
+const { decodeVaultOverview, vaultCardsHtml, vaultPanelHtml, vaultListenerText, vaultRequestSession } = loadBrowser();
 
 const NOW = Date.parse('2026-10-19T00:00:00Z');
 const wire = {

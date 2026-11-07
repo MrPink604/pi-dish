@@ -1,4 +1,4 @@
-import type { ApiRequest, HostEndpoint } from './api-client';
+import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from './api-client';
 import { record, finite } from '../core/helper-values';
 import { escapeHtml } from '../core/helper-format';
 export interface SavedFilter { readonly name: string; readonly query: string }
@@ -72,7 +72,7 @@ export function createDisplayPreferences(options: {
         button.addEventListener('click', async () => {
           if (!owns() || button.disabled) return; button.disabled = true;
           try { await options.persistFilters(options.filters().filter(filter => filter.name !== name), endpoint); if (owns()) renderFilters(); }
-          catch (error) { if (owns()) { button.disabled = false; options.alert('Could not delete filter: ' + message(error)); } }
+          catch (error) { if (owns()) { button.disabled = false; options.alert('Could not delete filter: ' + errorMessage(error)); } }
         }, { signal: filterEvents.signal });
       }
     }
@@ -95,12 +95,11 @@ export function createDisplayPreferences(options: {
       try {
         const response = await options.request(endpoint, '/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ monthlyBudgetUsd: value }) });
         const data: unknown = await response.json();
-        if (!response.ok) throw new Error(record(data) && typeof data.error === 'string' ? data.error : 'Save failed');
+        if (!response.ok) throw new Error(responseError(response, data, 'Save failed'));
         if (owns()) status.textContent = 'Saved for all devices.';
-      } catch (error) { if (owns()) status.textContent = 'Save failed: ' + message(error); }
+      } catch (error) { if (owns()) status.textContent = 'Save failed: ' + errorMessage(error); }
       finally { if (owns()) save.disabled = false; }
     }, listener);
   }
   return { open, close, render, get responseMode() { return mode; }, get contextMetric() { return context; }, dispose() { close(); disposed = true; } };
 }
-function message(error: unknown): string { return error instanceof Error ? error.message : String(error); }

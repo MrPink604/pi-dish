@@ -1,5 +1,4 @@
-import type { ApiRequest } from './api-client';
-import { modelCatalogUrl } from './api-client';
+import { ApiHttpError, errorMessage, jsonResponse, modelCatalogUrl, type ApiRequest } from './api-client';
 import { sameDirectoryHost } from './directory-catalog';
 import type { DirectoryHost } from './directory-catalog';
 import { decodeModelCatalog } from '../core/session-api';
@@ -58,7 +57,6 @@ export function createHarnessSettings(options: {
   }
   const button = $<HTMLButtonElement>('modelRolesSave');
   const search = $<HTMLInputElement>('hsSettingsSearch');
-  const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
   function isOpen(): boolean { return root.style.display === 'flex'; }
   function owns(view: SettingsView): boolean { return harnessSettings === view && isOpen(); }
   function ownsHost(view: SettingsView): boolean { return sameDirectoryHost(view.host, options.host(view.scope.hostId)); }
@@ -107,21 +105,14 @@ export function createHarnessSettings(options: {
         return { ...role, value, override: effectiveValue && effectiveValue !== value ? effectiveValue : null };
       });
   }
-  class RequestError extends Error {
-    constructor(message: string, readonly status: number) { super(message); }
-  }
   async function request(host: Readonly<DirectoryHost>, url: string, body?: unknown): Promise<unknown> {
-    const response = await options.request(host, url, body === undefined ? undefined : {
+    return jsonResponse(await options.request(host, url, body === undefined ? undefined : {
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    const data: unknown = await response.json().catch(() => null);
-    if (!response.ok) throw new RequestError(data && typeof data === 'object' && 'error' in data
-      && typeof data.error === 'string' && data.error ? data.error : `HTTP ${response.status}`, response.status);
-    return data;
+    }));
   }
   async function settle<T>(promise: Promise<T>): Promise<{ value: T; error?: undefined; status?: undefined } | { value?: undefined; error: string; status: number | null }> {
     try { return { value: await promise }; } catch (error) {
-      return { error: errorMessage(error), status: error instanceof RequestError ? error.status : null };
+      return { error: errorMessage(error), status: error instanceof ApiHttpError ? error.status : null };
     }
   }
   function hostChanged(): void {
@@ -211,14 +202,12 @@ export function createHarnessSettings(options: {
     return html;
   }
 
-  /** Model changed: re-derive the level ladder from the new model's catalog. */
   function modelRoleModelChanged(input: HTMLInputElement) {
     const levelSelect = input.closest('.model-role-row')?.querySelector<HTMLSelectElement>('.model-role-level');
     if (!levelSelect) return;
     levelSelect.innerHTML = modelRoleLevelOptions(levelSelect.value, input.dataset.value || '', false);
   }
 
-  /** A combobox input holding its choice in `data-value`, with the dropdown it filters. */
   function modelPickerHtml(className: string, attrs: string, value: string, placeholder: string) {
     return `<div class="cwd-input-wrap hs-model-pick"><input type="text" class="cwd-input ${className}" ${attrs}
       data-initial="${escapeHtml(value)}" data-value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}"

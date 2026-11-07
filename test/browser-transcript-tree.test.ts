@@ -1,13 +1,7 @@
-import { assertBrowserApiContext } from './browser-vm.js';
+import { loadBrowser } from './browser-vm.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
-import fs = require('node:fs');
-import path = require('node:path');
-const vm: typeof import('node:vm') = require('node:vm')
-const context = {};
-vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../public/browser.js'), 'utf8'), context);
-assertBrowserApiContext(context);
-const { decodeTranscriptTree, projectTranscriptTree, transcriptTreeDescend, transcriptTreePath } = context.PiDishBrowser;
+const { decodeTranscriptTree, projectTranscriptTree, transcriptTreeDescend, transcriptTreePath } = loadBrowser();
 test('tree decoding narrows ids, roles, timestamps and tool summaries', () => {
   const tree = decodeTranscriptTree({ nodes: [null, { id: 7 }, { id: 'entry', timestamp: '2026-10-28T12:00:00.000Z', role: {}, toolCalls: [null, { id: 'call', name: 'bash', args: 'pwd' }] }, { id: 'bad-time', timestamp: 'soon' }], activePathIds: ['entry', 3], leafId: false });
   assert.equal(tree.nodes.length, 2); assert.equal(tree.nodes[0].role, ''); assert.equal(tree.nodes[0].time, Date.parse('2026-10-28T12:00:00.000Z')); assert.equal(tree.nodes[1].time, 0);
