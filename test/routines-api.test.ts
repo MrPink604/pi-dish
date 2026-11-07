@@ -462,8 +462,11 @@ test('stored launch selections are validated at the file boundary', async () => 
   Object.assign(storedRow, { cwd: 42 });
   fs.writeFileSync(file, JSON.stringify(saved));
   const before = fs.readFileSync(START_LOG, 'utf8');
-  assert.equal((await post(`/api/routines/${routine.id}/invoke?wait=1`, {})).status, 404, 'a non-string cwd is not a routine');
-  assert.equal(fs.readFileSync(START_LOG, 'utf8'), before, 'nothing launches');
+  const failed = await post(`/api/routines/${routine.id}/invoke?wait=1`, {});
+  assert.equal(failed.status, 200);
+  assert.equal(record(failed.body.invocation).status, 'errored');
+  assert.equal(record(failed.body.invocation).sessionId, null);
+  assert.equal(fs.readFileSync(START_LOG, 'utf8'), before, 'a non-string cwd fails before native launch');
   Object.assign(storedRow, { cwd });
   fs.writeFileSync(file, JSON.stringify(saved));
   await del(`/api/routines/${routine.id}`);

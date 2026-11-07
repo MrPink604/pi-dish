@@ -4,6 +4,7 @@
  * deleting a definition never removes its invocation history or running session.
  */
 import crypto = require('crypto');
+import { isDeepStrictEqual } from 'util';
 import { readStore, writeStore } from './dish-store';
 import { asRecord } from './wire-protocol';
 import { getHarness } from './harnesses';
@@ -28,7 +29,8 @@ export interface Routine {
   name: string;
   description: string;
   harness: string;
-  cwd: string;
+  /** Stored as written; session launch rejects a non-string. */
+  cwd: unknown;
   model?: string;
   thinking?: RoutineThinking;
   prompt: string;
@@ -135,7 +137,7 @@ function parseVersions(value: unknown, promptVersion: number, prompt: string, cr
 /** A stored row is validated once here; everything downstream sees a Routine. */
 function parseRoutine(id: string, value: unknown): Routine | null {
   const row = asRecord(value);
-  if (row.id !== id || typeof row.name !== 'string' || typeof row.prompt !== 'string' || typeof row.cwd !== 'string') return null;
+  if (row.id !== id || typeof row.name !== 'string' || typeof row.prompt !== 'string') return null;
   const promptVersion = numberOr(row.promptVersion, 1);
   const cron = asRecord(row.schedule).cron;
   return {
@@ -178,8 +180,19 @@ function readRoutines(): Record<string, Routine> {
   return parseRoutines(storedRoutines());
 }
 
-function saveRoutine(stored: Record<string, unknown>, routine: Routine): void {
-  stored[routine.id] = { ...asRecord(stored[routine.id]), ...routine };
+/** Write only the fields that changed, so stored values this version cannot parse survive. */
+function changedFields(row: unknown, next: object, previous: object | null): Record<string, unknown> {
+  const merged = { ...asRecord(row) };
+  for (const [key, value] of Object.entries(next)) {
+    if (previous && isDeepStrictEqual(value, Reflect.get(previous, key))) continue;
+    if (value === undefined) delete merged[key];
+    else merged[key] = value;
+  }
+  return merged;
+}
+
+function saveRoutine(stored: Record<string, unknown>, routine: Routine, previous: Routine | null): void {
+  stored[routine.id] = changedFields(stored[routine.id], routine, previous);
   writeStore(ROUTINES_FILE, { version: 1, routines: stored });
 }
 
@@ -294,7 +307,7 @@ export function createRoutine(input: unknown = {}): Routine {
     createdAt: now,
     updatedAt: now,
   };
-  saveRoutine(stored, routine);
+  saveRoutine(stored, routine, null);
   return routine;
 }
 
@@ -339,7 +352,7 @@ export function updateRoutine(ref: string, patch: unknown = {}): Routine | null 
     }
   }
   routine.updatedAt = now;
-  saveRoutine(stored, routine);
+  saveRoutine(stored, routine, existing);
   return routine;
 }
 
@@ -358,7 +371,7 @@ export function markScheduled(id: string, minuteMs: number): Routine | null {
   const existing = parseRoutine(id, stored[id]);
   if (!existing) return null;
   const routine: Routine = { ...existing, lastScheduledMinute: minuteMs };
-  saveRoutine(stored, routine);
+  saveRoutine(stored, routine, existing);
   return routine;
 }
 
@@ -460,7 +473,7 @@ export function updateInvocation(id: string, patch: InvocationPatch): RoutineInv
     if (updated.endedAt && !Number.isFinite(updated.durationMs)) {
       updated.durationMs = Math.max(0, updated.endedAt - (updated.startedAt || 0));
     }
-    rows[index] = { ...asRecord(row), ...updated };
+    rows[index] = changedFields(row, updated, current);
     writeInvocations(rows);
     return updated;
   }

@@ -223,6 +223,8 @@ test('stored records are validated and normalized at the file boundary', () => {
   const savedRoutines = JSON.parse(fs.readFileSync(path.join(dishDir, 'routines.json'), 'utf8')).routines;
   assert.deepEqual(Object.keys(savedRoutines).sort(), ['external', 'partial', 'wrongKey'], 'a write keeps rows it cannot parse');
   assert.deepEqual(savedRoutines.partial.extra, { retained: true }, 'a write keeps unknown fields of the edited row');
+  assert.equal(savedRoutines.partial.model, 42, 'a write keeps unchanged fields it could not parse');
+  assert.equal(savedRoutines.partial.promptVersion, '2');
   assert.equal(savedRoutines.partial.description, 'edited');
 
   fs.writeFileSync(path.join(dishDir, 'routine-invocations.json'), JSON.stringify({
@@ -239,6 +241,8 @@ test('stored records are validated and normalized at the file boundary', () => {
   const savedRuns = JSON.parse(fs.readFileSync(path.join(dishDir, 'routine-invocations.json'), 'utf8')).invocations;
   assert.deepEqual(savedRuns.map((row: { id: unknown }) => row.id), ['external-run', 'bad-status', 1], 'a write keeps rows it cannot parse');
   assert.equal(savedRuns[0].extra, 'kept');
+  assert.equal(savedRuns[0].startedAt, '100', 'an unchanged unparseable field stays as stored');
+  assert.equal(savedRuns[0].status, 'completed');
 });
 
 test('the ledger rejects input over the cap without persisting', () => {
