@@ -6,7 +6,7 @@ import path = require('node:path');
 import { once } from 'node:events';
 import { performance } from 'node:perf_hooks';
 import type { Server } from 'node:http';
-import { checkedNativeId, record, type FixtureRecord } from './dev-fixture-values.js';
+import { nativeId, record, type TestRecord } from '../test/test-types.js';
 const { sanitizeTestEnv }: typeof import('../test/test-env') = require('../test/test-env')
 
 const scenario = process.argv[2] ?? '';
@@ -140,8 +140,8 @@ piSdk.getAvailableModels = async () => [];
 const index: typeof import('../lib/session-index') = require('../lib/session-index')
 const { encodeSessionKey }: typeof import('../lib/session-key') = require('../lib/session-key')
 let server: Server | null = null;
-const results: FixtureRecord[] = [];
-async function measure(name: string, action: () => FixtureRecord | Promise<FixtureRecord>): Promise<void> {
+const results: TestRecord[] = [];
+async function measure(name: string, action: () => TestRecord | Promise<TestRecord>): Promise<void> {
   counts = { directoryOpens: 0, directoryReads: 0, stats: 0, fullReads: 0, rangeReads: 0, bytes: 0 };
   const observed = counts;
   const start = performance.now();
@@ -166,7 +166,7 @@ async function main() {
   const address = activeServer.address();
   if (!address || typeof address === 'string') throw new Error('Baseline server lacks TCP address');
   const base = `http://127.0.0.1:${address.port}`;
-  const get = async (route: string): Promise<FixtureRecord> => {
+  const get = async (route: string): Promise<TestRecord> => {
     const response = await fetch(base + route);
     if (!response.ok) throw new Error(`${route}: HTTP ${response.status}`);
     const body = record(await response.json());
@@ -176,7 +176,7 @@ async function main() {
       indexing: body.indexing, totalMessages: body.totalMessages };
   };
   if (scenario === 'routes') {
-  const route = `/api/sessions/${encodeSessionKey('prime', checkedNativeId('fixture-0'))}/messages?limit=1`;
+  const route = `/api/sessions/${encodeSessionKey('prime', nativeId('fixture-0'))}/messages?limit=1`;
   await measure('cold-route-and-transcript', () => get(route));
   await measure('warm-route-and-transcript', () => get(route));
   }
@@ -197,7 +197,7 @@ async function main() {
   index.resetForTests();
   await measure('persisted-index-list', () => get('/api/sessions?view=client'));
   const sourceApi: typeof import('../lib/session-source') = require('../lib/session-source');
-  const candidate = sourceApi.sourceForIdentity('pi', checkedNativeId('streaming'), large);
+  const candidate = sourceApi.sourceForIdentity('pi', nativeId('streaming'), large);
   index.getSessionInfo(candidate);
   const delta = JSON.stringify({ type: 'message', id: 'm6000', parentId: 'm5999', message: { role: 'user', content: [{ type: 'text', text: 'ordinary append' }] } }) + '\n';
   fs.appendFileSync(large, delta);
