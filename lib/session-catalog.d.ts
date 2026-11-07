@@ -115,6 +115,8 @@ declare function withSessionContext<T extends Readonly<SessionInfo>>(info: T, co
 };
 declare function subsessionLabel(source: SessionSource | null): string | null;
 declare function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalogOptions): CatalogSession;
+/** Fallback cwd from pi's session dir naming (--home-user-proj-- → /home/user/proj). */
+declare function decodeDirToCwd(dirName: string): string;
 declare function buildSourceSession(source: SessionSource, info: Readonly<SessionInfo>, advice: CatalogAdvice, options: SessionCatalogOptions): CatalogSession;
 declare function buildHistoricalSession(history: CatalogHistoryObservation, options: SessionCatalogOptions, projection?: {
     cwdFallback?: boolean;
@@ -132,5 +134,6 @@ declare const _default: {
     buildSourceSession: typeof buildSourceSession;
     buildHistoricalSession: typeof buildHistoricalSession;
     composeSessionCatalog: typeof composeSessionCatalog;
+    decodeDirToCwd: typeof decodeDirToCwd;
 };
 export = _default;

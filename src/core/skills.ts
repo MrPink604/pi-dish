@@ -14,7 +14,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { LoadSkillsResult, ResourceDiagnostic, Skill } from '@earendil-works/pi-coding-agent' with { 'resolution-mode': 'import' };
 import * as piSDK from './pi-sdk';
-import { finite } from './session-index-data';
+import { finite } from './helper-values';
 import type { SkillActivation } from './session-index-data';
 
 type SkillDiagnostic = Pick<ResourceDiagnostic, 'type' | 'message' | 'path'>;

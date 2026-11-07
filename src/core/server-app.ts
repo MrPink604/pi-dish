@@ -12,13 +12,12 @@ import pages = require('./pages');
 import skillsLib = require('./skills');
 import sessionIndex = require('./session-index');
 import sessionProvenance = require('./session-provenance');
-import routinesStore = require('./routines');
 import recoveryStore = require('./session-recovery');
 import * as piSDK from './pi-sdk';
 import { readSessionMessages, readSessionCwd, readSessionTailEntry } from './session-files';
 import { knownWorkspaceCwds } from './skill-feature-handlers';
 import { getHarness, listHarnesses } from './harnesses';
-import { readDishSettings, writeDishSettings } from './dish-store';
+import { readDishSettings } from './dish-store';
 import { createAccessHandlers } from './access-handlers';
 import { createRelayHandlers } from './relay-handlers';
 import { createTerminalHandlers } from './terminal-handlers';
@@ -33,8 +32,8 @@ import { createSessionOwnership, liveSessionSupports, registryIdentity, routeIde
 import { createSessionLaunch } from './session-launch';
 import { createSessionOperations } from './session-operations';
 import { createMessageHold } from './message-hold';
-import { createCatalogRuntime, getContextWindow, getModelsCache, setModelsCache } from './session-catalog-runtime';
-import { createLiveSessionInfo, createSessionLifecycleObserver } from './live-sessions';
+import { createCatalogRuntime } from './session-catalog-runtime';
+import { createSessionLifecycleObserver, primeLiveSession } from './live-sessions';
 import { createSessionBrowseHandlers } from './session-browse-handlers';
 import { createSessionRelationHandlers } from './session-relation-handlers';
 import { createSlashCommandHandler } from './session-slash-handlers';
@@ -55,8 +54,7 @@ import { expandSessionRefs } from './session-refs';
 import { getPrimeDaemon } from './prime-daemon';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
-import { errorMessage, errorStatus } from './http-boundary';
-import { requestBody, type ApplicationRequest, type ApplicationResponse } from './http-boundary';
+import { errorMessage, errorStatus, requestBody, type ApplicationRequest, type ApplicationResponse } from './http-boundary';
 import type { NextFunction } from 'express';
 import type { Server } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -78,7 +76,6 @@ export function startServer(rootDirectory: string): Server {
   // opt-in too: without a token, anything that can reach the port can drive
   // agents with shell access.
   const HOST = process.env.HOST || '127.0.0.1';
-  const PI_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'agent', 'settings.json');
   const packageVersion: string = require(path.join(rootDirectory, 'package.json')).version;
 
   const accessHandlers = createAccessHandlers({
@@ -135,8 +132,8 @@ export function startServer(rootDirectory: string): Server {
   });
   const {
     sessionSources, getRegisteredSession, getRPCSession,
-    resolveSessionCandidate, liveSessionHistoryPending, getLiveSession,
-    adoptBridgeSessionSwitch, describeRuntime, locatePiPane,
+    resolveSessionCandidate, getLiveSession,
+    adoptBridgeSessionSwitch, locatePiPane,
     liveSourceObservations,
   } = ownership;
 
@@ -161,14 +158,16 @@ export function startServer(rootDirectory: string): Server {
     wakeSession: routeId => { messageHold.wake(routeId); },
     adoptSessionSwitch: (session, data) => { adoptBridgeSessionSwitch(session, data); },
   });
-  const catalog = createCatalogRuntime({ ownership, getLiveSession, onPrimeSession: lifecycleObserver });
-  const liveInfo = createLiveSessionInfo(ownership);
+  const catalog = createCatalogRuntime({ ownership, onPrimeSession: lifecycleObserver });
 
   function findSessionSource(sessionId: unknown, { exact = false } = {}): SessionSource | null {
     return sessionSources.resolve({ route: sessionId, exact, live: liveSourceObservations(sessionId) });
   }
   function findSessionFile(sessionId: unknown, options?: { exact?: boolean }): string | null {
     return findSessionSource(sessionId, options)?.file || null;
+  }
+  function sessionKnown(sessionId: string): boolean {
+    return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive || !!findSessionSource(sessionId, { exact: true });
   }
 
   // Best-known working directory for a session: live registry first, then the
@@ -177,7 +176,7 @@ export function startServer(rootDirectory: string): Server {
     const registered = getRegisteredSession(sessionId);
     if (registered?.cwd) return registered.cwd;
     // A fresh Prime root may not have a JSONL header yet; its roster row does.
-    const primeCwd = liveInfo.primeLiveSession(sessionId)?.cwd;
+    const primeCwd = primeLiveSession(sessionId)?.cwd;
     if (primeCwd) return primeCwd;
     const session = findSessionSource(sessionId);
     if (session) {
@@ -187,23 +186,11 @@ export function startServer(rootDirectory: string): Server {
   }
 
   const fileHandlers = createFileHandlers({ resolveSessionCwd, findSessionSource });
-  const sessionReadHandlers = createSessionReadHandlers({
-    findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession,
-    isLive: liveInfo.isLive,
-    getLiveSession,
-    liveTreeLeafId: liveInfo.liveTreeLeafId,
-    getLiveContextUsage: liveInfo.getLiveContextUsage,
-    getContextWindow,
-    describeRuntime,
-  });
+  const sessionReadHandlers = createSessionReadHandlers({ ownership, catalog, findSessionSource });
   const publicationHandlers = createPublicationHandlers({
-    findSessionSource, liveSessionHistoryPending, listRegisteredSessions,
-    enumerateSessionCandidates: catalog.enumerateSessionCandidates,
-    getRPCSession,
-    exportSessionHtml: sessionReadHandlers.exportSessionHtml,
-    getOmpShareSnapshot: sessionReadHandlers.getOmpShareSnapshot,
+    ownership, catalog, findSessionSource,
+    reads: sessionReadHandlers,
     relay: relayHandlers.publicArtifacts,
-    publicBaseUrl: () => process.env.PI_DISH_SHARE_BASE_URL,
     resourceRoot: rootDirectory,
   });
   const sessionLaunch = createSessionLaunch({ runHarnessModelCommand });
@@ -215,17 +202,9 @@ export function startServer(rootDirectory: string): Server {
     recordLaunchProvenance: (id, sourceId, operationId) => sessionProvenance.recordLaunch(id, sourceId, operationId),
   });
   const featureHandlers = createFeatureHandlers({
-    readDishSettings, writeDishSettings,
-    buildSessionCatalog: catalog.buildSessionCatalog,
-    enumerateSessionCandidates: catalog.enumerateSessionCandidates,
-    findSessionSource,
-    getSessionModels: catalog.getSessionModels,
-    getLiveSession,
-    locatePiPane,
-    getModelsCache,
-    setModelsCache,
+    catalog, ownership, findSessionSource,
     applicationRoot: rootDirectory,
-    piSettingsFile: PI_SETTINGS_FILE,
+    piSettingsFile: path.join(os.homedir(), '.pi', 'agent', 'settings.json'),
   });
 
   app.use('/api/sessions/:id', (req: ApplicationRequest, res: ApplicationResponse, next: NextFunction) => {
@@ -287,9 +266,7 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/sessions/:id/steer', sessionCommandHandlers.steer);
   app.post('/api/sessions/:id/follow-up', sessionCommandHandlers.followUp);
 
-  const mutationHandlers = createSessionMutationHandlers({
-    getLiveSession, findSessionSource, getRegisteredSession,
-  });
+  const mutationHandlers = createSessionMutationHandlers({ ownership, findSessionSource });
   app.post('/api/sessions/:id/queue/cancel', mutationHandlers.cancelQueued);
   app.post('/api/sessions/:id/thinking', mutationHandlers.thinking);
   app.post('/api/sessions/:id/fast', mutationHandlers.fast);
@@ -342,7 +319,7 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/sessions/:id/model', mutationHandlers.model);
   app.get('/api/sessions/:id/tree', sessionReadHandlers.tree);
   app.post('/api/sessions/:id/branch',
-    createSessionTreeHandler({ getLiveSession, findSessionSource, getRegisteredSession, getRPCSession, locatePiPane }).branch);
+    createSessionTreeHandler({ ownership, findSessionSource }).branch);
 
   app.get('/api/harnesses', featureHandlers.harnesses);
   app.get('/api/harnesses/:id/config', featureHandlers.harnessConfig);
@@ -429,13 +406,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/diff/patch', fileHandlers.diffPatch);
   app.get('/api/sessions/:id/diff', fileHandlers.diffSummary);
 
-  const createHandlers = createSessionCreateHandlers({
-    sessionOperations,
-    sessionLaunch,
-    findSessionFile,
-    getRegisteredSession,
-    getRPCSession,
-  });
+  const createHandlers = createSessionCreateHandlers({ sessionOperations, sessionLaunch, sessionKnown });
   app.post('/api/sessions/new', createHandlers.create);
   app.get('/api/session-spawns/:id', createHandlers.spawnStatus);
 
@@ -469,9 +440,9 @@ export function startServer(rootDirectory: string): Server {
     if (typeof excluded !== 'boolean') return res.status(400).json({ error: 'excluded must be a boolean' });
     const identity = routeIdentity(req.params.id);
     if (!identity || !getHarness(identity.harnessId)) return res.status(400).json({ error: 'Invalid session ID' });
-    if (!recoveryStore.readRecord(identity.harnessId, identity.nativeSessionId)
-        && !getRegisteredSession(req.params.id) && !getRPCSession(req.params.id)?.alive
-        && !findSessionSource(req.params.id, { exact: true })) return res.status(404).json({ error: 'Session not found' });
+    if (!recoveryStore.readRecord(identity.harnessId, identity.nativeSessionId) && !sessionKnown(req.params.id)) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
     try {
       res.json({ excluded: recoveryStore.patchControl(identity.harnessId, identity.nativeSessionId, { excluded }).excluded });
     } catch (error) { res.status(500).json({ error: errorMessage(error) }); }
@@ -590,7 +561,7 @@ export function startServer(rootDirectory: string): Server {
     composePrompt: (routine, invocation) => composeRoutinePrompt(routine, invocation, sessionRefDeps()),
     isTurnInProgress: (sess) => !!sess?.turnInProgress,
     supports: liveSessionSupports,
-    recoveryOutcome: sessionId => recoveryRunner.outcome(sessionId),
+    recoveryOutcome: recoveryRunner.outcome,
   });
   const routineHandlers = createRoutineHandlers({
     runner: routineRunner,
@@ -646,7 +617,7 @@ export function startServer(rootDirectory: string): Server {
   return startListeners({
     app, host: HOST, port: PORT, upgrade, closeResources,
     terminalShutdown: terminalHandlers?.shutdown,
-    warm: () => { piSDK.getAvailableModels().then(setModelsCache).catch(() => {}); },
+    warm: () => { piSDK.getAvailableModels().then(catalog.setModelsCache).catch(() => {}); },
     onListening: () => {
       // Skill roots precede the first big index build; failure remains harmless.
       skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds(catalog.buildSessionCatalog) })

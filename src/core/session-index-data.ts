@@ -1,6 +1,5 @@
 /** Persisted index projections and their consumed disk-ingress validation. */
 import { finite, record as isRecord } from './helper-values';
-export { finite };
 
 export interface UsageState { provider: string | null; model: string; serviceTier?: Record<string, string> }
 export interface UsageTokens {

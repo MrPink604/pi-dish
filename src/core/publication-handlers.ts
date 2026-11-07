@@ -13,25 +13,25 @@ import { readFileForViewer } from './file-mention';
 import { renderFilePage } from './file-page';
 import { readOmpExportData } from './omp-export';
 import { isolateArtifact } from './artifact-isolation';
-import type { SessionSource, DiscoveryCandidate } from './session-source';
+import type { SessionSource } from './session-source';
+import type { SessionOwnership } from './session-ownership';
+import type { CatalogRuntime } from './session-catalog-runtime';
+import { listRegisteredSessions } from './bridge-session';
 import type { BridgeRegistryEntry } from './contracts';
 import type { SessionReadHandlers } from './session-read-handlers';
 import type { PublicArtifactRelay } from './relay-handlers';
+import { errorMessage } from './http-boundary';
 
 type PublicationRequest = Request<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 type PublicationResponse = Response<unknown, Record<string, unknown>>;
 type PublicationHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 
 export interface PublicationPorts {
+  ownership: SessionOwnership;
+  catalog: CatalogRuntime;
   findSessionSource(id: string): SessionSource | null;
-  liveSessionHistoryPending(id: string): boolean;
-  listRegisteredSessions(): readonly BridgeRegistryEntry[];
-  enumerateSessionCandidates(): readonly DiscoveryCandidate[];
-  getRPCSession(id: string): { readonly id: unknown } | null | undefined;
-  exportSessionHtml: SessionReadHandlers['exportSessionHtml'];
-  getOmpShareSnapshot: SessionReadHandlers['getOmpShareSnapshot'];
+  reads: SessionReadHandlers;
   relay: PublicArtifactRelay;
-  publicBaseUrl(): string | undefined;
   resourceRoot: string;
 }
 
@@ -79,12 +79,14 @@ function commentBody(value: unknown): string | null {
 }
 
 export function createPublicationHandlers(ports: PublicationPorts): PublicationHandlers {
-  const { findSessionSource, liveSessionHistoryPending, listRegisteredSessions,
-    enumerateSessionCandidates, getRPCSession, exportSessionHtml, getOmpShareSnapshot } = ports;
+  const { findSessionSource } = ports;
+  const { liveSessionHistoryPending, getRPCSession } = ports.ownership;
+  const { enumerateSessionCandidates } = ports.catalog;
+  const { exportSessionHtml, getOmpShareSnapshot } = ports.reads;
   // url is set only when PI_DISH_SHARE_BASE_URL is, so operators behind a
   // proxy can hand out an absolute link.
   function publicLink(pathname: string) {
-    const base = ports.publicBaseUrl();
+    const base = process.env.PI_DISH_SHARE_BASE_URL;
     return base ? base.replace(/\/+$/, '') + pathname : null;
   }
 
@@ -155,7 +157,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       const token = shares.createHtmlShare(req.body);
       return res.json(sharePayload(token));
     } catch (e) {
-      return res.status(500).json({ error: (e as Error).message });
+      return res.status(500).json({ error: errorMessage(e) });
     }
   };
 

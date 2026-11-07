@@ -1,4 +1,5 @@
-import type { FeatureHandler, FeaturePorts } from './feature-handlers';
+import type { FeatureHandler } from './feature-handlers';
+import { readDishSettings } from './dish-store';
 import { discoverHarnessSessions } from './session-discovery';
 import { refreshHarnessPricing } from './harness-pricing';
 import * as sessionIndex from './session-index';
@@ -28,7 +29,7 @@ function localDay(offset = 0): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-export function createUsageSummaryHandler(ports: FeaturePorts): FeatureHandler {
+export function createUsageSummaryHandler(): FeatureHandler {
   return async (req, res) => {
     const range = String(req.query.days || '30');
     if (!['1', '7', '30', 'all'].includes(range)) return res.status(400).json({ error: 'days must be 1, 7, 30, or all' });
@@ -153,6 +154,6 @@ export function createUsageSummaryHandler(ports: FeaturePorts): FeatureHandler {
     // another request.
     const headlineCostsByBucket = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs]));
     const headlineCostUnavailable = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costUnavailable.total]));
-    res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostsByBucket, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: ports.readDishSettings().monthlyBudgetUsd ?? null });
+    res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostsByBucket, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
   };
 }

@@ -31,7 +31,7 @@ export interface RecoveryRunner {
     start(): Promise<void>;
     retry(id: string): Promise<RecoveryOutcome>;
     report(): RecoveryReport;
-    outcome(id: unknown): RecoveryOutcome | null;
+    outcome(id: string): RecoveryOutcome | null;
     stop(): void;
 }
 export type RecoveryRunnerStore = Pick<typeof recoveryStore, 'listRecords' | 'readRecord' | 'getControl' | 'patchControl' | 'checkpointMatches'>;

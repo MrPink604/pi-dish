@@ -45,7 +45,7 @@ export interface RecoveryRunner {
   start(): Promise<void>;
   retry(id: string): Promise<RecoveryOutcome>;
   report(): RecoveryReport;
-  outcome(id: unknown): RecoveryOutcome | null;
+  outcome(id: string): RecoveryOutcome | null;
   stop(): void;
 }
 
@@ -308,7 +308,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     return recover(record, true);
   }
 
-  return { start, retry, report, outcome: id => typeof id === 'string' ? reports.get(id) ?? null : null, stop: () => { stopped = true; } };
+  return { start, retry, report, outcome: id => reports.get(id) ?? null, stop: () => { stopped = true; } };
 }
 
 /** Checked production restore/delivery policy; callers provide owners and presentation, not authority callbacks. */

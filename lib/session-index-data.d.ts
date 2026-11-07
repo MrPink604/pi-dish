@@ -1,7 +1,4 @@
 // Generated from src/core/session-index-data.ts; edit that source and run npm run build:core.
-/** Persisted index projections and their consumed disk-ingress validation. */
-import { finite } from './helper-values';
-export { finite };
 export interface UsageState {
     provider: string | null;
     model: string;

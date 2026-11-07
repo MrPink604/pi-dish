@@ -4,37 +4,29 @@ import path = require('node:path');
 import type { RequestHandler } from 'express';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
-import type { BridgeRegistryEntry } from './contracts';
 import { getHarness } from './harnesses';
 import { asRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
+import { primeLiveSession } from './live-sessions';
+import type { CatalogRuntime } from './session-catalog-runtime';
 import { errorMessage } from './http-boundary';
 import { extractTextContent, getToolSummary } from './helper-content.js';
 import { collectActivePath, walkBranchTree } from './helper-tree';
 import { refreshHarnessPricing } from './harness-pricing';
 import * as piSDK from './pi-sdk';
-import { subsessionLabel, withSessionContext } from './session-catalog';
+import { subsessionLabel } from './session-catalog';
 import {
   getSessionStats, readSessionMessageById, readSessionMessages, readSessionMessagesAtLeaf, readSessionSearchText,
 } from './session-files';
 import type { SessionMessage } from './session-files';
-import { getSessionInfo } from './session-index';
 import { liveSessionSupports, routeIdentity, sessionIdentityFields } from './session-ownership';
-import type { LiveSession, RuntimeDescription } from './session-ownership';
+import type { LiveSession, SessionOwnership } from './session-ownership';
 import type { SessionSource } from './session-source';
 
-/** Ports retain captured read identity, never lifecycle permission. */
 export interface SessionReadPorts {
+  ownership: SessionOwnership;
+  catalog: CatalogRuntime;
   findSessionSource(id: string, options?: { exact?: boolean }): SessionSource | null;
-  liveSessionHistoryPending(id: string): boolean;
-  getRegisteredSession(id: string): BridgeRegistryEntry | null;
-  getRPCSession(id: string): unknown;
-  /** Any transport: bridge registry, pi-dish RPC child, or Prime daemon root. */
-  isLive(id: string): boolean;
-  getLiveSession(id: string): Promise<LiveSession | null>;
-  liveTreeLeafId(session: InstanceType<typeof BridgeSession>): Promise<unknown>;
-  getLiveContextUsage(id: string): unknown;
-  getContextWindow(model: string | null | undefined): number;
-  describeRuntime(id: string): Promise<RuntimeDescription | null>;
 }
 
 export interface SessionExportOptions {
@@ -161,11 +153,39 @@ function primeSessionTree(value: unknown): piSDK.SessionTree {
   return { nodes, leafId, activePathIds: [...activePathIds] };
 }
 
-export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadHandlers {
-  const {
-    findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession, isLive,
-    getLiveSession, liveTreeLeafId, getLiveContextUsage, getContextWindow, describeRuntime,
-  } = ports;
+/** Leaf-only tree read, falling back to the full tree for older bridges. */
+async function liveTreeLeafId(session: InstanceType<typeof BridgeSession>): Promise<unknown> {
+  if (!session.treeLeafUnsupported) {
+    try {
+      const result = await session.readTreeLeaf();
+      return (isRecord(result) ? result.leafId : undefined) ?? null;
+    } catch (error) {
+      if (!/unknown command/i.test(errorMessage(error))) throw error;
+      // Remember per connection: a reconnect may be a newer extension.
+      session.treeLeafUnsupported = true;
+    }
+  }
+  const result = await session.readTree();
+  return (isRecord(result) ? result.leafId : undefined) ?? null;
+}
+
+export function createSessionReadHandlers({ ownership, catalog, findSessionSource }: SessionReadPorts): SessionReadHandlers {
+  const { liveSessionHistoryPending, getRegisteredSession, getRPCSession, getLiveSession, describeRuntime } = ownership;
+
+  /** Any transport: bridge registry, pi-dish RPC child, or Prime daemon root. */
+  function isLive(sessionId: string): boolean {
+    return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive || !!primeLiveSession(sessionId);
+  }
+
+  /** Live context usage, whichever backend reports it (roster beats transport stats). */
+  function getLiveContextUsage(sessionId: string): unknown {
+    const registered = getRegisteredSession(sessionId);
+    if (registered?.contextUsage) return registered.contextUsage;
+    const stats = getRPCSession(sessionId)?.lastStats;
+    if (stats != null) return (isRecord(stats) && stats.contextUsage) || null;
+    const primeStats = primeLiveSession(sessionId)?.lastStats;
+    return isRecord(primeStats) ? primeStats.contextUsage || null : null;
+  }
 
   async function getOmpShareSnapshot(session: SessionSource): Promise<unknown> {
     if (session.profileId !== 'omp-v1') return undefined;
@@ -234,7 +254,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
     const after = req.query.after != null ? cursor(req.query.after) : null;
     const routeId = source.routeId;
     const identity = sessionIdentityFields(source.harnessId, source.nativeSessionId);
-    const info: Record<string, unknown> = { ...withSessionContext(getSessionInfo(source), getContextWindow) };
+    const info: Record<string, unknown> = { ...catalog.parseSessionFile(source) };
     const label = subsessionLabel(source);
     if (label) info.name = label;
     const liveUsage = asRecord(getLiveContextUsage(sessionId));
@@ -314,7 +334,7 @@ export function createSessionReadHandlers(ports: SessionReadPorts): SessionReadH
       } = getSessionStats(source);
       const reg = getRegisteredSession(sessionId);
       const contextUsage = getLiveContextUsage(sessionId);
-      const info = withSessionContext(getSessionInfo(source), getContextWindow);
+      const info = catalog.parseSessionFile(source);
       res.json({
         sessionFile: source.file,
         sessionId: source.routeId,

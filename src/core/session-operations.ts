@@ -2,7 +2,7 @@ import fs = require('fs');
 import path = require('path');
 import crypto = require('crypto');
 import { setTimeout as delay } from 'timers/promises';
-import type { BridgeRegistryEntry, ProcessIdentity } from './contracts';
+import type { BridgeRegistryEntry } from './contracts';
 import { BridgeSession, invalidateRegistryCache, listRegisteredSessions, pruneRegisteredSession } from './bridge-session';
 import { getHarness } from './harnesses';
 import { formatModelRef } from './helper-models';

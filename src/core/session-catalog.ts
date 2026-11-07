@@ -5,7 +5,6 @@ import { loadCacheRetentionConfig } from './cache-retention';
 import { hasPendingAskDialog } from './extension-ui-state';
 import { canonicalSessionId, encodeSessionKey } from './session-key';
 import { isPrivateSessionFile } from './private-sessions';
-import { decodeDirToCwd } from './session-files';
 import { record as isRecord } from './helper-values';
 import { asRecord } from './wire-protocol';
 import type { HarnessDescriptor, HarnessId, NativeSessionId, SessionCapabilities, SessionId, SessionIdentity } from './contracts';
@@ -261,6 +260,12 @@ function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalo
   };
 }
 
+/** Fallback cwd from pi's session dir naming (--home-user-proj-- → /home/user/proj). */
+function decodeDirToCwd(dirName: string): string {
+  const decoded = dirName.replace(/^--/, '').replace(/--$/, '');
+  return '/' + decoded.replace(/-/g, '/');
+}
+
 function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advice: CatalogAdvice,
   options: SessionCatalogOptions, liveChild: boolean, dirName?: string): CatalogSession {
   const info = withSessionContext(raw, options.contextWindowForModel, options.cacheRetention);
@@ -354,4 +359,5 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
 export = {
   registeredSessionObservation, rpcSessionObservation, primeSessionObservation, decodeLaunchParents, decodeRoutineAnnotations,
   withSessionContext, subsessionLabel, buildActiveSession, buildSourceSession, buildHistoricalSession, composeSessionCatalog,
+  decodeDirToCwd,
 };

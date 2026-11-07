@@ -120,7 +120,5 @@ export declare function readSessionCwd(filePath: string | SessionFileSource): un
  * own exit entry.
  */
 export declare function readSessionTailEntry(input: string | SessionFileSource): unknown;
-/** Fallback cwd from pi's session dir naming (--home-user-proj-- → /home/user/proj). */
-export declare function decodeDirToCwd(dirName: string): string;
 /** Test hook: drop caches so fixtures rewritten in place are re-read. */
 export declare function resetCaches(): void;

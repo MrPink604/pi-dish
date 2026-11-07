@@ -1,19 +1,14 @@
-import type { RouteHandler } from './http-boundary';
-import { requestBody } from './http-boundary';
-import { errorMessage, errorStatus } from './http-boundary';
+import { errorMessage, errorStatus, requestBody, type RouteHandler } from './http-boundary';
 import { getHarness } from './harnesses';
 import sessionProvenance = require('./session-provenance');
-import type { BridgeRegistryEntry } from './contracts';
 import type { HarnessLaunchTarget, SessionLaunch } from './session-launch';
 import type { SessionOperations } from './session-operations';
-import type { RPCSession } from './rpc-session';
 
 export interface SessionCreatePorts {
   sessionOperations: SessionOperations;
   sessionLaunch: SessionLaunch;
-  findSessionFile(id: string, options?: { exact?: boolean }): string | null;
-  getRegisteredSession(id: string): BridgeRegistryEntry | null;
-  getRPCSession(id: string): InstanceType<typeof RPCSession> | null | undefined;
+  /** Registered, running over RPC, or persisted on this host. */
+  sessionKnown(id: string): boolean;
 }
 
 const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -54,8 +49,7 @@ export function createSessionCreateHandlers(ports: SessionCreatePorts) {
     const sourceSessionId = typeof claimedSource === 'string'
       ? sessionProvenance.localizeCallerId(claimedSource) : null;
     const unknownSource = sourceSessionId && !sessionProvenance.isHostQualified(sourceSessionId)
-      && !ports.getRegisteredSession(sourceSessionId) && !ports.getRPCSession(sourceSessionId)?.alive
-      && !ports.findSessionFile(sourceSessionId, { exact: true });
+      && !ports.sessionKnown(sourceSessionId);
     if (unknownSource || (claimedSource !== null && typeof claimedSource !== 'string')) {
       return res.status(400).json({
         error: 'requestedBySessionId must identify an existing session on this host; name a session on another fleet host as <hostId>:<sessionId>',

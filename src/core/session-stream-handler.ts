@@ -44,20 +44,20 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     res.write(': connected\n\n');
     res.flush?.();
 
-    let sess: LiveSession | null;
-    try {
-      sess = await ports.getLiveSession(sessionId);
-    } catch (error) {
-      res.write(`event: stream_error\ndata: ${JSON.stringify({ error: errorMessage(error) })}\n\n`);
-      return res.end();
-    }
-    if (!sess) {
-      res.write(`event: stream_error\ndata: ${JSON.stringify({ error: 'Session not active' })}\n\n`);
+    const send = (event: string, data: unknown): void => {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      // Flush every frame so a reconnecting phone renders replay/live state
+      // without waiting for another event to make the chunk observable.
+      res.flush?.();
+    };
+
+    const session = await ports.getLiveSession(sessionId).catch((error: unknown) => errorMessage(error));
+    if (!session || typeof session === 'string') {
+      send('stream_error', { error: typeof session === 'string' ? session : 'Session not active' });
       return res.end();
     }
     // A stream that closed during the await above has already emitted 'close'.
     if (req.destroyed || res.destroyed) return res.end();
-    const session = sess;
     const viewerKey = canonicalSessionId(sessionId);
     ports.viewers.set(viewerKey, (ports.viewers.get(viewerKey) || 0) + 1);
     req.on('close', () => {
@@ -65,12 +65,6 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
       if (remaining) ports.viewers.set(viewerKey, remaining); else ports.viewers.delete(viewerKey);
     });
 
-    const send = (event: string, data: unknown): void => {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-      // Flush every frame so a reconnecting phone renders replay/live state
-      // without waiting for another event to make the chunk observable.
-      res.flush?.();
-    };
     const toolEvents = createToolEventStream(send);
     const messageForStream = (message: unknown): unknown => {
       if (!isRecord(message) || message.role !== 'custom') return message;
@@ -79,9 +73,9 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
       if (message.customType === 'interrupted-thinking') return { ...message, content: [] };
       return message.display === false ? null : message;
     };
-    const sideChatOf = (session: LiveSession): unknown => 'sideChat' in session ? session.sideChat ?? null : null;
+    const sideChatOf = (): unknown => 'sideChat' in session ? session.sideChat ?? null : null;
 
-    send('init', { turnInProgress: !!sess.turnInProgress, compacting: !!sess.compacting });
+    send('init', { turnInProgress: !!session.turnInProgress, compacting: !!session.compacting });
 
     const offs: Array<() => unknown> = [];
     const sub = (event: string, fn: (data: unknown) => void): void => {
@@ -136,7 +130,7 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     // Keep clients attached to the old route long enough to learn which route
     // now owns the same pane.
     sub('session_switch', (data) => {
-      const routed = sessionSwitchRouteData(sess, data);
+      const routed = sessionSwitchRouteData(session, data);
       if (routed && routed.sessionId !== routed.previousSessionId) {
         toolEvents.clear();
         send('session_switch', routed);
@@ -149,7 +143,7 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     // Subscribe before taking the snapshot: a call that ends during replay is
     // still forwarded, while one that started just before subscription is found
     // in the session-owned map. Repeated starts dedupe by toolCallId client-side.
-    for (const [toolCallId, call] of sess.runningToolCalls || []) {
+    for (const [toolCallId, call] of session.runningToolCalls || []) {
       const common = { toolCallId, toolName: call.toolName, args: call.args, startedAt: call.startedAt };
       toolEvents.push('tool_execution_start', common);
       if (call.lastPartialResult != null) {
@@ -165,9 +159,9 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
       JSON.stringify([payload.widgetLines, payload.widgetPlacement, payload.statusText]);
     const extensionUIKey = (payload: ExtensionUIPayload) =>
       `${String(payload.method)}:${String(payload.widgetKey || payload.statusKey || 'default')}`;
-    const replayDialogs = sess.extUIState
-      ? [...sess.extUIState.dialogs.values()].filter((data) =>
-        sess.turnInProgress || extensionUIPayload(data).method === 'auth')
+    const replayDialogs = session.extUIState
+      ? [...session.extUIState.dialogs.values()].filter((data) =>
+        session.turnInProgress || extensionUIPayload(data).method === 'auth')
       : [];
     sub('extension_ui_request', (data) => {
       const payload = extensionUIPayload(data);
@@ -185,8 +179,8 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     // Replay the transport-owned extension UI to a client that just connected.
     // Tool/extension dialogs are replayed only mid-turn; a login step belongs
     // to a live harness login, which runs while idle.
-    if (sess.extUIState) {
-      const { widgets, statuses } = sess.extUIState;
+    if (session.extUIState) {
+      const { widgets, statuses } = session.extUIState;
       for (const data of [...widgets.values(), ...statuses.values(), ...replayDialogs]) {
         const payload = extensionUIPayload(data);
         if (payload.method === 'setWidget' || payload.method === 'setStatus') {
@@ -201,7 +195,7 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
       dialogs: replayDialogs.map((data) => extensionUIPayload(data).id).filter(Boolean),
     });
     // Replay the last-known queue. RPCSessions have no queueState (fine).
-    const queueState = 'queueState' in sess ? sess.queueState : undefined;
+    const queueState = 'queueState' in session ? session.queueState : undefined;
     if (queueState) send('queue_update', queueState);
     sub('queue_update', (data) => send('queue_update', data));
 
@@ -214,16 +208,16 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     };
     sub('side_chat', () => {
       clearSideChatTimer();
-      send('side_chat', { sideChat: sideChatOf(sess) });
+      send('side_chat', { sideChat: sideChatOf() });
     });
     sub('side_chat_delta', () => {
       if (sideChatTimer) return;
       sideChatTimer = setTimeout(() => {
         sideChatTimer = null;
-        send('side_chat', { sideChat: sideChatOf(sess) });
+        send('side_chat', { sideChat: sideChatOf() });
       }, SIDE_CHAT_COALESCE_MS);
     });
-    if (sess instanceof BridgeSession) send('side_chat', { sideChat: sess.sideChat ?? null });
+    if (session instanceof BridgeSession) send('side_chat', { sideChat: session.sideChat ?? null });
 
     sub('compaction_start', (data) => send('compaction_start', data));
     sub('compaction_end', (data) => send('compaction_end', data));

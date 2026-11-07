@@ -25,7 +25,7 @@ import {
   spawnAllowsManagedClose, spawnAllowsRestart,
 } from './session-ownership';
 import { record as isRecord } from './helper-values';
-import type { LiveSession, SessionOwnership } from './session-ownership';
+import type { SessionOwnership } from './session-ownership';
 import type { AdvertisedCapabilities, BridgeRegistryEntry, NativeSessionId } from './contracts';
 import type { SessionInfo } from './session-metadata';
 import type { DiscoveryCandidate, SessionSource } from './session-source';
@@ -55,13 +55,8 @@ const CONTEXT_WINDOW_FALLBACKS = Object.entries(MODEL_CONTEXT_WINDOWS)
 const PRIME_ROSTER_STALE_MS = 1500;
 const SUBSESSION_ROW_CAP = 64;
 
-let modelsCache: AvailableModel[] | null = null;
-let modelsCacheTime = 0;
-const contextWindowMemo = new Map<string, number>();
-
 export interface CatalogRuntimePorts {
   ownership: SessionOwnership;
-  getLiveSession(sessionId: string): Promise<LiveSession | null>;
   /** Roster-discovered Prime roots attach their lifecycle listeners here. */
   onPrimeSession?(session: PrimeDaemonSession): void;
 }
@@ -82,6 +77,10 @@ export interface CatalogRuntime {
   parseSessionFile(source: SessionSource): SessionFileInfo;
   getSessionModels(sessionId: string): Promise<CatalogModel[] | null>;
   refreshPrimeRoster(): Promise<void>;
+  getContextWindow(modelId: string | null | undefined): number;
+  getModelsCache(): { models: AvailableModel[] | null; time: number };
+  /** Also invalidates the context-window memo. */
+  setModelsCache(models: AvailableModel[]): void;
 }
 
 export function canonicalSessionPath(file: string | null): string | null {
@@ -100,43 +99,46 @@ export function historicalAdvice(source: SessionSource, liveChild = false): Cata
   };
 }
 
-export function getContextWindow(modelId: string | null | undefined): number {
-  if (!modelId) return DEFAULT_CONTEXT_WINDOW;
-  const memoized = contextWindowMemo.get(modelId);
-  if (memoized != null) return memoized;
-
-  let window: number | undefined;
-  if (modelsCache) {
-    const longest = (models: AvailableModel[]) => models.reduce<AvailableModel | undefined>(
-      (best, model) => (!best || model.id.length > best.id.length ? model : best), undefined);
-    const match = modelsCache.find(model => model.id === modelId)
-      || longest(modelsCache.filter(model => modelId.includes(model.id)))
-      || longest(modelsCache.filter(model => model.id.startsWith(modelId + '-')));
-    if (match?.contextWindow) window = match.contextWindow;
-  }
-  if (!window) {
-    for (const [prefix, size] of CONTEXT_WINDOW_FALLBACKS) {
-      if (modelId.includes(prefix)) { window = size; break; }
-    }
-  }
-  window = window || DEFAULT_CONTEXT_WINDOW;
-  contextWindowMemo.set(modelId, window);
-  return window;
-}
-
-export function setModelsCache(models: AvailableModel[]): void {
-  modelsCache = models;
-  modelsCacheTime = Date.now();
-  contextWindowMemo.clear();
-}
-
-export function getModelsCache() {
-  return { models: modelsCache, time: modelsCacheTime };
-}
-
 export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime {
-  const { ownership, getLiveSession } = ports;
-  const { getRPCSession, liveSubsessionCandidates, sessionSources } = ownership;
+  const { ownership } = ports;
+  const { getRPCSession, getLiveSession, liveSubsessionCandidates, sessionSources } = ownership;
+  let modelsCache: AvailableModel[] | null = null;
+  let modelsCacheTime = 0;
+  const contextWindowMemo = new Map<string, number>();
+
+  function getContextWindow(modelId: string | null | undefined): number {
+    if (!modelId) return DEFAULT_CONTEXT_WINDOW;
+    const memoized = contextWindowMemo.get(modelId);
+    if (memoized != null) return memoized;
+
+    let window: number | undefined;
+    if (modelsCache) {
+      const longest = (models: AvailableModel[]) => models.reduce<AvailableModel | undefined>(
+        (best, model) => (!best || model.id.length > best.id.length ? model : best), undefined);
+      const match = modelsCache.find(model => model.id === modelId)
+        || longest(modelsCache.filter(model => modelId.includes(model.id)))
+        || longest(modelsCache.filter(model => model.id.startsWith(modelId + '-')));
+      if (match?.contextWindow) window = match.contextWindow;
+    }
+    if (!window) {
+      for (const [prefix, size] of CONTEXT_WINDOW_FALLBACKS) {
+        if (modelId.includes(prefix)) { window = size; break; }
+      }
+    }
+    window = window || DEFAULT_CONTEXT_WINDOW;
+    contextWindowMemo.set(modelId, window);
+    return window;
+  }
+
+  function setModelsCache(models: AvailableModel[]): void {
+    modelsCache = models;
+    modelsCacheTime = Date.now();
+    contextWindowMemo.clear();
+  }
+
+  function getModelsCache() {
+    return { models: modelsCache, time: modelsCacheTime };
+  }
 
   let primeRosterReadAt = 0;
   let primeRosterSocket: string | null = null;
@@ -372,5 +374,8 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     parseSessionFile,
     getSessionModels,
     refreshPrimeRoster,
+    getContextWindow,
+    getModelsCache,
+    setModelsCache,
   };
 }

@@ -1,7 +1,7 @@
 import fs = require('fs');
 import path = require('path');
 import type { BridgeCapability, BridgeRegistryEntry, HarnessDescriptor, HarnessId, NativeSessionId, ProcessIdentity, ProcessIdentityInput, SessionIdentity } from './contracts';
-import { BridgeSession, getBridgeSession as getBridgeSessionForClaim, getRegisteredSessionByNativeId, invalidateRegistryCache, listRegisteredSessions, pruneRegisteredSession, pruneUnreachableRegisteredSession, sameRegistryClaim } from './bridge-session';
+import { BridgeSession, getBridgeSession as getBridgeSessionForClaim, getRegisteredSessionByNativeId, invalidateRegistryCache, pruneRegisteredSession, pruneUnreachableRegisteredSession, sameRegistryClaim } from './bridge-session';
 import { getRPCSession as getRawRPCSession, RPCSession } from './rpc-session';
 import { getPrimeDaemon, PrimeDaemonSession } from './prime-daemon';
 import type { PrimeAgentSummary, PrimeDaemon } from './prime-daemon';

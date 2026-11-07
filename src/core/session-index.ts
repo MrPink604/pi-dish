@@ -21,8 +21,8 @@ import { loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
 import type { SessionInfo } from './session-metadata';
 import { sessionInfoFromEntries, extendSessionInfoFromEntries, decodeSessionInfo } from './session-metadata';
-import { record as isRecord } from './helper-values';
-import { checkSearchLeaf, decodeUsage, decodeSkillRecords, decodeSkillState, finite } from './session-index-data';
+import { finite, record as isRecord } from './helper-values';
+import { checkSearchLeaf, decodeUsage, decodeSkillRecords, decodeSkillState } from './session-index-data';
 import type { IndexedUsage, SkillActivation, SkillState } from './session-index-data';
 import { encodeSessionKey, canonicalSessionId, resolveSessionRoute } from './session-key';
 

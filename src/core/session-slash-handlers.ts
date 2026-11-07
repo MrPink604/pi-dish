@@ -1,22 +1,20 @@
-import type { RouteHandler } from './http-boundary';
-import { requestBody } from './http-boundary';
+import { errorMessage, errorStatus, httpError, requestBody, type RouteHandler } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
-import { errorMessage, errorStatus, httpError } from './http-boundary';
 import { parseModelId, thinkingLevelNamesFor } from './helper-models.js';
 import { getHarness } from './harnesses';
 import { liveSessionSupports } from './session-ownership';
 import { record as isRecord } from './helper-values';
+import { asRecord } from './wire-protocol';
 import tmux = require('./tmux');
 import { sideChatSupported } from './session-mutation-handlers';
 import type { HarnessDescriptor, HostBuiltin } from './contracts';
 import type { LiveSession } from './session-ownership';
 import type { RPCSession } from './rpc-session';
-import type tmuxTypes = require('./tmux');
 
 export interface SlashCommandPorts {
   getLiveSession(sessionId: string): Promise<LiveSession | null>;
-  locatePiPane(sessionId: string): Promise<tmuxTypes.PaneTarget | null>;
+  locatePiPane(sessionId: string): Promise<tmux.PaneTarget | null>;
 }
 
 interface ParsedHostBuiltin {
@@ -41,10 +39,6 @@ function availableModels(data: unknown): { id: string; provider: string }[] {
     : [];
 }
 
-function payloadField(data: unknown, key: string): unknown {
-  return isRecord(data) ? data[key] : undefined;
-}
-
 function splitCommand(message: string): { name: string; args: string } {
   const space = message.indexOf(' ');
   return {
@@ -60,7 +54,7 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
     if (liveSessionSupports(sess, 'reload')) {
       try {
         const data = await sess.runCommand('/reload');
-        return { info: payloadField(data, 'info') || 'Reloading extensions…' };
+        return { info: asRecord(data).info || 'Reloading extensions…' };
       } catch (error) {
         // Bridges that fire the reload in the same tick lose the response frame
         // to their own teardown; that rejection means the reload started.
@@ -69,16 +63,10 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
       }
     }
     bridgeError ||= new Error('This session does not support remote extension reload.');
-    if (sess.harnessId !== 'pi' && sess.harnessId !== 'omp') {
-      Reflect.set(Object(bridgeError), 'statusCode', 409, bridgeError);
-      throw bridgeError;
-    }
-    const pane = await ports.locatePiPane(sessionId);
+    const pane = sess.harnessId === 'pi' || sess.harnessId === 'omp' ? await ports.locatePiPane(sessionId) : null;
     if (!pane) {
-      Reflect.set(Object(bridgeError), 'statusCode', 409, bridgeError);
-      if (sess.harnessId === 'omp') {
-        Reflect.set(Object(bridgeError), 'message', 'Oh My Pi extension reload requires a reachable tmux pane.', bridgeError);
-      }
+      Object.assign(Object(bridgeError), { statusCode: 409 },
+        sess.harnessId === 'omp' ? { message: 'Oh My Pi extension reload requires a reachable tmux pane.' } : {});
       throw bridgeError;
     }
     await tmux.sendKeys(pane.socket, pane.paneId, sess.harnessId === 'omp' ? '/dish-reload' : '/reload');
@@ -143,7 +131,7 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
         try {
           const result = await rpc.compact(args || undefined);
           rpc._refreshStats();
-          const saved = result ? ` (${payloadField(result, 'tokensBefore')} → ~${payloadField(result, 'estimatedTokensAfter')} tokens)` : '';
+          const saved = result ? ` (${asRecord(result).tokensBefore} → ~${asRecord(result).estimatedTokensAfter} tokens)` : '';
           return { info: `Compacted${saved}` };
         } finally {
           rpc.compacting = false;
@@ -184,7 +172,7 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
         return { info: 'Reloading extensions...' };
       case 'export': {
         const data = await rpc.exportHtml(args || undefined);
-        return { info: `Exported to ${payloadField(data, 'path') || 'HTML'}` };
+        return { info: `Exported to ${asRecord(data).path || 'HTML'}` };
       }
       default: {
         // Extension commands, skills, and prompt templates execute via RPC
@@ -212,7 +200,7 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
         if (prime.compacting) throw new Error('Compaction already in progress — wait for it to finish.');
         prime.compacting = true;
         try {
-          return { info: payloadField(await prime.compact(args || undefined), 'info') };
+          return { info: asRecord(await prime.compact(args || undefined)).info };
         } finally {
           prime.compacting = false;
         }
@@ -248,7 +236,7 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
         return { info: 'Reloading…' };
       case 'export': {
         const data = await prime.exportHtml(args || undefined);
-        return { info: `Exported to ${payloadField(data, 'path') || 'HTML'}` };
+        return { info: `Exported to ${asRecord(data).path || 'HTML'}` };
       }
       case 'new':
         throw httpError('Prime Agent cannot start a new session from pi-dish.', 400);
@@ -289,7 +277,7 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
           sess.compacting = true;
           try {
             const data = await sess.compact(compactMatch[1]?.trim() || undefined);
-            return res.json({ success: true, info: payloadField(data, 'info') });
+            return res.json({ success: true, info: asRecord(data).info });
           } catch (error) {
             sess.compacting = false;
             throw error;
@@ -303,7 +291,7 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
           const question = btwMatch[1]?.trim();
           if (!question) return res.status(400).json({ error: 'usage: /btw <question>' });
           const data = await sess.sideChatAsk(question);
-          return res.json({ success: true, info: 'Asked in side chat', sideChat: payloadField(data, 'sideChat') ?? null });
+          return res.json({ success: true, info: 'Asked in side chat', sideChat: asRecord(data).sideChat ?? null });
         }
         if (/^\/login(\s|$)/.test(message) && !liveSessionSupports(sess, 'login')) {
           return res.status(409).json({ error: `This ${descriptor?.label ?? 'harness'} session does not support signing in from pi-dish.` });
@@ -316,7 +304,7 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
           return res.json({ success: true, info: result.info });
         }
         const data = await sess.runCommand(message, deliverAs as 'steer' | 'followUp' | undefined);
-        return res.json({ success: true, info: payloadField(data, 'info') });
+        return res.json({ success: true, info: asRecord(data).info });
       }
       if (sess instanceof PrimeDaemonSession) {
         if (/^\/btw(\s|$)/.test(message)) {

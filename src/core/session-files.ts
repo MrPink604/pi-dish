@@ -865,12 +865,6 @@ export function readSessionTailEntry(input: string | SessionFileSource): unknown
   });
 }
 
-/** Fallback cwd from pi's session dir naming (--home-user-proj-- → /home/user/proj). */
-export function decodeDirToCwd(dirName: string): string {
-  const decoded = dirName.replace(/^--/, '').replace(/--$/, '');
-  return '/' + decoded.replace(/-/g, '/');
-}
-
 /** Test hook: drop caches so fixtures rewritten in place are re-read. */
 export function resetCaches(): void {
   infoCache.clear();
