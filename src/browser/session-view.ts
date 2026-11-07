@@ -4,6 +4,7 @@ import { hibernationSummary } from './hibernation';
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import type { HostEndpoint } from './api-client';
 import { pendingComposerKey, type PendingSessionSpawn } from './session-spawns';
+import { requiredElement } from './dom';
 /** Operations selection may consume; collaborators retain their other authority. */
 export interface SessionViewDrafts {
   stash(): void;
@@ -44,7 +45,7 @@ export function createSessionView(options: {
   seen: (session: SessionEntry) => void; artifacts: (owner: SelectionOwner) => unknown; header: () => void; relations: (owner: SelectionOwner) => unknown;
   models: (id: string, harness?: string) => unknown; commands: (id: string) => unknown;
 }) {
-  const { document, sessionState } = options; const element = (id: string) => document.getElementById(id)!;
+  const { document, sessionState } = options; const element = requiredElement(document, 'session view');
   let currentSessionSpawnId: string | null = null, disposed = false;
 
 // Ordered retirement phases: advance/stash draft, stash DOM, retire transports,
@@ -146,9 +147,9 @@ function showPendingSessionFailure(spawnId: string, message: string, spawn?: Pic
     <p>${escapeHtml(harnessLabel)} could not start.</p>
     <small>${escapeHtml(message)}</small>
   </div>`;
-  const input = element('promptInput') as HTMLTextAreaElement;
+  const input = element<HTMLTextAreaElement>('promptInput');
   input.placeholder = 'Your draft is preserved here so you can copy it';
-  const btn = element('btnSend') as HTMLButtonElement;
+  const btn = element<HTMLButtonElement>('btnSend');
   btn.disabled = true;
   btn.title = message;
 }

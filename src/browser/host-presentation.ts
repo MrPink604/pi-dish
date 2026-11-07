@@ -46,15 +46,8 @@ export function createHostPresentation(options: HostPresentationOptions) {
     return `<span class="${className}" style="--host-color:${options.escapeHtml(colorFor(hostId))}"></span>`;
   }
 
-  /**
-   * The host chip: a color dot, the label, and a faint tint of the host's color
-   * on the hairline. Color-coded on purpose — across a fleet the color is what
-   * the eye sorts by — but kept calm: this is context, not a status light, and
-   * liveness stays the row dots' job. The unreachable form is the only
-   * variation, and it is a word plus dimming, never an alarm color. Renders
-   * nothing at all on a single host.
-   */
-  function chipHtml(hostId: HostId, { note = false } = {}): string {
+  /** Color dot plus label; dimmed when unreachable, empty on a single host. */
+  function chipHtml(hostId: HostId): string {
     if (options.directory.effectiveHosts().length <= 1) return '';
     const entry = options.directory.entryFor(hostId);
     if (!entry) return '';
@@ -62,7 +55,7 @@ export function createHostPresentation(options: HostPresentationOptions) {
     const label = options.displayLabel(entry);
     const title = label + (down ? ' — unreachable, showing last known sessions' : '');
     return `<span class="host-chip${down ? ' offline' : ''}" style="--host-color:${options.escapeHtml(colorFor(hostId))}" title="${options.escapeHtml(title)}">` +
-      `<span class="host-chip-dot"></span>${options.escapeHtml(label)}${down && note ? ' · unreachable' : ''}</span>`;
+      `<span class="host-chip-dot"></span>${options.escapeHtml(label)}</span>`;
   }
   return { colorFor, isCustom, setColor, dotHtml, chipHtml };
 }

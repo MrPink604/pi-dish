@@ -871,9 +871,8 @@ Draft/history persistence and attachment batches live in `composer-drafts.ts` an
 keys migrate dirty text and in-flight images together. Retired image controls and
 batches cannot modify a later composer, and bitmap/read resources are released.
 
-Autocomplete lives in `composer-autocomplete.ts`, with explicit command/file data
-in `composer-autocomplete-data.ts` and host-qualified session references in
-`session-references.ts`. Query tokens capture selection, composer, text/caret and
+Autocomplete lives in `composer-autocomplete.ts`, which also decodes command/file
+data; host-qualified session references live in `session-references.ts`. Query tokens capture selection, composer, text/caret and
 endpoint before debounce; completion acceptance emits input for draft persistence.
 
 Sidebar HTML projection lives in `sidebar-render.ts`. One render receives established
@@ -899,8 +898,8 @@ Live tool panels and coalesced assistant frames live in `live-tools.ts` and
 `streaming-render.ts`. Both capture selected-session ownership; retained details
 preserve user expansion. `mood.ts` owns the composer mood projection.
 
-Transcript loading lives in `transcript.ts`, with `transcript-data.ts` narrowing
-page payloads and `transcript-cache.ts` retaining bounded host/endpoint-owned DOM.
+Transcript loading and page-payload narrowing live in `transcript.ts`, with
+`transcript-cache.ts` retaining bounded host/endpoint-owned DOM.
 Selection retirement cancels requests before stashing without prematurely clearing
 the outgoing transcript’s cursors. Replaced paging controls remain inert.
 

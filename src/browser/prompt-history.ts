@@ -1,4 +1,5 @@
 import { storedPromptHistories } from './composer-drafts';
+import { countLabel } from './helper-format';
 
 export interface PromptHistoryOwnerLabel { readonly name: string | null; readonly detail: string }
 /** The composer-draft surface this controller drives; owner keys are host-qualified. */
@@ -88,7 +89,7 @@ export function createPromptHistory(options: {
     label.append(element('strong', '', 'Sent prompts'), element('small', '', 'Stored on this device: the last 50 prompts this browser sent to each session.'));
     const clearAll = element('button', 'btn-small', 'Clear all'); clearAll.type = 'button'; clearAll.id = 'sentPromptsClearAll'; clearAll.disabled = !rows.length;
     clearAll.addEventListener('click', () => {
-      if (signal.aborted || !options.confirm(`Clear sent prompts for all ${rows.length} session${rows.length === 1 ? '' : 's'} on this device?`)) return;
+      if (signal.aborted || !options.confirm(`Clear sent prompts for all ${countLabel(rows.length, 'session')} on this device?`)) return;
       for (const row of rows) drafts.clearHistory(row.owner);
       renderSettings(container, signal);
     }, { signal });
@@ -97,10 +98,10 @@ export function createPromptHistory(options: {
     for (const row of rows) {
       const details = element('details', 'sent-prompts-session'); details.dataset.owner = row.owner; details.open = expanded.has(row.owner);
       const summary = element('summary');
-      summary.append(element('span', 'sent-prompts-name', row.label.name || row.label.detail), element('span', 'sent-prompts-meta', `${row.label.name ? row.label.detail + ' · ' : ''}${row.prompts.length} prompt${row.prompts.length === 1 ? '' : 's'}`));
+      summary.append(element('span', 'sent-prompts-name', row.label.name || row.label.detail), element('span', 'sent-prompts-meta', `${row.label.name ? row.label.detail + ' · ' : ''}${countLabel(row.prompts.length, 'prompt')}`));
       const clear = element('button', 'btn-small sent-prompts-clear', 'Clear session'); clear.type = 'button';
       clear.addEventListener('click', () => {
-        if (signal.aborted || !options.confirm(`Clear ${row.prompts.length} sent prompt${row.prompts.length === 1 ? '' : 's'} for “${row.label.name || row.label.detail}”?`)) return;
+        if (signal.aborted || !options.confirm(`Clear ${countLabel(row.prompts.length, 'sent prompt')} for “${row.label.name || row.label.detail}”?`)) return;
         drafts.clearHistory(row.owner); renderSettings(container, signal);
       }, { signal });
       const entries = element('ol', 'sent-prompts-entries');

@@ -3,7 +3,7 @@ import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { TranscriptTree, TranscriptTreeBranch, TranscriptTreeFilter, TranscriptTreeNode, TranscriptTreeProjection, TranscriptTreeTool } from './transcript-tree-data';
 import { TRANSCRIPT_TREE_FILTERS, decodeTranscriptTree, nodePreview, projectTranscriptTree, transcriptTreeDescend, transcriptTreePath, transcriptTreeVisibleAnchor } from './transcript-tree-data';
-import { formatRelativeTime } from './helper-format';
+import { countLabel, formatRelativeTime } from './helper-format';
 import { escapeHtml } from '../core/helper-format';
 import { record } from '../core/helper-values';
 
@@ -181,7 +181,7 @@ function renderTree(locate: string | null = null) {
   }, { signal });
   const strip = element('treeStrip'), tipBranch = tipId ? view.branches.get(view.branchOf.get(tipId)!) : undefined;
   strip.innerHTML = `<span class="tree-strip-title">⑂ ${escapeHtml(tipBranch?.title || 'Conversation')}</span>`
-    + `<span class="tree-strip-meta">${view.forkCount} ${view.forkCount === 1 ? 'fork' : 'forks'} ▾</span>`;
+    + `<span class="tree-strip-meta">${countLabel(view.forkCount, 'fork')} ▾</span>`;
   renderFooter(rows.length, !!matches);
 
   if (locate) {

@@ -1,3 +1,4 @@
+import { countLabel } from './helper-format';
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 import { record } from '../core/helper-values';
@@ -136,7 +137,7 @@ export function createSessionRelations(options: {
     const link = document.createElement('button');
     link.type = 'button';
     link.className = 'session-relation-chip session-relation-tree-link';
-    link.title = `View the session family tree (${others} related session${others === 1 ? '' : 's'})`;
+    link.title = `View the session family tree (${countLabel(others, 'related session')})`;
     const icon = document.createElement('span');
     icon.className = 'session-relation-kind';
     icon.textContent = '⎇';

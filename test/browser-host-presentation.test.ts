@@ -75,13 +75,13 @@ test('color lookup never mistakes inherited property names for an override', () 
   }
 });
 
-test('host chips retain escaped labels, offline notes and single-host visibility', () => {
+test('host chips retain escaped labels, offline dimming and single-host visibility', () => {
   const { presentation: p, directory } = fixture({ isDown: () => true });
   directory.replaceCatalog([{ base: '/hosts/peer', hostId: 'peer', label: '<Peer>' }]);
-  const html = p.chipHtml('peer', { note: true });
+  const html = p.chipHtml('peer');
   assert.match(html, /host-chip offline/);
   assert.match(html, /&lt;Peer&gt;/);
-  assert.match(html, / · unreachable/);
+  assert.match(html, /title="&lt;Peer&gt; — unreachable/);
   assert.match(p.dotHtml('peer'), /host-chip-dot/);
   assert.equal(p.chipHtml('absent'), '');
   directory.replaceCatalog([]);

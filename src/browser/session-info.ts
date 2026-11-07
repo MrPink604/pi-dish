@@ -4,7 +4,7 @@ import type { SessionState, SelectionOwner, SessionEntry } from './session-state
 import type { SessionShare, PublishedPage } from './session-info-data';
 import { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './session-info-data';
 import { escapeHtml } from '../core/helper-format';
-import { formatTokSpeed, formatTokens, formatDuration, formatUsageCost, formatCacheStat, formatRuntime, formatRelativeTime } from './helper-format';
+import { countLabel, formatTokSpeed, formatTokens, formatDuration, formatUsageCost, formatCacheStat, formatRuntime, formatRelativeTime } from './helper-format';
 
 import { record } from '../core/helper-values';
 export function createSessionInfo(options: {
@@ -106,7 +106,7 @@ export function createSessionInfo(options: {
           ['__section', 'Tokens & cache'],
           ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
           s.reasoningTokens ? ['Reasoning', formatTokens(s.reasoningTokens)] : null,
-          ['Cache', `${formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)} · ${s.hardCacheMisses} hard ${s.hardCacheMisses === 1 ? 'miss' : 'misses'}`],
+          ['Cache', `${formatCacheStat(s.tokens?.cacheRead, s.tokens?.cacheWrite, s.tokens?.input)} · ${countLabel(s.hardCacheMisses, 'hard miss', 'hard misses')}`],
           ['__section', 'Estimated spend'],
           ['Estimated total', formatUsageCost(s.costs?.total ?? s.cost, s.costUnavailable?.total)],
           ['Components', `input ${formatUsageCost(s.costs?.input, s.costUnavailable?.input)} · output ${formatUsageCost(s.costs?.output, s.costUnavailable?.output)} · cache read ${formatUsageCost(s.costs?.cacheRead, s.costUnavailable?.cacheRead)} · write ${formatUsageCost(s.costs?.cacheWrite, s.costUnavailable?.cacheWrite)}`],

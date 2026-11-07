@@ -4,7 +4,7 @@ import { requiredElement } from './dom';
 import type { SessionState } from './session-state';
 import type { createSessionSearch } from './session-search';
 import { escapeHtml } from '../core/helper-format';
-import { formatRelativeTime, shortCwd } from './helper-format';
+import { countLabel, formatRelativeTime, shortCwd } from './helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { parseSessionQuery, stripQueryField, applyHostTerms, positiveQueryTokens, highlightTokens } from '../core/helper-query';
 import { queryHosts, mergeSearchPayloads, decodeSearchPayload } from './search-data';
@@ -262,7 +262,7 @@ export function createSearchView(options: {
       if (s.turnInProgress || s.compacting) dot = '<span class="session-item-status working"></span>';
       else if (s.isActive) dot = '<span class="live-dot"></span>';
       const count = s.matchCount
-        ? `<span class="search-result-count">${s.matchCount} ${s.matchCount === 1 ? 'match' : 'matches'}</span>` : '';
+        ? `<span class="search-result-count">${countLabel(s.matchCount, 'match', 'matches')}</span>` : '';
       const snippets = (s.snippets || []).map(sn =>
         `<div class="search-result-snippet">${highlightTokens(sn, tokens)}</div>`).join('');
       return `<div class="search-result" data-id="${escapeHtml(s.id)}"${s.host ? ` data-host="${escapeHtml(s.host)}"` : ''} data-content-matches="${s.matchCount > 0 ? '1' : '0'}">
@@ -283,7 +283,7 @@ export function createSearchView(options: {
       <div class="search-count-line">${shown.length === 1 ? '1 session' : `${shown.length} sessions`}${d.total > d.results.length ? ` — showing the ${d.results.length} ${tokens.length ? 'best matches' : 'most recent'}, narrow the query for the rest` : ''}</div>
       ${cards || '<div class="usage-state">No matching sessions.</div>'}
       ${scopesHidden > 0 ? `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>` : ''}
-      ${automationHidden > 0 ? `<div class="scope-hidden-note">${automationHidden} automation run${automationHidden === 1 ? '' : 's'} hidden (is:automation shows them)</div>` : ''}
+      ${automationHidden > 0 ? `<div class="scope-hidden-note">${countLabel(automationHidden, 'automation run')} hidden (is:automation shows them)</div>` : ''}
     `;
     body.querySelectorAll<HTMLElement>('[data-since]').forEach(button => button.addEventListener('click', () => {
       if (owns()) setSearchToken('since', button.dataset.since || null);

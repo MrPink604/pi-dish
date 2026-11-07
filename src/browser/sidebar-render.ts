@@ -3,7 +3,7 @@ import type { HelperHost } from '../core/helper-types';
 import type { SessionFamily, WorkspaceNode } from './shared-helper-types';
 import type { PendingSessionSpawn } from './session-spawns';
 import { escapeHtml } from '../core/helper-format';
-import { cacheExpiryPresentation, contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
+import { countLabel, cacheExpiryPresentation, contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
 import { shortModelName } from './helper-usage';
 import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDisplayLabel, sortHostSections, hostSectionKey } from './helper-identity';
 import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
@@ -447,7 +447,7 @@ function renderSessions() {
   // Sessions a forgotten chip silently removed must stay discoverable — the
   // note is the audit trail for "why isn't my session in the list?".
   if (automationHidden > 0) {
-    html += `<div class="scope-hidden-note">${automationHidden} automation run${automationHidden === 1 ? '' : 's'} hidden (is:automation shows them)</div>`;
+    html += `<div class="scope-hidden-note">${countLabel(automationHidden, 'automation run')} hidden (is:automation shows them)</div>`;
   }
   if (scopesHidden > 0) {
     html += `<div class="scope-hidden-note">${scopesHidden} hidden by scopes</div>`;

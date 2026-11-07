@@ -3,6 +3,10 @@ import type { CacheExpiryProjection } from '../core/session-api';
 import type { RuntimeInfo, ResponseMetadata } from './shared-helper-types';
 import { finite } from '../core/helper-values';
 
+/** `1 run`, `2 runs`; irregular plurals pass `many`. */
+export function countLabel(count: number, one: string, many = `${one}s`): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
 
 /**
  * Remove ANSI escape sequences (CSI colors, OSC titles, stray escapes).

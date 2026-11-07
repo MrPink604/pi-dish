@@ -1,3 +1,4 @@
+import { countLabel } from './helper-format';
 /** The group skeleton (summary + body) is shared so eviction splitting and the grouping pass cannot drift apart. */
 function createToolGroup(document: Document) {
   const group = document.createElement('details');
@@ -86,7 +87,7 @@ export function updateToolGroupSummary(group: HTMLElement) {
     [...group.querySelectorAll('.tool-call-name')].map(el => (el.textContent || '').trim())
   )];
   group.querySelector('.tool-group-label')!.textContent =
-    n ? `⚡ ${n} tool use${n === 1 ? '' : 's'}` : '🧠 thinking';
+    n ? `⚡ ${countLabel(n, 'tool use')}` : '🧠 thinking';
   group.querySelector('.tool-group-preview')!.textContent =
     names.slice(0, 4).join(', ') + (names.length > 4 ? '…' : '');
 }

@@ -1,12 +1,27 @@
 import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
-import type { RenderMessage } from './message-data';
+import { decodeRenderMessage, type RenderMessage } from './message-data';
+import { decodeSessionTranscriptPatch, type SessionTranscriptPatch } from '../core/session-api';
+import { record, finite } from '../core/helper-values';
 import { sessionRefKey } from './helper-identity';
 import { escapeHtml } from '../core/helper-format';
 import { createTranscriptCache } from './transcript-cache';
 import type { TranscriptCursors } from './transcript-cache';
 import { splitToolGroupRanges } from './message-groups';
-import { decodeTranscriptPage, type TranscriptPage } from './transcript-data';
+export interface TranscriptPage {
+  readonly messages: readonly RenderMessage[];
+  readonly session: Readonly<SessionTranscriptPatch>;
+  readonly firstIndex: number | null;
+  readonly lastIndex: number | null;
+  readonly hasMore: boolean;
+  readonly totalMessages: number | null;
+}
+const cursor = (value: unknown) => finite(value) && Number.isInteger(value) && value >= 0 ? value : null;
+export function decodeTranscriptPage(value: unknown): TranscriptPage {
+  if (!record(value) || !Array.isArray(value.messages)) throw new Error('Invalid transcript page');
+  const session = record(value.session) ? decodeSessionTranscriptPatch(value.session) : {};
+  return { messages: value.messages.map(decodeRenderMessage), session, firstIndex: cursor(value.firstIndex), lastIndex: cursor(value.lastIndex), hasMore: value.hasMore === true, totalMessages: cursor(value.totalMessages) };
+}
 /** The selected transcript owns its paging cursors, endpoint, requests and retained DOM. */
 export function createTranscript(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;

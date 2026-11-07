@@ -111,8 +111,6 @@ function updateSessionHeader() {
 
   options.controls();
 
-  // Phone chip row: the working directory is the one piece of session
-  // context the header used to hide behind the stats modal.
   const cwdChip = element('sessionCwdChip');
   if (cwdChip) {
     const cwd = current.cwd || '';

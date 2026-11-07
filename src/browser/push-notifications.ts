@@ -1,3 +1,4 @@
+import { countLabel } from './helper-format';
 import { errorMessage, sendJson, type ApiRequest } from './api-client';
 import type { BrowserHost } from './host-view';
 import { record } from '../core/helper-values';
@@ -127,7 +128,7 @@ export function createPushNotifications(options: {
     const results = await Promise.allSettled(targets.map(host => sendJson(options.request, host, '/api/push/test', { endpoint: existing.endpoint })));
     const failures = results.flatMap((result, i) => result.status === 'rejected'
       ? [`${options.label(targets[i])}: ${errorMessage(result.reason)}`] : []);
-    return failures.length ? failures.join(' ') : `Sent a test from ${targets.length} host${targets.length === 1 ? '' : 's'}.`;
+    return failures.length ? failures.join(' ') : `Sent a test from ${countLabel(targets.length, 'host')}.`;
   }
 
   function mount(): void {

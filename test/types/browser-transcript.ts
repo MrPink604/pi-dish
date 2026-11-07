@@ -1,4 +1,4 @@
-import { decodeTranscriptPage } from '../../src/browser/transcript-data';
+import { decodeTranscriptPage } from '../../src/browser/transcript';
 import type { RenderMessage } from '../../src/browser/message-data';
 import type { createTranscript } from '../../src/browser/transcript';
 declare const transcript: ReturnType<typeof createTranscript>;

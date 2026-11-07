@@ -1,5 +1,6 @@
 import { escapeHtml } from '../core/helper-format';
 import { finite, record } from '../core/helper-values';
+import { countLabel } from './helper-format';
 
 // Cache lifetimes section of the usage view: per model, the cache retention
 // sessions are served, where it comes from, and the probes the learner has
@@ -127,7 +128,7 @@ export function cacheLifetimeStatus(row: CacheLifetimeRow): CacheLifetimeStatus 
   switch (failing?.id) {
     case 'support': detail = `${Math.floor(failing.value ?? 0)} of ${failing.need} probes`; break;
     case 'warm': detail = 'Too few warm returns'; break;
-    case 'cold': detail = row.probes.misses === 0 ? `Never seen cold${warmAfter}` : `${row.probes.misses} cold return${row.probes.misses === 1 ? '' : 's'}, need ${failing.need}${warmAfter}`; break;
+    case 'cold': detail = row.probes.misses === 0 ? `Never seen cold${warmAfter}` : `${countLabel(row.probes.misses, 'cold return')}, need ${failing.need}${warmAfter}`; break;
     case 'slope': detail = 'No clear expiry cliff yet'; break;
     case 'range': detail = 'Fitted window out of range'; break;
     case 'bracket': detail = 'Crossing lies beyond observed gaps'; break;

@@ -4,7 +4,7 @@ import { requiredElement } from './dom';
 import type { HelperHost } from '../core/helper-types';
 import type { Costs, Tokens, UsageBucket, UsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry } from './shared-helper-types';
 import { escapeHtml } from '../core/helper-format';
-import { formatEstimatedCost, formatUsageCost, formatTokens, formatCacheStat, shortCwd } from './helper-format';
+import { countLabel, formatEstimatedCost, formatUsageCost, formatTokens, formatCacheStat, shortCwd } from './helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { mergeUsageSummaries, createFanoutRenderQueue, aggregateUsageWeekly, niceTicks, formatUsageDay, usageUnattributedCost, usageLimitsHtml, shortModelName } from './helper-usage';
 import { finite } from '../core/helper-values';
@@ -469,7 +469,7 @@ export function createUsageView(options: {
         ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', metric)}
         ${usageGroupListHtml('Sessions', d.groups?.sessions, 'session', metric)}
       </div>
-      ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${d.unpricedModelCalls} call${d.unpricedModelCalls === 1 ? '' : 's'} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing and ${d.unpricedModelCalls === 1 ? 'is' : 'are'} omitted.</div>` : ''}
+      ${d.unpricedModelCalls ? `<div class="usage-notice">* Known priced usage only; ${countLabel(d.unpricedModelCalls, 'call')} ${d.unpricedModelCalls === 1 ? 'has' : 'have'} unavailable pricing and ${d.unpricedModelCalls === 1 ? 'is' : 'are'} omitted.</div>` : ''}
     `;
     wireRangeButtons(body, owns);
     body.querySelectorAll<HTMLElement>('[data-sort]').forEach(button => button.addEventListener('click', () => {
@@ -688,7 +688,7 @@ export function createUsageView(options: {
       if (share > 0.004) segs.push(`<span class="sother" style="flex-grow:${(share * 1000).toFixed(1)}" title="Unattributed"></span>`);
       legend.push(`<span class="usage-legend-item"><i class="swatch sother"></i>Unattributed <b>${formatEstimatedCost(unattributed)}</b> <small>${Math.round(share * 100)}%</small></span>`);
     }
-    return `<section class="usage-section"><h4>Spend by bucket${unpriced ? ` <small class="usage-hint">${unpriced} unpriced call${unpriced === 1 ? '' : 's'} omitted</small>` : ''}</h4>
+    return `<section class="usage-section"><h4>Spend by bucket${unpriced ? ` <small class="usage-hint">${countLabel(unpriced, 'unpriced call')} omitted</small>` : ''}</h4>
       <div class="usage-share-bar">${segs.join('')}</div>
       <div class="usage-legend">${legend.join('')}</div></section>`;
   }
@@ -801,7 +801,7 @@ export function createUsageView(options: {
       for (const m of bucket.models || []) {
         if (!seriesRefs.includes(m.ref)) { otherV += usageModelValue(m, metric); extra++; }
       }
-      if (extra) rows.push(['sother', `other (${extra} model${extra > 1 ? 's' : ''})`, otherV]);
+      if (extra) rows.push(['sother', `other (${countLabel(extra, 'model')})`, otherV]);
     }
     for (const [cls, name, v] of rows) {
       const row = document.createElement('div');

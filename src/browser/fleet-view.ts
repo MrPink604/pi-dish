@@ -2,6 +2,7 @@ import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from 
 import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { record, finite } from '../core/helper-values';
+import { countLabel } from './helper-format';
 
 export interface FleetHost extends HostEndpoint {
   readonly hostId: string | null;
@@ -89,7 +90,7 @@ export function fleetSessionsHtml(sessions: FleetSessions | null, fallback: { li
   const parts = [`<strong>${s.live}</strong> live`];
   if (s.working) parts.push(`<span class="fleet-working">${s.working} working</span>`);
   if (s.waiting) parts.push(`${s.waiting} waiting on you`);
-  if (s.subagents) parts.push(`${s.subagents} subagent${s.subagents === 1 ? '' : 's'}`);
+  if (s.subagents) parts.push(countLabel(s.subagents, 'subagent'));
   return `<div class="fleet-sessions">${parts.join(' · ')}</div>`;
 }
 

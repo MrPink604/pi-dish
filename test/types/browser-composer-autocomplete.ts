@@ -1,5 +1,5 @@
 import type { createComposerAutocomplete } from '../../src/browser/composer-autocomplete';
-import type { SlashCommand } from '../../src/browser/composer-autocomplete-data';
+import type { SlashCommand } from '../../src/browser/composer-autocomplete';
 declare const autocomplete: ReturnType<typeof createComposerAutocomplete>;
 declare const command: SlashCommand;
 // @ts-expect-error autocomplete visibility is owned by its controller

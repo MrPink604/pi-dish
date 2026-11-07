@@ -1,3 +1,4 @@
+import { countLabel } from './helper-format';
 import type { CatalogModel } from '../core/session-api';
 import { decodeModelCatalog } from '../core/session-api';
 import type { DirectoryHost } from './directory-catalog';
@@ -125,7 +126,7 @@ export function modelSelectOptionsHtml(models: readonly Readonly<CatalogModel>[]
   return { html, enabled, hidden: models.length - enabled.length };
 }
 export function modelHiddenNote(hidden: number): string {
-  return hidden > 0 ? `${hidden} model${hidden === 1 ? '' : 's'} hidden (not enabled)` : '';
+  return hidden > 0 ? `${countLabel(hidden, 'model')} hidden (not enabled)` : '';
 }
 
 export function catalogModelSelector(model: Readonly<CatalogModel>): string {

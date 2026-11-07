@@ -10,7 +10,7 @@ import { decodeRoutine, decodeRoutineList, decodeRoutineInvocations } from './ro
 import { modelSelectOptionsHtml as selectOptions, modelHiddenNote } from './model-catalog';
 import { NS_THINKING_LABELS } from './new-session-options';
 import { escapeHtml, truncate } from '../core/helper-format';
-import { formatRelativeTime, shortCwd, formatDuration } from './helper-format';
+import { countLabel, formatRelativeTime, shortCwd, formatDuration } from './helper-format';
 import { sessionKey, hostDisplayLabel, hostSupportsCapability } from './helper-identity';
 import { createFanoutRenderQueue } from './helper-usage';
 import { record } from '../core/helper-values';
@@ -289,7 +289,7 @@ export function createRoutinesView(options: {
         </div>
         <div class="rt-row-sched">${routineScheduleLine(r)}</div>
         <div class="rt-row-meta">${escapeHtml(r.mode === 'continue' ? 'continue' : 'one-shot')} · on busy ${escapeHtml(r.onBusy)}</div>
-        <div class="rt-row-last">${lastLine}<span class="rt-count">${count} run${count === 1 ? '' : 's'}</span></div>
+        <div class="rt-row-last">${lastLine}<span class="rt-count">${countLabel(count, 'run')}</span></div>
       </div>`;
     }).join('');
 

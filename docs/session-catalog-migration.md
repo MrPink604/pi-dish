@@ -228,7 +228,7 @@ This worker alone edits the metadata sections/imports of `lib/session-files.js`.
 
 Replace the open authoritative `SessionEntry`/patch boundary in
 `src/browser/session-state.ts`. Update `api-client.ts`, `host-session-loader.ts`,
-`sidebar-lists.ts`, `transcript-data.ts`, `search-data.ts` and the state-writing
+`sidebar-lists.ts`, `search-data.ts` and the state-writing
 paths in `transcript.ts`, `session-controls.ts`, `session-activity.ts`,
 `message-stream.ts`, `session-view.ts` and resume/spawn reconciliation as needed.
 Audit every writer, not only `patchSession`: list replacement, selection creation,
@@ -500,7 +500,7 @@ the performance baseline's row counts do not prove list ordering.
 | `sessionForClient` → `/api/sessions?view=client` → `api-client.ts` | Default API preserves provenance; client projection removes eight private fields before JSON. Existing decoder validates a subset; Task 4 installs the closed row decoder after serialization. |
 | `host-session-loader.ts`, `sidebar-lists.ts` → `setSessionLists` | Endpoint/query generation owns fanout/cache publication; active-only child merging and family-hint retention happen per host. Omitted hosts retain their cached lists. |
 | `session-state.ts`: list replacement, selection creation, detached selection refresh | Host stamping and selection generations remain the owners. Lists replace rows; selected metadata merges only the new row's present fields. Task 4 must update every writer. |
-| `/messages` → `transcript-data.ts` → `transcript.ts` → `mergeCurrentSession` | File metadata plus live context overlays refresh selected header only. Request and selection guards survive body reads. List facts stay registry-aware. |
+| `/messages` → `transcript.ts` → `mergeCurrentSession` | File metadata plus live context overlays refresh selected header only. Request and selection guards survive body reads. List facts stay registry-aware. |
 | `session-controls.ts` acknowledged rename/model/thinking mutations | Host/session/field mutation sequence controls publication even after navigation; selected-view feedback additionally requires selection ownership. Task 4 narrows mutation patches. |
 | `message-stream.ts` → `session-activity.ts` → `patchSession` | Owned stream/turn events write `turnInProgress`/`compacting`; they do not acquire registry or capability authority. |
 | `search-data.ts`, `search-view.ts`, `session-view.ts`, `session-resume.ts` | Search result navigation and resume are captured host/view operations; they refresh/find authoritative lists before selecting/hydrating. Search rows are not full list rows. |

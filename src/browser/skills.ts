@@ -2,7 +2,7 @@ import { errorMessage, responseError, sameCapturedHost, type ApiRequest, type Ho
 import { requiredElement } from './dom';
 import type { SessionState } from './session-state';
 import { escapeHtml } from '../core/helper-format';
-import { formatRelativeTime, shortCwd } from './helper-format';
+import { countLabel, formatRelativeTime, shortCwd } from './helper-format';
 import { decodeSkillDirectory, decodeSkillCoverage } from './skills-data';
 import type { SkillDirectory, SkillRefine, SkillEntry, SkillCoverage } from './skills-data';
 export interface SkillsHost extends HostEndpoint { readonly hostId: string | null }
@@ -25,7 +25,6 @@ export function createSkills(options: {
   function owns(seq = skillsSeq): boolean {
     return seq === skillsSeq && isSkillsViewOpen() && !!viewHost && sameHost(viewHost);
   }
-  const plural = (n: number) => n === 1 ? '' : 's';
   function retireBody(): void { bodyEvents.abort(); bodyEvents = new AbortController(); }
   async function read(path: string): Promise<unknown> {
     const host = viewHost;
@@ -283,10 +282,10 @@ export function createSkills(options: {
 
     let coverageHtml;
     if (cov.numMapped === 0) {
-      coverageHtml = `<div class="cov-cap">No ranged reads recorded since this file was last edited${cov.excludedBeforeMtime ? ` (${cov.excludedBeforeMtime} older read${plural(cov.excludedBeforeMtime)} predate it)` : ''}.</div>`;
+      coverageHtml = `<div class="cov-cap">No ranged reads recorded since this file was last edited${cov.excludedBeforeMtime ? ` (${countLabel(cov.excludedBeforeMtime, 'older read')} predate it)` : ''}.</div>`;
     } else if (cov.flatFullRead) {
       coverageHtml = `<div class="cov-flat">This skill is short enough that every one of the last
-        ${cov.numMapped} read${plural(cov.numMapped)} loaded it in full — nothing has been
+        ${countLabel(cov.numMapped, 'read')} loaded it in full — nothing has been
         skipped, so there is no partial-coverage map to show.</div>`;
     } else {
       const secRows = cov.sections.map((sec, i) => {
@@ -302,8 +301,8 @@ export function createSkills(options: {
           <div class="sec-open" id="skSecOpen${i}" style="display:none"></div>`;
       }).join('');
       coverageHtml = `
-        <div class="cov-headline"><b>~${fmtTok(cov.unreadTokensEst)} tok</b> (est) never entered context across the last ${cov.numMapped} read${plural(cov.numMapped)}</div>
-        <div class="cov-cap">${cov.numMapped} ranged read${plural(cov.numMapped)} mapped · ${cov.targetedTouches} targeted access${cov.targetedTouches === 1 ? '' : 'es'} (counted as touches, not mapped)${cov.excludedBeforeMtime ? ` · ${cov.excludedBeforeMtime} older read${plural(cov.excludedBeforeMtime)} predate this version` : ''}</div>
+        <div class="cov-headline"><b>~${fmtTok(cov.unreadTokensEst)} tok</b> (est) never entered context across the last ${countLabel(cov.numMapped, 'read')}</div>
+        <div class="cov-cap">${countLabel(cov.numMapped, 'ranged read')} mapped · ${countLabel(cov.targetedTouches, 'targeted access', 'targeted accesses')} (counted as touches, not mapped)${cov.excludedBeforeMtime ? ` · ${countLabel(cov.excludedBeforeMtime, 'older read')} predate this version` : ''}</div>
         ${secRows}
         <div class="d-note">Coverage maps ranged reads against the current file version only —
           activations before the last edit count toward totals but aren't mapped. A short skill
@@ -312,7 +311,7 @@ export function createSkills(options: {
 
     const kinds = cov.kindSplit || {};
     const wsLine = u?.topCwd
-      ? `Used in ${cov.cwdCount || u.cwdCount || 1} workspace${plural(cov.cwdCount || u.cwdCount || 1)}, mostly <span class="mono">${escapeHtml(shortCwd(cov.topCwd))}</span>`
+      ? `Used in ${countLabel(cov.cwdCount || u.cwdCount || 1, 'workspace')}, mostly <span class="mono">${escapeHtml(shortCwd(cov.topCwd))}</span>`
       : 'No workspace activity recorded yet';
     let latestHtml = '';
     if (cov.latest && cov.latest.sessionId) {
