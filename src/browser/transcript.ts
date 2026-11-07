@@ -87,12 +87,7 @@ export function createTranscript(options: {
     if (before) container.insertBefore(template.content, before); else container.appendChild(template.content);
     return nodes;
   }
-  /**
-   * Bound the active transcript to MAX_ACTIVE indexed messages while keeping
-   * the oldest retained pages (where paging arrives), the live tail, and the
-   * context around the reader or a search hit. Evicted messages become gaps
-   * the existing paging controls reload, so nothing is lost irretrievably.
-   */
+  /** Keeps the oldest pages, live tail and reader/search context; evicted messages become reloadable gaps. */
   function boundActive() {
     const indexed = Array.from(container.querySelectorAll<HTMLElement>('[data-msg-index]'));
     if (indexed.length <= MAX_ACTIVE) return false;

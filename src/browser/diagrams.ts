@@ -50,10 +50,8 @@ function loadMermaid() {
 }
 
 /**
- * mermaid config derived from the live theme tokens, the way terminalTheme()
- * derives xterm's palette. Tokens are resolved to concrete hex first: several
- * are color-mix() over another token, and mermaid does color math (lighten,
- * darken, contrast) on whatever it is handed.
+ * Tokens are resolved to concrete hex first: several are color-mix() and
+ * mermaid does color math on whatever it is handed.
  */
 function mermaidConfig(): MermaidConfig {
   const css = window.getComputedStyle(document.documentElement);
@@ -109,11 +107,7 @@ function mermaidConfig(): MermaidConfig {
   };
 }
 
-/**
- * Equip a wrapped code block for diagram rendering: the source/zoom controls
- * join the copy button in one actions row. Idempotent — `data-diagram` is the
- * marker, and CSS keeps the controls hidden until an SVG actually lands.
- */
+/** Idempotent via `data-diagram`; CSS hides the controls until an SVG lands. */
 function prepareDiagramBlock(block: HTMLElement | null, kind: string) {
   if (disposed || !block || block.dataset.diagram) return;
   block.dataset.diagram = kind;
@@ -134,11 +128,7 @@ function prepareDiagramBlock(block: HTMLElement | null, kind: string) {
   block.prepend(actions);
 }
 
-/**
- * Render every diagram block under `root` that hasn't been rendered yet.
- * Fire-and-forget: the code block stays on screen until the SVG replaces it,
- * so a slow (or absent) renderer never blanks content.
- */
+/** Fire-and-forget: the code block stays on screen until the SVG replaces it. */
 function renderDiagrams(root: ParentNode) {
   const blocks = [...root.querySelectorAll<HTMLElement>('.diagram-block:not([data-diagram-state])')];
   if (disposed || !blocks.length) return;
@@ -146,16 +136,8 @@ function renderDiagrams(root: ParentNode) {
     const owner: RenderOwner = { generation: themeGeneration, source: block.querySelector('pre code')?.textContent || '' };
     renders.set(block, owner); block.dataset.diagramState = 'loading'; return { block, owner };
   });
-  // Deferred a task, never started inside the render pass that found the
-  // blocks. mermaid.render() does its parsing and layout in heavy chunks
-  // between awaits, so once mermaid is loaded a render started here would run
-  // in the same microtask checkpoint as the transcript load's own
-  // continuations (loadMessages → selectSession → whatever awaits them),
-  // paying the diagram layout before the text paints. It also broke the
-  // browser smoke: a CDP `awaitPromise` holds the awaited promise only weakly
-  // once it settles, and a GC in that checkpoint reported it "collected"
-  // (Playwright's "Execution context was destroyed") while the app's own
-  // chain completed fine. A task boundary separates the two.
+  // Deferred a task: mermaid's heavy parse/layout would otherwise run in the
+  // same microtask checkpoint as the transcript load and delay the text paint.
   const timer = setTimeout(() => {
     tasks.delete(timer); if (disposed) return;
     for (const { block, owner } of pending) if (block.dataset.diagram === 'svg' && owns(block, owner)) void renderSvgBlock(block, owner);
@@ -173,17 +155,12 @@ function renderDiagrams(root: ParentNode) {
   }, 0); tasks.add(timer);
 }
 
-/** Whether `block` sits in the live feed while it is pinned to the bottom. */
 function pinnedFeed(block: HTMLElement) {
   const feed = document.getElementById('messages');
   return feed && feed.contains(block) && options.isPinned(feed) ? feed : null;
 }
 
-/**
- * Put a finished render in front of the source. The render is taller than its
- * source, so a reader sitting at the bottom of a live feed (measured before
- * the render started and again now) must be carried down with it.
- */
+/** The render is taller than its source, so a reader pinned to the live feed is carried down. */
 function showRender(block: HTMLElement, pinned: HTMLElement | null, fill: (figure: Element) => void) {
   const stillPinned = pinned && pinned.contains(block) && options.isPinned(pinned);
   let figure = block.querySelector('.diagram-render');
@@ -222,12 +199,9 @@ async function renderDiagramBlock(m: MermaidRuntime, block: HTMLElement, owner: 
 }
 
 /**
- * An agent-authored ```svg fence. It is shown through an <img>, never inlined:
- * an SVG image document runs no script, loads nothing external and cannot
- * reach the app's DOM, so the source needs no sanitizer. The price is that
- * the page's CSS doesn't reach inside, so the theme tokens agents draw with
- * (`var(--fg)`, `--muted`, `--accent`, `--c1`…) are written into the image as
- * concrete colors at render time — which is why a theme change re-renders it.
+ * Shown through an <img>, never inlined: an SVG image document runs no script and
+ * cannot reach the app's DOM, so no sanitizer is needed. Page CSS can't reach in,
+ * so theme tokens are baked in at render time (a theme change re-renders it).
  */
 async function renderSvgBlock(block: HTMLElement, owner: RenderOwner) {
   const pinned = pinnedFeed(block);
@@ -303,12 +277,7 @@ function toggleDiagramSource(block: HTMLElement) {
   }
 }
 
-/**
- * Zoom a rendered diagram. Inside the reading column a wide flowchart shrinks
- * to unreadable, so the overlay shows the SVG at its own size in a scrollable
- * stage with explicit zoom steps — a phone has no wheel, and pinch-zoom inside
- * a fixed overlay is not dependable.
- */
+/** A scrollable stage with explicit zoom steps: phones have no wheel and pinch-zoom in a fixed overlay is unreliable. */
 function openDiagramLightbox(block: HTMLElement) {
   const media = block.querySelector<SVGSVGElement | HTMLImageElement>('.diagram-render svg, .diagram-render img');
   if (disposed || !media) return;
@@ -371,10 +340,8 @@ function openDiagramLightbox(block: HTMLElement) {
 }
 
 /**
- * Theme change: diagram colors are baked into each render (mermaid's config,
- * an SVG fence's resolved tokens), so re-render what's on screen — plus the
- * retained transcripts, which are restored without another applyHighlight
- * pass. Mermaid re-initializes on its next render pass.
+ * Colors are baked into each render, so re-render on-screen and retained
+ * transcripts (restored without another applyHighlight pass).
  */
 function refreshDiagramTheme() {
   if (disposed) return;

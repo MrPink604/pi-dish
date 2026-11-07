@@ -309,7 +309,6 @@ export function createRoutinesView(options: {
     });
   }
 
-  /** Blank the detail pane's per-routine state before a new selection or a create. */
   function resetRoutineDetail(): void {
     routineFormError = '';
     routineNotice = '';
@@ -384,16 +383,11 @@ export function createRoutinesView(options: {
     renderRoutineDetail();
   }
 
-  /** The host the detail pane's calls go to — the routine's, or the create pick. */
   function routineFormHostId() {
     return routineCreating ? routineCreateHostId : (routineSelected?.host ?? routineSelectedHostId);
   }
 
-  /**
-   * Known cwds for the form's host, taken from the client's own session lists.
-   * The new-session takeover's /api/cwds cache belongs to *its* host; deriving
-   * from `sessions` keeps a peer's routine from suggesting this machine's paths.
-   */
+  /** Derived from session lists, not /api/cwds (another host's cache), so a peer's routine never suggests this machine's paths. */
   function routineKnownCwds() {
     const hostId = routineFormHostId();
     const seen = new Set<string>();
@@ -439,7 +433,6 @@ export function createRoutinesView(options: {
     return models;
   }
 
-  /** Current form values, normalized to the wire shape the routes take. */
   function readRoutineForm(): RoutineForm | null {
     const detail = document.getElementById('routinesDetail');
     if (!detail || !detail.querySelector('#rtName')) return null;
@@ -1082,7 +1075,7 @@ export function createRoutinesView(options: {
       if (!ownsForm(owner) || mutationToken !== token) return;
       setRoutineNotice('Run started.');
       await loadRoutineInvocations({ reset: true });
-      if (ownsForm(owner)) void loadRoutinesView(); // the row's run count and last-run line just changed
+      if (ownsForm(owner)) void loadRoutinesView();
     } catch (e) {
       if (ownsForm(owner) && mutationToken === token) setRoutineFormError(errorMessage(e));
     } finally {

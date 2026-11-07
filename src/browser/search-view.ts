@@ -30,15 +30,9 @@ export function createSearchView(options: {
   function sameHost(host: SearchHost): boolean {
     return sameCapturedHost(options.host(host.hostId), host);
   }
-  // --- Advanced search (main-pane takeover) ---
-  // Full-width search over every session: the sidebar grammar verbatim (one
-  // dialect — never fork it), multiple highlighted snippets per session with
-  // an occurrence count, facet controls that are pure UI over the grammar
-  // (they rewrite the query text, which stays the single source of truth),
-  // and click-through that opens the session and hands the positive tokens to
-  // the in-session search so the reader lands on the match. `<main>`-level
-  // like the usage view because search isn't session-scoped; active scopes are
-  // sent separately so the server applies them before its result cap.
+  // Advanced search reuses the sidebar grammar verbatim (never fork it); facet
+  // controls only rewrite the query text, which stays the single source of truth.
+  // Active scopes are sent separately so the server applies them before its result cap.
   let searchViewSeq = 0;
   let searchViewQuery = '';
   let searchViewRenderedQuery = '';
@@ -88,27 +82,18 @@ export function createSearchView(options: {
     const body = element('searchViewBody');
     if (body.childElementCount) body.classList.add('usage-refreshing');
     else body.innerHTML = '<div class="usage-state">Searching…</div>';
-    // `host:` stays on this side of the wire — in the query and in any
-    // active scope — or every server would answer with nothing. Positive
-    // host terms prune the fan-out instead; the rest is applied to the
-    // merged results below.
+    // `host:` never goes over the wire, or every server would answer with nothing.
     const params = new URLSearchParams({ q: stripQueryField(query, 'host') });
-    // The browser's default: inactive routine runs are cron noise — the server
-    // drops them (before its result cap) unless the query or an active scope
-    // affirmatively asks. Sent as a param so API/CLI consumers of /api/search
-    // keep the inclusive corpus.
+    // Inactive routine runs are hidden server-side (before its result cap) as a
+    // param, so API/CLI consumers of /api/search keep the inclusive corpus.
     params.set('hideAutomation', '1');
     const wireScope = stripQueryField(scope, 'host');
     if (wireScope) params.set('scope', wireScope);
-    // Every host searches its own index and ranks with the same shared
-    // scoreSessionMatch, so the merge is a plain re-sort on searchScore.
+    // Every host ranks with the shared scoreSessionMatch, so merging is a plain re-sort.
     const hosts = queryHosts(queryHosts(fanoutHosts(), query), scope).map(host => Object.freeze({ ...host }));
     const stale = () => seq !== searchViewSeq || !isSearchViewOpen() ||
       query !== searchViewQuery.trim() || scope !== scopeQuery().trim();
-    // Render as each host lands: a fleet's slowest peer must not decide when
-    // the fastest one's results become readable. renderSearchView is a full
-    // idempotent render, and on one host the first settle *is* the final one —
-    // single-host behavior is unchanged, hint and all.
+    // Render as each host lands so the slowest peer doesn't gate readable results.
     const status: ('pending' | 'ok' | 'error')[] = hosts.map(() => 'pending');
     const payloads: (SearchPayload | undefined)[] = new Array(hosts.length);
     const reasons: unknown[] = new Array(hosts.length);
@@ -120,11 +105,7 @@ export function createSearchView(options: {
       const d: SearchViewData = ok.length
         ? mergeSearchPayloads(ok, query)
         : { results: [], total: 0, hiddenByScopes: 0, hiddenByAutomation: 0, indexing: false };
-      // The client-only half of the grammar, applied to what came back: the
-      // query's remaining host terms (negations, and positives on a host that
-      // serves several labels), then any host term in an active scope. Every
-      // partial render goes through it — partial results must not bypass the
-      // grammar for even one frame.
+      // Client-only host terms apply to every partial render too, never bypassing the grammar.
       d.results = applyHostTerms(d.results, query);
       const inScope = applyHostTerms(d.results, scope);
       d.hiddenByScopes += d.results.length - inScope.length;
@@ -151,13 +132,11 @@ export function createSearchView(options: {
           reasons[i] = e;
           if (!host.self && sameHost(host)) options.connection(host, { type: 'failure', error: e });
         }
-        // Until one host has answered there is nothing to show: keep the
-        // previous render (or "Searching…") instead of flashing an empty list.
+        // Keep the previous render rather than flashing an empty list.
         if (status.some(s => s === 'ok')) render();
       }));
       if (!status.some(s => s === 'ok')) {
-        // Every host pruned away is an answer, not a failure: the query named a
-        // host none of them is, so the result set is empty.
+        // All hosts pruned away is an empty answer, not a failure.
         if (hosts.length) throw reasons.find(Boolean) || new Error('no hosts answered');
         render();
       }
@@ -170,10 +149,7 @@ export function createSearchView(options: {
     }
   }
 
-  // Facet plumbing: replace any `prefix:` term in the query text with the
-  // picked value (or drop it). Rewriting the visible query — instead of
-  // keeping hidden facet state — means what you see is exactly what runs,
-  // and a facet choice can be hand-edited afterwards.
+  // Facets rewrite the visible query rather than hidden state, so what you see is what runs.
   function setSearchToken(prefix: 'cwd' | 'model' | 'host' | 'is' | 'since', value: string | null) {
     if (!isSearchViewOpen()) return;
     const input = element<HTMLInputElement>('searchViewInput');
@@ -200,9 +176,8 @@ export function createSearchView(options: {
     };
   }
 
-  // Facet options come from the sidebar's session lists (the full corpus the
-  // client already knows), not from the current results — otherwise picking a
-  // workspace would immediately empty every other option.
+  // Options come from the full session lists, not current results, so picking one
+  // doesn't empty every other option.
   function searchFacetOptions() {
     const all = [...sessionState.sessions.active, ...sessionState.sessions.previous];
     const cwds = new Map<string, string>(), models = new Set<string>();
@@ -227,9 +202,7 @@ export function createSearchView(options: {
     const modelOptions = ['<option value="">All models</option>',
       ...opts.models.map(m =>
         `<option value="${escapeHtml(m)}"${m.toLowerCase() === st.model ? ' selected' : ''}>${escapeHtml(m)}</option>`)].join('');
-    // The host facet exists only where there is a fleet to choose from, and
-    // its options come from the client's own host list — hosts are a client
-    // concept, so no result payload could source them.
+    // Hosts are a client concept, so options come from the client's host list.
     const hostSelect = !isMultiHost() ? '' : `<select class="search-facet-select" id="searchFacetHost">${
       ['<option value="">All hosts</option>', ...effectiveHosts().map(h => hostDisplayLabel(h)).filter(Boolean).map(label =>
         `<option value="${escapeHtml(label)}"${label.toLowerCase() === st.host ? ' selected' : ''}>${escapeHtml(label)}</option>`)].join('')
@@ -303,11 +276,7 @@ export function createSearchView(options: {
 
   }
 
-  /**
-   * Click-through: close the takeover, show the session, and — when the query
-   * had text terms — hand them to the in-session search so the reader lands on
-   * the actual match instead of at the transcript's tail.
-   */
+  /** Hands text terms to the in-session search so the reader lands on the match, not the tail. */
   async function openSearchResult(id: string, hasContentMatches: boolean, host: string | null = null, renderedQuery = searchViewRenderedQuery, endpoint = options.host(host)): Promise<void> {
     if (!isSearchViewOpen() || !endpoint || !sameHost(endpoint)) return;
     const captured = Object.freeze({ ...endpoint });

@@ -13,9 +13,7 @@ import { createTableControls } from './table-controls';
 
 declare const katex: KatexRenderer | undefined;
 const MATH_PENDING_CLASS = 'math-pending', MATH_SOURCE_ATTR = 'data-math-source';
-// Set by the placeholder renderer, so "this document needed KaTeX" comes from
-// the shared math tokenizer actually rendering a token — never from matching
-// text that merely mentions the attribute.
+// Counted by the placeholder renderer, never by matching text that mentions the attribute.
 let pendingMathRenders = 0;
 
 /**
@@ -41,21 +39,14 @@ const STABLE_BLOCK_TYPES: Record<string, true> = {
   heading: true, paragraph: true, space: true, code: true, blockquote: true, table: true, hr: true, html: true, blockMath: true, list: true,
 };
 /**
- * Types that definitively end a list when they follow it across a blank line. A
- * paragraph or another list can still become one of its items (an unfinished
- * marker only needs a `.` to merge into the list above it), so those never let
- * the list be finalized.
+ * Types that definitively end a list across a blank line; a paragraph or list
+ * can still merge into it (an unfinished marker only needs a `.`).
  */
 const LIST_TERMINATORS: Record<string, true> = { heading: true, code: true, html: true, hr: true, table: true };
 
 /**
- * Length of `source`'s finalized block prefix: the source every later line is
- * powerless to change. Only a blank line closes a block — a paragraph, table,
- * fence or setext underline otherwise still absorbs what follows — the block
- * before that blank line must not be able to continue past it (a list takes
- * another item, a blockquote another `>` line), the boundary must land on a
- * line start (leading whitespace decides indented code versus paragraph), and
- * every preceding token must be a type that can be finalized at all.
+ * Length of the finalized block prefix: ends at a blank line after a block that
+ * cannot continue past it, on a line start, with only finalizable token types.
  */
 function stablePrefixEnd(source: string, tokens: readonly MarkdownToken[]) {
   const ends: number[] = [], nextContent: (string | null)[] = new Array(tokens.length).fill(null);
@@ -129,10 +120,8 @@ export function createRichText(options: { document: Document; marked: MarkedRunt
     walkTokens(token) {
       if (token.type === 'link' || token.type === 'image') token.href = sanitizeMarkdownUrl(token.href);
     },
-    // Math renders through the shared KaTeX tokenizer. While the bundle is
-    // absent its renderer emits an inert, source-carrying placeholder instead
-    // of guessed markup, so a transcript paints immediately and hydration
-    // swaps in the exact KaTeX output later (live DOM and cached fragments).
+    // Without the KaTeX bundle the renderer emits inert source-carrying
+    // placeholders, so text paints immediately and hydration swaps in KaTeX later.
     extensions: createMathExtensions(() => mathRuntime() || pendingKatex),
   });
 function formatMarkdown(text: string) {
@@ -141,9 +130,7 @@ function formatMarkdown(text: string) {
     try {
       const renders = pendingMathRenders;
       const html = options.marked.parse(text);
-      // The placeholder renderer is the only signal that a math token really
-      // was parsed while KaTeX is absent — no matching of text that merely
-      // mentions the attribute, so math-free markdown loads nothing.
+      // Only load KaTeX when a math token was actually parsed.
       if (pendingMathRenders !== renders && !mathRuntime()) void loadMathAssets().catch(() => {});
       return linkSessionRefs(html);
     } catch(e) {}
@@ -194,14 +181,9 @@ function linkSessionRefs(html: string) {
   return template.innerHTML;
 }
 
-// Post-render pass over final markdown: syntax-highlight fenced code blocks,
-// give each one a copy button, turn diagram fences into rendered diagrams,
-// and give tables sort/filter controls. Runs after final renders only — streaming re-renders skip it to
-// stay cheap (and half a diagram is not parseable anyway) — and must stay
-// idempotent (it re-runs on every append/prepend). The wrapper div keeps the
-// button pinned while the <pre> scrolls horizontally (an absolutely
-// positioned child of the <pre> would scroll away with the overflowing
-// content).
+// Post-render pass over final markdown only (streaming skips it to stay cheap, and
+// half a diagram is not parseable); must stay idempotent. The wrapper div keeps
+// the copy button pinned while the <pre> scrolls horizontally.
 function applyHighlight(el?: ParentNode | null) {
   const root = el || document.getElementById('messages');
   if (disposed || !root) return;
@@ -221,9 +203,8 @@ function applyHighlight(el?: ParentNode | null) {
     const kind = diagramKindForFence(fenceLanguage(code), code.textContent);
     if (kind) {
       options.diagrams.prepare(pre?.parentElement || null, kind);
-      // hljs has no mermaid grammar in the common bundle, so highlighting the
-      // source view would only be auto-detection noise. SVG source is XML,
-      // which it does highlight.
+      // hljs's common bundle has no mermaid grammar (auto-detection would be
+      // noise); SVG source is XML, which it does highlight.
       if (kind === 'mermaid') code.dataset.highlighted = 'diagram';
     }
     if (code.dataset.highlighted) return;
@@ -251,23 +232,14 @@ function applyHighlight(el?: ParentNode | null) {
   tables.enhance(root);
 }
 
-/** The fence's declared language, from marked's `language-x` class. */
 function fenceLanguage(code: HTMLElement) {
   const cls = [...code.classList].find((c) => c.startsWith('language-'));
   return cls ? cls.slice('language-'.length) : '';
 }
 
-// Mark file mentions clickable: inline code spans and tool-call summaries
-// whose whole text looks like a path, plus path tokens inside plain prose
-// (findPathTokens in helper-markdown.ts). Runs inside applyHighlight so every final
-// render gets it; idempotent — linked elements are skipped and each
-// .markdown-body's prose is walked once (data-linkified). Clicks are
-// delegated on document → openFileViewer.
-//
-// Published artifact paths (/page/<token>, /share/<token>) are not files:
-// in any of those forms they become real links on this pi-dish origin, whose
-// fleet discovery serves the artifact whichever host published it, opened in
-// a new tab like the artifacts modal's links.
+// Idempotent: linked elements are skipped and each .markdown-body's prose is
+// walked once (data-linkified). Published artifact paths become real links on
+// this origin, not file links.
 function linkifyFilePaths(root: ParentNode) {
   const artifactLink = (href: string, label: Node | string) => {
     const link = document.createElement('a');
@@ -291,10 +263,8 @@ function linkifyFilePaths(root: ParentNode) {
     }
   });
 
-  // Markdown links whose href is a bare file path — agents cite evidence as
-  // [label](../out/summary.json) — would navigate the hub tab to a 404.
-  // Strip the dead href and let the delegated click open the file viewer on
-  // the path instead (data-file-path, read by app.ts).
+  // Bare-file-path hrefs would navigate to a 404: strip the href and let the
+  // delegated click open the file viewer (data-file-path).
   root.querySelectorAll<HTMLAnchorElement>('.markdown-body a[href]').forEach(link => {
     if (link.classList.contains('file-link') || link.classList.contains('published-link')) return;
     const href = (link.getAttribute('href') || '').trim();
@@ -348,14 +318,9 @@ function linkifyFilePaths(root: ParentNode) {
 }
 
   /**
-   * Reparse only what streaming has not finalized. Only the uncommitted tail is
-   * lexed each frame (everything before the previous boundary is already
-   * verified committed source), and `'grow'` hands back just the newly-final
-   * source's HTML plus the still-changing tail. `'replace'` is the conservative
-   * full re-render: the first frame, a rewritten/non-prefix frame, a retreat
-   * (a boundary that stopped being final), or a scan whose token raws do not
-   * cover it — CRLF/tab normalization, or a reference definition, which can also
-   * retroactively resolve links in already-committed source.
+   * Only the uncommitted tail is lexed each frame. `'replace'` is the conservative
+   * full re-render for first/rewritten/retreating frames, or when CRLF/tab
+   * normalization or a reference definition could change committed source.
    */
   function streamMarkdown(previous: StreamingBlockState | null, text: string): StreamingFrame | null {
     if (!options.marked) return null;

@@ -4,7 +4,6 @@ import { formatTime, formatThinkingPreview } from './helper-format';
 import { toolCallBodyHtml } from './tool-format';
 import { getToolSummary, messageHasVisibleText } from '../core/helper-content';
 
-/** How far a streamed markdown block's source has been finalized. */
 export interface StreamingBlockState { readonly text: string; readonly stableEnd: number }
 /** One incremental frame: `'replace'` carries the whole stable prefix, `'grow'`
  *  only the newly-final delta to insert ahead of the still-changing tail. */
@@ -52,9 +51,8 @@ export function createStreamingRenderer(options: {
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = null; const request = scrollRequest; scrollRequest = null;
       if (disposed || !request || !sessionState.ownsSelection(request.owner) || !request.container.isConnected) return;
-      // A viewport that moved up since the frame was measured is a manual
-      // scroll: leave it (and just offer the jump button) rather than yanking it
-      // back to the tail.
+      // A viewport that moved up since measurement is a manual scroll: offer
+      // the jump button rather than yanking it back to the tail.
       if (request.pinned && request.container.scrollTop >= request.scrollTop) options.scroll(request.container);
       else options.jump(request.container);
     });
@@ -75,11 +73,7 @@ function ensureStreamingElement(container: HTMLElement) {
   return container.querySelector<HTMLElement>('.message.assistant[data-streaming="true"]');
 }
 
-/**
- * Render one streamed text block. `stream` gives the incremental frame; without
- * it (or without marked) the whole block is reparsed, which stays correct for
- * rewritten frames and for constructs whose meaning later text can change.
- */
+/** Without `stream` (or marked) the whole block is reparsed, which stays correct for rewritten frames. */
 function renderTextBlock(blockEl: HTMLElement, previous: StreamingBlockState | null, text: string) {
   const body = blockEl.querySelector<HTMLElement>('.markdown-body');
   if (!body) return;
@@ -171,8 +165,7 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
     }
   });
 
-  // Same predicate as the static renderer (helper-content.ts) — the two maintaining
-  // this independently is how they drifted on errorMessage handling.
+  // Same predicate as the static renderer (helper-content.ts) so they cannot drift.
   el.classList.toggle('no-text', !messageHasVisibleText(message));
   scheduleScroll(container, owner, wasPinned, scrollTop);
 }

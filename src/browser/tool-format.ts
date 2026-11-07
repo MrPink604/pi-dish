@@ -24,10 +24,7 @@ export interface EvalCell {
 export interface EvalToolDetails { readonly kind: 'eval'; readonly cells: readonly EvalCell[] }
 export type ToolDetails = BashToolDetails | WaitToolDetails | EvalToolDetails;
 
-/**
- * OMP 18's `wait` returns a still-running snapshot after this safety cap even
- * when no watched job has settled (packages/coding-agent/src/tools/wait.ts).
- */
+/** OMP's `wait` returns a still-running snapshot after this cap even if no job settled. */
 export const WAIT_SAFETY_CAP_MS = 30 * 60_000;
 const OUTPUT_LIMIT = 8000;
 const EVAL_EVENT_LIMIT = 100;
@@ -92,11 +89,7 @@ export function evalCodeHtml(code: string, language: string | undefined) {
   return `<pre class="tool-code"><code${grammar ? ` class="language-${grammar}"` : ''}>${escapeHtml(code)}</code></pre>`;
 }
 
-/**
- * Tool-call body. Bash shows the command as a shell block and eval its cell
- * as highlighted code, each with execution options underneath; a bare OMP
- * wait shows its intent; others keep the argument dump.
- */
+/** Bash/eval show their source as code plus execution options; others keep the argument dump. */
 export function toolCallBodyHtml(name: string | undefined, args: Readonly<Record<string, unknown>>) {
   if ((name === 'bash' || name === 'Bash') && typeof args.command === 'string') {
     const meta: string[] = [];
@@ -178,11 +171,7 @@ function evalActivityHtml(events: readonly EvalEvent[]) {
     '</div>').join('') + '</div>';
 }
 
-/**
- * Eval body: the cell code (when the caller is not already showing it), the
- * host-tool activity it performed, then its output. A single cell uses the
- * caller's output block (the result content); split cells get a row each.
- */
+/** A single cell uses the caller's output block; split cells get a row each. */
 export function evalBodyHtml(details: EvalToolDetails, outputHtml: string, showCode: boolean) {
   if (details.cells.length === 1) {
     const cell = details.cells[0];
@@ -221,11 +210,7 @@ export function jobTimeoutMs(root: ParentNode | null | undefined, jobId: string)
 /** A job row's live clock: elapsed and remaining time measured at one instant. */
 export interface WaitJobClock { readonly elapsedMs: number; readonly leftMs: number | null; readonly noDeadline: boolean }
 
-/**
- * One line per job: id (a subagent-run link for task jobs), type, status,
- * exit, the command or label when it adds to the id, then run time and time
- * left; output, when present, follows underneath.
- */
+/** One line per job (task-job ids link to the subagent run); output follows underneath. */
 export function waitJobsHtml(jobs: readonly WaitJob[], clock?: (job: WaitJob) => WaitJobClock | null) {
   return '<div class="wait-jobs">' + jobs.map(job => {
     const running = job.status === 'running';
@@ -258,10 +243,8 @@ export function waitStatusSummary(jobs: readonly WaitJob[]) {
 }
 
 /**
- * Split an OMP background-job delivery notice into per-job output. The notice
- * wraps everything in <system-notice>, opens with a "has completed" line, and
- * separates several jobs with "── Job <id> (<label>) ──" rules; task jobs
- * wrap their answer in <task-result><output>…</output>.
+ * Split an OMP background-job delivery notice (<system-notice>, "── Job <id> ──"
+ * rules, task jobs in <task-result><output>) into per-job output.
  */
 export function jobDeliveryOutputs(text: string, jobIds: readonly string[]): Map<string, string> {
   const body = text.replace(/^\s*<system-notice>\s*\n?/, '').replace(/\n?\s*<\/system-notice>\s*$/, '')

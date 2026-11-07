@@ -8,9 +8,7 @@ const ABSENT_POLL_MS = 30000;
 
 export interface VaultApprovalsController {
   mount(): void;
-  /** Re-render after the selected session or the session lists change. */
   render(): void;
-  /** Toggle the global vault panel (sidebar header button). */
   togglePanel(): void;
   /** A vault notification was opened: show its session, or the panel when it has none. */
   open(requestId?: string | null): void;
@@ -18,11 +16,7 @@ export interface VaultApprovalsController {
 
 /**
  * Vault approvals live on the front-door host (the page's own origin), where
- * the listener runs. A request is answered in the view of the session that
- * made it, like an ask dialog: its card docks above that session's composer,
- * and any other view gets a toast that opens the session. The sidebar header's
- * vault button opens a panel with every pending request, the listener status
- * and the open 15-minute windows; it is hidden while the host has no listener.
+ * the listener runs. Cards dock in the requesting session's view; other views get a toast.
  */
 export function createVaultApprovals(options: {
   document: Document; window: Window; request: ApiRequest;

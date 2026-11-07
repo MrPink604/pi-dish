@@ -54,8 +54,7 @@ function updateSessionHeader() {
     const info = harnessBadgeInfo(current.harnessId, current.harnessLabel);
     const title = current.harnessLabel || info.label;
     options.ensureHarness(current.host || null);
-    // Clickable only where the host reports a settings view for this harness
-    // (OMP's /agents + /models hubs today).
+    // Clickable only where the host reports a settings view for this harness.
     const configurable = options.settings(current);
     harnessEl.className = `badge harness-badge harness-badge-${current.harnessId}`
       + (configurable ? ' clickable' : '');
@@ -69,8 +68,7 @@ function updateSessionHeader() {
   } else {
     harnessEl.textContent = '';
   }
-  // The tree has no header button any more (type /tree in the composer); the
-  // mobile control panel keeps its row, so it still follows harness support.
+  // The mobile control panel's tree row still follows harness support.
   const privateEl = element('sessionPrivate');
   if (privateEl) {
     const isPrivate = !!current.private;

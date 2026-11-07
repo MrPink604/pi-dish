@@ -159,9 +159,8 @@ export function createUsageView(options: {
     loadUsageView();
   }
 
-  // Each host answers by running its harness usage CLI, so limits load on
-  // open/Refresh only. A reload keeps the last rows and swaps each host's rows
-  // as it answers; hosts that stop answering drop out when the fan-out ends.
+  // Each host runs its harness usage CLI, so limits load on open/Refresh only;
+  // hosts that stop answering drop out when the fan-out ends.
   async function loadUsageLimits(): Promise<void> {
     const fetchSeq = ++limitsFetchSeq;
     const stale = () => fetchSeq !== limitsFetchSeq || !isUsageViewOpen();
@@ -297,7 +296,6 @@ export function createUsageView(options: {
     return bucket.calls || 0;
   }
   const USAGE_METRIC_LABELS: Readonly<Record<UsageMetric, string>> = { cost: 'Estimated spend', tokens: 'Tokens', calls: 'Calls' };
-  // Costs split into uncached input and cached reads, then generation and cache writes.
   const USAGE_COST_BUCKETS = [
     ['input', 'Read', 'c1'],
     ['cacheRead', 'Cached read', 'c2'],
@@ -320,7 +318,6 @@ export function createUsageView(options: {
   function usageGroupValue(group: UsageGroup, metric: UsageMetric) {
     return usageModelValue({ cost: group.costs?.total, calls: group.calls, tokens: group.tokens }, metric);
   }
-  /** Chart palette slot for a model ref: the first five series, else "other". */
   function usageSlot(ref: string | undefined) {
     const index = (usageChart?.seriesRefs || []).indexOf(ref || '');
     return index >= 0 ? `s${index + 1}` : 'sother';

@@ -42,7 +42,6 @@ export function createSessionInfo(options: {
     return decodeSessionShare(value);
   }
 
-  // --- Session stats modal ---
   let statsModalGeneration = 0;
   let statsModalOwner: SelectionOwner | null = null;
 
@@ -55,8 +54,7 @@ export function createSessionInfo(options: {
     if (disposed || !sessionState.currentSession) return;
     const owner = sessionState.captureSelection(); if (!owner) return;
     const sessionId = owner.id;
-    // Resolved now, while the selection is certainly this session — the stats
-    // response lands a round-trip later.
+    // Resolve now; the stats response lands after the selection may have changed.
     const host = endpoint(owner); if (!host) return;
     closeStatsModal(); statsEndpoint = host;
     const ref = sessionRefFor(sessionState.currentSession);
@@ -81,15 +79,10 @@ export function createSessionInfo(options: {
       .then(s => {
         if (!ownsStatsModal(owner, generation)) return;
         const cu = s.contextUsage || {};
-        // Session-wide effective speed: output tokens over the summed
-        // per-message response time (only messages with measurable timing).
+        // Only messages with measurable timing count toward speed.
         const avgSpeed = formatTokSpeed(s.genOutput, s.genMs);
-        // [key, value, copyable?] — copyable rows render the value as a
-        // click-to-copy button (paths, handy for jumping to the file in a shell).
         const rows: ([string, string, boolean?] | null)[] = [
           ['__section', 'Summary'],
-          // The pasteable handle for this session, click-to-copy like the paths
-          // below it — the modal-side twin of the sidebar row's context menu.
           ['Ref', ref, !!ref],
           ['Model', s.model || '—'],
           ['Thinking', s.thinkingLevel || '—'],
@@ -97,8 +90,7 @@ export function createSessionInfo(options: {
             ' / ' + (cu.contextWindow ? formatTokens(cu.contextWindow) : '—') +
             (cu.percent != null ? ` (${Math.round(cu.percent * 10) / 10}%)` : '')],
           ['Messages', `${s.userMessages} user · ${s.assistantMessages} assistant · ${s.toolCalls} tool calls`],
-          // Always shown, including zero: how often the context was rebuilt is
-          // read together with the Context row above it.
+          // Always shown, including zero.
           ['Compactions', String(s.compactions ?? 0)],
           ['__section', 'Performance'],
           s.responseTiming?.medianMs ? ['Response time', `${formatDuration(s.responseTiming.medianMs)} median · ${formatDuration(s.responseTiming.slowestMs)} slowest`] : null,
@@ -134,9 +126,7 @@ export function createSessionInfo(options: {
       });
   }
 
-  // Public share link section of the stats modal. Fetches current state (404 =
-  // no share) and renders either a "Create share link" button or the existing
-  // link as a click-to-copy row plus a Revoke button.
+  // 404 means no share exists.
   async function loadShareSection(owner: SelectionOwner, generation: number): Promise<void> {
     if (!ownsStatsModal(owner, generation) || !statsEndpoint) return;
     const host = statsEndpoint, sequence = ++shareSequence, holder = document.getElementById('statsShare'); if (!holder) return;
@@ -191,10 +181,7 @@ export function createSessionInfo(options: {
     finally { if (messageCopies.get(button) === token) messageCopies.delete(button); }
   }
 
-  // Shared post-close handling (stats-modal close and the sidebar row ✕):
-  // re-fetch both lists (the session just moved from active to previous) and,
-  // when it was the selected session, re-select so the view flips to its
-  // inactive state (resume bar).
+  // After a close, re-fetch lists and re-select if selected so the view shows the resume bar.
   async function finishSessionClose(sessionId: string, host: string | null, owner: SelectionOwner | null) {
     if (disposed) return;
     if (!owner || sessionState.ownsSelection(owner)) setStatus('Session closed');
@@ -204,10 +191,7 @@ export function createSessionInfo(options: {
     }
   }
 
-  // Session-process controls in the stats modal. Restart is advertised only for
-  // a pi-dish-owned tmux pane or RPC child; the server replaces that exact
-  // placement so startup-only CLI code/settings refresh without creating a new
-  // tmux session or window.
+  // Restart is offered only for a pi-dish-owned tmux pane or RPC child, which the server replaces in place.
   function renderCloseSection(owner: SelectionOwner, generation: number) {
     if (!ownsStatsModal(owner, generation) || !statsEndpoint) return;
     processEvents.abort(); processEvents = new AbortController();
@@ -334,12 +318,8 @@ export function createSessionInfo(options: {
     } catch { if (current()) holder.innerHTML = ''; }
   }
 
-  // --- Shared artifacts (header 📦: everything published/shared from the
-  // session in one place) ---
-  // Pages the agent (or the file viewer's 🌐) published plus the session share
-  // link. The badge count keeps them discoverable without opening the stats
-  // modal; refreshed on session select, turn end (agents publish mid-turn),
-  // and after any publish/revoke in the UI.
+  // The badge count keeps published pages discoverable; refreshed on select, turn end
+  // (agents publish mid-turn) and after any publish/revoke.
   let sessionArtifacts: { pages: readonly PublishedPage[]; share: SessionShare | null } = { pages: [], share: null };
   let artifactsSeq = 0; // drops stale responses on fast session switches
 

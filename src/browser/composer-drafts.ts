@@ -3,7 +3,6 @@ import { createComposerImages } from './composer-images';
 import { pushPromptHistory } from './helper-format';
 export function mergeComposerText(existing: string, restored: string) { const current = existing.trim(); return !current || current === restored ? restored : `${existing}\n\n${restored}`; }
 const HISTORY_PREFIX = 'pi-dish-history-', HISTORY_LIMIT = 50;
-/** The composer owner named by a sent-prompt storage key, or null for any other key. */
 export function promptHistoryOwner(storageKey: string | null) { return storageKey && storageKey.length > HISTORY_PREFIX.length && storageKey.startsWith(HISTORY_PREFIX) ? storageKey.slice(HISTORY_PREFIX.length) : null; }
 export function decodePromptHistory(raw: string | null): string[] {
   try { const value: unknown = JSON.parse(raw || '[]'); return Array.isArray(value) ? value.filter((value: unknown): value is string => typeof value === 'string').slice(-HISTORY_LIMIT) : []; } catch { return []; }
@@ -22,7 +21,6 @@ export function storedPromptHistories(storage: Pick<Storage, 'length' | 'key' | 
 export function createComposerDrafts(options: {
   document: Document; storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>; keyForSession: (id: string) => string;
   currentSessionId: () => string | null; autosize: (input: HTMLTextAreaElement) => void; status: (text: string, type?: string) => void;
-  /** The visible owner or its sent prompts changed. */
   historyChanged?: () => void;
 }) {
   const { document, storage } = options;

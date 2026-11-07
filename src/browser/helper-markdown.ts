@@ -18,21 +18,10 @@ export function sanitizeMarkdownUrl(url: unknown) {
 }
 
 /**
- * Diagram fences. Agents emit mermaid regularly (```mermaid) and just as often
- * forget the language tag, leaving the reader a wall of `flowchart LR` source.
- * `diagramKindForFence` decides whether a fenced block is diagram source the
- * viewer should render: the language tag when it names one, else a sniff of
- * the source's own declaration line — but only for a fence whose tag claims
- * nothing about code (untagged, plaintext-ish, or `uml`).
- *
- * The sniff is anchored on mermaid's diagram declarations rather than "does it
- * parse", because the renderer is a lazily loaded ~1MB vendor script: a prose
- * fence must not pull it in. A false positive still degrades safely — the
- * render fails and the code block stays on screen.
- *
- * Agents also draw mockups as ```svg fences (themed through `var(--fg)`-style
- * tokens). Those render as an image, so the same tag-or-sniff rule applies:
- * an untagged fence is SVG only when it is one whole `<svg>…</svg>` document.
+ * Diagram fences: the language tag when it names one, else a sniff of the
+ * declaration line for fences whose tag claims nothing about code. The sniff
+ * matches declarations rather than parsing so prose never loads the ~1MB
+ * renderer; an untagged fence is SVG only when it is one whole `<svg>` document.
  */
 export const MERMAID_FENCE_LANGS = new Set(['mermaid', 'mmd']);
 
@@ -90,11 +79,8 @@ export function diagramKindForFence(lang: unknown, source: unknown) {
 }
 
 /**
- * Relative-luminance test on a `#rgb`/`#rrggbb` string. The diagram renderer
- * derives its own shades from the theme's colors and needs to be told which
- * direction to go; every built-in theme is dark, but a user theme file
- * (~/.pi/dish/themes/*.json) may not be. Unparseable input reads as dark,
- * matching the default palette.
+ * The diagram renderer must be told which way to derive shades; user themes may
+ * be light. Unparseable input reads as dark, matching the default palette.
  */
 export function isDarkColorHex(hex: unknown) {
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex == null ? '' : hex).trim());
@@ -110,12 +96,8 @@ export function createMathExtensions(katexLib?: KatexRenderer | null) {
 }
 
 /**
- * Whether a chat-mentioned token plausibly names a file the viewer could
- * open: one path-safe token (optionally ~/, ./, ../ or / rooted, optional
- * trailing :line[:col]) that carries a '/' or a letter-led extension. The
- * extension rule keeps versions ("1.2.3") and prose out while accepting
- * "findings.md"; false positives are cheap (the server 404s), false
- * negatives are a dead filename the user can't tap.
+ * A path-safe token with a '/' or letter-led extension (keeps "1.2.3" out).
+ * False positives are cheap (the server 404s); false negatives are untappable.
  */
 export var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?$/;
 
@@ -123,12 +105,8 @@ export var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?:
 export var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
 
 /**
- * A published pi-dish artifact as the publish APIs report it: `/page/<token>`
- * (optionally a trailing slash, an asset or a query under it) or
- * `/share/<token>`. Minted tokens are 16 random bytes in base64url (22
- * characters), which keeps real filesystem paths from matching. These are
- * URLs on the pi-dish origin the reader browses — whose fleet discovery finds
- * the owning host — never files on a session's host.
+ * `/page/<token>` or `/share/<token>`: 22-char base64url tokens keep real
+ * filesystem paths from matching. These are pi-dish URLs, never session files.
  */
 export var ARTIFACT_PATH_RE = /^\/(?:page\/[A-Za-z0-9_-]{22}(?:[/?#]\S*)?|share\/[A-Za-z0-9_-]{22}\/?)$/;
 
@@ -144,12 +122,8 @@ export function looksLikeFilePath(text: unknown) {
 }
 
 /**
- * Path-looking tokens in plain prose (inline code is handled separately and
- * more permissively). Stricter than looksLikeFilePath: a bare word only
- * counts with a rooted prefix or a real extension — "and/or" and
- * "input/output" must not linkify — and domain-ish extensions are dropped
- * ("example.com" is prose, not a file). Published artifact paths come back
- * flagged `artifact`. Returns [{ start, end, token, artifact }].
+ * Stricter than looksLikeFilePath: "and/or" must not linkify and domain-ish
+ * extensions ("example.com") are dropped. Artifact paths come back flagged.
  */
 export var PATH_TOKEN_RE = /(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?::\d+(?::\d+)?)?/g;
 
@@ -183,12 +157,7 @@ export function findPathTokens(text: unknown) {
   return out;
 }
 
-/**
- * Render a unified diff's hunks as HTML lines for the diff modal. File-level
- * header lines (diff --git, index, ---/+++, mode/rename noise) are dropped —
- * the modal's file row already shows path and status; only content from the
- * first @@ onward renders. Returns '' for empty/missing patches.
- */
+/** File-level header lines are dropped: the modal's file row already shows path and status. */
 export function renderDiffHtml(patch: unknown) {
   if (!patch) return '';
   const out = [];

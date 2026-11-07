@@ -4,11 +4,7 @@ import { shortCwd } from './helper-format';
 import { finite, timestampMillis } from '../core/helper-values';
 import { sessionRefKey, sessionKey } from './helper-identity';
 
-/**
- * Group sessions by workspace (cwd); groups and members sorted by last
- * activity. Groups whose cwd is in `collapsedSet` sort after all expanded
- * groups (still by recency among themselves).
- */
+/** Collapsed groups sort after expanded ones, still by recency. */
 export function groupByWorkspace<T extends HelperSession>(list: readonly T[], collapsedSet?: ReadonlySet<string>) {
   const groups = new Map<string, T[]>(); // cwd -> [sessions]
   for (const s of list) {
@@ -29,16 +25,8 @@ export function groupByWorkspace<T extends HelperSession>(list: readonly T[], co
 }
 
 /**
- * Fold groupByWorkspace's flat [cwd, sessions] pairs into a tree of path
- * nodes with single-child chains flattened (a node exists only where paths
- * diverge or sessions live). Flat labels in a narrow sidebar all show the
- * same prefix and ellipsize away the part that differs — the tree shows
- * the shared prefix once and each workspace by its distinguishing tail.
- * Returns root nodes { label, path, sessions, children, count }: `path` is
- * the full prefix (collapse-state key — equals the cwd for leaf nodes),
- * `sessions` the sessions living exactly at `path` (null if none), `count`
- * the subtree total. Sibling order follows the input's (recency), with
- * collapsed nodes sunk below expanded siblings at every level.
+ * Tree of path nodes with single-child chains flattened, so a narrow sidebar shows the
+ * shared prefix once. `path` is the collapse key; collapsed nodes sink below siblings.
  */
 export function buildWorkspaceTree<T>(groups: readonly (readonly [string, readonly T[]])[], collapsedSet?: ReadonlySet<string>) {
   const root: WorkspaceBranch<T> = { label: '', path: '', sessions: null, children: new Map(), order: 0 };
@@ -58,7 +46,6 @@ export function buildWorkspaceTree<T>(groups: readonly (readonly [string, readon
     node.sessions = sessions;
   });
 
-  // Flatten chains: a prefix-only node with a single child merges into it.
   const flatten = (node: WorkspaceBranch<T>): void => {
     while (node.children.size === 1 && !node.sessions) {
       const child = node.children.values().next().value;
@@ -72,9 +59,7 @@ export function buildWorkspaceTree<T>(groups: readonly (readonly [string, readon
   };
   for (const top of root.children.values()) flatten(top);
 
-  // The home dir is the shared root of practically everything — a bare "~"
-  // top node is pure noise (and an indent level phones can't spare). Hoist
-  // its children to top level; shortCwd gives them their ~/ labels below.
+  // A bare "~" top node is noise and costs phones an indent level; hoist its children.
   const tops = [...root.children.values()];
   const homeIdx = tops.findIndex(t => shortCwd(t.path) === '~' && !t.sessions && t.children.size);
   if (homeIdx !== -1) tops.splice(homeIdx, 1, ...tops[homeIdx].children.values());
@@ -90,15 +75,7 @@ export function buildWorkspaceTree<T>(groups: readonly (readonly [string, readon
   return tops.map(top => finalize(top, true)).sort((a, b) => collapsed(a.path) - collapsed(b.path) || a.order - b.order);
 }
 
-/**
- * Group sessions into date buckets for the sidebar's Recent view: Today,
- * Yesterday, This week / Last week (Monday-start), then one bucket per
- * month, newest first; sessions sort by recency inside each. Returns
- * [{ key, label, sessions }] — `key` is the stable collapse-state handle
- * ('today', 'week', 'm:2026-06', …), `label` the header text. Sessions with
- * no usable timestamp (epoch-0 fallbacks) land in a trailing 'undated'
- * bucket instead of a comical "January 1970" month.
- */
+/** Recent-view date buckets; epoch-0 timestamps go to a trailing 'undated' bucket, not "January 1970". */
 export function groupSessionsByDate<T extends { activity?: number; lastActivity?: Timestamp | null }>(list: readonly T[], now = Date.now()) {
   const day = (t: Timestamp) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
   const today = day(now);
@@ -127,15 +104,13 @@ export function groupSessionsByDate<T extends { activity?: number; lastActivity?
     if (!bucket) { bucket = { ...b, sessions: [] }; buckets.set(b.key, bucket); }
     bucket.sessions.push(s);
   }
-  // Input order is recency-desc, so buckets appear newest-first already —
-  // except 'undated', which must sink below everything dated.
+  // Input is recency-desc, so only 'undated' needs moving to the end.
   const out = [...buckets.values()];
   const u = out.findIndex(b => b.key === 'undated');
   if (u !== -1) out.push(out.splice(u, 1)[0]);
   return out;
 }
 
-/** All sessions in a workspace-tree subtree (collapsed headers aggregate status). */
 export function collectTreeSessions<T>(node: WorkspaceNode<T>, out: T[] = []) {
   if (node.sessions) out.push(...node.sessions);
   for (const child of node.children) collectTreeSessions(child, out);
@@ -149,10 +124,8 @@ export function sessionFamilyParentId(session?: HelperSession | null) {
 }
 
 /**
- * Build same-host, same-workspace parent/child trees from advisory `parentId` hints.
- * Roots and sibling subtrees sort as blocks by the newest activity anywhere
- * below them, while the parent session itself remains the first row.
- * Missing/cross-workspace parents and cycles degrade to standalone roots.
+ * Same-host, same-workspace families from advisory `parentId` hints; blocks sort
+ * by newest descendant activity. Missing/cross-workspace parents and cycles become roots.
  */
 export function buildSessionFamilies<T extends HelperSession>(list?: readonly T[] | null) {
   const nodes = new Map<string, SessionFamily<T>>();
@@ -166,8 +139,7 @@ export function buildSessionFamilies<T extends HelperSession>(list?: readonly T[
   for (const node of nodes.values()) {
     const parent = nodes.get(sessionKey(node.session.host, sessionFamilyParentId(node.session)));
     if (!parent || parent === node || (parent.session.cwd || '~') !== (node.session.cwd || '~')) continue;
-    // Follow the declared chain before attaching so malformed A→B→A hints
-    // cannot remove both nodes from the root set or recurse forever.
+    // Walk the chain first so A→B→A cycles can't drop both nodes or recurse forever.
     let cursor: SessionFamily<T> | null = parent;
     const seen = new Set();
     let cyclic = false;
@@ -210,11 +182,6 @@ export function flattenSessionFamilies<T>(families?: readonly SessionFamily<T>[]
   return out;
 }
 
-/**
- * Split family roots by any pinned member, preserving manual family order.
- * Pins are composite session keys (see sessionKey), so the index is built on
- * keys too; host-less sessions key on their bare id and behave as before.
- */
 export function partitionPinnedFamilies<T extends HelperSession>(families?: readonly SessionFamily<T>[] | null, pinnedKeys?: readonly string[] | null) {
   if (!pinnedKeys?.length) return [[], families || []];
   const rootByMember = new Map<string, SessionFamily<T>>();
@@ -223,9 +190,7 @@ export function partitionPinnedFamilies<T extends HelperSession>(families?: read
     for (const child of node.children) index(child, root);
   };
   for (const root of families || []) index(root, root);
-  // In a partial view (notably Active), an inactive parent may be absent while
-  // its active children remain. Let the missing parent id alias those visible
-  // root fragments; when the parent is present, normal same-cwd grouping wins.
+  // In partial views (Active) a missing parent id aliases its visible child roots.
   const rootsByMissingParent = new Map<string, SessionFamily<T>[]>();
   for (const root of families || []) {
     const parentId = sessionFamilyParentId(root.session);
@@ -250,11 +215,7 @@ export function partitionPinnedFamilies<T extends HelperSession>(families?: read
   return [pinned, (families || []).filter(root => !pinnedRoots.has(sessionRefKey(root.session)))];
 }
 
-/**
- * Split sessions into [pinned, rest]. Pinned sessions come back in
- * `pinnedIds` order (the user's manual arrangement); ids with no matching
- * session are skipped.
- */
+/** Pinned come back in `pinnedIds` order; ids with no matching session are skipped. */
 export function partitionPinned<T extends { id: string }>(list: readonly T[], pinnedIds?: readonly string[] | null) {
   if (!pinnedIds || pinnedIds.length === 0) return [[], list];
   const byId = new Map(list.map(s => [s.id, s]));
@@ -263,27 +224,7 @@ export function partitionPinned<T extends { id: string }>(list: readonly T[], pi
   return [pinned, list.filter(s => !pinnedSet.has(s.id))];
 }
 
-// =========================================================================
-// Session filter query grammar — one dialect for the sidebar's local filter,
-// the server-side list search, and saved scopes, so a query means the same
-// thing everywhere it can be typed.
-//
-//   foo "two words"        plain terms (AND) — metadata, plus message content
-//                          where the caller supplies it (server search)
-//   -foo -name:subagent    negation — always metadata-only, so a session
-//                          whose *content* merely mentions the word survives
-//   name:x cwd:x model:x id:x   field-scoped terms
-//   is:active               live sessions only (-is:active for historical)
-//   is:automation           routine-invoked sessions (see isAutomationSession)
-//   since:7d since:2026-07-01 before:...   lastActivity bounds (h/d/w or ISO)
-//
-// Unknown prefixes stay literal text ("subagent: fix" searches for the colon
-// form), so the grammar never eats a query that wasn't meant for it.
-// =========================================================================
-// Related-session chips use a stable kind order for the modal and for the
-// header's candidate list. Singular lineage links (parent, startedFrom) sort
-// before the potentially long child lists; children keep the server's order
-// within a kind.
+// Singular lineage links sort before the potentially long child lists.
 export const RELATION_KIND_ORDER: Readonly<Record<string, number>> = { parent: 0, startedFrom: 1, child: 2, startedHere: 3 };
 
 
@@ -308,7 +249,6 @@ export function isChildRelation(relation?: Relation | null) {
   return RELATION_CHILD_KINDS.has(relation?.kind || '');
 }
 
-/** Group relations by kind for the overflow modal, groups in rank order. */
 export function groupRelations<T extends Relation>(relations?: readonly T[] | null) {
   const groups: { kind: string; relations: T[] }[] = [];
   const byKind = new Map<string, { kind: string; relations: T[] }>();
@@ -326,13 +266,7 @@ export function groupRelations<T extends Relation>(relations?: readonly T[] | nu
   return groups;
 }
 
-/**
- * Unread = a live, idle session whose last activity is newer than when the
- * user last had it on screen. The session being viewed right now (visibly)
- * is never unread; a working session shows the working indicator instead.
- * Keys are composite (host + session), so `currentKey`/`seenMap` speak
- * sessionKey form; host-less sessions degrade to bare ids.
- */
+/** Unread = live, idle, and active since last on screen; the visibly viewed session never is. */
 export function isUnreadSession(session: HelperSession, seenMap: Readonly<Record<string, Timestamp>>, currentKey: string | null, viewingVisible: boolean) {
   if (!session.isActive || session.turnInProgress) return false;
   const key = sessionRefKey(session);

@@ -80,17 +80,9 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     });
     let switchSequence = 0;
     let turnCleanupDone = false;
-    // OMP can deliver the same completed message event more than once. Keep
-    // completion rendering idempotent for the whole turn, including a late
-    // repeat after turn_end's JSONL catch-up has installed the indexed copy.
-    // Two keys: the full key for custom messages (a redelivery with evolved
-    // details must reach renderer.upsertCustom), and the core signature —
-    // role/timestamp/content — for user/assistant, so a repeat that only
-    // gained usage/details metadata still dedups. The core signature is also
-    // what a late message_update for an already-finalized message carries
-    // (timestamp is stamped at API-call start, content complete by the last
-    // delta), which lets the update handler below refuse to resurrect a
-    // streaming bubble for it.
+    // OMP can redeliver completed messages. Custom messages key on the full
+    // payload (evolved details must reach upsertCustom); user/assistant key on
+    // role/timestamp/content so metadata-only repeats still dedup.
     const seenMessageEnds = new Set<string>();
     const messageEndKey = (m: RenderMessage) => JSON.stringify(m.role === 'custom'
       ? [m.role, m.timestamp ?? null, m.content ?? null, m.errorMessage ?? null, m.customType ?? null, m.details ?? null]
@@ -98,7 +90,6 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
 
     evtSource.onopen = () => { if (ownsStream()) options.status(''); };
 
-    // Server sends current state on connect so we can catch up
     addOwnedListener('init', (e) => {
       try {
         const data = parseRecord(e.data);
@@ -106,16 +97,12 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
         // Stale dialogs for this session are pruned by the extension_ui_state
         // event that follows the connect replay — no per-init sweep needed.
         if (!data.turnInProgress) options.activity.endAbort(sessionKey(hostId, sessionId));
-        // Both flags, independently: auto-compaction runs inside a turn
-        // (both true), a TUI /compact has neither turn nor stream events yet
-        // (compacting only), and a reconnect after either ended must clear
-        // stale indicators (both false). options.activity.setCompacting first so the
-        // turn-off path doesn't wipe status a live compaction still owns.
+        // Set independently (auto-compaction runs inside a turn); compacting
+        // first so the turn-off path doesn't wipe a live compaction's status.
         options.activity.setCompacting(!!data.compacting);
         options.activity.setTurn(!!data.turnInProgress);
         if (!data.turnInProgress) {
-          // No turn running — incremental catch-up for any messages written
-          // since our initial load (avoids full reload stall).
+          // Incremental catch-up avoids a full-reload stall.
           options.catchup(owner);
         }
       } catch {}
@@ -144,21 +131,17 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
       options.activity.setTurn(false);
       options.streaming.cancel();
       tools.finishRunning();
-      // Incrementally pull only new messages from JSONL — full reload
-      // stalls long sessions.
+      // Incremental: a full reload stalls long sessions.
       options.catchup(owner);
       options.refresh();
       options.artifacts(owner); // the agent may have published pages mid-turn
       options.status('');
     };
     addOwnedListener('turn_end', handleTurnEnd);
-    // An aborted/errored turn can end with agent_end and no paired turn_end;
-    // both server backends treat it as turn-terminating, so we must too. The
-    // guard avoids double catch-up when turn_end already ran.
+    // An aborted/errored turn can end with agent_end and no turn_end; the guard
+    // avoids double catch-up.
     addOwnedListener('agent_end', handleTurnEnd);
 
-    // message_update streams text, thinking, and partial tool calls live —
-    // rendered incrementally through the throttled streaming renderer.
     addOwnedListener('message_update', (e) => {
       try {
         const message = decodeRenderMessage(parseRecord(e.data).message);
@@ -167,12 +150,8 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
           return;
         }
         if (message.role !== 'assistant') return;
-        // A redelivered/late update for a message whose message_end already
-        // ran (OMP usage-enrichment repeats, options.delivery-timing corners) must not
-        // resurrect a streaming bubble: the finalized render — or, post
-        // turn_end, the indexed JSONL copy — is already on screen, and a
-        // bubble created now would never be stripped again. It also must not
-        // re-arm the turn state below.
+        // A late update for an already-ended message must not resurrect a
+        // streaming bubble (it would never be stripped) or re-arm turn state.
         if (seenMessageEnds.size && seenMessageEnds.has(messageEndKey(message))) return;
         if (turnCleanupDone) seenMessageEnds.clear();
         turnCleanupDone = false;
@@ -190,17 +169,12 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
         if (seenMessageEnds.has(messageKey)) return;
         seenMessageEnds.add(messageKey);
         if (message.role === 'user') {
-          // pi echoes every user message it processes — including the prompt
-          // this client just rendered optimistically in sendMessage. Skip that
-          // one echo or the prompt shows twice until the turn_end catch-up.
+          // Skip pi's echo of the prompt this client already rendered optimistically.
           if (options.delivery.consume(sessionKey(hostId, sessionId), message.content)) {
             return;
           }
-          // A steer/follow-up pi just delivered mid-turn (or a prompt typed in
-          // the TUI). Insert it un-indexed before the streaming placeholder
-          // (if any); the turn_end JSONL catch-up strips un-indexed .message
-          // nodes and re-inserts the authoritative indexed render, so this
-          // never duplicates.
+          // Mid-turn steer/follow-up or TUI prompt: inserted un-indexed; the turn_end
+          // catch-up replaces un-indexed nodes with the indexed render.
           const wasPinned = options.pinned(container);
           const streaming = container.querySelector('.message.assistant[data-streaming="true"]');
           const tmp = document.createElement('template');
@@ -218,18 +192,13 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
         }
         if (message.role !== 'assistant') return;
         options.streaming.cancel();
-        // OMP ends an interrupted thinking turn with an empty assistant shell
-        // before its interrupted-thinking custom marker. Keep the API entry
-        // but do not flash a ghost π header in the live transcript.
+        // Empty assistant shell before an interrupted-thinking marker: no ghost header.
         if (typeof message.content !== 'string' && message.content?.length === 0 && !message.errorMessage) {
           container.querySelectorAll('.message.assistant[data-streaming="true"]').forEach(el => el.remove());
           return;
         }
-        // Swap the streaming placeholder for the finalized render in place.
-        // It stays un-indexed, so the turn_end JSONL catch-up replaces it
-        // with the authoritative version (options.catchup strips all
-        // .message:not([data-msg-index]) once indexed messages land) —
-        // meanwhile the text never blinks out of the transcript.
+        // Stays un-indexed so the turn_end catch-up replaces it with the indexed
+        // version without the text blinking out.
         const wasPinned = options.pinned(container);
         const streaming = container.querySelectorAll('.message.assistant[data-streaming="true"]');
         const tmp = document.createElement('template');
@@ -281,10 +250,8 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     addOwnedListener('extension_ui_resolved', (e) => {
       try { options.extensionUI.resolve(parseRecord(e.data).id, { id: sessionId, host: hostId }); } catch {}
     });
-    // Authoritative list of this session's pending dialogs, sent on (re)connect
-    // after the replay burst. Prunes stashed dialogs that were answered or
-    // dismissed while we were away (or orphaned by an idle session), without
-    // touching other sessions' dialogs.
+    // Authoritative pending-dialog list sent after the reconnect replay; prunes
+    // only this session's stale dialogs.
     addOwnedListener('extension_ui_state', (e) => {
       try {
         options.extensionUI.reconcile(JSON.parse(e.data), { id: sessionId, host: hostId });
@@ -296,9 +263,8 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
     });
     addOwnedListener('compaction_end', (e) => {
       options.activity.setCompacting(false);
-      // A manual compaction has no turn_end/agent_end boundary. Whether Stop
-      // won the race, compaction failed, or it completed first, its end is the
-      // authoritative point where a compaction-only abort gate can clear.
+      // A manual compaction has no turn_end/agent_end, so its end is where a
+      // compaction-only abort gate clears.
       if (!options.activity.turn) options.activity.endAbort(sessionKey(hostId, sessionId));
       try {
         const data = parseRecord(e.data);
@@ -323,10 +289,8 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
         options.refresh();
       } catch { options.status('Compaction finished'); }
     });
-    // Tree navigation (from any surface — this UI, the TUI, another client)
-    // rewrote the session's authoritative history: re-render the transcript
-    // from the JSONL. The UI's own branch flow also reloads after its POST
-    // resolves; a second forced reload of the same state is harmless.
+    // Tree navigation from any surface rewrote history: re-render from JSONL
+    // (a duplicate reload after the UI's own branch POST is harmless).
     addOwnedListener('session_tree', () => {
       if (sessionState.currentSession && sessionState.currentSession.id === sessionId) {
         options.select(sessionId, { forceTranscriptReload: true, host: hostId });
@@ -338,9 +302,7 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
       const nextId = record(data) && typeof data.sessionId === 'string' ? data.sessionId : '';
       const switchOwner = ++switchSequence;
       if (!nextId || nextId === sessionId) return;
-      // The route identifies a different transcript even though the pane and
-      // bridge socket stayed put. Never restore a prior DOM stash for that id:
-      // the session may have changed since it was last viewed.
+      // A different transcript: never restore a stale DOM stash for that id.
       options.deleteCached(sessionKey(hostId, nextId));
       void options.loadSessions(undefined, { withPrevious: true }).then(() => {
         if (!ownsStream() || switchOwner !== switchSequence || !sessionState.findSession(nextId, hostId)) return;

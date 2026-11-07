@@ -424,7 +424,6 @@ export function createSkills(options: {
     return lead.join('\n') + parts.join('\n');
   }
 
-  // Selects the session, then best-effort scrolls to the activating entry.
   async function openSkillActivation(id: string, entryId: string): Promise<void> {
     if (!owns() || !viewHost) return;
     const endpoint = viewHost;

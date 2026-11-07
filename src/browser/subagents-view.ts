@@ -86,7 +86,7 @@ export function createSubagentsView(options: {
     void loadLineage();
     focusPendingAgent();
     // Repoll while the viewed session can still gain relatives (active or the
-    // catalog is still indexing) — the rule the tree view has always had.
+    // catalog is still indexing).
     pollTimer = setInterval(() => {
       if (!owns() || loadInFlight) return;
       if (!sessionState.currentSession?.isActive && !lastIndexing) return;

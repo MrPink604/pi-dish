@@ -11,9 +11,8 @@ import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolS
 import { splitSessionRefContext } from '../core/helper-refs';
 export function createMessageRenderer(options: {
   document: Document; sessionState: SessionState; details: ReturnType<typeof createResponseDetails>;
-  // Peek mode renders another session's trace inside a viewer. Share-link and
-  // response-details buttons target the main session's endpoints, so they stay
-  // out; image host and model context come from the peeked session instead.
+  // Peek renders another session's trace: main-session share/details buttons
+  // stay out; image host and model context come from the peeked session.
   peek?: () => { host: string | null; model: string | null } | null;
   markdown: (text: string) => string; assetUrl: (host: string | null | undefined, path: string) => string;
   matchRef: (ref: string) => { name?: string | null; isActive?: boolean } | null | undefined;
@@ -27,15 +26,12 @@ export function createMessageRenderer(options: {
     options.peek ? (options.peek()?.model ?? null) : options.sessionState.currentSession?.model;
 function renderMessageHtml(msg: RenderMessage) {
   const time = msg.timestamp ? formatTime(msg.timestamp) : '';
-  // The stream index rides on the root element — dedup, tool grouping, and
-  // search jumps all key on data-msg-index. Passed into the renderers rather
-  // than string-spliced into their output afterwards.
+  // Dedup, tool grouping and search jumps all key on data-msg-index.
   const idxAttr = (msg.index != null) ? ` data-msg-index="${escapeHtml(msg.index)}"` : '';
   if (msg.role === 'user') return renderUserMessage(msg, time, idxAttr);
   if (msg.role === 'assistant') {
-    // OMP persists an empty assistant shell when thinking is interrupted. The
-    // following interrupted-thinking marker carries the useful UI; avoid a
-    // stray π header while preserving the message/index in the API.
+    // OMP persists an empty assistant shell when thinking is interrupted; the
+    // following interrupted-thinking marker carries the UI.
     if (typeof msg.content !== 'string' && msg.content?.length === 0 && !msg.errorMessage) return '';
     return renderAssistantMessage(msg, time, { attrs: idxAttr });
   }
@@ -58,9 +54,8 @@ function imageBlocksHtml(content: unknown, alt = 'image') {
   return `<div class="msg-images">${imgs}</div>`;
 }
 
-// Hover 🔗 on a turn header: copies the public share URL deep-linked to this
-// message (pi's HTML export scrolls to ?targetId=<JSONL entry id>). Only
-// JSONL-backed messages have an entry id — streaming placeholders don't.
+// Share URL deep-linked via ?targetId=<JSONL entry id>; only JSONL-backed
+// messages have one.
 function messageLinkBtnHtml(msg: RenderMessage) {
   if (!msg.id || inPeek || options.sessionState.currentSession?.capabilities?.export === false) return '';
   return `<button type="button" class="msg-link-btn" data-entry-id="${escapeHtml(msg.id)}" title="Copy share link to this message">
@@ -83,11 +78,8 @@ function messageActionsHtml(msg: RenderMessage, role: 'user' | 'assistant' | nul
   return branch + link + '<button type="button" class="msg-more-btn" title="Message actions" aria-label="Message actions">⋯</button>';
 }
 
-// The <session-refs> block the send routes append is context for the model,
-// not for the reader: the transcript hides it and shows one chip per ref,
-// which opens the session it names. Optimistic bubbles carry the same entries
-// on `msg.sessionRefs` — the server's copy only arrives with the echo, and by
-// then the echo has been suppressed.
+// The <session-refs> block is model context: show one chip per ref instead.
+// Optimistic bubbles carry the entries on `msg.sessionRefs` (the echo is suppressed).
 function sessionRefChipsHtml(refs?: readonly RefContextEntry[]) {
   if (!refs || !refs.length) return '';
   const chips = refs.map((entry) => {
@@ -101,12 +93,8 @@ function sessionRefChipsHtml(refs?: readonly RefContextEntry[]) {
   return `<div class="session-ref-chips">${chips}</div>`;
 }
 
-// OMP peer messages arrive in two wire shapes: a visible `irc:incoming`
-// custom_message whose details carry the clean sender/body (its content keeps
-// the full <irc> envelope as fallback), and — when delivery interrupted a
-// wait — a plain user message with a fixed "Current interruptible wait
-// interrupted" envelope. Both render as one IRC card so a peer note never
-// poses as a prompt typed by the user.
+// Peer messages arrive as an `irc:incoming` custom message or an interrupted-wait
+// user message; both render as an IRC card so they never pose as user prompts.
 interface IrcEnvelope { from?: string; body: string }
 
 function parseIrcInterrupt(text: string): IrcEnvelope | null {
@@ -194,7 +182,6 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
     textHtml = options.markdown(msg.content);
   }
   
-  // Show error messages from the API (e.g. 402, rate limits, etc.)
   let errorHtml = '';
   if (msg.errorMessage) {
     errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
@@ -204,8 +191,7 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
   // Tool-only messages (no prose, no error) are fully hidden in focus mode —
   // without this their empty header row lingers as a stray marker.
   const noTextClass = messageHasVisibleText(msg) ? '' : ' no-text';
-  // Effective response speed rides the header next to the time — JSONL-backed
-  // renders only (streaming messages have no timing until finalized).
+  // JSONL-backed renders only: streaming messages have no timing until finalized.
   let speedHtml = '';
   const hasMetadata = !inPeek && !opts.streaming && (msg.usage || msg.durationMs);
   if (hasMetadata) speedHtml = options.details.button(msg);
@@ -273,9 +259,8 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   const lineCount = lines.length;
   const preview = waitJobs ? waitStatusSummary(waitJobs) : truncate(lines[0], 80);
   const showLines = lineCount > 5 && !waitJobs;
-  // A tool result carrying an image (e.g. a `read` on a PNG) opens by default
-  // regardless of line count — seeing the image is the point — and flags it in
-  // the header meta so it's discoverable when collapsed.
+  // A tool result carrying an image opens by default regardless of line count
+  // and flags it in the header meta.
   const images = extractImageBlocks(msg.content);
   const imageCount = images.length;
   const imagesHtml = imageBlocksHtml(msg.content, 'tool result image');
@@ -303,10 +288,8 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   </div>`;
 }
 
-// Tree-navigation marker: the summary of an abandoned branch, injected into
-// the model's context at this point. Collapsed by default — summaries run
-// long — but stays visible in focus mode (it's conversation context, not
-// tool noise).
+// Summary of an abandoned branch injected into model context. Collapsed (long),
+// but visible in focus mode since it's conversation context.
 function renderBranchSummary(msg: RenderMessage, time: string, attrs = '') {
   const text = extractTextContent(msg.content);
   const timestamp = msg.timestamp || Date.now();
@@ -324,10 +307,8 @@ function renderBranchSummary(msg: RenderMessage, time: string, attrs = '') {
   </div>`;
 }
 
-// OMP advisor notes — a second model passively reviewing each turn. The JSONL
-// entry carries structured notes in details.notes and an <advisory> XML
-// rendering of the same thing in content; prefer the structure, fall back to
-// unwrapping the XML so an older/odder producer still reads as prose.
+// Advisor notes: prefer structured details.notes, fall back to unwrapping the
+// <advisory> XML in content.
 const ADVISOR_SEVERITIES = ['nit', 'concern', 'blocker'];
 
 function advisoryTagAttr(rawAttrs: string, name: string) {
@@ -340,9 +321,8 @@ function normalizeAdvisorSeverity(value: string | undefined) {
   return ADVISOR_SEVERITIES.includes(sev) ? sev : '';
 }
 
-// Split an <advisory ...>note</advisory> batch into notes. Anything that isn't
-// wrapped (or is only half-wrapped) survives as a single unwrapped note rather
-// than leaking raw tags into the card.
+// Unwrapped or half-wrapped text survives as a single note rather than leaking
+// raw tags into the card.
 function parseAdvisoryContent(text: string): AdvisorNote[] {
   const notes = [];
   const re = /<advisory\b([^>]*)>([\s\S]*?)<\/advisory>/gi;
@@ -380,8 +360,6 @@ function advisorSeverityChip(severity: string) {
   return `<span class="advisor-severity sev-${severity}">${escapeHtml(severity)}</span>`;
 }
 
-// A quiet card, not a boxed callout: hairline left accent tinted by the worst
-// severity in the batch, notes rendered as markdown (they carry `code` spans).
 // Conversation content, so it stays visible in focus mode.
 function renderAdvisorMessage(msg: RenderMessage, time: string, attrs: string, timestamp: Timestamp) {
   const notes = advisorNotesFrom(msg);
@@ -407,10 +385,8 @@ function renderAdvisorMessage(msg: RenderMessage, time: string, attrs: string, t
   </div>`;
 }
 
-// OMP conversational custom messages. interrupted-thinking deliberately
-// carries hidden reasoning in JSONL; session-files strips that content and we
-// render only this divider. Visible unknown types get a subdued generic row so
-// future host additions cannot vanish without explanation.
+// interrupted-thinking's hidden reasoning is stripped; render only a divider.
+// Visible unknown types get a generic row so new host types never vanish.
 function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
   const customType = msg.customType || 'custom-message';
   const timestamp = msg.timestamp || Date.now();
@@ -420,9 +396,8 @@ function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
     </div>`;
   }
 
-  // Unknown hidden custom messages are internal model/session continuity.
-  // session-files applies the same explicit skip historically; enforce it
-  // here too because live bridge events do not pass through that decoder.
+  // Hidden custom messages are internal continuity; enforced here too because
+  // live bridge events bypass session-files' decoder.
   if (msg.display === false) return '';
   if (customType === 'irc:incoming') {
     return renderIrcMessage(msg, time, attrs, timestamp, parseIrcCustomContent(extractTextContent(msg.content)));

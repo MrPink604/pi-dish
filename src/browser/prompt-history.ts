@@ -2,7 +2,7 @@ import { storedPromptHistories } from './composer-drafts';
 import { countLabel } from './helper-format';
 
 export interface PromptHistoryOwnerLabel { readonly name: string | null; readonly detail: string }
-/** The composer-draft surface this controller drives; owner keys are host-qualified. */
+/** Owner keys are host-qualified. */
 export interface PromptHistoryDrafts {
   readonly key: string | null;
   prompts(id?: string | null): string[];
@@ -11,18 +11,12 @@ export interface PromptHistoryDrafts {
 }
 export interface PromptHistoryController {
   open(): void; close(): void; toggle(): void; isOpen(): boolean;
-  /** Re-evaluates the composer button after the visible owner or its prompts change. */
   update(): void;
   renderSettings(container: HTMLElement, signal: AbortSignal): void;
   dispose(): void;
 }
 
-/**
- * Sent-prompt recall without a keyboard: the composer sheet lists the visible
- * owner's prompts newest first, and the settings section manages every stored
- * history. The sheet captures its owner when it opens; a retained row never
- * writes into whichever session became visible since.
- */
+/** The sheet captures its owner on open; a retained row never writes into a session that became visible since. */
 export function createPromptHistory(options: {
   document: Document; storage: Pick<Storage, 'length' | 'key' | 'getItem'>; drafts: PromptHistoryDrafts;
   label: (owner: string) => PromptHistoryOwnerLabel; copy: (text: string) => Promise<void>;
@@ -48,7 +42,7 @@ export function createPromptHistory(options: {
     generation++; events.abort(); owner = null;
     panel.classList.remove('open'); panel.replaceChildren(); button.classList.remove('active'); button.setAttribute('aria-expanded', 'false');
   }
-  /** Shows the button only for a composer owner with sent prompts; an owner change closes the sheet. */
+  /** An owner change closes the sheet. */
   function update() {
     if (disposed) return; const key = drafts.key, any = !!key && drafts.prompts(key).length > 0;
     button.style.display = any ? '' : 'none'; button.disabled = !any;

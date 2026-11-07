@@ -71,11 +71,7 @@ function liveToolOutputHtml(output: string) {
   return escapeHtml(truncate(parsed ? parsed.output : output, 8000));
 }
 
-/**
- * Clocks for a live wait: each running job's elapsed time and the time left
- * before its bash timeout kills it, plus the soonest moment the wait itself
- * must return (first job deadline or OMP's safety cap).
- */
+/** Running jobs' elapsed/remaining time, plus when the wait itself must return (first deadline or OMP's cap). */
 function waitClock(entry: ToolPanel, now: number) {
   const container = document.getElementById('messages');
   const drift = entry.wait ? now - entry.wait.receivedAt : 0;
@@ -269,18 +265,15 @@ function updateLiveToolPanel(data: ToolEvent) {
 
   let outputEl = entry.el.querySelector<HTMLElement>('.live-tool-output');
   if (output && !outputEl) {
-    // Create output area if it doesn't exist
     const cursorHtml = '<span class="live-tool-cursor"></span>';
     outputEl = document.createElement('div');
     outputEl.className = 'live-tool-output';
     outputEl.innerHTML = liveToolOutputHtml(output) + cursorHtml;
     entry.el.appendChild(outputEl);
-    // Open the details so output is visible
     entry.el.setAttribute('open', '');
   } else if (output && outputEl) {
     const cursorEl = outputEl.querySelector('.live-tool-cursor');
     outputEl.innerHTML = liveToolOutputHtml(output);
-    // Re-add cursor
     if (cursorEl) outputEl.appendChild(cursorEl);
     else outputEl.insertAdjacentHTML('beforeend', '<span class="live-tool-cursor"></span>');
   }
@@ -318,7 +311,6 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
   const details = decodeToolDetails(resolvedName, result?.details);
 
-  // Rebuild the panel in its final state
   const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, imagesHtml, intent, details);
   const tmp = document.createElement('div');
   tmp.innerHTML = newHtml;

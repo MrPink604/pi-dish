@@ -1,12 +1,6 @@
 /**
- * Sort and filter controls for rendered markdown tables.
- *
- * Enhancement runs inside the rich-text post-render pass (final renders only)
- * and is idempotent. All state lives in the DOM — `aria-sort` on the header,
- * `data-table-order` on each row, the filter input's value, `hidden` rows —
- * so a retained transcript fragment restores exactly as the reader left it,
- * and every event is delegated on the document, so moved nodes need no
- * rebinding.
+ * All state lives in the DOM and events are delegated on the document, so a
+ * retained transcript fragment restores as the reader left it without rebinding.
  */
 
 /** Tables with at least this many body rows also get a filter box. */

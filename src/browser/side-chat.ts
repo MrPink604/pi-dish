@@ -58,7 +58,6 @@ interface TurnView {
 }
 interface Shell { stop: HTMLButtonElement; close: HTMLButtonElement; turns: HTMLElement }
 
-/** The panel's consumer contract: no caller supplies a question owner. */
 export interface SideChatController {
   ask(question: string, askOptions?: { fresh?: boolean }): Promise<boolean>;
   apply(value: unknown, session: SideChatSession | null | undefined): void;
@@ -106,7 +105,7 @@ export function createSideChat(options: {
       && options.endpoint(captured.owner.host).base === captured.endpoint.base;
   }
   function sessionPath(owner: SelectionOwner) { return `/api/sessions/${encodeURIComponent(owner.id)}/side-chat`; }
-  // A host still on a pre-side-chat pi-dish has no route at all.
+  // Hosts predating side chat have no route.
   async function post(captured: { owner: SelectionOwner; endpoint: Readonly<HostEndpoint> }, suffix: string, body: unknown) {
     try {
       return await sendJson(options.request, captured.endpoint, sessionPath(captured.owner) + suffix, body);

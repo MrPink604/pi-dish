@@ -41,9 +41,7 @@ export function createSidebarLists(options: {
   const loader = createHostSessionLoader({
     requestList: (host, path, init) => api.list(host, path, init), currentSequence: () => sequence,
     stripHostQuery: query => stripQueryField(query, 'host'), onConnection: (host, event) => { if (!disposed) options.connection(host, event); },
-    // Indexing follow-up is background work too: while the tab is hidden it
-    // would be a request nobody can read, and the app's visibility refresh
-    // re-reads the indexing bit when the list is next shown.
+    // Hidden tabs skip it; the visibility refresh re-reads the indexing bit.
     onIndexing: () => { if (disposed || indexingTimer) return; indexingTimer = setTimeout(() => { indexingTimer = null; if (document.hidden) return; void refresh(); }, 1000); },
     beforePublish: (host, next, wireQuery) => {
       if (disposed) return; const hostId = host.hostId || null, selected = sessionState.currentSession;
@@ -53,9 +51,7 @@ export function createSidebarLists(options: {
     onPublish: query => { if (disposed) return; if (query !== undefined) queriedFor = query; publish(); },
     onError: (host, error) => { if (!disposed && host.self) console.error('Failed to load sessions:', error); },
   });
-  // Toast only on the false → true transition; a poll that merely confirms an
-  // already-reported ask must not re-toast, and a session that drops out of
-  // the list re-arms so a later ask is reported again.
+  // Toast only on false → true; rows that drop out re-arm.
   let askPendingSeen = new Set<string>();
   function noteAskBlocked(parts: readonly HostSessionLists[]) {
     const now = new Set<string>();
@@ -112,10 +108,7 @@ export function createSidebarLists(options: {
   }
   function invalidate() { sequence++; loader.retireRequests(); pendingHosts.clear(); renderProgress(); }
   function refresh() { if (disposed) return Promise.resolve(); options.refreshFleet(); return load(options.query() || undefined, { background: true }); }
-  // Background polling stops while the document is hidden: nothing can read
-  // the result, and a slept laptop should not wake to a burst of requests.
-  // Foreground loads and the app's visibility refresh are untouched, and the
-  // loader joins that resume poll to any request already in flight.
+  // Hidden documents skip background polls; a slept laptop shouldn't wake to a request burst.
   function mount() { if (!disposed && !pollTimer) pollTimer = setInterval(() => { if (document.hidden) return; void refresh(); }, 10000); }
   function dispose() { if (disposed) return; busy(false); disposed = true; sequence++; clearInterval(pollTimer ?? undefined); clearTimeout(indexingTimer ?? undefined); pollTimer = indexingTimer = null; loader.prune(new Set()); pendingHosts.clear(); progress?.remove(); progress = null; }
   renderProgress();

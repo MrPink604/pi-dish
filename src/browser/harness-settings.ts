@@ -202,14 +202,12 @@ export function createHarnessSettings(options: {
     return html;
   }
 
-  /** Model changed: re-derive the level ladder from the new model's catalog. */
   function modelRoleModelChanged(input: HTMLInputElement) {
     const levelSelect = input.closest('.model-role-row')?.querySelector<HTMLSelectElement>('.model-role-level');
     if (!levelSelect) return;
     levelSelect.innerHTML = modelRoleLevelOptions(levelSelect.value, input.dataset.value || '', false);
   }
 
-  /** A combobox input holding its choice in `data-value`, with the dropdown it filters. */
   function modelPickerHtml(className: string, attrs: string, value: string, placeholder: string) {
     return `<div class="cwd-input-wrap hs-model-pick"><input type="text" class="cwd-input ${className}" ${attrs}
       data-initial="${escapeHtml(value)}" data-value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}"

@@ -124,10 +124,7 @@ export function createSessionControls(options: {
     const dropdown = element('thinkingDropdown');
     place(dropdown, element('sessionThinking')); dropdown.style.display = 'block';
     outside(['sessionThinking', 'thinkingDropdown'], thinkingEvents, () => ownsThinking(owner), closeThinking);
-    // Only OMP derives its ladder from the current model's catalog entry; the
-    // other harnesses expose a fixed vocabulary, so their menu must not wait on
-    // — or be blocked by — a model request. A warm OMP catalog already has the
-    // entry, and any other OMP scope still fetches it.
+    // Only OMP derives its ladder from the model catalog; other harnesses must not wait on a model request.
     if (session.harnessId === 'omp'
         && !catalog.reusable({ sessionId: owner.selection.id, harnessId: 'omp', base: owner.endpoint.base })) {
       showCatalogLoading(dropdown);

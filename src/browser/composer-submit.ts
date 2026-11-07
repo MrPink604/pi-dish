@@ -95,11 +95,8 @@ async function sendPrompt() {
   if (message === '/tree') { input.value = ''; options.openTree(); return; }
   options.hideAutocomplete();
 
-  // Slash commands go to the command endpoint, never to the model as text.
   if (message.startsWith('/')) {
-    // The bridge refuses a /compact while one runs (concurrent compactions
-    // race pi's message rewrite); fail fast here too so the composer text
-    // survives and the feedback is immediate.
+    // The bridge refuses a concurrent /compact; fail fast so the text survives.
     if (sessionActivity.compacting && /^\/compact(\s|$)/.test(message)) {
       options.status('Compaction already in progress', 'error');
       return;
@@ -130,7 +127,6 @@ async function sendPrompt() {
   composerDrafts.clearDraft(ownerKey);
   const images = composerDrafts.images.take();
   const refs = options.refs(message);
-  // The prompt endpoint resumes a hibernated session before delivering.
   const hibernated = !sessionState.currentSession.isActive && !!sessionState.currentSession.hibernation;
   options.status(hibernated ? 'Resuming hibernated session...' : 'Sending...', 'working');
 
@@ -147,12 +143,10 @@ async function sendPrompt() {
   }, formatTime(Date.now()), ` data-client-prompt-id="${clientPromptId}"`);
   const optimisticElement = template.content.firstElementChild;
   if (optimisticElement) container.appendChild(optimisticElement);
-  // Arm the echo suppressor: pi re-emits this prompt as a user message_end
-  // when the turn starts, and we've already rendered it. '' is a valid value
-  // (images-only prompt). The stable id also lets queue Edit remove exactly
-  // this optimistic bubble even when several prompts have identical text.
+  // pi re-emits this prompt as message_end when the turn starts; '' is valid
+  // (images only). The stable id lets queue Edit remove exactly this bubble.
   delivery.add(ownerKey, message, optimisticElement, clientPromptId);
-  options.follow(); // sending means: follow the stream from here on
+  options.follow();
   options.scroll(container);
 
   sessionActivity.setTurn(true);
@@ -165,9 +159,7 @@ async function sendPrompt() {
     if (!owns()) return;
     if (hibernated) options.woke(owner.id, owner.host);
     if (resp?.result?.queued) {
-      // Held by the bridge until compaction finishes; no turn is running yet.
-      // Raise the compacting indicator before undoing the optimistic
-      // "Working" badge so the turn-off path doesn't blank the strip/status.
+      // Raise compacting before clearing the turn so the strip/status don't blank.
       sessionActivity.setCompacting(true);
       sessionActivity.setTurn(false);
       options.status('Queued — will send when compaction finishes', 'working');
@@ -175,7 +167,7 @@ async function sendPrompt() {
     }
   } catch (error) {
     if (disposed) return; const e = { message: errorMessage(error) };
-    delivery.discard(clientPromptId); // no echo is coming for a failed send
+    delivery.discard(clientPromptId);
     composerDrafts.restorePayload(ownerKey, message, images);
     if (owns()) {
       options.status(`Error: ${e.message}`, 'error');
@@ -251,8 +243,7 @@ function sendFollowUp() { return sendQueuedMessage('followUp'); }
 
 async function abortTurn() {
   if (disposed) return;
-  // Compaction counts: the bridge cancels a running compaction on abort, and
-  // its compaction_end (aborted) event clears the compacting indicator.
+  // Abort also cancels a running compaction; its compaction_end clears the indicator.
   if (!sessionState.currentSession || (!sessionActivity.turn && !sessionActivity.compacting)) return;
   const owner = sessionState.captureSelection();
   if (!owner || disposed) return;
@@ -266,9 +257,7 @@ async function abortTurn() {
   options.status('Stopping...', 'working');
   try {
     await send(endpoint, '/api/sessions/' + encodeURIComponent(sessionId) + '/abort');
-    // HTTP acknowledgement only means the abort request was accepted. Keep
-    // the turn owned by the stream until turn_end/agent_end performs cleanup
-    // and JSONL catch-up.
+    // HTTP ack only means accepted; the stream's turn_end/agent_end does cleanup.
   } catch (error) {
     if (disposed) return; const e = { message: errorMessage(error) };
     sessionActivity.endAbort(ownerKey, abortOwner);

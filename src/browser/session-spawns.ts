@@ -79,11 +79,8 @@ export function createSessionSpawns(options: {
         sessionId = status.sessionId;
         break;
       }
-      // Registration may finish during an older list request. Wait for the
+      // Registration may finish during an older list request; wait for the
       // authoritative host-qualified row before transferring composer state.
-      // Only the spawning host is refreshed: a fleet fan-out also awaits
-      // unrelated peers, and one slow peer would hold this pane unready for
-      // that request's whole timeout.
       for (let attempt = 0; ; attempt++) {
         await options.loadHost(spawn.host);
         if (options.hasSession(sessionId, spawn.host)) {

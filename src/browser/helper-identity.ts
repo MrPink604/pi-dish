@@ -1,23 +1,16 @@
 import type { HelperSession, HelperHost } from '../core/helper-types';
 
-// =========================================================================
-// Hosts (TASKS/multi-host.md) — one client may aggregate several pi-dish
-// hosts. Wire ids stay host-local; namespacing happens only in client keys.
-// =========================================================================
+// One client may aggregate several pi-dish hosts. Wire ids stay host-local;
+// namespacing happens only in client keys.
 /**
- * Composite client key for a session. A session id is unique only within its
- * host (generic session.jsonl header ids collide across machines), so every
- * client-side map/list/localStorage key that names a session uses this form.
- * A falsy host id yields the bare session id — the pre-multi-host shape,
- * which is what the client still speaks before GET /api/host has answered
- * and on servers too old to serve it.
+ * Session ids are unique only per host, so client keys name the host too. A falsy
+ * host yields the bare id, used before GET /api/host answers.
  */
 export function sessionKey(hostId: unknown, sessionId: unknown) {
   const id = sessionId == null ? '' : String(sessionId);
   return hostId ? `${hostId} ${id}` : id;
 }
 
-/** Inverse of sessionKey; a key with no separator is a bare (host-less) id. */
 export function parseSessionKey(key: unknown) {
   const raw = key == null ? '' : String(key);
   const sep = raw.indexOf(' ');
@@ -25,16 +18,11 @@ export function parseSessionKey(key: unknown) {
   return { hostId: raw.slice(0, sep), sessionId: raw.slice(sep + 1) };
 }
 
-/** Composite key of a session object in client state (writers stamp `host`). */
 export function sessionRefKey(session?: Pick<HelperSession, 'id' | 'host'> | null) {
   return sessionKey(session && session.host, session && session.id);
 }
 
-/**
- * Human label for a host entry: the server's own label if it gave one, else
- * the fleet name, else the bare authority of its base. The self host has no
- * base, so it says so rather than rendering an empty chip.
- */
+/** The self host has no base, so it gets an explicit label instead of an empty chip. */
 export function hostDisplayLabel(host?: HelperHost | null) {
   if (!host) return '';
   if (host.label) return String(host.label);
@@ -44,13 +32,8 @@ export function hostDisplayLabel(host?: HelperHost | null) {
 }
 
 /**
- * Per-host feature gating. `capabilities` is the host's own advertisement
- * (GET /api/host) and absent means unsupported: an advertised set that omits
- * a feature hides the affordance rather than letting it die on connect.
- * A host that advertised nothing at all (older build, or /api/host hasn't
- * answered yet) is only trusted to the local /api/config when it is *this*
- * host — a remote of unknown build stays hidden, because a dead button is
- * worse than a missing one.
+ * Absent from an advertised set means unsupported. A host that advertised nothing falls
+ * back to /api/config only if it is this host; a dead button is worse than a missing one.
  */
 export function hostSupportsCapability(hostEntry: HelperHost | null | undefined, capability: string, config?: Readonly<Record<string, unknown>> | null) {
   const caps = hostEntry && hostEntry.capabilities;
@@ -59,22 +42,12 @@ export function hostSupportsCapability(hostEntry: HelperHost | null | undefined,
   return isSelf ? !!(config && config[capability]) : false;
 }
 
-/**
- * Terminal gating for the host that owns the session on screen — the entry
- * host's own PI_DISH_TERMINAL says nothing about a peer's.
- */
 export function hostSupportsTerminal(hostEntry?: HelperHost | null, config?: Readonly<Record<string, unknown>> | null) {
   return hostSupportsCapability(hostEntry, 'terminal', config);
 }
 
-// --- Host sections -------------------------------------------------------
-// Color policy lives in src/core/host-colors.ts; its CommonJS exports are
-// preserved below while the browser presentation imports it directly.
-/**
- * Order for the sidebar's host sections: this host first, then by display
- * label. Deliberately not by recency - a heading that jumps around whenever
- * another machine speaks is worse than a stale-looking one.
- */
+// Color policy lives in src/core/host-colors.ts.
+/** Self first, then by label; not recency, so headings don't jump around. */
 export function sortHostSections<T extends HelperHost>(hosts?: readonly T[] | null) {
   const rows: T[] = Array.isArray(hosts) ? [...hosts] : [];
   return rows.sort((a, b) => {
@@ -85,7 +58,7 @@ export function sortHostSections<T extends HelperHost>(hosts?: readonly T[] | nu
   });
 }
 
-/** Collapse-store key for a host section (namespaced like `date:` buckets). */
+/** Namespaced like `date:` buckets. */
 export function hostSectionKey(hostKey?: string | null) { return 'host:' + (hostKey || 'self'); }
 
 
