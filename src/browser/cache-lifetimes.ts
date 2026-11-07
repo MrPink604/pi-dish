@@ -1,13 +1,9 @@
 import { escapeHtml } from '../core/helper-format';
-import { finite, record } from '../core/helper-values';
+import { finite, record, text } from '../core/helper-values';
 import { countLabel } from './helper-format';
 
-// Cache lifetimes section of the usage view: per model, the cache retention
-// sessions are served, where it comes from, and the probes the learner has
-// seen (/api/cache-lifetimes). A probe is one return to a model after an idle
-// gap: warm when the provider still had the prompt cached, cold when it
-// rewrote it. The page's job is explaining *why* a model has no learned TTL
-// yet, so each row leads with its first failing activation gate.
+// A probe is one return to a model after an idle gap: warm if still cached,
+// cold if rewritten. Rows lead with the first failing activation gate to explain a missing TTL.
 
 export type CacheLifetimeSource = 'override' | 'documented' | 'learned' | 'builtin' | 'none';
 export type CacheLifetimeGateId = 'support' | 'warm' | 'cold' | 'slope' | 'range' | 'bracket';
@@ -40,7 +36,6 @@ const MAX_POINTS = 400;
 const DOMAIN_LO_MS = 10_000, DOMAIN_HI_MS = 24 * 60 * 60_000;
 const AXIS_TICKS: readonly (readonly [string, number])[] = [['10s', 10_000], ['1m', 60_000], ['5m', 300_000], ['30m', 1_800_000], ['2h', 7_200_000], ['24h', 86_400_000]];
 
-const text = (value: unknown) => typeof value === 'string' ? value : '';
 const num = (value: unknown) => finite(value) ? value : null;
 function policy(value: unknown): Policy | null {
   if (!record(value) || !finite(value.retentionMs) || typeof value.retention !== 'string') return null;
@@ -151,10 +146,8 @@ export function cacheLifetimeStripSvg(row: CacheLifetimeRow): string {
 const sigmoid = (value: number) => 1 / (1 + Math.exp(-value));
 
 /**
- * Expanded view: probes as dots, the fitted warmth curve, and the built-in
- * prior it would replace. The SVG stretches horizontally to its column, so it
- * holds only non-scaling strokes (dots are zero-length round-capped lines);
- * every label is HTML positioned by percentage and never distorts.
+ * The SVG stretches horizontally, so it holds only non-scaling strokes (dots are
+ * zero-length round-capped lines); labels are percentage-positioned HTML.
  */
 export function cacheLifetimeCurveSvg(row: CacheLifetimeRow): string {
   const W = 600, H = 108, top = 8, plot = 92;
@@ -174,9 +167,7 @@ export function cacheLifetimeCurveSvg(row: CacheLifetimeRow): string {
     parts.push(`<line class="cl-dot ${hit ? 'cl-warm' : 'cl-cold'}" x1="${cx}" x2="${cx}" y1="${cy}" y2="${cy}"/>`);
   });
   if (row.fit) {
-    // The prior is a steep cliff at the built-in window; slope matches the learner's anchor.
-    // Without a built-in window the learner anchors on a generic fallback;
-    // drawing that as "built-in" would claim a policy that does not exist.
+    // Without a built-in window the anchor is a generic fallback; don't draw it as "built-in".
     const priorBeta = -6, priorAlpha = -priorBeta * Math.log(row.fit.priorTtlMs);
     if (row.builtin) parts.push(`<path class="cl-prior" d="${path(priorAlpha, priorBeta)}"/>`);
     parts.push(`<path class="cl-fit${row.fit.active ? '' : ' provisional'}" d="${path(row.fit.alpha, row.fit.beta)}"/>`);

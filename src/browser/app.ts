@@ -68,7 +68,7 @@ import { createDiagrams } from './diagrams';
 import { createRichText } from './rich-text';
 import { copyTextToClipboard } from './clipboard';
 import { createTranscriptTree } from './transcript-tree';
-import { createThemes, terminalTheme as terminalThemeBase } from './themes';
+import { createThemes, terminalTheme } from './themes';
 import { createTerminalController } from './terminal';
 import { createPanelResize } from './panel-resize';
 import { createRoutinesView } from './routines-view';
@@ -129,24 +129,16 @@ function hostWsUrl(host: HostTarget, path: string) {
   return `${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}${url.pathname.replace(/\/+$/, '')}${path}`;
 }
 
-/**
- * EventSource can't set headers and a bearer token must never sit in a URL,
- * so a token host hands out a short single-purpose ticket per connect. Every
- * (re)connect mints a fresh one — a remembered stream URL's ticket is spent
- * or expired by the time a reconnect would reuse it.
- */
+// Token hosts mint a fresh single-purpose ticket per (re)connect: EventSource
+// cannot send headers, and a bearer token must never sit in a URL.
 async function mintHostTicket(host: HostTarget, purpose: string) {
   const data = await sendJson(request, host, '/api/auth/ticket', { purpose });
   if (!record(data) || typeof data.ticket !== 'string' || !data.ticket) throw new Error('no ticket');
   return data.ticket;
 }
 
-/**
- * One-time rewrite of bare session-id client keys to composite ones, once
- * this host's id is known. Lossless — values move, keys that already carry a
- * host are left alone — and idempotent via the migrated flag. Everything
- * here keeps working unmigrated: sessionKey(null, id) is the bare form.
- */
+// One-time, idempotent rewrite of bare session-id client keys to host-qualified
+// ones once this host's id is known; unmigrated keys keep working meanwhile.
 function migrateClientKeys() {
   if (!hostDirectory.self.hostId) return;
   try {
@@ -223,25 +215,24 @@ const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscover
   },
   onIdentified: (...args) => {
     if (hostDirectory.applyDescriptor(...args) && newSessionController.isOpen()) newSessionController.renderHosts();
-    pruneHostCaches();
-    renderHostsSection();
-    routinesController.updateButton();
-    composerSpeech.updateButton();
-    renderSessions();
-    startDiscoveredHosts?.();
+    hostsChanged();
     void pushNotifications.sync();
   },
   onConnection: (host, event) => hostConnections.note(host, event),
   afterFleet: () => {
-    pruneHostCaches();
-    renderHostsSection();
-    routinesController.updateButton();
-    composerSpeech.updateButton();
     if (newSessionController.isOpen()) newSessionController.renderHosts();
-    renderSessions();
-    startDiscoveredHosts?.();
+    hostsChanged();
   },
 });
+
+function hostsChanged() {
+  pruneHostCaches();
+  renderHostsSection();
+  routinesController.updateButton();
+  composerSpeech.updateButton();
+  renderSessions();
+  startDiscoveredHosts?.();
+}
 
 function pruneHostCaches() {
   const live = new Set(effectiveHosts().map(hostKeyOf));
@@ -281,8 +272,6 @@ try {
 } catch {}
 const responseDetailsController: ReturnType<typeof createResponseDetails> = createResponseDetails({ document, sessionState, mode: () => displayPreferences.responseMode });
 
-// Scroll pinning: follow streaming output only while the reader is at the
-// bottom, so new content never yanks the viewport.
 const appChrome = createAppChrome({ document, storage: localStorage, older: container => transcriptController.maybeOlder(container) });
 function autosizePromptInput(input: HTMLTextAreaElement) { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 160)}px`; }
 
@@ -368,10 +357,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (img) composerDrafts.images.openLightbox(img.src);
   });
 
-  // Tap a linkified file mention to open it in the viewer. preventDefault
-  // keeps a link inside a <summary> (tool-call headers) from toggling the
-  // enclosing <details>. Markdown links to bare file paths carry the href in
-  // data-file-path (rich-text.ts); everything else names the path in its text.
+  // preventDefault keeps a file link inside a <summary> from toggling its <details>.
   document.addEventListener('click', (e) => {
     const link = (e.target instanceof Element ? e.target.closest<HTMLElement>('.file-link') : null);
     if (!link || !sessionState.currentSession) return;
@@ -593,7 +579,7 @@ const sessionView: ReturnType<typeof createSessionView> = createSessionView({ do
 });
 
 const sessionResume: ReturnType<typeof createSessionResume> = createSessionResume({ document, sessionState, request, endpoint: resolveHost,
-  target: host => savedResumeTarget(host), refresh: refreshSessions, select: selectSession, status: setStatus,
+  target: host => newSessionController.targets.resume(hostEntryFor(host)), refresh: refreshSessions, select: selectSession, status: setStatus,
 });
 
 
@@ -618,7 +604,7 @@ const sessionRelationsController: ReturnType<typeof createSessionRelations> = cr
 });
 
 const sessionHeader: ReturnType<typeof createSessionHeader> = createSessionHeader({ document, sessionState, multi: isMultiHost, host: hostEntryFor, down: hostIdIsDown, color: hostColor, label: hostLabelFor,
-  settings: harnessSupportsSettings, ensureHarness: ensureHarnessRows, controls: refreshSessionControls,
+  settings: harnessSupportsSettings, ensureHarness: hostId => { void harnessDiscovery.ensure(hostId); }, controls: refreshSessionControls,
 });
 
 const sessionControls: ReturnType<typeof createSessionControls> = createSessionControls({
@@ -883,13 +869,7 @@ const newSessionController: ReturnType<typeof createNewSession> = createNewSessi
 
 const harnessDiscovery = newSessionController.harnesses;
 const newSessionConfigPreview = newSessionController.config;
-const spawnTargetsController = newSessionController.targets;
 
-function savedResumeTarget(host: string | null) { return spawnTargetsController.resume(hostEntryFor(host)); }
-
-function loadNsHarnessConfig(cwd = newSessionController.cwd()) { return newSessionConfigPreview.load(cwd); }
-
-function ensureHarnessRows(hostId: string | null) { void harnessDiscovery.ensure(hostId); }
 function harnessSupportsSettings(session: SessionEntry | null) {
   return !!session?.harnessId && !!harnessDiscovery.row(sessionReferences.hostId(session), session.harnessId)?.pilotConfig;
 }
@@ -901,7 +881,7 @@ const harnessSettingsController: ReturnType<typeof createHarnessSettings> = crea
   escapeHtml, shortCwd, roleDefinitions: OMP_MODEL_ROLES, parseModelRoleRef, composeModelRoleRef, modelRoleLevels,
   onSaved: scope => {
     if (newSessionController.isOpen() && newSessionController.selectedHarness() === scope.harnessId
-        && newSessionController.hostId() === scope.hostId && newSessionController.cwd() === scope.cwd) void loadNsHarnessConfig();
+        && newSessionController.hostId() === scope.hostId && newSessionController.cwd() === scope.cwd) void newSessionConfigPreview.load(newSessionController.cwd());
   },
 });
 
@@ -936,14 +916,8 @@ function readJSONPref(key: string, fallback: unknown): unknown {
   try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; } catch { return fallback; }
 }
 
-/**
- * The ordered DOM post-pass pipeline every JSONL-backed render runs:
- * strip superseded live panels, fold tool activity into accordions, then
- * highlight + decorate code blocks. One owner so a new pass can't be wired
- * into some render paths and missed in others. `stripLive: false` is for
- * prepending older pages — the live panels at the bottom belong to the
- * in-flight turn and must survive.
- */
+// Every JSONL-backed render runs these post-passes in this order; prepended
+// older pages keep the live panels, which belong to the in-flight turn.
 function finalizeRender(container: HTMLElement, { stripLive = true, inserted }: { stripLive?: boolean; inserted?: readonly HTMLElement[] } = {}) {
   if (stripLive) liveToolsController.clear(container);
   groupToolActivity(container);
@@ -1060,36 +1034,20 @@ async function loadConfig() {
   composerSpeech.updateButton();
 }
 
-/**
- * The terminal is a *per-host* feature: a session on a peer with
- * PI_DISH_TERMINAL on is reachable from an entry host that has it off, and
- * vice versa (the WS URL and ticket already follow the session's host). Gate
- * on the owning host's advertised capabilities, falling back to this host's
- * /api/config only for self — see hostSupportsTerminal in helper-identity.ts.
- */
-function sessionHostSupportsTerminal(session: SessionEntry | null) {
-  return hostSupportsTerminal(hostEntryFor(session?.host), appConfig);
-}
-
-/** Same rule for the pi-tmux view button: tmux is the owning host's, too. */
-function sessionHostSupportsTmux(session: SessionEntry | null) {
-  return hostSupportsCapability(hostEntryFor(session?.host), 'tmux', appConfig);
-}
-
 const themesController: ReturnType<typeof createThemes> = createThemes({ document, storage: localStorage, request, host: () => hostEntryFor(null)!,
   changed: () => { terminalController.refreshTheme(); diagramRenderer.refreshTheme(); },
 });
 
-function terminalTheme() { return terminalThemeBase(document); }
-
 const terminalController: ReturnType<typeof createTerminalController> = createTerminalController({
   document, storage: localStorage, sessionState, host: host => hostEntryFor(host),
-  supportsTerminal: session => sessionHostSupportsTerminal(session), supportsTmux: session => sessionHostSupportsTmux(session),
+  // Terminal and tmux follow the session's owning host, not the entry host.
+  supportsTerminal: session => hostSupportsTerminal(hostEntryFor(session?.host), appConfig),
+  supportsTmux: session => hostSupportsCapability(hostEntryFor(session?.host), 'tmux', appConfig),
   asset: (tag, attributes) => browserAssets.load(tag, attributes),
   createTerminal: options => typeof Terminal === 'undefined' ? null : new Terminal(options),
   createFitAddon: () => { const runtime = typeof FitAddon === 'undefined' ? null : FitAddon; const Ctor = typeof runtime === 'function' ? runtime : runtime?.FitAddon; return Ctor ? new Ctor() : null; },
   socket: url => new WebSocket(url), socketUrl: (host, path) => hostWsUrl(host, path), ticket: (host, purpose) => mintHostTicket(host, purpose),
-  theme: () => terminalTheme(), applySize: panel => panelResize.terminalSize(panel), confirm: message => confirm(message),
+  theme: () => terminalTheme(document), applySize: panel => panelResize.terminalSize(panel), confirm: message => confirm(message),
 });
 
 const panelResize: ReturnType<typeof createPanelResize> = createPanelResize({ document, storage: localStorage, fitTerminal: () => terminalController.fit() });

@@ -1,7 +1,7 @@
 import { errorMessage, responseError, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel } from './helper-identity';
-import { record } from '../core/helper-values';
+import { record, text } from '../core/helper-values';
 import { requiredElement } from './dom';
 
 export interface RecoveryHost extends HostEndpoint {
@@ -20,7 +20,6 @@ export interface RecoveryReport {
   readonly mode: string; readonly sessions: readonly RecoveryRecord[];
   readonly totalRecords: number; readonly truncated: boolean;
 }
-const text = (value: unknown) => typeof value === 'string' ? value : '';
 const RECOVERY_MODE_LABELS: Readonly<Record<string, string>> = {
   off: 'Off', restore: 'Restore open sessions', continue: 'Restore and continue interrupted work',
 };

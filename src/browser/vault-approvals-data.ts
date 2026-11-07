@@ -1,6 +1,6 @@
 import { escapeHtml } from '../core/helper-format';
 import { resolveSessionRefAmong } from '../core/helper-refs';
-import { finite, record } from '../core/helper-values';
+import { finite, record, text } from '../core/helper-values';
 
 export type VaultDecision = 'approve' | 'approve-window' | 'deny';
 export interface VaultRequestView {
@@ -17,10 +17,8 @@ export interface VaultOverviewView {
   readonly pending: readonly VaultRequestView[];
   readonly grants: readonly VaultGrantView[];
 }
-/** A session a request can be matched against: its route id, owning host and host label. */
 export interface VaultSessionCandidate { readonly id: string; readonly host?: string | null; readonly hostLabel?: string }
 
-const text = (value: unknown) => typeof value === 'string' ? value : '';
 const strings = (value: unknown) => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 
 export function decodeVaultOverview(value: unknown): VaultOverviewView {
@@ -44,11 +42,7 @@ export function decodeVaultOverview(value: unknown): VaultOverviewView {
   return { listener, pending, grants };
 }
 
-/**
- * The session a request claims to come from. The claim is `<host label>/<short
- * ref>` as the agent's CLI reported it; it resolves only to a unique session on
- * a host with that label.
- */
+/** The `<host label>/<short ref>` claim resolves only to a unique session on a host with that label. */
 export function vaultRequestSession<T extends VaultSessionCandidate>(request: Pick<VaultRequestView, 'sessionRef' | 'sessionHost'>, sessions: readonly T[]): T | null {
   if (!request.sessionRef) return null;
   const slash = request.sessionRef.indexOf('/');
@@ -70,12 +64,7 @@ export function vaultListenerText(listener: VaultListenerView | null): string {
   return listener.account ? `Vault ready (${listener.account})` : 'Vault ready';
 }
 
-/**
- * Approval cards. Every agent-supplied string is escaped; the session and
- * reason are the agent's own claims, so they are labelled as such. `inSession`
- * cards sit in their own session's view and omit the session line; panel cards
- * name it and offer to open it.
- */
+/** Every agent-supplied string is escaped; session and reason are labelled as the agent's own claims. */
 export function vaultCardsHtml(requests: readonly VaultRequestView[], options: { readonly now: number; readonly busy: ReadonlySet<string>; readonly inSession: boolean }): string {
   return requests.map(request => {
     const disabled = options.busy.has(request.id) ? ' disabled' : '';
@@ -99,7 +88,6 @@ export function vaultCardsHtml(requests: readonly VaultRequestView[], options: {
   }).join('');
 }
 
-/** The global vault panel: listener status, every pending request and the open windows. */
 export function vaultPanelHtml(view: VaultOverviewView, options: { readonly now: number; readonly busy: ReadonlySet<string>; readonly notice: string }): string {
   const grants = view.grants.length ? `<h4>Open windows</h4><ul class="vault-grants">${view.grants.map(grant =>
     `<li><span>${escapeHtml(grant.item)} <small>${escapeHtml([grant.fields.join(', '), grant.device, grant.sessionRef, `${remaining(grant.expiresAt, options.now)} left`].filter(Boolean).join(' · '))}</small></span>

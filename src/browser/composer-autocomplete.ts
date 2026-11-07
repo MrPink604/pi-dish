@@ -7,10 +7,9 @@ import type { createSessionReferences } from './session-references';
 import { escapeHtml } from '../core/helper-format';
 import { shortCwd } from './helper-format';
 import { highlightFuzzy } from '../core/helper-query';
-import { record } from '../core/helper-values';
+import { record, text } from '../core/helper-values';
 export interface SlashCommand { readonly name: string; readonly description: string; readonly source: string; readonly args: string }
 export interface FileCompletion { readonly path: string; readonly isDir: boolean; readonly gitStatus: string }
-const text = (v: unknown) => typeof v === 'string' ? v : '';
 export function decodeSlashCommands(value: unknown): readonly SlashCommand[] {
   return Array.isArray(value) ? value.flatMap((v: unknown) => record(v) && typeof v.name === 'string' && v.name ? [{ name: v.name, description: text(v.description), source: text(v.source), args: text(v.args) }] : []) : [];
 }

@@ -1,4 +1,4 @@
-import { record } from '../core/helper-values';
+import { record, text } from '../core/helper-values';
 export type BounceMode = 'reload' | 'restart';
 export interface BounceTarget {
   readonly sessionId: string; readonly name: string; readonly harnessId: string;
@@ -12,7 +12,6 @@ export interface BounceOperation {
   readonly id: string; readonly mode: BounceMode; readonly createdAt: string | number;
   readonly targets: readonly BounceResult[];
 }
-const text = (value: unknown) => typeof value === 'string' ? value : '';
 export const bounceMode = (value: unknown): BounceMode => value === 'restart' ? 'restart' : 'reload';
 export function decodeBouncePreview(value: unknown): readonly BounceTarget[] {
   if (!record(value) || !Array.isArray(value.targets)) throw new Error('Invalid preview response');
