@@ -97,19 +97,33 @@ const hostDirectory: ReturnType<typeof createHostDirectory> = createHostDirector
 // The only fetch entry point for /api paths: it attaches the owning host's
 // base and bearer token, so a request cannot reach the serving origin when
 // the session lives elsewhere.
-const apiTransport: ReturnType<typeof createHostTransport> = createHostTransport({ resolveHost: hostDirectory.resolveHost, fetch: (...args) => fetch(...args) });
-const request: ApiRequest = apiTransport.request;
+const apiTransport: ReturnType<typeof createHostTransport> = createHostTransport({ resolveHost, fetch: (...args) => fetch(...args) });
+// Shared ports resolve the owner's method on every call: fixtures and tests
+// replace feature methods (e.g. `apiTransport.request`) at runtime.
+const request: ApiRequest = (host, path, options) => apiTransport.request(host, path, options);
+function resolveHost(host?: HostTarget) { return hostDirectory.resolveHost(host); }
+function selectSession(...args: Parameters<ReturnType<typeof createSessionView>['select']>) { return sessionView.select(...args); }
+function refreshSessions() { return sidebarLists.refresh(); }
+function hostDown(host: Parameters<typeof hostConnections.isDown>[0]) { return hostConnections.isDown(host); }
+function noteHost(...args: Parameters<typeof hostConnections.note>) { hostConnections.note(...args); }
+function hostChip(hostId?: string | null) { return hostPresentation.chipHtml(hostId); }
+function hostColor(hostId: string | null | undefined) { return hostPresentation.colorFor(hostId); }
+const chromeScroll = {
+  pinned: (container: HTMLElement) => appChrome.pinned(container),
+  scroll: (container: HTMLElement) => appChrome.scroll(container),
+  jump: (container: HTMLElement) => appChrome.jump(container),
+};
 const sessionApi: ReturnType<typeof createSessionApi> = createSessionApi(request);
 
 // Element-driven requests (`<img src>`, `<a href>`) cannot carry the bearer
 // token and stay unauthenticated, exactly like window.open'd exports.
 function hostAssetUrl(host: HostTarget | undefined, path: string) {
-  return hostDirectory.resolveHost(host).base + path;
+  return resolveHost(host).base + path;
 }
 
 /** ws(s) URL for a host path — scheme/authority come from the host's base. */
 function hostWsUrl(host: HostTarget, path: string) {
-  const base = hostDirectory.resolveHost(host).base;
+  const base = resolveHost(host).base;
   const localProto = location.protocol === 'https:' ? 'wss' : 'ws';
   if (!base) return `${localProto}://${location.host}${path}`;
   if (base.startsWith('/')) return `${localProto}://${location.host}${base}${path}`;
@@ -257,7 +271,7 @@ const hostPresentation: ReturnType<typeof createHostPresentation> = createHostPr
     if (rows) renderHostsSection();
     renderSessions();
   },
-  escapeHtml, displayLabel: host => hostDisplayLabel(hostView(host)), isDown: hostConnections.isDown,
+  escapeHtml, displayLabel: host => hostDisplayLabel(hostView(host)), isDown: hostDown,
 });
 
 // All session list/selection writes and their rendering hooks share one store.
@@ -539,8 +553,8 @@ sidebarQuery.mount();
 const sidebarLists: ReturnType<typeof createSidebarLists> = createSidebarLists({
   document, request, sessionState, activity: sidebarActivity,
   hosts: effectiveHosts, pollable: pollableHosts, selfId: () => hostDirectory.self.hostId,
-  query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: hostDiscovery.refreshSoon,
-  connection: hostConnections.note,
+  query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: () => hostDiscovery.refreshSoon(),
+  connection: noteHost,
   askBlocked: (session, host) => extensionUI.toast(`${session.name || 'Unnamed'} is waiting for an answer`, 'warning', () => { void revealSession(session.id, host); }),
 });
 const hostSessionLoader = sidebarLists.loader;
@@ -575,7 +589,7 @@ function renderSessions() {
       contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: sessionView.spawnId,
       expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
       closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
-      unread: sidebarActivity.unread, hostChip: hostPresentation.chipHtml,
+      unread: sidebarActivity.unread, hostChip,
       hosts: effectiveHosts().map(host => {
         const cache = hostSessionLoader.getCache(host);
         return { ...host, state: hostConnections.stateOf(host), key: hostKeyOf(host), color: hostPresentation.colorFor(host.hostId || null),
@@ -599,9 +613,9 @@ function refreshSessionControls() {
   composerSpeech.updateButton();
 }
 
-const sessionView: ReturnType<typeof createSessionView> = createSessionView({ document, sessionState, storage: localStorage, endpoint: hostDirectory.resolveHost,
+const sessionView: ReturnType<typeof createSessionView> = createSessionView({ document, sessionState, storage: localStorage, endpoint: resolveHost,
   get drafts() { return composerDrafts; }, get activity() { return sessionActivity; }, get transcript() { return transcriptController; }, get stream() { return messageStreamController; }, get resume() { return sessionResume; },
-  spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => streamingRenderer.cancel(), stopFollowing: appChrome.stopFollowing,
+  spawn: id => pendingSessionSpawns.get(id), resetSearch: () => sessionSearch.reset(), cancelStreaming: () => streamingRenderer.cancel(), stopFollowing: () => appChrome.stopFollowing(),
   closeViews: keepBounce => mainPane.beforeSelection(keepBounce),
   closeTerminal: () => terminalController.close(), clearExtension: () => extensionUI.clear(), clearRelations: () => sessionRelationsController.clear(), closeControls: () => appChrome.closePanel(), hideAutocomplete: () => composerAutocomplete.hide(),
   retireModels: () => modelCatalog.retire(), retireCommands: () => composerAutocomplete.retireCommands(), queue: data => promptDelivery.render(data), resetSideChat: () => sideChat.reset(), resetArtifacts: () => sessionInfo.resetArtifacts(),
@@ -610,8 +624,8 @@ const sessionView: ReturnType<typeof createSessionView> = createSessionView({ do
   seen: session => sidebarActivity.mark(session), artifacts: owner => sessionInfo.refreshArtifacts(owner), header: () => sessionHeader.update(), relations: owner => sessionRelationsController.load(owner), models: (id, harness) => appModels.load(id, harness), commands: id => composerAutocomplete.loadCommands(id),
 });
 
-const sessionResume: ReturnType<typeof createSessionResume> = createSessionResume({ document, sessionState, request, endpoint: hostDirectory.resolveHost,
-  target: host => savedResumeTarget(host), refresh: sidebarLists.refresh, select: sessionView.select, status: setStatus,
+const sessionResume: ReturnType<typeof createSessionResume> = createSessionResume({ document, sessionState, request, endpoint: resolveHost,
+  target: host => savedResumeTarget(host), refresh: refreshSessions, select: selectSession, status: setStatus,
 });
 
 // =========================================================================
@@ -638,7 +652,7 @@ const sessionRelationsController: ReturnType<typeof createSessionRelations> = cr
   // The takeover's own lineage poll covers an open view (the header chip is
   // hidden there); the header poll defers to it instead of doubling requests.
   takeoverActive: () => subagentsController.isOpen(),
-  selectSession: sessionView.select, status: setStatus,
+  selectSession, status: setStatus,
 });
 
 /**
@@ -646,7 +660,7 @@ const sessionRelationsController: ReturnType<typeof createSessionRelations> = cr
  * informative part, so it is dropped before the name is allowed to
  * ellipsize (CSS does the truncation). Full ref stays in the tooltip.
  */
-const sessionHeader: ReturnType<typeof createSessionHeader> = createSessionHeader({ document, sessionState, multi: isMultiHost, host: hostEntryFor, down: hostIdIsDown, color: hostPresentation.colorFor, label: hostLabelFor,
+const sessionHeader: ReturnType<typeof createSessionHeader> = createSessionHeader({ document, sessionState, multi: isMultiHost, host: hostEntryFor, down: hostIdIsDown, color: hostColor, label: hostLabelFor,
   settings: harnessSupportsSettings, ensureHarness: ensureHarnessRows, controls: refreshSessionControls,
 });
 
@@ -660,7 +674,7 @@ const sessionControls: ReturnType<typeof createSessionControls> = createSessionC
 const sessionSearch: ReturnType<typeof createSessionSearch> = createSessionSearch({
   document, sessionState, request, endpoint: hostEntryFor,
   focusMode: () => appChrome.focus, ensureMessage: (index, owns) => transcriptController.ensureMessage(index, owns),
-  stopFollowing: appChrome.stopFollowing, updateJumpButton: appChrome.jump,
+  stopFollowing: () => appChrome.stopFollowing(), updateJumpButton: chromeScroll.jump,
 });
 
 // Display preferences own modal requests, rendered controls and device readouts.
@@ -713,8 +727,8 @@ function revealSession(id: string, host: string | null) {
 // Recovery owns its preferences/report views and captured host endpoints.
 const recoveryController: ReturnType<typeof createRecovery> = createRecovery({
   root: document.querySelector<HTMLElement>('.main')!, request, hosts: effectiveHosts,
-  supports: host => hostSupportsCapability(host, 'recovery', appConfig), down: hostConnections.isDown,
-  fleetReady: () => hostFleetReady, refreshFleet: hostDiscovery.loadFleet,
+  supports: host => hostSupportsCapability(host, 'recovery', appConfig), down: hostDown,
+  fleetReady: () => hostFleetReady, refreshFleet: () => hostDiscovery.loadFleet(),
   selectedHost: () => sessionState.currentSession?.host || null,
   preferencesOpen: () => fleetController.isOpen(),
   closeOtherViews: () => mainPane.beforeTakeover('recovery'),
@@ -731,15 +745,15 @@ const hostSettings: ReturnType<typeof createHostSettings> = createHostSettings({
   request, protocol: () => location.protocol,
   promptToken: label => prompt(`Token for ${label}`, ''),
   displayLabel: host => hostDisplayLabel({ base: host.base, label: host.label ? String(host.label) : '', name: host.name ? String(host.name) : '' }), escapeHtml,
-  color: hostPresentation.colorFor, customColor: hostPresentation.isCustom, resolveColor: resolveColorToHex,
-  setColor: hostPresentation.setColor,
+  color: hostColor, customColor: hostId => hostPresentation.isCustom(hostId), resolveColor: resolveColorToHex,
+  setColor: (...args) => hostPresentation.setColor(...args),
   onCatalogSaved: () => {
     if (newSessionController.isOpen()) newSessionController.renderHosts();
     pruneHostCaches();
     renderHostsSection();
     renderSessions();
   },
-  refreshSessions: sidebarLists.refresh, renderNewSessionHosts: (...args) => newSessionController.renderHosts(...args),
+  refreshSessions, renderNewSessionHosts: (...args) => newSessionController.renderHosts(...args),
 });
 
 function renderHostsSection() {
@@ -759,7 +773,7 @@ const fleetController: ReturnType<typeof createFleetView> = createFleetView({
     return { live: rows.length, working: rows.filter(session => session.turnInProgress).length };
   },
   dot: hostId => hostPresentation.dotHtml(hostId, 'fleet-host-dot'),
-  noteConnection: hostConnections.note,
+  noteConnection: noteHost,
   closeOtherViews: () => mainPane.beforeTakeover('fleet'),
   mountSections: () => {
     const connections = document.getElementById('fleetConnections')!;
@@ -775,19 +789,19 @@ const fleetController: ReturnType<typeof createFleetView> = createFleetView({
 // Advanced search owns fleet query results, facet controls and click-through.
 const searchViewController: ReturnType<typeof createSearchView> = createSearchView({
   root: document.querySelector<HTMLElement>('.main')!, request, sessionState,
-  hosts: effectiveHosts, fanout: pollableHosts, host: hostEntryFor, scope: sidebarQuery.scope,
+  hosts: effectiveHosts, fanout: pollableHosts, host: hostEntryFor, scope: () => sidebarQuery.scope(),
   connection: noteConnection,
-  hostChip: hostPresentation.chipHtml,
+  hostChip,
   closeOtherViews: () => mainPane.beforeTakeover('search'),
   loadPrevious,
-  selectSession: sessionView.select, sessionSearch,
+  selectSession, sessionSearch,
 });
 
 // The skills directory and coverage view retain their entry-host ownership.
 const skillsController: ReturnType<typeof createSkills> = createSkills({
   root: document.querySelector<HTMLElement>('.main')!, request, self: selfHostEntry, origin: () => location.origin,
   sessionState, loadPrevious,
-  selectSession: sessionView.select,
+  selectSession,
   closeOtherViews: () => mainPane.beforeTakeover('skills'),
   refine: ({ cwd, draft, host }) => { newSessionController.setHostId(host); newSessionController.open({ cwd, draft }); },
   copy: copyTextToClipboard, status: setStatus,
@@ -799,14 +813,14 @@ const usageController: ReturnType<typeof createUsageView> = createUsageView({
   fleetReady: () => hostFleetReady, hosts: pollableHosts, host: hostEntryFor, multiHost: isMultiHost,
   closeOtherViews: () => mainPane.beforeTakeover('usage'),
   connection: noteConnection,
-  selectSession: sessionView.select,
+  selectSession,
 });
 
 // Session information owns stats/process/share controls and artifact discovery.
 const sessionInfo: ReturnType<typeof createSessionInfo> = createSessionInfo({
   document, request, sessionState, host: hostEntryFor,
   reference: session => sessionRefFor(session), copy: copyTextToClipboard, status: setStatus, confirm: text => confirm(text),
-  loadPrevious, refreshSessions: sidebarLists.refresh, selectSession: sessionView.select,
+  loadPrevious, refreshSessions, selectSession,
 });
 
 // File and diff takeovers share a typed owner and keep comment coordination explicit.
@@ -832,15 +846,14 @@ const transcriptController: ReturnType<typeof createTranscript> = createTranscri
   document, sessionState, request, host: hostEntryFor,
   renderMessage: message => messageRenderer.message(message), finalize: (root, options) => finalizeRender(root, options),
   closeSearch: () => sessionSearch.close(), cancelStreaming: () => streamingRenderer.cancel(), mood: (description, face) => moodController.set(description, face),
-  updateMood: messages => moodController.fromMessages(messages), pinned: appChrome.pinned, scroll: appChrome.scroll, jump: appChrome.jump,
+  updateMood: messages => moodController.fromMessages(messages), ...chromeScroll,
   consumeEcho: (id, content) => promptDelivery.consume(keyForSessionId(id), content),
 });
 
 // Typed message projection and telemetry retain only their own render data.
 const messageRenderer: ReturnType<typeof createMessageRenderer> = createMessageRenderer({
   document, sessionState, details: responseDetailsController, markdown: text => richText.format(text),
-  assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), pinned: appChrome.pinned,
-  follow: () => appChrome.following, scroll: appChrome.scroll, jump: appChrome.jump,
+  assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), ...chromeScroll, follow: () => appChrome.following,
 });
 
 // Session-scoped takeover: family tree + trace peek + signaling, opened from
@@ -850,7 +863,7 @@ const subagentsController: ReturnType<typeof createSubagentsView> = createSubage
   root: document.querySelector<HTMLElement>('.main')!, request, sessionState, endpoint: hostEntryFor,
   closeOtherViews: () => mainPane.beforeTakeover('subagents'),
   loadPrevious,
-  selectSession: sessionView.select, status: setStatus,
+  selectSession, status: setStatus,
   markdown: text => richText.format(text), assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), details: responseDetailsController,
 });
 
@@ -860,7 +873,7 @@ const subagentsController: ReturnType<typeof createSubagentsView> = createSubage
 
 const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools({
   document, sessionState, started: (id, name) => sessionActivity.toolStarted(id, name),
-  finished: id => sessionActivity.toolFinished(id), pinned: appChrome.pinned, scroll: appChrome.scroll, jump: appChrome.jump,
+  finished: id => sessionActivity.toolFinished(id), ...chromeScroll,
   images: (content, alt) => messageRenderer.images(content, alt), mood: (name, args) => moodController.fromTool(name, args),
 });
 
@@ -868,11 +881,11 @@ const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools(
 // SSE Streaming (RPC events only)
 // =========================================================================
 
-const messageStreamController: ReturnType<typeof createMessageStream> = createMessageStream({ document, sessionState, endpoint: hostDirectory.resolveHost, ticket: host => mintHostTicket(host, 'stream'),
+const messageStreamController: ReturnType<typeof createMessageStream> = createMessageStream({ document, sessionState, endpoint: resolveHost, ticket: host => mintHostTicket(host, 'stream'),
   get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
-  status: setStatus, catchup: owner => transcriptController.catchup(owner), refresh: sidebarLists.refresh, artifacts: owner => sessionInfo.refreshArtifacts(owner),
-  pinned: appChrome.pinned, follow: () => appChrome.following, scroll: appChrome.scroll, jump: appChrome.jump, highlight: root => richText.highlight(root),
-  select: sessionView.select, deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => sidebarLists.load(query, options),
+  status: setStatus, catchup: owner => transcriptController.catchup(owner), refresh: refreshSessions, artifacts: owner => sessionInfo.refreshArtifacts(owner),
+  ...chromeScroll, follow: () => appChrome.following, highlight: root => richText.highlight(root),
+  select: selectSession, deleteCached: key => transcriptController.deleteCached(key), loadSessions: (query, options) => sidebarLists.load(query, options),
 });
 
 // =========================================================================
@@ -904,7 +917,7 @@ const composerSpeech: ReturnType<typeof createComposerSpeech> = createComposerSp
   showNote: text => composerNotes.show(text), hideNote: () => composerNotes.hide(),
 });
 
-const promptDelivery: ReturnType<typeof createPromptDelivery> = createPromptDelivery({ document, sessionState, request, endpoint: hostDirectory.resolveHost,
+const promptDelivery: ReturnType<typeof createPromptDelivery> = createPromptDelivery({ document, sessionState, request, endpoint: resolveHost,
   restore: (key, text) => composerDrafts.restorePayload(key, text, null), status: setStatus,
 });
 
@@ -923,13 +936,13 @@ function syncComposerMode(active: boolean) {
   if (input) input.placeholder = active ? 'Ask a follow-up in the side chat…' : 'Send a message...';
 }
 const sideChat: SideChatController = createSideChat({ document, sessionState, markdown: text => richText.format(text), copy: copyTextToClipboard,
-  request, endpoint: hostDirectory.resolveHost, status: setStatus,
+  request, endpoint: resolveHost, status: setStatus,
   onChange: syncComposerMode });
 
 const composerSubmit: ReturnType<typeof createComposerSubmit> = createComposerSubmit({ document, sessionState, drafts: composerDrafts, delivery: promptDelivery, activity: sessionActivity, sideChat,
-  request, endpoint: hostDirectory.resolveHost, spawnId: () => sessionView.spawnId, spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
+  request, endpoint: resolveHost, spawnId: () => sessionView.spawnId, spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
   refs: message => sessionReferences.hints(message), status: setStatus, openTree: () => transcriptTree.open(), hideAutocomplete: () => composerAutocomplete.hide(),
-  refresh: sidebarLists.refresh, follow: appChrome.follow, scroll: appChrome.scroll, renderUser: (message, time, attrs) => messageRenderer.user(message, time, attrs),
+  refresh: refreshSessions, follow: () => appChrome.follow(), scroll: chromeScroll.scroll, renderUser: (message, time, attrs) => messageRenderer.user(message, time, attrs),
   woke: async (id, host) => { await sidebarLists.refresh(); const current = sessionState.currentSession; if (current?.id === id && (current.host || null) === host) await sessionView.select(id, { host }); },
 });
 
@@ -937,18 +950,18 @@ const pendingSessionSpawns: ReturnType<typeof createSessionSpawns> = createSessi
   request, delay: attempt => new Promise(resolve => setTimeout(resolve, attempt < 50 ? 100 : 250)), harnessLabel: (...args) => newSessionController.harnessLabel(...args),
   current: () => sessionView.spawnId, changed: renderSessions,
   showPending: key => { sidebarQuery.switchTab('active'); sessionView.pending(key); if (window.innerWidth <= 768) sidebarQuery.close(); },
-  loadHost: sidebarLists.loadHost, hasSession: (id, host) => !!sessionState.findSession(id, host),
+  loadHost: host => sidebarLists.loadHost(host), hasSession: (id, host) => !!sessionState.findSession(id, host),
   selectSession: (id, host) => { void sessionView.select(id, { host }); },
-  stashPrompt: composerDrafts.stash,
+  stashPrompt: () => composerDrafts.stash(),
   saveDraft: (key, draft) => { try { localStorage.setItem(composerDrafts.draftKey(pendingComposerKey(key)), draft); } catch {} },
   migratePrompt: (key, host, id) => composerDrafts.migrate(pendingComposerKey(key), sessionKey(host || hostDirectory.self.hostId, id)),
   discardPrompt: key => { const owner = pendingComposerKey(key); composerDrafts.clearDraft(owner); composerDrafts.images.discard(owner); },
-  showFailure: sessionView.failure, status: setStatus,
+  showFailure: (...args) => sessionView.failure(...args), status: setStatus,
 });
 // The typed takeover owns form state, controls, caches and launch view tokens.
 const newSessionController: ReturnType<typeof createNewSession> = createNewSession({
   root: document.querySelector<HTMLElement>('.main')!, storage: localStorage, request,
-  self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown: hostConnections.isDown, multiHost: isMultiHost,
+  self: selfHostEntry, host: hostEntryFor, hosts: effectiveHosts, hostDown, multiHost: isMultiHost,
   sessionState, currentSpawn: () => sessionView.spawnId, spawns: pendingSessionSpawns, models: modelCatalog,
   closeOtherViews: () => mainPane.beforeTakeover('newSession'),
   closeSettings: () => harnessSettingsController.close(),
@@ -1040,7 +1053,7 @@ function finalizeRender(container: HTMLElement, { stripLive = true, inserted }: 
 // =========================================================================
 
 const streamingRenderer: ReturnType<typeof createStreamingRenderer> = createStreamingRenderer({
-  document, sessionState, markdown: text => richText.format(text), pinned: appChrome.pinned, scroll: appChrome.scroll, jump: appChrome.jump,
+  document, sessionState, markdown: text => richText.format(text), ...chromeScroll,
   stream: (previous, text) => richText.stream(previous, text),
 });
 
@@ -1084,7 +1097,7 @@ const richText: ReturnType<typeof createRichText> = createRichText({
 // =========================================================================
 const transcriptTree: ReturnType<typeof createTranscriptTree> = createTranscriptTree({
   document, storage: localStorage, sessionState, request, host: hostEntryFor,
-  status: setStatus, selectSession: sessionView.select,
+  status: setStatus, selectSession,
   copyMessageLink: button => sessionInfo.copyMessage(button),
   saveEditorDraft: (owner, text) => {
     try { const key = composerDrafts.draftKey(sessionRefKey(owner)); if (!(localStorage.getItem(key) || '').trim()) localStorage.setItem(key, text); } catch {}
@@ -1154,7 +1167,7 @@ document.addEventListener('keydown', function(e) {
 let appConfig: Record<string, unknown> = { terminal: false };
 async function loadConfig() {
   try {
-    const res = await apiTransport.request(null, '/api/config');
+    const res = await request(null, '/api/config');
     const data: unknown = await res.json(); if (res.ok && record(data)) appConfig = data;
   } catch { /* feature stays hidden */ }
   terminalController.updateButtons();
@@ -1205,17 +1218,17 @@ const panelResize: ReturnType<typeof createPanelResize> = createPanelResize({ do
 const routinesController: ReturnType<typeof createRoutinesView> = createRoutinesView({
   root: document.querySelector<HTMLElement>('.main')!, request, storage: localStorage, sessionState,
   hosts: pollableHosts, effectiveHosts, host: hostEntryFor, fleetReady: () => hostFleetReady, config: () => appConfig, multiHost: isMultiHost,
-  hostChip: hostPresentation.chipHtml,
+  hostChip,
   closeOtherViews: () => mainPane.beforeTakeover('routines'),
   connection: noteConnection,
   autocomplete: options => createCwdAutocomplete(options), copy: copyTextToClipboard, status: setStatus, confirm: text => confirm(text),
-  loadPrevious, selectSession: sessionView.select,
+  loadPrevious, selectSession,
 });
 
 // Bounce owns host snapshots, selected targets, status polling and view disposal.
 const bounceController: ReturnType<typeof createBounce> = createBounce({
   document, request, hosts: effectiveHosts, fleetReady: () => hostFleetReady,
-  sessionState, refreshSessions: sidebarLists.refresh, loadPrevious, selectSession: sessionView.select,
+  sessionState, refreshSessions, loadPrevious, selectSession,
 });
 
 // Register exclusion policy once; close callbacks keep controller ownership lazy.
@@ -1259,7 +1272,7 @@ createAppBindings({ document, actions: {
   toggleVaultPanel: () => vaultApprovals.togglePanel(),
   refreshFleetView: () => fleetController.refresh(),
   closeFleetView: () => fleetController.close(),
-  refreshSessions: () => sidebarLists.refresh(),
+  refreshSessions,
   openNewSessionView: () => newSessionController.open(),
   openSessionHarnessSettings: () => openSessionHarnessSettings(),
   openStatsModal: () => sessionInfo.openStats(),
