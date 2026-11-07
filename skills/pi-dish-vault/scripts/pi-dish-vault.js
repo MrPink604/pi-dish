@@ -298,7 +298,7 @@ function search(args) {
         return;
     const listing = decodeSearchReply(reply);
     if (json)
-        return void process.stdout.write(JSON.stringify(listing, null, 2) + '\n');
+        return core.print(listing, true);
     for (const entry of listing.results) {
         process.stdout.write(`${entry.id}\t${entry.kind}\t${entry.name}\t${entry.uris.join(' ')}\n`);
         if (entry.fields.length)

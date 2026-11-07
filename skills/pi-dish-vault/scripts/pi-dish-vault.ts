@@ -284,7 +284,7 @@ function search(args: readonly string[]): void {
   const reply = runAac(aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', '30']), 'search');
   if (reply === null) return;
   const listing = decodeSearchReply(reply);
-  if (json) return void process.stdout.write(JSON.stringify(listing, null, 2) + '\n');
+  if (json) return core.print(listing, true);
   for (const entry of listing.results) {
     process.stdout.write(`${entry.id}\t${entry.kind}\t${entry.name}\t${entry.uris.join(' ')}\n`);
     if (entry.fields.length) process.stdout.write(`  fields: ${entry.fields.join(', ')}\n`);
