@@ -329,6 +329,10 @@ The C1 tools prerequisite uses strict NodeNext/ES2022, Node-only
 `check-source-policy` and `report-ci-failure`. The policy source is `.mts`
 and keeps its `.mjs` API/command path; the others are `.ts` with existing
 CommonJS `.js` command paths. Generated JavaScript and declarations are checked in.
+Every program extends `tsconfig.base.json` (target, strict); the NodeNext
+programs extend it through `tsconfig.node.json`. The builders share
+`scripts/build-output.ts` for argument parsing, temporary compilation, orphan
+detection and check/write of outputs.
 
 After `npm ci`, `npm run build:tools` executes the checked-in
 `scripts/build-tools.js`, not unbuilt TypeScript. It invokes the pinned compiler
