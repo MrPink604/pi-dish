@@ -11,15 +11,14 @@ Object.defineProperty(exports, "__esModule", { value: true });
  */
 const fs = require("node:fs");
 const path = require("node:path");
-const clientPath = path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js');
 let core;
-;
 try {
-    core = require(clientPath);
+    core = require(path.join(__dirname, '..', '..', 'lib', 'pi-dish-client.js'));
 }
 catch (e) {
-    process.stderr.write(`pi-dish-pages: cannot load ${clientPath} (${e instanceof Error ? e.message : e}); `
-        + 'install the skills by symlinking them from the pi-dish repo (./install.sh).\n');
+    process.stderr.write(`pi-dish-pages: could not load the shared pi-dish client library (${e instanceof Error && e.message ? e.message : e}).\n`
+        + 'Install the skills by symlinking the skill directories from the pi-dish repo '
+        + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n');
     process.exit(1);
 }
 const { makeFail, defaultBase, discoverSessionQuietly, request, hostPath, jsonInit, parseCommandLine } = core;
