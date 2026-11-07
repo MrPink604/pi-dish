@@ -23,7 +23,7 @@ try {
 const {
   makeFail, print, defaultBase, discoverSession, fleetCallerId, request, api, jsonInit,
   requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef,
-  mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef,
+  mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef, wireArray,
 } = core;
 
 const fail = makeFail('pi-dish-sessions');
@@ -84,7 +84,6 @@ interface TmuxEntry extends TmuxTarget {
   harness: unknown; name: unknown; state: string; cwd: string; model: unknown;
   sessionId: unknown; routeId: unknown; pid: unknown; updatedAt: unknown;
 }
-function wireArray(value: unknown): unknown[] { return Array.isArray(value) ? value : []; }
 
 const SHARED_FLAGS: [string, string][] = [
   ['--json', 'machine-readable JSON instead of tab-separated lines'],
@@ -860,7 +859,7 @@ async function main() {
     if (spec.name === 'hosts') {
       const { data } = await request(base, '/api/hosts');
       if (args.json) return print(data, true);
-      const hosts = core.fleetRows(core.record(data).hosts);
+      const hosts = wireArray(core.record(data).hosts);
       for (const entry of hosts) process.stdout.write(hostLine(entry) + '\n');
       const remotes = hosts.filter(entry => !core.fleetHost(entry).self);
       if (remotes.length) process.stdout.write('# Add --host <name> to any command to act on that host.\n');

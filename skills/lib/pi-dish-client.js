@@ -33,7 +33,6 @@ __export(pi_dish_client_exports, {
   fleetCallerId: () => fleetCallerId,
   fleetHost: () => fleetHost,
   fleetHosts: () => fleetHosts,
-  fleetRows: () => fleetRows,
   hostPath: () => hostPath,
   hostSupports: () => hostSupports,
   jsonInit: () => jsonInit,
@@ -54,7 +53,8 @@ __export(pi_dish_client_exports, {
   sessionHarnessId: () => sessionHarnessId,
   sessionRows: () => sessionRows,
   stableSessionRef: () => stableSessionRef,
-  stringValue: () => stringValue
+  stringValue: () => stringValue,
+  wireArray: () => wireArray
 });
 module.exports = __toCommonJS(pi_dish_client_exports);
 var import_node_child_process = require("node:child_process");
@@ -180,7 +180,7 @@ function isSessionRow(value) {
 function sessionRows(value) {
   return Array.isArray(value) ? value.filter(isSessionRow) : [];
 }
-function fleetRows(value) {
+function wireArray(value) {
   return Array.isArray(value) ? value : [];
 }
 function fleetHost(value) {
@@ -210,9 +210,7 @@ function makeFail(name) {
   };
 }
 function print(value, json) {
-  if (json) process.stdout.write(JSON.stringify(value, null, 2) + "\n");
-  else if (typeof value === "string") process.stdout.write(value + "\n");
-  else process.stdout.write(JSON.stringify(value, null, 2) + "\n");
+  process.stdout.write((typeof value === "string" && !json ? value : JSON.stringify(value, null, 2)) + "\n");
 }
 function parseCommandLine(argv, fallback, flags = []) {
   const line = { command: argv[0] || fallback, positional: [], json: false, values: {} };
@@ -407,7 +405,7 @@ function jsonInit(body, headers = {}) {
 var fleetPromise = null;
 function fleetHosts(base) {
   if (!fleetPromise) {
-    fleetPromise = request(base, "/api/hosts").then(({ data }) => fleetRows(record(data ?? {}).hosts)).catch(() => null);
+    fleetPromise = request(base, "/api/hosts").then(({ data }) => wireArray(record(data ?? {}).hosts)).catch(() => null);
   }
   return fleetPromise;
 }
@@ -735,7 +733,6 @@ function renderTranscript(input, options = {}) {
   fleetCallerId,
   fleetHost,
   fleetHosts,
-  fleetRows,
   hostPath,
   hostSupports,
   jsonInit,
@@ -756,5 +753,6 @@ function renderTranscript(input, options = {}) {
   sessionHarnessId,
   sessionRows,
   stableSessionRef,
-  stringValue
+  stringValue,
+  wireArray
 });

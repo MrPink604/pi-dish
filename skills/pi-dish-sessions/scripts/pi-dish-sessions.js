@@ -19,9 +19,8 @@ catch (e) {
         + '(run ./install.sh in the pi-dish checkout) so this script sits next to skills/lib/.\n');
     process.exit(1);
 }
-const { makeFail, print, defaultBase, discoverSession, fleetCallerId, request, api, jsonInit, requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef, mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef, } = core;
+const { makeFail, print, defaultBase, discoverSession, fleetCallerId, request, api, jsonInit, requestText, fleetHosts, hostSupports, entryForHostName, resolveSessionRef, mergeSearchResults, renderTranscript, registryEntries, registryRouteId, sessionHarnessId, stableSessionRef, wireArray, } = core;
 const fail = makeFail('pi-dish-sessions');
-function wireArray(value) { return Array.isArray(value) ? value : []; }
 const SHARED_FLAGS = [
     ['--json', 'machine-readable JSON instead of tab-separated lines'],
     ['--host NAME', 'act on a fleet host (see `hosts`); a host-qualified ref implies it'],
@@ -827,7 +826,7 @@ async function main() {
             const { data } = await request(base, '/api/hosts');
             if (args.json)
                 return print(data, true);
-            const hosts = core.fleetRows(core.record(data).hosts);
+            const hosts = wireArray(core.record(data).hosts);
             for (const entry of hosts)
                 process.stdout.write(hostLine(entry) + '\n');
             const remotes = hosts.filter(entry => !core.fleetHost(entry).self);

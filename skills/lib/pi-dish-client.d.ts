@@ -112,8 +112,8 @@ export declare function errorMessage(value: unknown): string;
 export declare function errorStatus(value: unknown): unknown;
 export declare function errorBody(value: unknown): Record<string, unknown>;
 export declare function sessionRows(value: unknown): SessionRow[];
-/** Fleet arrays are opaque until a particular operation consumes a row. */
-export declare function fleetRows(value: unknown): unknown[];
+/** Wire arrays stay opaque until a particular operation consumes a row. */
+export declare function wireArray(value: unknown): unknown[];
 export declare function fleetHost(value: unknown): FleetHost;
 /** Check only when a caller actually invokes a string operation. */
 export declare function stringValue(value: unknown, message: string): string;

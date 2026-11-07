@@ -106,8 +106,8 @@ function isSessionRow(value: unknown): value is SessionRow {
 export function sessionRows(value: unknown): SessionRow[] {
   return Array.isArray(value) ? value.filter(isSessionRow) : [];
 }
-/** Fleet arrays are opaque until a particular operation consumes a row. */
-export function fleetRows(value: unknown): unknown[] {
+/** Wire arrays stay opaque until a particular operation consumes a row. */
+export function wireArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 export function fleetHost(value: unknown): FleetHost {
@@ -134,9 +134,7 @@ function makeFail(name: string) {
 }
 
 function print(value: unknown, json?: boolean) {
-  if (json) process.stdout.write(JSON.stringify(value, null, 2) + '\n');
-  else if (typeof value === 'string') process.stdout.write(value + '\n');
-  else process.stdout.write(JSON.stringify(value, null, 2) + '\n');
+  process.stdout.write((typeof value === 'string' && !json ? value : JSON.stringify(value, null, 2)) + '\n');
 }
 
 export interface CommandLine {
@@ -381,7 +379,7 @@ let fleetPromise: Promise<unknown[] | null> | null = null;
 function fleetHosts(base: string): Promise<unknown[] | null> {
   if (!fleetPromise) {
     fleetPromise = request(base, '/api/hosts')
-      .then(({ data }) => fleetRows(record(data ?? {}).hosts))
+      .then(({ data }) => wireArray(record(data ?? {}).hosts))
       // A server too old (or too closed) to answer is not an error here: the
       // callers all degrade to capability-absent behaviour.
       .catch(() => null);
