@@ -41,27 +41,10 @@ export type FileViewerResult = FileViewerFile | FileViewerError;
 export interface FileViewerOptions {
     imageData?: 'base64' | 'buffer' | false;
 }
-/**
- * Clean a chat-mentioned path: surrounding quotes/brackets, trailing
- * sentence punctuation, a trailing :line[:col] (returned separately), a
- * leading @ (the composer's mention form), ~ expansion.
- */
+/** Strips quotes/brackets, trailing punctuation, a leading @, and a trailing :line[:col] (returned separately); expands ~. */
 export declare function normalizeMention(raw: unknown, home: string): NormalizedMention;
-/**
- * Every absolute path a session's tool calls referenced (plus the dirname of
- * each structured file arg, so siblings of a written file resolve too).
- * Returns Map<absPath, lastMessageIndex> — recency for ranking.
- */
+/** Includes each file arg's dirname so siblings resolve. Values are last message index, for recency. */
 export declare function extractSessionPaths(messages: readonly unknown[], cwd: string | null | undefined, home?: string): Map<string, number>;
-/**
- * Resolve a mention to an existing, allowed file. Returns
- * { absPath, line } or null. See the module doc for the strategy.
- */
 export declare function resolveFileMention(rawMention: unknown, { cwd, messages, home }: FileMentionContext): Promise<ResolvedFileMention | null>;
-/**
- * Read a resolved file for the viewer: text (capped, with a truncated flag),
- * or image metadata plus optional base64/buffer bytes. Binary non-images get
- * { error, status }. Base64 stays the default for direct library callers;
- * HTTP metadata and resource routes opt into no bytes / Buffer respectively.
- */
+/** Base64 is the default for library callers; HTTP routes opt into no bytes or a Buffer. */
 export declare function readFileForViewer(absPath: string, { imageData }?: FileViewerOptions): FileViewerResult;

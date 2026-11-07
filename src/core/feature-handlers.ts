@@ -1,4 +1,7 @@
 import type { RequestHandler } from 'express';
+import { requestBody, errorMessage } from './http-boundary';
+import { readDishSettings, writeDishSettings } from './dish-store';
+import { asRecord } from './wire-protocol';
 import * as harnessSettings from './harness-feature-settings';
 import * as stt from './stt';
 import { recoveryMode } from './recovery-runner';
@@ -6,11 +9,9 @@ import { MAX_MESSAGE_HOLD_WINDOW_MS, messageHoldWindowMs } from './message-hold'
 import { hibernationMode } from './session-hibernation';
 import { listHarnesses } from './harnesses';
 import { harnessCommandAvailable, runHarnessJsonCommand } from './harness-feature-commands';
-import type { SessionCatalog } from './session-catalog';
+import type { CatalogRuntime } from './session-catalog-runtime';
 import type { SessionSource } from './session-source';
 import type { SessionOwnership } from './session-ownership';
-import type { CatalogModel } from './session-api';
-import type { AvailableModel } from './pi-sdk';
 import { createUsageSummaryHandler } from './usage-feature-handler';
 import { cacheLifetimeReport } from './cache-lifetime';
 import { createSkillFeatureHandlers } from './skill-feature-handlers';
@@ -19,18 +20,9 @@ import { createModelFeatureHandlers } from './model-feature-handlers';
 export type FeatureHandler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 
 export interface FeaturePorts {
-  readDishSettings(): Record<string, unknown>;
-  writeDishSettings(settings: Record<string, unknown>): void;
-  buildSessionCatalog(): Pick<SessionCatalog, 'list'>;
-  enumerateSessionCandidates(): readonly SessionSource[];
+  catalog: CatalogRuntime;
+  ownership: SessionOwnership;
   findSessionSource(id: string, options?: { exact?: boolean }): SessionSource | null;
-  getSessionModels(id: string): Promise<CatalogModel[] | null>;
-  getLiveSession: SessionOwnership['getLiveSession'];
-  /** Weak listing advice only; never a command-execution authorization. */
-  locatePiPane: SessionOwnership['locatePiPane'];
-  getModelsCache(): { models: AvailableModel[] | null; time: number };
-  /** The root setter also invalidates its context-window memo. */
-  setModelsCache(models: AvailableModel[]): void;
   applicationRoot: string;
   piSettingsFile: string;
 }
@@ -85,15 +77,11 @@ function settingsForClient(settings: Record<string, unknown>) {
   };
 }
 
-function optionalRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
-
 function normalizeUsageLimit(value: unknown) {
   if (!value || typeof value !== 'object') return null;
-  const limit = optionalRecord(value);
-  const amount = optionalRecord(limit.amount);
-  const window = optionalRecord(limit.window);
+  const limit = asRecord(value);
+  const amount = asRecord(limit.amount);
+  const window = asRecord(limit.window);
   const usedFraction = Number(amount.usedFraction);
   if (typeof limit.label !== 'string' || !Number.isFinite(usedFraction)) return null;
   const resetsAt = Number(window.resetsAt);
@@ -112,9 +100,9 @@ function normalizeUsageLimit(value: unknown) {
 // the display fields — upstream ids/programs/limit maps stay off the wire.
 function normalizeResetCredits(value: unknown) {
   if (!value || typeof value !== 'object') return null;
-  const raw = optionalRecord(value);
+  const raw = asRecord(value);
   const credits = (Array.isArray(raw.credits) ? raw.credits as unknown[] : []).flatMap(item => {
-    const credit = optionalRecord(item);
+    const credit = asRecord(item);
     if (credit.status !== undefined && credit.status !== 'available') return [];
     const expiresAt = Date.parse(String(credit.expiresAt));
     const remainingCount = Number(credit.remainingCount);
@@ -136,11 +124,11 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
       try {
         const parsed = await runHarnessJsonCommand(d, d.argv.usage!);
         if (parsed === null || parsed === undefined) throw new TypeError(`Cannot read properties of ${parsed} (reading 'reports')`);
-        const rawReports = optionalRecord(parsed).reports;
+        const rawReports = asRecord(parsed).reports;
         // Even redacted upstream reports can contain account IDs/emails.
         const reports = (Array.isArray(rawReports) ? rawReports as unknown[] : []).map(value => {
-          const report = optionalRecord(value);
-          const metadata = optionalRecord(report.metadata);
+          const report = asRecord(value);
+          const metadata = asRecord(report.metadata);
           return {
             provider: String(report.provider || 'unknown').slice(0, 60),
             fetchedAt: Number.isFinite(Number(report.fetchedAt)) ? Number(report.fetchedAt) : null,
@@ -151,7 +139,7 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
         }).filter(report => report.limits.length);
         return { harness: d.id, label: d.label, reports };
       } catch (e) {
-        return { harness: d.id, label: d.label, error: optionalRecord(e).message };
+        return { harness: d.id, label: d.label, error: asRecord(e).message };
       }
     }));
     res.json({ generatedAt: Date.now(), harnesses: results });
@@ -161,10 +149,10 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
   const cacheLifetimes: FeatureHandler = (_req, res) => {
     res.json({ generatedAt: Date.now(), identities: cacheLifetimeReport() });
   };
-  const settings: FeatureHandler = (_req, res) => res.json(settingsForClient(ports.readDishSettings()));
+  const settings: FeatureHandler = (_req, res) => res.json(settingsForClient(readDishSettings()));
   const updateSettings: FeatureHandler = (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const settings = ports.readDishSettings();
+    const body = requestBody(req);
+    const settings = readDishSettings();
     if ('monthlyBudgetUsd' in body) {
       const value = body.monthlyBudgetUsd;
       if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1_000_000)) return res.status(400).json({ error: 'monthlyBudgetUsd must be null or a positive number at most 1000000' });
@@ -195,14 +183,14 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
       settings.hibernation = body.hibernation;
     }
     try {
-      ports.writeDishSettings(settings);
+      writeDishSettings(settings);
       res.json(settingsForClient(settings));
     } catch (e) {
-      res.status(500).json({ error: e && typeof e === 'object' && 'message' in e ? e.message : undefined });
+      res.status(500).json({ error: errorMessage(e) });
     }
   };
   const transcribe: FeatureHandler = async (req, res) => {
-    const config = stt.resolveSttConfig(ports.readDishSettings());
+    const config = stt.resolveSttConfig(readDishSettings());
     if (!config) return res.status(503).json({ error: 'Speech-to-text is not configured on this host' });
     // Type before body: the local raw parser claims audio/* and video/webm only.
     const contentType = req.headers['content-type'] || '';
@@ -219,7 +207,7 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
     }
   };
   return {
-    usageSummary: createUsageSummaryHandler(ports),
+    usageSummary: createUsageSummaryHandler(),
     ...createSkillFeatureHandlers(ports),
     ...createModelFeatureHandlers(ports),
     usageLimits,

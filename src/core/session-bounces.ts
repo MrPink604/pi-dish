@@ -2,7 +2,8 @@ import { randomUUID } from 'crypto';
 import { setTimeout as delay } from 'timers/promises';
 import { BridgeSession, sameRegistryClaim } from './bridge-session';
 import { getHarness } from './harnesses';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
+import { errorMessage } from './http-boundary';
 import { inspectSubsessionExits } from './session-discovery';
 import { LifecycleInterruption, sameProcessIdentity } from './session-ownership';
 import type { BeforeLifecycleAction, BounceAuthority, LiveSession, SessionOwnership } from './session-ownership';
@@ -126,10 +127,6 @@ interface BounceOperationSnapshot<Authority extends object> {
 }
 
 const ACTIVE: Partial<Record<SessionBounceStatus, true>> = { waiting: true, executing: true };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : isRecord(error) && typeof error.message === 'string' ? error.message : String(error);
-}
 
 // Process-local by design: stopping the server abandons waiting work, never
 // serializes runtime authority for a future process to accidentally inherit.

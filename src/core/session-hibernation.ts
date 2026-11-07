@@ -1,16 +1,15 @@
 /**
- * Memory-pressure hibernation: stop the longest-idle agent that is provably
- * doing nothing while keeping its transcript resumable, one session per sample
- * so the next sample measures the freed memory. This is not an explicit close;
- * recovery intent is untouched and the record lives in its own store.
- * Eligibility is conservative: anything that cannot be proven idle is kept.
+ * Memory-pressure hibernation: stop the longest-idle, provably idle agent, one
+ * per sample so the next sample measures the freed memory. Not an explicit
+ * close: recovery intent is untouched. Anything not provably idle is kept.
  */
 import fs = require('fs');
 import path = require('path');
 import dishStore = require('./dish-store');
 import { canonicalSessionId } from './session-key';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import type { HibernationState } from './session-api';
+import { errorMessage } from './http-boundary';
 
 export type HibernationMode = 'pressure' | 'off';
 
@@ -37,7 +36,6 @@ export interface MemorySample {
   readonly swapFreeBytes: number;
 }
 
-/** A `Key:  N kB` field from /proc/meminfo or /proc/<pid>/status, in bytes. */
 function kilobytes(text: string, key: string): number | null {
   const match = text.match(new RegExp(`^${key}:\\s+(\\d+)\\s+kB`, 'm'));
   return match ? Number(match[1]) * 1024 : null;
@@ -51,7 +49,6 @@ export function parseMeminfo(text: string | null): MemorySample | null {
   return { totalBytes, availableBytes, swapTotalBytes: kilobytes(text, 'SwapTotal') ?? 0, swapFreeBytes: kilobytes(text, 'SwapFree') ?? 0 };
 }
 
-/** Human-readable pressure description, or null when the host is not under pressure. */
 export function memoryPressure(sample: MemorySample): string | null {
   const { totalBytes, availableBytes, swapTotalBytes, swapFreeBytes } = sample;
   if (availableBytes < totalBytes * PRESSURE_AVAILABLE_FRACTION) {
@@ -84,14 +81,12 @@ export interface ProcessTreeSummary {
   readonly processes: number;
   readonly rssBytes: number;
   readonly swapBytes: number;
-  /** One label per live eval kernel process. */
   readonly kernels: readonly string[];
   /** Processes supervised by an OMP launch broker inside this tree. */
   readonly serviceProcesses: number;
   readonly browserProcesses: number;
 }
 
-/** Memory and stateful children of one agent process tree; null when the root is gone. */
 export function inspectProcessTree(rootPid: number, proc: ProcReader = procfs): ProcessTreeSummary | null {
   const statuses = new Map<number, string>();
   const children = new Map<number, number[]>();
@@ -145,11 +140,7 @@ function evalLineVerdict(line: Buffer, sinceMs: number): boolean | null {
   return null;
 }
 
-/**
- * Whether the transcript called `eval` at or after `sinceMs`, reading backwards
- * only as far as the window. An unreadable file or a window larger than the
- * scan bound answers true: unknown kernel use keeps the session alive.
- */
+/** Unreadable files or windows past the scan bound answer true: unknown kernel use keeps the session alive. */
 export function evalUsedSince(file: string | null, sinceMs: number, maxBytes = EVAL_SCAN_MAX_BYTES): boolean {
   if (!file) return true;
   let fd: number;
@@ -221,9 +212,7 @@ export interface HibernationInspection {
 export interface SessionHibernationPorts<Authority, Inspection extends HibernationInspection> {
   readSettings(): Record<string, unknown>;
   readMeminfo(): string | null;
-  /** Current live sessions only. */
   candidates(): readonly HibernationCandidate[];
-  /** Open browser event streams for a canonical session id. */
   viewers(sessionId: string): number;
   capture(row: HibernationCandidate): Authority | null;
   /** true unless the agent's tmux pane is provably unwatched. */
@@ -247,7 +236,6 @@ export interface SessionHibernation {
   records(): ReadonlyMap<string, HibernationState>;
   isHibernated(sessionId: string): boolean;
   forget(sessionId: string): void;
-  /** Resumes a hibernated session; false when the session was not hibernated. */
   wake(sessionId: string): Promise<boolean>;
 }
 
@@ -280,7 +268,6 @@ export function createSessionHibernation<Authority, Inspection extends Hibernati
     return row.lastActivity instanceof Date ? row.lastActivity.getTime() : new Date(row.lastActivity ?? NaN).getTime();
   }
 
-  /** Deep checks for one cheap-filtered candidate; returns the stored record on success. */
   async function attempt(row: HibernationCandidate, pressure: string, at: number): Promise<HibernationState | null> {
     const authority = ports.capture(row);
     if (!authority || !row.pid) return null;
@@ -332,7 +319,7 @@ export function createSessionHibernation<Authority, Inspection extends Hibernati
       try { state = await attempt(row, pressure, at); }
       catch (error) {
         // A failed stop may have changed the host; never cascade within one sample.
-        log.error(`[hibernation] ${row.name || row.id}: ${error instanceof Error ? error.message : String(error)}`);
+        log.error(`[hibernation] ${row.name || row.id}: ${errorMessage(error)}`);
         return { skipped: 'Hibernation failed; retrying at the next sample.' };
       }
       if (!state) continue;
@@ -353,7 +340,7 @@ export function createSessionHibernation<Authority, Inspection extends Hibernati
     tick,
     start() {
       if (timer || stopped) return;
-      timer = setInterval(() => { tick().catch(error => log.error(`[hibernation] ${error instanceof Error ? error.message : String(error)}`)); }, SAMPLE_INTERVAL_MS);
+      timer = setInterval(() => { tick().catch(error => log.error(`[hibernation] ${errorMessage(error)}`)); }, SAMPLE_INTERVAL_MS);
       timer.unref?.();
     },
     stop() { stopped = true; clearInterval(timer); timer = undefined; },

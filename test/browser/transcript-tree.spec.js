@@ -2,7 +2,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const fixtures_js_1 = require("./fixtures.js");
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const tree = { nodes: [
         { id: 'first', type: 'message', role: 'user', text: 'First prompt' },
         { id: 'second', parentId: 'first', type: 'message', role: 'assistant', text: 'Second answer' },
@@ -61,7 +61,7 @@ async function setup(page, fleet, json = tree) {
     await page.route(fleet.peer.base + `/api/sessions/${fixtures_js_1.ROOT}/branch`, route => { payload = route.request().postDataJSON(); return route.fulfill({ json: {} }); });
     await page.locator('#treeSwitchBtn').click();
     await page.locator('#branchGoBtn').click();
-    await fixtures_js_1.expect.poll(() => (0, wire_protocol_js_1.isRecord)(payload) ? payload.entryId : null).toBe('x1');
+    await fixtures_js_1.expect.poll(() => (0, helper_values_js_1.record)(payload) ? payload.entryId : null).toBe('x1');
     await (0, fixtures_js_1.expect)(page.locator('#treeModal')).toBeHidden();
 });
 for (const success of [true, false])
@@ -124,6 +124,6 @@ for (const success of [true, false])
     await page.locator('#chatBranchFixture .msg-branch-btn').click();
     await (0, fixtures_js_1.expect)(page.locator('#messageActionMenu .message-branch-title')).toHaveText('Continue from here');
     await page.locator('#messageActionMenu [data-branch-go]').click();
-    await fixtures_js_1.expect.poll(() => (0, wire_protocol_js_1.isRecord)(payload) ? payload.entryId : null).toBe('chat-entry');
+    await fixtures_js_1.expect.poll(() => (0, helper_values_js_1.record)(payload) ? payload.entryId : null).toBe('chat-entry');
     await (0, fixtures_js_1.expect)(page.locator('#messageActionMenu')).toBeHidden();
 });

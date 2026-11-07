@@ -11,7 +11,8 @@ import { liveSessionSupports, recoveryRouteId, validateRecoveryRecord } from './
 import type { LiveSession, SessionOwnership } from './session-ownership';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryAttempt, RecoveryRecord } from './session-recovery';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
+import { errorMessage } from './http-boundary';
 
 export type RecoveryMode = 'off' | 'restore' | 'continue';
 export type RecoveryStatus = 'pending' | 'failed' | 'needs-review' | 'closed' | 'live' | 'restoring' | 'restored' | 'continued';
@@ -44,7 +45,7 @@ export interface RecoveryRunner {
   start(): Promise<void>;
   retry(id: string): Promise<RecoveryOutcome>;
   report(): RecoveryReport;
-  outcome(id: unknown): RecoveryOutcome | null;
+  outcome(id: string): RecoveryOutcome | null;
   stop(): void;
 }
 
@@ -80,10 +81,6 @@ const HIBERNATED_REASON = 'Hibernated under memory pressure; a message resumes i
 
 export function recoveryMode(value: unknown): RecoveryMode {
   return value === 'off' || value === 'restore' || value === 'continue' ? value : 'off';
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : isRecord(error) && typeof error.message === 'string' ? error.message : String(error);
 }
 
 // Stream with explicit bounds: a corrupt/huge transcript is reviewable, not a
@@ -311,7 +308,7 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
     return recover(record, true);
   }
 
-  return { start, retry, report, outcome: id => typeof id === 'string' ? reports.get(id) ?? null : null, stop: () => { stopped = true; } };
+  return { start, retry, report, outcome: id => reports.get(id) ?? null, stop: () => { stopped = true; } };
 }
 
 /** Checked production restore/delivery policy; callers provide owners and presentation, not authority callbacks. */

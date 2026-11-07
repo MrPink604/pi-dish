@@ -1,4 +1,5 @@
 import type { SideChatState, SideChatTurn, SideChatTurnStatus } from './contracts';
+import { record as isRecord } from './helper-values';
 
 /** Only envelope fields are validated here; feature payloads remain unknown. */
 export type ProtocolRecord = Record<string, unknown>;
@@ -14,10 +15,6 @@ export type RPCFrame = ResponseFrame | { kind: 'event'; event: string; data: Pro
 export type BridgeFrame = ResponseFrame
   | { kind: 'hello'; hello: ProtocolRecord }
   | { kind: 'event'; event: string; data: unknown };
-
-export function isRecord(value: unknown): value is ProtocolRecord {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 /** Read-only view of wire data whose feature payloads stay unvalidated. */
 export function asRecord(value: unknown): ProtocolRecord {

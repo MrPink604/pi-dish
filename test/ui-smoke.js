@@ -12,7 +12,7 @@ const playwright_1 = require("playwright");
 const node_events_1 = require("node:events");
 const http = require("node:http");
 const node_child_process_1 = require("node:child_process");
-const wire_protocol_js_1 = require("../lib/wire-protocol.js");
+const helper_values_js_1 = require("../lib/helper-values.js");
 const test_types_js_1 = require("./test-types.js");
 const test_env_js_1 = require("./test-env.js");
 const browser_app_js_1 = require("./fixtures/browser-app.js");
@@ -246,7 +246,7 @@ function onBridgeLines(sock, handle) {
             catch {
                 continue;
             }
-            if ((0, wire_protocol_js_1.isRecord)(message))
+            if ((0, helper_values_js_1.record)(message))
                 handle(message);
         }
     });
@@ -431,7 +431,7 @@ const sttEndpoint = http.createServer(async (req, res) => {
 const dishSettingsFile = path.join(tmpHome, '.pi', 'dish', 'settings.json');
 function writeSttSettings(block) {
     const parsed = fs.existsSync(dishSettingsFile) ? JSON.parse(fs.readFileSync(dishSettingsFile, 'utf8')) : {};
-    if (!(0, wire_protocol_js_1.isRecord)(parsed))
+    if (!(0, helper_values_js_1.record)(parsed))
         throw new Error('Fixture settings must be an object');
     if (block)
         parsed.stt = block;
@@ -3065,7 +3065,7 @@ let remoteHost = null;
             // without wiping a mode the user is still editing on another host.
             let advertisesRecovery = false;
             const descriptorRoute = async (route) => route.fulfill({
-                json: { ...remoteDescriptor, capabilities: { ...((0, wire_protocol_js_1.isRecord)(remoteDescriptor.capabilities) ? remoteDescriptor.capabilities : {}), recovery: advertisesRecovery } },
+                json: { ...remoteDescriptor, capabilities: { ...((0, helper_values_js_1.record)(remoteDescriptor.capabilities) ? remoteDescriptor.capabilities : {}), recovery: advertisesRecovery } },
             });
             await multi.route(remoteHost.base + '/api/host', descriptorRoute);
             await multi.evaluate(() => fixtureApp.features.hostDiscovery.loadFleet());

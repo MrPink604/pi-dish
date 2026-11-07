@@ -810,8 +810,9 @@ test('readSessionCwd reads the header line without loading the file', () => {
 });
 
 test('decodeDirToCwd reverses pi session-dir naming', () => {
-  assert.equal(SF.decodeDirToCwd('--home-user-proj--'), '/home/user/proj');
-  assert.equal(SF.decodeDirToCwd('--home-user--'), '/home/user');
+  const { decodeDirToCwd }: typeof import('../lib/session-catalog.js') = require('../lib/session-catalog.js');
+  assert.equal(decodeDirToCwd('--home-user-proj--'), '/home/user/proj');
+  assert.equal(decodeDirToCwd('--home-user--'), '/home/user');
 });
 
 test('typed metadata accumulation narrows malformed known fields without promoting later headers', () => {

@@ -1,9 +1,7 @@
 // Generated from src/core/session-metadata.ts; edit that source and run npm run build:core.
 import type { CacheRetentionConfig } from './cache-retention';
-import { record as isRecord } from './helper-values';
-export { isRecord };
 export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
-/** 'unknown' anchors cache activity with no documented, estimated or configured window; only the serve-time learner fills it in. */
+/** 'unknown': cache activity with no known window; only the serve-time learner fills it in. */
 export type StoredCacheExpiryBasis = CacheExpiryBasis | 'unknown';
 export interface CacheExpiry {
     readonly refreshedAt: number;
@@ -11,7 +9,7 @@ export interface CacheExpiry {
     readonly retentionMs: number;
     readonly retention: string;
     readonly basis: StoredCacheExpiryBasis;
-    /** Cache identity of the message that set the window; retained for incremental parsing. */
+    /** Retained for incremental parsing. */
     readonly identity: string;
     readonly tier?: '1h';
 }
@@ -43,39 +41,25 @@ export interface CacheTarget {
     readonly provider: string;
     readonly model: string;
 }
-/** Normalize a message's cache ownership: explicit fields, model slug, then API. */
 export declare function resolveCacheTarget(message: Record<string, unknown>): CacheTarget;
 /**
- * Anthropic's extended retention tier. Pi reports it as cacheWrite1h
- * dominating cacheWrite. OMP omits that split but still prices the write, and
- * Anthropic bills 1h-tier writes at 2× base input against 1.25× for the 5m
- * tier, so for Anthropic targets the priced write/input rate ratio decides
- * when the split is absent. Other providers' write premiums mean nothing here.
+ * Pi reports the 1h tier as cacheWrite1h dominating cacheWrite. OMP omits the
+ * split, so for Anthropic the priced write/input ratio decides (1h bills 2×
+ * input vs 1.25× for 5m). Other providers' write premiums mean nothing here.
  */
 export declare function cacheTier1h(usage: Record<string, unknown>, anthropic?: boolean): boolean;
-/**
- * Documented fixed/minimum windows and conservative provider estimates. This
- * ladder is the learner's Bayesian prior and the fallback when no learned
- * model has activated.
- */
+/** Documented windows and conservative estimates: the learner's prior and the fallback before it activates. */
 export declare function builtinCacheRetention(target: CacheTarget, long1h: boolean): {
     retentionMs: number;
     retention: string;
     basis: CacheExpiryBasis;
 } | null;
-/**
- * Providers report cache token activity, not expiry timestamps. Derive only
- * documented fixed/minimum windows and conservative provider estimates.
- */
+/** Providers report cache activity, not expiry timestamps. */
 export declare function cacheExpiryForMessage(message: Record<string, unknown>, previous?: CacheExpiry | null, fallbackTimestamp?: unknown, config?: CacheRetentionConfig): CacheExpiry | null;
-/** The model id a model_change entry records, in the profile's field. */
 export declare function entryModel(entry: Record<string, unknown>, profileId: string | undefined): string | null;
 /** Validate persisted accumulator output, reviving its serialized activity Date. */
 export declare function decodeSessionInfo(value: unknown): SessionInfo | null;
 export declare function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile, config?: CacheRetentionConfig): SessionInfo;
-/**
- * Extend an info object with entries appended after the range it was built
- * from (session-index's O(delta) path). Mutates and returns `info`; `mtime` is
- * the file's new mtime, which a full parse floors lastActivity at.
- */
+/** O(delta) extension with appended entries; mutates `info`. A full parse floors lastActivity at `mtime`. */
 export declare function extendSessionInfoFromEntries(info: SessionInfo, entries: SessionEntries, mtime?: Date, candidate?: MetadataProfile, config?: CacheRetentionConfig): SessionInfo;
+export {};

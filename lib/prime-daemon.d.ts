@@ -16,14 +16,11 @@ export interface PrimeQueueState {
     followUp: string[];
 }
 /**
- * The daemon socket Prime itself would use for this launch configuration:
- * an explicit `--daemon-socket` in PI_DISH_PRIME_COMMAND, then
- * PRIME_AGENT_DAEMON_SOCKET (command assignment, then server env), then the
- * per-user default the Rust launcher pins. Managed launches pass the result
- * explicitly so pi-dish always watches the daemon its own clients use.
+ * Resolved like Prime itself: `--daemon-socket` in PI_DISH_PRIME_COMMAND, then
+ * PRIME_AGENT_DAEMON_SOCKET (command, then server env), then the launcher's
+ * per-user default. Managed launches pass it explicitly.
  */
 export declare function primeDaemonSocket(env?: NodeJS.ProcessEnv): string;
-/** One root agent row from the daemon roster (`list`). */
 export interface PrimeAgentSummary {
     activeSessionId: string;
     nativeSessionId: NativeSessionId;
@@ -71,7 +68,6 @@ export declare class PrimeDaemonConnection {
     private _closed;
     close(): void;
 }
-/** A live Prime root agent, as consumed by the session routes (LiveSession). */
 export declare class PrimeDaemonSession extends TransportSession {
     readonly harnessId: 'prime';
     readonly activeSessionId: string;
@@ -120,11 +116,7 @@ export interface PrimeStopObservation {
     workerInstanceId: string | null;
     sessionFile: string;
 }
-/**
- * The roster cache and connection for one daemon socket. Refreshes poll the
- * public `list` command; each root agent gets one PrimeDaemonSession that
- * attaches for events. An unreachable socket means no live Prime agents.
- */
+/** Roster cache and connection for one daemon socket; unreachable means no live Prime agents. */
 export declare class PrimeDaemon {
     readonly socketPath: string;
     private connection;
@@ -140,7 +132,6 @@ export declare class PrimeDaemon {
     }, options?: {
         timeout?: number;
     }): Promise<unknown>;
-    /** Current live roots from the last refresh (synchronous, for list assembly). */
     list(): PrimeDaemonSession[];
     byNativeId(nativeSessionId: unknown): PrimeDaemonSession | null;
     byActiveSessionId(activeSessionId: unknown): PrimeDaemonSession | null;
@@ -148,16 +139,11 @@ export declare class PrimeDaemon {
     private _refresh;
     private attach;
     private retireAll;
-    /** Wait for a root agent matching `predicate` to appear in the roster. */
     waitFor(predicate: (summary: PrimeAgentSummary) => boolean, { timeout, interval }?: {
         interval?: number | undefined;
         timeout?: number | undefined;
     }): Promise<PrimeDaemonSession[]>;
-    /**
-     * Stop one root through the supervisor after re-reading the roster: the
-     * agent id, worker instance and transcript must still match what the
-     * caller authorized. No retry; a lost reply is indeterminate.
-     */
+    /** Re-reads the roster first: agent, worker and transcript must still match. No retry; a lost reply is indeterminate. */
     stop(expected: PrimeStopObservation, beforeStop: () => void | Promise<void>, { timeout }?: {
         timeout?: number | undefined;
     }): Promise<void>;
@@ -166,6 +152,5 @@ export declare class PrimeDaemon {
 }
 /** The daemon for the configured Prime launch; replaced when the socket changes. */
 export declare function getPrimeDaemon(env?: NodeJS.ProcessEnv): PrimeDaemon;
-/** Test seam: drop the cached daemon (and its connection). */
 export declare function resetPrimeDaemon(): void;
 export {};

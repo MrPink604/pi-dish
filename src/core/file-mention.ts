@@ -1,23 +1,8 @@
 /**
- * Resolve a file mentioned in chat ("findings.md", `lib/tmux.js:42`) to a
- * real path using the session as context, and read it for the file viewer.
- *
- * Agents write intermediate outputs (findings.md, plan.md) deep inside the
- * project or in a scratchpad and then refer to them by bare filename. The
- * session's own tool calls know the full paths, so resolution mines them:
- * read/write/edit `path` args, `cwd` args, and absolute/`~` path tokens
- * inside bash command strings — most recent reference wins. A qualified
- * mention (contains '/') prefers the exact cwd-relative file; a bare
- * basename prefers the tool-call trail (the agent's "findings.md" means the
- * one it just wrote, not a stale one at the repo root). Last resort is the
- * fuzzy file search under the session cwd (files created via bash heredocs
- * never appear in structured tool args).
- *
- * Reads are gated to the session's reach: the cwd subtree plus paths/dirs
- * its tool calls touched. Containment is lexical (path.resolve normalizes
- * ".." before the check) — the threat model is a LAN client typing an
- * arbitrary ?path=, not a hostile agent planting symlinks; the agent
- * already has a shell.
+ * Resolve a chat-mentioned path via the session's tool-call trail (most recent
+ * wins), falling back to fuzzy search under the cwd. Reads are gated to the cwd
+ * subtree plus touched paths; containment is lexical, which stops a LAN
+ * client's arbitrary ?path=, not a hostile agent that already has a shell.
  */
 import * as fs from 'fs';
 import * as os from 'os';
@@ -77,14 +62,10 @@ export interface FileViewerOptions {
   imageData?: 'base64' | 'buffer' | false;
 }
 
-// Structured tool args that carry a path (pi's read/write/edit use `path`,
-// process-style tools use `cwd`; the *_path variants cover other agents'
-// logs viewed through pi-dish).
+// `*_path` variants cover other agents' logs viewed through pi-dish.
 const PATH_ARG_KEYS = ['path', 'file_path', 'filePath', 'cwd'];
 
-// Only the most recent tool-call paths are used as join bases (dir + '/' +
-// mention) — joining against a whole multi-thousand-call session would stat
-// thousands of nonexistent candidates per click.
+// Joining against every tool-call path would stat thousands of candidates per click.
 const MAX_JOIN_BASES = 200;
 
 const MAX_TEXT_BYTES = 500 * 1024;
@@ -94,11 +75,7 @@ const IMAGE_MIME: Record<string, string> = {
   '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
 };
 
-/**
- * Clean a chat-mentioned path: surrounding quotes/brackets, trailing
- * sentence punctuation, a trailing :line[:col] (returned separately), a
- * leading @ (the composer's mention form), ~ expansion.
- */
+/** Strips quotes/brackets, trailing punctuation, a leading @, and a trailing :line[:col] (returned separately); expands ~. */
 export function normalizeMention(raw: unknown, home: string): NormalizedMention {
   let s = String(raw || '').trim();
   s = s.replace(/^[('"`[<]+/, '').replace(/[)'"`\]>.,;:!?]+$/, '');
@@ -111,11 +88,7 @@ export function normalizeMention(raw: unknown, home: string): NormalizedMention 
   return { mention: s, line };
 }
 
-/**
- * Every absolute path a session's tool calls referenced (plus the dirname of
- * each structured file arg, so siblings of a written file resolve too).
- * Returns Map<absPath, lastMessageIndex> — recency for ranking.
- */
+/** Includes each file arg's dirname so siblings resolve. Values are last message index, for recency. */
 export function extractSessionPaths(messages: readonly unknown[], cwd: string | null | undefined, home = os.homedir()): Map<string, number> {
   const paths = new Map<string, number>();
   const resolveArg = (p: string): string | null => {
@@ -151,10 +124,6 @@ export function extractSessionPaths(messages: readonly unknown[], cwd: string | 
   return paths;
 }
 
-/**
- * Resolve a mention to an existing, allowed file. Returns
- * { absPath, line } or null. See the module doc for the strategy.
- */
 export async function resolveFileMention(rawMention: unknown, { cwd, messages, home = os.homedir() }: FileMentionContext): Promise<ResolvedFileMention | null> {
   const { mention, line } = normalizeMention(rawMention, home);
   if (!mention || /[\n\0]/.test(mention)) return null;
@@ -175,8 +144,7 @@ export async function resolveFileMention(rawMention: unknown, { cwd, messages, h
     const qualified = mention.includes('/');
     const suffixMatches = byRecency.filter(p => p.endsWith('/' + mention));
     const cwdJoin = normCwd ? [path.resolve(normCwd, mention)] : [];
-    // Qualified mentions name a location — trust it before the tool trail;
-    // bare basenames mean "the one the agent last touched".
+    // Qualified mentions name a location; bare basenames mean "the one the agent last touched".
     candidates.push(...(qualified ? [...cwdJoin, ...suffixMatches] : [...suffixMatches, ...cwdJoin]));
     for (const base of byRecency.slice(0, MAX_JOIN_BASES)) {
       candidates.push(path.resolve(base, mention), path.resolve(path.dirname(base), mention));
@@ -199,12 +167,7 @@ export async function resolveFileMention(rawMention: unknown, { cwd, messages, h
   return null;
 }
 
-/**
- * Read a resolved file for the viewer: text (capped, with a truncated flag),
- * or image metadata plus optional base64/buffer bytes. Binary non-images get
- * { error, status }. Base64 stays the default for direct library callers;
- * HTTP metadata and resource routes opt into no bytes / Buffer respectively.
- */
+/** Base64 is the default for library callers; HTTP routes opt into no bytes or a Buffer. */
 export function readFileForViewer(absPath: string, { imageData = 'base64' }: FileViewerOptions = {}): FileViewerResult {
   const stats = fs.statSync(absPath);
   const mime = IMAGE_MIME[path.extname(absPath).toLowerCase()];

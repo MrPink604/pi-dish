@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Route } from '@playwright/test';
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 import fs = require('node:fs');
 import path = require('node:path');
 const script = fs.readFileSync(path.resolve(__dirname, '../../public/artifact-comments.js'), 'utf8');

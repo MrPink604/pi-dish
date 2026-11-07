@@ -13,7 +13,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
-const wire_protocol_js_1 = require("../lib/wire-protocol.js");
+const helper_values_js_1 = require("../lib/helper-values.js");
 const bunAvailable = (0, node_child_process_1.spawnSync)('bun', ['--version'], { stdio: 'ignore' }).status === 0;
 const fixture = path.join(__dirname, 'fixtures', 'fake-omp-tree-host.ts');
 const { BridgeSession } = require('../lib/bridge-session.js');
@@ -112,7 +112,7 @@ async function startHost(mode) {
 function readOperations(host) {
     return fs.readFileSync(host.log, 'utf8').trim().split('\n').filter(Boolean).map(line => {
         const value = JSON.parse(line);
-        if (!(0, wire_protocol_js_1.isRecord)(value))
+        if (!(0, helper_values_js_1.record)(value))
             throw new Error('Invalid operation log entry');
         return value;
     });

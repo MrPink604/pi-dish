@@ -1,23 +1,18 @@
 // Generated from src/core/publication-handlers.ts; edit that source and run npm run build:core.
 import type { RequestHandler } from 'express';
 import type { ParsedQs } from 'qs';
-import type { SessionSource, DiscoveryCandidate } from './session-source';
-import type { BridgeRegistryEntry } from './contracts';
+import type { SessionSource } from './session-source';
+import type { SessionOwnership } from './session-ownership';
+import type { CatalogRuntime } from './session-catalog-runtime';
 import type { SessionReadHandlers } from './session-read-handlers';
 import type { PublicArtifactRelay } from './relay-handlers';
 type PublicationHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 export interface PublicationPorts {
+    ownership: SessionOwnership;
+    catalog: CatalogRuntime;
     findSessionSource(id: string): SessionSource | null;
-    liveSessionHistoryPending(id: string): boolean;
-    listRegisteredSessions(): readonly BridgeRegistryEntry[];
-    enumerateSessionCandidates(): readonly DiscoveryCandidate[];
-    getRPCSession(id: string): {
-        readonly id: unknown;
-    } | null | undefined;
-    exportSessionHtml: SessionReadHandlers['exportSessionHtml'];
-    getOmpShareSnapshot: SessionReadHandlers['getOmpShareSnapshot'];
+    reads: SessionReadHandlers;
     relay: PublicArtifactRelay;
-    publicBaseUrl(): string | undefined;
     resourceRoot: string;
 }
 export interface PublicationHandlers {

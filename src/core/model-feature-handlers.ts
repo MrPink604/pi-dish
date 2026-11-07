@@ -11,6 +11,7 @@ import type { BridgeCapability } from './contracts';
 import type { CatalogModel } from './session-api';
 import type { FeatureHandler, FeatureHandlers, FeaturePorts } from './feature-handlers';
 import { harnessCommandAvailable, runHarnessModelCommand, withCatalogThinkingLevels, MODELS_CACHE_TTL } from './harness-feature-commands';
+import { errorMessage } from './http-boundary';
 
 const RPC_BUILTIN_COMMANDS = [
   EMULATED_COMMAND_METADATA.compact,
@@ -28,8 +29,7 @@ const BRIDGE_COMMAND_CAPABILITIES: Readonly<Record<string, BridgeCapability>> = 
   thinking: 'setThinking', abort: 'abort', reload: 'reload', btw: 'sideChat', login: 'login',
 };
 
-// Payload fields remain opaque. These accesses intentionally retain native
-// property/spread behavior; a bad command list falls through the existing catch.
+// Opaque payload fields with native property semantics; a bad command list throws to the caller's catch.
 function commandField(command: unknown, key: 'name' | 'supported'): unknown {
   if (command == null) throw new TypeError(`Cannot read properties of ${command} (reading '${key}')`);
   if (typeof command !== 'object') return undefined;
@@ -44,10 +44,6 @@ function commandList(value: unknown): unknown[] {
 function responseCommands(data: unknown): unknown {
   return data && typeof data === 'object' && 'commands' in data ? data.commands : undefined;
 }
-function errorMessage(error: unknown): unknown {
-  return error && typeof error === 'object' && 'message' in error ? error.message : undefined;
-}
-
 function filterBridgeCommands(sess: InstanceType<typeof BridgeSession>, commands: unknown): unknown {
   // Pi keeps its established full TUI list. Alternative harnesses retain only
   // supported commands and builtins mapped to an advertised bridge operation.
@@ -79,7 +75,7 @@ async function appendHostBuiltins(ports: FeaturePorts, sessionId: string, sess: 
   // A reachable pane is weak presentation advice, never command authorization.
   // One lookup covers curated commands and OMP's context-bound /dish-reload.
   const wantsPane = descriptor?.hostBuiltins?.length || sess.harnessId === 'omp';
-  const pane = wantsPane ? await ports.locatePiPane(sessionId) : null;
+  const pane = wantsPane ? await ports.ownership.locatePiPane(sessionId) : null;
   if (pane && descriptor?.hostBuiltins?.length) {
     available.push(...descriptor.hostBuiltins.map(
       ({ allowedArgs, blockedArgs, freeArgs, requireArgs, ...command }) => ({
@@ -114,13 +110,13 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
         const identity = routeIdentity(sessionId);
         if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
         // routeIdentity accepted this exact query value, not a coerced alias.
-        const sessionModels = await ports.getSessionModels(sessionId as string);
+        const sessionModels = await ports.catalog.getSessionModels(sessionId as string);
         if (sessionModels) {
           if (identity.harnessId === 'pi') return res.json(annotateEnabled(sessionModels));
           if (!sessionModels.some(model => model.reasoning !== false && !Array.isArray(model.thinking))) return res.json(sessionModels);
           // Legacy bridges need catalog enrichment, but project model overrides
           // belong to this session's cwd, never the server's working directory.
-          const live = await ports.getLiveSession(sessionId as string);
+          const live = await ports.ownership.getLiveSession(sessionId as string);
           if (typeof live?.cwd !== 'string' || !live.cwd) return res.json(sessionModels);
           return res.json(await withCatalogThinkingLevels(sessionModels, getHarness(identity.harnessId), { cwd: live.cwd }));
         }
@@ -141,10 +137,10 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
       if (descriptor.modelCatalog !== 'pi-sdk') {
         return res.status(501).json({ error: `New-session model discovery is not supported for ${descriptor.label}.` });
       }
-      let cache = ports.getModelsCache();
+      let cache = ports.catalog.getModelsCache();
       if (!cache.models || Date.now() - cache.time > MODELS_CACHE_TTL) {
-        ports.setModelsCache(await piSDK.getAvailableModels());
-        cache = ports.getModelsCache();
+        ports.catalog.setModelsCache(await piSDK.getAvailableModels());
+        cache = ports.catalog.getModelsCache();
       }
       res.json(annotateEnabled(cache.models!));
     } catch (e) {
@@ -184,7 +180,7 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
         try {
           // The owner returns null for a non-string route. Do not coerce query
           // arrays into valid session identities before the fallback gate.
-          const sess = typeof sessionId === 'string' ? await ports.getLiveSession(sessionId) : null;
+          const sess = typeof sessionId === 'string' ? await ports.ownership.getLiveSession(sessionId) : null;
           if (sess instanceof BridgeSession) {
             if (!liveSessionSupports(sess, 'commands')) {
               return res.status(409).json({ error: 'This session does not support command discovery.' });

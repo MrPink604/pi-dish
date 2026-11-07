@@ -1,6 +1,5 @@
 /** Persisted index projections and their consumed disk-ingress validation. */
 import { finite, record as isRecord } from './helper-values';
-export { finite };
 
 export interface UsageState { provider: string | null; model: string; serviceTier?: Record<string, string> }
 export interface UsageTokens {
@@ -61,7 +60,6 @@ export interface SkillActivation {
   cwd: string | null;
   model: string;
 }
-export interface SearchProjection { text: string; tree: boolean; leafId: string | null }
 /** Only tree identity remains untrusted after the typed parser's search projection. */
 export function checkSearchLeaf(value: { leafId: unknown }): asserts value is { leafId: string | null } {
   if (value.leafId !== null && typeof value.leafId !== 'string') throw new TypeError('Invalid search projection');

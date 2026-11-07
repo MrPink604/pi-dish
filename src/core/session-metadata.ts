@@ -4,10 +4,9 @@ import { extractTextContent } from './helper-content';
 import { truncate } from './helper-format';
 import { splitSessionRefContext } from './helper-refs';
 import { record as isRecord } from './helper-values';
-export { isRecord };
 
 export type CacheExpiryBasis = 'fixed' | 'minimum' | 'estimate' | 'learned';
-/** 'unknown' anchors cache activity with no documented, estimated or configured window; only the serve-time learner fills it in. */
+/** 'unknown': cache activity with no known window; only the serve-time learner fills it in. */
 export type StoredCacheExpiryBasis = CacheExpiryBasis | 'unknown';
 
 export interface CacheExpiry {
@@ -16,7 +15,7 @@ export interface CacheExpiry {
   readonly retentionMs: number;
   readonly retention: string;
   readonly basis: StoredCacheExpiryBasis;
-  /** Cache identity of the message that set the window; retained for incremental parsing. */
+  /** Retained for incremental parsing. */
   readonly identity: string;
   readonly tier?: '1h';
 }
@@ -81,7 +80,6 @@ export interface CacheTarget {
   readonly model: string;
 }
 
-/** Normalize a message's cache ownership: explicit fields, model slug, then API. */
 export function resolveCacheTarget(message: Record<string, unknown>): CacheTarget {
   const api = typeof message.api === 'string' ? message.api : '';
   let provider = typeof message.provider === 'string' ? message.provider.toLowerCase() : '';
@@ -102,11 +100,9 @@ export function resolveCacheTarget(message: Record<string, unknown>): CacheTarge
 }
 
 /**
- * Anthropic's extended retention tier. Pi reports it as cacheWrite1h
- * dominating cacheWrite. OMP omits that split but still prices the write, and
- * Anthropic bills 1h-tier writes at 2× base input against 1.25× for the 5m
- * tier, so for Anthropic targets the priced write/input rate ratio decides
- * when the split is absent. Other providers' write premiums mean nothing here.
+ * Pi reports the 1h tier as cacheWrite1h dominating cacheWrite. OMP omits the
+ * split, so for Anthropic the priced write/input ratio decides (1h bills 2×
+ * input vs 1.25× for 5m). Other providers' write premiums mean nothing here.
  */
 export function cacheTier1h(usage: Record<string, unknown>, anthropic = false): boolean {
   const write = cacheTokens(usage, 'cacheWrite');
@@ -118,19 +114,14 @@ export function cacheTier1h(usage: Record<string, unknown>, anthropic = false): 
   return (writeCost / write) / (inputCost / input) >= 1.6;
 }
 
-/**
- * Documented fixed/minimum windows and conservative provider estimates. This
- * ladder is the learner's Bayesian prior and the fallback when no learned
- * model has activated.
- */
+/** Documented windows and conservative estimates: the learner's prior and the fallback before it activates. */
 export function builtinCacheRetention(target: CacheTarget, long1h: boolean): { retentionMs: number; retention: string; basis: CacheExpiryBasis } | null {
   const { api, provider, model } = target;
   if (provider === 'opencode-go' && /^deepseek-/i.test(model)) {
     return { retentionMs: 24 * 60 * 60_000, retention: '24h', basis: 'minimum' };
   }
-  // Anthropic's published windows belong to Anthropic itself. Third parties
-  // speaking its wire format (Kimi, GLM, …) run their own caches and were
-  // observed warm after hours; the learner, not this ladder, answers for them.
+  // Only Anthropic itself: third parties on its wire format (Kimi, GLM, …) run
+  // their own caches, observed warm for hours; the learner answers for them.
   if (provider === 'anthropic') {
     return long1h
       ? { retentionMs: 60 * 60_000, retention: '1h', basis: 'fixed' }
@@ -149,10 +140,7 @@ export function builtinCacheRetention(target: CacheTarget, long1h: boolean): { r
   return null;
 }
 
-/**
- * Providers report cache token activity, not expiry timestamps. Derive only
- * documented fixed/minimum windows and conservative provider estimates.
- */
+/** Providers report cache activity, not expiry timestamps. */
 export function cacheExpiryForMessage(message: Record<string, unknown>, previous: CacheExpiry | null = null,
   fallbackTimestamp?: unknown, config: CacheRetentionConfig = loadCacheRetentionConfig()): CacheExpiry | null {
   if (!isRecord(message.usage) || !hasCacheActivity(message)) return null;
@@ -172,8 +160,7 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
   } else {
     const configured = configuredCacheRetention(config, target.provider, target.model);
     const derived = configured ?? builtinCacheRetention(target, long);
-    // No known window: keep an 'unknown' anchor (refresh time + identity) so
-    // a learned TTL can still project an expiry at serve time.
+    // An 'unknown' anchor still lets a learned TTL project an expiry at serve time.
     ({ retentionMs, retention, basis } = derived ?? { retentionMs: 0, retention: '', basis: 'unknown' });
   }
   if (retentionMs === null) return null;
@@ -181,8 +168,6 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
     ...(long ? { tier: '1h' as const } : {}) };
 }
 
-
-/** The model id a model_change entry records, in the profile's field. */
 export function entryModel(entry: Record<string, unknown>, profileId: string | undefined): string | null {
   const model = profileId === 'omp-v1' ? entry.model : entry.modelId;
   return typeof model === 'string' && model ? model : null;
@@ -215,11 +200,7 @@ export function sessionInfoFromEntries(entries: SessionEntries, mtime?: Date, ca
   return accumulateSessionInfo(info, entries, candidate, true, config);
 }
 
-/**
- * Extend an info object with entries appended after the range it was built
- * from (session-index's O(delta) path). Mutates and returns `info`; `mtime` is
- * the file's new mtime, which a full parse floors lastActivity at.
- */
+/** O(delta) extension with appended entries; mutates `info`. A full parse floors lastActivity at `mtime`. */
 export function extendSessionInfoFromEntries(info: SessionInfo, entries: SessionEntries, mtime?: Date, candidate: MetadataProfile = {},
   config: CacheRetentionConfig = loadCacheRetentionConfig()): SessionInfo {
   if (mtime && mtime.getTime() > new Date(info.lastActivity).getTime()) info.lastActivity = mtime;
@@ -233,14 +214,12 @@ function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candi
     const entry = entries[i];
     if (!isRecord(entry)) continue;
     const message = isRecord(entry.message) ? entry.message : null;
-    // Only an entry parsed from physical line zero can be the header; a later
-    // session-shaped entry must not be promoted to one.
+    // Only an entry from physical line zero can be the header.
     const isFirst = fromStart && i === 0 && entries.firstEntryOnFirstLine === true;
     if (profileId === 'omp-v1' && isFirst && entry.type === 'title' && nonempty(entry.title)) info.name = entry.title;
     if (entry.type === 'session') {
       if (nonempty(entry.cwd)) info.cwd = entry.cwd;
-      // Native identity and lineage belong to Pi's first-line SessionHeader.
-      // Later session-shaped custom entries must not rewrite provenance.
+      // Identity and lineage come only from the first-line header; later session-shaped entries can't rewrite them.
       if (isFirst || (profileId === 'omp-v1' && info.sessionId === null)) {
         if (typeof entry.id === 'string' && entry.id) info.sessionId = entry.id;
         if (typeof entry.parentSession === 'string' && entry.parentSession) info.parentSession = entry.parentSession;
@@ -257,8 +236,7 @@ function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candi
     if (entry.type === 'message' && message?.role === 'user') {
       info.messageCount++;
       if (info.name === null) {
-        // The <session-refs> block is appended context, not user text, so it
-        // must never become the session name.
+        // The <session-refs> block is appended context and must never become the name.
         const { text } = splitSessionRefContext(extractTextContent(message.content));
         if (text) info.name = shortName(text);
       }

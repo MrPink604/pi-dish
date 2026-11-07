@@ -1,21 +1,8 @@
 /**
- * Prime Agent (Rust, 0.10+) transport: pi-dish is one more client of Prime's
- * resident daemon, exactly like `prime-agent attach`. Prime no longer loads
- * TypeScript extensions, so there is no in-process bridge; every live Prime
- * root agent is read from the daemon roster and controlled over the daemon's
- * Unix socket.
- *
- * Wire format (protocol `prime-agent.daemon` v7, LF-delimited JSON):
- *   server → `{type:'daemon_hello', protocol:{name,version}, …}` on connect
- *   client → `{type:'command', id, protocol, clientId, command:{type, id, …}}`
- *   server → `{type:'response', id, command, success, data?, error?}`
- *   server → `{type:'session_event', activeSessionId, event:{type,…}, meta}`
- *            for agents this connection has `attach`ed to.
- * Supervisor commands: list, attach, detach, kill. Session commands carry an
- * `activeSessionId` and use Pi-RPC names (prompt, steer, follow_up, abort,
- * get_state, compact, set_model, get_queue, mutate_queued_message, …).
- * Events are Pi-shaped agent events plus `session_action_update` (queue) and
- * `session_info_changed` (name).
+ * Prime Agent transport: pi-dish is a daemon client like `prime-agent attach`.
+ * Protocol `prime-agent.daemon` v7, LF-delimited JSON over a Unix socket.
+ * Supervisor commands: list, attach, detach, kill; session commands carry an
+ * `activeSessionId` and use Pi-RPC names.
  */
 import fs = require('fs');
 import net = require('net');
@@ -26,7 +13,9 @@ import { setTimeout as delay } from 'timers/promises';
 import type { NativeSessionId, PromptOptions } from './contracts';
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
-import { asRecord, isRecord, type ProtocolRecord } from './wire-protocol';
+import { asRecord, type ProtocolRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
+import { errorMessage } from './http-boundary';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { validSessionId } from './session-key';
 import { getHarness, resolveLaunchSpec } from './harnesses';
@@ -39,14 +28,10 @@ export interface PrimeQueueState { steering: string[]; followUp: string[]; }
 
 function text(value: unknown): string | null { return typeof value === 'string' && value ? value : null; }
 function strings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
-function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-
 /**
- * The daemon socket Prime itself would use for this launch configuration:
- * an explicit `--daemon-socket` in PI_DISH_PRIME_COMMAND, then
- * PRIME_AGENT_DAEMON_SOCKET (command assignment, then server env), then the
- * per-user default the Rust launcher pins. Managed launches pass the result
- * explicitly so pi-dish always watches the daemon its own clients use.
+ * Resolved like Prime itself: `--daemon-socket` in PI_DISH_PRIME_COMMAND, then
+ * PRIME_AGENT_DAEMON_SOCKET (command, then server env), then the launcher's
+ * per-user default. Managed launches pass it explicitly.
  */
 export function primeDaemonSocket(env: NodeJS.ProcessEnv = process.env): string {
   const descriptor = getHarness('prime');
@@ -59,7 +44,6 @@ export function primeDaemonSocket(env: NodeJS.ProcessEnv = process.env): string 
   return path.join(env.TMPDIR || '/tmp', `prime-agent-rust-${uid}`, 'daemon.sock');
 }
 
-/** One root agent row from the daemon roster (`list`). */
 export interface PrimeAgentSummary {
   activeSessionId: string;
   nativeSessionId: NativeSessionId;
@@ -190,7 +174,6 @@ export class PrimeDaemonConnection {
   }
 }
 
-/** A live Prime root agent, as consumed by the session routes (LiveSession). */
 export class PrimeDaemonSession extends TransportSession {
   declare readonly harnessId: 'prime';
   declare readonly activeSessionId: string;
@@ -204,7 +187,6 @@ export class PrimeDaemonSession extends TransportSession {
   declare queueState: PrimeQueueState;
   declare state: ProtocolRecord;
   declare attached: boolean;
-  // Shared live-lifecycle bookkeeping (bulk bounce and hibernation guards).
   declare bounceExecuting?: boolean;
   declare bounceActivityRevision?: number;
   declare private daemon: PrimeDaemon;
@@ -247,8 +229,7 @@ export class PrimeDaemonSession extends TransportSession {
       this.compacting = summary.isCompacting;
       this.queueState = summary.queue;
     }
-    // The route contract needs both sides: listeners re-key the spawn record and
-    // retire the old route while still holding the previous native id.
+    // Listeners re-key the spawn record and retire the old route using the previous id.
     if (switched) this.emitEvent('session_switch', { sessionId: summary.nativeSessionId, previousSessionId });
   }
 
@@ -369,11 +350,7 @@ export class PrimeDaemonSession extends TransportSession {
 
 export interface PrimeStopObservation { activeSessionId: string; workerInstanceId: string | null; sessionFile: string; }
 
-/**
- * The roster cache and connection for one daemon socket. Refreshes poll the
- * public `list` command; each root agent gets one PrimeDaemonSession that
- * attaches for events. An unreachable socket means no live Prime agents.
- */
+/** Roster cache and connection for one daemon socket; unreachable means no live Prime agents. */
 export class PrimeDaemon {
   declare readonly socketPath: string;
   declare private connection: PrimeDaemonConnection | null;
@@ -413,7 +390,6 @@ export class PrimeDaemon {
     return this.connected().then(connection => connection.request(command, options));
   }
 
-  /** Current live roots from the last refresh (synchronous, for list assembly). */
   list(): PrimeDaemonSession[] { return [...this.sessions.values()].filter(session => session.alive); }
 
   byNativeId(nativeSessionId: unknown): PrimeDaemonSession | null {
@@ -495,7 +471,6 @@ export class PrimeDaemon {
     this.sessions.clear();
   }
 
-  /** Wait for a root agent matching `predicate` to appear in the roster. */
   async waitFor(predicate: (summary: PrimeAgentSummary) => boolean, { timeout = 30000, interval = 250 } = {}): Promise<PrimeDaemonSession[]> {
     const deadline = Date.now() + timeout;
     for (;;) {
@@ -505,11 +480,7 @@ export class PrimeDaemon {
     }
   }
 
-  /**
-   * Stop one root through the supervisor after re-reading the roster: the
-   * agent id, worker instance and transcript must still match what the
-   * caller authorized. No retry; a lost reply is indeterminate.
-   */
+  /** Re-reads the roster first: agent, worker and transcript must still match. No retry; a lost reply is indeterminate. */
   async stop(expected: PrimeStopObservation, beforeStop: () => void | Promise<void>, { timeout = 10000 } = {}): Promise<void> {
     let stopRequested = false;
     try {
@@ -563,7 +534,6 @@ export function getPrimeDaemon(env: NodeJS.ProcessEnv = process.env): PrimeDaemo
   return current;
 }
 
-/** Test seam: drop the cached daemon (and its connection). */
 export function resetPrimeDaemon(): void {
   current?.shutdown();
   current = null;

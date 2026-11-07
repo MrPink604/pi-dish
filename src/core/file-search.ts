@@ -1,22 +1,9 @@
 /**
- * Fuzzy file/directory search for the web UI.
- *
- * Backed by fff (@ff-labs/fff-node) — a Rust fuzzy finder that keeps an
- * in-memory index per project, so repeated searches from the @-mention
- * autocomplete stay fast. The package is ESM-only and ships a native
- * binary, so it's loaded lazily via dynamic import and everything degrades
- * to a plain recursive walk + the shared fuzzy scorer when it's missing
- * (unsupported platform, stripped install).
- *
- * Three entry points:
- *   searchFiles(basePath, query, limit) — files under a project dir
- *   searchHomeDirs(query, limit)        — directories under $HOME for the
- *     new-session cwd picker (fff refuses to index $HOME by design, so this
- *     is always the walker + scorer)
- *   completePath(token, { cwd, limit }) — shell-style completion for path
- *     tokens (/abs, ~/home, ../relative): readdir the parent, fuzzy-match the
- *     partial basename. Lets @-mentions reach anywhere on the filesystem
- *     without pretending the whole filesystem is indexable.
+ * Fuzzy file/directory search backed by fff (@ff-labs/fff-node), which keeps an
+ * in-memory index per project. It is ESM-only with a native binary, so it is
+ * imported lazily and everything degrades to a recursive walk + the shared
+ * fuzzy scorer when missing. fff refuses to index $HOME, so searchHomeDirs
+ * always walks; completePath reads one parent dir so @-mentions reach anywhere.
  */
 import * as fs from 'fs';
 import * as os from 'os';
@@ -71,8 +58,6 @@ interface HomeDirCache {
 
 type FffModule = typeof FffSdk;
 
-// --- fff finder pool ---------------------------------------------------------
-
 const MAX_FINDERS = 4;
 const finders = new Map<string, FinderEntry>();
 
@@ -119,18 +104,13 @@ async function getFinder(basePath: string): Promise<FileFinder | null> {
   return promise;
 }
 
-/**
- * Fuzzy-search files under basePath. Returns [{ path, gitStatus }] with
- * paths relative to basePath. Empty query returns the index's
- * frecency/recency ordering — a useful "recent files" list.
- */
+/** Paths relative to basePath. An empty query returns frecency order ("recent files"). */
 export async function searchFiles(basePath: string | null | undefined, query: string | null | undefined, limit = 20): Promise<FileSearchResult[]> {
   if (!basePath || !fs.existsSync(basePath)) return [];
   const finder = await getFinder(basePath);
   if (finder) {
-    // try/catch, not just result.ok: under LRU pressure a concurrent
-    // getFinder can destroy this finder before we call it, and the native
-    // call then throws — degrade to the walker like every other fff failure.
+    // try/catch, not just result.ok: under LRU pressure a concurrent getFinder
+    // can destroy this finder and the native call then throws.
     try {
       const result = finder.fileSearch(query || '', { pageSize: limit });
       if (result.ok) {
@@ -143,8 +123,6 @@ export async function searchFiles(basePath: string | null | undefined, query: st
   }
   return walkerSearch(basePath, query, limit);
 }
-
-// --- $HOME directory search (walker only) -------------------------------------
 
 const SKIP_DIRS = new Set(['node_modules', 'target', 'dist', 'build', '__pycache__', 'venv']);
 const DIR_CACHE_MS = 60_000;
@@ -173,11 +151,7 @@ function walk(root: string, { maxDepth, collect }: { maxDepth: number; collect: 
   return out;
 }
 
-/**
- * Fuzzy-search directories under $HOME for the new-session cwd picker.
- * Returns [{ path, short }] best-first; `short` is the ~-relative form the
- * match was scored against.
- */
+/** Best-first; `short` is the ~-relative form the match was scored against. */
 export function searchHomeDirs(query: string | null | undefined, limit = 15): HomeDirSearchResult[] {
   const home = os.homedir();
   if (!homeDirCache || Date.now() - homeDirCache.at > DIR_CACHE_MS) {
@@ -200,7 +174,6 @@ export function searchHomeDirs(query: string | null | undefined, limit = 15): Ho
     .slice(0, limit);
 }
 
-/** Expand a leading `~` / `~/x` to the home directory; other forms pass through. */
 function expandHome(p: string): string {
   if (p === '~') return os.homedir();
   if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
@@ -208,12 +181,9 @@ function expandHome(p: string): string {
 }
 
 /**
- * List the immediate subdirectories of `inputPath` for the new-session cwd
- * tree. Expands a leading `~`, then requires an absolute path (throws a
- * badRequest error otherwise — the route turns it into a 400). Directories
- * only, dotdirs and SKIP_DIRS excluded, locale-sorted, capped at 500. An
- * unreadable/nonexistent dir degrades to `{ path, dirs: [], error }` (200) so
- * the tree never blanks.
+ * Subdirectories for the new-session cwd tree. Non-absolute paths throw
+ * badRequest (400); an unreadable dir degrades to `{ path, dirs: [], error }`
+ * so the tree never blanks.
  */
 export function getDirChildren(inputPath: unknown): DirChildrenResult {
   const resolved = expandHome(String(inputPath || ''));
@@ -236,21 +206,15 @@ export function getDirChildren(inputPath: unknown): DirChildrenResult {
   return { path: resolved, dirs };
 }
 
-// --- path completion (absolute / ~ / ../ tokens) -------------------------------
-
-/** Does this @-mention token name a filesystem location rather than a
- *  cwd-relative fuzzy query? Matches /abs, ~ , ~/x, ./x, ../x. */
+/** A filesystem location rather than a cwd-relative fuzzy query: /abs, ~, ~/x, ./x, ../x. */
 export function isPathCompletionToken(token: string): boolean {
   return /^(?:\/|~(?:\/|$)|\.\.?\/)/.test(token);
 }
 
 /**
- * Complete one path segment, shell-style. The directory part of the token is
- * kept verbatim in the results (so accepting a suggestion preserves the form
- * the user typed — ~/x stays ~-relative, /x stays absolute); only the partial
- * basename after the last slash is matched. Directories come back with
- * isDir:true so the client can drill into them. Dotfiles are hidden unless
- * the partial itself starts with a dot.
+ * Shell-style completion of the partial basename after the last slash. The
+ * typed directory part is kept verbatim (~/x stays ~-relative). Dotfiles are
+ * hidden unless the partial starts with a dot.
  */
 export function completePath(token: string, { cwd = null, limit = 20 }: PathCompletionOptions = {}): PathCompletionResult[] {
   const slash = token.lastIndexOf('/');
@@ -289,8 +253,6 @@ export function completePath(token: string, { cwd = null, limit = 20 }: PathComp
 
   return picked.map(c => ({ path: prefix + c.name, isDir: c.isDir, gitStatus: null }));
 }
-
-// --- walker fallback for file search ------------------------------------------
 
 function walkerSearch(basePath: string, query: string | null | undefined, limit: number): FileSearchResult[] {
   const out = walk(basePath, { maxDepth: 6, collect: 'files' })

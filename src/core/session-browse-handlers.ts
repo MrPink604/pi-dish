@@ -93,8 +93,7 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     res.status(404).json({ error: 'Session not found' });
   };
 
-  // Main-pane search: one flat result list with multiple snippets and an
-  // occurrence count per content match, ranked then capped.
+  // One flat ranked, capped list with snippets and a per-match occurrence count.
   const search: RouteHandler = (req, res) => {
     const query = ((req.query.q || '') as string).trim().toLowerCase();
     const scopeQuery = String(req.query.scope || '').trim().toLowerCase();
@@ -102,9 +101,8 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     const parsed = parseSessionQuery(query);
     const scopeParsed = parseSessionQuery(scopeQuery);
     const hasScope = scopeParsed.terms.length || scopeParsed.since !== null || scopeParsed.before !== null;
-    // Routine runs are cron noise in a human's results; the browser asks for
-    // inactive ones to be dropped unless the query (or active scope) asks for
-    // them. Applied before scoring and the cap so the cap is never wasted.
+    // Routine runs are noise in human results unless the query/scope asks for
+    // them; filtered before scoring so they never consume the cap.
     const hideAutomation = req.query.hideAutomation === '1'
       && !queryAsksForAutomation(parsed) && !(hasScope && queryAsksForAutomation(scopeParsed));
     const contentTokens = positiveQueryTokens(parsed);

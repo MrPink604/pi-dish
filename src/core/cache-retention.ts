@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { dishDir } from './dish-store';
 import { modelMatchesPattern } from './helper-models';
 import { record } from './helper-values';
 import type { CacheExpiryBasis } from './session-metadata';
@@ -78,7 +78,7 @@ function readSettings(file: string): unknown {
  * by (mtime,size), matching the other hand-edited pi-dish configuration.
  */
 export function loadCacheRetentionConfig(): CacheRetentionConfig {
-  const file = path.join(os.homedir(), '.pi', 'dish', 'settings.json');
+  const file = path.join(dishDir(), 'settings.json');
   let stamp = 'missing';
   try {
     const stats = fs.statSync(file);

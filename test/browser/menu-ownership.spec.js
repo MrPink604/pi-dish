@@ -1,7 +1,7 @@
 // Generated test/tool from test/browser/menu-ownership.spec.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const fixtures_js_1 = require("./fixtures.js");
 const tree = { nodes: [{ id: 'fixture-entry', type: 'message', role: 'user', text: 'branch prompt' }], activePathIds: [], leafId: 'other-entry' };
 const menus = ['Model', 'Thinking'];
@@ -28,7 +28,7 @@ const menus = ['Model', 'Thinking'];
     await page.evaluate(() => { fixtureApp.features.transcriptTree.select('fixture-entry'); window.pendingBranch = fixtureApp.features.transcriptTree.confirm(); });
     const route = await branchHold.received;
     const branchPayload = route.request().postDataJSON();
-    if (!(0, wire_protocol_js_1.isRecord)(branchPayload))
+    if (!(0, helper_values_js_1.record)(branchPayload))
         throw new Error('Invalid branch payload');
     (0, fixtures_js_1.expect)(branchPayload.entryId).toBe('fixture-entry');
     await fleet.select(fleet.self);

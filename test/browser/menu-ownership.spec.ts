@@ -1,4 +1,4 @@
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 import { test, expect, ROOT, heldRoute } from './fixtures.js';
 
 const tree = { nodes: [{ id: 'fixture-entry', type: 'message', role: 'user', text: 'branch prompt' }], activePathIds: [], leafId: 'other-entry' };

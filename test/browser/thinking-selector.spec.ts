@@ -1,4 +1,4 @@
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 import type { SelectionOwner } from '../../src/browser/session-state.js';
 import { test, expect, ROOT } from './fixtures.js';
 

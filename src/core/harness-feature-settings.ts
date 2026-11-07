@@ -6,6 +6,7 @@ import type { HarnessDescriptor } from './contracts';
 import { getHarness, listHarnesses } from './harnesses';
 import { listTaskAgents } from './harness-agents';
 import { harnessCommandAvailable, runHarnessJsonCommand, runHarnessTextCommand } from './harness-feature-commands';
+import { errorMessage, requestBody } from './http-boundary';
 
 type Handler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 interface AgentSettings {
@@ -22,12 +23,6 @@ interface AgentPatch {
 }
 function valueOf(result: unknown): unknown {
   return result && typeof result === 'object' && 'value' in result ? result.value : undefined;
-}
-function errorMessage(error: unknown): unknown {
-  return error && typeof error === 'object' && 'message' in error ? error.message : undefined;
-}
-function requestBody(body: unknown): Record<string, unknown> {
-  return body && typeof body === 'object' ? body as Record<string, unknown> : {};
 }
 
 type HandlerRequest = Parameters<Handler>[0];
@@ -70,11 +65,8 @@ function sanitizeModelRoles(value: unknown): Record<string, string> {
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && !!entry[1].trim()));
 }
 
-// `config get <key>` returns the merged project-over-global view for the cwd,
-// while `config set <key>` rewrites the whole value in the *global* config —
-// so a read(merged) → edit → set() round trip would silently copy a project's
-// `.omp/config.yml` overrides into the global config. An empty temp dir has no
-// project config to overlay, so reading there yields global alone.
+// `config get` merges project-over-global but `config set` writes global, so a
+// round trip would leak project overrides into global; an empty dir reads global alone.
 async function inEmptyDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-global-'));
   try {
@@ -121,10 +113,7 @@ function sanitizeNameList(value: unknown): string[] {
   return [...new Set(value.filter(name => typeof name === 'string' && AGENT_NAME_KEY.test(name)))];
 }
 
-// OMP stores these per-agent toggles as `record`s and stringifies booleans it
-// has normalized once ("on"/"off"), so a read sees either form; both collapse
-// to a boolean for the wire, and writes go back out as booleans (which the
-// harness accepts and normalizes itself).
+// OMP may store these toggles as booleans or "on"/"off"; both collapse to a boolean.
 function sanitizeFlagRecord(value: unknown): Record<string, boolean> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   const flags: Record<string, boolean> = {};
@@ -150,9 +139,7 @@ function agentSettingKeyList(descriptor: HarnessDescriptor): string[] {
   return AGENT_SETTING_KEYS.map(key => descriptor.pilotConfig![key]);
 }
 
-// Effective (project-over-global, for `cwd`) and global-only settings, the
-// same split the model-role editor uses: rows edit global, and a differing
-// effective value is a project override the harness wins with in that cwd.
+// Rows edit global; a differing effective value is the project's override in that cwd.
 async function readAgentSettings(descriptor: HarnessDescriptor, cwd?: string) {
   const keys = agentSettingKeyList(descriptor);
   const [effective, global] = await Promise.all([
@@ -163,12 +150,10 @@ async function readAgentSettings(descriptor: HarnessDescriptor, cwd?: string) {
   return { settings: shapeAgentSettings(effective), globalSettings: shapeAgentSettings(global) };
 }
 
-// Every config write here is a read-modify-write of one whole value, so two
-// concurrent PUTs would drop one another's patch. One chain per harness.
+// Writes are whole-value read-modify-writes; serialize per harness so concurrent PUTs don't drop patches.
 const harnessConfigWrites = new Map<string, Promise<unknown>>();
 function queueHarnessConfigWrite<T>(harnessId: string, task: () => Promise<T>): Promise<T> {
-  // The stored link is always failure-swallowed, so one failed write can't
-  // reject every queued one behind it.
+  // The stored link swallows failures so one failed write can't reject the queue behind it.
   const chained = (harnessConfigWrites.get(harnessId) || Promise.resolve()).then(() => task());
   harnessConfigWrites.set(harnessId, chained.catch(() => {}));
   return chained;
@@ -196,10 +181,8 @@ function settingsSupported(descriptor: HarnessDescriptor): boolean {
     && typeof argv.configSet === 'function' && typeof argv.configReset === 'function');
 }
 
-// The human `config list` prints `[tab]` headings, then `  key = value (type)`
-// rows whose type is the `a|b|c` value list for an enum. The JSON listing
-// carries neither, so the two are joined by key. The first row per key wins:
-// a multi-line string value cannot shadow a real row printed before it.
+// The human `config list` alone carries `[tab]` headings and enum `a|b|c` types;
+// join to the JSON listing by key. First row wins so multi-line values can't shadow it.
 function parseSettingsSchema(text: string): Map<string, { tab: string; typeDisplay: string }> {
   const rows = new Map<string, { tab: string; typeDisplay: string }>();
   let tab = '';
@@ -222,9 +205,7 @@ function listedSettings(value: unknown): Record<string, Record<string, unknown>>
   return result;
 }
 
-// Rows edit the global config, the same split as the role/agent editors; with
-// a cwd, a differing effective value is reported as that project's override.
-// Settings the TUI has no tab for ("internal") are not offered.
+// Settings with no TUI tab ("internal") are not offered.
 async function readSettings(descriptor: HarnessDescriptor, cwd?: string) {
   const [schemaText, globalList, effectiveList] = await inEmptyDir(dir => Promise.all([
     runHarnessTextCommand(descriptor, descriptor.argv.configSchema!, { cwd: dir }),
@@ -255,9 +236,8 @@ async function readSettings(descriptor: HarnessDescriptor, cwd?: string) {
   return { tabs: tabIds.map(id => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) })), settings, cwd: cwd || '' };
 }
 
-// The CLI parses every value from one argv entry: JSON for arrays/records,
-// otherwise the trimmed text. An entry starting with `-` reads as a flag and is
-// dropped, so such text gets a leading space the CLI trims away again.
+// The CLI parses one argv entry (JSON for arrays/records, else trimmed text). A
+// leading `-` would read as a flag, so such text gets a leading space the CLI trims.
 function settingArgument(row: SettingRow, value: unknown): string {
   const fail = (expected: string) => { throw new SettingInputError(`Invalid value for ${row.key}: expected ${expected}`); };
   let text: string;
@@ -301,10 +281,8 @@ export const harnesses: Handler = (_req, res) => {
       available: harnessCommandAvailable(descriptor),
       rpcFallback: descriptor.rpcFallback,
       closeMode: descriptor.closeMode,
-      // Can this harness keep a transcript outside the fleet session backup?
       privateSessions: typeof descriptor.privateRootPath === 'function',
-      // Does this harness have a settings view at all: pilot defaults plus
-      // model roles, and (OMP only so far) the task-agent hub.
+      // Settings view: pilot defaults plus model roles, and the task-agent hub where supported.
       pilotConfig: !!descriptor.pilotConfig,
       taskAgents: agentSettingsSupported(descriptor),
     })),
@@ -321,14 +299,12 @@ export const harnessConfig = harnessRoute({
   },
 });
 
-// Patch role → model assignments in the harness's *global* config. Values are
-// stored verbatim: the harness resolves model refs itself, and a rewrite here
-// would only invent a second dialect.
+// Values are stored verbatim: the harness resolves model refs itself.
 export const updateModelRoles = harnessRoute({
   supported: descriptor => !!descriptor.pilotConfig && typeof descriptor.argv.configSet === 'function',
   unsupported: descriptor => `Model roles are not editable for ${descriptor.label}.`,
   async run(descriptor, req, res) {
-    const { roles, cwd } = requestBody(req.body);
+    const { roles, cwd } = requestBody(req);
     const cwdValue = optionalCwd(res, cwd);
     if (cwdValue === null) return;
     if (!roles || typeof roles !== 'object' || Array.isArray(roles)) {
@@ -361,8 +337,7 @@ export const updateModelRoles = harnessRoute({
   },
 });
 
-// Task-agent inventory (bundled + user + project definitions) with the
-// per-agent settings the harness's own agents hub edits.
+// Task-agent inventory with the per-agent settings the harness's own hub edits.
 export const harnessAgents = harnessRoute({
   supported: agentSettingsSupported,
   unsupported: descriptor => `Task agents are not configurable for ${descriptor.label}.`,
@@ -377,14 +352,12 @@ export const harnessAgents = harnessRoute({
   },
 });
 
-// Patch per-agent settings in the harness's *global* config. Each field is
-// tri-state: `disabled` toggles array membership, and `model`/`prewalk`/
-// `advisor` take a value or null to drop the override and inherit again.
+// Fields are tri-state: a value sets it; null drops the override and inherits again.
 export const updateHarnessAgents = harnessRoute({
   supported: descriptor => agentSettingsSupported(descriptor) && typeof descriptor.argv.configSet === 'function',
   unsupported: descriptor => `Task agents are not configurable for ${descriptor.label}.`,
   async run(descriptor, req, res) {
-    const { agents, cwd } = requestBody(req.body);
+    const { agents, cwd } = requestBody(req);
     const cwdValue = optionalCwd(res, cwd);
     if (cwdValue === null) return;
     if (!agents || typeof agents !== 'object' || Array.isArray(agents)) {
@@ -442,9 +415,7 @@ export const updateHarnessAgents = harnessRoute({
         [descriptor.pilotConfig!.agentPrewalk]: record.prewalk,
         [descriptor.pilotConfig!.agentAdvisor]: record.advisor,
       };
-      // Only the records a patch actually moved are rewritten: every `config
-      // set` is a whole-value write, so touching an untouched key would
-      // materialize a global copy of whatever the read returned.
+      // Rewrite only dirty keys: a whole-value set on an untouched key would materialize a global copy.
       for (const key of keys) {
         if (dirty.has(key)) {
           await runHarnessJsonCommand(descriptor, descriptor.argv.configSet!(key, JSON.stringify(values[key])));
@@ -455,7 +426,6 @@ export const updateHarnessAgents = harnessRoute({
   },
 });
 
-// Every setting the harness's own settings panel offers, grouped by its tabs.
 export const listHarnessSettings = harnessRoute({
   supported: settingsSupported,
   unsupported: descriptor => `Settings are not editable for ${descriptor.label}.`,
@@ -466,15 +436,13 @@ export const listHarnessSettings = harnessRoute({
   },
 });
 
-// Patch settings in the harness's *global* config: a value sets the key, null
-// resets it to the harness default. Every key and value is checked against
-// the current schema before the first write.
+// null resets to the harness default; all keys/values are validated before the first write.
 export const updateHarnessSettings = harnessRoute({
   supported: settingsSupported,
   unsupported: descriptor => `Settings are not editable for ${descriptor.label}.`,
   errorStatus: error => (error instanceof SettingInputError ? 400 : 500),
   async run(descriptor, req, res) {
-    const { settings, cwd } = requestBody(req.body);
+    const { settings, cwd } = requestBody(req);
     const cwdValue = optionalCwd(res, cwd);
     if (cwdValue === null) return;
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {

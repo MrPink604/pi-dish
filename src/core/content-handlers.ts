@@ -1,8 +1,8 @@
 import fs = require('fs');
 import path = require('path');
-import os = require('os');
 import type { RouteHandler } from './http-boundary';
-import { isRecord } from './wire-protocol';
+import { dishDir } from './dish-store';
+import { record as isRecord } from './helper-values';
 
 const AGENT_DOC_TOPIC_RE = /^[a-z0-9-]{1,64}$/;
 const AGENT_DOC_DESCRIPTION_MAX = 160;
@@ -77,7 +77,7 @@ export const themesHandler: RouteHandler = (_req, res) => {
     { id: 'solarized', builtin: true }, { id: 'graphite', builtin: true },
   ];
   try {
-    const directory = path.join(os.homedir(), '.pi', 'dish', 'themes');
+    const directory = path.join(dishDir(), 'themes');
     for (const file of fs.readdirSync(directory).filter((name) => name.endsWith('.json')).sort()) {
       try {
         const raw: unknown = JSON.parse(fs.readFileSync(path.join(directory, file), 'utf-8'));

@@ -16,6 +16,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const helper_values_js_1 = require("../lib/helper-values.js");
 const originalHome = process.env.HOME;
 const originalCloseGrace = process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS;
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-routines-test-'));
@@ -27,7 +28,6 @@ const store = require('../lib/routines.js');
 const { createRoutineRunner, STARTING_WATCHDOG_MS } = require('../lib/routine-runner.js');
 const { BridgeSession } = require('../lib/bridge-session.js');
 const { validSessionId } = require('../lib/session-key.js');
-const { isRecord } = require('../lib/wire-protocol.js');
 const runners = new Set();
 test.after(() => {
     for (const runner of runners)
@@ -144,7 +144,7 @@ test('only a prompt change bumps the version; the 50-entry cap keeps the current
     assert.equal(current.versions.length, store.MAX_VERSIONS);
     const newest = current.versions[current.versions.length - 1];
     const oldest = current.versions[0];
-    assert.ok(isRecord(newest) && isRecord(oldest));
+    assert.ok((0, helper_values_js_1.record)(newest) && (0, helper_values_js_1.record)(oldest));
     assert.equal(newest.version, 60, 'the current version survives the trim');
     assert.equal(newest.prompt, current.prompt);
     assert.equal(oldest.version, 11, 'the oldest entries are the ones trimmed');
@@ -203,7 +203,14 @@ test('stored records are validated and normalized at the file boundary', () => {
     assert.equal(partial.harness, 'ghost', 'the harness is a launch selection, not a registry member');
     assert.deepEqual(partial.schedule, { cron: '@daily' });
     assert.deepEqual(partial.versions, [{ version: 1, prompt: 'old', savedAt: 0 }]);
-    assert.equal(Object.hasOwn(partial, 'extra'), false, 'unknown keys are dropped');
+    assert.equal(Object.hasOwn(partial, 'extra'), false, 'unknown keys are not part of a routine');
+    updateRoutine('partial', { description: 'edited' });
+    const savedRoutines = JSON.parse(fs.readFileSync(path.join(dishDir, 'routines.json'), 'utf8')).routines;
+    assert.deepEqual(Object.keys(savedRoutines).sort(), ['external', 'partial', 'wrongKey'], 'a write keeps rows it cannot parse');
+    assert.deepEqual(savedRoutines.partial.extra, { retained: true }, 'a write keeps unknown fields of the edited row');
+    assert.equal(savedRoutines.partial.model, 42, 'a write keeps unchanged fields it could not parse');
+    assert.equal(savedRoutines.partial.promptVersion, '2');
+    assert.equal(savedRoutines.partial.description, 'edited');
     fs.writeFileSync(path.join(dishDir, 'routine-invocations.json'), JSON.stringify({
         invocations: [
             { id: 'external-run', routineId: 'partial', startedAt: '100', status: 'running', extra: 'kept' },
@@ -215,6 +222,11 @@ test('stored records are validated and normalized at the file boundary', () => {
     const completed = store.updateInvocation('external-run', { status: 'completed', endedAt: 150 });
     assert.ok(completed);
     assert.equal(completed.startedAt, 0, 'a non-numeric start falls back to 0');
+    const savedRuns = JSON.parse(fs.readFileSync(path.join(dishDir, 'routine-invocations.json'), 'utf8')).invocations;
+    assert.deepEqual(savedRuns.map((row) => row.id), ['external-run', 'bad-status', 1], 'a write keeps rows it cannot parse');
+    assert.equal(savedRuns[0].extra, 'kept');
+    assert.equal(savedRuns[0].startedAt, '100', 'an unchanged unparseable field stays as stored');
+    assert.equal(savedRuns[0].status, 'completed');
 });
 test('the ledger rejects input over the cap without persisting', () => {
     const routine = store.createRoutine(definition());
@@ -371,7 +383,7 @@ test('busy: skip refuses with 409, steer and followUp deliver into the running s
     assert.equal(existingInvocation(first.id).status, 'running');
     const refused = catchError(() => runner.invoke(routine, { trigger: 'invoke', source: 'cli' }));
     assert.equal(refused.status, 409);
-    assert.ok('invocation' in refused && isRecord(refused.invocation));
+    assert.ok('invocation' in refused && (0, helper_values_js_1.record)(refused.invocation));
     assert.equal(refused.invocation.id, first.id);
     // A scheduled tick never queues into a busy routine — it records a skip.
     const skipped = runner.invoke(routine, { trigger: 'schedule' });
@@ -467,7 +479,7 @@ test('minIntervalSec rate-limits invokes without recording the rejection', async
     assert.equal(limited.status, 429);
     assert.ok('retryAfterSec' in limited && typeof limited.retryAfterSec === 'number');
     assert.ok(limited.retryAfterSec > 0 && limited.retryAfterSec <= 60);
-    assert.ok('lastInvocation' in limited && isRecord(limited.lastInvocation));
+    assert.ok('lastInvocation' in limited && (0, helper_values_js_1.record)(limited.lastInvocation));
     assert.equal(limited.lastInvocation.id, first.id);
     assert.equal(store.readInvocations().length, 1, 'the rejection is not in the ledger');
 });
@@ -510,9 +522,9 @@ test('an unparseable schedule is inert rather than fatal', async () => {
     const routine = store.createRoutine(definition({ schedule: { cron: '@hourly' } }));
     // Corrupt it behind the store's validation, the way a hand-edited file would.
     const raw = JSON.parse(fs.readFileSync(path.join(dishDir, 'routines.json'), 'utf8'));
-    assert.ok(isRecord(raw) && isRecord(raw.routines));
+    assert.ok((0, helper_values_js_1.record)(raw) && (0, helper_values_js_1.record)(raw.routines));
     const storedRoutine = raw.routines[routine.id];
-    assert.ok(isRecord(storedRoutine));
+    assert.ok((0, helper_values_js_1.record)(storedRoutine));
     storedRoutine.schedule = { cron: 'nonsense' };
     fs.writeFileSync(path.join(dishDir, 'routines.json'), JSON.stringify(raw));
     const { runner } = harness();

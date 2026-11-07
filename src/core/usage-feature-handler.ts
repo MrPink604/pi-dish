@@ -1,4 +1,5 @@
-import type { FeatureHandler, FeaturePorts } from './feature-handlers';
+import type { FeatureHandler } from './feature-handlers';
+import { readDishSettings } from './dish-store';
 import { discoverHarnessSessions } from './session-discovery';
 import { refreshHarnessPricing } from './harness-pricing';
 import * as sessionIndex from './session-index';
@@ -28,17 +29,15 @@ function localDay(offset = 0): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-export function createUsageSummaryHandler(ports: FeaturePorts): FeatureHandler {
+export function createUsageSummaryHandler(): FeatureHandler {
   return async (req, res) => {
     const range = String(req.query.days || '30');
     if (!['1', '7', '30', 'all'].includes(range)) return res.status(400).json({ error: 'days must be 1, 7, 30, or all' });
     const sort = String(req.query.sort || 'cost');
     if (!['cost', 'tokens'].includes(sort)) return res.status(400).json({ error: 'sort must be cost or tokens' });
-    // Multi-select model filter. It has to be applied here, not client-side:
-    // the workspace/session groups are truncated to the top 20 below, and only
-    // the per-session usage.models day buckets can rebuild their totals for a
-    // subset of models. groups.models stays unfiltered — it is the facet list
-    // the client toggles from. Headline KPIs stay global (fixed windows).
+    // Model filter must apply server-side: groups are truncated to the top 20
+    // and only per-session usage.models buckets can rebuild subset totals.
+    // groups.models stays unfiltered (facet list); headline KPIs stay global.
     const modelsRaw = req.query.models == null ? '' : String(req.query.models);
     if (modelsRaw.length > 4000) return res.status(400).json({ error: 'models filter too long' });
     const modelRefs = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
@@ -116,10 +115,8 @@ export function createUsageSummaryHandler(ports: FeaturePorts): FeatureHandler {
     // Rank by displayed tokens (excluding reasoning), or known cost then calls.
     const compare = (a: UsageTotal, b: UsageTotal) => compareUsageBuckets(a, b, sort);
     const top = <T extends UsageTotal>(map: Map<string, T>) => [...map.entries()].map(([key, value]) => ({ key, ...value })).sort(compare).slice(0, 20);
-    // The daily series spans the requested range (for 'all', from the earliest
-    // dated usage, capped at a year) so the chart always reflects the selected
-    // window. Each day carries a per-model breakdown so the client can stack the
-    // chart by model and open day details without another request.
+    // Daily series spans the requested range ('all': earliest dated usage,
+    // capped at a year), each day with a per-model breakdown for stacking.
     const DAILY_SPAN_CAP = 365;
     let spanDays = range === 'all' ? 1 : Number(range);
     if (range === 'all') {
@@ -148,11 +145,9 @@ export function createUsageSummaryHandler(ports: FeaturePorts): FeatureHandler {
       return { day, ...dayTotal, models };
     });
     const headlineCosts = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs.total]));
-    // Per-component twins of the headline scalars, so the client can pivot
-    // every KPI into read/cached-read/output/cache-write buckets without
-    // another request.
+    // Per-component twins of the headline scalars for client-side KPI pivots.
     const headlineCostsByBucket = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs]));
     const headlineCostUnavailable = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costUnavailable.total]));
-    res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostsByBucket, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: ports.readDishSettings().monthlyBudgetUsd ?? null });
+    res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostsByBucket, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
   };
 }

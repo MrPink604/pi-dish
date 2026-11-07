@@ -2,11 +2,12 @@ import fs = require('fs');
 import path = require('path');
 import crypto = require('crypto');
 import { setTimeout as delay } from 'timers/promises';
-import type { BridgeRegistryEntry, ProcessIdentity } from './contracts';
+import type { BridgeRegistryEntry } from './contracts';
 import { BridgeSession, invalidateRegistryCache, listRegisteredSessions, pruneRegisteredSession } from './bridge-session';
 import { getHarness } from './harnesses';
 import { formatModelRef } from './helper-models';
 import { record } from './helper-values';
+import { errorMessage, errorStatus } from './http-boundary';
 import { getPrimeDaemon } from './prime-daemon';
 import { processIdentityAlive } from './process-identity';
 import { canonicalSessionId } from './session-key';
@@ -145,12 +146,6 @@ export interface SessionOperations {
   admitHttpAction(requestedId: string, method: string): SessionOperationResponse | null;
 }
 
-function errorMessage(error: unknown): string {
-  return record(error) && typeof error.message === 'string' ? error.message : String(error);
-}
-function errorStatus(error: unknown): number {
-  return record(error) && typeof error.status === 'number' && error.status ? error.status : 500;
-}
 function filePath(value: unknown): string {
   if (typeof value !== 'string') throw new TypeError('Session file must be a string');
   return value;
@@ -225,14 +220,12 @@ export function createSessionOperations(observations: SessionOperationObservatio
     sessionSpawnOperations.set(spawnId, operation);
     Promise.resolve()
       .then(async () => {
-        // Model/thinking discovery shells out to the harness CLI (OMP:
-        // `omp models --json`, seconds cold). The HTTP handler answers 202
-        // before this runs, so the browser can show the pending pane at once
-        // and a bad pilot selection arrives as a spawn error it already renders.
+        // Pilot discovery shells out to the harness CLI (seconds cold), so it runs
+        // after the 202; a bad selection surfaces as a spawn error.
         const descriptor = getHarness(options.harness || 'pi');
         if (!descriptor) throw new SessionOperationError(400, `Unknown harness: ${options.harness}`);
         try { await launch.validateHarnessPilotSelection(descriptor, { model: options.model, thinking: options.thinking, cwd: options.cwd }); }
-        catch (error) { throw new SessionOperationError(errorStatus(error), errorMessage(error)); }
+        catch (error) { throw new SessionOperationError(errorStatus(error, 500), errorMessage(error)); }
         return createSession(options);
       })
       .then(sessionId => {
@@ -558,7 +551,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
       }
       const thinking = recovery && ['pi', 'omp'].includes(descriptor.id) ? recovery.thinkingLevel ?? undefined : undefined;
       await launch.validateHarnessPilotSelection(descriptor, { model, thinking, cwd });
-      // Validation and quarantine cleanup may await for seconds; repeat the existing final guards.
+      // Validation and quarantine cleanup may await for seconds; repeat the final guards.
       invalidateRegistryCache();
       if (activeSessionClearsQuarantine(sessionId)) return { success: true, id: sessionId, alreadyActive: true };
       assertNoConflictingWriter(sessionId, sessionFile);
@@ -722,10 +715,10 @@ export function createSessionOperations(observations: SessionOperationObservatio
         const currentPaneProcess = await tmux.paneProcessIdentity(spawn.socket, spawn.paneId);
         const replaced = workerStopped || !sameProcessIdentity(currentPaneProcess, spawn.paneProcess);
         if (replaced) return {
-          kind: 'replacement-not-ready', stopped: true, status: errorStatus(error),
+          kind: 'replacement-not-ready', stopped: true, status: errorStatus(error, 500),
           error: `The agent stopped, but its replacement failed to become ready: ${errorMessage(error)}`, cause: error,
         };
-        return noAction(errorStatus(error), `The agent was not restarted: ${errorMessage(error)}`, error);
+        return noAction(errorStatus(error, 500), `The agent was not restarted: ${errorMessage(error)}`, error);
       }
     } finally { restartFlights.delete(sessionId); }
   }

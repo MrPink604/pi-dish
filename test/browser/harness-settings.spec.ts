@@ -1,5 +1,5 @@
 import type { Page, Route } from '@playwright/test';
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 import type { BrowserHost } from './fixtures.js';
 import { test, expect, requiredRoute } from './fixtures.js';
 const model = { id: 'model', provider: 'fixture', name: 'Model', reasoning: true, thinking: ['high'] };

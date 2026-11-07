@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import fs = require('node:fs');
 import path = require('node:path');
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 import { test, expect, ROOT } from './fixtures.js';
 
 // A published page is served by the app's own listener. Its scripts, relative

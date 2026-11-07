@@ -17,15 +17,13 @@ interface FindOptions extends DiscoveryOptions {
 declare function readSessionHeader(filePath: string, profileId?: string): SessionHeader | null;
 declare function safeHeaderSessionId(value: unknown): NativeSessionId | null;
 /**
- * Discover harness session JSONLs, including bounded nested layouts used by
- * external launchers and OMP subagents. Normal files retain their basename
- * identity; generic/nested session files use validated header ids.
+ * Basename identity for normal files; generic/nested session files use
+ * validated header ids. Nested layouts are bounded.
  */
 declare function discoverSessionCandidates(rootDir: string, options?: DiscoveryOptions): DiscoveryResult;
 /**
- * Discover configured harness roots while retaining per-harness identity.
- * The ordinary root precedes the private root, so if both somehow hold one
- * native id, the ordinary store keeps the route (first wins).
+ * The ordinary root precedes the private root, so on a native-id collision
+ * the ordinary store keeps the route (first wins).
  */
 declare function discoverHarnessSessions(descriptors?: readonly HarnessDescriptor[], options?: HarnessDiscoveryOptions): DiscoveryResult;
 declare function findSessionCandidate(rootDir: string, sessionId: string, options?: FindOptions): {
@@ -34,17 +32,14 @@ declare function findSessionCandidate(rootDir: string, sessionId: string, option
     skipped: number;
 };
 /**
- * The nested subsession files under one session's own artifact directory
- * (`<parent>.jsonl` -> `<parent>/<agent>.jsonl`, recursively). Bounded to that
- * subtree: a corpus-wide collision stays the full walk's business, so a row
- * whose id it later refuses simply 404s on click.
+ * Bounded to one parent's artifact subtree; corpus-wide collisions are the
+ * full walk's business, so a row it later refuses simply 404s on click.
  */
 declare function discoverSubsessionCandidates(parentFile: string, options?: DiscoveryOptions): Candidate[];
 /**
- * Lifecycle proof, deliberately stricter than sidebar discovery. Every JSONL
- * and directory in the parent's subtree must be inspectable; no lossy
- * candidate filtering, symlinks, ambiguous headers, or depth caps count as
- * evidence that all descendants exited.
+ * Lifecycle proof, stricter than sidebar discovery: every JSONL and dir in the
+ * subtree must be inspectable; symlinks, ambiguous headers or depth caps never
+ * count as evidence that all descendants exited.
  */
 declare function inspectSubsessionExits(parentFile: unknown, options?: DiscoveryOptions): {
     complete: boolean;

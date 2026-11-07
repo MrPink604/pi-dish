@@ -5,7 +5,8 @@
 import path = require('path');
 import crypto = require('crypto');
 import { readStore, writeStore } from './dish-store';
-import { canonicalSessionId } from './session-key';
+import { asRecord } from './wire-protocol';
+import { tryCanonicalSessionId } from './session-key';
 
 export interface CreatePageOptions {
   root: string;
@@ -39,13 +40,8 @@ export interface ListedPageDto extends PageDto {
 }
 
 // Stored rows are external; members stay unknown until the route validates them.
-function fields(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
-
 function canonical(value: unknown): unknown {
-  if (!value) return null;
-  try { return canonicalSessionId(value); } catch { return value; }
+  return value ? tryCanonicalSessionId(value) : null;
 }
 
 function readPages(): Record<string, unknown> {
@@ -62,8 +58,8 @@ export function createPage({ root, title = null, sessionId = null, renderer = nu
   sessionId = canonical(sessionId);
   const pages = readPages();
   for (const [token, entry] of Object.entries(pages)) {
-    if (entry && fields(entry).root === abs) {
-      const existing = fields(entry);
+    if (entry && asRecord(entry).root === abs) {
+      const existing = asRecord(entry);
       const updated: PageDto = { ...existing, title: title ?? existing.title, sessionId: sessionId ?? canonical(existing.sessionId) };
       if (renderer) updated.renderer = renderer;
       else delete updated.renderer;
@@ -90,12 +86,12 @@ export function revokePage(token: string): boolean {
 
 export function getPage(token: string): PageDto | null {
   const entry = readPages()[token];
-  return entry && fields(entry).root ? { ...fields(entry), sessionId: canonical(fields(entry).sessionId) } : null;
+  return entry && asRecord(entry).root ? { ...asRecord(entry), sessionId: canonical(asRecord(entry).sessionId) } : null;
 }
 
 /** Newest first; do not drop malformed rows that the legacy list exposed. */
 export function listPages(): ListedPageDto[] {
   return Object.entries(readPages())
-    .map(([token, entry]): ListedPageDto => ({ token, ...fields(entry), sessionId: canonical(fields(entry).sessionId) }))
+    .map(([token, entry]): ListedPageDto => ({ token, ...asRecord(entry), sessionId: canonical(asRecord(entry).sessionId) }))
     .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
 }

@@ -1,8 +1,5 @@
 // Generated from src/core/rpc-session.ts; edit that source and run npm run build:core.
-/**
- * Manages pi sessions spawned via `pi --mode rpc`: {"type": command, ...} in,
- * {"type":"response"|event, ...} out. Framing is LF-only, never readline's.
- */
+/** `pi --mode rpc` sessions. Framing is LF-only, never readline's. */
 import { type ChildProcessWithoutNullStreams } from 'child_process';
 import { PendingRequests } from './pending-requests';
 import { type ProtocolRecord } from './wire-protocol';

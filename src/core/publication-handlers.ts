@@ -8,29 +8,30 @@ import * as shares from './shares';
 import * as comments from './comments';
 import { canonicalSessionId } from './session-key';
 import { registryIdentity, routeIdentity, routeSessionId } from './session-ownership';
+import { asRecord } from './wire-protocol';
 import { readFileForViewer } from './file-mention';
 import { renderFilePage } from './file-page';
 import { readOmpExportData } from './omp-export';
 import { isolateArtifact } from './artifact-isolation';
-import type { SessionSource, DiscoveryCandidate } from './session-source';
+import type { SessionSource } from './session-source';
+import type { SessionOwnership } from './session-ownership';
+import type { CatalogRuntime } from './session-catalog-runtime';
+import { listRegisteredSessions } from './bridge-session';
 import type { BridgeRegistryEntry } from './contracts';
 import type { SessionReadHandlers } from './session-read-handlers';
 import type { PublicArtifactRelay } from './relay-handlers';
+import { errorMessage } from './http-boundary';
 
 type PublicationRequest = Request<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 type PublicationResponse = Response<unknown, Record<string, unknown>>;
 type PublicationHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 
 export interface PublicationPorts {
+  ownership: SessionOwnership;
+  catalog: CatalogRuntime;
   findSessionSource(id: string): SessionSource | null;
-  liveSessionHistoryPending(id: string): boolean;
-  listRegisteredSessions(): readonly BridgeRegistryEntry[];
-  enumerateSessionCandidates(): readonly DiscoveryCandidate[];
-  getRPCSession(id: string): { readonly id: unknown } | null | undefined;
-  exportSessionHtml: SessionReadHandlers['exportSessionHtml'];
-  getOmpShareSnapshot: SessionReadHandlers['getOmpShareSnapshot'];
+  reads: SessionReadHandlers;
   relay: PublicArtifactRelay;
-  publicBaseUrl(): string | undefined;
   resourceRoot: string;
 }
 
@@ -72,22 +73,20 @@ interface ShareExportCacheEntry {
 const PAGE_COMMENTS_HEADER = 'x-pi-dish-page-comments';
 
 // Stored rows and HTTP bodies are external; members stay unknown until checked.
-function fields(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
-
 function commentBody(value: unknown): string | null {
   const text = typeof value === 'string' ? value.trim() : '';
   return text && text.length <= 10000 ? text : null;
 }
 
 export function createPublicationHandlers(ports: PublicationPorts): PublicationHandlers {
-  const { findSessionSource, liveSessionHistoryPending, listRegisteredSessions,
-    enumerateSessionCandidates, getRPCSession, exportSessionHtml, getOmpShareSnapshot } = ports;
+  const { findSessionSource } = ports;
+  const { liveSessionHistoryPending, getRPCSession } = ports.ownership;
+  const { enumerateSessionCandidates } = ports.catalog;
+  const { exportSessionHtml, getOmpShareSnapshot } = ports.reads;
   // url is set only when PI_DISH_SHARE_BASE_URL is, so operators behind a
   // proxy can hand out an absolute link.
   function publicLink(pathname: string) {
-    const base = ports.publicBaseUrl();
+    const base = process.env.PI_DISH_SHARE_BASE_URL;
     return base ? base.replace(/\/+$/, '') + pathname : null;
   }
 
@@ -147,9 +146,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     }
   }
 
-  // OMP's supported custom-share hook gives us the complete native HTML that
-  // /share generated from the live session. Preserve that exact snapshot rather
-  // than trying to reconstruct OMP-only metadata from historical JSONL.
+  // OMP's custom-share hook sends the complete native /share HTML; keep that
+  // exact snapshot rather than reconstructing OMP-only metadata from JSONL.
   const importShare: PublicationHandler = (req, res) => {
     if (!validOmpShareHtml(req.body)) {
       return res.status(400).json({ error: 'Expected a standalone OMP HTML export' });
@@ -158,7 +156,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       const token = shares.createHtmlShare(req.body);
       return res.json(sharePayload(token));
     } catch (e) {
-      return res.status(500).json({ error: (e as Error).message });
+      return res.status(500).json({ error: errorMessage(e) });
     }
   };
 
@@ -192,13 +190,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     res.json(sharePayload(existing.token));
   };
 
-  // Public route — always available on the main app (the share listener is opt-in).
-
-  // The browser creates comments from a selected file/prose range or diff
-  // lines. When the user later asks the agent to read comments, the
-  // pi-dish-comments skill lists the open index, fetches whichever related ids
-  // it needs, and acknowledges completed items. Creating a comment never
-  // prompts, steers, or starts an agent turn.
+  // Comments: creating one never prompts, steers, or starts an agent turn; the
+  // pi-dish-comments skill reads and acknowledges them when the user asks.
 
   function shortString(value: unknown, max: number): string | null {
     return typeof value === 'string' && value.length <= max ? value : null;
@@ -207,10 +200,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   function inferSessionForPath(absPath: unknown): string | null {
     if (typeof absPath !== 'string' || !absPath) return null;
     const targetPath = absPath;
-    // Nested session cwds are normal here (a checkout under a workspace root
-    // that another session sits in), so the most specific containing cwd wins.
-    // Only a genuine tie — two sessions at the same depth, e.g. the same cwd —
-    // is ambiguous enough to give up on.
+    // Nested cwds are normal, so the most specific containing cwd wins; only a
+    // same-depth tie (e.g. the same cwd) is ambiguous.
     const candidates = listRegisteredSessions()
       .filter((entry): entry is BridgeRegistryEntry & { cwd: string } => {
         if (typeof entry.cwd !== 'string' || !entry.cwd) return false;
@@ -244,7 +235,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   function cleanAnchor(value: unknown): comments.CommentAnchor | null {
     if (!value || typeof value !== 'object') return null;
-    const raw = fields(value);
+    const raw = asRecord(value);
     const type = raw.type === 'lines' ? 'lines' : raw.type === 'text' ? 'text' : null;
     if (!type) return null;
     const anchor: comments.CommentAnchor = { type };
@@ -261,7 +252,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   function cleanCommentTarget(value: unknown): comments.CommentTarget | null {
     if (!value || typeof value !== 'object') return null;
-    const raw = fields(value);
+    const raw = asRecord(value);
     const anchor = cleanAnchor(raw.anchor);
     if (!anchor) return null;
     if (raw.kind === 'file') {
@@ -294,7 +285,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   }
 
   const createComment: PublicationHandler = (req, res) => {
-    const input = fields(req.body);
+    const input = asRecord(req.body);
     const body = commentBody(input.body);
     const target = cleanCommentTarget(input.target);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
@@ -313,15 +304,14 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   };
 
   function commentPreview(value: unknown, label: string): unknown {
-    // JSON persists comment text as a string; arrays survive from the legacy
-    // store, and both carry a native slice.
+    // Strings, or arrays from older stores; both have a native slice.
     if (typeof value === 'string' || Array.isArray(value)) return value.slice(0, 240);
     throw new TypeError(`${label} is not a string or array`);
   }
 
   function commentIndexEntry(comment: comments.CommentDto) {
-    const target = fields(comment.target || {});
-    const anchor = fields(target.anchor || {});
+    const target = asRecord(comment.target || {});
+    const anchor = asRecord(target.anchor || {});
     const indexedAnchor: Record<string, unknown> = { type: anchor.type };
     for (const key of ['startLine', 'endLine', 'oldStart', 'oldEnd', 'newStart', 'newEnd']) {
       if (Number.isInteger(anchor[key])) indexedAnchor[key] = anchor[key];
@@ -341,9 +331,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     };
   }
 
-  // Lightweight, unpaginated inventory. It gives the agent enough location
-  // and intent to infer useful groups without loading every full anchor/body.
-  // Reading this index changes no comment state.
+  // Lightweight, unpaginated inventory with enough location/intent for the agent
+  // to group comments without loading full bodies. Changes no comment state.
   const commentIndex: PublicationHandler = (req, res) => {
     const sessionId = shortString(req.query.sessionId, 512);
     if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
@@ -357,10 +346,9 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     res.json({ total: comments.listComments({ sessionId, state: 'open' }).length });
   };
 
-  // Fetch an agent-selected group from the inventory. This is a state-free
-  // read; acknowledgment remains a separate, explicit close operation.
+  // State-free read; acknowledgment is a separate explicit close.
   const getComments: PublicationHandler = (req, res) => {
-    const input = fields(req.body);
+    const input = asRecord(req.body);
     const sessionId = shortString(input.sessionId, 512);
     const rawIds = input.ids;
     if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
@@ -376,9 +364,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     res.json({ comments: selected, missing, total: selected.length, hasMore: false });
   };
 
-  // Editing/deleting is the user's own correction path from the views the
-  // comment was written in. Acknowledged comments are the agent's record and
-  // stay immutable — a late edit would silently change what was acted on.
+  // Edit/delete is the user's correction path. Acknowledged comments are the
+  // agent's record and stay immutable: a late edit would change what was acted on.
   function requestedComment(req: PublicationRequest, res: PublicationResponse, allowAcknowledged: boolean) {
     const existing = comments.getComment(req.params.id);
     if (!existing) {
@@ -386,7 +373,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       return null;
     }
     let requestedSessionId = null;
-    try { requestedSessionId = canonicalSessionId(fields(req.body).sessionId); } catch {}
+    try { requestedSessionId = canonicalSessionId(asRecord(req.body).sessionId); } catch {}
     if (!requestedSessionId || requestedSessionId !== existing.sessionId) {
       res.status(403).json({ error: 'comment belongs to a different session' });
       return null;
@@ -403,7 +390,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   const updateComment: PublicationHandler = (req, res) => {
     if (!resolveOpenComment(req, res)) return;
-    const body = commentBody(fields(req.body).body);
+    const body = commentBody(asRecord(req.body).body);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     const comment = comments.updateComment(req.params.id, body);
     if (!comment) return res.status(409).json({ error: 'comment already acknowledged' });
@@ -423,20 +410,14 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     res.json(comments.acknowledgeComment(req.params.id));
   };
 
-  // Page-scoped comments (the published-page overlay)
-  //
-  // Published pages run in an opaque sandboxed origin (artifact-isolation), so
-  // the overlay injected into them cannot use the session-wide comment API.
-  // These routes take the page token as their whole scope: every read and
-  // write is limited to open comments anchored on that page, the session
-  // comes from the page registration, and responses carry only what the
-  // overlay renders. Page scripts share the overlay's document and so its
-  // capability — commenting on their own page — and nothing more. They stay
-  // under /api: the bearer gate applies, the public listener never mounts
-  // them, and access-handlers' pageCommentTransport answers the opaque origin.
+  // Page-scoped comments for the published-page overlay, which runs in an
+  // opaque sandboxed origin. The page token is the whole scope: only open
+  // comments anchored on that page, session from the page registration. Page
+  // scripts share the overlay's capability and nothing more. These stay under
+  // /api (bearer-gated, never on the public listener).
 
   function pageCommentView(comment: comments.CommentDto | comments.CommentRecord) {
-    const anchor = fields(fields(comment.target).anchor);
+    const anchor = asRecord(asRecord(comment.target).anchor);
     return {
       id: comment.id,
       body: comment.body,
@@ -456,7 +437,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   function openPageComment(req: PublicationRequest, res: PublicationResponse) {
     if (!commentablePage(req, res)) return null;
     const existing = comments.getComment(req.params.id);
-    const target = fields(existing?.target);
+    const target = asRecord(existing?.target);
     if (!existing || target.kind !== 'page' || target.pageToken !== req.params.token) {
       res.status(404).json({ error: 'comment not found' });
       return null;
@@ -477,7 +458,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
   const createPageComment: PublicationHandler = (req, res) => {
     const page = commentablePage(req, res);
     if (!page) return;
-    const input = fields(req.body);
+    const input = asRecord(req.body);
     const body = commentBody(input.body);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     const target = cleanCommentTarget({ kind: 'page', pageToken: req.params.token, anchor: input.anchor });
@@ -490,7 +471,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   const updatePageComment: PublicationHandler = (req, res) => {
     if (!openPageComment(req, res)) return;
-    const body = commentBody(fields(req.body).body);
+    const body = commentBody(asRecord(req.body).body);
     if (!body) return res.status(400).json({ error: 'comment body required (max 10000 characters)' });
     const comment = comments.updateComment(req.params.id, body);
     if (!comment) return res.status(409).json({ error: 'comment already acknowledged' });
@@ -519,14 +500,11 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     };
   }
 
-  // Deliberately no path gate on registration: sharing governance rests with
-  // the main app, which is assumed reachable only by trusted people (same
-  // trust model as the rest of the API — anything on this port can already
-  // drive agents with shell access, so a "no paths outside the workspace"
-  // rule would only be theater: an agent can copy any file into its cwd).
+  // Deliberately no path gate: the main app is trusted-only and agents can
+  // already copy any file into their cwd, so a workspace-path rule is theater.
   // The public share listener never registers, only serves known tokens.
   const createPage: PublicationHandler = (req, res) => {
-    const input = fields(req.body);
+    const input = asRecord(req.body);
     const { path: rawPath, title, sessionId, renderer } = input;
     const hasSessionId = Object.hasOwn(input, 'sessionId');
     if (typeof rawPath !== 'string' || !rawPath) {
@@ -589,11 +567,9 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
     res.json({ revoked: pages.revokePage(req.params.token) });
   };
 
-  // The public serving routes. File roots serve the file itself; directory
-  // roots serve index.html at /page/:token/ (the bare token URL redirects so
-  // the document's relative asset URLs resolve under the token) and contained
-  // assets at /page/:token/<rel>. res.sendFile rejects `..` traversal and
-  // absolute rests via its root option — every failure is a bare 404.
+  // File roots serve the file; directory roots serve index.html at
+  // /page/:token/ (bare token redirects so relative assets resolve) and assets
+  // at /page/:token/<rel>. sendFile's root option rejects traversal; failures 404.
   function sendPageFile(file: string, req: PublicationRequest, res: PublicationResponse, annotate: boolean) {
     if (!annotate || path.extname(file).toLowerCase() !== '.html') {
       return res.sendFile(file, (err) => {
@@ -638,9 +614,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
 
   function servePage(req: PublicationRequest, res: PublicationResponse, annotate = false) {
     const entry = pages.getPage(req.params.token);
-    // A token this host doesn't own may still belong to a peer it fronts; the
-    // peer answers the redirect and injects its own comment overlay — except
-    // on the public listener, which asks the peer to leave it out (below).
+    // A token this host doesn't own may belong to a peer it fronts; the peer
+    // injects its own overlay unless the public listener asks it not to.
     if (!entry) return ports.relay.serve(req, res, 'page', { annotate });
     if (req.headers[PAGE_COMMENTS_HEADER] === 'off') annotate = false;
     isolateArtifact(res, 'page');

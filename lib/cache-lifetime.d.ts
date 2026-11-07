@@ -89,19 +89,13 @@ export type ServedCacheExpiry = Omit<CacheExpiry, 'basis'> & {
     readonly basis: CacheExpiryBasis;
 };
 /**
- * Serve-time overlay: substitute an active learned TTL for built-in
- * 'estimate'/'minimum' projections, and supply one where no built-in window
- * exists at all ('unknown' — never served itself). Documented 'fixed'
- * retentions and user cacheTtlOverrides rules always win; the learner only
- * replaces guesses.
+ * Substitute an active learned TTL for built-in 'estimate'/'minimum'
+ * projections, or supply one for 'unknown'. Documented 'fixed' retentions and
+ * user overrides always win; the learner only replaces guesses.
  */
 export declare function applyLearnedCacheExpiry(expiry: CacheExpiry | null, config?: CacheRetentionConfig): ServedCacheExpiry | null;
-/** Per-identity fitted state for diagnostics and the provider-stats surface. */
 export declare function cacheLifetimeSnapshot(): CacheLifetimeSnapshotEntry[];
-/**
- * Everything the cache-lifetimes view explains per identity: the policy
- * sessions are served (with the same precedence as applyLearnedCacheExpiry),
- * the fitted curve, each activation gate, and the window's probes.
- */
+/** Per identity: the served policy (same precedence as applyLearnedCacheExpiry),
+ * fitted curve, activation gates, and window probes. */
 export declare function cacheLifetimeReport(config?: CacheRetentionConfig): CacheLifetimeReportEntry[];
 export declare function resetCacheLifetimeForTests(): void;

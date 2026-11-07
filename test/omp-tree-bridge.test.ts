@@ -10,7 +10,7 @@ import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
 import { spawn, spawnSync } from 'node:child_process';
-import { isRecord } from '../lib/wire-protocol.js';
+import { record as isRecord } from '../lib/helper-values.js';
 
 const bunAvailable = spawnSync('bun', ['--version'], { stdio: 'ignore' }).status === 0;
 const fixture = path.join(__dirname, 'fixtures', 'fake-omp-tree-host.ts');

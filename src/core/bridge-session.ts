@@ -1,23 +1,17 @@
 /**
- * Connector for pi-dish-bridge sockets.
- *
- * Discovers running pi sessions via the registry at ~/.pi/dish/sessions/
- * and connects to their per-session Unix socket on demand.
- *
- * Each registry entry is a JSON file written by the bridge extension on
- * session_start (and updated on turn/model/name changes). The bridge cleans
- * its own files up on session_shutdown; we also discard entries whose socket
- * is unreachable.
+ * Connector for pi-dish-bridge sockets, discovered via the registry at
+ * ~/.pi/dish/sessions/. Entries whose socket is unreachable are discarded.
  */
 import fs = require('fs');
 import net = require('net');
-import os = require('os');
 import path = require('path');
 import { EventEmitter } from 'events';
 import { isDeepStrictEqual } from 'util';
+import { dishDir } from './dish-store';
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
-import { asRecord, decodeBridgeFrame, decodeSideChat, isRecord, type ProtocolRecord } from './wire-protocol';
+import { asRecord, decodeBridgeFrame, decodeSideChat, type ProtocolRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { trackRunningToolCalls } from './running-tool-calls';
 import { createExtensionUIState, reduceExtensionUIState } from './extension-ui-state';
@@ -41,39 +35,31 @@ function requireNativeId(value: unknown): NativeSessionId {
 }
 
 /**
- * Append one streamed delta to the running turn it belongs to. A delta for a
- * closed/replaced chat, a stale turn, or a turn that already finished is
- * dropped — the next `side_chat` snapshot is authoritative.
+ * Deltas for a closed/replaced chat, stale turn or finished turn are dropped —
+ * the next `side_chat` snapshot is authoritative.
  */
 function withSideChatDelta(state: SideChatState, input: unknown): SideChatState {
   const data = asRecord(input);
   if (!state || data.chatId !== state.id || typeof data.turnId !== 'string' || typeof data.delta !== 'string') return state;
   const turn = state.turns[state.turns.length - 1];
-  // Only the last turn may be running (wire invariant), so matching it is the
-  // whole lookup.
+  // Only the last turn may be running (wire invariant).
   if (!turn || turn.id !== data.turnId || turn.status !== 'running') return state;
   const updated = { ...turn, answer: turn.answer + data.delta, updatedAt: Date.now() };
   return { ...state, turns: [...state.turns.slice(0, -1), updated] };
 }
 
-const ROOT = path.join(os.homedir(), '.pi', 'dish');
-const REGISTRY_DIR = path.join(ROOT, 'sessions');
+const REGISTRY_DIR = path.join(dishDir(), 'sessions');
 
 function ensureDirs() {
   try { fs.mkdirSync(REGISTRY_DIR, { recursive: true }); } catch {}
 }
 
 /**
- * List all registered (active) sessions from disk.
- * Returns an array of { sessionId, sessionFile, cwd, pid, socketPath, name, model, turnInProgress }.
- * Stale entries (dead pid or missing socket) are pruned on read.
- *
- * Memoized for a fraction of a second: routes hit this 2-4 times per request
- * (dispatch, live-usage overlay, session-file lookup), and each scan is a
- * readdir + per-entry read/parse + pid liveness check. The TTL is short
- * enough that a new/ended session is still seen within one poll tick.
+ * Stale entries (dead pid or missing socket) are pruned on read. Memoized
+ * briefly: routes scan 2-4 times per request, and the TTL still sees a new/ended
+ * session within one poll tick.
  */
-let registryCache: { at: number; entries: BridgeRegistryEntry[] } | null = null; // { at, entries }
+let registryCache: { at: number; entries: BridgeRegistryEntry[] } | null = null;
 const REGISTRY_CACHE_MS = 500;
 
 function listRegisteredSessions() {
@@ -85,9 +71,8 @@ function listRegisteredSessions() {
   return entries;
 }
 
-// For state changes the server itself caused (closing a session): the client
-// re-fetches the list immediately after the response, and a memoized scan
-// from up to 500ms ago would still show the session as live.
+// For server-caused changes (closing a session): the client re-fetches at once,
+// and a memoized scan would still show the session as live.
 function invalidateRegistryCache() {
   registryCache = null;
 }
@@ -101,31 +86,18 @@ function registryHarnessId(input: unknown): unknown {
   return asRecord(entry.wrapper).harnessId || entry.harnessId || 'pi';
 }
 
-// A wrapper host (OMP, …) embeds pi's extension API, so the stock
-// pi-dish-bridge from the wrapper's user-extension directory also loads in
-// the same process and registers the session a second time as a plain pi
-// session: one logical session then appears twice in pi-dish (a wrapper row
-// plus a pi row), and because the session index is keyed by file path the
-// two claims carry different profile ids and invalidate each other's cached
-// entries on every poll — a full re-parse of the JSONL per row per refresh.
-// The wrapper-specific claim is authoritative for that process; hide the
-// duplicate generic-pi claim rather than pruning its file (its bridge is
-// alive in the same process and would just rewrite the entry).
-// Alternate harnesses' session files can never legitimately belong to a
-// generic-pi claim: wrapper hosts embed pi's extension API, so the stock
-// pi-dish-bridge from the wrapper's user-extension directory loads in their
-// processes and registers the wrapper's session as a plain pi session. Host
-// detection in the bridge is the first line of defense; this containment
-// check is deterministic and catches whatever slips past it (old bridge
-// copies, detection gaps). Config roots (not just the sessions subpath)
-// cover wrapper profile trees like ~/.omp/profiles/<p>/agent/sessions.
+// Wrapper hosts (OMP, …) embed pi's extension API, so the stock pi-dish-bridge
+// also loads there and registers the wrapper's session a second time as plain
+// pi, duplicating the row and thrashing the file-keyed session index. The
+// wrapper claim is authoritative; the duplicate is hidden, not pruned (its live
+// bridge would rewrite it). Config roots (not just sessions dirs) cover profile
+// trees like ~/.omp/profiles/<p>/agent/sessions.
 const FOREIGN_CONFIG_ROOTS = listHarnesses()
   .filter((descriptor) => descriptor.id !== 'pi')
   .flatMap((descriptor) => {
     const roots: string[] = [];
     try {
-      // rootPath is <configRoot>/<agent>/sessions; the config root is two
-      // levels up.
+      // rootPath is <configRoot>/<agent>/sessions.
       roots.push(path.dirname(path.dirname(descriptor.rootPath())));
     } catch { /* Unresolvable host config leaves the pid/file check. */ }
     // A private root is directly a sessions directory, not a config tree.
@@ -151,16 +123,14 @@ function withoutWrappedPiClaims(entries: BridgeRegistryEntry[]) {
     if (registryHarnessId(entry) !== 'pi') return true;
     if (!entry.sessionFile) return true;
     if (wrapped.has(`${Number(entry.pid)}\0${entry.sessionFile}`)) return false;
-    // A pi claim pointing into another harness's config tree is the stock
-    // bridge riding inside that wrapper host — even with no competing wrapper
-    // claim (a manually launched wrapper has none).
+    // A pi claim inside another harness's config tree is the stock bridge in that
+    // wrapper, even with no competing wrapper claim (manually launched wrapper).
     return !underAnyRoot(entry.sessionFile, FOREIGN_CONFIG_ROOTS);
   });
 }
 
-// Legacy registry compatibility belongs to upstream Pi only. Alternative
-// harness identity is trusted only when the thin wrapper publishes the full
-// protocol-v2 claim that its socket must prove again in hello.
+// Unversioned claims are accepted for upstream Pi only. Other harnesses must
+// publish the full protocol-v2 claim, which their socket re-proves in hello.
 function validRegistryClaimShape(input: unknown): boolean {
   const entry = asRecord(input);
   const wrapper = asRecord(entry.wrapper);
@@ -215,11 +185,8 @@ function sameRegistryClaim(left: unknown, right: unknown): boolean {
 }
 
 /**
- * Remove only the registry claim that was actually inspected. Re-read before
- * unlinking so a new bridge for the same session cannot be erased by a stale
- * scan or failed connection from the old bridge. The socket itself is left
- * alone: unlinking a path after a replacement bridge binds it would sever a
- * healthy listener from future clients.
+ * Re-reads before unlinking so a stale scan can't erase a new bridge's claim for
+ * the same session. The socket is left alone: a replacement bridge may have bound it.
  */
 function pruneRegisteredSession(entry: unknown) {
   invalidateRegistryCache();
@@ -241,10 +208,8 @@ function pruneRegisteredSession(entry: unknown) {
   }
 }
 
-// These errors prove that the registry's socket path has no connectable bridge
-// listener. A timeout is deliberately excluded: the bridge may still be live
-// but wedged, and deleting its claim would let a lower-priority transport hide
-// it permanently.
+// These errors prove no connectable listener. Timeouts are excluded: a wedged but
+// live bridge must not lose its claim to a lower-priority transport.
 function pruneUnreachableRegisteredSession(entry: unknown, error: unknown) {
   const code = asRecord(error).code;
   if (typeof code !== 'string' || !['ENOENT', 'ECONNREFUSED', 'ENOTSOCK'].includes(code)) return false;
@@ -297,9 +262,7 @@ function scanRegistry() {
         continue;
       }
     } else if (entry.pid && !pidAlive(entry.pid)) {
-      // Legacy bridges did not publish a birth marker. Keep live legacy
-      // entries visible, but dead ones are still safe to discard. Destructive
-      // use of a legacy PID requires a bridge handshake in server.js.
+      // v1 bridges publish no birth marker; destroying one still requires a handshake.
       pruneRegisteredSession(entry);
       continue;
     }
@@ -315,9 +278,8 @@ function pidAlive(pid: unknown) {
 function getRegisteredSession(sessionId: NativeSessionId) {
   const matches = listRegisteredSessions().filter(e => e.sessionId === sessionId);
   const pi = matches.filter(e => !e.protocolVersion || (asRecord(e.wrapper).harnessId || e.harnessId) === 'pi');
-  // This legacy raw-id lookup belongs to upstream Pi only. Alternate callers
-  // must select the canonical (harnessId, nativeSessionId) tuple or an exact
-  // registry claim, so a colliding native ID can never hijack a Pi route.
+  // Raw-id lookup is Pi-only; other harnesses must use (harnessId, nativeSessionId)
+  // or an exact claim so a colliding native id can't hijack a Pi route.
   return pi.length === 1 ? pi[0] : null;
 }
 
@@ -337,11 +299,7 @@ function refreshRegisteredSession(sessionId: NativeSessionId) {
   return getRegisteredSession(sessionId);
 }
 
-/**
- * A live connection to a bridge socket. Mirrors the surface that server.js
- * previously expected from RPCSession: on(event, cb), prompt, abort, setModel,
- * setName, plus a few state fields (alive, turnInProgress, sessionFile, cwd).
- */
+/** A live bridge socket with the prompt/abort/model surface RPCSession exposes. */
 class BridgeSession extends EventEmitter<BridgeEvents> {
   declare id: NativeSessionId;
   declare protocolVersion: unknown;
@@ -395,11 +353,11 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     this.model = registryEntry.model || null;
     this.turnInProgress = !!registryEntry.turnInProgress;
     this.compacting = !!registryEntry.compacting;
-    this.queueState = null; // populated from the bridge hello / queue_update
-    this.sideChat = null; // populated from the bridge hello / side_chat
+    this.queueState = null;
+    this.sideChat = null;
     this.runningToolCalls = new Map();
-    // Populate this inside _handle(), before connect() resolves, so bridge
-    // state replay cannot outrun server-side listeners on the first socket.
+    // Populated inside _handle() before connect() resolves, so replayed bridge
+    // state can't outrun server-side listeners on the first socket.
     this.extUIState = createExtensionUIState();
 
     this.alive = false;
@@ -441,10 +399,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
         this.once('protocol_error', onProtocolError);
       }
 
-      // A socket that exists but never accepts (wedged pi) would otherwise
-      // hang every route that resolves this session. Protocol-v2 sessions must
-      // also prove that the socket belongs to the exact selected registry
-      // claim before callers can send a command.
+      // A socket that never accepts (wedged pi) would hang every route; v2
+      // sessions must also prove via hello that the socket matches the claim.
       const connectTimer = setTimeout(() => {
         if (!settled) { fail(new Error('bridge connect timeout')); sock.destroy(); }
       }, 5000);
@@ -456,9 +412,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
       sock.on('error', (err) => {
         this.alive = false;
         fail(err);
-        // Only re-emit when something is listening — an unlistened 'error'
-        // on an EventEmitter throws and would crash the whole server. The
-        // 'close' that always follows a socket error drives cleanup anyway.
+        // An unlistened 'error' would throw and crash the server; the following
+        // 'close' drives cleanup anyway.
         if (this.listenerCount('error')) this.emit('error', err);
       });
       sock.on('close', () => {
@@ -470,7 +425,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     });
   }
 
-  /** Legacy claims predate claim-bound identity; v2 claims are immutable and proved by hello. */
+  /** v1 claims predate claim-bound identity; v2 claims are immutable and proved by hello. */
   private get legacyClaim(): boolean {
     return Number(this.registryClaim.protocolVersion || 1) < 2;
   }
@@ -490,9 +445,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   _handle(input: unknown) {
     const frame = decodeBridgeFrame(input);
     if (!frame) return;
-    // A v2 socket must prove the selected claim before any event can mutate
-    // that claim or populate replay state. Otherwise a pre-hello switch could
-    // rewrite the evidence that the following hello is compared against.
+    // A v2 socket must prove the claim before any event mutates it or replay
+    // state, or a pre-hello switch could rewrite what hello is compared against.
     if (frame.kind !== 'hello' && !this.legacyClaim && !this.hello) return;
     if (frame.kind === 'hello') {
       const msg = frame.hello;
@@ -510,8 +464,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
         return;
       }
       this.hello = msg;
-      // Only legacy bridges may refresh identity from hello; a v2 claim keeps
-      // the identity the socket already proved.
+      // Only v1 bridges may refresh identity from hello.
       if (this.legacyClaim) {
         this.protocolVersion = msg.protocolVersion || this.protocolVersion;
         this.wrapper = msg.wrapper || this.wrapper;
@@ -526,9 +479,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
       if (msg.name) this.name = msg.name;
       if (msg.contextUsage) this.contextUsage = msg.contextUsage;
       if (msg.fastMode !== undefined) this.fastMode = msg.fastMode;
-      // Remembered so the SSE stream route can replay it into a client that
-      // just (re)connected — the bridge only pushes hello when our socket
-      // connects, which is once per session.
+      // Replayed by the SSE route to (re)connecting clients: the bridge only sends
+      // hello once, when our socket connects.
       this.queueState = msg.queue || null;
       this.sideChat = decodeSideChat(msg.sideChat);
       this.emit('hello', msg);
@@ -543,8 +495,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
       const ev = frame.event;
       const data = asRecord(frame.data);
       const switchedId = ev === 'session_switch' && validSessionId(data.sessionId) ? data.sessionId : null;
-      // Older producers may send an identity-less switch solely to clear
-      // replay state. Preserve that reset, but never adopt a malformed id.
+      // An identity-less switch only clears replay state; never adopt a malformed id.
       if (ev === 'session_switch' && data.sessionId && !switchedId) return;
       trackRunningToolCalls(this.runningToolCalls, ev, {
         toolCallId: typeof data.toolCallId === 'string' ? data.toolCallId : undefined,
@@ -560,10 +511,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
       else if (ev === 'side_chat') this.sideChat = decodeSideChat(data.sideChat);
       else if (ev === 'side_chat_delta') this.sideChat = withSideChatDelta(this.sideChat, frame.data);
       if (ev === 'session_switch') {
-        // The preserved socket now controls a different logical session.
-        // Clear session-owned live state before listeners re-key server state;
-        // identity fields are updated after emit so listeners can still use
-        // the previous native id as a fallback with older event producers.
+        // Clear session-owned live state before listeners re-key; identity is
+        // updated after emit so listeners can still use the previous native id.
         this.turnInProgress = false;
         this.compacting = false;
         this.queueState = null;
@@ -577,11 +526,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
         this.nativeSessionId = switchedId;
         if (data.sessionFile) this.sessionFile = data.sessionFile;
         if (data.cwd) this.cwd = data.cwd;
-        // The pool is instance-keyed, but validates a reused connection
-        // against the registry claim selected for the requested route. Adopt
-        // the rewritten identity here too, or the first new-route request
-        // sees the old claim, closes this healthy socket, and disconnects
-        // clients that were meant to survive the in-pane switch.
+        // The pool validates reused connections against the route's claim, so
+        // adopt the new identity or the next request closes this healthy socket.
         if (this.registryClaim) {
           this.registryClaim.sessionId = switchedId;
           this.registryClaim.nativeSessionId = data.sessionId;
@@ -616,9 +562,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     });
   }
 
-  // Timeout mirrors RPCSession.send — without it a command the bridge never
-  // answers (wedged extension host) leaves the awaiting HTTP request hanging
-  // until the socket happens to close.
+  // Without a timeout a wedged extension host leaves the HTTP request hanging.
   send(command: string, params: ProtocolRecord = {}, { timeout = 30000 } = {}): BridgeRequest {
     if (this.bounceExecuting && !command.startsWith('get_')
         && !['guarded_reload', 'tree_read', 'tree_leaf', 'share_snapshot'].includes(command)) {
@@ -632,8 +576,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     } catch (e) {
       this._pending.fail(id, e);
     }
-    // Internal request correlation for protocols that need an explicit
-    // queued barrier before an out-of-band host action (OMP tree commands).
+    // Lets OMP tree commands place an explicit queued barrier before a host action.
     return Object.assign(promise, { requestId: id });
   }
 
@@ -641,8 +584,6 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     const params: ProtocolRecord = { message };
     if (opts.deliverAs) params.deliverAs = opts.deliverAs;
     if (opts.images?.length) params.images = opts.images;
-    // Prompts can legitimately take a moment to be accepted (same allowance
-    // as RPCSession.prompt).
     return this.send('prompt', params, { timeout: 120000 });
   }
   steer(message: string, opts: PromptOptions = {}) {
@@ -660,8 +601,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   getShareSnapshot() { return this.send('share_snapshot'); }
   setThinkingLevel(level: string) { return this.send('set_thinking_level', { level }); }
   setFastMode(enabled: boolean) { return this.send('set_fast_mode', { enabled }); }
-  // Asks return immediately: the answer streams through `side_chat` /
-  // `side_chat_delta` events, so the default socket timeout is plenty.
+  // The answer streams via `side_chat` / `side_chat_delta`, so the default timeout suffices.
   sideChatAsk(question: string, chatId?: string) {
     return this.send('side_chat_ask', chatId ? { question, chatId } : { question });
   }
@@ -671,13 +611,9 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     return this.send('run_command', { message, deliverAs });
   }
   readTree() { return this.send('tree_read', {}, { timeout: 10000 }); }
-  // Leaf id only — the transcript route needs just the live leaf, and
-  // tree_read serializes the whole session tree per call. Older running
-  // bridge extensions answer "unknown command"; callers fall back to
-  // readTree() (see server.js liveTreeLeafId).
+  // Bridges without tree_leaf answer "unknown command"; callers fall back to readTree().
   readTreeLeaf() { return this.send('tree_leaf', {}, { timeout: 10000 }); }
-  // Branch-summary generation is a full LLM call over the abandoned branch —
-  // give it the long prompt-style allowance, not the 30s default.
+  // Branch summaries are a full LLM call: long timeout.
   navigateTree(targetId: string, opts: TreeOptions = {}) {
     const params: ProtocolRecord = { targetId };
     if (opts.summarize) params.summarize = true;
@@ -701,8 +637,8 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   }
 }
 
-// Pool — reuse a single connection per session for the lifetime of any subscriber.
-const connections = new Map<string, Promise<BridgeSession>>(); // exact registry claim -> Promise<BridgeSession>
+// One connection per exact registry claim, reused while anything subscribes.
+const connections = new Map<string, Promise<BridgeSession>>();
 
 function connectionKey(entry: BridgeRegistryEntry) {
   return entry.bridgeInstanceId || entry.instanceId
@@ -735,7 +671,6 @@ async function getBridgeSession(sessionId: NativeSessionId | BridgeRegistryEntry
 }
 
 export = {
-  ROOT,
   REGISTRY_DIR,
   listRegisteredSessions,
   invalidateRegistryCache,

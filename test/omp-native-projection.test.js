@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
-const wire_protocol_js_1 = require("../lib/wire-protocol.js");
+const helper_values_js_1 = require("../lib/helper-values.js");
 const { BridgeSession } = require('../lib/bridge-session');
 async function waitFor(predicate, timeoutMs = 5000) {
     const deadline = Date.now() + timeoutMs;
@@ -94,7 +94,7 @@ test('OMP bridge projects captured goal-mode transitions as a status', async () 
     const host = await startFakeHost();
     const session = new BridgeSession(host.claim);
     const requests = [];
-    session.on('extension_ui_request', (request) => { if ((0, wire_protocol_js_1.isRecord)(request))
+    session.on('extension_ui_request', (request) => { if ((0, helper_values_js_1.record)(request))
         requests.push(request); });
     try {
         await session.connect();
@@ -164,7 +164,7 @@ test('OMP bridge projects captured advisor state as a status', async () => {
     const host = await startFakeHost();
     const session = new BridgeSession(host.claim);
     const requests = [];
-    session.on('extension_ui_request', (request) => { if ((0, wire_protocol_js_1.isRecord)(request))
+    session.on('extension_ui_request', (request) => { if ((0, helper_values_js_1.record)(request))
         requests.push(request); });
     try {
         await session.connect();
@@ -219,19 +219,19 @@ test('OMP bridge reports and toggles fast mode over the socket', async () => {
         await host.step({ fastModeSettable: true });
         const off = await waitFor(async () => {
             const state = await session.send('get_state');
-            return (0, wire_protocol_js_1.isRecord)(state.fastMode) && state.fastMode.available === true ? state : null;
+            return (0, helper_values_js_1.record)(state.fastMode) && state.fastMode.available === true ? state : null;
         });
         assert.ok(off, 'get_state reports the initial fast-mode state');
-        assert.deepEqual((0, wire_protocol_js_1.isRecord)(off.fastMode) ? off.fastMode : null, { available: true, enabled: false, active: false });
+        assert.deepEqual((0, helper_values_js_1.record)(off.fastMode) ? off.fastMode : null, { available: true, enabled: false, active: false });
         const toggled = await session.setFastMode(true);
-        const enabled = (0, wire_protocol_js_1.isRecord)(toggled) && (0, wire_protocol_js_1.isRecord)(toggled.fastMode) ? toggled.fastMode : null;
+        const enabled = (0, helper_values_js_1.record)(toggled) && (0, helper_values_js_1.record)(toggled.fastMode) ? toggled.fastMode : null;
         assert.deepEqual(enabled, { available: true, enabled: true, active: true });
         // The registry entry republishes the new state for /api/sessions polls.
         const registry = await waitFor(() => {
             const entry = JSON.parse(fs.readFileSync(host.registryPath, 'utf8'));
-            return (0, wire_protocol_js_1.isRecord)(entry.fastMode) && entry.fastMode.enabled === true ? entry : null;
+            return (0, helper_values_js_1.record)(entry.fastMode) && entry.fastMode.enabled === true ? entry : null;
         });
-        assert.deepEqual((0, wire_protocol_js_1.isRecord)(registry.fastMode) ? registry.fastMode : null, { available: true, enabled: true, active: true });
+        assert.deepEqual((0, helper_values_js_1.record)(registry.fastMode) ? registry.fastMode : null, { available: true, enabled: true, active: true });
         // An ineligible model refuses the enable with the host's own message.
         await host.step({ fastModeModel: { provider: 'zai', id: 'glm-5.3' }, fastMode: false });
         const refused = await session.setFastMode(true).then(() => null, (error) => error.message);
@@ -249,7 +249,7 @@ test('OMP bridge ignores native state read by in-process subagent sessions', asy
     const host = await startFakeHost();
     const session = new BridgeSession(host.claim);
     const requests = [];
-    session.on('extension_ui_request', (request) => { if ((0, wire_protocol_js_1.isRecord)(request))
+    session.on('extension_ui_request', (request) => { if ((0, helper_values_js_1.record)(request))
         requests.push(request); });
     try {
         await session.connect();

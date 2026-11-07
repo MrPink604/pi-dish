@@ -6,8 +6,7 @@ import path = require('path');
 import { runtimeResourcePath } from './runtime-resources';
 import { privateRootPath } from './private-sessions';
 
-// Deliberately data-only: launch/RPC modules consume this registry, never the
-// reverse, which keeps harness selection free of the rpc-session dependency.
+// Data-only: launch/RPC modules consume this registry, never the reverse.
 const repo = path.resolve(__dirname, '..');
 const bridge = (name: string) => runtimeResourcePath(repo, `extensions/pi-dish-bridge-${name}/index.ts`);
 
@@ -29,7 +28,6 @@ function primeResume({ file, model }: ResumeOptions = {}): (string | undefined)[
   return ['--resume', file, ...(model ? ['--model', model] : [])];
 }
 
-
 const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
   pi: {
     id: 'pi', label: 'Pi', wrapperEntrypoint: null, eventProfile: 'pi-v3', profileId: 'pi-v3', profileVersion: 1,
@@ -44,40 +42,28 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
     id: 'omp', label: 'Oh My Pi', wrapperEntrypoint: bridge('omp'), eventProfile: 'omp-v1', profileId: 'omp-v1', profileVersion: 1,
     rootPath: () => path.join(os.homedir(), '.omp', 'agent', 'sessions'), layout: 'nested', nestedSubsessions: true,
     privateRootPath: () => privateRootPath('omp'),
-    // OMP's SESSION_EXIT_CUSTOM_TYPE (session/exit-diagnostics): a `custom`
-    // entry it appends when a session is disposed — including when a kept
-    // alive subagent is parked. A subagent JSONL whose *last* entry is this
-    // one belongs to history; anything else is a session still loaded in its
-    // parent process. Markers also appear mid-file (a revived session appends
-    // past its own exit), so only the final entry means anything.
+    // `custom` entry OMP appends when a session is disposed (incl. a parked
+    // subagent). Only a JSONL's *final* entry counts: a revived session appends
+    // past its own exit, so mid-file markers mean nothing.
     sessionExitCustomType: 'session_exit',
     commandEnv: 'PI_DISH_OMP_COMMAND',
-    // OMP persists image bytes ≥1KB outside the session JSONL: the entry
-    // keeps `data: "blob:sha256:<hex>"` and the raw bytes live in this
-    // content-addressed store (oh-my-pi session-persistence/blob-store).
+    // OMP stores image bytes ≥1KB here, content-addressed; the JSONL entry
+    // keeps `data: "blob:sha256:<hex>"`.
     blobsPath: () => path.join(os.homedir(), '.omp', 'agent', 'blobs'),
     command: 'omp', rpcFallback: false, modelCatalog: 'command', closeMode: 'owned-pane', spawnTokenMode: 'wrapper',
-    // The generated launch wrapper imports this host package itself: OMP's
-    // bare-specifier rewrite covers only the entry's directory tree, which
-    // the wrapper (under ~/.pi/dish/launch-wrappers/) shares with none of the
-    // repo's bridge modules. See materializeLaunchWrapper.
+    // The launch wrapper imports this itself: OMP's bare-specifier rewrite only
+    // covers the entry's directory tree, which the wrapper doesn't share.
     wrapperHostPackage: '@oh-my-pi/pi-coding-agent',
     wrapperAuthPackage: '@oh-my-pi/pi-ai',
-    // install.sh links the bridge here for OMP's own extension discovery, so
-    // every omp session — not just pi-dish spawns — loads it. Spawns check
-    // this before injecting a launch wrapper (see discoveryBridgeInstalled).
+    // install.sh links the bridge here so every omp session loads it; spawns
+    // check this before injecting a launch wrapper.
     discoveryExtensionsDir: (env = process.env) =>
       path.join(env.OMP_AGENT_DIR || path.join(env.HOME || os.homedir(), '.omp', 'agent'), 'extensions'),
-    // OMP's first-run setup wizard owns TUI input until dismissed, which a
-    // web pilot can't do — it swallows the keypress that hands the bridge a
-    // command context for tree navigation (504s) and garbles the embedded
-    // terminal view. Web-piloted sessions don't need it: `omp models --json`
-    // already reads OMP's auth storage and returns only authenticated or
-    // keyless providers.
+    // OMP's first-run wizard owns TUI input until dismissed, which a web pilot
+    // can't do (it swallows bridge keypresses and garbles the terminal view).
+    // `omp models --json` already reads auth storage, so the wizard isn't needed.
     spawnEnv: { OMP_SKIP_SETUP: '1' },
-    // `modelRoles`/`defaultThinkingLevel` back the model-roles editor (OMP's
-    // /models roles); the `task.*` records back the agents editor (its
-    // /agents hub): a disabled-name array plus three per-agent records.
+    // Back the model-roles editor (OMP /models roles) and agents editor (/agents).
     pilotConfig: {
       modelRoles: 'modelRoles', defaultThinkingLevel: 'defaultThinkingLevel',
       disabledAgents: 'task.disabledAgents',
@@ -85,13 +71,10 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
       agentPrewalk: 'task.agentPrewalk',
       agentAdvisor: 'task.agentAdvisor',
     },
-    // OMP's SETTING_TABS order for its /settings panel. Settings outside these
-    // tabs ("internal") have no TUI entry; the agents/models panes own the
-    // pilotConfig records above.
+    // OMP's /settings tab order; settings outside these tabs have no TUI entry.
     settingsTabs: ['appearance', 'model', 'interaction', 'context', 'memory', 'files', 'shell', 'tools', 'tasks', 'providers'],
-    // Where task-agent definitions live. `unpack` into a throwaway dir is the
-    // only way to enumerate the agents bundled into the executable; the other
-    // two are the dirs `omp agents unpack --user|--project` writes to.
+    // `unpack` into a throwaway dir is the only way to enumerate bundled
+    // agents; the dirs are where `omp agents unpack --user|--project` write.
     taskAgents: {
       unpack: (dir) => ['agents', 'unpack', '--dir', dir, '--json', '--force'],
       userDir: (env = process.env) => path.join(
@@ -99,22 +82,12 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
           || path.join(env.HOME || os.homedir(), '.omp', 'agent'), 'agents'),
       projectDir: (cwd) => path.join(cwd, '.omp', 'agents'),
     },
-    // Curated pane-typed commands, each verified non-interactive in a real
-    // OMP TUI pane (17.2.15 for /shake, 17.4.0 for the next three, 18.0.1 for
-    // the rest): they complete with a status line or status-bar change, no
-    // overlay or follow-up interaction. Descriptor arg model: `allowedArgs`
-    // exact-matches a curated set, `freeArgs` takes arbitrary single-line text,
-    // `requireArgs` rejects the bare form (it would open a TUI overlay), and
-    // `blockedArgs` rejects the sub-forms that do. Excluded: /omfg opens a
-    // multi-step generation/save flow; bare /goal and /goal drop|set|budget
-    // open TUI menus/editors/confirms (hence the goal descriptor's gates);
-    // /plan and /vibe are mode toggles whose follow-up UX (plan review, drafts)
-    // is TUI-only, so toggling them from a phone strands the user. WS-G
-    // excluded /handoff because its in-pane switch left pi-dish on the old
-    // route; switch adoption now closes that gap, but re-evaluating /handoff's
-    // host-command UX remains separate work. /hotkeys is terminal-only;
-    // /review is a prompt command. /branch, /tree, /debug, /pause open TUI
-    // selectors/screens.
+    // Pane-typed commands verified non-interactive in a real OMP TUI (they end
+    // with a status line, no overlay). `allowedArgs` exact-matches a curated
+    // set, `freeArgs` takes single-line text, `requireArgs` rejects the bare
+    // form and `blockedArgs` the sub-forms that would open a TUI overlay.
+    // Excluded as TUI-only or interactive: /omfg, /plan, /vibe, /handoff,
+    // /hotkeys, /review (prompt command), /branch, /tree, /debug, /pause.
     hostBuiltins: [{
       name: 'shake',
       description: 'Drop heavy content from context (tool results, large blocks, or images)',
@@ -182,15 +155,11 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
       export: ({ file, output }) => ['--export', file, output],
       models: ['models', '--json'],
       configGet: (key) => ['config', 'get', key, '--json'],
-      // Subscription/quota windows per provider account (5h/7d utilization,
-      // reset times). Standalone: reads OMP's auth store and queries the
-      // providers directly, no running session needed. --redact keeps account
-      // ids/emails off the wire; the server still whitelists fields.
+      // Per-provider quota windows; standalone (no session). --redact keeps
+      // account ids/emails off the wire; the server still whitelists fields.
       usage: ['usage', '--json', '--redact'],
-      // `config set` replaces the whole record in the *global* config
-      // regardless of cwd (dotted sub-keys are unsupported), so json is a
-      // pre-stringified whole value passed as one execFile argv entry.
-      // Scalars are parsed from their plain text (true, 42, an enum name).
+      // Replaces the whole record in the *global* config (no dotted sub-keys),
+      // so json values are pre-stringified into one argv entry; scalars as text.
       configSet: (key, value) => ['config', 'set', key, value, '--json'],
       configList: ['config', 'list', '--json'],
       configSchema: ['config', 'list'],
@@ -201,14 +170,12 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
     id: 'prime', label: 'Prime Agent', wrapperEntrypoint: null, eventProfile: 'prime-v1', profileId: 'prime-v1', profileVersion: 1,
     rootPath: () => path.join(os.homedir(), '.prime', 'agent', 'sessions'), layout: 'flat', commandEnv: 'PI_DISH_PRIME_COMMAND',
     command: 'prime-agent', rpcFallback: false, modelCatalog: null, closeMode: 'owned-agent',
-    // Prime 0.10+ (Rust) loads no TypeScript extensions. Its TUI is a client
-    // of a resident daemon; pi-dish is another client of the same daemon
-    // (protocol prime-agent.daemon v7) and reads live roots from its roster.
+    // Prime (Rust) loads no TypeScript extensions; pi-dish is another client of
+    // its resident daemon and reads live roots from the daemon roster.
     liveTransport: 'prime-daemon',
-    // RLM subagent sessions persist outside the flat sessions root:
-    // session-artifacts/<parentId>/sub-<id8>/<child>.jsonl, recursively.
-    // Discovery walks that tree; child headers carry the parentSession edge
-    // and the per-child rlm-subagent.json display entry proves liveness.
+    // RLM subagents persist under session-artifacts/<parentId>/sub-<id8>/<child>.jsonl
+    // (recursively); child headers carry the parentSession edge and the
+    // per-child rlm-subagent.json display entry proves liveness.
     subagentArtifacts: true,
     argv: { new: ({ model, thinking } = {}) => [...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : [])], resume: primeResume, models: ['model', 'list'] },
   },

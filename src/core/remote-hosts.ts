@@ -1,13 +1,8 @@
 /**
- * Fleet transports for the `remotes` in ~/.pi/dish/settings.json: direct HTTP
- * to a peer's address, or a lazily-spawned ssh forward to a loopback-bound
- * peer (optionally deploying this hub's host bundle over the session).
- *
- * `name` becomes a path segment under /hosts/<name>/api, so it is validated
- * hard and a malformed fleet-map entry is skipped, never thrown. Reachability
- * is memoized behind a backoff ladder instead of polled. ssh stderr carries
- * host names, key paths and auth detail, so it is classified into a short code
- * and the text dropped.
+ * Fleet transports for settings.json `remotes`: direct HTTP, or a lazily-spawned
+ * ssh forward to a loopback-bound peer (optionally deploying this hub's bundle).
+ * `name` becomes a URL path segment, so it is validated hard. ssh stderr carries
+ * host names and auth detail, so it is reduced to a short code and dropped.
  */
 import { spawn, type ChildProcess, type ChildProcessByStdio } from 'node:child_process';
 import crypto = require('node:crypto');
@@ -19,7 +14,7 @@ import type { Readable, Writable } from 'node:stream';
 import { dishDir, readStore } from './dish-store';
 import { hostBundle, type HostBundle } from './host-bundle';
 import { readVapidKeys } from './push-notifications';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 
 export interface DirectRemote {
   name: string;
@@ -121,14 +116,12 @@ export const DEFAULT_REMOTE_PORT = 3333;
 const PROBE_TIMEOUT_MS = 2500;
 const PROBE_TTL_MS = 10_000;
 export const BACKOFF_LADDER = [3000, 4000, 8000, 16_000];
-// A peer must be *continuously* reachable this long before its failure count
-// is forgiven: a flapper (up two seconds, down again) has to keep climbing the
-// ladder, or every brief recovery re-dials it at the 3s slot forever.
+// A peer must be *continuously* reachable this long before failures are forgiven,
+// or a flapper re-dials at the 3s slot forever.
 export const STABLE_RESET_MS = 30_000;
 const FORWARD_READY_TIMEOUT_MS = 8000;
 const FORWARD_POLL_MS = 50;
-// A deployed host includes ssh connect plus a cold node start on a phone CPU;
-// an upload carries the whole bundle over a possibly slow link.
+// Covers ssh connect plus a cold node start on a phone CPU / a full bundle upload.
 const DEPLOY_READY_TIMEOUT_MS = 90_000;
 const DEPLOY_UPLOAD_TIMEOUT_MS = 300_000;
 export const DEPLOY_IDLE_MS = 10 * 60_000;
@@ -150,7 +143,7 @@ export function isValidRemoteName(name: unknown): name is string {
   return typeof name === 'string' && NAME_RE.test(name);
 }
 
-/** Config entry -> normalized remote, or null when the entry is unusable. */
+/** null when the entry is unusable. */
 function normalizeRemote(value: unknown): Remote | null {
   if (!value || typeof value !== 'object') return null;
   const entry = value as Record<string, unknown>;
@@ -171,23 +164,20 @@ function normalizeRemote(value: unknown): Remote | null {
       ? DEFAULT_REMOTE_PORT : Number(entry.remotePort);
     if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) return null;
     const deploy = entry.deploy === true;
-    // remoteHost covers peers bound to a specific interface (a tailnet or
-    // LAN IP) instead of loopback — the forward's far end must match the
-    // peer's actual bind address. A deployed host always binds loopback.
+    // The forward's far end must match the peer's bind address (tailnet/LAN IP).
+    // A deployed host always binds loopback.
     const remoteHost = !deploy && typeof entry.remoteHost === 'string' && entry.remoteHost.trim()
       ? entry.remoteHost.trim() : '127.0.0.1';
     if (/[\s:]/.test(remoteHost)) return null;
-    // A token is not part of the ssh shape (the hop authenticates), but an
-    // explicitly configured one is honored: a peer that *does* run with a
-    // token would otherwise 401 every proxied request. A deployed host gets
-    // a fresh token for every ssh session instead.
+    // The ssh hop authenticates, but an explicit token is honored so a peer that
+    // runs with one doesn't 401. Deployed hosts get a fresh token per ssh session.
     return { name, kind: 'ssh', sshDest: entry.sshDest.trim(), remotePort, remoteHost, token: deploy ? null : token, deploy };
   }
 
   return null;
 }
 
-/** Configured peers, invalid entries skipped, first entry wins on a name clash. */
+/** Invalid entries skipped; first entry wins on a name clash. */
 export function listRemotes(): Remote[] {
   const out: Remote[] = [];
   const seen = new Set<string>();
@@ -205,8 +195,7 @@ export function getRemote(name: unknown): Remote | null {
   return listRemotes().find((r) => r.name === name) || null;
 }
 
-// Keyed by dish dir as well as name: a test's temp HOME is a different fleet,
-// and its ssh sockets live in a different run dir.
+// Keyed by dish dir too: a test's temp HOME is a different fleet and run dir.
 const states = new Map<string, RemoteState>();
 
 function stateFor(name: string): RemoteState {
@@ -229,7 +218,7 @@ function transportError(code: unknown): TransportError {
   return err;
 }
 
-/** Network failure -> short code. Never surfaces a message or stderr text. */
+/** Never surfaces a message or stderr text. */
 export function errorCode(err: unknown): unknown {
   const failure = err as { transportCode?: unknown; code?: unknown } | null | undefined;
   if (failure && failure.transportCode) return failure.transportCode;
@@ -250,7 +239,7 @@ export function errorCode(err: unknown): unknown {
   return 'unreachable';
 }
 
-/** ssh's own diagnostics, reduced to a class. The text itself is discarded. */
+/** The stderr text itself is discarded. */
 export function classifySshStderr(text: unknown): SshErrorCode {
   const s = String(text || '');
   if (/host key verification failed/i.test(s)) return 'ssh_host_key_failed';
@@ -267,17 +256,15 @@ export function runDir(): string {
   return path.join(dishDir(), 'run');
 }
 
-/** Forwarded socket for a remote. 0700 dir: no other user on a shared host. */
+/** Lives in the 0700 run dir: no other user on a shared host. */
 export function socketPathFor(name: string): string {
   return path.join(runDir(), `${name}.sock`);
 }
 
 /**
- * argv for the long-lived forward (spawned as `ssh <argv>`, never a shell
- * string). BatchMode keeps a passphrase prompt from hanging the spawn;
- * ExitOnForwardFailure means a dead forward exits instead of pretending;
- * the keepalives notice a silently dropped link. With `launch` (deployed
- * remotes) the session runs that command instead of `-N`.
+ * Spawned as `ssh <argv>`, never a shell string. BatchMode keeps a passphrase
+ * prompt from hanging; ExitOnForwardFailure makes a dead forward exit; keepalives
+ * notice a silently dropped link. `launch` (deployed remotes) replaces `-N`.
  */
 export function sshArgv(remote: SshRemote, socketPath = socketPathFor(remote.name), launch?: string): string[] {
   const forward = [
@@ -290,9 +277,8 @@ export function sshArgv(remote: SshRemote, socketPath = socketPathFor(remote.nam
   return launch === undefined ? ['-N', ...forward, remote.sshDest] : ['-T', ...forward, remote.sshDest, launch];
 }
 
-// Android/Termux sessions started by sshd may lack the app's environment:
-// its bin dir, a writable TMPDIR, and the exec shim that makes `#!/usr/bin/env`
-// shebangs work. Elsewhere this is a no-op.
+// sshd-started Termux sessions may lack PREFIX/bin, a writable TMPDIR and the
+// termux-exec shim `#!/usr/bin/env` needs. No-op elsewhere.
 const TERMUX_ENV = [
   'if [ -d /data/data/com.termux/files/usr ]; then',
   ': "${PREFIX:=/data/data/com.termux/files/usr}"; : "${TMPDIR:=$PREFIX/tmp}"; : "${TMUX_TMPDIR:=$TMPDIR}"; export PREFIX TMPDIR TMUX_TMPDIR;',
@@ -306,17 +292,12 @@ const TERMUX_ENV = [
 const SATELLITE_JOB_ID = 33330;
 
 /**
- * The deployed host's ssh command. Exits EXIT_NEEDS_BUNDLE / EXIT_NEEDS_VAPID
- * / EXIT_NODE_MISSING before starting anything; otherwise replaces a host a
- * silently dropped session left holding the port (matched by its bundle path
- * in /proc, never by pid alone) and execs the bundle. Host logs go to
- * ~/.pi/dish/host/host.log on the far side; stdout carries the ready line.
- *
- * On Termux it also refreshes the bundle's satellite watchdog in
- * ~/.pi/dish/satellite/, links it into Termux:Boot, and (re)schedules it with
- * termux-job-scheduler whenever its content changed. The scheduler call runs
- * detached under a timeout, because termux-api blocks forever without the
- * Termux:API app; only a successful call writes the `scheduled` marker.
+ * Exits EXIT_* before starting anything; otherwise replaces a host a dropped
+ * session left holding the port (matched by bundle path in /proc, never pid
+ * alone) and execs the bundle. stdout carries the ready line.
+ * On Termux it also installs/schedules the satellite watchdog; the scheduler call
+ * runs detached under a timeout because termux-api blocks forever without the
+ * Termux:API app, and only success writes the `scheduled` marker.
  */
 export function hostLaunchScript(hash: string, port: number): string {
   const script = [
@@ -351,7 +332,7 @@ export function hostLaunchScript(hash: string, port: number): string {
   return `sh -c '${script}'`;
 }
 
-/** Unpacks a bundle tarball from stdin into ~/.pi/dish/host/<hash>, marked complete only once whole. */
+/** Marked complete only once fully unpacked. */
 function hostUploadScript(hash: string): string {
   const script = [
     TERMUX_ENV,
@@ -362,7 +343,7 @@ function hostUploadScript(hash: string): string {
   return `sh -c '${script}'`;
 }
 
-/** Installs this hub's VAPID key file from stdin unless the far side already has one. */
+/** Never overwrites an existing far-side key file. */
 const VAPID_INSTALL_SCRIPT = `sh -c '${[
   'set -e; umask 077; F="$HOME/.pi/dish/vapid.json"; mkdir -p "$HOME/.pi/dish";',
   '[ -f "$F" ] || { cat > "$F.tmp"; mv "$F.tmp" "$F"; }',
@@ -377,8 +358,8 @@ function ensureForward(remote: SshRemote): Promise<string> {
   const fwd = st.forward;
   // spawnForward installs ready synchronously before a caller can reuse it.
   if (fwd && !fwd.dead && fwd.key === forwardKey(remote)) return fwd.ready!;
-  // A forward that just died stays down for its backoff slot rather than
-  // being respawned by every request that arrives behind it.
+  // A just-died forward stays down for its backoff slot instead of being
+  // respawned by every queued request.
   if (fwd && fwd.dead && fwd.key === forwardKey(remote) && Date.now() < fwd.retryAt) {
     return Promise.reject(transportError(fwd.error || 'ssh_failed'));
   }
@@ -505,9 +486,8 @@ async function uploadBundle(remote: SshRemote, bundle: HostBundle): Promise<void
 }
 
 /**
- * Start the deployed host as the forward's ssh command: 'ready' once it
- * announced itself and the local socket exists, or the exit status it ended
- * with before that. Exiting later is the forward dying (`fail`).
+ * 'ready' once the host announced itself and the local socket exists, else the
+ * exit status it ended with first. A later exit is the forward dying (`fail`).
  */
 function startHost(remote: SshRemote, forward: ForwardState, hash: string, fail: (code: unknown) => void): Promise<'ready' | number | null> {
   return new Promise((resolve, reject) => {
@@ -535,8 +515,7 @@ function startHost(remote: SshRemote, forward: ForwardState, hash: string, fail:
       if (fs.existsSync(forward.socketPath)) settle('ready');
       else setTimeout(poll, FORWARD_POLL_MS).unref();
     };
-    // The token is the first stdin line; stdin then stays open for the
-    // session's lifetime, and its end is what stops the host.
+    // Token is the first stdin line; stdin stays open and its end stops the host.
     child.stdin.on('error', () => {});
     child.stdin.write(`${forward.token}\n`);
     child.stdout.setEncoding('utf8');
@@ -555,7 +534,7 @@ function startHost(remote: SshRemote, forward: ForwardState, hash: string, fail:
   });
 }
 
-/** GET /api/sessions on the deployed host: does anything still need it running? */
+/** Does anything on the deployed host still need it running? */
 function hostBusy(remote: SshRemote, forward: ForwardState): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const req = http.request({
@@ -616,20 +595,19 @@ async function deployForward(remote: SshRemote, st: RemoteState, forward: Forwar
   }
 }
 
-/** Kill every ssh child. Hooked into the server's close (server.js). */
+/** Called on server close. */
 export function shutdown(): void {
   for (const st of states.values()) {
     if (st.forward) closeForward(st, st.forward);
   }
 }
 
-// Never forwarded upstream: the caller's credential (the *hub's* token is not
-// the peer's, and a peer must never see it) and framing headers node owns.
+// Never forwarded: the caller's credential (a peer must never see the hub's
+// token) and framing headers node owns.
 const DROPPED_REQUEST_HEADERS: Record<string, true> = {
   authorization: true, host: true, connection: true, 'keep-alive': true, 'transfer-encoding': true,
   te: true, trailer: true, 'upgrade-insecure-requests': true, 'proxy-authorization': true, 'proxy-authenticate': true,
-  // The hub already ran the browser-facing origin check; a peer applying its
-  // own allowlist to the hub's origin would refuse legitimate proxied calls.
+  // The hub already ran the origin check; a peer's own allowlist would refuse the hub.
   origin: true,
 };
 
@@ -640,20 +618,16 @@ function outboundHeaders(headers: http.OutgoingHttpHeaders, token: string | null
     if (DROPPED_REQUEST_HEADERS[key.toLowerCase()] === true) continue;
     out[key] = value;
   }
-  // A WebSocket handshake is the one case where the hop-by-hop framing *is*
-  // the request: without Connection: Upgrade the peer's http server never
-  // emits its own upgrade event and answers with a plain response.
+  // For a WebSocket handshake the hop-by-hop framing *is* the request: without
+  // Connection: Upgrade the peer never emits its upgrade event.
   if (upgrade) out.connection = 'Upgrade';
   if (token) out.authorization = `Bearer ${token}`;
   return out;
 }
 
 /**
- * Open a request to a peer. Returns the raw ClientRequest so bodies stream
- * both ways — nothing here buffers a request or a response.
- *
- * The caller writes/pipes the body and ends the request, and handles
- * 'response' / 'upgrade' / 'error' itself.
+ * Returns the raw ClientRequest so bodies stream both ways; the caller writes the
+ * body, ends the request and handles 'response' / 'upgrade' / 'error'.
  */
 export async function request(target: Remote | string, options: RemoteRequestOptions = {}): Promise<http.ClientRequest> {
   const remote = target && typeof target === 'object' ? target : getRemote(target);
@@ -663,7 +637,7 @@ export async function request(target: Remote | string, options: RemoteRequestOpt
   if (remote.kind === 'ssh') {
     const socketPath = await ensureForward(remote);
     const forward = stateFor(remote.name).forward;
-    // Real traffic keeps a deployed host from being let go as idle.
+    // Real traffic keeps a deployed host from idling out.
     if (forward) forward.lastUse = Date.now();
     const token = remote.deploy ? forward?.token ?? null : remote.token;
     return http.request({
@@ -722,9 +696,8 @@ function probeNow(remote: Remote): Promise<ProbeResult> {
       } catch (e) {
         return finish({ reachable: false, error: errorCode(e) });
       }
-      // The deadline passed while the forward was still coming up (a deployed
-      // host takes seconds). Destroying emits 'error'; with no listener that
-      // would crash the server.
+      // Deadline passed while the forward came up. destroy() emits 'error', which
+      // would crash the server with no listener.
       if (settled) { req.on('error', () => {}); req.destroy(); return; }
       req.on('error', (e: Error) => finish({ reachable: false, error: errorCode(e) }));
       req.on('response', (res) => {
@@ -750,9 +723,8 @@ function probeNow(remote: Remote): Promise<ProbeResult> {
 }
 
 /**
- * Reachability of one remote: `GET /api/host` through its transport.
- * Memoized for PROBE_TTL_MS on success; on failure the result stands until
- * the backoff ladder's next slot, so a poll-driven caller can ask freely.
+ * Memoized for PROBE_TTL_MS on success; a failure stands until the backoff
+ * ladder's next slot, so poll-driven callers can ask freely.
  */
 export function probe(target: Remote | string, { force = false }: ProbeOptions = {}): Promise<ProbeResult> {
   const remote = target && typeof target === 'object' ? target : getRemote(target);
@@ -780,9 +752,8 @@ export function probe(target: Remote | string, { force = false }: ProbeOptions =
 }
 
 /**
- * The memoized probe result, or null when there is none or it has expired.
- * A pure cache read: it never dials and never spawns a forward, so a caller
- * on the request path (the /hosts proxy) can consult it for free.
+ * Pure cache read (never dials or spawns), so the /hosts proxy request path can
+ * consult it for free. null when absent or expired.
  */
 export function reachability(target: Remote | string): ReachabilityResult | null {
   const remote = target && typeof target === 'object' ? target : getRemote(target);
@@ -793,9 +764,8 @@ export function reachability(target: Remote | string): ReachabilityResult | null
 }
 
 /**
- * A transport failure seen outside probe() — the /hosts proxy's own dials.
- * Real traffic is fresher truth than a cached probe, so it overwrites a
- * reachable result and advances the same ladder a failed probe would.
+ * Real traffic failures (the /hosts proxy's dials) overwrite a cached reachable
+ * result and advance the same ladder a failed probe would.
  */
 export function noteTransportFailure(target: Remote | string, code?: unknown): void {
   const remote = target && typeof target === 'object' ? target : getRemote(target);

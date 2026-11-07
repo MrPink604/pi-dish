@@ -15,7 +15,8 @@ export interface Routine {
     name: string;
     description: string;
     harness: string;
-    cwd: string;
+    /** Stored as written; session launch rejects a non-string. */
+    cwd: unknown;
     model?: string;
     thinking?: RoutineThinking;
     prompt: string;

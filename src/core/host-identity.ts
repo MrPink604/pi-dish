@@ -1,16 +1,14 @@
 /**
- * Stable per-host identity: a uuid generated once into ~/.pi/dish/host-id.
- * Clients pin a session to it and fail a (re)connect that lands elsewhere.
- * HOME is resolved per call so a test's temp HOME gets its own identity, and
- * the write goes through a temp file + rename so a concurrent reader never
- * sees a partial id.
+ * Stable per-host uuid in ~/.pi/dish/host-id. Clients pin a session to it and
+ * fail a (re)connect that lands elsewhere. HOME is resolved per call (tests).
  */
 import type { HostId } from './contracts';
+import { record as isRecord } from './helper-values';
 import crypto = require('crypto');
 import fs = require('fs');
 import os = require('os');
 import path = require('path');
-import { dishDir } from './dish-store';
+import { dishDir, readDishSettings, replaceFile } from './dish-store';
 
 const memo = new Map<string, HostId>(); // resolved host-id path -> uuid
 
@@ -36,10 +34,7 @@ function getHostId(): HostId {
   if (!id) {
     id = crypto.randomUUID() as HostId;
     try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-      fs.writeFileSync(tmp, id + '\n');
-      fs.renameSync(tmp, file);
+      replaceFile(file, id + '\n');
       // Two processes generating at once both rename; the loser must adopt
       // whichever id actually landed on disk, not the one it minted.
       id = readHostIdFile(file) || id;
@@ -52,11 +47,8 @@ function getHostId(): HostId {
 }
 
 // `hostLabel` in ~/.pi/dish/settings.json, else the machine's hostname.
-function getHostLabel(settings?: unknown): string {
-  if (settings === undefined) {
-    try { settings = JSON.parse(fs.readFileSync(path.join(dishDir(), 'settings.json'), 'utf8')); } catch { settings = null; }
-  }
-  const label = settings && typeof settings === 'object' ? (settings as { hostLabel?: unknown }).hostLabel : null;
+function getHostLabel(settings: unknown = readDishSettings()): string {
+  const label = isRecord(settings) ? settings.hostLabel : null;
   if (typeof label === 'string' && label.trim()) return label.trim();
   return os.hostname();
 }

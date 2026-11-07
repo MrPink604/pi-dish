@@ -67,28 +67,20 @@ export type GitDiffAggregate = {
 };
 export declare function isGitAvailable(): boolean;
 /**
- * Find git repos under `root` (including root itself): any directory holding
- * a `.git` entry — dir or file, so worktrees count. Found repos are not
- * descended into (submodules show as pointer changes in the parent). BFS,
- * bounded depth and dir count; symlinked dirs are skipped (no cycles).
+ * Any dir holding a `.git` entry (dir or file, so worktrees count). Found repos
+ * are not descended into (submodules show as pointer changes in the parent);
+ * symlinked dirs are skipped (no cycles).
  */
 export declare function findGitRepos(root: string, { maxDepth, maxRepos }?: GitRepoDiscoveryOptions): string[];
 export declare function parseStatusV2(out: string): GitStatusV2;
 /**
- * Split one `git diff` output into per-file entries with counts. Content
- * lines can't collide with the "diff --git " sentinel — they always start
- * with ' ', '+', '-', or '\'. Returns [{ path, oldPath, additions,
- * deletions, binary, patch }]; `path` is the post-change side (the pre-change
- * side for deletions).
+ * Content lines can't collide with the "diff --git " sentinel: they always
+ * start with ' ', '+', '-', or '\'. `path` is the post-change side (the
+ * pre-change side for deletions).
  */
 export declare function splitPatch(patchText: string): GitFilePatch[];
 export declare function parseNumstat(out: string): GitNumstatFile[];
-export declare function getRepoDiff(repoPath: string): Promise<GitRepoDiff>;
-/**
- * The full aggregate for the diff modal: every repo under `root` with its
- * uncommitted changes. Repo paths are root-relative ('.' for root itself);
- * dirty repos sort before clean ones, then by path.
- */
+/** Repo paths are root-relative ('.' for root); dirty repos sort first, then by path. */
 export declare function aggregateDiffs(root: string, { inlineLimit }?: GitDiffOptions): Promise<GitDiffAggregate>;
 export interface DiffViewSummary {
     root: unknown;

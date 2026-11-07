@@ -4,7 +4,7 @@ import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
 import { spawn } from 'node:child_process';
-import { isRecord } from '../lib/wire-protocol.js';
+import { record as isRecord } from '../lib/helper-values.js';
 
 const { BridgeSession }: typeof import('../lib/bridge-session') = require('../lib/bridge-session')
 

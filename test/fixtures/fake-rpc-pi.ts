@@ -21,7 +21,7 @@
  */
 import fs = require('node:fs');
 import path = require('node:path');
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 
 if (process.env.PI_FIXTURE_EXIT_ON_START) process.exit(3);
 

@@ -2,19 +2,22 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { FeatureHandler, FeaturePorts, FeatureHandlers } from './feature-handlers';
+import type { CatalogRuntime } from './session-catalog-runtime';
+import { readDishSettings } from './dish-store';
 import * as skillsLib from './skills';
 import type { SkillsInventory } from './skills';
 import * as sessionIndex from './session-index';
-import { finite } from './session-index-data';
+import { finite } from './helper-values';
 import type { SkillActivation } from './session-index-data';
 import { runtimeResourcePath } from './runtime-resources';
+import { errorMessage } from './http-boundary';
 
 const DAY_MS = 86400000;
 const WEEK_MS = 7 * DAY_MS;
 
 // Distinct project cwds pi-dish knows about — the scope over which skills are
 // discovered (global user skills plus every project root).
-export function knownWorkspaceCwds(buildSessionCatalog: FeaturePorts['buildSessionCatalog']): string[] {
+export function knownWorkspaceCwds(buildSessionCatalog: CatalogRuntime['buildSessionCatalog']): string[] {
   const cwds = new Set<string>();
   try {
     for (const session of buildSessionCatalog().list) if (session.cwd) cwds.add(session.cwd);
@@ -27,7 +30,7 @@ export function knownWorkspaceCwds(buildSessionCatalog: FeaturePorts['buildSessi
 // token is a pi skill name; unset is the vended default skill.
 function resolveRefineConfig(inventory: SkillsInventory, ports: FeaturePorts) {
   const envVal = process.env.PI_DISH_REFINE;
-  const settingVal = ports.readDishSettings().refine;
+  const settingVal = readDishSettings().refine;
   const raw = (envVal != null && envVal !== '') ? envVal
     : (typeof settingVal === 'string' ? settingVal : '');
   const names = new Set((inventory?.skills || []).map(s => s.name));
@@ -92,10 +95,10 @@ function usageRollup(records: readonly SkillActivation[], now = Date.now()) {
 export function createSkillFeatureHandlers(ports: FeaturePorts): Pick<FeatureHandlers, 'skills' | 'skillActivations' | 'skillCoverage'> {
   const skills: FeatureHandler = async (_req, res) => {
     try {
-      const cwds = knownWorkspaceCwds(ports.buildSessionCatalog);
+      const cwds = knownWorkspaceCwds(ports.catalog.buildSessionCatalog);
       const inventory = await skillsLib.getSkillsInventory({ cwds });
       sessionIndex.setSkillRoots(inventory.skills.map(s => s.filePath));
-      const candidates = ports.enumerateSessionCandidates();
+      const candidates = ports.catalog.enumerateSessionCandidates();
       const scan = sessionIndex.scanSessions(candidates);
       const now = Date.now();
       const skills = inventory.skills.map(s => {
@@ -124,7 +127,7 @@ export function createSkillFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
       });
     } catch (e) {
       console.error('GET /api/skills failed:', e);
-      res.status(500).json({ error: e && typeof e === 'object' && 'message' in e ? e.message : undefined });
+      res.status(500).json({ error: errorMessage(e) });
     }
   };
 
@@ -133,7 +136,7 @@ export function createSkillFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
   // cwd, kind.
   const skillActivations: FeatureHandler = (req, res) => {
     // Ensure the corpus is indexed (mines skills as a side effect).
-    sessionIndex.scanSessions(ports.enumerateSessionCandidates());
+    sessionIndex.scanSessions(ports.catalog.enumerateSessionCandidates());
     const filter: Parameters<typeof sessionIndex.getSkillActivations>[0] = {};
     if (req.query.skill) filter.skill = String(req.query.skill);
     if (req.query.cwd) filter.cwd = String(req.query.cwd);
@@ -168,7 +171,7 @@ export function createSkillFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
     try { stat = fs.statSync(skill); content = fs.readFileSync(skill, 'utf-8'); }
     catch { return res.status(404).json({ error: 'skill file not found' }); }
 
-    sessionIndex.scanSessions(ports.enumerateSessionCandidates());
+    sessionIndex.scanSessions(ports.catalog.enumerateSessionCandidates());
     const now = Date.now();
     const all = sessionIndex.getSkillActivations({ skill });
     const coverage = skillsLib.projectSkillCoverage(content, stat.mtimeMs, all);

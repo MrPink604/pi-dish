@@ -3,17 +3,12 @@ import { finite } from './helper-values';
 import { sessionMetaText } from './helper-identity';
 import { escapeHtml } from './helper-format';
 
-// `host` is the one client-evaluated field: hosts are a client concept (the
-// client is the aggregator), so a server's own sessions carry neither
-// hostLabel nor host. Clients strip host terms with stripQueryField() before
-// querying any server and re-apply them locally.
-// `routine` uses the same named-field substring matching: a session stamped
-// with routine provenance answers `routine:nightly` and `-routine:nightly`
-// everywhere the grammar is spoken. Deliberately absent from sessionMetaText —
-// a plain term must not match a routine name.
+// `host` is client-evaluated (servers' sessions carry no host): clients strip it
+// with stripQueryField() before querying a server and re-apply it locally.
+// `routine` is deliberately absent from sessionMetaText so plain terms don't match it.
 export const QUERY_FIELDS = new Set(['name', 'cwd', 'model', 'id', 'is', 'host', 'routine']);
 
-/** "7d"/"12h"/"2w" → ms span; ISO "YYYY-MM-DD" → ms epoch (local midnight); null otherwise. */
+/** "7d"/"12h"/"2w" → `now` minus that span; "YYYY-MM-DD" → local midnight; null otherwise (ms epochs). */
 export function parseQueryDate(value: string, now: number) {
   const rel = /^(\d+)([hdw])$/.exec(value);
   if (rel) {
@@ -32,16 +27,13 @@ export function parseQueryDate(value: string, now: number) {
   return null;
 }
 
-// Tokens are non-space runs, but a double-quoted span (optionally after a
-// -/field: prefix) keeps its spaces: -name:"two words", "two words". One
-// builder, so the parser and stripQueryField can never tokenize differently.
+// A double-quoted span (optionally after -/field:) keeps its spaces. Shared so the
+// parser and stripQueryField can never tokenize differently.
 export function queryTokenRe() { return /(-?)([a-zA-Z]+:)?("([^"]*)"|\S+)/g; }
 
 /**
- * The query minus every `field:`/`-field:` token (quoted values included),
- * whitespace normalized. Used to drop client-only terms — `host:` — from a
- * query before it reaches a server, which would match them against nothing
- * and so filter everything out.
+ * Drops client-only terms (`host:`) before a query reaches a server, which would
+ * match them against nothing and filter everything out.
  */
 export function stripQueryField(query?: string | null, field?: string | null) {
   if (!query) return '';
@@ -57,10 +49,8 @@ export function stripQueryField(query?: string | null, field?: string | null) {
 }
 
 /**
- * Parse a filter query → { terms: [{ neg, field, value }], since, before }.
- * `since`/`before` are ms epochs (null when absent); multiple occurrences
- * AND (max since, min before). Values are lowercased. `now` is injectable
- * for tests. A malformed since:/before: value falls back to a literal term.
+ * Repeated since/before AND together (max since, min before). A malformed
+ * since:/before: value falls back to a literal term.
  */
 export function parseSessionQuery(query?: string | null, now = Date.now()) {
   const parsed: SessionQuery = { terms: [], since: null, before: null };
@@ -90,36 +80,26 @@ export function parseSessionQuery(query?: string | null, now = Date.now()) {
   return parsed;
 }
 
-/** The positive plain-text terms of a parsed query — what content search and
- * snippet highlighting act on (field terms and negations never touch content). */
+/** Field terms and negations never touch content. */
 export function positiveQueryTokens(parsed: SessionQuery) {
   return parsed.terms.filter(t => !t.neg && !t.field).map(t => t.value);
 }
 
-/** A session launched by a routine invocation — "automation". The stamp is
- * *presentation-only* provenance (annotateSessionRoutines in server.js), so
- * this answers listing questions ("is this a cron run?") and never control
- * ones. */
+/** Provenance is presentation-only: answers listing questions, never control ones. */
 export function isAutomationSession(session?: HelperSession | null) {
   return !!(session && (session.routine || session.routineId));
 }
 
-/** Does a parsed query *affirmatively* ask for automation sessions — a
- * positive `is:automation` test or a positive `routine:` term? Negations and
- * plain terms never ask: `-routine:x` only narrows within whatever the caller
- * is already showing. This is the escape hatch for the UI default that hides
- * inactive routine runs (every cron tick is a session; unmanaged they bury
- * the human list), so it must stay a positive-only signal. */
+/** Positive-only by design: this is the escape hatch for the UI default that hides
+ * inactive routine runs; `-routine:x` and plain terms only narrow. */
 export function queryAsksForAutomation(parsed?: SessionQuery | null) {
   return (parsed?.terms || []).some(term =>
     !term.neg && (term.field === 'routine' || (term.field === 'is' && term.value === 'automation')));
 }
 
 /**
- * Evaluate a parsed query against a session. `contentText` (lowercased
- * message text) widens *positive plain* terms only: negations stay
- * metadata-only by design — excluding a session because its transcript
- * mentions a word would make `-subagent` hide half the corpus.
+ * `contentText` widens positive plain terms only: content-based negation would
+ * make `-subagent` hide half the corpus.
  */
 export function evaluateSessionQuery(parsed: SessionQuery, session: HelperSession, contentText?: string) {
   if (parsed.since !== null || parsed.before !== null) {
@@ -131,14 +111,10 @@ export function evaluateSessionQuery(parsed: SessionQuery, session: HelperSessio
   for (const term of parsed.terms) {
     let hit;
     if (term.field === 'host') {
-      // Client-only: the host's display label, falling back to its id. A
-      // server's sessions carry neither, so a positive host: term matches
-      // nothing there — which is exactly why clients strip these first.
+      // Servers' sessions carry neither field — why clients strip host: first.
       hit = (session.hostLabel || session.host || '').toLowerCase().includes(term.value);
     } else if (term.field === 'is') {
-      // Not a substring field: is:active tests liveness, is:automation
-      // routine provenance (anything else simply never matches, so a typo
-      // can't silently mean "everything").
+      // Unknown is: values never match, so a typo can't mean "everything".
       hit = (term.value === 'active' && !!session.isActive)
         || (term.value === 'automation' && isAutomationSession(session));
     } else {
@@ -154,8 +130,7 @@ export function evaluateSessionQuery(parsed: SessionQuery, session: HelperSessio
   return true;
 }
 
-/** Non-overlapping occurrences of `token` in `text` (both lowercased). An
- * indexOf walk, not a regex: tokens are arbitrary user text. */
+/** indexOf walk, not a regex: tokens are arbitrary user text. */
 export function countOccurrences(text: string | null | undefined, token: string) {
   if (!text || !token) return 0;
   let n = 0, i = text.indexOf(token);
@@ -164,20 +139,10 @@ export function countOccurrences(text: string | null | undefined, token: string)
 }
 
 /**
- * Relevance score for a session against a parsed query — the shared ranking
- * used by the sidebar filter, `/api/sessions?q=` and `/api/search`.
- *
- * The philosophy is *coverage beats repetition*: every positive plain token
- * contributes independently, so a session hitting two distinct keywords
- * outranks one that says a single keyword fifty times. Metadata carries the
- * most signal (a name hit is what you meant; cwd/model/id is nearly as
- * deliberate), and the content contribution grows logarithmically from a
- * single hit and caps out — a transcript can't shout its way to the top.
- *
- * Only positive plain terms score: field terms, negations and since/before
- * are filters, so a purely field/date query scores 0 everywhere and the
- * caller's recency tiebreak stands. `contentText` is the (already lowercased)
- * indexed search text, optional.
+ * Shared ranking (sidebar, `/api/sessions?q=`, `/api/search`): coverage beats
+ * repetition — each positive plain token scores independently and the content
+ * contribution is logarithmic and capped. Field/date terms are filters only, so
+ * such queries score 0 and the caller's recency tiebreak stands.
  */
 export function scoreSessionMatch(parsed: SessionQuery, session: HelperSession, contentText?: string | null) {
   const tokens = positiveQueryTokens(parsed);
@@ -194,8 +159,7 @@ export function scoreSessionMatch(parsed: SessionQuery, session: HelperSession, 
   return Math.round(total);
 }
 
-/** Filter sessions locally (metadata + dates only — no content on this path),
- * relevance-ordered when the query has content-bearing tokens. */
+/** Metadata + dates only (no content on this path). */
 export function applyLocalFilter<T extends HelperSession>(list: readonly T[], query?: string | null) {
   if (!query) return list;
   const parsed = parseSessionQuery(query);
@@ -207,11 +171,7 @@ export function applyLocalFilter<T extends HelperSession>(list: readonly T[], qu
     .map(([s]) => s);
 }
 
-/**
- * Narrow a list by a query's `host:` terms alone — the client-side half of a
- * query whose every other term a server already applied (host terms never
- * reach one). Returns the list untouched when the query names no host.
- */
+/** The client-side half of a query whose other terms a server already applied. */
 export function applyHostTerms<T extends HelperSession>(list: readonly T[], query?: string | null) {
   if (!query) return list;
   const terms = parseSessionQuery(query).terms.filter(t => t.field === 'host');
@@ -220,7 +180,7 @@ export function applyHostTerms<T extends HelperSession>(list: readonly T[], quer
   return list.filter(s => evaluateSessionQuery(parsed, s));
 }
 
-/** Simple fuzzy match: all chars of query appear in order in str; returns match indices or null */
+/** Returns match indices or null. */
 export function fuzzyMatch(query: string, str: string) {
   query = query.toLowerCase();
   str = str.toLowerCase();
@@ -232,18 +192,17 @@ export function fuzzyMatch(query: string, str: string) {
   return qi === query.length ? indices : null;
 }
 
-/** Score fuzzy match — prefer consecutive chars, earlier matches, shorter strings */
+/** Prefers consecutive chars, earlier matches, shorter strings. */
 export function fuzzyScore(indices: readonly number[] | null, str: string) {
   if (!indices) return -Infinity;
   let score = 0;
   for (let i = 1; i < indices.length; i++) {
-    if (indices[i] === indices[i - 1] + 1) score += 10; // consecutive bonus
+    if (indices[i] === indices[i - 1] + 1) score += 10;
   }
-  score -= indices[0]; // earlier match = better
-  score -= str.length * 0.1; // shorter = better
+  score -= indices[0];
+  score -= str.length * 0.1;
   return score;
 }
-
 
 export function highlightFuzzy(str: string, indices: readonly number[] | null) {
   if (!indices || !indices.length) return escapeHtml(str);
@@ -258,21 +217,13 @@ export function highlightFuzzy(str: string, indices: readonly number[] | null) {
   return result;
 }
 
-/**
- * A short plain-text excerpt of `text` around the first occurrence of any of
- * `tokens` (both already lowercased — this runs against the search corpus),
- * for showing *why* a content search matched. Trims to word boundaries and
- * marks elided ends with an ellipsis. '' when no token occurs.
- */
+/** `text` and `tokens` are already lowercased (search corpus). '' when no token occurs. */
 export function buildSnippet(text: string, tokens: readonly string[], radius = 60) {
   return buildSnippets(text, tokens, { radius, max: 1 }).snippets[0] || '';
 }
 
 /**
- * Multi-window variant for the advanced-search view: up to `max` excerpts,
- * each around the next token occurrence past the previous window, plus the
- * total occurrence count of all tokens (which keeps counting past the last
- * window — "12 matches" with 4 snippets is meaningful).
+ * `count` keeps counting past the last window ("12 matches" with 4 snippets).
  */
 export function buildSnippets(text: string, tokens: readonly string[], { radius = 60, max = 4 } = {}) {
   const valid = tokens.filter(Boolean);
@@ -291,11 +242,10 @@ export function buildSnippets(text: string, tokens: readonly string[], { radius 
       if (i !== -1 && (at === -1 || i < at)) { at = i; tokenLen = t.length; }
     }
     if (at === -1) break;
-    // Never reach back into the previous window: repeated text between
-    // adjacent excerpts reads like a rendering bug.
+    // Never reach back into the previous window: repeated text reads like a bug.
     let start = Math.max(snippets.length ? from : 0, at - radius);
     let end = Math.min(text.length, at + tokenLen + radius);
-    // Don't cut words: pull the window edges in to the whitespace inside it.
+    // Don't cut words.
     if (start > 0) {
       const ws = text.indexOf(' ', start);
       if (ws !== -1 && ws < at) start = ws + 1;
@@ -310,11 +260,7 @@ export function buildSnippets(text: string, tokens: readonly string[], { radius 
   return { snippets, count };
 }
 
-/**
- * Escape `text` for HTML with every (case-insensitive) occurrence of the
- * given tokens wrapped in <mark>. Overlapping token ranges are merged so the
- * output never nests marks.
- */
+/** Overlapping ranges are merged so marks never nest. */
 export function highlightTokens(text: unknown, tokens: readonly string[]) {
   const str = String(text);
   const lower = str.toLowerCase();

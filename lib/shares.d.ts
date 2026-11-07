@@ -10,7 +10,6 @@ export interface HtmlShareRecord {
     createdAt: number;
     sessionId?: never;
 }
-export type ShareRecord = SessionShareRecord | HtmlShareRecord;
 export interface SessionShareDto {
     kind: 'session';
     sessionId: unknown;

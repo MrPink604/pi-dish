@@ -1,24 +1,18 @@
-import type { RouteHandler } from './http-boundary';
-import { requestBody } from './http-boundary';
+import { setTimeout as delay } from 'timers/promises';
+import { errorMessage, httpError, requestBody, type RouteHandler } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
-import { errorMessage, httpError } from './http-boundary';
 import * as piSDK from './pi-sdk';
 import { liveSessionSupports, routeIdentity } from './session-ownership';
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
 import tmux = require('./tmux');
-import type { BridgeRegistryEntry } from './contracts';
 import type { BranchSessionOptions } from './pi-sdk';
-import type { RPCSession } from './rpc-session';
-import type { LiveSession } from './session-ownership';
+import type { SessionOwnership } from './session-ownership';
 import type { SessionSource } from './session-source';
 
 export interface SessionTreePorts {
-  getLiveSession(sessionId: string): Promise<LiveSession | null>;
+  ownership: SessionOwnership;
   findSessionSource(id: string): SessionSource | null;
-  getRegisteredSession(id: string): BridgeRegistryEntry | null;
-  getRPCSession(id: string): InstanceType<typeof RPCSession> | null | undefined;
-  locatePiPane(sessionId: string): Promise<tmux.PaneTarget | null>;
 }
 
 const TMUX_CHORD_MODIFIERS: Record<string, string> = { ctrl: 'C-', alt: 'M-', shift: 'S-' };
@@ -38,7 +32,7 @@ function tmuxKeyForChord(chord: unknown): string | null {
   return `${prefix}${base.toUpperCase()}`;
 }
 
-export function createSessionTreeHandler(ports: SessionTreePorts) {
+export function createSessionTreeHandler({ ownership, findSessionSource }: SessionTreePorts) {
   // Bridge navigate_tree needs a stashed pi command context. RPC-backed
   // sessions can prime one with an RPC prompt; tmux TUI sessions get the
   // command typed into their pane.
@@ -47,7 +41,7 @@ export function createSessionTreeHandler(ports: SessionTreePorts) {
       return await sess.navigateTree(entryId, opts);
     } catch (error) {
       if (!/no command context/i.test(errorMessage(error))) throw error;
-      const rpc = ports.getRPCSession(sessionId);
+      const rpc = ownership.getRPCSession(sessionId);
       if (rpc?.alive) {
         await rpc.prompt('/dish-prime');
         return sess.navigateTree(entryId, opts);
@@ -55,7 +49,7 @@ export function createSessionTreeHandler(ports: SessionTreePorts) {
       const spawn = tmux.getSpawn(sessionId);
       if (spawn && await tmux.paneExists(spawn.socket, spawn.paneId)) {
         await tmux.sendKeys(spawn.socket, spawn.paneId, '/dish-prime');
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await delay(1500);
         return sess.navigateTree(entryId, opts);
       }
       throw error;
@@ -68,11 +62,11 @@ export function createSessionTreeHandler(ports: SessionTreePorts) {
   // trigger is the advertised shortcut, not its command name, because
   // send-keys of a command concatenates with the user's draft.
   async function navigateLiveOmpTree(sessionId: string, sess: InstanceType<typeof BridgeSession>, entryId: string, opts: BranchSessionOptions) {
-    const pane = await ports.locatePiPane(sessionId);
+    const pane = await ownership.locatePiPane(sessionId);
     if (!pane) {
       throw httpError('Oh My Pi tree navigation requires a reachable tmux pane to acquire its command context.', 409);
     }
-    const chordKey = tmuxKeyForChord(ports.getRegisteredSession(sessionId)?.treeServiceShortcut);
+    const chordKey = tmuxKeyForChord(ownership.getRegisteredSession(sessionId)?.treeServiceShortcut);
     const operation = sess.treeNavigate(entryId, opts);
     operation.catch(() => {});
     const handoff = new Promise<void>((resolve, reject) => {
@@ -121,8 +115,8 @@ export function createSessionTreeHandler(ports: SessionTreePorts) {
       if (identity.harnessId !== 'pi' && identity.harnessId !== 'omp' && identity.harnessId !== 'prime') {
         return res.status(409).json({ error: 'Session tree navigation is not supported for this harness.' });
       }
-      const source = ports.findSessionSource(req.params.id);
-      const sess = await ports.getLiveSession(req.params.id);
+      const source = findSessionSource(req.params.id);
+      const sess = await ownership.getLiveSession(req.params.id);
       if (sess) {
         if (!liveSessionSupports(sess, 'treeNavigation')) {
           return res.status(409).json({ error: 'This session does not support tree navigation.' });

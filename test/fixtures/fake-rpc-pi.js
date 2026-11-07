@@ -24,7 +24,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
  */
 const fs = require("node:fs");
 const path = require("node:path");
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 if (process.env.PI_FIXTURE_EXIT_ON_START)
     process.exit(3);
 const home = process.env.HOME;
@@ -131,7 +131,7 @@ async function runTurn(message) {
 let sentInvalidState = false;
 function handle(cmd) {
     logCmd(cmd);
-    if (!(0, wire_protocol_js_1.isRecord)(cmd) || typeof cmd.id !== 'string' || typeof cmd.type !== 'string')
+    if (!(0, helper_values_js_1.record)(cmd) || typeof cmd.id !== 'string' || typeof cmd.type !== 'string')
         return;
     const { id, type } = cmd;
     switch (type) {

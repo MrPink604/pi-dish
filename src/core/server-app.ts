@@ -12,13 +12,12 @@ import pages = require('./pages');
 import skillsLib = require('./skills');
 import sessionIndex = require('./session-index');
 import sessionProvenance = require('./session-provenance');
-import routinesStore = require('./routines');
 import recoveryStore = require('./session-recovery');
 import * as piSDK from './pi-sdk';
 import { readSessionMessages, readSessionCwd, readSessionTailEntry } from './session-files';
 import { knownWorkspaceCwds } from './skill-feature-handlers';
 import { getHarness, listHarnesses } from './harnesses';
-import { readDishSettings, writeDishSettings } from './dish-settings';
+import { readDishSettings } from './dish-store';
 import { createAccessHandlers } from './access-handlers';
 import { createRelayHandlers } from './relay-handlers';
 import { createTerminalHandlers } from './terminal-handlers';
@@ -33,8 +32,8 @@ import { createSessionOwnership, liveSessionSupports, registryIdentity, routeIde
 import { createSessionLaunch } from './session-launch';
 import { createSessionOperations } from './session-operations';
 import { createMessageHold } from './message-hold';
-import { createCatalogRuntime, getContextWindow, getModelsCache, setModelsCache } from './session-catalog-runtime';
-import { createLiveSessionInfo, createSessionLifecycleObserver } from './live-sessions';
+import { createCatalogRuntime } from './session-catalog-runtime';
+import { createSessionLifecycleObserver, primeLiveSession } from './live-sessions';
 import { createSessionBrowseHandlers } from './session-browse-handlers';
 import { createSessionRelationHandlers } from './session-relation-handlers';
 import { createSlashCommandHandler } from './session-slash-handlers';
@@ -55,8 +54,7 @@ import { expandSessionRefs } from './session-refs';
 import { getPrimeDaemon } from './prime-daemon';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
-import { errorMessage, errorStatus } from './http-boundary';
-import { requestBody, type ApplicationRequest, type ApplicationResponse } from './http-boundary';
+import { errorMessage, errorStatus, requestBody, type ApplicationRequest, type ApplicationResponse } from './http-boundary';
 import type { NextFunction } from 'express';
 import type { Server } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -74,11 +72,9 @@ export type { ServerStartupObserver } from './server-startup';
 export function startServer(rootDirectory: string): Server {
   const app = express();
   const PORT = Number.isFinite(Number(process.env.PORT)) ? Number(process.env.PORT) : 3333;
-  // Localhost-only by default; opt in to LAN/VPN exposure explicitly. Auth is
-  // opt-in too: without a token, anything that can reach the port can drive
-  // agents with shell access.
+  // Localhost-only by default. Auth is opt-in: without a token, anything that
+  // reaches the port can drive agents with shell access.
   const HOST = process.env.HOST || '127.0.0.1';
-  const PI_SETTINGS_FILE = path.join(os.homedir(), '.pi', 'agent', 'settings.json');
   const packageVersion: string = require(path.join(rootDirectory, 'package.json')).version;
 
   const accessHandlers = createAccessHandlers({
@@ -135,8 +131,8 @@ export function startServer(rootDirectory: string): Server {
   });
   const {
     sessionSources, getRegisteredSession, getRPCSession,
-    resolveSessionCandidate, liveSessionHistoryPending, getLiveSession,
-    adoptBridgeSessionSwitch, describeRuntime, locatePiPane,
+    resolveSessionCandidate, getLiveSession,
+    adoptBridgeSessionSwitch, locatePiPane,
     liveSourceObservations,
   } = ownership;
 
@@ -161,8 +157,7 @@ export function startServer(rootDirectory: string): Server {
     wakeSession: routeId => { messageHold.wake(routeId); },
     adoptSessionSwitch: (session, data) => { adoptBridgeSessionSwitch(session, data); },
   });
-  const catalog = createCatalogRuntime({ ownership, getLiveSession, onPrimeSession: lifecycleObserver });
-  const liveInfo = createLiveSessionInfo(ownership);
+  const catalog = createCatalogRuntime({ ownership, onPrimeSession: lifecycleObserver });
 
   function findSessionSource(sessionId: unknown, { exact = false } = {}): SessionSource | null {
     return sessionSources.resolve({ route: sessionId, exact, live: liveSourceObservations(sessionId) });
@@ -170,14 +165,16 @@ export function startServer(rootDirectory: string): Server {
   function findSessionFile(sessionId: unknown, options?: { exact?: boolean }): string | null {
     return findSessionSource(sessionId, options)?.file || null;
   }
+  function sessionKnown(sessionId: string): boolean {
+    return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive || !!findSessionSource(sessionId, { exact: true });
+  }
 
-  // Best-known working directory for a session: live registry first, then the
-  // JSONL header. Null when neither knows (terminal + file search fall back).
+  // Live registry first, then the JSONL header; null when neither knows.
   function resolveSessionCwd(sessionId: string): unknown {
     const registered = getRegisteredSession(sessionId);
     if (registered?.cwd) return registered.cwd;
     // A fresh Prime root may not have a JSONL header yet; its roster row does.
-    const primeCwd = liveInfo.primeLiveSession(sessionId)?.cwd;
+    const primeCwd = primeLiveSession(sessionId)?.cwd;
     if (primeCwd) return primeCwd;
     const session = findSessionSource(sessionId);
     if (session) {
@@ -187,23 +184,11 @@ export function startServer(rootDirectory: string): Server {
   }
 
   const fileHandlers = createFileHandlers({ resolveSessionCwd, findSessionSource });
-  const sessionReadHandlers = createSessionReadHandlers({
-    findSessionSource, liveSessionHistoryPending, getRegisteredSession, getRPCSession,
-    isLive: liveInfo.isLive,
-    getLiveSession,
-    liveTreeLeafId: liveInfo.liveTreeLeafId,
-    getLiveContextUsage: liveInfo.getLiveContextUsage,
-    getContextWindow,
-    describeRuntime,
-  });
+  const sessionReadHandlers = createSessionReadHandlers({ ownership, catalog, findSessionSource });
   const publicationHandlers = createPublicationHandlers({
-    findSessionSource, liveSessionHistoryPending, listRegisteredSessions,
-    enumerateSessionCandidates: catalog.enumerateSessionCandidates,
-    getRPCSession,
-    exportSessionHtml: sessionReadHandlers.exportSessionHtml,
-    getOmpShareSnapshot: sessionReadHandlers.getOmpShareSnapshot,
+    ownership, catalog, findSessionSource,
+    reads: sessionReadHandlers,
     relay: relayHandlers.publicArtifacts,
-    publicBaseUrl: () => process.env.PI_DISH_SHARE_BASE_URL,
     resourceRoot: rootDirectory,
   });
   const sessionLaunch = createSessionLaunch({ runHarnessModelCommand });
@@ -215,17 +200,9 @@ export function startServer(rootDirectory: string): Server {
     recordLaunchProvenance: (id, sourceId, operationId) => sessionProvenance.recordLaunch(id, sourceId, operationId),
   });
   const featureHandlers = createFeatureHandlers({
-    readDishSettings, writeDishSettings,
-    buildSessionCatalog: catalog.buildSessionCatalog,
-    enumerateSessionCandidates: catalog.enumerateSessionCandidates,
-    findSessionSource,
-    getSessionModels: catalog.getSessionModels,
-    getLiveSession,
-    locatePiPane,
-    getModelsCache,
-    setModelsCache,
+    catalog, ownership, findSessionSource,
     applicationRoot: rootDirectory,
-    piSettingsFile: PI_SETTINGS_FILE,
+    piSettingsFile: path.join(os.homedir(), '.pi', 'agent', 'settings.json'),
   });
 
   app.use('/api/sessions/:id', (req: ApplicationRequest, res: ApplicationResponse, next: NextFunction) => {
@@ -260,8 +237,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/messages', sessionReadHandlers.messages);
   app.get('/api/sessions/:id/search', sessionReadHandlers.search);
 
-  // The catalog is only read once a prompt actually carries a `#ref`, so these
-  // dependency bundles are built lazily.
+  // Built lazily: the catalog is only read once a prompt carries a `#ref`.
   function sessionRefDeps(): SessionRefDependencies {
     let built: SessionCatalog | null = null;
     return {
@@ -287,27 +263,23 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/sessions/:id/steer', sessionCommandHandlers.steer);
   app.post('/api/sessions/:id/follow-up', sessionCommandHandlers.followUp);
 
-  const mutationHandlers = createSessionMutationHandlers({
-    getLiveSession, findSessionSource, getRegisteredSession,
-  });
+  const mutationHandlers = createSessionMutationHandlers({ ownership, findSessionSource });
   app.post('/api/sessions/:id/queue/cancel', mutationHandlers.cancelQueued);
   app.post('/api/sessions/:id/thinking', mutationHandlers.thinking);
   app.post('/api/sessions/:id/fast', mutationHandlers.fast);
   app.get('/api/sessions/:id/stats', sessionReadHandlers.stats);
   app.get('/api/sessions/:id/export', sessionReadHandlers.export);
 
-  // A share is a random token referencing a session or an immutable native HTML
-  // snapshot. Management lives on the main app; GET /share/:token is mounted on
-  // both the main app and the optional share listener. Every miss is a bare 404.
+  // GET /share/:token is mounted on both the main app and the optional share
+  // listener; management stays on the main app. Every miss is a bare 404.
   app.post('/api/shares/import', express.text({ type: 'text/html', limit: '20mb' }), publicationHandlers.importShare);
   app.post('/api/sessions/:id/share', publicationHandlers.createShare);
   app.delete('/api/sessions/:id/share', publicationHandlers.revokeShare);
   app.get('/api/sessions/:id/share', publicationHandlers.getShare);
   app.get('/share/:token', publicationHandlers.serveSharedSession);
 
-  // Published pages reach their own comments only through these page-scoped
-  // routes. Every route is a GET or POST so the overlay's cross-origin calls
-  // are never preflighted.
+  // Published pages reach their own comments only through these routes; GET/POST
+  // only so the overlay's cross-origin calls are never preflighted.
   app.use('/api/page-comments/:token', relayHandlers.pageComments);
   app.get('/api/page-comments/:token', publicationHandlers.listPageComments);
   app.post('/api/page-comments/:token', publicationHandlers.createPageComment);
@@ -326,8 +298,7 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/pages', publicationHandlers.createPage);
   app.get('/api/pages', publicationHandlers.listPages);
   app.delete('/api/pages/:token', publicationHandlers.revokePage);
-  // The public serving routes: directory roots serve index.html and contained
-  // assets; every failure is a bare 404.
+  // Public serving routes; every failure is a bare 404.
   app.get('/page/:token', publicationHandlers.page);
   app.get('/page/:token/*', publicationHandlers.pageAsset);
 
@@ -342,7 +313,7 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/sessions/:id/model', mutationHandlers.model);
   app.get('/api/sessions/:id/tree', sessionReadHandlers.tree);
   app.post('/api/sessions/:id/branch',
-    createSessionTreeHandler({ getLiveSession, findSessionSource, getRegisteredSession, getRPCSession, locatePiPane }).branch);
+    createSessionTreeHandler({ ownership, findSessionSource }).branch);
 
   app.get('/api/harnesses', featureHandlers.harnesses);
   app.get('/api/harnesses/:id/config', featureHandlers.harnessConfig);
@@ -377,9 +348,8 @@ export function startServer(rootDirectory: string): Server {
     }
   });
 
-  // Feature flags the client needs before rendering chrome. `terminal` is
-  // opt-in and additionally requires node-pty to have loaded: a missing native
-  // binary must hide the button, not break the UI.
+  // `terminal` also requires node-pty to have loaded: a missing native binary
+  // must hide the button, not break the UI.
   app.get('/api/config', (_req: ApplicationRequest, res: ApplicationResponse) => {
     res.json({
       terminal: terminal.isTerminalEnabled(),
@@ -390,8 +360,7 @@ export function startServer(rootDirectory: string): Server {
     });
   });
 
-  // The browser posts raw audio; the server holds the endpoint and its key and
-  // relays a multipart transcription request.
+  // The server holds the STT endpoint and key; the browser only posts raw audio.
   const parseAudioBody = express.raw({ type: ['audio/*', 'video/webm'], limit: '25mb' });
   app.post('/api/stt', parseAudioBody, featureHandlers.transcribe);
 
@@ -400,14 +369,12 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/agent-docs/:topic', agentDocs.topic);
   app.get('/api/themes', themesHandler);
 
-  // tmux spawn targets: the running tmux servers and their sessions. 200 with
-  // available:false when tmux is missing (the client hides the control).
+  // 200 with available:false when tmux is missing (the client hides the control).
   app.get('/api/tmux/targets', async (_req: ApplicationRequest, res: ApplicationResponse) => {
     if (!tmux.isTmuxAvailable()) return res.json({ available: false, servers: [] });
     try {
       const servers = await tmux.listServers();
-      // Opportunistically drop spawn placements whose pane and session are both
-      // gone, so tmux-spawns.json doesn't grow without bound.
+      // Prune placements whose pane and session are gone so tmux-spawns.json stays bounded.
       try {
         const registered = new Set(listRegisteredSessions().map((entry) => {
           const identity = registryIdentity(entry);
@@ -429,13 +396,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/diff/patch', fileHandlers.diffPatch);
   app.get('/api/sessions/:id/diff', fileHandlers.diffSummary);
 
-  const createHandlers = createSessionCreateHandlers({
-    sessionOperations,
-    sessionLaunch,
-    findSessionFile,
-    getRegisteredSession,
-    getRPCSession,
-  });
+  const createHandlers = createSessionCreateHandlers({ sessionOperations, sessionLaunch, sessionKnown });
   app.post('/api/sessions/new', createHandlers.create);
   app.get('/api/session-spawns/:id', createHandlers.spawnStatus);
 
@@ -469,9 +430,9 @@ export function startServer(rootDirectory: string): Server {
     if (typeof excluded !== 'boolean') return res.status(400).json({ error: 'excluded must be a boolean' });
     const identity = routeIdentity(req.params.id);
     if (!identity || !getHarness(identity.harnessId)) return res.status(400).json({ error: 'Invalid session ID' });
-    if (!recoveryStore.readRecord(identity.harnessId, identity.nativeSessionId)
-        && !getRegisteredSession(req.params.id) && !getRPCSession(req.params.id)?.alive
-        && !findSessionSource(req.params.id, { exact: true })) return res.status(404).json({ error: 'Session not found' });
+    if (!recoveryStore.readRecord(identity.harnessId, identity.nativeSessionId) && !sessionKnown(req.params.id)) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
     try {
       res.json({ excluded: recoveryStore.patchControl(identity.harnessId, identity.nativeSessionId, { excluded }).excluded });
     } catch (error) { res.status(500).json({ error: errorMessage(error) }); }
@@ -521,7 +482,6 @@ export function startServer(rootDirectory: string): Server {
     },
   });
 
-  // Web Push: this host notifies subscribed devices about its own sessions.
   const pushNotifier = createPushNotifier({
     sessions: () => catalog.getActiveSessions(),
     agentLaunched: id => {
@@ -580,8 +540,7 @@ export function startServer(rootDirectory: string): Server {
     res.json({ operation });
   });
 
-  // A routine is a session template and an invocation is a session: each run
-  // stamps its session with routine provenance.
+  // Each routine run stamps its session with routine provenance.
   const routineRunner = createRoutineRunner({
     createSession: sessionOperations.createSession,
     resumeSession: sessionOperations.resumeSessionById,
@@ -590,7 +549,7 @@ export function startServer(rootDirectory: string): Server {
     composePrompt: (routine, invocation) => composeRoutinePrompt(routine, invocation, sessionRefDeps()),
     isTurnInProgress: (sess) => !!sess?.turnInProgress,
     supports: liveSessionSupports,
-    recoveryOutcome: sessionId => recoveryRunner.outcome(sessionId),
+    recoveryOutcome: recoveryRunner.outcome,
   });
   const routineHandlers = createRoutineHandlers({
     runner: routineRunner,
@@ -634,8 +593,7 @@ export function startServer(rootDirectory: string): Server {
     pushNotifier.stop();
   }
 
-  // Fleet relay takes precedence even when this host's terminal is disabled.
-  // Keep ordinary unbound handler calls and destroy every unclaimed socket.
+  // Fleet relay takes precedence even when the terminal is disabled; unclaimed sockets are destroyed.
   function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     let url: URL;
     try { url = new URL(req.url || '', 'http://localhost'); } catch { socket.destroy(); return; }
@@ -646,7 +604,7 @@ export function startServer(rootDirectory: string): Server {
   return startListeners({
     app, host: HOST, port: PORT, upgrade, closeResources,
     terminalShutdown: terminalHandlers?.shutdown,
-    warm: () => { piSDK.getAvailableModels().then(setModelsCache).catch(() => {}); },
+    warm: () => { piSDK.getAvailableModels().then(catalog.setModelsCache).catch(() => {}); },
     onListening: () => {
       // Skill roots precede the first big index build; failure remains harmless.
       skillsLib.getSkillFilePaths({ cwds: knownWorkspaceCwds(catalog.buildSessionCatalog) })
@@ -656,8 +614,7 @@ export function startServer(rootDirectory: string): Server {
       sessionBounces.start();
       hibernation.start();
       pushNotifier.start();
-      // Prime roots appear in the daemon roster, not the bridge registry: poll
-      // it so the active list and capability projections track attaches/exits.
+      // Prime roots live in the daemon roster, not the bridge registry, so poll it.
       getPrimeDaemon().start();
       // A restored idle session is interrupted work, not a completed oneShot.
       recoveryRunner.start()

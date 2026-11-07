@@ -1,5 +1,5 @@
 import type { Route } from '@playwright/test';
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 import { test, expect, ROOT, requiredRoute } from './fixtures.js';
 
 test('a delayed spawn acceptance retains its submitted refine draft and leaves a newer takeover visible', async ({ page, fleet }) => {

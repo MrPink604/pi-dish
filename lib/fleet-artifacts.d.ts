@@ -10,7 +10,7 @@ export interface FleetArtifactListEntry {
     kind: ArtifactKind;
     createdAt: number | null;
 }
-/** M3-owned port consumed by M5 relay; untrusted inputs stay unknown. */
+/** Store port consumed by the relay; untrusted inputs stay unknown. */
 export interface FleetArtifactStore {
     get(token: unknown): FleetArtifactRecord | null;
     record(token: unknown, host: unknown, kind: unknown): FleetArtifactRecord | null;

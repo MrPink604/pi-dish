@@ -1,29 +1,15 @@
 // Generated from src/core/feature-handlers.ts; edit that source and run npm run build:core.
 import type { RequestHandler } from 'express';
-import type { SessionCatalog } from './session-catalog';
+import type { CatalogRuntime } from './session-catalog-runtime';
 import type { SessionSource } from './session-source';
 import type { SessionOwnership } from './session-ownership';
-import type { CatalogModel } from './session-api';
-import type { AvailableModel } from './pi-sdk';
 export type FeatureHandler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 export interface FeaturePorts {
-    readDishSettings(): Record<string, unknown>;
-    writeDishSettings(settings: Record<string, unknown>): void;
-    buildSessionCatalog(): Pick<SessionCatalog, 'list'>;
-    enumerateSessionCandidates(): readonly SessionSource[];
+    catalog: CatalogRuntime;
+    ownership: SessionOwnership;
     findSessionSource(id: string, options?: {
         exact?: boolean;
     }): SessionSource | null;
-    getSessionModels(id: string): Promise<CatalogModel[] | null>;
-    getLiveSession: SessionOwnership['getLiveSession'];
-    /** Weak listing advice only; never a command-execution authorization. */
-    locatePiPane: SessionOwnership['locatePiPane'];
-    getModelsCache(): {
-        models: AvailableModel[] | null;
-        time: number;
-    };
-    /** The root setter also invalidates its context-window memo. */
-    setModelsCache(models: AvailableModel[]): void;
     applicationRoot: string;
     piSettingsFile: string;
 }

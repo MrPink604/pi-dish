@@ -2,6 +2,7 @@ import type { RequestHandler } from 'express';
 import type { ParsedQs } from 'qs';
 import type { LiveSession, liveSessionSupports } from './session-ownership';
 import { messageHoldWindowMs, peerSender, type MessageHold } from './message-hold';
+import { errorMessage } from './http-boundary';
 
 type CommandHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 type CommandRequest = Parameters<CommandHandler>[0];
@@ -95,7 +96,7 @@ export function createSessionCommandHandlers(ports: SessionCommandPorts): {
       const result = operation === 'steer' ? await session.steer(text, opts) : await session.prompt(text, opts);
       res.json({ success: true, result });
     } catch (error) {
-      res.status(500).json({ error: error && typeof error === 'object' && 'message' in error ? error.message : undefined });
+      res.status(500).json({ error: errorMessage(error) });
     }
   }
 

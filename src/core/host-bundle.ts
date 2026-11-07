@@ -1,17 +1,9 @@
 /**
- * The self-contained host tree a hub deploys to a `deploy: true` ssh remote,
- * built once per process under ~/.pi/dish/host-bundle/<hash>/:
- *
- *   lib/pi-dish-host.js   host-entry.ts with every npm dependency bundled
- *   lib/*.js              plain copies; bridge extensions import a few of them
- *   extensions/, skills/  loaded by spawned harnesses and the skills feature
- *   satellite/watchdog    Termux keep-reachable script
- *   package.json          read for the version
- *
- * Native modules stay out: the web terminal (node-pty) is unavailable on a
- * deployed host and file search uses its directory-walk fallback (fff). The
- * content hash names the remote directory, so an unchanged tree is never
- * uploaded twice.
+ * Self-contained host tree a hub deploys to a `deploy: true` ssh remote, under
+ * ~/.pi/dish/host-bundle/<hash>/: lib/pi-dish-host.js (npm deps bundled),
+ * lib/*.js copies, extensions/, skills/, satellite/watchdog, package.json.
+ * Native modules stay out (no node-pty terminal; fff falls back to a dir walk).
+ * The content hash names the remote dir, so an unchanged tree uploads once.
  */
 import crypto = require('node:crypto');
 import fs = require('node:fs');
@@ -23,19 +15,15 @@ export interface HostBundle {
   hash: string;
 }
 
-// Native addons cannot be bundled; esbuild is the hub's own build tool and is
-// loaded lazily, so a deployed host never needs it.
+// Native addons can't be bundled; esbuild is lazy-loaded so a deployed host never needs it.
 const EXTERNALS = ['node-pty', '@ff-labs/fff-node', 'esbuild'];
 const COPIED_DIRS = ['extensions', 'skills'];
 
 /**
- * Runs on the phone without the hub: Termux:Boot at boot, and Android's
- * JobScheduler about every 15 minutes, which starts Termux again if Android
- * killed it. It only keeps sshd up; the hub dials in and starts pi-dish itself.
- * Neither runner is a login shell, so termux-services' supervisor (started
- * from profile.d) and SVDIR may be absent: an enabled sshd service gets its
- * supervisor started, anything else a plain sshd. Never both, or runit's
- * sshd would loop on the port the plain one holds.
+ * Termux:Boot and JobScheduler (~15 min) keep sshd up; the hub starts pi-dish.
+ * Neither runner is a login shell, so the termux-services supervisor may be
+ * absent: start it for an enabled sshd service, else a plain sshd. Never both,
+ * or runit's sshd loops on the port the plain one holds.
  */
 const SATELLITE_WATCHDOG = `#!/data/data/com.termux/files/usr/bin/sh
 # pi-dish satellite watchdog. Installed and refreshed by the pi-dish hub that
@@ -73,7 +61,6 @@ function treeFiles(dir: string, prefix = ''): string[] {
   return out.sort();
 }
 
-/** sha256 over sorted relative paths and contents: names the tree, not its mtimes. */
 function hashTree(dir: string): string {
   const hash = crypto.createHash('sha256');
   for (const rel of treeFiles(dir)) {

@@ -1,7 +1,7 @@
 import type { Page, Route } from '@playwright/test';
 import type { FleetFixture } from './fixtures.js';
 import { test, expect, ROOT, requiredRoute } from './fixtures.js';
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 const tree = { nodes: [
   { id: 'first', type: 'message', role: 'user', text: 'First prompt' },
   { id: 'second', parentId: 'first', type: 'message', role: 'assistant', text: 'Second answer' },

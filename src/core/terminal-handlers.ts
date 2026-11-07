@@ -88,6 +88,6 @@ export function createTerminalHandlers(ports: TerminalPorts): TerminalHandlers {
     return true;
   }
 
-  // Keep the original shutdown policy: kill PTYs, not a new WS lifecycle owner.
+  // Shutdown kills PTYs; it does not own the WS lifecycle.
   return { upgrade, shutdown: killAllTerminals };
 }

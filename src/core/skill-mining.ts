@@ -1,27 +1,8 @@
 /**
- * Mine skill-activation records from a session JSONL's parsed content. Pure
- * and side-effect-free so the session-index parse pass can call it (never a
- * separate corpus walk) and unit tests can drive it directly.
- *
- * A record is the primitive the Skills view is built on:
- *
- *   { skill, file, kind, ranges, truncatedTo?, ts, sessionId, entryId, cwd, model }
- *
- * - `skill`   absolute SKILL.md path (stable identity, matches pi's `location`)
- * - `file`    which file under the skill dir was touched (relative)
- * - `kind`    'read' | 'targeted' | 'explicit'
- * - `ranges`  line ranges [[start,end], …] for ranged reads; 'all' for a
- *             full-content read; null for a grep-style touch (never fabricated
- *             line data). An open-ended read stores end === -1 (to EOF).
- * - `truncatedTo` last line the tool actually returned, parsed from the read
- *             result's truncation notice.
- *
- * Detection:
- * - read: a `read` tool call whose resolved path is SKILL.md under a known
- *   skill root, or any file under a skill directory.
- * - targeted: a `bash` call naming a skill-path token; cat/sed -n ranges are
- *   parsed when trivial, grep-style access records no ranges.
- * - explicit: a user message in pi's skill-block format.
+ * Mine skill-activation records from parsed session JSONL. Kinds: `read` (read
+ * tool inside a skill root), `targeted` (bash token naming a skill path), and
+ * `explicit` (pi's skill-block user message). `ranges` is 'all', null (grep-style,
+ * never fabricated) or [[start,end], …] with end === -1 for an open-ended read.
  */
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -42,11 +23,7 @@ export interface SkillMiningOptions {
 export interface SkillBlock { name: string; location: string }
 export interface SkillPath { skill: string; file: string }
 
-/**
- * Match pi's own skill-block format (AgentSession.parseSkillBlock). Kept in
- * sync with that regex deliberately — explicit invocations must be detected
- * via pi's format, not a heuristic. Returns { name, location } or null.
- */
+/** Deliberately mirrors pi's AgentSession.parseSkillBlock regex, not a heuristic. */
 export function parseSkillBlockText(text: unknown): SkillBlock | null {
   if (typeof text !== 'string') return null;
   const match = text.match(/^<skill name="([^"]+)" location="([^"]+)">\n[\s\S]*?\n<\/skill>(?:\n\n[\s\S]+)?$/);
@@ -54,10 +31,7 @@ export function parseSkillBlockText(text: unknown): SkillBlock | null {
   return { name: match[1], location: match[2] };
 }
 
-/**
- * Last line a truncated `read` result actually returned, parsed from the
- * tool's text notice rather than guessed from the requested range.
- */
+/** Last line a truncated `read` actually returned, parsed from the tool's notice. */
 export function parseTruncationNotice(text: unknown): number | null {
   if (typeof text !== 'string') return null;
   let m = text.match(/\[Showing lines \d+-(\d+) of \d+/);
@@ -69,32 +43,22 @@ export function parseTruncationNotice(text: unknown): number | null {
   return null;
 }
 
-/**
- * Trivially-parseable line ranges for a targeted (bash) access to `token`.
- * `sed -n '10,50p' file` → [[10,50]]; a grep-style access → null (a touch,
- * never fabricated line data).
- */
 export function parseTargetedRanges(command: unknown, token: string): SkillActivation['ranges'] {
   if (typeof command !== 'string') return null;
-  // Only look at the segment of the pipeline that names the token.
   const idx = command.indexOf(token);
   const seg = idx >= 0 ? command.slice(Math.max(0, idx - 60), idx + token.length + 4) : command;
   const before = idx >= 0 ? command.slice(0, idx) : command;
   if (/\b(grep|rg|ag|ack|awk|find|ls|wc|stat|file|xxd|hexdump)\b/.test(before)) return null;
-  // sed -n '10,50p'
   let m = command.match(/sed\s+-n\s+['"]?(\d+),(\d+)p/);
   if (m) return [[Number(m[1]), Number(m[2])]];
-  // sed -n '10p'
   m = command.match(/sed\s+-n\s+['"]?(\d+)p/);
   if (m) return [[Number(m[1]), Number(m[1])]];
-  // head -n 40  (from the top)
   m = command.match(/head\s+(?:-n\s*)?-?(\d+)/);
   if (m && /\b(head|cat)\b/.test(before + seg)) return [[1, Number(m[1])]];
   if (/\bcat\b/.test(before)) return 'all';
   return null; // an unrecognized read of the file — a touch without line data
 }
 
-/** Resolve a tool-arg / command path against cwd + home. */
 function makeResolver(cwd: string | null, home: string): (value: unknown) => string | null {
   return (value) => {
     if (typeof value !== 'string' || !value) return null;
@@ -109,7 +73,6 @@ function makeResolver(cwd: string | null, home: string): (value: unknown) => str
   };
 }
 
-/** Classify SKILL.md itself, or a file beneath an inventory skill directory. */
 export function classifySkillPath(absPath: string | null | undefined, ctx?: SkillContext | null): SkillPath | null {
   if (!absPath) return null;
   const base = path.basename(absPath);
@@ -126,7 +89,6 @@ export function classifySkillPath(absPath: string | null | undefined, ctx?: Skil
   return null;
 }
 
-/** Read the toolCall blocks out of an assistant message entry. */
 function toolCallsOf(entry: Record<string, unknown>): Record<string, unknown>[] {
   const m = entry.type === 'message' ? entry.message : undefined;
   if (!record(m) || m.role !== 'assistant' || !Array.isArray(m.content)) return [];
@@ -139,25 +101,16 @@ function entryTs(entry: Record<string, unknown>): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-/**
- * Mine every skill-activation record from one session's JSONL content.
- * `opts.skillCtx.roots` is a Map(skillDir → SKILL.md path) from the inventory;
- * when empty, SKILL.md reads and explicit blocks are still detected.
- */
+/** With empty `opts.skillCtx.roots`, SKILL.md reads and explicit blocks are still detected. */
 export function mineSkillsFromContent(content: unknown, opts: SkillMiningOptions = {}): SkillActivation[] {
   const entries = parseSessionEntries(String(content || ''));
   return mineSkillsFromEntries(entries, opts).records;
 }
 
 /**
- * Entry-based form so the session-index parse pass can feed one parsed-entry
- * array to every derivation, and so an appended byte range can be mined
- * incrementally: `initialState` is the `{ cwd, provider, model }` continuity
- * returned by the previous call over the earlier part of the same file.
- * Returns `{ records, state }`. Known incremental-fidelity limit: a read
- * toolCall and its toolResult can straddle two appended batches, in which
- * case the un-ranged-read truncation recovery (pass 1) misses — the record
- * still lands, minus its recovered end line, until the next full re-index.
+ * `initialState` carries `{ cwd, provider, model }` from the previous call so
+ * appended byte ranges mine incrementally. Limit: a read toolCall/toolResult
+ * pair straddling two batches loses its truncation end line until re-index.
  */
 export function mineSkillsFromEntries(entries: SessionEntries, opts: SkillMiningOptions = {}): SkillProjection {
   const { sessionId = null, skillCtx = null, home = os.homedir(), initialState = null } = opts;
@@ -166,8 +119,7 @@ export function mineSkillsFromEntries(entries: SessionEntries, opts: SkillMining
   // can recover its truncation end line.
   const resultText = new Map<unknown, string>();
   for (const e of entries) {
-    // Preserve the existing failure for null entries; malformed JSON lines are
-    // ignored by the content parser, not normalized into synthetic entries.
+    // Null entries throw deliberately; malformed JSON lines were already dropped by the parser.
     if (e == null) throw new TypeError('Cannot read properties of null or undefined');
     if (!record(e)) continue;
     const message = e.message;
@@ -196,7 +148,6 @@ export function mineSkillsFromEntries(entries: SessionEntries, opts: SkillMining
     const modelRef = provider ? `${provider}/${model}` : model;
     const ts = entryTs(entry);
 
-    // explicit /skill: invocation (user message expanded to a skill block)
     if (msg?.role === 'user') {
       const parsed = parseSkillBlockText(extractTextContent(msg.content));
       if (parsed) {

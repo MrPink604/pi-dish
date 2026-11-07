@@ -1,9 +1,8 @@
 // Generated from src/core/session-capabilities.ts; edit that source and run npm run build:core.
 import type { HarnessId, BridgeCapability, AdvertisedCapabilities, SessionCapabilities, CapabilityContext } from './contracts';
 /**
- * Legacy Pi permits missing flags; alternative wrappers must explicitly opt in.
- * This is policy only, not harness-id validation. Unknown wrapper observations
- * retain the same explicit-opt-in rule; no synthetic harness identity is needed.
+ * Pi permits missing flags; alternative wrappers (known or not) must
+ * explicitly opt in. Policy only, not harness-id validation.
  */
 declare function bridgeSupports(harnessId: unknown, capabilities: AdvertisedCapabilities | null | undefined, capability: BridgeCapability): boolean;
 /** Project UI/API advice. Lifecycle authority is established separately by callers. */

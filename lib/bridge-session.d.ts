@@ -18,11 +18,8 @@ declare function invalidateRegistryCache(): void;
 declare function validRegistryClaimShape(input: unknown): boolean;
 declare function sameRegistryClaim(left: unknown, right: unknown): boolean;
 /**
- * Remove only the registry claim that was actually inspected. Re-read before
- * unlinking so a new bridge for the same session cannot be erased by a stale
- * scan or failed connection from the old bridge. The socket itself is left
- * alone: unlinking a path after a replacement bridge binds it would sever a
- * healthy listener from future clients.
+ * Re-reads before unlinking so a stale scan can't erase a new bridge's claim for
+ * the same session. The socket is left alone: a replacement bridge may have bound it.
  */
 declare function pruneRegisteredSession(entry: unknown): boolean;
 declare function pruneUnreachableRegisteredSession(entry: unknown, error: unknown): boolean;
@@ -31,11 +28,7 @@ declare function getRegisteredSession(sessionId: NativeSessionId): BridgeRegistr
 declare function getRegisteredSessionByNativeId(harnessId: HarnessId, nativeSessionId: NativeSessionId): BridgeRegistryEntry | null;
 declare function getRegisteredSessionByClaim(claim: unknown): BridgeRegistryEntry | null;
 declare function refreshRegisteredSession(sessionId: NativeSessionId): BridgeRegistryEntry | null;
-/**
- * A live connection to a bridge socket. Mirrors the surface that server.js
- * previously expected from RPCSession: on(event, cb), prompt, abort, setModel,
- * setName, plus a few state fields (alive, turnInProgress, sessionFile, cwd).
- */
+/** A live bridge socket with the prompt/abort/model surface RPCSession exposes. */
 declare class BridgeSession extends EventEmitter<BridgeEvents> {
     id: NativeSessionId;
     protocolVersion: unknown;
@@ -70,7 +63,7 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     bounceActivityRevision?: number;
     constructor(registryEntry: BridgeRegistryEntry);
     connect(): Promise<this>;
-    /** Legacy claims predate claim-bound identity; v2 claims are immutable and proved by hello. */
+    /** v1 claims predate claim-bound identity; v2 claims are immutable and proved by hello. */
     private get legacyClaim();
     _validateV2Hello(msg: unknown): NodeJS.ErrnoException | null;
     _handle(input: unknown): void;
@@ -106,7 +99,6 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
 }
 declare function getBridgeSession(sessionId: NativeSessionId | BridgeRegistryEntry): Promise<BridgeSession>;
 declare const _default: {
-    ROOT: string;
     REGISTRY_DIR: string;
     listRegisteredSessions: typeof listRegisteredSessions;
     invalidateRegistryCache: typeof invalidateRegistryCache;

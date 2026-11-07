@@ -14,7 +14,9 @@ import { LifecycleInterruption, proveBridgeRegistryClaim, registryIdentity, rout
 import type { BeforeLifecycleAction } from './session-ownership';
 import { formatModelRef, parseModelId } from './helper-models';
 import type { ModelRef } from './helper-types';
+import { dishDir } from './dish-store';
 import { record } from './helper-values';
+import { errorMessage, errorStatus } from './http-boundary';
 import * as tmux from './tmux';
 
 export interface HarnessLaunchTarget {
@@ -45,7 +47,7 @@ export interface NewSessionLaunchOptions {
   descriptor: HarnessDescriptor;
   name?: string | null;
   target?: HarnessLaunchTarget | null;
-  /** Keep the transcript in the harness's private root (outside fleet backups). */
+  /** Harness private root, outside fleet backups. */
   private?: boolean;
 }
 
@@ -126,29 +128,21 @@ class BridgeSocketConfigError extends LaunchError {
 }
 
 export const HEADLESS_TMUX_SERVER = 'pi-dish';
-/** Bounds for the spawn-registration poll; see the interval rule in performTmuxLaunch. */
+/** Spawn-registration poll bounds; see the interval rule in performTmuxLaunch. */
 const REGISTRY_POLL_MIN_MS = 20;
 const REGISTRY_POLL_MAX_MS = 300;
 const MAX_BRIDGE_SOCKET_PATH_BYTES = 103;
 const BRIDGE_SOCKET_BASENAME = `${'0'.repeat(24)}.sock`;
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : record(error) && typeof error.message === 'string' ? error.message : String(error);
-}
-
-function errorStatus(error: unknown): number {
-  return record(error) && typeof error.status === 'number' && error.status ? error.status : 500;
-}
-
 function forbidden(error: unknown): LaunchOutcome {
-  if (error instanceof LifecycleInterruption) return { kind: 'interrupted', error, status: errorStatus(error) };
-  return { kind: 'fallback-forbidden', error, status: errorStatus(error) };
+  if (error instanceof LifecycleInterruption) return { kind: 'interrupted', error, status: errorStatus(error, 500) };
+  return { kind: 'fallback-forbidden', error, status: errorStatus(error, 500) };
 }
 
 function unclassifiedTmuxFailure(descriptor: HarnessDescriptor, error: unknown): LaunchOutcome {
   if (error instanceof BridgeSocketConfigError || error instanceof LifecycleInterruption) return forbidden(error);
   // Only an unclassified launch exception permits the headless RPC fallback.
-  return { kind: descriptor.rpcFallback ? 'fallback-permitted' : 'fallback-forbidden', error, status: errorStatus(error) };
+  return { kind: descriptor.rpcFallback ? 'fallback-permitted' : 'fallback-forbidden', error, status: errorStatus(error, 500) };
 }
 
 interface SpawnRegistration {
@@ -219,7 +213,7 @@ function materializeLaunchWrapper(descriptor: HarnessDescriptor, token: string):
   if (!descriptor.wrapperEntrypoint) {
     throw new BridgeSocketConfigError(`${descriptor.label} uses wrapper token injection without a wrapper entrypoint`);
   }
-  const dir = path.join(os.homedir(), '.pi', 'dish', 'launch-wrappers');
+  const dir = path.join(dishDir(), 'launch-wrappers');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stat = fs.statSync(dir);
   if (!stat.isDirectory() || (typeof process.getuid === 'function' && stat.uid !== process.getuid())) {
@@ -227,8 +221,7 @@ function materializeLaunchWrapper(descriptor: HarnessDescriptor, token: string):
   }
   if ((stat.mode & 0o777) !== 0o700) fs.chmodSync(dir, 0o700);
   const wrapperPath = path.join(dir, `${descriptor.id}-${token}.ts`);
-  // OMP rewrites bare host imports only in this wrapper's tree, so its host
-  // import must remain here.
+  // OMP rewrites bare host imports only in this wrapper's tree, so the import must live here.
   const hostImport = descriptor.wrapperHostPackage ? [
     'let hostAgentSession;',
     `try { hostAgentSession = (await import(${JSON.stringify(descriptor.wrapperHostPackage)})).AgentSession; } catch {}`,
@@ -279,14 +272,13 @@ function stripLaunchWrapperArgs(descriptor: HarnessDescriptor, args: readonly un
   return [...args.slice(0, index - 1), ...args.slice(index + 1)];
 }
 
-/** Live processes named by a tmux cleanup failure; null when the error carries no evidence. */
 export function cleanupProcesses(error: unknown): ProcessIdentity[] | null {
   if (!record(error) || !Array.isArray(error.remainingProcesses)) return null;
   return error.remainingProcesses.filter((value: unknown): value is ProcessIdentity =>
     record(value) && typeof value.pid === 'number' && typeof value.startTime === 'string');
 }
 
-/** Resolved-path identity for a transcript or working directory; never a bare prefix match. */
+/** realpath equality; never a bare prefix match. */
 function samePath(left: unknown, right: unknown): boolean {
   if (typeof left !== 'string' || !left || typeof right !== 'string' || !right) return false;
   try { return fs.realpathSync(left) === fs.realpathSync(right); }
@@ -315,10 +307,7 @@ interface PrimeLaunchContext {
 
 type PrimeRootObservation = { kind: 'single'; summary: PrimeAgentSummary } | { kind: 'ambiguous'; count: number } | null;
 
-/**
- * Identify the root agent a Prime launch produced. Resume matches the
- * transcript; a new session is the single new root in the launch directory.
- */
+/** Resume matches the transcript; a new session is the single new root in the launch cwd. */
 async function waitForPrimeRoot(daemon: PrimeDaemon, { cwd, resumeFile, snapshot, timeout }: {
   cwd: string; resumeFile: string | null; snapshot: ReadonlySet<string>; timeout: number;
 }): Promise<PrimeRootObservation> {
@@ -382,12 +371,11 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     if (!descriptor.rpcFallback) return true;
     if (mode === 'tmux') return true;
     if (headlessTmuxBroken) return false;
-    const home = process.env.HOME || os.homedir();
+    const home = os.homedir();
     return fs.existsSync(path.join(home, '.pi', 'agent', 'extensions', 'pi-dish-bridge'));
   }
 
-  // pi-dish serializes its own Prime launches so new-session identification
-  // never races another root it is starting.
+  // Serialized so new-session identification never races another root pi-dish is starting.
   let primeLaunchChain: Promise<unknown> = Promise.resolve();
 
   function withPrimeLaunch<T>(action: () => Promise<T>): Promise<T> {
@@ -411,18 +399,17 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     }
     const spec = harnessLaunchSpec(descriptor);
     const env = { ...spec.env };
-    // A persistent tmux server may carry stale HOME/socket settings. Command
+    // A persistent tmux server may carry stale HOME/socket settings; command
     // assignments win, including an explicitly empty socket override.
-    if (!Object.hasOwn(env, 'HOME')) env.HOME = process.env.HOME || os.homedir();
+    if (!Object.hasOwn(env, 'HOME')) env.HOME = os.homedir();
     if (process.env.PI_DISH_URL) env.PI_DISH_URL = process.env.PI_DISH_URL;
     const launchCwd = cwd ? String(cwd) : env.HOME!;
     let spawnToken = '';
     let wrapperPath: string | null = null;
     let command: readonly unknown[];
     if (prime) {
-      // Prime's TUI is a client of the resident daemon: no wrapper, no spawn
-      // token. The explicit socket keeps pi-dish watching the daemon its own
-      // client uses even when the configured command names one.
+      // Prime's TUI is a daemon client (no wrapper or spawn token); the explicit
+      // socket keeps pi-dish on the same daemon as its client.
       command = [...spec.argv, ...(hasDaemonSocketArg(spec.argv) ? args : ['--daemon-socket', prime.daemon.socketPath, ...args])];
       for (const session of await prime.daemon.refresh()) prime.snapshot.add(session.activeSessionId);
     } else {
@@ -543,8 +530,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
             break;
           }
         }
-        // Detect cheap registrations promptly; pace larger registry scans toward
-        // 300 ms rather than re-parsing every claim at 20 ms.
+        // Poll cheap registrations promptly; pace expensive scans toward 300 ms.
         const interval = Math.min(REGISTRY_POLL_MAX_MS, Math.max(REGISTRY_POLL_MIN_MS, (Date.now() - scanStartedAt) * 20));
         await delay(Math.min(interval, Math.max(1, deadline - Date.now())));
       }
@@ -560,8 +546,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       }
     }
     if (restartPane && descriptor.closeMode === 'owned-agent') {
-      // A resident replacement can outlive its client; pane exit cannot prove
-      // that another transcript writer is safe to launch.
+      // A resident replacement can outlive its client; pane exit doesn't prove a second writer is safe.
       const error = new LaunchError(`${registrationError?.message || `${timeoutReason} — the tmux pane was left open for inspection; no second replacement was launched.`}`, registrationError?.status || 500);
       return { kind: 'detached-replacement-uncertain', error, status: error.status,
         placement: { socket, paneId, detachedWorker: true, knownProcesses: [] } };
@@ -605,7 +590,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
   }
 
   function spawnHarnessHeadlessTmux(options: Omit<SpawnHarnessOptions, 'target' | 'hidden' | 'restartPane'>): Promise<LaunchOutcome> {
-    // Name selection and new-session creation share one chain, avoiding races.
+    // Name selection and session creation share one chain to avoid races.
     const run = headlessSpawnChain.then(async (): Promise<LaunchOutcome> => {
       try {
         fs.mkdirSync(tmux.tmuxTmpdir(), { recursive: true, mode: 0o700 });
@@ -618,10 +603,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     return run;
   }
 
-  /**
-   * Explicit or headless tmux first. A fallback-permitted failure retires
-   * headless tmux for this process and continues with the RPC path.
-   */
+  /** A fallback-permitted tmux failure retires headless tmux for this process and continues via RPC. */
   async function launchInTmuxOrRpc(
     options: Omit<SpawnHarnessOptions, 'hidden' | 'restartPane' | 'target'> & { target?: HarnessLaunchTarget | null },
     action: 'spawn' | 'resume',
@@ -657,7 +639,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
 
   async function launchNewSession({ descriptor, name, model, thinking, cwd, target, private: privateSession = false }: NewSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
-      // Original dynamic calls own malformed-cwd failures; the assertions do not validate cwd.
+      // Downstream calls own malformed-cwd failures; these assertions don't validate cwd.
       if (cwd && (cwd as string).startsWith('~')) cwd = path.join(process.env.HOME!, (cwd as string).slice(1).replace(/^\//, ''));
       const sessionDir = privateSession ? privateRootFor(descriptor) : null;
       if (privateSession && !sessionDir) throw new LaunchError(`${descriptor.label} does not support private sessions.`, 400);

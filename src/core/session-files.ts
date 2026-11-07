@@ -1,13 +1,12 @@
 /**
- * Session JSONL readers. Session files run to tens of MB, so each reader
- * caches its projection keyed by (mtimeMs, size, ctimeMs, device, inode) and
- * re-parses only changed files. `getSessionInfo` returns a fresh shallow copy
- * per call (callers overlay live usage); the other readers return cached
- * arrays — treat them as immutable.
+ * Session JSONL readers. Files run to tens of MB, so each reader caches its
+ * projection by file stamp. `getSessionInfo` returns a fresh shallow copy (callers
+ * overlay live usage); other readers return cached arrays — treat as immutable.
  */
 import fs from 'node:fs';
 import { cacheRetentionRevision, loadCacheRetentionConfig } from './cache-retention.js';
-import { cacheExpiryForMessage, hasCacheActivity, isHardCacheMiss, sessionInfoFromEntries, isRecord } from './session-metadata.js';
+import { cacheExpiryForMessage, hasCacheActivity, isHardCacheMiss, sessionInfoFromEntries } from './session-metadata.js';
+import { record as isRecord } from './helper-values.js';
 import { applyLearnedCacheExpiry } from './cache-lifetime.js';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata.js';
 import { COST_KEYS, TOKEN_KEYS } from './session-index-data.js';
@@ -88,9 +87,8 @@ function entryDate(value: unknown): Date {
   return Reflect.construct(Date, [value]) as Date;
 }
 
-// Finite operands do not promise finite sums: preserve JS overflow, without
-// saturation. Persisted nonfinite projections are rejected by the index decoder.
-/** Malformed raw token operands contribute no amount, without rewriting usage. */
+// Malformed operands contribute 0. Finite operands may still overflow; that is
+// preserved, and the index decoder rejects persisted nonfinite projections.
 function tokenAmount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
@@ -111,10 +109,8 @@ function sameFile(left: fs.Stats, right: fs.Stats): boolean {
     left.ctimeMs === right.ctimeMs && left.dev === right.dev && left.ino === right.ino;
 }
 
-// One opportunistic raw parse, shared by metadata/messages/stats/the corpus
-// index. Weak ownership avoids retaining a second large transcript solely for
-// a possible next reader. GC may discard it at any time between operations;
-// that changes work, never freshness. Profiles/pricing apply after this cache.
+// One opportunistic raw parse shared by all readers and the corpus index. WeakRef
+// avoids pinning a second large transcript; GC changes work, never freshness.
 let parsedFile: { file: string; stats: fs.Stats; entries: WeakRef<SessionEntries>; endsNl: boolean } | undefined;
 export function readSessionFileEntries(file: string, stats: fs.Stats = fs.statSync(file)): {
   entries: SessionEntries; endsNl: boolean;
@@ -130,7 +126,7 @@ export function readSessionFileEntries(file: string, stats: fs.Stats = fs.statSy
   return { entries, endsNl };
 }
 
-/** The file-stamp revalidating LRU every reader shares; a hit refreshes recency and the oldest entry is evicted when full. */
+/** File-stamp revalidating LRU shared by every reader. */
 function statCached<T>(cache: Map<string, Cached<T>>, input: string | SessionFileSource, max: number, parse: (file: string, stats: fs.Stats, candidate: SessionFileSource) => T, extraKey = ''): T {
   const candidate = source(input);
   const filePath = candidate.file;
@@ -138,14 +134,14 @@ function statCached<T>(cache: Map<string, Cached<T>>, input: string | SessionFil
   const stats = fs.statSync(filePath);
   const cached = cache.get(cacheKey);
   if (cached && sameFile(cached.stats, stats)) {
-    cache.delete(cacheKey); cache.set(cacheKey, cached); // refresh recency
+    cache.delete(cacheKey); cache.set(cacheKey, cached);
     return cached.value;
   }
   const value = parse(filePath, stats, candidate);
   cache.delete(cacheKey);
   if (cache.size >= max) {
     const oldest = cache.keys().next();
-    if (!oldest.done) cache.delete(oldest.value); // evict oldest
+    if (!oldest.done) cache.delete(oldest.value);
   }
   cache.set(cacheKey, { stats, value });
   return value;
@@ -159,10 +155,9 @@ export function getSessionInfo(filePath: string | SessionFileSource): SessionInf
 }
 
 /**
- * The active branch: the parent chain from the leaf (the *last* entry, as
- * pi's SessionManager does on reopen) back to the root. Off-chain entries are
- * abandoned /tree branches and must not render. Null for pre-tree files (no
- * parentId), where every entry is active.
+ * Parent chain from the leaf (the *last* entry, as pi's SessionManager does on
+ * reopen) to the root; off-chain entries are abandoned /tree branches. Null for
+ * pre-tree files (no parentId), where every entry is active.
  */
 function activeTree(entries: SessionEntries, leafOverride?: unknown): ActiveTree | null {
   const byId = new Map<unknown, Record<string, unknown>>();
@@ -170,7 +165,7 @@ function activeTree(entries: SessionEntries, leafOverride?: unknown): ActiveTree
   for (const raw of entries) {
     const e = fields(raw);
     if (e.type === 'session' || !e.id) continue;
-    if (e.parentId === undefined) return null; // pre-tree format — linear file
+    if (e.parentId === undefined) return null; // pre-tree linear file
     byId.set(e.id, e);
     leafId = e.id;
   }
@@ -191,10 +186,8 @@ function activeTree(entries: SessionEntries, leafOverride?: unknown): ActiveTree
   return { ids: active, leafId };
 }
 
-// A snapcompact compaction record can reach tens of MB of base64 PNG
-// preserveData, which no projection consumes. The OMP writer serializes it
-// last, so parse the prefix before it; any other ordering falls back to a
-// full parse.
+// Snapcompact compaction records can carry tens of MB of base64 preserveData no
+// projection uses. OMP serializes it last, so parse the prefix; else full parse.
 const LARGE_COMPACTION_RECORD = 64 * 1024;
 function parseEntry(line: string): unknown {
   if (line.length >= LARGE_COMPACTION_RECORD && line.startsWith('{"type":"compaction",')) {
@@ -216,18 +209,14 @@ export function parseSessionEntries(content: string): SessionEntries {
   for (let i = 0; i < lines.length; i++) {
     try {
       entries.push(parseEntry(lines[i]));
-      // Only physical line zero can be Pi's SessionHeader / OMP's title line;
-      // sessionInfoFromEntries must not promote a later entry to one.
+      // Only physical line zero can be the header/title line.
       if (i === 0) entries.firstEntryOnFirstLine = true;
     } catch (e) {}
   }
   return entries;
 }
 
-/**
- * Chronological model changes only; assistant identity and retry/aggregation
- * remain with each consumer. Reuse one state per pass, not a fact per entry.
- */
+/** Chronological model changes only; reuse one state per pass. */
 function advanceModelChange(entry: Record<string, unknown>, state: ModelContinuity, profileId: string | undefined, policy: 'display' | 'usage'): void {
   if (policy === 'display') {
     if (profileId === 'omp-v1' && typeof entry.model === 'string') {
@@ -237,8 +226,8 @@ function advanceModelChange(entry: Record<string, unknown>, state: ModelContinui
     } else { state.provider = entry.provider || state.provider; state.model = entry.modelId || state.model; }
     return;
   }
-  // Persisted billing continuity admits strings only. In particular, OMP's
-  // empty suffix retains the previous model, unlike display pricing fallback.
+  // Billing continuity admits strings only; OMP's empty suffix keeps the previous
+  // model, unlike the display fallback.
   if (profileId === 'omp-v1') {
     const ref = typeof entry.model === 'string' ? entry.model : '';
     const slash = ref.indexOf('/');
@@ -259,10 +248,8 @@ type ServiceTierFamily = 'openai' | 'anthropic' | 'google';
 type ServiceTierContinuity = Partial<Record<ServiceTierFamily, string>> | null;
 
 /**
- * OMP's service_tier_change entries track the per-family tier map /fast
- * writes (null clears it). Billing-provider families mirror OMP's own
- * Sv() resolution for the providers pi-dish prices; unknown providers have
- * no known tier accounting and keep the flat estimate.
+ * Per-family tier map written by OMP /fast (null clears). Families mirror OMP's
+ * own provider resolution; unknown providers keep the flat estimate.
  */
 function advanceServiceTierChange(entry: Record<string, unknown>, tiers: { value: ServiceTierContinuity }): void {
   if (entry.type !== 'service_tier_change') return;
@@ -276,7 +263,7 @@ function advanceServiceTierChange(entry: Record<string, unknown>, tiers: { value
   tiers.value = Object.keys(next).length ? next : null;
 }
 
-/** Whether a message's provider bills under an engaged fast tier (priority/ultrafast). */
+/** Fast tiers: priority/ultrafast. */
 function providerUnderFastTier(provider: unknown, tiers: ServiceTierContinuity): boolean {
   if (!tiers) return false;
   if (provider === 'openai' || provider === 'openai-codex') {
@@ -291,8 +278,7 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
   estimateCost: UsageCostEstimator, fallbackModel: { provider?: unknown; model?: unknown } = {}, cacheExpiry?: CacheExpiry | null, tiers: ServiceTierContinuity = null): SessionMessage | null {
   if (entry.type === 'message' && entry.message) {
     const message = fields(entry.message);
-    // Hidden custom messages are model continuity/state, not transcript UI;
-    // interrupted-thinking is projected below without its hidden reasoning.
+    // Hidden custom messages are model state, not transcript UI.
     if (message.role === 'custom' && message.display === false) return null;
     const usage = sanitizeUsage(message.usage);
     if (usage) {
@@ -301,7 +287,7 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
       else delete usage.cost;
     }
     return {
-      // The JSONL entry id anchors pi's HTML export deep links (?targetId=<id>).
+      // Anchors pi's HTML export deep links (?targetId=<id>).
       id: entry.id || undefined,
       role: message.role,
       content: message.content || [],
@@ -313,8 +299,6 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
       usage,
       errorMessage: message.errorMessage || undefined,
       stopReason: message.stopReason || undefined,
-      // toolResult entries carry these at the message level; the client renders
-      // the tool name and error state from them.
       toolName: message.toolName || undefined,
       toolCallId: message.toolCallId || undefined,
       isError: message.isError || undefined,
@@ -333,8 +317,7 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
         timestamp: entry.timestamp,
       };
     }
-    // OMP marks interrupted-thinking display:false because its content is
-    // private reasoning, so only type/details reach the client.
+    // Content is private reasoning; only type/details reach the client.
     if (entry.customType === 'interrupted-thinking') {
       return {
         id: entry.id || undefined,
@@ -358,7 +341,7 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
     };
   }
   if (entry.type === 'branch_summary') {
-    // Tree navigation injects this as context, so show it in the transcript.
+    // Tree navigation injects this as context, so it is shown.
     return {
       id: entry.id || undefined,
       role: 'branchSummary',
@@ -371,9 +354,8 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
 }
 
 /**
- * The displayable message stream /messages paginates over; array index is the
- * stream index. Only the active tree path is included. Cached for the few most
- * recently viewed sessions — do not mutate the result.
+ * The stream /messages paginates over (array index is stream index), active
+ * tree path only.
  */
 function parseMessageData(entries: SessionEntries, candidate?: SessionFileProfile, leafOverride?: unknown): MessageData {
   const cacheConfig = loadCacheRetentionConfig();
@@ -406,8 +388,8 @@ function parseMessageData(entries: SessionEntries, candidate?: SessionFileProfil
       }
       const message = messageFromEntry(entry, candidate, estimateCost, model, applyLearnedCacheExpiry(responseCacheExpiry, cacheConfig), tiers.value);
       if (!message) continue;
-      // Keep abandoned entries addressable by id so an already-rendered lazy
-      // image URL cannot change meaning after /tree navigation.
+      // Abandoned entries stay addressable so a rendered lazy image URL can't
+      // change meaning after /tree navigation.
       if (entry.id) byId.set(entry.id, message);
       if (active && entry.id && !active.has(entry.id)) continue;
       messages.push(message);
@@ -416,8 +398,7 @@ function parseMessageData(entries: SessionEntries, candidate?: SessionFileProfil
   return { messages, byId };
 }
 
-// Usage is an API boundary: copy only Pi's documented counters and estimated
-// cost components, never provider-specific payload fields.
+// API boundary: copy only documented counters and cost components.
 export function sanitizeUsage(usage: unknown): SanitizedUsage | undefined {
   if (!usage || typeof usage !== 'object') return undefined;
   const raw = fields(usage);
@@ -439,9 +420,8 @@ export function sanitizeUsage(usage: unknown): SanitizedUsage | undefined {
 }
 
 /**
- * Response time from two timestamps: message.timestamp is stamped when the
- * API call starts, the entry's timestamp when it is appended. Empty for
- * non-assistant entries or when either timestamp is missing/inverted.
+ * message.timestamp is stamped at API call start, the entry's when appended.
+ * Empty when either is missing or inverted.
  */
 function assistantGenStats(entry: Record<string, unknown>): AssistantGenStats {
   const m = fields(entry.message);
@@ -452,19 +432,17 @@ function assistantGenStats(entry: Record<string, unknown>): AssistantGenStats {
   return { durationMs: end - start, outputTokens: fields(m.usage ?? EMPTY_FIELDS).output || 0 };
 }
 
-const messagesCache = new Map<string, Cached<MessageData>>(); // filePath -> { mtimeMs, size, value }
+const messagesCache = new Map<string, Cached<MessageData>>();
 
 export function readSessionMessages(filePath: string | SessionFileSource): readonly SessionMessage[] {
-  // Sized above the client's 5-session retention: lazy image loads and
-  // warm-restore catch-ups tour that many sessions through this cache.
+  // Sized above the client's 5-session retention (lazy images, warm-restore).
   return statCached(messagesCache, filePath, 8,
     (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate),
     `cache:${cacheRetentionRevision()}`).messages;
 }
 
-// A live OMP session can move its in-memory leaf without a JSONL anchor, so
-// the bridge's ReadonlySessionManager decides the branch. Cached with the leaf
-// in the key: opening a long session fires several page requests.
+// A live OMP session can move its leaf without a JSONL anchor, so the bridge
+// decides the branch. Leaf is in the key: one open fires several page requests.
 export function readSessionMessagesAtLeaf(filePath: string | SessionFileSource, leafId: unknown): readonly SessionMessage[] {
   return statCached(messagesCache, filePath, 8,
     (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate, leafId),
@@ -478,10 +456,8 @@ export function readSessionMessageById(filePath: string | SessionFileSource, ent
 }
 
 /**
- * Lowercased per-message text, index-aligned with readSessionMessages ('' for
- * a message with no text). Memoized on the shared message cache entry so a
- * repeated search over an unchanged file is a plain string scan, and both are
- * returned from one revalidation.
+ * Lowercased text index-aligned with readSessionMessages, memoized on the shared
+ * cache entry so both come from one revalidation.
  */
 export function readSessionSearchText(filePath: string | SessionFileSource): {
   readonly messages: readonly SessionMessage[]; readonly texts: readonly string[];
@@ -496,19 +472,16 @@ export function readSessionSearchText(filePath: string | SessionFileSource): {
 }
 
 /**
- * Search-text bounds. Prose is the recall target, so its cap only stops one
- * giant paste from eating the session budget. Tool results are bulky
- * low-recall dumps and stay tight. The session cap bounds one transcript's
- * total text and overflow drops the *oldest* text, keeping recent turns.
+ * Prose cap only stops one giant paste eating the budget; tool results are
+ * low-recall dumps. Session-cap overflow drops the *oldest* text.
  */
 const SEARCH_TEXT_PROSE_CAP = 100_000;
 const SEARCH_TEXT_TOOL_RESULT_CAP = 500;
 const SEARCH_TEXT_TOOL_CALL_CAP = 300;
 export const SEARCH_TEXT_SESSION_CAP = 4_000_000;
 
-// Args whose values are the recall keys people actually search for (file
-// paths, bash command lines, URLs); they go ahead of other string args so a
-// bulky arg (an edit's oldText) can't crowd them out of the per-call cap.
+// High-recall args (paths, commands, URLs) go first so bulky args (oldText)
+// can't crowd them out of the per-call cap.
 const TOOL_ARG_PRIORITY = new Set([
   'path', 'file_path', 'filename', 'file', 'cwd', 'command', 'cmd',
   'url', 'pattern', 'query',
@@ -526,11 +499,11 @@ function toolCallSearchText(block: Record<string, unknown>): string {
   return first.concat(rest).join(' ').substring(0, SEARCH_TEXT_TOOL_CALL_CAP);
 }
 
-/** Lowercased whole-session message text for server-side list search; the index persists it. */
+/** Persisted by the index for server-side list search. */
 function searchTextFromEntries(entries: SessionEntries, active: Set<unknown> | null): string {
   const parts: string[] = [];
   let total = 0;
-  let head = 0; // parts before head have been evicted by the session cap
+  let head = 0; // parts before head were evicted by the session cap
   const push = (part: string) => {
     if (!part) return;
     parts.push(part);
@@ -551,9 +524,8 @@ function searchTextFromEntries(entries: SessionEntries, active: Set<unknown> | n
         const cap = m.role === 'toolResult' ? SEARCH_TEXT_TOOL_RESULT_CAP : SEARCH_TEXT_PROSE_CAP;
         const text = extractTextContent(m.content);
         if (text) push(text.substring(0, cap));
-        // Tool calls carry the highest-signal recall keys a coding session
-        // has (file paths, bash command lines) and none of it reaches a text
-        // block, so extractTextContent alone made those sessions unfindable.
+        // Tool calls hold the best recall keys (paths, commands), which never
+        // reach a text block.
         if (Array.isArray(m.content)) {
           for (const rawBlock of m.content) {
             const block = rawBlock ? fields(rawBlock) : null;
@@ -600,24 +572,18 @@ export function extendSearchIndexFromEntries(entries: SessionEntries, tree: bool
     const entry = fields(raw);
     return entry.type !== 'session' && entry.id && entry.parentId !== undefined;
   })) {
-    // A legacy linear index has no prior tree identity to anchor against.
-    // Rebuild once when the file transitions into the tree format.
+    // A linear index has no tree anchor: rebuild once on transition to tree format.
     return null;
   }
   return { text: searchTextFromEntries(entries, null), tree, leafId: nextLeafId };
 }
 
-/**
- * Aggregate token/cost/message stats over a whole session (the /stats
- * endpoint). Cached like the other readers — do not mutate the result.
- */
-const statsCache = new Map<string, Cached<SessionStats>>(); // filePath -> { mtimeMs, size, value }
+const statsCache = new Map<string, Cached<SessionStats>>();
 
 const emptyCosts = (): UsageCosts => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
 
-// Subscription-plan providers report zero costs because there is no
-// per-request price; those zeros mean unpriced, not free. Explicit zeros from
-// providers that do report costs stay authoritative.
+// Plan providers report zero costs meaning unpriced, not free. Explicit zeros
+// from other providers stay authoritative.
 function reportedCost(harnessId: string | undefined, provider: unknown, usage: unknown): Partial<UsageCosts> | undefined {
   const cost = fields(usage ?? EMPTY_FIELDS).cost;
   const rawCost = cost ? fields(cost) : null;
@@ -634,14 +600,13 @@ function reportedCost(harnessId: string | undefined, provider: unknown, usage: u
 
 function usageCost(candidate: SessionFileProfile | undefined, provider: unknown, model: unknown, usage: unknown, estimateCost: UsageCostEstimator, preferReported = false): Partial<UsageCosts> | undefined {
   const estimated = estimateCost(provider, model, usage);
-  // Under an engaged fast tier OMP scales its own persisted usage cost by the
-  // model's service-tier multiplier (account-specific, never in `models --json`),
-  // so the reported cost outranks the flat catalog estimate for those turns.
+  // Under a fast tier OMP scales its persisted cost by an account-specific
+  // multiplier (never in `models --json`), so reported cost outranks the estimate.
   if (preferReported) return reportedCost(candidate?.harnessId, provider, usage) ?? estimated;
   return estimated || reportedCost(candidate?.harnessId, provider, usage);
 }
 
-/** Display/stats price the raw selected/response identity without rewriting it. */
+/** Prices the raw selected/response identity without rewriting it. */
 function messageUsageCost(candidate: SessionFileProfile | undefined, message: Record<string, unknown>, fallback: { provider?: unknown; model?: unknown }, estimateCost: UsageCostEstimator, tiers: ServiceTierContinuity = null): Partial<UsageCosts> | undefined {
   const provider = message.provider || fallback.provider;
   return usageCost(candidate, provider,
@@ -661,9 +626,8 @@ function isEmptyFailedUsage(message: Record<string, unknown>): boolean {
 }
 
 /**
- * Keep every known subtotal; a missing price increments a parallel call count
- * (rendered as a partial-estimate marker) instead of destroying the subtotal.
- * Explicit zero stays authoritative.
+ * A missing price increments a parallel count (partial-estimate marker) rather
+ * than destroying the subtotal. Explicit zero stays authoritative.
  */
 function addReportedCosts(bucket: UsageBucket, cost: Partial<UsageCosts> | undefined): void {
   bucket.costs ||= emptyCosts();
@@ -685,7 +649,7 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
   const costBucket = { costs: emptyCosts(), costUnavailable: emptyCosts() };
   let reasoningTokens = 0, hardCacheMisses = 0;
   let userMessages = 0, assistantMessages = 0, toolCalls = 0, toolResults = 0, compactions = 0;
-  // Effective speed sums only measurable messages so it is not diluted.
+  // Sums only measurable messages so speed is not diluted.
   let genMs = 0, genOutput = 0;
   const responseDurations: number[] = [];
   const model: ModelContinuity = { provider: null, model: null };
@@ -694,7 +658,6 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
     const entry = fields(raw);
     if (entry.type === 'model_change') advanceModelChange(entry, model, candidate.profileId, 'display');
     advanceServiceTierChange(entry, tiers);
-    // Both Pi and OMP record one `compaction` entry per compaction.
     if (entry.type === 'compaction') { compactions++; continue; }
     if (entry.type !== 'message' || !entry.message) continue;
     const m = fields(entry.message);
@@ -732,7 +695,7 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
   return { tokens, reasoningTokens, hardCacheMisses, cost: costs.total, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput };
 }
 
-/** Compact corpus-index usage, derived during the same read as metadata/text. */
+/** Derived during the same read as metadata/text. */
 export function buildIndexedUsageFromContent(content: string, candidate: SessionFileProfile = {}): IndexedUsage {
   return buildIndexedUsageFromEntries(parseSessionEntries(content), candidate);
 }
@@ -742,18 +705,13 @@ export function buildIndexedUsageFromEntries(entries: SessionEntries, candidate:
   const usage: IndexedUsage = {
     total: { tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }, costs: emptyCosts(), costUnavailable: emptyCosts(), calls: 0, measured: 0, durationMs: 0, slowestMs: 0 },
     days: {}, models: {}, cwd: null,
-    // Running provider/model continuity, persisted so an appended byte range
-    // can be accumulated without re-reading earlier entries.
+    // Persisted so appended ranges accumulate without re-reading earlier entries.
     state: { provider: null, model: 'unknown' },
   };
   return accumulateIndexedUsage(usage, entries, candidate, estimateCost);
 }
 
-/**
- * O(delta) usage extension for an append-only session file. Only valid for
- * usage objects that carry `state` (built by this schema); mutates and
- * returns `usage`.
- */
+/** O(delta) for append-only files; requires `state` and mutates `usage`. */
 export function extendIndexedUsageFromEntries(usage: IndexedUsage, entries: SessionEntries, candidate: SessionFileProfile = {},
   estimateCost: UsageCostEstimator = createUsageCostEstimator(candidate.harnessId)): IndexedUsage {
   return accumulateIndexedUsage(usage, entries, candidate, estimateCost);
@@ -782,12 +740,10 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
     const message = e.type === 'message' && fields(e.message ?? EMPTY_FIELDS);
     const m = message && message.role === 'assistant' ? message : null;
     if (!m) continue;
-    // Providers may emit one assistant error per retry. A rejected attempt
-    // with no tokens and no cost is not usage and must not become a chart call.
+    // A retry's rejected attempt with no tokens and no cost is not usage.
     if (isEmptyFailedUsage(m)) continue;
     const p = (typeof m.provider === 'string' && m.provider) || model.provider || 'unknown';
-    // Routed models (for example OpenRouter `auto`) bill under the concrete
-    // response model, not the selected alias recorded in message.model.
+    // Routed models (OpenRouter `auto`) bill under the concrete response model.
     const mid = (typeof m.responseModel === 'string' && m.responseModel)
       || (typeof m.model === 'string' && m.model) || model.model || 'unknown';
     const ref = `${p}/${mid}`;
@@ -808,7 +764,7 @@ export function getSessionStats(filePath: string | SessionFileSource): Readonly<
   return statCached(statsCache, filePath, 200, computeSessionStats);
 }
 
-/** cwd from the session header line via a bounded read; null when unreadable/absent. */
+/** Bounded header read; null when unreadable/absent. */
 export function readSessionCwd(filePath: string | SessionFileSource): unknown {
   const candidate = source(filePath);
   filePath = candidate.file;
@@ -831,17 +787,13 @@ export function readSessionCwd(filePath: string | SessionFileSource): unknown {
   }
 }
 
-const tailCache = new Map<string, Cached<unknown>>(); // (mtimeMs, size) -> last complete JSONL entry
+const tailCache = new Map<string, Cached<unknown>>();
 const TAIL_BYTES = 64 * 1024;
 
 /**
- * The session JSONL's last complete entry via a bounded tail read: harnesses
- * stamp a terminal bookkeeping entry when they dispose a session.
- *
- * Null when the tail holds no complete line; callers treat "unknown" as "not
- * finished". Never grep the whole file for a marker: a transcript that merely
- * discusses one contains the string, and a revived session appends past its
- * own exit entry.
+ * Bounded tail read: harnesses stamp a terminal entry on dispose. Null ("not
+ * finished") when no complete line. Never grep the whole file for a marker: a
+ * transcript may discuss it, and a revived session appends past its exit entry.
  */
 export function readSessionTailEntry(input: string | SessionFileSource): unknown {
   return statCached(tailCache, input, 500, (filePath, stats) => {
@@ -864,13 +816,7 @@ export function readSessionTailEntry(input: string | SessionFileSource): unknown
   });
 }
 
-/** Fallback cwd from pi's session dir naming (--home-user-proj-- → /home/user/proj). */
-export function decodeDirToCwd(dirName: string): string {
-  const decoded = dirName.replace(/^--/, '').replace(/--$/, '');
-  return '/' + decoded.replace(/-/g, '/');
-}
-
-/** Test hook: drop caches so fixtures rewritten in place are re-read. */
+/** Test hook: fixtures rewritten in place are re-read. */
 export function resetCaches(): void {
   infoCache.clear();
   messagesCache.clear();

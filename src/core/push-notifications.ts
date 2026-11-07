@@ -1,36 +1,26 @@
 /**
- * Web Push for installed browser clients. Each host pushes for its own live
- * sessions; the browser registers one subscription with every host, so the
- * fleet needs no hub aggregation. Every host must sign with the same VAPID key
- * pair (`~/.pi/dish/vapid.json`): a host whose key differs from the
- * subscribing origin's refuses the subscription instead of accepting one it
- * can never deliver to.
- *
- * Triggers come from sampling the host's live-session catalog: a session
- * observed working is idle for two consecutive samples, or its ask dialog
- * becomes pending. The first sample after subscriptions appear is a baseline
- * and never rings.
+ * Web Push: each host pushes for its own live sessions and the browser
+ * subscribes to every host. All hosts must share the VAPID key pair
+ * (`~/.pi/dish/vapid.json`); a mismatched host refuses subscriptions it could
+ * never deliver to. Triggers: a working session idle for two samples, or a
+ * pending ask dialog. The first sample after subscribing is a silent baseline.
  */
 import crypto = require('crypto');
 import fs = require('fs');
 import path = require('path');
 import webpush = require('web-push');
 import dishStore = require('./dish-store');
-import { isRecord } from './wire-protocol';
+import { record as isRecord } from './helper-values';
+import { errorMessage } from './http-boundary';
 
 const VAPID_FILE = 'vapid.json';
 const SUBSCRIPTIONS_STORE = 'push-subscriptions.json';
 const DEFAULT_SUBJECT = 'mailto:pi-dish@example.com';
 export const SAMPLE_INTERVAL_MS = 3000;
-/** Consecutive idle samples before a working session counts as finished. */
 export const FINISHED_IDLE_SAMPLES = 2;
 const PUSH_TTL_SECONDS = 4 * 60 * 60;
 const PREVIEW_CHARS = 180;
-/**
- * A push service may answer "gone" for a subscription it has not finished
- * provisioning (observed with FCM right after subscribe). Pruning then would
- * silently drop a working device, so young subscriptions are only reported.
- */
+/** Push services (FCM) may report "gone" for a just-provisioned subscription; young ones are only reported, not pruned. */
 export const GONE_GRACE_MS = 10 * 60 * 1000;
 const MAX_ENDPOINT_LENGTH = 2048;
 const BASE64URL = /^[A-Za-z0-9_-]+={0,2}$/;
@@ -74,11 +64,7 @@ interface SessionWatch { working: boolean; idleSamples: number; asking: boolean 
 export type SessionWatchState = ReadonlyMap<string, Readonly<SessionWatch>>;
 export interface SessionTransition { readonly kind: PushEventKind; readonly row: PushSessionRow }
 
-/**
- * Pure transition step. `previous === null` is a baseline sample: it records
- * state and never reports. Sessions absent from `rows` are dropped silently —
- * a session that closed or crashed did not finish.
- */
+/** `previous === null` is a silent baseline. Sessions absent from `rows` closed or crashed; they did not finish. */
 export function sessionTransitions(previous: SessionWatchState | null, rows: readonly PushSessionRow[]): {
   readonly state: SessionWatchState; readonly transitions: readonly SessionTransition[];
 } {
@@ -113,7 +99,6 @@ function decodeSubscription(value: unknown, now: () => number = Date.now): PushS
   return { endpoint, keys: { p256dh, auth }, createdAt: new Date(now()).toISOString() };
 }
 
-/** Plain text of the last assistant message, collapsed and shortened for a notification. */
 function assistantPreview(messages: readonly { readonly role?: unknown; readonly content: unknown }[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
@@ -135,11 +120,7 @@ function decodeVapid(value: unknown): VapidKeys | null {
   return { publicKey: value.publicKey, privateKey: value.privateKey, subject };
 }
 
-/**
- * The host's VAPID keys, generated on first use. The private key is a signing
- * secret: written 0600 and created exclusively, so two racing first uses
- * cannot leave the host with a key its earlier subscriptions don't match.
- */
+/** Private key is written 0600 and created exclusively so racing first uses can't orphan earlier subscriptions. */
 export function readVapidKeys(): VapidKeys {
   const file = path.join(dishStore.dishDir(), VAPID_FILE);
   try {
@@ -182,7 +163,6 @@ const sendWebPush: PushSender = async (subscription, payload, vapid) => {
 };
 
 export interface PushNotifierPorts {
-  /** Current live sessions on this host. */
   sessions(): readonly PushSessionRow[];
   /** Agent-launched peers report to the agent that launched them, not the user. */
   agentLaunched(sessionId: string): boolean;
@@ -203,7 +183,6 @@ export interface PushNotifier {
   test(endpoint: unknown): Promise<boolean>;
   /** Delivers a host-level notification (not a session transition) to every registered device; `tag` is host-relative. */
   notify(payload: Omit<PushPayload, 'hostId'>): Promise<void>;
-  /** One sampling step (exposed for tests). */
   sample(): Promise<void>;
   start(): void;
   stop(): void;
@@ -241,7 +220,7 @@ export function createPushNotifier(ports: PushNotifierPorts): PushNotifier {
         if (!(await send(target, payload, vapid)).gone) return;
         if (now() - Date.parse(target.createdAt) >= GONE_GRACE_MS) { gone.add(target.endpoint); return; }
         message = 'the push service does not recognize this new subscription yet; retry in a minute';
-      } catch (error) { message = error instanceof Error ? error.message : String(error); }
+      } catch (error) { message = errorMessage(error); }
       message = `${new URL(target.endpoint).host}: ${message}`;
       logError(`[push] ${message}`);
       failures.push(message);
@@ -257,8 +236,7 @@ export function createPushNotifier(ports: PushNotifierPorts): PushNotifier {
     if (kind === 'finished' && row.sessionFile) {
       try { detail = assistantPreview(ports.readMessages(row.sessionFile)); } catch {}
     }
-    // The preview leads the body so a lock-screen line shows what happened;
-    // the host rides in the title, where it stays visible without crowding it.
+    // Preview leads the body for the lock screen; the host rides in the title.
     return {
       kind, hostId, sessionId: row.id,
       title: `${row.name || 'pi-dish session'} · ${label}`,
@@ -321,7 +299,7 @@ export function createPushNotifier(ports: PushNotifierPorts): PushNotifier {
     sample: tick,
     start() {
       if (timer || stopped) return;
-      timer = setInterval(() => { tick().catch(error => logError(`[push] ${error instanceof Error ? error.message : String(error)}`)); }, SAMPLE_INTERVAL_MS);
+      timer = setInterval(() => { tick().catch(error => logError(`[push] ${errorMessage(error)}`)); }, SAMPLE_INTERVAL_MS);
       timer.unref?.();
     },
     stop() { stopped = true; clearInterval(timer); timer = undefined; },

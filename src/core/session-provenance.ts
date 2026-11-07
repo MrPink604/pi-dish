@@ -50,8 +50,7 @@ export function readLaunches(): Record<string, LaunchProvenance> {
     const launch = value as Record<string, unknown>;
     if (!validId(launch.sourceSessionId)) continue;
     launches[canonicalSessionId(sessionId)] = {
-      // A server that predates localization recorded its own sessions
-      // self-qualified; reading them localized keeps their links resolvable.
+      // Older servers stored their own sessions self-qualified; localize to keep links resolvable.
       sourceSessionId: canonicalSessionId(localize(launch.sourceSessionId, selfHostId)),
       operationId: validId(launch.operationId) ? launch.operationId : null,
       createdAt: typeof launch.createdAt === 'number' && Number.isFinite(launch.createdAt) ? launch.createdAt : 0,

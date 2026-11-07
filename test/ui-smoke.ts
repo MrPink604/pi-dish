@@ -12,7 +12,7 @@ import { once } from 'node:events';
 import http = require('node:http');
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { spawn, type ChildProcess, execFileSync } from 'node:child_process';
-import { isRecord } from '../lib/wire-protocol.js';
+import { record as isRecord } from '../lib/helper-values.js';
 import { errorMessage, record, records } from './test-types.js';
 import { applyTestEnv } from './test-env.js';
 import { installFixtureApp } from './fixtures/browser-app.js';

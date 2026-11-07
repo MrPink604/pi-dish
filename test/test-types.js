@@ -11,10 +11,10 @@ exports.harnessId = harnessId;
 exports.bridgeEntry = bridgeEntry;
 exports.errorMessage = errorMessage;
 const assert = require("node:assert/strict");
-const wire_protocol_js_1 = require("../lib/wire-protocol.js");
+const helper_values_js_1 = require("../lib/helper-values.js");
 const sessionKey = require("../lib/session-key.js");
 function record(value, message = 'expected an object') {
-    assert.ok((0, wire_protocol_js_1.isRecord)(value), message);
+    assert.ok((0, helper_values_js_1.record)(value), message);
     return value;
 }
 function records(value, message = 'expected an object array') {
@@ -47,7 +47,7 @@ function bridgeEntry(value, message = 'expected a bridge registry entry') {
     return value;
 }
 function isBridgeEntry(value) {
-    return (0, wire_protocol_js_1.isRecord)(value) && sessionKey.validSessionId(value.sessionId) && typeof value.socketPath === 'string';
+    return (0, helper_values_js_1.record)(value) && sessionKey.validSessionId(value.sessionId) && typeof value.socketPath === 'string';
 }
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);

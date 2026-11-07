@@ -5,7 +5,7 @@ import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
 import { sanitizeTestEnv } from '../test-env.js';
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 import type { SessionEntry } from '../../src/browser/session-state.js';
 import { installFixtureApp } from '../fixtures/browser-app.js';
 

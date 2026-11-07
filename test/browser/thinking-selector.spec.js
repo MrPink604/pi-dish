@@ -1,7 +1,7 @@
 // Generated test/tool from test/browser/thinking-selector.spec.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const wire_protocol_js_1 = require("../../lib/wire-protocol.js");
+const helper_values_js_1 = require("../../lib/helper-values.js");
 const fixtures_js_1 = require("./fixtures.js");
 (0, fixtures_js_1.test)('thinking selector copies levels, carries owners and disposes without leaving active handlers', async ({ page, fleet }) => {
     await fleet.select(fleet.self);
@@ -88,7 +88,7 @@ fixtures_js_1.test.describe('live thinking selector', () => {
         const requests = [];
         await page.route(`${fleet.self.base}/api/sessions/${fixtures_js_1.ROOT}/thinking`, route => {
             const body = route.request().postDataJSON();
-            if (!(0, wire_protocol_js_1.isRecord)(body))
+            if (!(0, helper_values_js_1.record)(body))
                 throw new Error('Invalid thinking request');
             requests.push(body);
             return route.fulfill({ json: { success: true, level: body.level } });

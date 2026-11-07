@@ -1,12 +1,8 @@
 /**
- * Skill inventory for the Skills view. Discovery goes through pi's own loader
- * (`loadSkills`), never a reimplementation of its discovery/collision rules.
- * Each known workspace root is scanned, results dedup by SKILL.md path, and
- * only observational metadata is derived: byte sizes, a chars/4 token estimate
- * (always badged `estimate`), and the catalog fragment pi itself would
- * advertise (`formatSkillsForPrompt`). Skill identity is the absolute SKILL.md
- * path; `disable-model-invocation` skills are discovered but excluded from the
- * advertised catalog.
+ * Skill inventory via pi's own `loadSkills`, never a reimplementation of its
+ * discovery/collision rules. Identity is the absolute SKILL.md path; metadata
+ * is observational (sizes, chars/4 token estimate, pi's catalog fragment).
+ * `disable-model-invocation` skills are discovered but not advertised.
  */
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
@@ -14,7 +10,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { LoadSkillsResult, ResourceDiagnostic, Skill } from '@earendil-works/pi-coding-agent' with { 'resolution-mode': 'import' };
 import * as piSDK from './pi-sdk';
-import { finite } from './session-index-data';
+import { finite } from './helper-values';
 import type { SkillActivation } from './session-index-data';
 
 type SkillDiagnostic = Pick<ResourceDiagnostic, 'type' | 'message' | 'path'>;
@@ -221,9 +217,8 @@ export async function getSkillsInventory(opts: SkillsInventoryOptions = {}): Pro
 
   const visible = [...byPath.values()].filter((s) => !s.disableModelInvocation);
   const fullCatalog = visible.length ? sdk.formatSkillsForPrompt(visible) : '';
-  // Shared overhead = the advertised catalog with every per-skill fragment
-  // removed (preamble instructions + <available_skills> wrapper). Reported
-  // once at the summary level.
+  // Shared overhead: the catalog minus every per-skill fragment (preamble +
+  // <available_skills> wrapper), reported once at summary level.
   let overheadChars = fullCatalog.length;
   for (const s of visible) overheadChars -= catalogFragment(s).length + 1;
   if (overheadChars < 0) overheadChars = 0;

@@ -5,8 +5,9 @@
 import crypto = require('crypto');
 import fs = require('fs');
 import path = require('path');
-import { dishDir, readStore, writeStore } from './dish-store';
-import { canonicalSessionId } from './session-key';
+import { dishDir, readStore, replaceFile, writeStore } from './dish-store';
+import { asRecord } from './wire-protocol';
+import { canonicalSessionId, tryCanonicalSessionId as canonical } from './session-key';
 import type { SessionId } from './contracts';
 
 export interface SessionShareRecord {
@@ -20,8 +21,6 @@ export interface HtmlShareRecord {
   createdAt: number;
   sessionId?: never;
 }
-
-export type ShareRecord = SessionShareRecord | HtmlShareRecord;
 
 export interface SessionShareDto {
   kind: 'session';
@@ -40,14 +39,6 @@ export interface SessionShareToken {
 }
 
 // Stored rows are external; members stay unknown until the route validates them.
-function fields(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
-}
-
-function canonical(value: unknown): unknown {
-  try { return canonicalSessionId(value); } catch { return value; }
-}
-
 function readShares(): Record<string, unknown> {
   return readStore('shares.json');
 }
@@ -73,9 +64,9 @@ export function createShare(sessionId: unknown): string {
   const canonicalId = canonicalSessionId(sessionId);
   const shares = readShares();
   for (const [token, entry] of Object.entries(shares)) {
-    if (entry && canonical(fields(entry).sessionId) === canonicalId) {
-      if (fields(entry).sessionId !== canonicalId) {
-        shares[token] = { ...fields(entry), sessionId: canonicalId };
+    if (entry && canonical(asRecord(entry).sessionId) === canonicalId) {
+      if (asRecord(entry).sessionId !== canonicalId) {
+        shares[token] = { ...asRecord(entry), sessionId: canonicalId };
         writeShares(shares);
       }
       return token;
@@ -112,7 +103,7 @@ export function revokeShare(sessionId: unknown): boolean {
   const shares = readShares();
   let existed = false;
   for (const [token, entry] of Object.entries(shares)) {
-    if (entry && canonical(fields(entry).sessionId) === sessionId) {
+    if (entry && canonical(asRecord(entry).sessionId) === sessionId) {
       delete shares[token];
       removeShareHtml(token);
       existed = true;
@@ -123,7 +114,7 @@ export function revokeShare(sessionId: unknown): boolean {
 }
 
 export function getShare(token: string): ShareDto | null {
-  const entry = fields(readShares()[token]);
+  const entry = asRecord(readShares()[token]);
   if (entry.kind === 'html') return { kind: 'html' };
   return entry.sessionId ? { kind: 'session', sessionId: canonical(entry.sessionId) } : null;
 }
@@ -132,7 +123,7 @@ export function getShareForSession(sessionId: unknown): SessionShareToken | null
   sessionId = canonical(sessionId);
   const shares = readShares();
   for (const [token, entry] of Object.entries(shares)) {
-    if (entry && canonical(fields(entry).sessionId) === sessionId) return { token };
+    if (entry && canonical(asRecord(entry).sessionId) === sessionId) return { token };
   }
   return null;
 }
@@ -144,9 +135,7 @@ function saveShareHtml(token: string, html: string | NodeJS.ArrayBufferView): st
   const dir = htmlDir();
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = htmlPath(token);
-  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tmp, html, { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  replaceFile(file, html, 0o600);
   return file;
 }
 

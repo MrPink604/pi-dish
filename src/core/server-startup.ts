@@ -163,14 +163,13 @@ export function startListeners(options: ListenerOptions): Server {
     const share = shareServer;
     const shareHost = process.env.PI_DISH_SHARE_HOST || host;
     // Node coerces a numeric string; pass the env value through unchanged.
-    const sharePort: number = process.env.PI_DISH_SHARE_PORT as unknown as number;
-    share.listen(sharePort, shareHost, () => {
+    share.listen(process.env.PI_DISH_SHARE_PORT as unknown as number, shareHost, () => {
       console.log(`pi-dish share listener at http://${shareHost}:${(share.address() as AddressInfo).port}`);
     });
   }
 
-  // Signals retain the existing forward-cleanup and process-exit policy; they
-  // do not redefine native Server.close(), sibling listeners or retry timers.
+  // Signals only run forward cleanup and exit; they do not close servers,
+  // sibling listeners or retry timers.
   const exitSignals: [NodeJS.Signals, number][] = [['SIGINT', 130], ['SIGTERM', 143]];
   for (const [signal, code] of exitSignals) {
     process.once(signal, () => { remoteHosts.shutdown(); process.exit(code); });

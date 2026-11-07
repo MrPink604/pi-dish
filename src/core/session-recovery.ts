@@ -1,8 +1,8 @@
 import fs = require('fs');
-import os = require('os');
 import path = require('path');
 import crypto = require('crypto');
-import { isRecord } from './wire-protocol';
+import { dishDir, replaceFileDurably, syncDirectory } from './dish-store';
+import { record as isRecord } from './helper-values';
 
 export type RecoveryActivity = 'idle' | 'running' | 'uncertain';
 export interface RecoveryCheckpoint {
@@ -56,8 +56,8 @@ export interface RecoveryControlPatch {
   attempt?: RecoveryAttempt | null;
 }
 
-/** Observation input is not a decoded store record. Metadata is nullable and
- * untrusted; the writer retains its existing normalization and startTime coercion.
+/** Observation input, not a decoded store record: metadata is nullable and
+ * untrusted; the writer normalizes it and coerces startTime.
  */
 export interface RecoverySnapshot {
   harnessId: string;
@@ -121,12 +121,7 @@ function validActivity(value: unknown): value is RecoveryActivity {
 function fileFor(kind: 'observations' | 'controls', harnessId: string, nativeSessionId: string): string {
   if (!validId(harnessId) || !validId(nativeSessionId)) throw new Error('Invalid recovery session identity');
   const key = crypto.createHash('sha256').update(JSON.stringify([harnessId, nativeSessionId])).digest('hex');
-  return path.join(os.homedir(), '.pi', 'dish', 'recovery', kind, `${key}.json`);
-}
-
-function syncDirectory(dir: string): void {
-  const fd = fs.openSync(dir, 'r');
-  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+  return path.join(dishDir(), 'recovery', kind, `${key}.json`);
 }
 
 function privateDirectory(dir: string): void {
@@ -145,22 +140,8 @@ function privateDirectory(dir: string): void {
 }
 
 function atomicWrite(file: string, value: object): void {
-  const dir = path.dirname(file);
-  privateDirectory(dir);
-  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  let fd: number | undefined;
-  try {
-    fd = fs.openSync(tmp, 'wx', 0o600);
-    fs.writeFileSync(fd, JSON.stringify(value));
-    fs.fsyncSync(fd);
-    fs.closeSync(fd);
-    fd = undefined;
-    fs.renameSync(tmp, file);
-    syncDirectory(dir);
-  } finally {
-    if (fd !== undefined) fs.closeSync(fd);
-    try { fs.unlinkSync(tmp); } catch {}
-  }
+  privateDirectory(path.dirname(file));
+  replaceFileDurably(file, JSON.stringify(value));
 }
 
 function readJson(file: string): unknown {
@@ -209,7 +190,7 @@ export function readRecord(harnessId: string, nativeSessionId: string): Recovery
 }
 
 export function listRecords(): RecoveryRecord[] {
-  const dir = path.join(os.homedir(), '.pi', 'dish', 'recovery', 'observations');
+  const dir = path.join(dishDir(), 'recovery', 'observations');
   const records: RecoveryRecord[] = [];
   try {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

@@ -2,7 +2,7 @@
 import fs = require('node:fs');
 import net = require('node:net');
 import path = require('node:path');
-import { isRecord } from '../../lib/wire-protocol.js';
+import { record as isRecord } from '../../lib/helper-values.js';
 
 (async () => {
   if (process.env.PI_DISH_TEST_LIVE_SESSION) {

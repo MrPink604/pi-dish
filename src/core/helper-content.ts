@@ -2,7 +2,6 @@ import type { ImageBlock } from './helper-types';
 import { record } from './helper-values';
 import { truncate } from './helper-format';
 
-
 export function extractTextContent(content: unknown) {
   if (!content) return '';
   if (typeof content === 'string') return content;
@@ -10,10 +9,7 @@ export function extractTextContent(content: unknown) {
   return '';
 }
 
-/** Text of the text blocks only — no phantom separators from image or other
- *  non-text blocks (extractTextContent joins those in as empty lines, so it
- *  can never equal the composer's trimmed text once an image is attached).
- *  Used when comparing a prompt to its echo. */
+/** Text blocks only: extractTextContent joins non-text blocks as empty lines, so it can't equal a prompt's echo once an image is attached. */
 export function extractTextBlocks(content: unknown) {
   if (!content) return '';
   if (typeof content === 'string') return content;
@@ -25,12 +21,7 @@ export function extractTextBlocks(content: unknown) {
     .join('\n');
 }
 
-/**
- * Prime's single built-in tool (`ipython` up to 0.9, `python_repl` from the
- * 0.10 Rust build): a stateful Python kernel whose shell access is wrapped in
- * bash('...') calls. Surface the wrapped command when present, otherwise the
- * first line of the code — mirroring the Bash/read summaries.
- */
+/** Prime's Python kernel tool wraps shell access in bash('...'): surface that command, else the first code line. */
 export function ipythonCodeSummary(code: unknown) {
   if (typeof code !== 'string' || !code) return '';
   const m = /(?:^|[^A-Za-z0-9_])bash\(\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(code);
@@ -38,13 +29,11 @@ export function ipythonCodeSummary(code: unknown) {
   return truncate(inner, 60);
 }
 
-
 export function getToolSummary(toolName: string, args: unknown) {
   if (!record(args)) return '';
   if (toolName === 'Bash' || toolName === 'bash') return typeof args.command === 'string' && args.command ? truncate(args.command.split('\n')[0], 60) : '';
   if (toolName === 'ipython' || toolName === 'python_repl') return ipythonCodeSummary(args.code);
-  // OMP eval args lead with language ("py"), which is not the work. Prefer the
-  // cell title, then the same first-line/bash summary Prime's ipython uses.
+  // OMP eval args lead with language ("py"); prefer the cell title, then the ipython summary.
   if (toolName === 'eval') {
     const title = typeof args.title === 'string' ? args.title.trim() : '';
     if (title) return truncate(title, 60);
@@ -57,10 +46,8 @@ export function getToolSummary(toolName: string, args: unknown) {
 }
 
 /**
- * Prime's ipython tool results are the Python repr of a BashResult (or plain
- * kernel text): `BashResult(exit_code=0, output='...', duration=0.017)`.
- * Unwrap it so transcripts show the command output instead of the repr.
- * Returns null for anything else, including a partial streaming prefix.
+ * Unwrap Prime's `BashResult(exit_code=0, output='...', duration=0.017)` repr to
+ * its output. Null for anything else, including a partial streaming prefix.
  */
 export function parseIpythonResult(text: unknown) {
   if (typeof text !== 'string') return null;
@@ -68,7 +55,6 @@ export function parseIpythonResult(text: unknown) {
   if (!m) return null;
   return { exitCode: Number(m[1]), output: pythonReprUnescape(m[3]), durationMs: m[4] != null ? Math.round(Number(m[4]) * 1000) : null };
 }
-
 
 export function pythonReprUnescape(text: string) {
   return text.replace(/\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|[\s\S])/g, (_all, seq) => {
@@ -79,19 +65,13 @@ export function pythonReprUnescape(text: string) {
   });
 }
 
-/**
- * Whether a message renders any prose (a non-empty text block or an error).
- * Drives the `.message.no-text` class that focus mode and tool-activity
- * grouping key on. One definition for the static and streaming renderers —
- * they used to derive it independently and disagreed about errorMessage.
- */
+/** Drives `.message.no-text` (focus mode, tool grouping); shared by static and streaming renderers. */
 export function messageHasVisibleText(msg: unknown) {
   if (!record(msg)) return false;
   if (msg.errorMessage) return true;
   if (typeof msg.content === 'string') return !!msg.content;
   return Array.isArray(msg.content) && msg.content.some((b: unknown) => record(b) && b.type === 'text' && typeof b.text === 'string' && !!b.text);
 }
-
 
 export function getToolOutputText(partialResult: unknown) {
   if (!record(partialResult) || !Array.isArray(partialResult.content)) return '';
@@ -102,13 +82,7 @@ export function getToolOutputText(partialResult: unknown) {
     .join('');
 }
 
-/**
- * Image content blocks from a message or tool-result content array. Live
- * events carry `{ data, mimeType }`; historical pages project those bytes to
- * `{ url, mimeType }` so the browser can cache/lazy-load them. Non-array
- * content and blocks without either source yield nothing; mimeType defaults
- * to image/png. Rendering stays with the DOM-owning caller.
- */
+/** Live events carry `{ data, mimeType }`; history pages project bytes to `{ url, mimeType }`. mimeType defaults to image/png. */
 export function extractImageBlocks(content: unknown) {
   if (!Array.isArray(content)) return [];
   const out: ImageBlock[] = [];

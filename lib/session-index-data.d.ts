@@ -1,7 +1,4 @@
 // Generated from src/core/session-index-data.ts; edit that source and run npm run build:core.
-/** Persisted index projections and their consumed disk-ingress validation. */
-import { finite } from './helper-values';
-export { finite };
 export interface UsageState {
     provider: string | null;
     model: string;
@@ -66,11 +63,6 @@ export interface SkillActivation {
     entryId: string | null;
     cwd: string | null;
     model: string;
-}
-export interface SearchProjection {
-    text: string;
-    tree: boolean;
-    leafId: string | null;
 }
 /** Only tree identity remains untrusted after the typed parser's search projection. */
 export declare function checkSearchLeaf(value: {

@@ -11,10 +11,8 @@ declare function privateRootFor(descriptor: Pick<HarnessDescriptor, 'privateRoot
 /** Create the root (0700) before a spawn writes into it. */
 declare function ensurePrivateRoot(root: string): void;
 /**
- * Realpath-safe containment: a symlinked transcript must not masquerade as
- * private (or vice versa), and a not-yet-created root still answers false
- * rather than throwing. The lexical prefix fast-paths every ordinary row
- * without a syscall; only a lexically-inside path pays for realpath.
+ * Realpath-safe containment so a symlink cannot change privacy; a missing
+ * root answers false. The lexical check spares ordinary rows a realpath call.
  */
 declare function isPrivateSessionFile(descriptor: Pick<HarnessDescriptor, 'privateRootPath'> | null | undefined, file: string | null | undefined): boolean;
 interface SessionRoot {
@@ -24,11 +22,9 @@ interface SessionRoot {
 }
 /**
  * Every directory that can hold one harness's sessions, primary first. The
- * private root is walked as a single workspace: `pi --session-dir` writes a
- * flat `<ts>_<id>.jsonl`, which the nested corpus walk would skip. An
- * explicit `roots` override (tests, alternate corpora) suppresses the real
- * private root unless `privateRoots` names one too, so isolating a fixture
- * cannot quietly mix in the developer's own private sessions.
+ * private root is a single flat workspace (`pi --session-dir` writes
+ * `<ts>_<id>.jsonl`). A `roots` override suppresses the real private root
+ * unless `privateRoots` names one, so fixtures never mix in real private sessions.
  */
 declare function sessionRootsFor(descriptor: HarnessDescriptor, options?: {
     roots?: Partial<Record<HarnessId, string>>;
