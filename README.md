@@ -965,6 +965,15 @@ move anything agents should not even see there. `pi-dish-vault.js sync` asks
 the listener to run `bw sync` (also without an approval), so an item you have
 just added or changed shows up without visiting the listener window.
 
+Agents can also add a login with `pi-dish-vault.js create --name <name>
+[--username U] [--uri URL] --reason "…"`. The card reads **➕ Create** and
+offers no 15-minute window; on approval the listener generates the password
+(`bw generate`, 32 characters by default) and stores the login in the folder
+`agent-created` (listener flag `--create-folder`, made on first use). The
+password never reaches the agent host; the agent gets the new id and uses it
+with `run`, approved separately. A name that a visible item already has is
+refused before reaching pi-dish.
+
 Setup, on the host whose pi-dish your phone uses:
 
 1. Build the listener (Rust, against the system OpenSSL from `libssl-dev`;

@@ -42,9 +42,14 @@ pub struct Device {
 #[serde(rename_all = "camelCase")]
 pub struct NewRequest<'a> {
     pub id: &'a str,
+    /// `release` an existing item's fields, or `create` a new login.
+    pub action: &'static str,
     pub device: Device,
     pub item: &'a str,
     pub fields: &'a [String],
+    /// The folder a created item lands in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]

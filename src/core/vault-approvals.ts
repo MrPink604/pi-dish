@@ -31,12 +31,19 @@ export interface VaultDevice { readonly name: string; readonly fingerprint: stri
 export interface VaultSessionClaim { readonly ref: string; readonly name: string | null; readonly host: string | null }
 export type VaultRequestStatus = 'pending' | 'approved' | 'denied' | 'expired';
 export type VaultDecision = 'approve' | 'approve-window' | 'deny';
+/** `release` hands existing fields to one command; `create` adds one login with a listener-generated password. */
+export type VaultAction = 'release' | 'create';
 
 export interface VaultRequest {
   readonly id: string;
   readonly device: VaultDevice;
+  readonly action: VaultAction;
+  /** The existing item's name, or the new login's name. */
   readonly item: string;
+  /** The requested fields, or for `create` the fields the new login will have. */
   readonly fields: readonly VaultField[];
+  /** The folder a created login lands in; null for `release`. */
+  readonly folder: string | null;
   /** Requester-claimed; shown as such. */
   readonly reason: string | null;
   /** Requester-claimed; shown as such. */
@@ -141,10 +148,12 @@ function decodeSession(value: unknown): VaultSessionClaim | null | undefined {
 export function vaultPushPayload(request: VaultRequest): Omit<PushPayload, 'hostId'> {
   const who = request.session?.name || request.session?.ref;
   const lead = who ? `${who} on ${request.device.name}` : request.device.name;
-  let body = `${lead} wants ${request.item} (${request.fields.join(', ')})`;
+  let body = request.action === 'create'
+    ? `${lead} wants to create ${request.item} in ${request.folder} (${request.fields.join(', ')})`
+    : `${lead} wants ${request.item} (${request.fields.join(', ')})`;
   if (request.reason) body += ` — ${request.reason}`;
   if (body.length > PUSH_BODY_CHARS) body = `${body.slice(0, PUSH_BODY_CHARS - 1)}…`;
-  return { kind: 'vault', title: 'Vault request', body, sessionId: null, tag: `vault:${request.id}`, vaultRequestId: request.id };
+  return { kind: 'vault', title: request.action === 'create' ? 'Vault create request' : 'Vault request', body, sessionId: null, tag: `vault:${request.id}`, vaultRequestId: request.id };
 }
 
 export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals {
@@ -210,8 +219,12 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
       if (requests.has(id)) return fail(409, 'Duplicate vault request id');
       const device = decodeDevice(input.device);
       if (!device) return fail(400, 'device needs a name and a hex fingerprint');
+      const action = input.action ?? 'release';
+      if (action !== 'release' && action !== 'create') return fail(400, "action must be 'release' or 'create'");
       const item = boundedString(input.item, 256);
       if (!item) return fail(400, 'item is required');
+      const folder = action === 'create' ? boundedString(input.folder, 256) : null;
+      if (action === 'create' && !folder) return fail(400, 'a create names its folder');
       const fields = decodeFields(input.fields);
       if (!fields) return fail(400, `fields must be distinct values from: ${VAULT_FIELDS.join(', ')}, field:<name>`);
       const reason = optionalString(input.reason, 500);
@@ -222,15 +235,15 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
       const expiresAt = typeof input.expiresAt === 'number' && Number.isFinite(input.expiresAt) ? input.expiresAt : NaN;
       if (!(expiresAt > at)) return fail(400, 'expiresAt must be a future epoch-millisecond time');
       const request: VaultRequest = {
-        id, device, item, fields, reason, session,
+        id, device, action, item, fields, folder, reason, session,
         createdAt: at, expiresAt: Math.min(expiresAt, at + MAX_REQUEST_LIFETIME_MS),
         status: 'pending', decidedAt: null, auto: false, grantId: null,
       };
       requests.set(id, request);
-      // A grant covers the same device, item, field set and claimed session.
-      const grant = [...grants.values()].find(candidate => candidate.device.fingerprint === device.fingerprint
+      // A grant covers the same device, item, field set and claimed session; creates are always asked.
+      const grant = action === 'release' ? [...grants.values()].find(candidate => candidate.device.fingerprint === device.fingerprint
         && candidate.item === item && candidate.fields.join(',') === fields.join(',')
-        && candidate.sessionRef === (session?.ref ?? null));
+        && candidate.sessionRef === (session?.ref ?? null)) : undefined;
       if (grant) {
         settle(request, 'approved', at);
         request.auto = true;
@@ -257,6 +270,7 @@ export function createVaultApprovals(ports: VaultApprovalPorts): VaultApprovals 
       if (!found.ok) return found;
       const request = found.value;
       if (request.status !== 'pending') return fail(409, `This request is already ${request.status}`);
+      if (decision === 'approve-window' && request.action === 'create') return fail(400, 'A create is approved once; it opens no window');
       const at = now();
       settle(request, decision === 'deny' ? 'denied' : 'approved', at);
       if (decision === 'approve-window') {

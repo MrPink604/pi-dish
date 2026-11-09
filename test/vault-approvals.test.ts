@@ -172,6 +172,19 @@ test('the notification names the claimed session, the device and the item', () =
   assert.equal(vaultPushPayload(created(instance, { session: null, reason: 'r'.repeat(400) })).body.length, 180);
 });
 
+test('a create always asks: no window opens, and a release window never covers it', () => {
+  const { instance, notified } = vault();
+  instance.decide(created(instance, { item: 'grafana', fields: ['password', 'uri'] }).id, 'approve-window');
+  const request = created(instance, { action: 'create', item: 'grafana', fields: ['password', 'uri'], folder: 'agent-created' });
+  assert.equal(request.status, 'pending');
+  assert.equal(notified.length, 2);
+  assert.deepEqual(instance.decide(request.id, 'approve-window'), { ok: false, status: 400, error: 'A create is approved once; it opens no window' });
+  assert.equal(request.status, 'pending');
+  assert.equal(vaultPushPayload(request).body, 'Htpc provision on desktop wants to create grafana in agent-created (password, uri) — install rocprofiler');
+  assert.equal(create(instance, { action: 'create' }).ok, false, 'a create names its folder');
+  assert.equal(create(instance, { action: 'delete' }).ok, false);
+});
+
 test('the bridge refuses a peer that is not loopback even with the token', () => {
   const handlers = createVaultHandlers(vault().instance, () => 'secret-token');
   const outcome = (remoteAddress: string, header: string | undefined) => {

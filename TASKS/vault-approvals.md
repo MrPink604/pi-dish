@@ -86,6 +86,22 @@ field:key`. A deny-folder item reads as a missing item, and an ambiguous name om
 matching ids. `ok` (or no answer) leaves a denial in pi-dish, a timeout, or a release
 failure, which only the listener window distinguishes.
 
+`pidish-vault:create:` + base64url(JSON) is a create request (`pi-dish-vault create`):
+
+```json
+{ "name": "grafana admin", "username": "admin", "uri": "https://grafana.lan",
+  "length": 32, "reason": "set up grafana", "session": { "ref": "…" }, "timeoutSec": 300 }
+```
+
+The listener refuses it before pi-dish when the vault is locked or a visible item already
+has that exact name. Otherwise it registers an `action: "create"` request (fields: the
+new login's `username`/`password`/`uri`, folder: `--create-folder`, default
+`agent-created`). On approval it runs `bw generate -ulns --length N`, creates the folder
+on first use, and pipes the new login to `bw create item` on stdin. The password never
+leaves the hub and never appears in an argv. Its reply's `notes` carry
+`{"id","name","folder"}` or `{"error":"<why>"}`; a denial or timeout is aac exit 4. The
+agent then uses the new id with `run` like any other item, approved separately.
+
 The wrapper runs `aac --output json run …`: aac otherwise logs INFO status lines to
 stdout, into the command's own output.
 
@@ -99,7 +115,7 @@ reads it.
 | Method | Path | Body / result |
 | --- | --- | --- |
 | `POST` | `/api/vault/bridge/status` | `{ state: "locked"\|"ready", account?: string, devices: [{ name, fingerprint }] }` → 204. Heartbeat every 15 s; stale after 45 s. |
-| `POST` | `/api/vault/bridge/requests` | `{ id, device: { name, fingerprint }, item, fields, reason?, session?, expiresAt }` → `201 { status }` (`approved` immediately when a grant matches). |
+| `POST` | `/api/vault/bridge/requests` | `{ id, action?: "release"\|"create", device: { name, fingerprint }, item, fields, folder? (create), reason?, session?, expiresAt }` → `201 { status }` (`approved` immediately when a grant matches a release). |
 | `GET` | `/api/vault/bridge/requests/:id` | → `{ status: "pending"\|"approved"\|"denied"\|"expired" }`. Listener polls each second. |
 | `DELETE` | `/api/vault/bridge/requests/:id` | Listener abandoned the request → 204; pending becomes `expired`. |
 
@@ -112,11 +128,13 @@ reads it.
 | `DELETE` | `/api/vault/grants/:id` | Revoke a window → 204. |
 
 `approve-window` approves and creates a 15-minute grant keyed by device fingerprint +
-item + field set (+ session ref when present). Grants live in memory only.
+item + field set (+ session ref when present). Grants live in memory only. A create
+cannot be approved with a window (`400`), and no grant ever covers one.
 
 ### Push
 
-Kind `vault`, title `Vault request`, body `<session name or device> wants <item>` plus
+Kind `vault`, title `Vault request` (`Vault create request` for a create), body
+`<session name or device> wants <item>` (`wants to create <item> in <folder>`) plus
 the reason; tag `<hostId>:vault:<id>`; click opens the app with the approval card.
 
 ## Decisions
@@ -133,3 +151,7 @@ the reason; tag `<hostId>:vault:<id>`; click opens the app with the approval car
   the deny folder hides anything that should not be visible at all.
 - Agents may request `bw sync` without approval: it releases nothing and only refreshes
   the listener's local copy of the vault.
+- Agents may create new logins (operator decision, 2026-11-08), only with a password the
+  listener generates, only in the create folder, each approved once in pi-dish. Agents
+  cannot store values they already hold: aac takes the query as an argv (visible in
+  `ps`) and logs it at INFO, so agent-supplied secrets would leak on the agent host.

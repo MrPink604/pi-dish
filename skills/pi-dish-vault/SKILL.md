@@ -1,6 +1,6 @@
 ---
 name: pi-dish-vault
-description: Get one credential from the operator's Bitwarden vault, approved by the operator in pi-dish, injected into a single command's environment. Use BEFORE asking the operator for any secret — passwords for web UIs/admin panels/devices (e.g. glkvm, router, NAS), logins, API keys, tokens, TOTP codes, sudo passwords. This is the sanctioned Bitwarden path; "never touch Bitwarden" rules mean raw `bw`/BW_SESSION, not this skill.
+description: Get one credential from the operator's Bitwarden vault, approved by the operator in pi-dish, injected into a single command's environment; or create a new login with a listener-generated password. Use BEFORE asking the operator for any secret — passwords for web UIs/admin panels/devices (e.g. glkvm, router, NAS), logins, API keys, tokens, TOTP codes, sudo passwords — and when a new account needs a password. This is the sanctioned Bitwarden path; "never touch Bitwarden" rules mean raw `bw`/BW_SESSION, not this skill.
 ---
 
 # Bitwarden items, approved in pi-dish
@@ -42,6 +42,23 @@ stale? Refresh the listener's copy (no approval), then search again:
 ```bash
 node "$VAULT" sync
 ```
+
+A new account needs a password (a service you are setting up, a new admin
+login)? Ask the listener to create the login; it generates the password, so
+you never see or choose it. Then set it where needed with `run`:
+
+```bash
+node "$VAULT" create --name "grafana admin" --username admin \
+  --uri https://grafana.lan --reason "admin login for the new grafana"
+# prints: <new id> <tab> grafana admin <tab> agent-created
+node "$VAULT" run --item <new id> --env PW=password \
+  --reason "set the grafana admin password" -- ./set-grafana-password.sh
+```
+
+`create` adds logins only, with a generated password (`--length`, default
+32), into the operator's agent folder. You cannot store a value you already
+have; ask the operator to add that item. A name that already exists is refused:
+pick another.
 
 - `--item`: Bitwarden item id (from `search`) or exact, unique name. `--env VAR=field` with field one
   of `username`, `password`, `totp`, `uri`, `notes` (secure-note bodies live

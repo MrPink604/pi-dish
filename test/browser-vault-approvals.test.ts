@@ -56,6 +56,14 @@ test('an in-flight decision disables only that request', () => {
   assert.equal((html.match(/data-vault-decision="[a-z-]+" disabled/g) || []).length, 3);
 });
 
+test('a create card names the folder and offers no window', () => {
+  const [request] = decodeVaultOverview({ ...wire, pending: [{ ...wire.pending[0], action: 'create', item: 'grafana', folder: '<i>agent-created</i>', fields: ['password', 'uri'] }] }).pending;
+  const html = vaultCardsHtml([request], { ...options, inSession: true });
+  assert.match(html, /➕ Create grafana/);
+  assert.match(html, /&lt;i&gt;agent-created&lt;\/i&gt;/);
+  assert.ok(!html.includes('approve-window'));
+});
+
 test('the listener line says why an approval would not release anything', () => {
   assert.match(vaultListenerText(null), /offline/);
   assert.match(vaultListenerText({ state: 'ready', account: '', stale: true }), /offline/);

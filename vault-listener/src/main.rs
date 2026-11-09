@@ -4,7 +4,8 @@
 //! Runs in a tmux window on the hub. The operator unlocks Bitwarden once on
 //! the tty; every credential request from a paired agent host is registered
 //! with the local pi-dish, which pushes it to the operator's phone, and only
-//! an approval there releases the requested fields of that one item.
+//! an approval there releases the requested fields of that one item, or
+//! creates one new login with a generated password in the create folder.
 
 mod bridge;
 mod envelope;
@@ -37,8 +38,9 @@ const POLL: Duration = Duration::from_secs(1);
 const ANSWER_MARGIN: Duration = Duration::from_secs(5);
 const COMMANDS: &str = "commands: pair <host-name> | status | sync | lock | unlock | quit";
 const DEFAULT_DENY_FOLDER: &str = "no-agents";
+const DEFAULT_CREATE_FOLDER: &str = "agent-created";
 
-const USAGE: &str = "Usage: pi-dish-vault-listener [--relay-url URL] [--dish-url URL] [--state-dir DIR] [--token-file FILE] [--bw-bin PATH] [--deny-folder NAME]
+const USAGE: &str = "Usage: pi-dish-vault-listener [--relay-url URL] [--dish-url URL] [--state-dir DIR] [--token-file FILE] [--bw-bin PATH] [--deny-folder NAME] [--create-folder NAME]
 
 Bitwarden Agent Access listener whose approvals come from pi-dish.
 
@@ -48,6 +50,7 @@ Bitwarden Agent Access listener whose approvals come from pi-dish.
   --token-file FILE  pi-dish bridge token (default ~/.pi/dish/vault/bridge.token)
   --bw-bin PATH      Bitwarden CLI (default bw)
   --deny-folder NAME items in this Bitwarden folder are never listed or released (default no-agents)
+  --create-folder NAME logins agents create land in this folder, made on first use (default agent-created)
 
 Set BW_SESSION to start unlocked; otherwise the master password is read from the tty.";
 
@@ -58,6 +61,7 @@ struct Options {
     token_file: PathBuf,
     bw_bin: String,
     deny_folder: String,
+    create_folder: String,
 }
 
 fn parse_options() -> Result<Option<Options>, String> {
@@ -70,6 +74,7 @@ fn parse_options() -> Result<Option<Options>, String> {
         token_file: vault_dir.join("bridge.token"),
         bw_bin: "bw".to_string(),
         deny_folder: DEFAULT_DENY_FOLDER.to_string(),
+        create_folder: DEFAULT_CREATE_FOLDER.to_string(),
     };
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -84,8 +89,12 @@ fn parse_options() -> Result<Option<Options>, String> {
             "--token-file" => options.token_file = PathBuf::from(value),
             "--bw-bin" => options.bw_bin = value,
             "--deny-folder" => options.deny_folder = value,
+            "--create-folder" => options.create_folder = value,
             _ => return Err(format!("unknown option {flag}")),
         }
+    }
+    if options.create_folder.trim().is_empty() || options.create_folder == options.deny_folder {
+        return Err("--create-folder must be a folder name other than --deny-folder".to_string());
     }
     Ok(Some(options))
 }
@@ -187,6 +196,78 @@ fn answer(reply: oneshot::Sender<CredentialRequestReply>, notes: Option<String>)
     let _ = reply.send(CredentialRequestReply { approved: true, credential: Some(credential), credential_id: None });
 }
 
+/// Registers a request with pi-dish and waits for the operator until `deadline`.
+async fn ask_operator(bridge: &Arc<Bridge>, request: &NewRequest<'_>, deadline: Instant) -> Result<Decision, String> {
+    let first = bridge.create(request).await?;
+    let poller = bridge.clone();
+    let id = request.id.to_string();
+    let decision = bridge::await_decision(first, deadline, POLL, || {
+        let poller = poller.clone();
+        let id = id.clone();
+        async move { poller.poll(&id).await }
+    })
+    .await;
+    if decision == Decision::Expired {
+        bridge.abandon(&id).await;
+    }
+    Ok(decision)
+}
+
+/// A create request: refusals before approval and the new item's id travel as JSON in `notes`.
+async fn handle_create(vault: &Vault, bridge: &Arc<Bridge>, device: Device, request: Result<envelope::CreateEnvelope, String>, reply: oneshot::Sender<CredentialRequestReply>) {
+    let name = device.name.clone();
+    let request = match request {
+        Ok(request) => match vault.check_create(&request.name).await {
+            Ok(()) => request,
+            Err(error) => {
+                println!("Refused to create {:?} for {name}: {error}", request.name);
+                return answer(reply, Some(serde_json::json!({ "error": error }).to_string()));
+            }
+        },
+        Err(error) => {
+            println!("Refused a malformed create from {name}: {error}");
+            return answer(reply, Some(serde_json::json!({ "error": error }).to_string()));
+        }
+    };
+    let id = uuid::Uuid::new_v4().to_string();
+    let short = id.get(..8).unwrap_or(&id).to_string();
+    let lifetime = Duration::from_secs(request.timeout_sec).saturating_sub(ANSWER_MARGIN);
+    let fields = request.fields();
+    let new_request = NewRequest {
+        id: &id,
+        action: "create",
+        device,
+        item: &request.name,
+        fields: &fields,
+        folder: Some(vault.create_folder()),
+        reason: request.reason.as_deref(),
+        session: request.session.as_ref(),
+        expires_at: now_millis() + lifetime.as_millis() as u64,
+    };
+    println!("[{short}] {name} wants to create {:?} ({}) in {:?} — waiting for pi-dish", request.name, fields.join(", "), vault.create_folder());
+    match ask_operator(bridge, &new_request, Instant::now() + lifetime).await {
+        Ok(Decision::Approved) => {}
+        Ok(decision) => {
+            println!("[{short}] {decision:?}");
+            return deny(reply);
+        }
+        Err(error) => {
+            println!("[{short}] not asked: {error}");
+            return deny(reply);
+        }
+    }
+    match vault.create(&request).await {
+        Ok(item) => {
+            println!("[{short}] approved — created {item}");
+            answer(reply, Some(serde_json::json!({ "id": item, "name": request.name, "folder": vault.create_folder() }).to_string()));
+        }
+        Err(error) => {
+            println!("[{short}] approved but not created: {error}");
+            answer(reply, Some(serde_json::json!({ "error": format!("approved, but Bitwarden refused the item: {error}") }).to_string()));
+        }
+    }
+}
+
 async fn handle_request(
     vault: Arc<Vault>,
     bridge: Arc<Bridge>,
@@ -233,6 +314,9 @@ async fn handle_request(
             }
         };
     }
+    if let Some(create) = envelope::create_query(&query) {
+        return handle_create(&vault, &bridge, Device { name: device, fingerprint }, create, reply).await;
+    }
     if let Some(check) = envelope::check_query(&query) {
         let (item, verdict) = match check {
             Ok(request) => {
@@ -271,35 +355,27 @@ async fn handle_request(
     let deadline = Instant::now() + lifetime;
     let new_request = NewRequest {
         id: &id,
+        action: "release",
         device: Device { name: device.clone(), fingerprint },
         item: &prepared.name,
         fields: &request.fields,
+        folder: None,
         reason: request.reason.as_deref(),
         session: request.session.as_ref(),
         expires_at: now_millis() + lifetime.as_millis() as u64,
     };
-    let first = match bridge.create(&new_request).await {
-        Ok(decision) => decision,
+    let short = id.get(..8).unwrap_or(&id).to_string();
+    println!("[{short}] {device} wants {} ({}) — waiting for pi-dish", prepared.name, request.fields.join(", "));
+    match ask_operator(&bridge, &new_request, deadline).await {
+        Ok(Decision::Approved) => {}
+        Ok(decision) => {
+            println!("[{short}] {decision:?}");
+            return deny(reply);
+        }
         Err(error) => {
             println!("Denied {} for {device}: {error}", request.item);
             return deny(reply);
         }
-    };
-    let short = id.get(..8).unwrap_or(&id).to_string();
-    println!("[{short}] {device} wants {} ({}) — waiting for pi-dish", prepared.name, request.fields.join(", "));
-    let poller = bridge.clone();
-    let decision = bridge::await_decision(first, deadline, POLL, || {
-        let poller = poller.clone();
-        let id = id.clone();
-        async move { poller.poll(&id).await }
-    })
-    .await;
-    if decision != Decision::Approved {
-        if decision == Decision::Expired {
-            bridge.abandon(&id).await;
-        }
-        println!("[{short}] {decision:?}");
-        return deny(reply);
     }
     match vault.release(&prepared, &request.fields).await {
         Ok(credential) => {
@@ -316,7 +392,7 @@ async fn handle_request(
 
 async fn run(options: Options, session: Option<SecretString>) -> Result<(), String> {
     storage::ensure_dir(&options.state_dir).map_err(|e| format!("{}: {e}", options.state_dir.display()))?;
-    let vault = Arc::new(Vault::new(options.bw_bin.clone(), options.deny_folder.clone(), session));
+    let vault = Arc::new(Vault::new(options.bw_bin.clone(), options.deny_folder.clone(), options.create_folder.clone(), session));
     if vault.is_unlocked() {
         if let Err(error) = vault.sync().await {
             println!("bw sync failed: {error}");
@@ -442,10 +518,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pi-dish-vault-sync-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let bw = stub_bw(&dir);
-        let unlocked = || Vault::new(bw.clone(), DEFAULT_DENY_FOLDER.to_string(), Some(SecretString::from("session-key")));
+        let unlocked = || Vault::new(bw.clone(), DEFAULT_DENY_FOLDER.to_string(), DEFAULT_CREATE_FOLDER.to_string(), Some(SecretString::from("session-key")));
         let calls = || std::fs::read_to_string(dir.join("calls")).unwrap_or_default();
 
-        assert!(!sync_probe(Vault::new(bw.clone(), DEFAULT_DENY_FOLDER.to_string(), None), &dir).await, "locked: refused");
+        assert!(!sync_probe(Vault::new(bw.clone(), DEFAULT_DENY_FOLDER.to_string(), DEFAULT_CREATE_FOLDER.to_string(), None), &dir).await, "locked: refused");
         assert_eq!(calls(), "", "locked: bw never runs");
         assert!(sync_probe(unlocked(), &dir).await, "unlocked: approved");
         assert_eq!(calls(), "sync\n");
@@ -463,7 +539,7 @@ mod tests {
         let note = r#"{"id":"n1","name":"huggingface-read","type":2,"folderId":null,"fields":[{"name":"key","value":"hf_x","type":1}]}"#;
         std::fs::write(&bw, format!("#!/bin/sh\ncase \"$1 $2 $3\" in\n'list folders '*) echo '[]';;\n'get item n1') echo '{note}';;\n*) echo 'Not found.' >&2; exit 1;;\nesac\n")).expect("write stub");
         std::fs::set_permissions(&bw, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
-        let vault = Arc::new(Vault::new(bw.to_string_lossy().into_owned(), DEFAULT_DENY_FOLDER.to_string(), Some(SecretString::from("session-key"))));
+        let vault = Arc::new(Vault::new(bw.to_string_lossy().into_owned(), DEFAULT_DENY_FOLDER.to_string(), DEFAULT_CREATE_FOLDER.to_string(), Some(SecretString::from("session-key"))));
         let bridge = Arc::new(Bridge::new("http://127.0.0.1:9".to_string(), dir.join("bridge.token")));
         let check = |json: &str| {
             let query = CredentialQuery::Domain(format!("{}{}", envelope::CHECK_PREFIX, base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)));

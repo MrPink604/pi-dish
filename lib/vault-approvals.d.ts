@@ -20,11 +20,18 @@ export interface VaultSessionClaim {
 }
 export type VaultRequestStatus = 'pending' | 'approved' | 'denied' | 'expired';
 export type VaultDecision = 'approve' | 'approve-window' | 'deny';
+/** `release` hands existing fields to one command; `create` adds one login with a listener-generated password. */
+export type VaultAction = 'release' | 'create';
 export interface VaultRequest {
     readonly id: string;
     readonly device: VaultDevice;
+    readonly action: VaultAction;
+    /** The existing item's name, or the new login's name. */
     readonly item: string;
+    /** The requested fields, or for `create` the fields the new login will have. */
     readonly fields: readonly VaultField[];
+    /** The folder a created login lands in; null for `release`. */
+    readonly folder: string | null;
     /** Requester-claimed; shown as such. */
     readonly reason: string | null;
     /** Requester-claimed; shown as such. */

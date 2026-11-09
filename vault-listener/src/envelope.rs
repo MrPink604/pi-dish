@@ -23,6 +23,18 @@ pub const SYNC_PROBE: &str = "pidish-vault:sync";
 /// JSON after aac reports a refusal. The listener answers it itself, without
 /// approval, with `{"ok":true}` or `{"error":"<why>"}` as JSON in `notes`.
 pub const CHECK_PREFIX: &str = "pidish-vault:check:";
+/// `pi-dish-vault create` sends `pidish-vault:create:` + base64url JSON naming a
+/// new login. The listener generates the password itself (it never travels
+/// from the agent host), asks pi-dish, and on approval creates the item in its
+/// create folder. The reply's `notes` carry `{"id","name","folder"}` or
+/// `{"error":"<why>"}` for a refusal before approval; a decision other than
+/// approval is a denied request.
+pub const CREATE_PREFIX: &str = "pidish-vault:create:";
+pub const DEFAULT_PASSWORD_LENGTH: u8 = 32;
+pub const MIN_PASSWORD_LENGTH: u8 = 16;
+pub const MAX_PASSWORD_LENGTH: u8 = 128;
+const MAX_NAME: usize = 256;
+const MAX_LOGIN_TEXT: usize = 1024;
 
 /// The search text of a search probe; `None` for any other query.
 pub fn search_query(query: &CredentialQuery) -> Option<Result<String, String>> {
@@ -145,6 +157,76 @@ fn decode_wire(encoded: &str) -> Result<Envelope, String> {
     Ok(Envelope { item, fields, reason, session, timeout_sec })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateEnvelope {
+    pub name: String,
+    pub username: Option<String>,
+    pub uri: Option<String>,
+    pub length: u8,
+    pub reason: Option<String>,
+    pub session: Option<SessionClaim>,
+    pub timeout_sec: u64,
+}
+
+impl CreateEnvelope {
+    /// The fields the new item will have, as the approval card lists them.
+    pub fn fields(&self) -> Vec<String> {
+        [("username", self.username.is_some()), ("password", true), ("uri", self.uri.is_some())]
+            .into_iter()
+            .filter(|(_, present)| *present)
+            .map(|(field, _)| field.to_string())
+            .collect()
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateWire {
+    name: String,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    uri: Option<String>,
+    #[serde(default)]
+    length: Option<u8>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    session: Option<SessionClaim>,
+    #[serde(default, rename = "timeoutSec")]
+    timeout_sec: Option<u64>,
+}
+
+/// A short single-line value, `None` when absent or blank.
+fn login_text(value: Option<String>, what: &str, max: usize) -> Result<Option<String>, String> {
+    let Some(text) = value.map(|text| text.trim().to_string()).filter(|text| !text.is_empty()) else { return Ok(None) };
+    if text.chars().count() > max || text.chars().any(char::is_control) {
+        return Err(format!("{what} must be one line of at most {max} characters"));
+    }
+    Ok(Some(text))
+}
+
+/// The new item a create request names; `None` for any other query.
+pub fn create_query(query: &CredentialQuery) -> Option<Result<CreateEnvelope, String>> {
+    let encoded = query.search_string().trim().strip_prefix(CREATE_PREFIX)?;
+    Some(decode_create(encoded))
+}
+
+fn decode_create(encoded: &str) -> Result<CreateEnvelope, String> {
+    let bytes = URL_SAFE_NO_PAD.decode(encoded.trim_end_matches('=')).map_err(|e| format!("bad create encoding: {e}"))?;
+    let wire: CreateWire = serde_json::from_slice(&bytes).map_err(|e| format!("bad create JSON: {e}"))?;
+    let name = login_text(Some(wire.name), "name", MAX_NAME)?.ok_or_else(|| "the new item needs a name".to_string())?;
+    let username = login_text(wire.username, "username", MAX_LOGIN_TEXT)?;
+    let uri = login_text(wire.uri, "uri", MAX_LOGIN_TEXT)?;
+    let length = wire.length.unwrap_or(DEFAULT_PASSWORD_LENGTH);
+    if !(MIN_PASSWORD_LENGTH..=MAX_PASSWORD_LENGTH).contains(&length) {
+        return Err(format!("length must be {MIN_PASSWORD_LENGTH}-{MAX_PASSWORD_LENGTH}"));
+    }
+    let reason = wire.reason.map(|reason| reason.trim().to_string()).filter(|reason| !reason.is_empty());
+    let session = wire.session.filter(|session| !session.r#ref.trim().is_empty());
+    let timeout_sec = wire.timeout_sec.unwrap_or(DEFAULT_TIMEOUT_SEC).clamp(10, MAX_TIMEOUT_SEC);
+    Ok(CreateEnvelope { name, username, uri, length, reason, session, timeout_sec })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +305,18 @@ mod tests {
         let request = check_query(&probe).expect("a check probe").expect("valid request");
         assert_eq!((request.item.as_str(), request.fields), ("hf", vec!["password".to_string()]));
         assert!(check_query(&domain(r#"{"item":"hf","fields":["password"]}"#)).is_none());
+    }
+
+    #[test]
+    fn create_requests_list_the_fields_of_the_new_item() {
+        let probe = |json: &str| CredentialQuery::Domain(format!("{CREATE_PREFIX}{}", URL_SAFE_NO_PAD.encode(json)));
+        let request = create_query(&probe(r#"{"name":" grafana admin ","uri":"https://g.lan","reason":"set up","timeoutSec":120}"#)).expect("a create").expect("valid");
+        assert_eq!(request.name, "grafana admin");
+        assert_eq!(request.fields(), vec!["password", "uri"]);
+        assert_eq!((request.length, request.timeout_sec), (DEFAULT_PASSWORD_LENGTH, 120));
+        assert!(create_query(&probe(r#"{"name":" "}"#)).expect("a create").is_err());
+        assert!(create_query(&probe(r#"{"name":"x","length":8}"#)).expect("a create").is_err());
+        assert!(create_query(&probe(r#"{"name":"x","username":"a\nb"}"#)).expect("a create").is_err());
+        assert!(create_query(&domain(r#"{"item":"x","fields":["password"]}"#)).is_none());
     }
 }

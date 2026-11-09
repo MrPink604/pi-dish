@@ -2,16 +2,20 @@
 //! only in this process's memory and reaches `bw` children through their
 //! environment; it is never logged or written.
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use std::process::Stdio;
 use std::sync::RwLock;
 
 use ap_client::CredentialData;
 use secrecy::{ExposeSecret, SecretString};
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use zeroize::Zeroizing;
 
-use crate::envelope::custom_field;
+use crate::envelope::{CreateEnvelope, custom_field};
 
 #[derive(Deserialize)]
 struct BwUri {
@@ -95,12 +99,18 @@ pub struct Vault {
     bw: String,
     /// Items in the Bitwarden folder with this name are invisible to agents.
     deny_folder: String,
+    /// Items agents create land in the Bitwarden folder with this name.
+    create_folder: String,
     session: RwLock<Option<SecretString>>,
 }
 
 impl Vault {
-    pub fn new(bw: String, deny_folder: String, session: Option<SecretString>) -> Self {
-        Self { bw, deny_folder, session: RwLock::new(session) }
+    pub fn new(bw: String, deny_folder: String, create_folder: String, session: Option<SecretString>) -> Self {
+        Self { bw, deny_folder, create_folder, session: RwLock::new(session) }
+    }
+
+    pub fn create_folder(&self) -> &str {
+        &self.create_folder
     }
 
     fn session(&self) -> Option<SecretString> {
@@ -128,6 +138,26 @@ impl Vault {
 
     async fn run(&self, args: &[&str]) -> Result<Vec<u8>, String> {
         let output = self.command(args).output().await.map_err(|e| format!("could not run {}: {e}", self.bw))?;
+        if output.status.success() {
+            return Ok(output.stdout);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() { format!("bw {} failed", args.first().unwrap_or(&"")) } else { stderr })
+    }
+
+    /// `bw <args>` with `input` on stdin, so secrets never appear in argv.
+    async fn run_with_input(&self, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String> {
+        let mut child = self
+            .command(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("could not run {}: {e}", self.bw))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input).await.map_err(|e| format!("could not write to bw: {e}"))?;
+        }
+        let output = child.wait_with_output().await.map_err(|e| format!("could not run {}: {e}", self.bw))?;
         if output.status.success() {
             return Ok(output.stdout);
         }
@@ -170,10 +200,48 @@ impl Vault {
         self.run(&["sync"]).await.map(|_| ())
     }
 
+    async fn folders(&self) -> Result<Vec<BwFolder>, String> {
+        serde_json::from_slice(&self.run(&["list", "folders"]).await?).map_err(|e| format!("unexpected bw output: {e}"))
+    }
+
     /// The id of the folder agents may never see, if it exists.
     async fn denied_folder(&self) -> Result<Option<String>, String> {
-        let folders: Vec<BwFolder> = serde_json::from_slice(&self.run(&["list", "folders"]).await?).map_err(|e| format!("unexpected bw output: {e}"))?;
-        Ok(folders.into_iter().find(|folder| folder.name.as_deref() == Some(self.deny_folder.as_str())).and_then(|folder| folder.id))
+        Ok(self.folders().await?.into_iter().find(|folder| folder.name.as_deref() == Some(self.deny_folder.as_str())).and_then(|folder| folder.id))
+    }
+
+    /// Refuses a create before the operator is asked: a locked vault, or a
+    /// visible item with the same name (names stay usable with `run --item`).
+    pub async fn check_create(&self, name: &str) -> Result<(), String> {
+        if !self.is_unlocked() {
+            return Err("the vault is locked (the operator types `unlock` in the listener window)".to_string());
+        }
+        let found = self.search(name).await?;
+        match found.results.iter().find(|entry| entry.name == name) {
+            Some(existing) => Err(format!("an item named {name:?} already exists ({}); choose another name", existing.id)),
+            None => Ok(()),
+        }
+    }
+
+    /// After approval: a generated password, then a new login in the create
+    /// folder (made on first use). The password reaches `bw` only on stdin.
+    pub async fn create(&self, request: &CreateEnvelope) -> Result<String, String> {
+        let folder = match self.folders().await?.into_iter().find(|folder| folder.name.as_deref() == Some(self.create_folder.as_str())) {
+            Some(BwFolder { id: Some(id), .. }) => id,
+            _ => {
+                let body = STANDARD.encode(serde_json::json!({ "name": self.create_folder }).to_string());
+                let created: BwFolder = serde_json::from_slice(&self.run_with_input(&["create", "folder"], body.as_bytes()).await?).map_err(|e| format!("unexpected bw output: {e}"))?;
+                created.id.ok_or("bw created a folder without an id")?
+            }
+        };
+        let length = request.length.to_string();
+        let password = Zeroizing::new(String::from_utf8_lossy(&Zeroizing::new(self.run(&["generate", "-ulns", "--length", &length]).await?)).trim().to_string());
+        if password.chars().count() != usize::from(request.length) {
+            return Err("bw generate returned an unexpected password".to_string());
+        }
+        let document = Zeroizing::new(new_login(request, &folder, &password).to_string());
+        let body = Zeroizing::new(STANDARD.encode(document.as_bytes()));
+        let created: BwSummary = serde_json::from_slice(&Zeroizing::new(self.run_with_input(&["create", "item"], body.as_bytes()).await?)).map_err(|e| format!("unexpected bw output: {e}"))?;
+        created.id.ok_or_else(|| "bw created an item without an id".to_string())
     }
 
     /// Names, ids and URIs (never values) of items matching `query`, outside the deny folder.
@@ -222,6 +290,23 @@ impl Vault {
         };
         credential_from_item(&prepared.document, fields, totp)
     }
+}
+
+/// The `bw create item` document for a new login (Bitwarden's item template, type 1).
+fn new_login(request: &CreateEnvelope, folder_id: &str, password: &str) -> serde_json::Value {
+    let uris: Vec<serde_json::Value> = request.uri.iter().map(|uri| serde_json::json!({ "match": null, "uri": uri })).collect();
+    serde_json::json!({
+        "organizationId": null,
+        "collectionIds": null,
+        "folderId": folder_id,
+        "type": 1,
+        "name": request.name,
+        "notes": null,
+        "favorite": false,
+        "fields": [],
+        "login": { "uris": uris, "username": request.username, "password": password, "totp": null },
+        "reprompt": 0,
+    })
 }
 
 /// Why a request was refused before approval: the listener window's line and
@@ -462,5 +547,55 @@ mod tests {
         assert_eq!(lookup_refusal("hf", "Not found.".to_string()).requester, r#"no item "hf"; find its id with `search`"#);
         let ambiguous = lookup_refusal("hf", "More than one result was found. Try getting a specific object by `id` instead. The following objects were found:\nsecret-id".to_string());
         assert!(ambiguous.log.contains("secret-id") && !ambiguous.requester.contains("secret-id"));
+    }
+
+    #[test]
+    fn a_new_login_holds_only_what_was_asked_for() {
+        let request = CreateEnvelope {
+            name: "grafana".to_string(), username: None, uri: Some("https://g.lan".to_string()),
+            length: 32, reason: None, session: None, timeout_sec: 60,
+        };
+        let item = new_login(&request, "f1", "pw");
+        assert_eq!(item["folderId"], "f1");
+        assert_eq!(item["type"], 1);
+        assert_eq!(item["login"], serde_json::json!({ "uris": [{ "match": null, "uri": "https://g.lan" }], "username": null, "password": "pw", "totp": null }));
+    }
+
+    #[tokio::test]
+    async fn create_makes_the_folder_once_and_passes_the_password_only_on_stdin() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pi-dish-vault-create-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let bw = dir.join("bw");
+        // `list folders` lists the create folder once `folder` exists; `create` logs its decoded stdin.
+        std::fs::write(&bw, r#"#!/bin/sh
+dir=$(dirname "$0")
+echo "$*" >> "$dir/argv"
+case "$1 $2" in
+  "list folders") if [ -e "$dir/folder" ]; then echo '[{"id":"f1","name":"agent-created"}]'; else echo '[]'; fi ;;
+  "create folder") base64 -d >> "$dir/stdin"; echo >> "$dir/stdin"; touch "$dir/folder"; echo '{"id":"f1","name":"agent-created"}' ;;
+  "generate -ulns") printf 'Zq7#Zq7#Zq7#Zq7#Zq7#Zq7#Zq7#Zq7#\n' ;;
+  "create item") base64 -d >> "$dir/stdin"; echo >> "$dir/stdin"; echo '{"id":"new-item","name":"grafana"}' ;;
+  *) exit 1 ;;
+esac
+"#).expect("write stub");
+        std::fs::set_permissions(&bw, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
+        let vault = Vault::new(bw.to_string_lossy().into_owned(), "no-agents".to_string(), "agent-created".to_string(), Some(SecretString::from("key")));
+        let request = CreateEnvelope {
+            name: "grafana".to_string(), username: Some("admin".to_string()), uri: None,
+            length: 32, reason: None, session: None, timeout_sec: 60,
+        };
+        assert_eq!(vault.create(&request).await.as_deref(), Ok("new-item"));
+        assert_eq!(vault.create(&request).await.as_deref(), Ok("new-item"));
+        let argv = std::fs::read_to_string(dir.join("argv")).expect("argv log");
+        assert_eq!(argv.matches("create folder").count(), 1, "{argv}");
+        assert!(!argv.contains("Zq7#"), "the password never reaches argv");
+        let items: Vec<serde_json::Value> = std::fs::read_to_string(dir.join("stdin")).expect("stdin log").lines()
+            .map(|line| serde_json::from_str(line).expect("JSON document")).filter(|value: &serde_json::Value| value["type"] == 1).collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["folderId"], "f1");
+        assert_eq!(items[0]["login"]["username"], "admin");
+        assert_eq!(items[0]["login"]["password"], "Zq7#Zq7#Zq7#Zq7#Zq7#Zq7#Zq7#Zq7#");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

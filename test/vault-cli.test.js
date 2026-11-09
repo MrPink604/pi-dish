@@ -136,6 +136,24 @@ test('sync sends the sync probe and fails when the listener refuses it', async (
     assert.equal(refused?.code, 1);
     assert.match(refused?.stderr ?? '', /sync failed \(exit 7\)/);
 });
+test('create sends only metadata, prints the new id, and reports refusals and denials', async (t) => {
+    const { home, aac, argvLog } = setup(t, false);
+    const env = { ...process.env, HOME: home, AAC_BIN: aac, PI_DISH_URL: 'http://127.0.0.1:9', PI_DISH_SESSION_ID: '' };
+    delete env.PI_DISH_VAULT_RELAY_URL;
+    const reply = (notes) => JSON.stringify({ success: true, credential: { notes: JSON.stringify(notes) } });
+    const create = (stdout) => run(process.execPath, [cli, 'create', '--name', 'grafana admin', '--uri', 'https://g.lan', '--reason', 'set up grafana'], { env: { ...env, AAC_STUB_STDOUT: stdout ?? '' } });
+    const { stdout } = await create(reply({ id: 'new-id', name: 'grafana admin', folder: 'agent-created' }));
+    assert.equal(stdout, 'new-id\tgrafana admin\tagent-created\n');
+    const argv = JSON.parse(fs.readFileSync(argvLog, 'utf8'));
+    assert.deepEqual(argv.slice(0, 3), ['--output', 'json', 'connect']);
+    const domain = argv[argv.indexOf('--domain') + 1];
+    assert.ok(domain.startsWith('pidish-vault:create:'));
+    assert.deepEqual(JSON.parse(Buffer.from(domain.slice('pidish-vault:create:'.length), 'base64url').toString('utf8')), { name: 'grafana admin', length: 32, timeoutSec: 300, uri: 'https://g.lan', reason: 'set up grafana' });
+    const refused = await create(reply({ error: 'an item named "grafana admin" already exists (x); choose another name' })).then(() => null, (error) => error);
+    assert.match(refused?.stderr ?? '', /not created: an item named "grafana admin" already exists/);
+    const failed = await run(process.execPath, [cli, 'create', '--name', 'x', '--length', '8'], { env }).then(() => null, (error) => error);
+    assert.match(failed?.stderr ?? '', /--length must be 16-128/);
+});
 test('custom fields reach their variables through the notes bundle, alongside direct slots', async (t) => {
     const { home } = setup(t, false);
     const argvLog = path.join(home, 'aac-run-argv.json');

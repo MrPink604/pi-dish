@@ -25,6 +25,29 @@ export declare function encodeEnvelope(body: {
     session: SessionClaim | null;
     timeoutSec: number;
 }): string;
+interface CreateArgs {
+    name: string;
+    username: string | null;
+    uri: string | null;
+    length: number;
+    reason: string | null;
+    timeout: number;
+    session?: string;
+    json: boolean;
+}
+export declare function parseCreateArgs(argv: readonly string[]): CreateArgs;
+/** The listener answers `CREATE_PREFIX` + this payload: refusals and the new id travel as JSON in `notes`. */
+export declare const CREATE_PREFIX = "pidish-vault:create:";
+export declare function encodeCreate(args: Omit<CreateArgs, 'json' | 'session' | 'timeout'> & {
+    session: SessionClaim | null;
+    timeoutSec: number;
+}): string;
+/** The listener's verdict in an `aac --output json connect` reply. */
+export declare function decodeCreateReply(stdout: string): {
+    id: string;
+    name: string;
+    folder: string;
+};
 /**
  * aac injects only its five built-in slots. With custom fields the listener
  * returns them (and notes, if asked) as one JSON bundle in `notes`; aac puts

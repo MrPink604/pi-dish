@@ -2,9 +2,12 @@
 // Generated edge from skills/pi-dish-vault/scripts/pi-dish-vault.ts; edit that source and run npm run build:edges.
 'use strict';
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SYNC_PROBE = exports.SEARCH_PREFIX = exports.PAIR_PROBE = exports.CHECK_PREFIX = exports.FIELDS = exports.ENVELOPE_PREFIX = void 0;
+exports.SYNC_PROBE = exports.SEARCH_PREFIX = exports.PAIR_PROBE = exports.CHECK_PREFIX = exports.CREATE_PREFIX = exports.FIELDS = exports.ENVELOPE_PREFIX = void 0;
 exports.parseRunArgs = parseRunArgs;
 exports.encodeEnvelope = encodeEnvelope;
+exports.parseCreateArgs = parseCreateArgs;
+exports.encodeCreate = encodeCreate;
+exports.decodeCreateReply = decodeCreateReply;
 exports.aacInvocation = aacInvocation;
 exports.decodeSearchReply = decodeSearchReply;
 /**
@@ -39,6 +42,9 @@ const INJECT = '__inject';
 const DEFAULT_TIMEOUT_SEC = 300;
 const MAX_TIMEOUT_SEC = 600;
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const DEFAULT_LENGTH = 32;
+const MIN_LENGTH = 16;
+const MAX_LENGTH = 128;
 const HELP = {
     run: `run — fetch one Bitwarden item, approved in pi-dish, into one command's environment.
 
@@ -69,6 +75,22 @@ changed show up in search and requests. No approval needed.
 Usage: sync
 
 Fails while the vault is locked or Bitwarden is unreachable; the listener's window says which.`,
+    create: `create — add one new login to the vault, approved in pi-dish. The listener generates the
+password; it never passes through this host. The login lands in the listener's create folder.
+
+Usage: create --name <name> [--username <user>] [--uri <url>] [--length <n>] [--reason <text>] [--timeout <secs>] [--json]
+
+Flags:
+  --name NAME      the new item's name; refused when a visible item already has it
+  --username USER  login username (optional)
+  --uri URL        login URI (optional)
+  --length N       generated password length, ${MIN_LENGTH}-${MAX_LENGTH} (default ${DEFAULT_LENGTH})
+  --reason TEXT    one short, honest line shown on the approval card
+  --timeout SECS   how long to wait for the decision (default ${DEFAULT_TIMEOUT_SEC}, max ${MAX_TIMEOUT_SEC})
+  --session ID     this caller's session id, when discovery cannot infer it
+
+Prints the new item's id; use it with \`run --item <id> --env PW=password\` to set the
+password where it is needed (that release is approved separately).`,
     pair: `pair — pair this host with the hub's vault listener (once per host).
 
 Usage: pair <psk-token>
@@ -130,6 +152,73 @@ function encodeEnvelope(body) {
     if (body.session)
         payload.session = body.session;
     return exports.ENVELOPE_PREFIX + Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+function parseCreateArgs(argv) {
+    const args = { name: '', username: null, uri: null, length: DEFAULT_LENGTH, reason: null, timeout: DEFAULT_TIMEOUT_SEC, json: false };
+    for (let i = 0; i < argv.length; i++) {
+        const flag = argv[i];
+        if (flag === '--json') {
+            args.json = true;
+            continue;
+        }
+        const value = argv[i + 1];
+        if (value === undefined)
+            throw new Error(`${flag} needs a value`);
+        i++;
+        if (flag === '--name')
+            args.name = value.trim();
+        else if (flag === '--username')
+            args.username = value.trim() || null;
+        else if (flag === '--uri')
+            args.uri = value.trim() || null;
+        else if (flag === '--reason')
+            args.reason = value.trim() || null;
+        else if (flag === '--session')
+            args.session = value;
+        else if (flag === '--length') {
+            const length = Number(value);
+            if (!Number.isInteger(length) || length < MIN_LENGTH || length > MAX_LENGTH)
+                throw new Error(`--length must be ${MIN_LENGTH}-${MAX_LENGTH}`);
+            args.length = length;
+        }
+        else if (flag === '--timeout') {
+            const seconds = Number(value);
+            if (!Number.isInteger(seconds) || seconds < 10 || seconds > MAX_TIMEOUT_SEC)
+                throw new Error(`--timeout must be 10-${MAX_TIMEOUT_SEC} seconds`);
+            args.timeout = seconds;
+        }
+        else
+            throw new Error(`unknown option: ${flag}`);
+    }
+    if (!args.name)
+        throw new Error('--name is required');
+    return args;
+}
+/** The listener answers `CREATE_PREFIX` + this payload: refusals and the new id travel as JSON in `notes`. */
+exports.CREATE_PREFIX = 'pidish-vault:create:';
+function encodeCreate(args) {
+    const payload = { name: args.name, length: args.length, timeoutSec: args.timeoutSec };
+    if (args.username)
+        payload.username = args.username;
+    if (args.uri)
+        payload.uri = args.uri;
+    if (args.reason)
+        payload.reason = args.reason;
+    if (args.session)
+        payload.session = args.session;
+    return exports.CREATE_PREFIX + Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+/** The listener's verdict in an `aac --output json connect` reply. */
+function decodeCreateReply(stdout) {
+    const notes = core.record(core.record(JSON.parse(stdout)).credential ?? {}).notes;
+    if (typeof notes !== 'string')
+        throw new Error('the listener returned no result (is it up to date?)');
+    const verdict = core.record(JSON.parse(notes));
+    if (typeof verdict.error === 'string')
+        throw new Error(verdict.error);
+    if (typeof verdict.id !== 'string' || !verdict.id)
+        throw new Error('the listener returned no item id');
+    return { id: verdict.id, name: typeof verdict.name === 'string' ? verdict.name : '', folder: typeof verdict.folder === 'string' ? verdict.folder : '' };
 }
 /** This session as the approval card should show it; null when the CLI runs outside a pi-dish session. */
 async function sessionClaim(explicit) {
@@ -201,6 +290,30 @@ async function run(argv) {
             process.stderr.write(`pi-dish-vault: ${explainRefusal(envelope, args.timeout, (Date.now() - started) / 1000)}\n`);
         process.exit(signal ? 1 : code ?? 1);
     });
+}
+async function create(argv) {
+    const args = parseCreateArgs(argv);
+    const probe = encodeCreate({ ...args, session: await sessionClaim(args.session), timeoutSec: args.timeout });
+    process.stderr.write(`pi-dish-vault: waiting for approval to create ${args.name} in pi-dish (up to ${args.timeout}s)…\n`);
+    const result = (0, node_child_process_1.spawnSync)(aacBin(), aacArgv(['--output', 'json', 'connect', '--domain', probe, '--timeout', String(args.timeout)]), { encoding: 'utf8' });
+    if (result.error)
+        return fail(`could not run ${aacBin()}: ${result.error.message} (install aac v0.11.0 or set AAC_BIN)`);
+    if (result.status === AAC_REFUSED)
+        return fail(`not created: denied in pi-dish, or no decision within ${args.timeout}s`);
+    if (result.status !== 0) {
+        const detail = (result.stderr || result.stdout || '').trim().split('\n').pop() || 'no output';
+        return fail(`create failed (exit ${result.status}): ${detail}`);
+    }
+    let created;
+    try {
+        created = decodeCreateReply(result.stdout);
+    }
+    catch (error) {
+        return fail(`not created: ${core.errorMessage(error)}`);
+    }
+    if (args.json)
+        return core.print(created, true);
+    process.stdout.write(`${created.id}\t${created.name}\t${created.folder}\n`);
 }
 /** aac says only "Request denied"; ask the listener whether it refused the request before approval, and why. */
 function explainRefusal(envelope, timeoutSec, elapsedSec) {
@@ -338,6 +451,8 @@ async function main() {
     try {
         if (command === 'run')
             return await run(rest);
+        if (command === 'create')
+            return await create(rest);
         if (command === INJECT)
             return inject(rest);
         if (command === 'pair')
