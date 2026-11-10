@@ -96,9 +96,11 @@ export function createTranscript(options: {
     if (Number.isFinite(center)) ranges.push({ start: center - ACTIVE_CONTEXT, end: center + ACTIVE_CONTEXT });
     if (protectedRange) ranges.push(protectedRange);
     const within = (node: HTMLElement) => { const index = Number(node.dataset.msgIndex); return ranges.some(range => index >= range.start && index <= range.end); };
+    // The non-tail budget grows one contiguous window outward from the reader, so eviction leaves at most one internal gap.
     const keep = new Set(indexed.filter(within)), budget = Math.max(0, MAX_ACTIVE - keep.size), headQuota = Math.ceil(budget / 2);
-    let head = 0;
-    for (const node of indexed) { if (head >= headQuota) break; if (!keep.has(node)) { keep.add(node); head++; } }
+    const pivot = Number.isFinite(center) ? center : protectedRange ? (protectedRange.start + protectedRange.end) / 2 : Number(indexed[0]!.dataset.msgIndex);
+    const nearest = indexed.filter(node => !keep.has(node)).sort((a, b) => Math.abs(Number(a.dataset.msgIndex) - pivot) - Math.abs(Number(b.dataset.msgIndex) - pivot));
+    for (const node of nearest.slice(0, headQuota)) keep.add(node);
     let tail = 0;
     for (let i = indexed.length - 1; i >= 0 && tail < budget - headQuota; i--) { const node = indexed[i]!; if (!keep.has(node)) { keep.add(node); tail++; } }
     const offset = anchor?.getBoundingClientRect().top ?? null;
@@ -166,7 +168,7 @@ export function createTranscript(options: {
       if (!owns(owner) || !container.contains(gap)) return;
       const indices = data.messages.map(message => message.index).filter((value): value is number => value != null);
       if (indices.length) protectedRange = { start: Math.min(...indices) - ACTIVE_CONTEXT, end: Math.max(...indices) + ACTIVE_CONTEXT };
-      insertWindow(data.messages);
+      insertWindow(data.messages); protectedRange = null;
       if (retained?.isConnected && container.contains(retained)) container.scrollTop += topLevel(retained).getBoundingClientRect().top - offset;
     } catch (error) {
       if (owns(owner) && container.contains(gap)) {
@@ -198,7 +200,7 @@ export function createTranscript(options: {
       || !data.messages.some(message => message.index === index)) return;
     const indices = data.messages.map(message => message.index).filter((value): value is number => value != null);
     if (indices.length) protectedRange = { start: Math.min(...indices) - ACTIVE_CONTEXT, end: Math.max(...indices) + ACTIVE_CONTEXT };
-    insertWindow(data.messages);
+    insertWindow(data.messages); protectedRange = null;
   }
   function stash() {
     const selected = sessionState.currentSession; if (disposed || !selected || !loaded || loaded.key !== sessionRefKey(selected)) return;

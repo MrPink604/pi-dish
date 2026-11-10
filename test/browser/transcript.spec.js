@@ -380,7 +380,7 @@ async function initial(page) { await page.evaluate(() => { window.transcriptLoad
     (0, fixtures_js_1.expect)(result.bounded.mounted).toBeLessThanOrEqual(300);
     (0, fixtures_js_1.expect)(result.bounded.oldest).toBeLessThan(result.initialOldest);
     (0, fixtures_js_1.expect)(result.bounded.sorted).toBe(true);
-    (0, fixtures_js_1.expect)(result.bounded.gaps).toBeGreaterThan(0);
+    (0, fixtures_js_1.expect)(result.bounded.gaps).toBeLessThanOrEqual(1);
     (0, fixtures_js_1.expect)(result.reloaded).toBe(true);
     (0, fixtures_js_1.expect)(result.reloadMounted).toBeLessThanOrEqual(300);
 });

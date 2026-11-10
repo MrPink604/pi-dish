@@ -309,7 +309,7 @@ test('repeated older pages stay bounded and evicted messages remain reachable', 
   expect(result.peak).toBeLessThanOrEqual(300);
   expect(result.bounded.mounted).toBeLessThanOrEqual(300);
   expect(result.bounded.oldest).toBeLessThan(result.initialOldest);
-  expect(result.bounded.sorted).toBe(true); expect(result.bounded.gaps).toBeGreaterThan(0);
+  expect(result.bounded.sorted).toBe(true); expect(result.bounded.gaps).toBeLessThanOrEqual(1);
   expect(result.reloaded).toBe(true); expect(result.reloadMounted).toBeLessThanOrEqual(300);
 });
 
