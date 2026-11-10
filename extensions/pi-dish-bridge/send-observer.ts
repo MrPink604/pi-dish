@@ -30,12 +30,13 @@ export function observeSendUserMessage(AgentSession: unknown): void {
 }
 
 /**
- * Run `send` and return what it returned plus the promise of the first
- * AgentSession.sendUserMessage() it made synchronously. `promise` is null when
- * the host never reached a patched session (no adapter, or a host whose public
- * API stopped delegating synchronously); callers keep the public outcome then.
+ * Run `send` and return the promise that settles with the host's delivery: the
+ * first AgentSession.sendUserMessage() it made synchronously, else a thenable
+ * the public API itself returned (OMP 18.18 returns the AgentSession promise).
+ * Either may settle only when the whole turn ends. `null` when the host gave
+ * neither; callers keep the public outcome then.
  */
-export function captureSendUserMessage(send: () => unknown): { returned: unknown; promise: Promise<unknown> | null } {
+export function captureSendUserMessage(send: () => unknown): Promise<unknown> | null {
   const slot: { promise: Promise<unknown> | null } = { promise: null };
   const previous = sharedGlobal[SINK];
   sharedGlobal[SINK] = (result: unknown) => {
@@ -43,7 +44,7 @@ export function captureSendUserMessage(send: () => unknown): { returned: unknown
   };
   try {
     const returned = send();
-    return { returned, promise: slot.promise };
+    return slot.promise ?? (isThenable(returned) ? Promise.resolve(returned) : null);
   } finally {
     sharedGlobal[SINK] = previous;
   }

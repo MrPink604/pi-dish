@@ -2093,8 +2093,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
     admissionWaiters.add(admit);
     const timer = setTimeout(admit, PROMPT_ADMISSION_MS);
     try {
-      const { returned, promise } = captureSendUserMessage(() => callHost(pi, "sendUserMessage", content, delivery));
-      await returned;
+      const promise = captureSendUserMessage(() => callHost(pi, "sendUserMessage", content, delivery));
       if (promise) {
         await Promise.race([promise, admitted]).catch((error: unknown) => {
           throw new Error(`${descriptor.name} did not accept the message: ${errorText(error)}`);

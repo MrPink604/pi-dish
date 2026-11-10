@@ -46,10 +46,13 @@ const pi = {
   getThinkingLevel() { return 'minimal'; },
   setThinkingLevel() {},
   setSessionName() {},
-  // OMP's ExtensionAPI.sendUserMessage(): fire the AgentSession call and keep
-  // a rejection to the TUI (`.catch(showError)`), returning nothing.
+  // OMP 18.18's ExtensionAPI.sendUserMessage(): fire the AgentSession call,
+  // keep a rejection to the TUI (`.catch(showError)`) and return the call's
+  // promise, which settles only when the turn ends.
   sendUserMessage(content: unknown, options: unknown) {
-    nativeSession?.sendUserMessage(content, options).catch(() => {});
+    const turn = nativeSession?.sendUserMessage(content, options);
+    turn?.catch(() => {});
+    return turn;
   },
 };
 

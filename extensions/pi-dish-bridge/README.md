@@ -129,10 +129,11 @@ before removing the selected index, preserving duplicate messages and images.
 Pi and OMP keep a `sendUserMessage()` rejection in their own TUI, so a prompt
 refused before the turn starts (signed-out provider, no model) used to look
 delivered. `send-observer.ts` wraps the host `AgentSession.sendUserMessage()`
-(patched by `pi-private.ts` and the OMP `native-state.ts`); the core waits up to
-10 s for agent/turn start, pre-prompt compaction, or the call to settle, and
-returns a refusal as the prompt's error. The web composer then restores the
-prompt text.
+(patched by `pi-private.ts` and the OMP `native-state.ts`); OMP 18.18's public
+API also returns that call's promise, which settles only when the turn ends.
+The core never awaits it directly: it waits up to 10 s for agent/turn start,
+pre-prompt compaction, or the call to settle, and returns a refusal as the
+prompt's error. The web composer then restores the prompt text.
 
 Remote `/login` (`login.ts`) drives the host's own sign-in: Pi's private
 `modelRegistry.runtime` login (`pi-login.ts`) or OMP's
