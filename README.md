@@ -77,11 +77,13 @@ Rules of thumb:
 - **Slash commands** — `/compact`, `/model`, `/name`, skills, prompt
   templates, and more, routed to the session instead of the model (support
   matrix below).
-- **Extension UI** — pi extension dialogs (select/confirm/input/editor) and
-  OMP's native multi-question `ask` form dock into the session's
-  chat box: they take over the composer while expanded, minimize to a
-  backgroundable bar, and stay scoped to their session when you switch away;
-  extension widgets/status badges plus OMP todos, plan mode, and prewalk state
+- **Extension UI** — pi extension dialogs (select/confirm/input/editor),
+  OMP's native multi-question `ask` form and OMP's approval prompts (tool
+  approvals, agent `cfg://` settings changes, issue-report consent) dock into
+  the session's chat box: they take over the composer while expanded, minimize
+  to a backgroundable bar, and stay scoped to their session when you switch
+  away; approvals mark the session as waiting for an answer like an ask.
+  Extension widgets/status badges plus OMP todos, plan mode, and prewalk state
   render natively.
 - **Session controls** — model switcher (mirrors pi's scoped-models
   settings), thinking-level toggle, OMP fast mode (the `/fast` priority

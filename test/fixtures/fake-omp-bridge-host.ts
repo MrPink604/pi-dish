@@ -3,10 +3,13 @@ import * as path from 'node:path';
 import { createBridge } from '../../extensions/pi-dish-bridge/core.js';
 import { bridgeDescriptor, createHarnessBridge } from '../../extensions/pi-dish-bridge-omp/index.js';
 import { patchOmpAgentSession } from '../../extensions/pi-dish-bridge-omp/native-state.js';
+import { patchOmpExtensionUiController } from '../../extensions/pi-dish-bridge-omp/host-dialogs.js';
 import { isObject, type HostObject as HostRecord } from '../../extensions/pi-dish-bridge/host.js';
 
 interface FixtureUI {
   askDialog(questions: unknown): Promise<unknown>;
+  select?(title: string, options: readonly string[], dialogOptions?: unknown): Promise<unknown>;
+  approve?(prompt: unknown, dialogOptions?: unknown): Promise<unknown>;
 }
 interface FixtureContext {
   ui: FixtureUI;
@@ -335,6 +338,42 @@ if (process.env.FAKE_OMP_ASK_RESULT) {
   } else {
     void fireAsk();
   }
+}
+
+const hostDialogResult = process.env.FAKE_OMP_HOST_DIALOG_RESULT || '';
+if (hostDialogResult) {
+  // OMP's ExtensionUiController: ui.select and ui.approve delegate to it, and
+  // interactive mode calls showCollabAwareSelector directly for cfg:// writes.
+  // Each local dialog stays open until its signal dismisses it.
+  const results: Record<string, unknown> = { dismissed: [] };
+  const record = (key: string, value: unknown) => {
+    results[key] = value;
+    fs.writeFileSync(hostDialogResult, JSON.stringify(results));
+  };
+  const localDialog = (name: string, dialogOptions: unknown) => new Promise<undefined>(resolve => {
+    const signal = isObject(dialogOptions) ? dialogOptions.signal : undefined;
+    if (signal instanceof AbortSignal) signal.addEventListener('abort', () => {
+      record('dismissed', [...results.dismissed as string[], name]);
+      resolve(undefined);
+    });
+  });
+  class FakeExtensionUiController {
+    showCollabAwareSelector(title: string, _options: readonly string[], dialogOptions?: unknown) {
+      return localDialog(title.split('\n')[0], dialogOptions);
+    }
+  }
+  patchOmpExtensionUiController(FakeExtensionUiController);
+  const controller = new FakeExtensionUiController();
+  ui.select = (title, options, dialogOptions) => controller.showCollabAwareSelector(title, options, dialogOptions);
+  ui.approve = (_prompt, dialogOptions) => localDialog('approval', dialogOptions);
+  await emit('tool_execution_update', { toolCallId: 'host-dialogs', toolName: 'read' }, ctx);
+  void controller.showCollabAwareSelector(
+    '⚙️ Your agent wants to change `task.agentModelOverrides` for this session.\n{} → {"scout":"opus"}',
+    ['Always for this session', 'Approve', 'Deny'], { initialIndex: 1 },
+  ).then(value => record('cfg', value ?? null));
+  void ctx.ui.select?.('Pick a color', ['Red', 'Blue']).then(value => record('select', value ?? null));
+  void ctx.ui.approve?.({ full: 'Run bash?\nrm -rf build', compact: 'Run bash?', session: 'Approve bash for this session' })
+    .then(value => record('approval', value ?? null));
 }
 
 for (let attempt = 0; attempt < 100; attempt++) {

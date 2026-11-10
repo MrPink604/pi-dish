@@ -19,7 +19,7 @@ async function waitFor(predicate, timeoutMs = 3000) {
     }
     throw new Error('condition timeout');
 }
-async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false, askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false, promptMode, } = {}) {
+async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false, askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false, promptMode, hostDialogs = false, } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
     const home = path.join(root, 'home');
     const socketDir = path.join(root, 'sockets');
@@ -31,6 +31,7 @@ async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsess
     const askResultFile = path.join(root, 'ask-result.json');
     const askTriggerFile = path.join(root, 'ask-trigger');
     const uiRestoreResultFile = path.join(root, 'ui-restore-result.json');
+    const hostDialogResultFile = path.join(root, 'host-dialogs.json');
     const lifecycleFile = path.join(root, 'lifecycle.json');
     fs.writeFileSync(lifecycleFile, 'null');
     fs.mkdirSync(home, { recursive: true });
@@ -59,6 +60,7 @@ async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsess
             FAKE_OMP_NATIVE_PROJECTION: nativeProjection ? JSON.stringify(nativeProjection) : '',
             FAKE_OMP_LIFECYCLE_FILE: lifecycle ? lifecycleFile : '',
             FAKE_OMP_PROMPT_MODE: promptMode ?? '',
+            FAKE_OMP_HOST_DIALOG_RESULT: hostDialogs ? hostDialogResultFile : '',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -90,7 +92,7 @@ async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsess
     const registryPath = path.join(registryDir, registryName);
     const claim = (0, test_types_js_1.bridgeEntry)((0, test_types_js_1.record)(JSON.parse(fs.readFileSync(registryPath, 'utf8'))));
     return {
-        root, callFile, askResultFile, askTriggerFile, lifecycleFile, claim, child,
+        root, callFile, askResultFile, askTriggerFile, lifecycleFile, hostDialogResultFile, registryPath, claim, child,
         async close() {
             child.kill('SIGTERM');
             await new Promise(resolve => child.once('exit', () => resolve()));
@@ -263,6 +265,56 @@ test('OMP bridge restores the shared UI context during extension shutdown', asyn
     session.close();
     const result = await host.close();
     assert.equal(result.uiRestored, true, 'reload cannot accumulate another askDialog wrapper');
+});
+test('OMP bridge puts host approval prompts on the web and marks the session waiting', async () => {
+    const host = await startFakeHost(false, { hostDialogs: true });
+    const session = new BridgeSession(host.claim);
+    const requests = [];
+    session.on('extension_ui_request', (request) => { if (request && typeof request === 'object' && !Array.isArray(request))
+        requests.push((0, test_types_js_1.record)(request)); });
+    const results = () => { try {
+        return (0, test_types_js_1.record)(JSON.parse(fs.readFileSync(host.hostDialogResultFile, 'utf8')));
+    }
+    catch {
+        return null;
+    } };
+    const askPending = () => (0, test_types_js_1.record)(JSON.parse(fs.readFileSync(host.registryPath, 'utf8'))).askPending;
+    const answer = async (request, value) => {
+        if (typeof request.id !== 'string')
+            throw new Error('dialog request lacks an id');
+        await session.respondExtensionUI(request.id, { value });
+    };
+    try {
+        await session.connect();
+        await waitFor(() => requests.filter(request => request.method === 'select').length >= 3);
+        // OMP's cfg:// approval reaches the controller directly, not ui.select.
+        const cfg = (0, test_types_js_1.present)(requests.find(request => String(request.title).includes('task.agentModelOverrides')));
+        assert.equal(cfg.title, '⚙️ Your agent wants to change `task.agentModelOverrides` for this session.');
+        assert.equal(cfg.message, '{} → {"scout":"opus"}');
+        assert.deepEqual(cfg.options, ['Always for this session', 'Approve', 'Deny']);
+        // ui.select reaches the patched controller too; it must not be raised twice.
+        assert.equal(requests.filter(request => request.title === 'Pick a color').length, 1);
+        const approval = (0, test_types_js_1.present)(requests.find(request => request.title === 'Run bash?'));
+        assert.equal(approval.message, 'rm -rf build');
+        assert.deepEqual(approval.options, ['Approve', 'Approve bash for this session', 'Deny']);
+        assert.equal(askPending(), true, 'a pending host approval holds the agent');
+        await answer(cfg, 'Approve');
+        await answer((0, test_types_js_1.present)(requests.find(request => request.title === 'Pick a color')), 'Blue');
+        await answer(approval, 'Approve bash for this session');
+        const final = await waitFor(() => {
+            const value = results();
+            return value && 'cfg' in value && 'select' in value && 'approval' in value ? value : null;
+        });
+        assert.equal(final.cfg, 'Approve');
+        assert.equal(final.select, 'Blue');
+        assert.equal(final.approval, 'session');
+        assert.deepEqual(Array.isArray(final.dismissed) ? [...final.dismissed].sort() : null, ['Pick a color', 'approval', '⚙️ Your agent wants to change `task.agentModelOverrides` for this session.'].sort(), 'each web answer tears down its local TUI dialog');
+        await waitFor(() => askPending() === false);
+    }
+    finally {
+        session.close();
+        await host.close();
+    }
 });
 test('OMP bridge projects native todos, plan mode, and prewalk as extension UI', async () => {
     const host = await startFakeHost(false, {

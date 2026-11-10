@@ -18,13 +18,65 @@ import { createToolEventStream } from "../../lib/tool-event-stream.js";
 
 type UserContent = Parameters<ExtensionAPI["sendUserMessage"]>[0];
 type DeliveryOptions = Parameters<ExtensionAPI["sendUserMessage"]>[1];
-type UIRequest = Record<string, unknown> & { method: string; id?: string };
+export type UIRequest = Record<string, unknown> & { method: string; id?: string };
+/**
+ * Puts a host dialog the extension ui object never sees on the web, raced
+ * against its local presentation. `openLocal` receives the signal that tears
+ * the local dialog down after a web answer, or null when the call is already
+ * part of a bridged ui dialog and must run unchanged.
+ */
+export type HostDialogRace = (
+  req: UIRequest,
+  mapResponse: (response: unknown) => unknown,
+  openLocal: (dismiss: AbortSignal | null) => unknown,
+) => unknown;
 type HostModel = HostObject & { provider: string; id: string };
 type HostCommand = HostObject & { name: string; source: string };
 type FastModeBridgeState = { available: boolean; enabled: boolean; active: boolean };
 
 function errorText(error: unknown): string {
   return String(field(error, "message") || error);
+}
+
+/**
+ * Every OMP dialog renderer wires options.signal to a teardown that disposes
+ * the TUI component and resolves the dialog with undefined, so aborting a
+ * per-dialog controller when the remote answer wins dismisses the tmux-side
+ * dialog. Hosts that ignore signal just discard the late local result.
+ */
+export function withDismissSignal(options: unknown, dismiss: AbortSignal): Record<string, unknown> {
+  const caller = field(options, "signal");
+  const signal = caller instanceof AbortSignal ? AbortSignal.any([caller, dismiss]) : dismiss;
+  return { ...(isObject(options) ? options : {}), signal };
+}
+
+/** A host prompt's headline becomes the card title; its detail lines become the scrollable message. */
+export function dialogText(text: unknown): { title: string; message?: string } {
+  const value = typeof text === "string" ? text : "";
+  const newline = value.indexOf("\n");
+  return newline < 0 ? { title: value } : { title: value.slice(0, newline), message: value.slice(newline + 1) };
+}
+
+type ApprovalChoice = { label: string; answer: unknown };
+
+// OMP's ui.approve() choice list and answer shapes (tools/approval.ts,
+// verified 18.18.6): scoped grants, then their "always" forms, the one-call
+// approval, the optional session-wide approval, and Deny.
+function approvalChoices(prompt: unknown): ApprovalChoice[] {
+  const grants = field(prompt, "grants");
+  const grantList: unknown[] = Array.isArray(grants) ? grants : [];
+  const choices: ApprovalChoice[] = [];
+  for (const always of [false, true]) {
+    for (const grant of grantList) {
+      const label = field(grant, always ? "alwaysLabel" : "label");
+      if (typeof label === "string") choices.push({ label, answer: { grant: field(grant, "scope"), always } });
+    }
+  }
+  choices.push({ label: grantList.length ? "Approve Once" : "Approve", answer: "once" });
+  const session = field(prompt, "session");
+  if (typeof session === "string" && session) choices.push({ label: session, answer: "session" });
+  choices.push({ label: "Deny", answer: "deny" });
+  return choices;
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -365,6 +417,9 @@ export type BridgeDescriptor = {
   runSideTurn?: SideTurnRunner;
   // Remote /login: adapts the host's provider login to `auth` dialog steps.
   login?: LoginAdapter;
+  // Host prompts the extension ui object never sees (OMP's cfg:// approval).
+  // The live bridge hands over its racer on every event, null at shutdown.
+  routeHostDialogs?: (race: HostDialogRace | null) => void;
 };
 
 // Identifying the OMP host from inside an extension, verified against bun
@@ -1365,12 +1420,77 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   // Keep the original request payload for replay to late-joining clients.
   const dialogRequests = new Map<string, UIRequest>();
-  function hasPendingAskDialog() {
-    for (const req of dialogRequests.values()) if (req.method === "ask") return true;
-    return false;
+  // Pending dialogs that hold the agent until answered; any of them sets the
+  // registry's askPending (sidebar badge, "waits for an answer" push).
+  const agentDialogs = new Set<string>();
+  // True while a bridged dialog opens its local presentation. A host dialog
+  // primitive reached from inside it is the same prompt, already on the web.
+  let openingDialog = false;
+
+  // Broadcast the request and race the local TUI dialog against a remote
+  // answer from a connected pi-dish client. Whichever side answers first wins;
+  // the loser's result is discarded, and aborting the dismiss signal tears down
+  // a still-visible local dialog after a remote answer.
+  function raceDialog(
+    req: UIRequest,
+    mapResponse: (response: unknown) => unknown,
+    openLocal: (dismiss: AbortSignal) => unknown,
+    blocksAgent: boolean,
+  ): Promise<unknown> {
+    const id = crypto.randomUUID();
+    req.id = id;
+    const dismiss = new AbortController();
+    let settled = false;
+    const settle = (source: string) => {
+      if (settled) return;
+      settled = true;
+      dismiss.abort();
+      pendingDialogs.delete(id);
+      dialogRequests.delete(id);
+      if (agentDialogs.delete(id)) writeRegistry();
+      broadcast({ type: "event", event: "extension_ui_resolved", data: { id, source } });
+    };
+    const remote = new Promise<unknown>((resolve) => {
+      pendingDialogs.set(id, (response: unknown) => resolve(mapResponse(response)));
+    });
+    dialogRequests.set(id, req);
+    // Both notifications are needed: the registry entry drives the catalog's
+    // askPending flag without a socket client, and the broadcast delivers the
+    // request to connected pi-dish clients so the dialog renders.
+    if (blocksAgent) {
+      agentDialogs.add(id);
+      writeRegistry();
+    }
+    try { emitExtensionUIRequest(req); } catch {}
+    let local: unknown;
+    const outer = openingDialog;
+    openingDialog = true;
+    try {
+      local = openLocal(dismiss.signal);
+    } catch (error) {
+      settle("tui-error");
+      throw error;
+    } finally {
+      openingDialog = outer;
+    }
+    return Promise.race([
+      Promise.resolve(local).then(
+        (value) => { settle("tui"); return value; },
+        (error) => { settle("tui-error"); throw error; },
+      ),
+      remote.then((value) => { settle("web"); return value; }),
+    ]);
   }
 
+  // Host prompts reached outside the extension ui object all wait on the user
+  // for the agent (OMP's cfg:// approval and report consent).
+  const raceHostDialog: HostDialogRace = (req, mapResponse, openLocal) =>
+    openingDialog ? openLocal(null) : raceDialog(req, mapResponse, openLocal, true);
+
+  const valueResponse = (response: unknown) => (field(response, "cancelled") ? undefined : field(response, "value"));
+
   function wrapExtensionUI(ctx?: HostObject | null) {
+    descriptor.routeHostDialogs?.(raceHostDialog);
     const ui = ctx?.ui;
     if (!isObject(ui)) return;
 
@@ -1403,71 +1523,31 @@ export function createBridge(descriptor: BridgeDescriptor) {
       return ret;
     });
 
-    // Every OMP dialog renderer wires options.signal to a teardown that
-    // disposes the TUI component and resolves the dialog with undefined, so
-    // aborting a per-dialog controller when the remote answer wins dismisses
-    // the tmux-side dialog. Hosts that ignore signal just discard the late
-    // local result.
-    const withDismissSignal = (options: unknown, dismiss: AbortController): Record<string, unknown> => {
-      const caller = field(options, "signal");
-      const signal = caller instanceof AbortSignal ? AbortSignal.any([caller, dismiss.signal]) : dismiss.signal;
-      return { ...(isObject(options) ? options : {}), signal };
-    };
-
     // OMP's native ask tool uses the same shared UI context as extensions but
     // prefers the richer askDialog primitive. Intercept it directly so the web
     // can answer the native tool without reducing multi-question forms to a
     // sequence of lossy select dialogs.
     installUIWrapper(ui, "askDialog", originalAskDialog => function (this: unknown, questions: unknown, options?: unknown) {
-      const dismiss = new AbortController();
-      const req = {
-        method: "ask",
-        id: crypto.randomUUID(),
-        questions,
-        timeout: field(options, "timeout"),
-      };
-      let settled = false;
-      const settle = (source: string) => {
-        if (settled) return;
-        settled = true;
-        dismiss.abort();
-        pendingDialogs.delete(req.id);
-        dialogRequests.delete(req.id);
-        writeRegistry();
-        broadcast({ type: "event", event: "extension_ui_resolved", data: { id: req.id, source } });
-      };
-      const remote = new Promise<unknown>((resolve) => {
-        pendingDialogs.set(req.id, response => {
-          if (field(response, "cancelled")) resolve(undefined);
-          else resolve(field(response, "value"));
-        });
-      });
-      dialogRequests.set(req.id, req);
-      // Both notifications are needed: the registry entry drives the catalog's
-      // askPending flag without a socket client, and the broadcast delivers
-      // the request to connected pi-dish clients so the ask dialog renders.
-      writeRegistry();
-      try { emitExtensionUIRequest(req); } catch {}
-      let local: unknown;
-      try {
-        local = Reflect.apply(originalAskDialog, this, [questions, withDismissSignal(options, dismiss)]);
-      } catch (error) {
-        settle("tui-error");
-        throw error;
-      }
-      return Promise.race([
-        Promise.resolve(local).then(
-          value => { settle("tui"); return value; },
-          error => { settle("tui-error"); throw error; },
-        ),
-        remote.then(value => { settle("web"); return value; }),
-      ]);
+      return raceDialog(
+        { method: "ask", questions, timeout: field(options, "timeout") },
+        valueResponse,
+        dismiss => Reflect.apply(originalAskDialog, this, [questions, withDismissSignal(options, dismiss)]),
+        true,
+      );
     });
 
-    // Dialogs: broadcast the request and race the local TUI dialog against a
-    // remote answer from a connected pi-dish client. Whichever side answers
-    // first wins; the loser's result is discarded, and aborting the injected
-    // signal tears down a still-visible local dialog after a remote answer.
+    // OMP's tool-approval prompt: the web offers the host's own choices and
+    // maps the picked label back to its answer; dismissing denies.
+    installUIWrapper(ui, "approve", originalApprove => function (this: unknown, prompt: unknown, options?: unknown) {
+      const choices = approvalChoices(prompt);
+      return raceDialog(
+        { method: "select", ...dialogText(field(prompt, "full")), options: choices.map(choice => choice.label), timeout: field(options, "timeout") },
+        response => field(response, "cancelled") ? "deny" : choices.find(choice => choice.label === field(response, "value"))?.answer ?? "deny",
+        dismiss => Reflect.apply(originalApprove, this, [prompt, withDismissSignal(options, dismiss)]),
+        true,
+      );
+    });
+
     // select/confirm/input/editor all take their options object at args[2].
     const wrapDialog = (
       name: string,
@@ -1475,43 +1555,13 @@ export function createBridge(descriptor: BridgeDescriptor) {
       mapResponse: (resp: unknown) => unknown,
     ) => {
       installUIWrapper(ui, name, original => function (this: unknown, ...args: unknown[]) {
-        const req = makeReq(...args);
-        const id = crypto.randomUUID();
-        req.id = id;
-        const dismiss = new AbortController();
-        let settled = false;
-        const settle = (source: string) => {
-          if (settled) return;
-          settled = true;
-          dismiss.abort();
-          pendingDialogs.delete(id);
-          dialogRequests.delete(id);
-          broadcast({ type: "event", event: "extension_ui_resolved", data: { id, source } });
-        };
-        const remote = new Promise((resolve) => {
-          pendingDialogs.set(id, (resp: unknown) => resolve(mapResponse(resp)));
-        });
-        dialogRequests.set(id, req);
-        try { emitExtensionUIRequest(req); } catch {}
-        let local: unknown;
-        try {
+        return raceDialog(makeReq(...args), mapResponse, (dismiss) => {
           args[2] = withDismissSignal(args[2], dismiss);
-          local = original.apply(this, args);
-        } catch (error) {
-          settle("tui-error");
-          throw error;
-        }
-        return Promise.race([
-          Promise.resolve(local).then(
-            (value) => { settle("tui"); return value; },
-            (error) => { settle("tui-error"); throw error; },
-          ),
-          remote.then((value) => { settle("web"); return value; }),
-        ]);
+          return original.apply(this, args);
+        }, false);
       });
     };
 
-    const valueResponse = (resp: unknown) => (field(resp, "cancelled") ? undefined : field(resp, "value"));
     wrapDialog("select", (title: unknown, options: unknown, opts?: unknown) => ({ method: "select", title, options, timeout: field(opts, "timeout") }), valueResponse);
     wrapDialog("confirm", (title: unknown, message: unknown, opts?: unknown) => ({ method: "confirm", title, message, timeout: field(opts, "timeout") }), (resp) => (field(resp, "cancelled") ? false : !!field(resp, "confirmed")));
     wrapDialog("input", (title: unknown, placeholder?: unknown, opts?: unknown) => ({ method: "input", title, placeholder, timeout: field(opts, "timeout") }), valueResponse);
@@ -1662,7 +1712,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       fastMode: fastModeState(),
       thinkingLevel: getThinkingLevel(),
       turnInProgress,
-      askPending: hasPendingAskDialog(),
+      askPending: agentDialogs.size > 0,
       spawnToken: effectiveSpawnToken,
       tmux: TMUX_LOCATION,
       treeServiceShortcut,
@@ -1690,6 +1740,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         if (underlyingUIMethod(ui, name) === method.wrapped) ui[name] = method.original;
       }
     }
+    descriptor.routeHostDialogs?.(null);
     wrappedUIs.clear();
     for (const c of clients) { try { c.destroy(); } catch {} }
     clients.clear();

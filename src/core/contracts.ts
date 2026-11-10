@@ -170,6 +170,8 @@ export interface HarnessDescriptor {
   wrapperHostPackage?: string;
   /** Host auth package the wrapper imports and passes after the host package (remote /login). */
   wrapperAuthPackage?: string;
+  /** Host extension UI controller module the wrapper imports and passes after the auth package (host dialogs). */
+  wrapperUiControllerModule?: string;
   argv: {
     new: (options?: LaunchOptions) => unknown[];
     resume: HarnessResumeArgv;
