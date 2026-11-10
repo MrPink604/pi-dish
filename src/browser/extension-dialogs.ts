@@ -1,6 +1,7 @@
 import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { ExtensionRequest, ExtensionResponse, ExtensionAuth } from './extension-ui-data';
+import { collectFormData, formBodyHtml, formSummary, type ExtensionForm } from './extension-form';
 import { authCallbackMatches, authUrlState, parseAuthCallback } from './extension-auth';
 import { escapeHtml } from '../core/helper-format';
 import { sessionKey } from './helper-identity';
@@ -31,6 +32,7 @@ function dialogIdentity(req: ExtensionRequest): string | null {
 }
 function dialogTitle(req: ExtensionRequest): string {
   if (req.method === 'ask') return req.questions.length === 1 ? 'Question' : `${req.questions.length} questions`;
+  if (req.method === 'form') return 'Question';
   const titles: Readonly<Record<string, string>> = { select: 'Select', confirm: 'Confirm', input: 'Input', editor: 'Editor' };
   return req.title || titles[req.method] || 'Dialog';
 }
@@ -39,6 +41,10 @@ function dialogCollapsedLabel(req: ExtensionRequest): string {
     return req.questions.length === 1
       ? `Question pending: ${req.questions[0]?.question || ''}`
       : `${req.questions.length} questions pending — click to answer`;
+  }
+  if (req.method === 'form') {
+    const summary = req.form ? formSummary(req.form) : '';
+    return summary ? `Question pending: ${summary}` : 'Question pending — click to answer';
   }
   return `${dialogTitle(req)} pending — click to answer`;
 }
@@ -149,7 +155,7 @@ export function createExtensionDialogs(options: {
     entry.el.classList.toggle('minimized', minimized);
     updateExtDialogDock();
     if (!minimized) {
-      entry.el.querySelector<HTMLElement>('.ext-ui-ask-option, .ext-ui-dialog-option, .ext-ui-dialog-input, .ext-ui-dialog-editor')?.focus();
+      entry.el.querySelector<HTMLElement>('.ext-ui-ask-option, .ext-ui-dialog-option, .ext-ui-form-control, .ext-ui-form-choice input, .ext-ui-dialog-input, .ext-ui-dialog-editor')?.focus();
     }
   }
 
@@ -365,6 +371,54 @@ export function createExtensionDialogs(options: {
     card.querySelector<HTMLElement>('.ext-ui-ask-option, .ext-ui-ask-custom')?.focus();
   }
 
+  function showExtFormDialog(req: ExtensionRequest, form: ExtensionForm, session: ExtensionSession) {
+    const opened = beginDialog(req, session);
+    if (!opened) return;
+    const { endpoint, dialogKey } = opened;
+    const events = new AbortController();
+    const card = buildExtDialogCard(dialogKey, events, {
+      title: dialogTitle(req),
+      collapsedLabel: dialogCollapsedLabel(req),
+      onClose: () => sendExtDialogResponse(dialogKey, { cancelled: true }, card),
+      bodyHtml: formBodyHtml(form),
+      footerHtml: `
+      <div class="ext-ui-dialog-actions">
+        <button class="ext-ui-dialog-btn primary" data-action="submit-form">Submit</button>
+      </div>`,
+    });
+    card.classList.add('ext-ui-form-modal');
+    const formElement = card.querySelector('form')!;
+    // Typing an Other answer picks Other, as choosing the TUI's Other row does.
+    formElement.querySelectorAll<HTMLInputElement>('.ext-ui-form-other').forEach(input => {
+      input.addEventListener('input', () => {
+        const other = formElement.querySelector<HTMLInputElement>(`input[name="f${input.dataset.fieldIndex}"][value="other"]`);
+        if (other && input.value.trim()) other.checked = true;
+      }, { signal: events.signal });
+    });
+    const submit = () => {
+      if (!currentCard(dialogKey, card)) return;
+      const { data, errors } = collectFormData(formElement, form);
+      formElement.querySelectorAll<HTMLElement>('[data-field-error]').forEach(error => {
+        const message = errors.get(Number(error.dataset.fieldError));
+        error.textContent = message || '';
+        error.hidden = !message;
+      });
+      const invalid = formElement.querySelector<HTMLElement>('[data-field-error]:not([hidden])');
+      if (invalid) {
+        invalid.scrollIntoView({ block: 'nearest' });
+        invalid.parentElement?.querySelector<HTMLElement>('input, select, textarea')?.focus();
+        return;
+      }
+      sendExtDialogResponse(dialogKey, { value: { data } }, card);
+    };
+    formElement.addEventListener('submit', event => { event.preventDefault(); submit(); }, { signal: events.signal });
+    card.querySelector('[data-action="submit-form"]')!.addEventListener('click', submit, { signal: events.signal });
+
+    attachDialog(dialogKey, dialogEntry(card, events, endpoint, req, session));
+    // A choice takes focus; focusing a text box would raise a phone's keyboard over the form.
+    formElement.querySelector<HTMLElement>('.ext-ui-form-choice input, select')?.focus();
+  }
+
   function showExtDialog(req: ExtensionRequest, session: ExtensionSession) {
     const opened = beginDialog(req, session);
     if (!opened) return;
@@ -570,6 +624,7 @@ export function createExtensionDialogs(options: {
     show(request: ExtensionRequest, session: ExtensionSession) {
       if (disposed) return;
       if (request.method === 'ask') showExtAskDialog(request, session);
+      else if (request.method === 'form') { if (request.form) showExtFormDialog(request, request.form, session); }
       else if (request.method === 'auth') { if (request.auth) showExtAuthDialog(request, request.auth, session); }
       else showExtDialog(request, session);
     },

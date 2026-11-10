@@ -1,5 +1,6 @@
 import { record, finite } from '../core/helper-values';
 import { stripAnsi } from './helper-format';
+import { decodeExtensionForm, type ExtensionForm, type HtmlFormData } from './extension-form';
 export interface ExtensionOption { readonly label: string; readonly description: string; readonly preview: string }
 export interface ExtensionQuestion {
   readonly id: string; readonly question: string; readonly header: string; readonly multi: boolean; readonly recommended: number | null;
@@ -9,7 +10,7 @@ export interface ExtensionRequest {
   readonly id: string; readonly method: string; readonly title: string; readonly message: string; readonly text: string; readonly prefill: string; readonly placeholder: string;
   readonly widgetKey: string; readonly widgetLines: readonly string[]; readonly widgetPlacement: string; readonly statusKey: string; readonly statusText: string;
   readonly notifyType: 'info' | 'warning' | 'error'; readonly options: readonly ExtensionOption[]; readonly questions: readonly ExtensionQuestion[];
-  readonly auth: ExtensionAuth | null;
+  readonly auth: ExtensionAuth | null; readonly form: ExtensionForm | null;
 }
 export interface ExtensionAuthOption { readonly id: string; readonly label: string; readonly description: string }
 export interface ExtensionAuthPrompt {
@@ -22,7 +23,8 @@ export interface ExtensionAnswer {
   readonly id: string; readonly question: string; readonly options: readonly string[]; readonly multi: boolean;
   readonly selectedOptions: readonly string[]; readonly customInput?: string; readonly note?: string;
 }
-export type ExtensionResponse = { cancelled: true } | { confirmed: boolean } | { value: string | { kind: 'chat' } | { kind: 'submit'; results: readonly ExtensionAnswer[] } };
+export type ExtensionResponse = { cancelled: true } | { confirmed: boolean }
+  | { value: string | { kind: 'chat' } | { kind: 'submit'; results: readonly ExtensionAnswer[] } | { data: HtmlFormData } };
 const text = (value: unknown) => typeof value === 'string' ? stripAnsi(value) : '';
 function options(value: unknown): ExtensionOption[] {
   return Array.isArray(value) ? value.map((row: unknown) => typeof row === 'string'
@@ -55,6 +57,6 @@ export function decodeExtensionRequest(value: unknown): ExtensionRequest | null 
       if (!record(row) || typeof row.id !== 'string') return [];
       return [{ id: row.id, question: text(row.question), header: text(row.header), multi: row.multi === true,
         recommended: finite(row.recommended) && Number.isInteger(row.recommended) ? row.recommended : null, options: options(row.options) }];
-    }) : [], auth: auth(value),
+    }) : [], auth: auth(value), form: value.method === 'form' ? decodeExtensionForm(value.sections, value.hidden) : null,
   };
 }

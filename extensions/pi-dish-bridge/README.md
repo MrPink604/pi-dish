@@ -19,11 +19,12 @@ client of Prime's resident daemon instead; see
 For a managed OMP launch, pi-dish generates a tiny per-launch module in
 `~/.pi/dish/launch-wrappers/`. It imports the wrapper above and embeds the
 correlation token instead of relying on inherited environment variables. The
-generated module also imports `@oh-my-pi/pi-ai` and OMP's
-`modes/controllers/extension-ui-controller` and passes them to the wrapper.
-OMP resolves those modules only for a literal specifier inside the importing
-extension's own directory tree. Remote `/login` uses the first to list
-providers; the second carries OMP's own approval prompts (below).
+generated module also imports OMP's `@oh-my-pi/pi-ai`,
+`modes/controllers/extension-ui-controller` and `@oh-my-pi/pi-tui/html-form/parse`
+and passes them to the wrapper. OMP resolves those modules only for a literal
+specifier inside the importing extension's own directory tree. Remote `/login`
+uses the first to list providers; the others carry OMP's own approval prompts
+and its `ask` forms (below).
 
 The bridge forwards a *subset* of pi's `ctx.ui` surface to web clients. The
 TUI renders everything either way, so an incompatible call is **silently
@@ -74,6 +75,7 @@ the manual-review boundaries. Recovery does not configure host autostart.
 | `ctx.ui.select/confirm/input/editor(...)` | real web modal, raced against the TUI dialog | first answer (terminal or browser) wins; the loser's is discarded |
 | `ctx.ui.approve(prompt)` (OMP tool approval) | web select with the host's choices (Approve, session/grant choices, Deny) | dismissing denies; marks the session waiting like `ask` |
 | OMP host prompts: `cfg://` settings approval, issue-report consent | web select, raced against the TUI | OMP raises these on its UI controller, not `ctx.ui`; the OMP wrapper patches `ExtensionUiController.showCollabAwareSelector` (verified 18.18.6) |
+| `ctx.ui.formDialog(html)` (OMP 18.18.3+ `ask` tool) | form card with native controls | the bridge sends OMP's parsed form model, never the HTML; the web submits the same `{ data }` the TUI form does; dismissing cancels the ask |
 | a **tool named `set_mood`** | mood indicator above the composer | recognized arg shapes: `{description, kaomoji}` or `{mood, label?}`; a reference implementation ships at [`extensions/mood.ts`](../mood.ts) |
 
 ## What does NOT cross (TUI-only)

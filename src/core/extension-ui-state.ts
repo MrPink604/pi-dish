@@ -3,7 +3,7 @@ import type { ProtocolRecord } from './wire-protocol';
 
 // `auth` is the bridge's remote /login flow: one pending step at a time, owned
 // by a live login in the harness rather than by a turn.
-const DIALOG_METHODS: Record<string, true> = { select: true, confirm: true, input: true, editor: true, ask: true, auth: true };
+const DIALOG_METHODS: Record<string, true> = { select: true, confirm: true, input: true, editor: true, ask: true, form: true, auth: true };
 
 export function createExtensionUIState(): ExtensionUIState {
   return { widgets: new Map(), statuses: new Map(), dialogs: new Map() };
@@ -13,12 +13,18 @@ export function removeExtensionUIDialog(state: ExtensionUIState, id: unknown): v
   state.dialogs.delete(id);
 }
 
-/** Any pending dialog with the native ask method blocks the turn on an answer. */
+/** The native ask tool's dialogs: the multi-question `ask` and the HTML `form` (OMP 18.18.3+). */
+export function isAskDialog(data: unknown): boolean {
+  const method = (data as ProtocolRecord | null | undefined)?.method;
+  return method === 'ask' || method === 'form';
+}
+
+/** Any pending native ask dialog blocks the turn on an answer. */
 export function hasPendingAskDialog(value: unknown): boolean {
   const dialogs = (value as ExtensionUIState | null | undefined)?.dialogs;
   if (!(dialogs instanceof Map)) return false;
   for (const data of dialogs.values()) {
-    if ((data as ProtocolRecord | null | undefined)?.method === 'ask') return true;
+    if (isAskDialog(data)) return true;
   }
   return false;
 }

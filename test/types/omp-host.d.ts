@@ -8,6 +8,10 @@ declare module "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-control
   const controller: unknown;
   export = controller;
 }
+declare module "@oh-my-pi/pi-tui/html-form/parse" {
+  const parse: unknown;
+  export = parse;
+}
 declare module "@oh-my-pi/pi-ai" {
   const auth: unknown;
   export = auth;

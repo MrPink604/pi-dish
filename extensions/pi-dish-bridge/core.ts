@@ -420,6 +420,9 @@ export type BridgeDescriptor = {
   // Host prompts the extension ui object never sees (OMP's cfg:// approval).
   // The live bridge hands over its racer on every event, null at shutdown.
   routeHostDialogs?: (race: HostDialogRace | null) => void;
+  // Host parser for ui.formDialog HTML (OMP's ask tool): returns its
+  // { sections, hidden } form model; without it the form stays TUI-only.
+  parseForm?: (html: string) => unknown;
 };
 
 // Identifying the OMP host from inside an extension, verified against bun
@@ -1544,6 +1547,28 @@ export function createBridge(descriptor: BridgeDescriptor) {
         { method: "select", ...dialogText(field(prompt, "full")), options: choices.map(choice => choice.label), timeout: field(options, "timeout") },
         response => field(response, "cancelled") ? "deny" : choices.find(choice => choice.label === field(response, "value"))?.answer ?? "deny",
         dismiss => Reflect.apply(originalApprove, this, [prompt, withDismissSignal(options, dismiss)]),
+        true,
+      );
+    });
+
+    // OMP's ask tool (18.18.3+) sends one HTML form. The host's own parser
+    // reduces it to sections and fields the web renders natively, so the web
+    // submits the same data shape as the TUI dialog; an unparsable form stays
+    // TUI-only rather than reaching the browser as raw markup.
+    const parseForm = descriptor.parseForm;
+    if (parseForm) installUIWrapper(ui, "formDialog", originalFormDialog => function (this: unknown, html: unknown, options?: unknown) {
+      const openLocal = (dismiss: AbortSignal | null) =>
+        Reflect.apply(originalFormDialog, this, [html, dismiss ? withDismissSignal(options, dismiss) : options]);
+      let form: unknown = null;
+      try { if (typeof html === "string") form = parseForm(html); } catch {}
+      if (!Array.isArray(field(form, "sections"))) return openLocal(null);
+      return raceDialog(
+        { method: "form", sections: field(form, "sections"), hidden: field(form, "hidden"), timeout: field(options, "timeout") },
+        (response) => {
+          const data = field(field(response, "value"), "data");
+          return !field(response, "cancelled") && asRecord(data) ? { data } : undefined;
+        },
+        openLocal,
         true,
       );
     });

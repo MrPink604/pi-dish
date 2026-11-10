@@ -168,10 +168,12 @@ export interface HarnessDescriptor {
    * wrapper lives under ~/.pi/dish/launch-wrappers/.
    */
   wrapperHostPackage?: string;
-  /** Host auth package the wrapper imports and passes after the host package (remote /login). */
-  wrapperAuthPackage?: string;
-  /** Host extension UI controller module the wrapper imports and passes after the auth package (host dialogs). */
-  wrapperUiControllerModule?: string;
+  /**
+   * Host modules the wrapper imports after the host package and passes, in this
+   * order, as createHarnessBridge's trailing arguments (OMP: auth for remote
+   * /login, the extension UI controller and html-form parser for host dialogs).
+   */
+  wrapperHostModules?: readonly string[];
   argv: {
     new: (options?: LaunchOptions) => unknown[];
     resume: HarnessResumeArgv;

@@ -54,8 +54,11 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
     // The launch wrapper imports this itself: OMP's bare-specifier rewrite only
     // covers the entry's directory tree, which the wrapper doesn't share.
     wrapperHostPackage: '@oh-my-pi/pi-coding-agent',
-    wrapperAuthPackage: '@oh-my-pi/pi-ai',
-    wrapperUiControllerModule: '@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller',
+    wrapperHostModules: [
+      '@oh-my-pi/pi-ai',
+      '@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller',
+      '@oh-my-pi/pi-tui/html-form/parse',
+    ],
     // install.sh links the bridge here so every omp session loads it; spawns
     // check this before injecting a launch wrapper.
     discoveryExtensionsDir: (env = process.env) =>

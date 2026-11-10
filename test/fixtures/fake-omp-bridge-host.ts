@@ -3,13 +3,14 @@ import * as path from 'node:path';
 import { createBridge } from '../../extensions/pi-dish-bridge/core.js';
 import { bridgeDescriptor, createHarnessBridge } from '../../extensions/pi-dish-bridge-omp/index.js';
 import { patchOmpAgentSession } from '../../extensions/pi-dish-bridge-omp/native-state.js';
-import { patchOmpExtensionUiController } from '../../extensions/pi-dish-bridge-omp/host-dialogs.js';
+import { patchOmpExtensionUiController, useOmpFormParser } from '../../extensions/pi-dish-bridge-omp/host-dialogs.js';
 import { isObject, type HostObject as HostRecord } from '../../extensions/pi-dish-bridge/host.js';
 
 interface FixtureUI {
   askDialog(questions: unknown): Promise<unknown>;
   select?(title: string, options: readonly string[], dialogOptions?: unknown): Promise<unknown>;
   approve?(prompt: unknown, dialogOptions?: unknown): Promise<unknown>;
+  formDialog?(html: string, dialogOptions?: unknown): Promise<unknown>;
 }
 interface FixtureContext {
   ui: FixtureUI;
@@ -366,6 +367,19 @@ if (hostDialogResult) {
   const controller = new FakeExtensionUiController();
   ui.select = (title, options, dialogOptions) => controller.showCollabAwareSelector(title, options, dialogOptions);
   ui.approve = (_prompt, dialogOptions) => localDialog('approval', dialogOptions);
+  ui.formDialog = (_html, dialogOptions) => localDialog('form', dialogOptions);
+  // Stands in for @oh-my-pi/pi-tui's parseHtmlForm, which only OMP's executable provides.
+  useOmpFormParser({
+    parseHtmlForm: (html: string) => ({
+      sections: [{ title: [{ text: 'Session store' }], blocks: [
+        { kind: 'text', spans: [{ text: html.includes('store') ? 'Where do sessions live?' : '' }], heading: false },
+        { kind: 'field', field: { kind: 'choice', name: 'store', multi: false, select: false, other: true, label: [], required: false,
+          options: [{ value: 'sqlite', label: [{ text: 'SQLite' }], checked: true, disabled: false }] } },
+      ] }],
+      fields: [],
+      hidden: [['form_id', 'f1']],
+    }),
+  });
   await emit('tool_execution_update', { toolCallId: 'host-dialogs', toolName: 'read' }, ctx);
   void controller.showCollabAwareSelector(
     '⚙️ Your agent wants to change `task.agentModelOverrides` for this session.\n{} → {"scout":"opus"}',
@@ -374,6 +388,8 @@ if (hostDialogResult) {
   void ctx.ui.select?.('Pick a color', ['Red', 'Blue']).then(value => record('select', value ?? null));
   void ctx.ui.approve?.({ full: 'Run bash?\nrm -rf build', compact: 'Run bash?', session: 'Approve bash for this session' })
     .then(value => record('approval', value ?? null));
+  void ctx.ui.formDialog?.('<form><p>store</p><input type="radio" name="store" value="sqlite" checked></form>')
+    .then(value => record('form', value ?? null));
 }
 
 for (let attempt = 0; attempt < 100; attempt++) {

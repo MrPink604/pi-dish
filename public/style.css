@@ -4861,6 +4861,27 @@ a.ext-ui-dialog-btn { display: inline-block; text-decoration: none; }
   resize: vertical;
 }
 
+/* OMP ask form: the host-parsed form model rendered with native controls. */
+.ext-ui-dialog-modal.ext-ui-form-modal { max-height: min(60vh, 520px); }
+.ext-ui-form { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
+.ext-ui-form-section { display: flex; flex-direction: column; gap: 8px; }
+.ext-ui-form-section + .ext-ui-form-section { border-top: 1px solid var(--border); padding-top: 12px; }
+.ext-ui-form-text { font-size: 13px; color: var(--text); white-space: normal; overflow-wrap: anywhere; margin: 0; }
+ul.ext-ui-form-text, ol.ext-ui-form-text { padding-left: 20px; }
+.ext-ui-form-text code, .ext-ui-form-label code, .ext-ui-form-choice code { font-family: var(--font-mono); font-size: 12px; }
+.ext-ui-form-field { display: flex; flex-direction: column; }
+.ext-ui-form-field .ext-ui-dialog-input, .ext-ui-form-field .ext-ui-dialog-editor { margin-top: 6px; }
+.ext-ui-form-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.ext-ui-form-required { color: var(--error); }
+.ext-ui-form-choices { display: flex; flex-direction: column; gap: 4px; }
+.ext-ui-form-choice { display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.ext-ui-form-choice:hover { background: var(--bg-hover); }
+.ext-ui-form-choice input { margin-top: 2px; accent-color: var(--accent); }
+.ext-ui-form-table-wrap { overflow-x: auto; }
+.ext-ui-form-table { border-collapse: collapse; font-size: 12px; }
+.ext-ui-form-table th, .ext-ui-form-table td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.ext-ui-form-image { max-width: 100%; max-height: 240px; object-fit: contain; align-self: flex-start; }
+
 /* Jump-to-bottom button (appears when scrolled away during streaming) */
 .jump-to-bottom {
   position: absolute;

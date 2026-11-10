@@ -1,7 +1,7 @@
 import { createBridge, PUBLIC_EVENT_PROFILE, type BridgeDescriptor, type SideTurnInput } from "../pi-dish-bridge/core.js";
 import { getOmpNativeProjection, subscribeOmpNativeProjection, ompFastModeState, setOmpFastMode, getOmpNativeCaptureStats, getOmpNativeSession, patchOmpAgentSession } from "./native-state.js";
 import { ompLogin, useOmpAuthModule } from "./login.js";
-import { patchOmpExtensionUiController, routeOmpHostDialogs } from "./host-dialogs.js";
+import { parseOmpForm, patchOmpExtensionUiController, routeOmpHostDialogs, useOmpFormParser } from "./host-dialogs.js";
 import { field, isObject } from "../pi-dish-bridge/host.js";
 
 // OMP's own /btw prompt ($bunfs/root/btw-user-*.md, verified 18.1.16). The
@@ -111,19 +111,24 @@ export const bridgeDescriptor = {
     set: setOmpFastMode,
   },
   routeHostDialogs: routeOmpHostDialogs,
+  parseForm: parseOmpForm,
 } satisfies BridgeDescriptor;
 
-// hostAgentSession is the host's AgentSession class, hostAuthModule its
-// @oh-my-pi/pi-ai module and hostUiControllerModule its extension UI
-// controller module, all imported by the generated launch wrapper itself
-// (OMP's bare-specifier rewrite only covers the entry file's directory tree,
-// which the repo's modules are outside when the entry lives in
-// launch-wrappers/). Discovery loads get them from the modules' own
+// hostAgentSession is the host's AgentSession class; the modules after it are
+// @oh-my-pi/pi-ai, the extension UI controller and the html-form parser, in
+// HarnessDescriptor.wrapperHostModules order. The generated launch wrapper
+// imports them itself (OMP's bare-specifier rewrite only covers the entry
+// file's directory tree, which the repo's modules are outside when the entry
+// lives in launch-wrappers/). Discovery loads get them from the modules' own
 // top-level imports.
-export function createHarnessBridge(spawnToken?: string, hostAgentSession?: unknown, hostAuthModule?: unknown, hostUiControllerModule?: unknown) {
+export function createHarnessBridge(
+  spawnToken?: string, hostAgentSession?: unknown,
+  hostAuthModule?: unknown, hostUiControllerModule?: unknown, hostFormParseModule?: unknown,
+) {
   if (hostAgentSession) patchOmpAgentSession(hostAgentSession);
   if (hostAuthModule) useOmpAuthModule(hostAuthModule);
   if (hostUiControllerModule) patchOmpExtensionUiController(field(hostUiControllerModule, "ExtensionUiController"));
+  if (hostFormParseModule) useOmpFormParser(hostFormParseModule);
   return createBridge({ ...bridgeDescriptor, spawnToken });
 }
 

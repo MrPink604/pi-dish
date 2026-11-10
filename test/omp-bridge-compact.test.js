@@ -266,7 +266,7 @@ test('OMP bridge restores the shared UI context during extension shutdown', asyn
     const result = await host.close();
     assert.equal(result.uiRestored, true, 'reload cannot accumulate another askDialog wrapper');
 });
-test('OMP bridge puts host approval prompts on the web and marks the session waiting', async () => {
+test('OMP bridge puts host approval prompts and ask forms on the web and marks the session waiting', async () => {
     const host = await startFakeHost(false, { hostDialogs: true });
     const session = new BridgeSession(host.claim);
     const requests = [];
@@ -297,18 +297,25 @@ test('OMP bridge puts host approval prompts on the web and marks the session wai
         const approval = (0, test_types_js_1.present)(requests.find(request => request.title === 'Run bash?'));
         assert.equal(approval.message, 'rm -rf build');
         assert.deepEqual(approval.options, ['Approve', 'Approve bash for this session', 'Deny']);
+        // The ask tool's HTML form arrives as the host parser's model, not markup.
+        const form = (0, test_types_js_1.present)(requests.find(request => request.method === 'form'));
+        assert.equal(form.html, undefined);
+        assert.deepEqual((0, test_types_js_1.record)((0, test_types_js_1.present)((0, test_types_js_1.records)(form.sections)[0])).title, [{ text: 'Session store' }]);
+        assert.deepEqual(form.hidden, [['form_id', 'f1']]);
         assert.equal(askPending(), true, 'a pending host approval holds the agent');
         await answer(cfg, 'Approve');
         await answer((0, test_types_js_1.present)(requests.find(request => request.title === 'Pick a color')), 'Blue');
         await answer(approval, 'Approve bash for this session');
+        await answer(form, { data: { form_id: 'f1', store: 'redis' } });
         const final = await waitFor(() => {
             const value = results();
-            return value && 'cfg' in value && 'select' in value && 'approval' in value ? value : null;
+            return value && 'cfg' in value && 'select' in value && 'approval' in value && 'form' in value ? value : null;
         });
         assert.equal(final.cfg, 'Approve');
         assert.equal(final.select, 'Blue');
         assert.equal(final.approval, 'session');
-        assert.deepEqual(Array.isArray(final.dismissed) ? [...final.dismissed].sort() : null, ['Pick a color', 'approval', '⚙️ Your agent wants to change `task.agentModelOverrides` for this session.'].sort(), 'each web answer tears down its local TUI dialog');
+        assert.deepEqual(final.form, { data: { form_id: 'f1', store: 'redis' } });
+        assert.deepEqual(Array.isArray(final.dismissed) ? [...final.dismissed].sort() : null, ['Pick a color', 'approval', 'form', '⚙️ Your agent wants to change `task.agentModelOverrides` for this session.'].sort(), 'each web answer tears down its local TUI dialog');
         await waitFor(() => askPending() === false);
     }
     finally {

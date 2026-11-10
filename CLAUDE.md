@@ -626,11 +626,13 @@ drives Pi's private `ctx.modelRegistry.runtime`, using `getProviders`,
 `@oh-my-pi/pi-ai`. OMP only resolves that package for a literal specifier
 inside the extension's own tree. The launch wrapper materialized under
 `~/.pi/dish/launch-wrappers/` therefore imports it itself
-(`HarnessDescriptor.wrapperAuthPackage`) and passes the module to
-`createHarnessBridge`; `wrapperUiControllerModule` does the same for OMP's
-`ExtensionUiController`, whose `showCollabAwareSelector` the wrapper patches
+(`HarnessDescriptor.wrapperHostModules`, in `createHarnessBridge` argument
+order) and passes the module to `createHarnessBridge`. The same list carries
+OMP's `ExtensionUiController`, whose `showCollabAwareSelector` the wrapper patches
 (`extensions/pi-dish-bridge-omp/host-dialogs.ts`) so `cfg://` approvals and
-issue-report consent reach the web. Those prompts and `ui.approve` tool
+issue-report consent reach the web, and OMP's html-form parser, which turns
+the `ask` tool's `ui.formDialog(html)` into a structured `form` request the
+browser renders natively (`src/browser/extension-form.ts`). Those prompts and `ui.approve` tool
 approvals set the registry's `askPending`. The bridge advertises capability `login` only when its
 adapter finds that host surface (`available(ctx)`). The `/command` route
 returns 409 otherwise. Each step is an extension-UI request with

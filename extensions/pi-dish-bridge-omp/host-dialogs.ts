@@ -38,6 +38,21 @@ export function patchOmpExtensionUiController(controller: unknown): void {
   };
 }
 
+// OMP's ask tool (18.18.3+) sends one HTML form through ui.formDialog. Its own
+// parser (@oh-my-pi/pi-tui html-form) decides the fields and their submitted
+// data shape, so the web renders exactly what the TUI form would.
+let formParser: HostMethod | null = null;
+
+export function useOmpFormParser(module: unknown): void {
+  const parse = field(module, "parseHtmlForm");
+  if (isHostMethod(parse)) formParser = parse;
+}
+
+/** The host's parsed form, or null when this host has no parser. */
+export function parseOmpForm(html: string): unknown {
+  return formParser ? Reflect.apply(formParser, undefined, [html]) : null;
+}
+
 // Literal specifier: OMP's loader maps it to the bundled module only when
 // spelled out (see native-state.ts). Absent outside OMP's executable.
 try {
@@ -45,4 +60,7 @@ try {
     await import("@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller"),
     "ExtensionUiController",
   ));
+} catch {}
+try {
+  useOmpFormParser(await import("@oh-my-pi/pi-tui/html-form/parse"));
 } catch {}

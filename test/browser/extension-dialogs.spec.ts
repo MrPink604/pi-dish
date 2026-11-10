@@ -130,6 +130,36 @@ test('widget collapsed state is scoped to the host as well as the session', asyn
   await expect(page.locator('.ext-ui-widget')).not.toHaveClass(/collapsed/);
 });
 
+// OMP 18.18.6's parseHtmlForm output for the ask tool's example form (plus a
+// checkbox group, select, textarea and hidden input), captured from the binary.
+const ASK_FORM = JSON.parse('{"sections":[{"title":[],"blocks":[{"kind":"text","spans":[{"text":"Sessions live in memory and are "},{"text":"lost","style":"strong"},{"text":" on restart."}],"heading":false}]},{"title":[{"text":"Session store"}],"blocks":[{"kind":"field","field":{"kind":"choice","name":"store","multi":false,"select":false,"other":true,"label":[],"options":[{"value":"sqlite","label":[{"text":"SQLite: one file, no new service"}],"checked":true,"disabled":false},{"value":"redis","label":[{"text":"Redis: shared across instances, needs ops"}],"checked":false,"disabled":false}],"required":false}}]},{"title":[],"blocks":[{"kind":"field","field":{"kind":"text","name":"ttl_days","type":"number","multiline":false,"label":[{"text":"Session lifetime (days)"}],"value":"30","placeholder":"","required":false,"min":1,"rows":1}},{"kind":"text","spans":[{"text":"Extras"}],"heading":false},{"kind":"field","field":{"kind":"choice","name":"extras","multi":true,"select":false,"other":true,"label":[],"options":[{"value":"metrics","label":[{"text":"Metrics"}],"checked":false,"disabled":false},{"value":"backup","label":[{"text":"Backups"}],"checked":true,"disabled":false}],"required":false}},{"kind":"field","field":{"kind":"choice","name":"region","multi":false,"select":true,"other":false,"label":[{"text":"Region"}],"options":[{"value":"eu","label":[{"text":"EU"}],"checked":false,"disabled":false},{"value":"us","label":[{"text":"US"}],"checked":true,"disabled":false}],"required":false}},{"kind":"field","field":{"kind":"text","name":"notes","type":"textarea","multiline":true,"label":[{"text":"Notes"}],"value":"","placeholder":"anything else","required":false,"rows":3}}]}],"hidden":[["form_id","f1"]]}');
+
+test('an OMP ask form renders natively, validates, and submits the TUI data shape', async ({ page, fleet }) => {
+  await select(fleet, page, fleet.self);
+  fleet.self.emit('turn_start', {});
+  fleet.self.emit('extension_ui_request', { method: 'form', id: 'form-1', ...ASK_FORM });
+  const card = page.locator('.ext-ui-form-modal');
+  await expect(card.locator('.ext-ui-dialog-title')).toHaveText('Question');
+  await expect(card.locator('.ext-ui-form strong')).toHaveText('lost');
+  await card.getByLabel('Redis: shared across instances, needs ops').check();
+  const days = card.locator('.ext-ui-form-control[type=number]');
+  await expect(days).toHaveValue('30');
+  await days.fill('0');
+  await card.locator('[data-action="submit-form"]').click();
+  await expect(card.locator('[data-field-error]:not([hidden])')).toHaveText('Must be at least 1');
+  expect(responses(fleet.self)).toEqual([]);
+  await days.fill('7');
+  await card.getByLabel('Metrics').check();
+  // Typing an Other answer picks Other; a checkbox group reports it in its array.
+  await card.locator('.ext-ui-form-other[data-field-index="2"]').fill('logs');
+  await card.locator('textarea').fill('none');
+  await card.locator('[data-action="submit-form"]').click();
+  await expect.poll(() => responses(fleet.self)).toEqual([{ id: 'form-1', cancelled: undefined, value: { data: {
+    form_id: 'f1', store: 'redis', ttl_days: 7, extras: ['metrics', 'backup', 'logs'], region: 'us', notes: 'none',
+  } } }]);
+  await expect(page.locator('.ext-ui-dialog-modal')).toHaveCount(0);
+});
+
 function responses(host: BrowserHost) {
   return (host.commands || []).filter(command => command.command === 'extension_ui_response')
     .map(command => ({ id: command.requestId ?? command.id, value: command.value, cancelled: command.cancelled }));

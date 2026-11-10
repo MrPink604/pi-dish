@@ -1,9 +1,8 @@
 import { BridgeSession } from './bridge-session';
 import { getPrimeDaemon, PrimeDaemonSession } from './prime-daemon';
-import { removeExtensionUIDialog } from './extension-ui-state';
+import { isAskDialog, removeExtensionUIDialog } from './extension-ui-state';
 import { getHarness } from './harnesses';
 import { routeIdentity, routeSessionId } from './session-ownership';
-import { record as isRecord } from './helper-values';
 import type { LiveSession } from './session-ownership';
 
 /** The cached daemon root for a Prime route, without touching other harnesses. */
@@ -36,7 +35,7 @@ export function createSessionLifecycleObserver(ports: LiveSessionLifecyclePorts)
     ports.wakeSession(liveRouteId(session));
     const dismissAskDialogs = (source: string) => {
       for (const [id, data] of session.extUIState.dialogs) {
-        if (!isRecord(data) || data.method !== 'ask') continue;
+        if (!isAskDialog(data)) continue;
         removeExtensionUIDialog(session.extUIState, id);
         // Only bridge asks are dispatched as events; RPC and Prime have no emitter.
         if (session instanceof BridgeSession) session.emit('extension_ui_resolved', { id, source });
