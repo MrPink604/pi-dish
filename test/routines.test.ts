@@ -369,6 +369,26 @@ test('invoke spawns, names, prompts, completes and closes a oneShot run', async 
   assert.equal(existingInvocation(invocation.id).closeError, null);
 });
 
+test('a stored non-string or empty routine cwd fails before spawning', async () => {
+  const routine = store.createRoutine(definition());
+  const file = path.join(dishDir, 'routines.json');
+  const { runner, created } = harness();
+  for (const cwd of [null, '   ']) {
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as { routines: Record<string, { cwd: unknown }> };
+    raw.routines[routine.id].cwd = cwd;
+    fs.writeFileSync(file, JSON.stringify(raw));
+    const stored = store.getRoutine(routine.id);
+    assert.ok(stored);
+    const invocation = runner.invoke(stored, { trigger: 'invoke' });
+    await settleTwice();
+    const failed = existingInvocation(invocation.id);
+    assert.equal(failed.status, 'errored', JSON.stringify(cwd));
+    assert.equal(failed.sessionId, null);
+    assert.match(String(failed.error), /working directory/i);
+  }
+  assert.deepEqual(created, [], 'nothing spawns from an unusable cwd');
+});
+
 test('a refused close records closeError and leaves the session alone', async () => {
   const routine = store.createRoutine(definition());
   const { runner, sessions } = harness({

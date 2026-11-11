@@ -756,7 +756,9 @@ reports outcomes and truncation;
 `PUT /api/sessions/:id/recovery` sets exclusion, and `/api/recovery/retry`
 explicitly restores idle, never replays an uncertain prompt. Continuation is
 best effort, not exactly-once side effects; changed/unverifiable transcripts
-and unresolved tool results require review. See README for operational limits.
+and unresolved tool results require review. Assistant content arrays containing
+non-object blocks are unverifiable: restore the session for inspection without
+sending an automatic continuation prompt. See README for operational limits.
 
 ### Memory-pressure hibernation (src/core/session-hibernation.ts)
 
@@ -1159,6 +1161,9 @@ methods; checked `src/core/routine-runner.ts` owns scheduling and ledger policy.
 via `createSession` (no name; then a best-effort capability-gated rename), delivers,
 observes `turn_end`/`agent_end`/`message_end`/session-gone, and closes after
 `PI_DISH_ROUTINE_CLOSE_GRACE_MS` through `SessionOperations.closeSessionById`.
+Stored routine rows retain raw working-directory values for repair, but a fresh
+spawn requires a nonblank string `cwd`; an invalid value errors the invocation
+before launch rather than falling back to the server's HOME.
 A refused close (unprovable Prime daemon ownership or OMP pane ownership) records
 `closeError` and never escalates. `continue` mode reuses the last
 invocation's session (live → prompt when idle, else resume headlessly, else

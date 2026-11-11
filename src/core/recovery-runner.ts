@@ -107,7 +107,8 @@ export async function continuationSafety(file: string): Promise<string | null> {
       lastMessage = message;
       if (message.role === 'assistant') {
         for (const block of Array.isArray(message.content) ? message.content : []) {
-          if (!isRecord(block) || (block.type !== 'toolCall' && block.type !== 'tool_use')) continue;
+          if (!isRecord(block)) return 'The transcript contains an unverifiable assistant content block.';
+          if (block.type !== 'toolCall' && block.type !== 'tool_use') continue;
           const id = block.id;
           if (typeof id !== 'string') return 'A tool call has no verifiable identity.';
           pending.add(id);

@@ -223,6 +223,17 @@ test('transcript entries that are not JSON objects cannot be verified', async (t
         assert.ok(typeof await (0, recovery_runner_1.continuationSafety)(s.file) === 'string', `${line} is not a verifiable entry`);
     }
 });
+test('unverifiable assistant content restores for review without continuing automatically', async (t) => {
+    const s = scenario(t, { mode: 'continue', record: { activity: 'running', runId: 'run' } });
+    fs.appendFileSync(s.file, JSON.stringify({ type: 'message', message: {
+            role: 'assistant', stopReason: 'toolUse', content: [null],
+        } }) + '\n');
+    await s.runner.start();
+    assert.deepEqual(s.launches, ['session']);
+    assert.equal(s.row().status, 'needs-review');
+    assert.deepEqual(s.prompts, []);
+    assert.equal(s.control().attempt?.delivery, null);
+});
 test('aborted responses and compaction are never automatically continued', async (t) => {
     const s = scenario(t);
     fs.appendFileSync(s.file, JSON.stringify({ type: 'message', message: {
