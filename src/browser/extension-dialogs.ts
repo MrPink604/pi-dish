@@ -27,6 +27,7 @@ function dialogIdentity(req: ExtensionRequest): string | null {
     case 'confirm': return `confirm:${question}`;
     case 'input': case 'editor': return `${req.method}:${question}`;
     case 'ask': return `ask:${JSON.stringify(req.questions)}`;
+    case 'form': return req.form ? `form:${JSON.stringify([req.form.sections, req.form.hidden])}` : null;
     default: return null;
   }
 }

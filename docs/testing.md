@@ -13,9 +13,9 @@ pull requests, and manual dispatch. All jobs use Ubuntu 24.04 x64 and `npm ci`.
 | --- | --- |
 | Node 22.19.0 | Exact minimum from `package.json`; lint, types, full backend |
 | Latest Node 22, 24, 26 patches | Lint, types, full backend on each major |
-| Node 24 + Playwright 1.63.0 managed Chromium | Focused browser tests, eight independent smoke features, full desktop/mobile smoke |
+| Node 24 + Playwright 1.65.0 managed Chromium | Focused browser tests, eight independent smoke features, full desktop/mobile smoke |
 | Bun 1.3.14 | OMP bridge fixture execution in backend jobs |
-| Bundled Pi from the lockfile | Real Pi bridge canary in every backend job |
+| Pi SDK/TUI 1.5.1, pinned together | Real Pi bridge canary in every backend job; local host Pi must match |
 | OMP 18.5.0 | Opt-in real CLI canary, including fast-mode on/off provider payloads, verified locally on 2026-10-04 |
 | Prime Agent 0.10.2 | Opt-in real CLI canary over the resident daemon: managed launch, streaming, queue update/cancel, abort, tree, same-pane restart, roster-proven close, resume, and manual-TUI ownership refusal (daemon protocol verified live on 2026-11-03); see [prime-agent.md](prime-agent.md) |
 

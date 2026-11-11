@@ -30,6 +30,9 @@ for (const kind of kinds) {
   // a provider-backed session. Only the malformed mirror is fixture-owned.
   const session: unknown = Object.assign(Object.create(AgentSession.prototype), {
     agent, _eventListeners: [], _steeringMessages: [], _followUpMessages: [],
+    // Pi 1.5.1 tracks queued messages with images in this WeakSet; class-field
+    // initialization does not run for an Object.create() fixture receiver.
+    _queuedMessagesWithImages: new WeakSet(),
   });
   if (!isObject(session)) throw new Error('native queue fixture failed to create session');
   const release = callHost(session, 'subscribe', () => {});

@@ -48,9 +48,13 @@ fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
 process.env.PI_DISH_SOCKET_DIR = socketDir;
+// Pi 1.5+ normalizes queued images when they are delivered. This PNG must be
+// decodable and already within the inline limits so normalization leaves both
+// its bytes and its text untouched; an undecodable image is replaced with an
+// "[Image omitted: …]" hint, which would change the delivered message text.
 const QUEUE_IMAGE_A = {
   mimeType: 'image/png',
-  data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+  data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
 };
 const QUEUE_IMAGE_B = {
   mimeType: 'image/gif',
@@ -75,9 +79,9 @@ try {
 } catch { piOk = false; }
 
 // --- fake Anthropic endpoint -------------------------------------------------
-// Streams a scripted reply for each /v1/messages request. A user message
-// containing HOLD keeps the stream open until releaseHold() — that's how tests
-// pin a turn in progress to exercise the steering queue.
+// Streams a scripted reply for each /v1/messages request. Each test arms one
+// HOLD request; compaction may make multiple summary requests carrying the same
+// instructions, and later requests must not acquire another unreleased hold.
 let holdRelease: (() => void) | null = null;
 let holdArrived: (() => void) | null = null; // resolves when a HOLD request is being served
 const sse = (res: http.ServerResponse, event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -105,7 +109,7 @@ const llm = http.createServer((req, res) => {
     sse(res, 'content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
     sse(res, 'content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'echo: ' } });
 
-    if (/HOLD/.test(userText)) {
+    if (holdArrived && /HOLD/.test(userText)) {
       await new Promise<void>(resolve => {
         holdRelease = resolve;
         if (holdArrived) { holdArrived(); holdArrived = null; }
@@ -616,27 +620,19 @@ test('compaction: second /compact refused, prompts queue until compaction ends',
     assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
     await stream.waitFor((e: unknown) => eventName(e) === 'queue_update' &&
       JSON.stringify(eventData(e).followUp) === JSON.stringify(['compaction duplicate', 'compaction other']), 15000);
-    // Leave one buffered row to flush. The extension send API is deliberately
-    // fire-and-forget, so testing two-row delivery here would exercise an
-    // unrelated send-scheduling race rather than cancellation identity.
-    const cancelledOther = await post(`/api/sessions/${sessionId}/queue/cancel`, {
-      kind: 'followUp', index: 1, text: 'compaction other',
-    });
-    assert.equal(cancelledOther.status, 200, JSON.stringify(cancelledOther.body));
 
     present(holdRelease)();
     const end = await stream.waitFor((e: unknown) => eventName(e) === 'compaction_end', 20000);
     assert.ok(!eventData(end).errorMessage, `compaction failed: ${JSON.stringify(eventData(end))}`);
 
-    // Gate released: the first duplicate remains and flushes as a real turn.
     const msgs = await waitFor(async () => {
       const { body } = await get(`/api/sessions/${sessionId}/messages`);
       const texts = records(body.messages).filter(message => message.role === 'user').map(messageText);
-      return texts.includes('compaction duplicate') ? body : null;
+      return texts.includes('compaction duplicate') && texts.includes('compaction other') ? body : null;
     }, 20000, 'compaction queue flush');
     const texts = records(present(msgs).messages).map(messageText);
     assert.deepEqual(texts.filter((text: string) => text === 'compaction duplicate' || text === 'compaction other'),
-      ['compaction duplicate']);
+      ['compaction duplicate', 'compaction other']);
     const { body: tree } = await get(`/api/sessions/${sessionId}/tree`);
     assert.ok(records(tree.nodes).some(node => node.type === 'compaction'),
       'compaction entry persisted to the JSONL');
@@ -651,9 +647,10 @@ test('guarded reload refuses unfinished work and reloads after the agent becomes
     const bridge = await getBridgeSession(checkedNativeId(sessionId));
     const before = extLoadCount();
     try {
+      const held = new Promise<void>(resolve => { holdArrived = resolve; });
       const sent = await post(`/api/sessions/${sessionId}/prompt`, { message: 'HOLD bounce safety' });
       assert.equal(sent.status, 200, JSON.stringify(sent.body));
-      await waitFor(() => holdRelease, 15000, 'held bounce-safety turn');
+      await held;
       await assert.rejects(bridge.send('guarded_reload'), /no longer safely idle/);
       assert.equal(extLoadCount(), before, 'unfinished turn did not reload extensions');
     } finally {

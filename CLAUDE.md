@@ -163,11 +163,10 @@ falls back to `execCommand('copy')` because `navigator.clipboard` doesn't
 exist on insecure origins (phones hit the server over plain LAN http — a
 clipboard-only button silently no-ops there).
 
-`mermaid` is vendored the same way but **lazily loaded**: `mermaid.min.js` is
-3.5MB (the self-contained IIFE build — the `.esm` one splits into chunks a
-plain `<script>` can't resolve), so `loadVendorAsset()` pulls it in on the
-first diagram a transcript actually holds, exactly like the xterm bundles. A
-session with no diagrams downloads nothing. `applyHighlight()` decides what is
+`mermaid` is vendored the same way but **lazily loaded**: its large, self-contained
+`mermaid.min.js` IIFE is fetched only when a transcript contains a diagram,
+exactly like the xterm bundles. The ESM distribution needs additional chunks.
+A session with no diagrams downloads nothing. `applyHighlight()` decides what is
 a diagram via `diagramKindForFence()` (helpers.js): a `mermaid`/`mmd` fence,
 or — because agents routinely forget the tag — an untagged/plaintext fence
 whose first meaningful line is a mermaid diagram declaration. Tagged *code*
@@ -194,6 +193,10 @@ the awaited promise only weakly once it settles, and a GC in that checkpoint
 reported it "collected" (Playwright's "Execution context was destroyed, most
 likely because of a navigation" with no navigation) while the app's own chain
 completed fine. Keep the task boundary.
+
+Mermaid 12 uses explicit `layout: 'dagre'` and `look: 'classic'` to preserve
+the existing layout and appearance alongside the app's custom `base` theme
+(see the [upstream migration notes](https://github.com/mermaid-js/mermaid/releases/tag/mermaid%4012.0.0)).
 
 SVG fences (```` ```svg ````, or an untagged/plaintext fence holding exactly one
 `<svg>…</svg>` document) go through the same diagram block and controls but
@@ -2771,8 +2774,10 @@ widget/status removal and toast timers, and `extension-dialogs.ts` owns cards by
 host/session/request. A host may re-issue the same decision while its earlier
 request is pending (OMP's expiring-reset sweep does this per usage tick, with a
 changing expiry line): coalesce by question line/options, cancel the superseded
-id, and answer the newest one. Dismissing a Yes/No select answers No so a host
-that only persists an explicit choice stops re-asking. Stashing preserves edits;
+id, and answer the newest one. HTML forms coalesce by their parsed sections and
+hidden fields, retaining typed answers; different hidden data keeps forms separate.
+Dismissing a Yes/No select answers No so a host that only persists an explicit
+choice stops re-asking. Stashing preserves edits;
 redocking renews the selection owner. Reconcile only the named host/session,
 ignore malformed authoritative lists, and abort retired card listeners.
 Credential refresh cannot change a captured base.

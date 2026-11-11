@@ -12,6 +12,7 @@ export interface MarkedRuntime { use(options: MarkedOptions): void; parse(source
 export interface HighlightRuntime { highlightElement(element: HTMLElement): void }
 export interface MermaidConfig {
   startOnLoad: false; securityLevel: 'strict'; suppressErrorRendering: true; theme: 'base'; fontFamily: string;
+  layout: 'dagre'; look: 'classic';
   flowchart: { htmlLabels: true; useMaxWidth: true }; themeVariables: Readonly<Record<string, string | boolean>>;
 }
 export interface MermaidRuntime { initialize(config: MermaidConfig): void; render(id: string, source: string): Promise<{ svg: string }> }

@@ -150,6 +150,34 @@ const ASK_FORM = JSON.parse('{"sections":[{"title":[],"blocks":[{"kind":"text","
                 } } }]);
     await (0, fixtures_js_1.expect)(page.locator('.ext-ui-dialog-modal')).toHaveCount(0);
 });
+(0, fixtures_js_1.test)('reissued forms preserve edits and answer the newest request without merging different hidden data', async ({ page, fleet }) => {
+    await select(fleet, page, fleet.self);
+    fleet.self.emit('turn_start', {});
+    const request = { method: 'form', id: 'form-1', ...ASK_FORM };
+    fleet.self.emit('extension_ui_request', request);
+    const cards = page.locator('.ext-ui-form-modal');
+    await cards.locator('textarea').fill('keep this answer');
+    fleet.self.emit('extension_ui_request', { ...request, id: 'form-2' });
+    fleet.self.emit('extension_ui_request', { method: 'setStatus', statusKey: 'barrier', statusText: 'form reissued' });
+    await (0, fixtures_js_1.expect)(page.locator('.ext-ui-status-badge')).toHaveText('form reissued');
+    await (0, fixtures_js_1.expect)(cards).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(cards.locator('textarea')).toHaveValue('keep this answer');
+    fleet.self.emit('extension_ui_resolved', { id: 'form-1', source: 'web' });
+    fleet.self.emit('extension_ui_request', request);
+    fleet.self.emit('extension_ui_request', { ...request, id: 'form-3', hidden: [['form_id', 'f2']] });
+    await (0, fixtures_js_1.expect)(cards).toHaveCount(2);
+    await cards.first().locator('[data-action="submit-form"]').click();
+    await fixtures_js_1.expect.poll(() => responses(fleet.self).filter(response => !response.cancelled)).toEqual([
+        { id: 'form-2', cancelled: undefined, value: { data: {
+                    form_id: 'f1', store: 'sqlite', ttl_days: 30, extras: ['backup'], region: 'us', notes: 'keep this answer',
+                } } },
+    ]);
+    await (0, fixtures_js_1.expect)(cards).toHaveCount(1);
+    await (0, fixtures_js_1.expect)(cards.locator('textarea')).toHaveValue('');
+    await cards.locator('[data-action="submit-form"]').click();
+    await fixtures_js_1.expect.poll(() => responses(fleet.self).filter(response => !response.cancelled).map(response => response.id))
+        .toEqual(['form-2', 'form-3']);
+});
 function responses(host) {
     return (host.commands || []).filter(command => command.command === 'extension_ui_response')
         .map(command => ({ id: command.requestId ?? command.id, value: command.value, cancelled: command.cancelled }));

@@ -72,6 +72,8 @@ function mermaidConfig(): MermaidConfig {
     // error graphic.
     suppressErrorRendering: true,
     theme: 'base',
+    layout: 'dagre',
+    look: 'classic',
     fontFamily: window.getComputedStyle(document.body).fontFamily,
     flowchart: { htmlLabels: true, useMaxWidth: true },
     themeVariables: {
