@@ -324,7 +324,13 @@ copy (callers overlay live usage onto it); the other readers return the
 cached value itself — never mutate it. The parser also retains Pi's optional
 core `SessionHeader.id`/`parentSession` provenance. This is display metadata,
 not control authority, and pi-dish never appends custom relationship entries
-to Pi JSONL. Context window/percent are derived in
+to Pi JSONL. Separately, OMP never persists a classifier refusal
+(`stopDetails.type` refusal/sensitive, e.g. "Refusal (cyber)"), so when a run
+ends on one the OMP bridge records it through the host's own `appendEntry` as a
+`pi-dish-turn-error` custom entry (`src/core/turn-error-entry.ts`); custom
+entries never reach the model, and `readSessionMessages` projects it as an
+errored assistant message so the transcript shows why the agent stopped. A
+refusal the fallback walk recovers from is not recorded. Context window/percent are derived in
 `src/core/session-catalog.ts` (`withSessionContext`) at read time, not inside the cache — the models
 cache warms asynchronously and would bake in stale windows.
 

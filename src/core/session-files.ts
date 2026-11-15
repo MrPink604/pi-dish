@@ -14,6 +14,7 @@ import type { IndexedUsage, UsageBucket, UsageCosts, UsageTokens } from './sessi
 import { extractTextContent } from './helper-content.js';
 import { createUsageCostEstimator, isPlanProvider, pricingRevision } from './harness-pricing.js';
 import type { UsageCostEstimator } from './harness-pricing.js';
+import { TURN_ERROR_ENTRY_TYPE, turnErrorData } from './turn-error-entry.js';
 
 export interface SessionFileProfile {
   readonly profileId?: string;
@@ -338,6 +339,20 @@ function messageFromEntry(entry: Record<string, unknown>, candidate: SessionFile
       details: entry.details || undefined,
       display: entry.display,
       timestamp: entry.timestamp,
+    };
+  }
+  if (entry.type === 'custom' && entry.customType === TURN_ERROR_ENTRY_TYPE) {
+    const data = turnErrorData(entry.data);
+    if (!data) return null;
+    return {
+      id: entry.id || undefined,
+      role: 'assistant',
+      content: [],
+      timestamp: data.timestamp ?? entry.timestamp,
+      model: data.model,
+      provider: data.provider,
+      errorMessage: data.errorMessage,
+      stopReason: 'error',
     };
   }
   if (entry.type === 'branch_summary') {

@@ -3,6 +3,7 @@ import { getOmpNativeProjection, subscribeOmpNativeProjection, ompFastModeState,
 import { ompLogin, useOmpAuthModule } from "./login.js";
 import { parseOmpForm, patchOmpExtensionUiController, routeOmpHostDialogs, useOmpFormParser } from "./host-dialogs.js";
 import { field, isObject } from "../pi-dish-bridge/host.js";
+import { isUnpersistedOmpRefusal } from "../../lib/turn-error-entry.js";
 
 // OMP's own /btw prompt ($bunfs/root/btw-user-*.md, verified 18.1.16). The
 // embedded asset is unreadable from an extension, so the text is mirrored
@@ -112,6 +113,7 @@ export const bridgeDescriptor = {
   },
   routeHostDialogs: routeOmpHostDialogs,
   parseForm: parseOmpForm,
+  unpersistedErrorTurn: isUnpersistedOmpRefusal,
 } satisfies BridgeDescriptor;
 
 // hostAgentSession is the host's AgentSession class; the modules after it are

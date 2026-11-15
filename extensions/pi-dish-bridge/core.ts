@@ -15,6 +15,7 @@ import { createSessionObserver } from "../../lib/session-recovery.js";
 import { EMULATED_COMMAND_METADATA, PI_EMULATED_THINKING_LEVELS } from "../../lib/helper-command-metadata.js";
 import { collectActivePath, walkBranchTree } from "../../lib/helper-tree.js";
 import { createToolEventStream } from "../../lib/tool-event-stream.js";
+import { TURN_ERROR_ENTRY_TYPE, turnErrorData, type TurnErrorEntryData } from "../../lib/turn-error-entry.js";
 
 type UserContent = Parameters<ExtensionAPI["sendUserMessage"]>[0];
 type DeliveryOptions = Parameters<ExtensionAPI["sendUserMessage"]>[1];
@@ -423,6 +424,9 @@ export type BridgeDescriptor = {
   // Host parser for ui.formDialog HTML (OMP's ask tool): returns its
   // { sections, hidden } form model; without it the form stays TUI-only.
   parseForm?: (html: string) => unknown;
+  // An assistant error the host never writes to its session file. The bridge
+  // records it once the run ends with it, so the transcript shows why it stopped.
+  unpersistedErrorTurn?: (message: unknown) => boolean;
 };
 
 // Identifying the OMP host from inside an extension, verified against bun
@@ -2805,12 +2809,23 @@ export function createBridge(descriptor: BridgeDescriptor) {
   if (descriptor.piLifecycleEvents) on("agent_settled", () => {
     recoveryObserver.event("agent_settled");
   });
+  // Latest assistant outcome when it is a dropped error; a retry or fallback
+  // model's next assistant message supersedes it before the run settles.
+  let droppedTurnError: TurnErrorEntryData | null = null;
   for (const ev of descriptor.eventProfile) {
     on(ev, (event: HostObject, ctx: HostObject) => {
       wrapExtensionUI(ctx);
       lastCtx = ctx ?? lastCtx;
       refreshModel(ctx);
       recoveryObserver.event(ev, event);
+      if (ev === "message_end" && field(event.message, "role") === "assistant") {
+        droppedTurnError = descriptor.unpersistedErrorTurn?.(event.message) ? turnErrorData(event.message) : null;
+      } else if (ev === "agent_end" && droppedTurnError && event.willContinue !== true) {
+        const data = droppedTurnError;
+        droppedTurnError = null;
+        try { callHost(pi, "appendEntry", TURN_ERROR_ENTRY_TYPE, data); }
+        catch (e) { try { process.stderr.write(`[pi-dish-bridge] could not record turn error: ${e}\n`); } catch {} }
+      }
       if (ev === "agent_start" || ev === "turn_start") admitPendingSends();
       if (ev === "turn_start") {
         turnInProgress = true;

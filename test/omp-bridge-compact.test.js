@@ -19,7 +19,7 @@ async function waitFor(predicate, timeoutMs = 3000) {
     }
     throw new Error('condition timeout');
 }
-async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false, askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false, promptMode, hostDialogs = false, } = {}) {
+async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false, askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false, promptMode, hostDialogs = false, turnErrors = false, } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
     const home = path.join(root, 'home');
     const socketDir = path.join(root, 'sockets');
@@ -61,6 +61,7 @@ async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsess
             FAKE_OMP_LIFECYCLE_FILE: lifecycle ? lifecycleFile : '',
             FAKE_OMP_PROMPT_MODE: promptMode ?? '',
             FAKE_OMP_HOST_DIALOG_RESULT: hostDialogs ? hostDialogResultFile : '',
+            FAKE_OMP_TURN_ERRORS: turnErrors ? '1' : '',
         },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -92,7 +93,7 @@ async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsess
     const registryPath = path.join(registryDir, registryName);
     const claim = (0, test_types_js_1.bridgeEntry)((0, test_types_js_1.record)(JSON.parse(fs.readFileSync(registryPath, 'utf8'))));
     return {
-        root, callFile, askResultFile, askTriggerFile, lifecycleFile, hostDialogResultFile, registryPath, claim, child,
+        root, sessionFile, callFile, askResultFile, askTriggerFile, lifecycleFile, hostDialogResultFile, registryPath, claim, child,
         async close() {
             child.kill('SIGTERM');
             await new Promise(resolve => child.once('exit', () => resolve()));
@@ -139,6 +140,19 @@ test('OMP bridge reports a prompt the host refuses before admitting it', async (
     }
     finally {
         session.close();
+        await host.close();
+    }
+});
+test('OMP bridge records only a terminal refusal the host leaves out of the session', async () => {
+    const host = await startFakeHost(false, { turnErrors: true });
+    try {
+        const entries = fs.readFileSync(host.sessionFile, 'utf8').trim().split('\n').map(line => (0, test_types_js_1.record)(JSON.parse(line)));
+        const recorded = entries.filter(entry => entry.type === 'custom');
+        assert.deepEqual(recorded.map(entry => [entry.customType, entry.data]), [['pi-dish-turn-error', {
+                    errorMessage: 'Refusal (cyber): final', model: 'claude-opus-5-5', provider: 'anthropic', timestamp: 1_790_000_000_000,
+                }]], 'a recovered refusal and a persisted ordinary error are not recorded');
+    }
+    finally {
         await host.close();
     }
 });

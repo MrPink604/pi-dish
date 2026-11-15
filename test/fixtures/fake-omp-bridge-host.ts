@@ -31,6 +31,7 @@ interface FixtureContext {
 }
 type HostHandler = (event: HostRecord, context: FixtureContext) => unknown | Promise<unknown>;
 
+let customEntries = 0;
 const handlers = new Map<string, HostHandler[]>();
 const pi = {
   on(event: string, handler: HostHandler) {
@@ -57,6 +58,10 @@ const pi = {
     const turn = nativeSession?.sendUserMessage(content, options);
     turn?.catch(() => {});
     return turn;
+  },
+  // OMP's SessionManager.appendCustomEntry() line shape.
+  appendEntry(customType: string, data?: unknown) {
+    fs.appendFileSync(sessionFile, JSON.stringify({ type: 'custom', customType, data, id: `custom-${++customEntries}`, timestamp: new Date().toISOString() }) + '\n');
   },
 };
 
@@ -299,6 +304,23 @@ const bridgeFactory = nativeProjection
   : createHarnessBridge('fake-spawn-token');
 bridgeFactory(pi);
 await emit('session_start', {}, ctx);
+
+if (process.env.FAKE_OMP_TURN_ERRORS === '1') {
+  // OMP 18.18 never persists a classifier refusal; an ordinary error it does.
+  const refusal = (errorMessage: string) => ({
+    role: 'assistant', content: [], stopReason: 'error', stopDetails: { type: 'refusal', category: 'cyber' },
+    errorMessage, provider: 'anthropic', model: 'claude-opus-5-5', timestamp: 1_790_000_000_000,
+  });
+  // The refusal walk recovers on a fallback model: not the run's outcome.
+  await emit('message_end', { message: refusal('Refusal (cyber): recovered') }, ctx);
+  await emit('agent_end', { messages: [], willContinue: true }, ctx);
+  await emit('message_end', { message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' } }, ctx);
+  await emit('agent_end', { messages: [] }, ctx);
+  await emit('message_end', { message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '429 rate limited' } }, ctx);
+  await emit('agent_end', { messages: [] }, ctx);
+  await emit('message_end', { message: refusal('Refusal (cyber): final') }, ctx);
+  await emit('agent_end', { messages: [] }, ctx);
+}
 
 if (process.env.FAKE_OMP_ASK_RESULT) {
   const fireAsk = async (): Promise<void> => {

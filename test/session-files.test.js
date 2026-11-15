@@ -240,6 +240,23 @@ test('readSessionMessages carries entry ids and assistant generation stats', () 
     assert.equal(all[1].outputTokens, 100);
     assert.equal(all[2].durationMs, undefined, 'missing start timestamp yields no duration');
 });
+test('readSessionMessages shows a recorded turn error the harness did not persist', () => {
+    const refusal = 'Refusal (cyber): This request triggered restrictions on violative cyber content.';
+    const file = writeSession([
+        { type: 'session', cwd: '/x' },
+        { type: 'message', id: 'u1', parentId: null, timestamp: '2026-07-01T10:00:00.000Z',
+            message: { role: 'user', content: [{ type: 'text', text: 'q' }] } },
+        { type: 'custom', id: 'e1', parentId: 'u1', timestamp: '2026-07-01T10:00:03.000Z', customType: 'pi-dish-turn-error',
+            data: { errorMessage: refusal, provider: 'anthropic', model: 'claude-opus-5-5', timestamp: Date.parse('2026-07-01T10:00:01.000Z') } },
+        { type: 'custom', id: 'e2', parentId: 'e1', timestamp: '2026-07-01T10:00:04.000Z', customType: 'pi-dish-turn-error', data: {} },
+    ]);
+    const all = SF.readSessionMessages(file);
+    assert.equal(all.length, 2, 'an entry without an error message is not a transcript row');
+    assert.deepEqual(all[1], {
+        id: 'e1', role: 'assistant', content: [], timestamp: Date.parse('2026-07-01T10:00:01.000Z'),
+        model: 'claude-opus-5-5', provider: 'anthropic', errorMessage: refusal, stopReason: 'error',
+    });
+});
 test('cache telemetry preserves retention, refreshes expiry, and counts hard misses', () => {
     const firstStart = Date.parse('2026-07-01T10:00:00.000Z');
     const secondStart = Date.parse('2026-07-01T10:10:00.000Z');
