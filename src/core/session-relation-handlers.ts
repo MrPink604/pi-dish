@@ -8,6 +8,7 @@ import sessionProvenance = require('./session-provenance');
 import type { CatalogRuntime } from './session-catalog-runtime';
 import type { CatalogSession } from './session-catalog';
 import type { SessionSource } from './session-source';
+import type { IncomingMessage } from 'http';
 
 interface CatalogRelationSummary extends Pick<CatalogSession, 'id' | 'sessionKey' | 'name' | 'lastActivity'> {
   harnessId: CatalogSession['harnessId'];
@@ -42,6 +43,8 @@ interface CatalogLineageNode {
 export interface SessionRelationPorts {
   catalog: CatalogRuntime;
   resolveSessionCandidate(id: string): SessionSource | null;
+  /** The request carries a private-session unlock token. */
+  privateUnlocked(req: IncomingMessage): boolean;
 }
 
 const LINEAGE_NODE_CAP_DEFAULT = 500;
@@ -88,7 +91,7 @@ export function createSessionRelationHandlers(ports: SessionRelationPorts) {
   // subsession layout, and pi-dish launch provenance. None implies control.
   function related(req: Parameters<RouteHandler>[0], res: Parameters<RouteHandler>[1]): void {
     try {
-      const base = runtime.buildSessionCatalog();
+      const base = runtime.buildSessionCatalog({ includePrivate: ports.privateUnlocked(req) });
       const list = [...base.list];
       const byId = new Map<string, CatalogSession>(base.byId);
       const byPath = new Map<string | null, CatalogSession>(base.byPath);
@@ -148,7 +151,7 @@ export function createSessionRelationHandlers(ports: SessionRelationPorts) {
     try {
       const configuredCap = Number.parseInt(process.env.PI_DISH_LINEAGE_NODE_CAP || '', 10);
       const nodeCap = Number.isFinite(configuredCap) && configuredCap > 0 ? configuredCap : LINEAGE_NODE_CAP_DEFAULT;
-      const catalog = runtime.buildSessionCatalog();
+      const catalog = runtime.buildSessionCatalog({ includePrivate: ports.privateUnlocked(req) });
       let list = catalog.list;
       let byId: ReadonlyMap<string, CatalogSession> = catalog.byId;
       const byPath: ReadonlyMap<string | null, CatalogSession> = catalog.byPath;

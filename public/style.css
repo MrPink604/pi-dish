@@ -8202,9 +8202,9 @@ mark.comment-mark {
   white-space: nowrap;
 }
 
-/* Private session: its transcript lives outside every backed-up folder.
-   Cyan separates it from the routine (yellow) and hibernation (blue) chips
-   it sits beside, and marks configuration rather than runtime state. */
+/* Private session: hidden by its host until the PIN is entered, and its
+   transcript lives outside every backed-up folder. Cyan separates it from the
+   routine (yellow) and hibernation (blue) chips it sits beside. */
 .private-chip {
   display: inline-flex;
   align-items: center;
@@ -8222,6 +8222,21 @@ mark.comment-mark {
   color: color-mix(in srgb, var(--cyan) 80%, var(--text-muted));
   background: color-mix(in srgb, var(--cyan) 14%, transparent);
 }
+.private-sessions-btn .private-eye { display: none; }
+.private-sessions-btn.unlocked { color: color-mix(in srgb, var(--cyan) 80%, var(--text-muted)); }
+.private-sessions-btn.unlocked .private-eye { display: inline; }
+.private-sessions-btn.unlocked .private-eye-off { display: none; }
+.private-unlock-modal { width: min(320px, calc(100vw - 32px)); }
+.private-unlock-form { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px; }
+.private-unlock-form input {
+  flex: 1; min-width: 0; padding: 8px; color: var(--text); background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: 4px; font-size: 16px; letter-spacing: 0.2em;
+}
+.private-unlock-status { flex-basis: 100%; color: var(--text-muted); }
+.private-pin-row { flex-wrap: wrap; }
+.private-pin-row > #privatePinStatus { flex-basis: 100%; }
+.private-pin-fields { display: flex; flex-wrap: wrap; gap: 6px; }
+.private-pin-fields input { width: 9em; }
 
 /* Routines on phones: one column at a time. Lives after the base rules so
    the same-specificity cascade lands on this side. */

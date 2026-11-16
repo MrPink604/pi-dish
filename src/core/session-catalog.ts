@@ -55,6 +55,8 @@ export interface SessionCatalogInput {
   readonly discoveryTruncated: boolean;
   readonly discoverySkipped: number;
   readonly activeOnly: boolean;
+  /** Omit `private` rows; set for every browse surface not unlocked by the private-session PIN. */
+  readonly hidePrivate?: boolean;
 }
 export interface SessionCatalogOptions {
   readonly harnesses: ReadonlyMap<SessionIdentity['harnessId'],
@@ -312,12 +314,14 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
     for (const live of input.active) {
       if (live.kind !== kind || seen.has(live.id)) continue;
       const row = buildActiveSession(live, options);
+      if (input.hidePrivate && row.private) continue;
       seen.add(row.id); active.push(row);
     }
   }
   for (const history of input.history) {
     if (seen.has(history.source.routeId) || (input.activeOnly && !history.liveChild)) continue;
     const row = buildHistoricalSession(history, options, { cwdFallback: !input.activeOnly });
+    if (input.hidePrivate && row.private) continue;
     seen.add(row.id);
     (input.activeOnly ? children : previous).push(row);
   }

@@ -45,6 +45,8 @@ export interface MessageStreamSideChat {
 function parseRecord(text: string): Record<string, unknown> { const value: unknown = JSON.parse(text); return record(value) ? value : {}; }
 export function createMessageStream(options: {
   document: Document; sessionState: SessionState; endpoint: (host: string | null) => HostEndpoint; ticket: (host: HostEndpoint) => Promise<string>; source?: (url: string) => EventSource;
+  /** Adds the private-session unlock query; EventSource cannot send its header. */
+  withUnlock?: (url: string, base: string) => string;
   activity: MessageStreamActivity; renderer: MessageStreamRenderer; streaming: MessageStreamRendering;
   tools: MessageStreamTools; delivery: MessageStreamDelivery; extensionUI: MessageStreamExtensionUI; sideChat: MessageStreamSideChat;
   status: (message: string, type?: string) => void; catchup: (owner: SelectionOwner) => unknown; refresh: () => unknown; artifacts: (owner: SelectionOwner) => unknown;
@@ -61,11 +63,12 @@ export function createMessageStream(options: {
   async function start(owner = sessionState.captureSelection()) {
     if (disposed || !owner || !sessionState.ownsSelection(owner)) return; stop();
     const generation = connectionGeneration, target = Object.freeze({ ...options.endpoint(owner.host) });
-    const path = `/api/sessions/${encodeURIComponent(owner.id)}/stream`;
-    if (!target.token) { open(target.base + path, owner, target, generation); return; }
+    const path = `${target.base}/api/sessions/${encodeURIComponent(owner.id)}/stream`;
+    const url = options.withUnlock?.(path, target.base) ?? path;
+    if (!target.token) { open(url, owner, target, generation); return; }
     try {
       const ticket = await options.ticket(target); if (!ownsConnection(owner, target, generation)) return;
-      open(`${target.base}${path}?ticket=${encodeURIComponent(ticket)}`, owner, target, generation);
+      open(`${url}${url.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`, owner, target, generation);
     } catch { if (ownsConnection(owner, target, generation)) options.status('Stream failed', 'error'); }
   }
 function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number) {

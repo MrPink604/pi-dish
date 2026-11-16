@@ -23,6 +23,7 @@ export interface PushSessionRow {
     readonly askPending?: boolean;
     readonly compacting?: boolean;
     readonly sessionFile?: string | null;
+    readonly private?: boolean;
 }
 export type PushEventKind = 'finished' | 'waiting';
 export interface PushPayload {

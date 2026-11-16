@@ -12,10 +12,13 @@ import { sessionForClient } from './session-api';
 import type { HibernationState } from './session-api';
 import type { CatalogRuntime } from './session-catalog-runtime';
 import type { CatalogSession } from './session-catalog';
+import type { IncomingMessage } from 'http';
 
 export interface SessionBrowsePorts {
   catalog: CatalogRuntime;
   hibernated(): ReadonlyMap<string, HibernationState>;
+  /** The request carries a private-session unlock token. */
+  privateUnlocked(req: IncomingMessage): boolean;
 }
 
 const SEARCH_RESULT_CAP = 100;
@@ -27,7 +30,7 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
   const list: RouteHandler = async (req, res) => {
     const query = ((req.query.q || '') as string).trim().toLowerCase();
     await runtime.refreshPrimeRoster();
-    const catalog = runtime.buildSessionCatalog({ activeOnly: req.query.active === '1' });
+    const catalog = runtime.buildSessionCatalog({ activeOnly: req.query.active === '1', includePrivate: ports.privateUnlocked(req) });
     const hibernated = ports.hibernated();
     const previous = hibernated.size
       ? catalog.previous.map(session => {
@@ -75,7 +78,7 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
     if (!ref) return res.status(400).json({ error: 'id is required' });
     if (ref.length < 4) return res.status(400).json({ error: 'id prefix must be at least 4 characters' });
 
-    const catalog = runtime.buildSessionCatalog();
+    const catalog = runtime.buildSessionCatalog({ includePrivate: ports.privateUnlocked(req) });
     const { session, matches } = runtime.resolveRefInCatalog(catalog, ref);
     if (session) return res.json({ session, ref: stableSessionRef(session.id, catalog.list.map((entry) => entry.id)) });
     if (matches.length > 1) {
@@ -97,7 +100,7 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
   const search: RouteHandler = (req, res) => {
     const query = ((req.query.q || '') as string).trim().toLowerCase();
     const scopeQuery = String(req.query.scope || '').trim().toLowerCase();
-    const { active, previous, indexing, discoveryTruncated, discoverySkipped } = runtime.buildSessionCatalog();
+    const { active, previous, indexing, discoveryTruncated, discoverySkipped } = runtime.buildSessionCatalog({ includePrivate: ports.privateUnlocked(req) });
     const parsed = parseSessionQuery(query);
     const scopeParsed = parseSessionQuery(scopeQuery);
     const hasScope = scopeParsed.terms.length || scopeParsed.since !== null || scopeParsed.before !== null;

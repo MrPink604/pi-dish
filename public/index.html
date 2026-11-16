@@ -75,6 +75,17 @@
               <path d="M3 17h18l-2.5 3.5h-13z"/>
             </svg>
           </button>
+          <button class="btn-icon private-sessions-btn" id="btnPrivateSessions" data-app-click="togglePrivateSessions" title="Show private sessions (PIN)" aria-label="Private sessions" aria-pressed="false">
+            <svg class="private-eye-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 3l18 18"/>
+              <path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-3 3.8M6.6 6.6C3.9 8.4 2.5 12 2.5 12s3.5 7 9.5 7a9.4 9.4 0 0 0 5.4-1.6"/>
+              <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>
+            </svg>
+            <svg class="private-eye" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7S2.5 12 2.5 12z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
           <button class="btn-icon global-settings-btn" data-app-click="openSettingsModal" title="Settings" aria-label="Settings">⚙</button>
           <button class="btn-icon" data-app-click="refreshSessions" title="Refresh">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -595,7 +606,7 @@
               <input type="checkbox" id="nsPrivateToggle">
               <span>Private session</span>
             </label>
-            <div class="ns-hidden-note">Stored outside backed-up session folders</div>
+            <div class="ns-hidden-note" id="nsPrivateNote">Hidden until the PIN is entered; stored outside backed-up session folders</div>
           </div>
 
           <div class="ns-config-readout" id="nsHarnessConfig" style="display:none">
@@ -816,6 +827,18 @@
       <div class="settings-body">
         <div id="settingsBody"></div>
       </div>
+    </div>
+  </div>
+
+  <!-- Private sessions: hosts hide them until this tab enters the PIN. -->
+  <div class="modal-overlay" id="privateUnlockModal" style="display:none">
+    <div class="modal private-unlock-modal" role="dialog" aria-modal="true" aria-labelledby="privateUnlockTitle">
+      <div class="modal-header"><h3 id="privateUnlockTitle">Private sessions</h3><button class="btn-icon" data-private-close title="Close (Esc)">✕</button></div>
+      <form class="private-unlock-form" id="privateUnlockForm">
+        <input type="password" id="privateUnlockPin" inputmode="numeric" autocomplete="off" placeholder="PIN" aria-label="PIN">
+        <button type="submit" class="btn btn-primary">Show</button>
+        <small class="private-unlock-status" id="privateUnlockStatus"></small>
+      </form>
     </div>
   </div>
 

@@ -255,14 +255,25 @@ test('POST /api/sessions/new with private:true writes under the private root and
     assert.equal(launchArgs[dirIndex + 1], privateRoot);
     assert.equal(path.dirname(String(registry.sessionFile)), privateRoot, 'the transcript lands in the private root');
     assert.equal(fs.statSync(privateRoot).mode & 0o777, 0o700, 'the private root is owner-only');
+    const locked = await get('/api/sessions?active=1');
+    assert.ok(!(0, test_types_js_1.records)(locked.body.active).some(session => session.id === body.id), 'a locked list hides the private row');
+    await fetch(`${base}/api/private-sessions/pin`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: '1357' }) });
+    const unlock = await post('/api/private-sessions/unlock', { pin: '1357' });
+    assert.equal(unlock.status, 200, JSON.stringify(unlock.body));
+    const headers = { 'X-Pi-Dish-Private-Unlock': text(unlock.body.token) };
     let row;
-    for (let i = 0; i < 10 && !row; i++) {
-        const list = await get('/api/sessions?active=1');
-        row = (0, test_types_js_1.records)(list.body.active).find(session => session.id === body.id);
-        if (!row)
-            await new Promise((resolve) => setTimeout(resolve, 200));
+    try {
+        for (let i = 0; i < 10 && !row; i++) {
+            const list = (0, test_types_js_1.record)(await (await fetch(`${base}/api/sessions?active=1`, { headers })).json());
+            row = (0, test_types_js_1.records)(list.active).find(session => session.id === body.id);
+            if (!row)
+                await new Promise((resolve) => setTimeout(resolve, 200));
+        }
     }
-    assert.ok(row, 'private session is listed as active');
+    finally {
+        fs.rmSync(path.join(tmpHome, '.pi', 'dish', 'private-pin.json'), { force: true });
+    }
+    assert.ok(row, 'private session is listed as active once unlocked');
     assert.equal(row.private, true, 'the live-registry-only row carries the private flag');
 });
 test('POST /api/sessions/new rejects private for an unsupported harness and non-boolean input', async () => {

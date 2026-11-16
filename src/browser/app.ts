@@ -71,6 +71,7 @@ import { createRoutinesView } from './routines-view';
 import { createVaultApprovals, type VaultApprovalsController } from './vault-approvals';
 import { createBounce } from './bounce';
 import { createAppBindings } from './app-bindings';
+import { createPrivateSessions, type PrivateSessions } from './private-sessions';
 import type { CwdAutocompleteOptions } from './cwd-autocomplete';
 import type { Terminal as Xterm } from '@xterm/xterm';
 import type { FitAddon as XtermFitAddon } from '@xterm/addon-fit';
@@ -92,10 +93,18 @@ const hostDirectory: ReturnType<typeof createHostDirectory> = createHostDirector
 // The only fetch entry point for /api paths: it attaches the owning host's
 // base and bearer token, so a request cannot reach the serving origin when
 // the session lives elsewhere.
-const apiTransport: ReturnType<typeof createHostTransport> = createHostTransport({ resolveHost, fetch: (...args) => fetch(...args) });
+const apiTransport: ReturnType<typeof createHostTransport> = createHostTransport({ resolveHost, fetch: (...args) => fetch(...args),
+  privateUnlock: base => privateSessions.token(base) });
 // Shared ports resolve the owner's method on every call: fixtures and tests
 // replace feature methods (e.g. `apiTransport.request`) at runtime.
 const request: ApiRequest = (host, path, options) => apiTransport.request(host, path, options);
+// Hosts hide private sessions until this tab enters their PIN; a reload locks again.
+const privateSessions: PrivateSessions = createPrivateSessions({
+  document, request, label: host => hostDisplayLabel(host),
+  hosts: () => effectiveHosts().filter(host => hostSupportsCapability(host, 'privateUnlock', appConfig)),
+  refresh: () => sidebarLists.load(sidebarQuery.query || undefined),
+  reload: () => location.reload(),
+});
 function resolveHost(host?: HostTarget) { return hostDirectory.resolveHost(host); }
 function selectSession(...args: Parameters<ReturnType<typeof createSessionView>['select']>) { return sessionView.select(...args); }
 function refreshSessions() { return sidebarLists.refresh(); }
@@ -624,6 +633,7 @@ const displayPreferences: ReturnType<typeof createDisplayPreferences> = createDi
   metadataChanged: () => responseDetailsController.update(), contextChanged: () => renderSessions(), alert: message => alert(message),
   notifications: (container, signal) => pushNotifications.renderSettings(container, signal),
   sentPrompts: (container, signal) => promptHistory.renderSettings(container, signal),
+  privateSessions: (container, signal) => privateSessions.renderSettings(container, signal),
 });
 
 const pushNotifications: PushNotifications = createPushNotifications({
@@ -790,6 +800,7 @@ const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools(
 
 
 const messageStreamController: ReturnType<typeof createMessageStream> = createMessageStream({ document, sessionState, endpoint: resolveHost, ticket: host => mintHostTicket(host, 'stream'),
+  withUnlock: (url, base) => privateSessions.withUnlock(url, base),
   get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
   status: setStatus, catchup: owner => transcriptController.catchup(owner), refresh: refreshSessions, artifacts: owner => sessionInfo.refreshArtifacts(owner),
   ...chromeScroll, follow: () => appChrome.following, highlight: root => richText.highlight(root),
@@ -861,6 +872,7 @@ const newSessionController: ReturnType<typeof createNewSession> = createNewSessi
   closeOtherViews: () => mainPane.beforeTakeover('newSession'),
   closeSettings: () => harnessSettingsController.close(),
   harnessCacheChanged: () => { if (sessionState.currentSession) sessionHeader.update(); }, status: setStatus,
+  privateUnlocked: host => !!privateSessions.token(host.base),
 });
 
 const harnessDiscovery = newSessionController.harnesses;
@@ -972,6 +984,8 @@ document.addEventListener('keydown', function(e) {
   const lightbox = document.querySelector('.lightbox-overlay');
   if (lightbox) {
     e.preventDefault(); lightbox.remove();
+  } else if (privateSessions.isOpen()) {
+    e.preventDefault(); privateSessions.close();
   } else if (sidebarControls.menuOpen) {
     e.preventDefault(); sidebarControls.closeMenu();
   } else if (promptHistory.isOpen()) {
@@ -1040,7 +1054,8 @@ const terminalController: ReturnType<typeof createTerminalController> = createTe
   asset: (tag, attributes) => browserAssets.load(tag, attributes),
   createTerminal: options => typeof Terminal === 'undefined' ? null : new Terminal(options),
   createFitAddon: () => { const runtime = typeof FitAddon === 'undefined' ? null : FitAddon; const Ctor = typeof runtime === 'function' ? runtime : runtime?.FitAddon; return Ctor ? new Ctor() : null; },
-  socket: url => new WebSocket(url), socketUrl: (host, path) => hostWsUrl(host, path), ticket: (host, purpose) => mintHostTicket(host, purpose),
+  socket: url => new WebSocket(url), socketUrl: (host, path) => privateSessions.withUnlock(hostWsUrl(host, path), resolveHost(host).base),
+  ticket: (host, purpose) => mintHostTicket(host, purpose),
   theme: () => terminalTheme(document), applySize: panel => panelResize.terminalSize(panel), confirm: message => confirm(message),
 });
 
@@ -1097,6 +1112,7 @@ createAppBindings({ document, actions: {
   openSkillsView: () => skillsController.open(),
   openRoutinesView: () => routinesController.open(),
   openSettingsModal: () => displayPreferences.open(),
+  togglePrivateSessions: () => privateSessions.toggle(),
   openFleetView: () => fleetController.open(),
   toggleVaultPanel: () => vaultApprovals.togglePanel(),
   refreshFleetView: () => fleetController.refresh(),

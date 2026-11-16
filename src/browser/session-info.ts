@@ -116,10 +116,12 @@ export function createSessionInfo(options: {
         }).join('') + '</table><div class="telemetry-note">Spend is estimated from the session harness catalog, not provider-billed. Response time is request start → JSONL append; effective speed includes TTFT.</div>' +
           '<div class="stats-share" id="statsShare"></div>' +
           '<div class="stats-share" id="statsPages"></div>' +
-          '<div class="stats-share" id="statsClose"></div>';
+          '<div class="stats-share" id="statsClose"></div>' +
+          '<div class="stats-share" id="statsDelete"></div>';
         loadShareSection(owner, generation);
         loadPagesSection(owner, generation);
         renderCloseSection(owner, generation);
+        renderDeleteSection(owner, generation);
       })
       .catch(e => {
         if (ownsStatsModal(owner, generation)) body.textContent = 'Failed to load stats: ' + errorMessage(e);
@@ -283,6 +285,43 @@ export function createSessionInfo(options: {
         }
       }
     }, listener);
+  }
+
+  // Permanent and closed-only: the server refuses a live session or a live parent's subagent.
+  function renderDeleteSection(owner: SelectionOwner, generation: number) {
+    if (!ownsStatsModal(owner, generation) || !statsEndpoint) return;
+    const el = document.getElementById('statsDelete'); if (!el) return;
+    const endpoint = statsEndpoint, sessionId = owner.id, host = owner.host;
+    const session = sessionState.findSession(sessionId, host);
+    if (!session) { el.remove(); return; }
+    const live = !!session.isActive || !!session.subagentLive;
+    el.innerHTML = '<div class="stats-share-title">Transcript</div><div class="stats-share-body">' +
+      (live ? '' : '<button type="button" class="btn-small btn-danger" id="sessionDeleteBtn">Delete transcript</button>') +
+      `<div class="stats-share-hint">${live
+        ? 'Close the session to delete its transcript.'
+        : `Permanently deletes the session file${session.harnessId === 'omp' ? ' and its subagent transcripts' : ''} from this host. This cannot be undone.`}</div></div>`;
+    const button = el.querySelector<HTMLButtonElement>('#sessionDeleteBtn'); if (!button) return;
+    button.addEventListener('click', async () => {
+      if (!ownsStatsModal(owner, generation) || button.disabled) return;
+      if (!confirm(`Permanently delete the transcript of “${session.name || sessionId}”? This cannot be undone.`) || !ownsStatsModal(owner, generation)) return;
+      button.disabled = true; button.textContent = 'Deleting…';
+      try {
+        await json(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+      } catch (e) {
+        if (!ownsStatsModal(owner, generation)) return;
+        button.disabled = false; button.textContent = 'Delete transcript';
+        setStatus('Delete failed: ' + errorMessage(e), 'error');
+        return;
+      }
+      if (ownsStatsModal(owner, generation)) closeStatsModal();
+      if (sessionState.ownsSelection(owner)) setStatus('Transcript deleted');
+      await options.loadPrevious();
+      // The deleted row is gone; move the still-owned view to the newest remaining session.
+      if (disposed || !sessionState.ownsSelection(owner)) return;
+      const next = [...sessionState.sessions.active, ...sessionState.sessions.previous]
+        .find(entry => !(entry.id === sessionId && (entry.host || null) === host));
+      if (next) await selectSession(next.id, { host: next.host || null });
+    }, { signal: statsEvents.signal });
   }
 
   function closeStatsModal() {

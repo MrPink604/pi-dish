@@ -14,6 +14,8 @@ export interface TerminalPorts {
   findSessionFile(id: string): string | null | undefined;
   resolveSessionCwd(id: string): unknown;
   locatePiPane(id: string): Promise<PaneTarget | null>;
+  /** A locked request must not reach a private session's shell or pane. */
+  privateRefused(req: IncomingMessage, id: string): boolean;
 }
 
 export interface TerminalHandlers {
@@ -42,7 +44,8 @@ export function createTerminalHandlers(ports: TerminalPorts): TerminalHandlers {
     }
     // A malformed percent escape throws before the upgrade, not mid-stream.
     const sessionId = decodeURIComponent(match[1]);
-    const known = ports.getRegisteredSession(sessionId) || ports.getRPCSession(sessionId) || ports.findSessionFile(sessionId);
+    const known = !ports.privateRefused(req, sessionId)
+      && (ports.getRegisteredSession(sessionId) || ports.getRPCSession(sessionId) || ports.findSessionFile(sessionId));
     if (!known) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
       socket.destroy();

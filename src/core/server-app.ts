@@ -54,6 +54,10 @@ import { expandSessionRefs } from './session-refs';
 import { getPrimeDaemon } from './prime-daemon';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
+import { createPrivateAccess } from './private-access';
+import { createPrivateSessionHandlers } from './private-session-handlers';
+import { isPrivateSessionFile } from './private-sessions';
+import { createSessionDelete } from './session-delete';
 import { errorMessage, errorStatus, requestBody, type ApplicationRequest, type ApplicationResponse } from './http-boundary';
 import type { NextFunction } from 'express';
 import type { Server } from 'node:http';
@@ -169,6 +173,19 @@ export function startServer(rootDirectory: string): Server {
     return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive || !!findSessionSource(sessionId, { exact: true });
   }
 
+  // Private rows and routes answer only to requests unlocked by the PIN.
+  const privateAccess = createPrivateAccess();
+  const privateUnlocked = (req: IncomingMessage) => privateAccess.unlocked(req);
+  const privateSessions = createPrivateSessionHandlers({
+    access: privateAccess,
+    sessionIsPrivate: sessionId => [...liveSourceObservations(sessionId), findSessionSource(sessionId)]
+      .some(entry => !!entry && isPrivateSessionFile(getHarness(entry.harnessId), entry.file)),
+  });
+  app.get('/api/private-sessions', privateSessions.status);
+  app.put('/api/private-sessions/pin', privateSessions.setPin);
+  app.post('/api/private-sessions/unlock', privateSessions.unlock);
+  app.post('/api/private-sessions/lock', privateSessions.lock);
+
   // Live registry first, then the JSONL header; null when neither knows.
   function resolveSessionCwd(sessionId: string): unknown {
     const registered = getRegisteredSession(sessionId);
@@ -203,8 +220,10 @@ export function startServer(rootDirectory: string): Server {
     catalog, ownership, findSessionSource,
     applicationRoot: rootDirectory,
     piSettingsFile: path.join(os.homedir(), '.pi', 'agent', 'settings.json'),
+    privateUnlocked,
   });
 
+  app.use('/api/sessions/:id', privateSessions.sessionGate);
   app.use('/api/sessions/:id', (req: ApplicationRequest, res: ApplicationResponse, next: NextFunction) => {
     const refusal = sessionOperations.admitHttpAction(req.params.id, req.method);
     if (refusal) return res.status(refusal.status).json(refusal.body);
@@ -214,8 +233,9 @@ export function startServer(rootDirectory: string): Server {
   const browseHandlers = createSessionBrowseHandlers({
     catalog,
     hibernated: () => hibernation.records(),
+    privateUnlocked,
   });
-  const relationHandlers = createSessionRelationHandlers({ catalog, resolveSessionCandidate });
+  const relationHandlers = createSessionRelationHandlers({ catalog, resolveSessionCandidate, privateUnlocked });
 
   app.get('/api/sessions', browseHandlers.list);
   app.get('/api/host/health', browseHandlers.hostHealth);
@@ -332,6 +352,21 @@ export function startServer(rootDirectory: string): Server {
     const { status, body } = await sessionOperations.closeSessionById(req.params.id);
     if (status >= 200 && status < 300) hibernation.forget(req.params.id);
     res.status(status).json(body);
+  });
+
+  // Permanent: removes the closed session's transcript (and OMP subagent folder).
+  const deleteSession = createSessionDelete({
+    findSessionSource,
+    activeSessions: () => { invalidateRegistryCache(); return catalog.getActiveSessions(); },
+  });
+  app.delete('/api/sessions/:id', (req: ApplicationRequest, res: ApplicationResponse) => {
+    try {
+      const result = deleteSession(req.params.id);
+      hibernation.forget(req.params.id);
+      res.json({ success: true, ...result });
+    } catch (error) {
+      res.status(errorStatus(error, 500)).json({ error: errorMessage(error) });
+    }
   });
 
   app.get('/api/cwds', (_req: ApplicationRequest, res: ApplicationResponse) => {
@@ -574,6 +609,7 @@ export function startServer(rootDirectory: string): Server {
     findSessionFile,
     resolveSessionCwd,
     locatePiPane,
+    privateRefused: privateSessions.refused,
   }) : null;
   const relayUpgrade = relayHandlers.upgrade;
   const terminalUpgrade = terminalHandlers?.upgrade;

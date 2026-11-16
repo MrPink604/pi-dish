@@ -76,8 +76,9 @@ harness-specific formats that raw JSONL reads get wrong.
   on, so an OMP session spawns OMP and a Pi session spawns Pi; `--harness`
   crosses over, and the target host is checked for that harness before
   launching. `--private` keeps the transcript outside the fleet session backup
-  (Pi/OMP only; the session still lists and resumes normally and reports
-  `private: true`). `--no-wait` returns the spawn id immediately. Launch
+  and hides the session from every list, search and per-session command until
+  the user enters the PIN in pi-dish (Pi/OMP only; incompatible with
+  `--prompt`). `--no-wait` returns the spawn id immediately. Launch
   provenance is recorded in an advisory sidecar so the UI can navigate between
   related sessions; it grants no ownership or lifecycle authority.
 - `interrupt <ref>` — abort the current turn; the session stays live.

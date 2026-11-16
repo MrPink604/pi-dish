@@ -207,9 +207,9 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const hibernationChip = session.hibernation
     ? `<span class="hibernation-chip" title="${escapeHtml(hibernationSummary(session.hibernation))}">hibernated</span>`
     : '';
-  // Private transcripts live outside backed-up folders; this chip is the only on-row signal.
+  // Private rows reach the list only once the PIN unlocked their host; this chip is the only on-row signal.
   const privateChip = session.private
-    ? '<span class="private-chip" title="Private session — stored outside backed-up session folders">private</span>'
+    ? '<span class="private-chip" title="Private session — hidden until the PIN is entered; stored outside backed-up session folders">private</span>'
     : '';
   // Pinned rows get a drag handle; out-of-group rows get a cwd hint.
   const dragHandle = opts.pinnedRow ? '<span class="session-drag-handle" title="Drag to reorder">⠿</span>' : '';

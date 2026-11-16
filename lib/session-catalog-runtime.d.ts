@@ -20,8 +20,10 @@ export type SessionFileInfo = SessionInfo & {
 };
 export interface CatalogRuntime {
     readonly options: SessionCatalogOptions;
+    /** Private rows stay hidden unless `includePrivate` (a PIN-unlocked request). */
     buildSessionCatalog(options?: {
         activeOnly?: boolean;
+        includePrivate?: boolean;
     }): SessionCatalog;
     getActiveSessions(registered?: readonly BridgeRegistryEntry[]): readonly CatalogSession[];
     enumerateSessionCandidates(excludeIds?: ReadonlySet<string>): DiscoveryCandidate[];

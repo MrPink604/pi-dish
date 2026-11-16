@@ -61,6 +61,7 @@ interface SpawnBody {
   harness: string;
   cwd?: string;
   model?: string;
+  name?: string;
   private?: boolean;
 }
 interface SpawnOperation {
@@ -156,7 +157,7 @@ const COMMANDS: CommandSpec[] = [
       ['--harness ID', 'coding agent to run (default: the harness this session itself runs on)'],
       ['--model REF', 'canonical provider/id model ref (default: the host default)'],
       ['--prompt TEXT', 'first prompt, sent once the session is ready'],
-      ['--private', 'keep the transcript outside the fleet session backup (pi/omp only)'],
+      ['--private', 'hidden until the PIN is entered in pi-dish; transcript outside the fleet session backup (pi/omp only; no --prompt)'],
       ['--no-wait', 'return the spawn id immediately instead of waiting for readiness'],
     ],
     example: 'spawn --cwd ~/work/api --name "index audit" --prompt "Audit the session index caps"',
@@ -913,7 +914,13 @@ async function main() {
       const body: SpawnBody = { async: true, requestedBySessionId: callerId, harness };
       if (args.cwd) body.cwd = args.cwd;
       if (args.model) body.model = args.model;
-      if (args.private) body.private = true;
+      // A private session is invisible to this CLI once spawned: name it in the
+      // spawn request, and it cannot take a first prompt.
+      if (args.private) {
+        if (args.prompt) throw new Error('--private cannot be combined with --prompt: private sessions are hidden from the API until the PIN is entered in pi-dish');
+        body.private = true;
+        if (args.name) body.name = args.name;
+      }
       const { data } = await createSpawn(base, hostFlag, body, callerId);
       if (args.no_wait) return print({ ...core.record(data ?? {}), harness }, args.json);
       const spawnId = core.record(data).spawnId;
@@ -922,7 +929,7 @@ async function main() {
       if (operation.status === 'error') throw new Error(String(operation.error || 'session spawn failed'));
       const id = operation.sessionId;
       if (typeof id !== 'string') throw new TypeError('spawn response did not report a sessionId');
-      if (args.name) await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/rename`, jsonInit({ name: args.name }));
+      if (args.name && !args.private) await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/rename`, jsonInit({ name: args.name }));
       if (args.prompt) await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/prompt`, jsonInit({ message: args.prompt }));
       return print({ ...operation, spawnId, sessionId: id, harness, ...(hostFlag ? { host: hostFlag } : {}) }, args.json);
     }

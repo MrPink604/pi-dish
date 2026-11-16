@@ -48,14 +48,18 @@ export function withFetchTimeout(options: RequestOptions): RequestInit {
 export function createHostTransport(options: {
   resolveHost: (target: HostTarget) => HostEndpoint;
   fetch: typeof fetch;
+  /** Private-session unlock token for a host base, sent as `X-Pi-Dish-Private-Unlock`. */
+  privateUnlock?: (base: string) => string | null;
 }) {
   const request: ApiRequest = (host, path, init = {}) => {
     // Resolve synchronously. Neither URL nor authorization is read after an await.
     const { base, token } = options.resolveHost(host);
+    const unlock = options.privateUnlock?.(base);
     const requestInit = withFetchTimeout(init);
-    if (token) {
+    if (token || unlock) {
       const headers = new Headers(requestInit.headers);
-      headers.set('Authorization', `Bearer ${token}`);
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      if (unlock) headers.set('X-Pi-Dish-Private-Unlock', unlock);
       requestInit.headers = headers;
     }
     return options.fetch(base + path, requestInit);

@@ -91,7 +91,7 @@ const COMMANDS = [
             ['--harness ID', 'coding agent to run (default: the harness this session itself runs on)'],
             ['--model REF', 'canonical provider/id model ref (default: the host default)'],
             ['--prompt TEXT', 'first prompt, sent once the session is ready'],
-            ['--private', 'keep the transcript outside the fleet session backup (pi/omp only)'],
+            ['--private', 'hidden until the PIN is entered in pi-dish; transcript outside the fleet session backup (pi/omp only; no --prompt)'],
             ['--no-wait', 'return the spawn id immediately instead of waiting for readiness'],
         ],
         example: 'spawn --cwd ~/work/api --name "index audit" --prompt "Audit the session index caps"',
@@ -895,8 +895,15 @@ async function main() {
                 body.cwd = args.cwd;
             if (args.model)
                 body.model = args.model;
-            if (args.private)
+            // A private session is invisible to this CLI once spawned: name it in the
+            // spawn request, and it cannot take a first prompt.
+            if (args.private) {
+                if (args.prompt)
+                    throw new Error('--private cannot be combined with --prompt: private sessions are hidden from the API until the PIN is entered in pi-dish');
                 body.private = true;
+                if (args.name)
+                    body.name = args.name;
+            }
             const { data } = await createSpawn(base, hostFlag, body, callerId);
             if (args.no_wait)
                 return print({ ...core.record(data ?? {}), harness }, args.json);
@@ -909,7 +916,7 @@ async function main() {
             const id = operation.sessionId;
             if (typeof id !== 'string')
                 throw new TypeError('spawn response did not report a sessionId');
-            if (args.name)
+            if (args.name && !args.private)
                 await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/rename`, jsonInit({ name: args.name }));
             if (args.prompt)
                 await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/prompt`, jsonInit({ message: args.prompt }));

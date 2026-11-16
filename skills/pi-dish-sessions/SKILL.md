@@ -69,9 +69,10 @@ the harness it launched.
 `spawn --private` keeps the transcript under the host's private session root
 (`$XDG_STATE_HOME/pi-dish/private-sessions/<harness>`, defaulting under
 `~/.local/state`) instead of the ordinary session store, so the fleet session
-backup never captures it. Pi and OMP support it; Prime does not. The session
-lists and resumes normally, and its row reports `private: true`. Private
-transcripts are never auto-expired or cleaned up.
+backup never captures it. Pi and OMP support it; Prime does not. A private
+session is hidden from `list`, `search`, `read` and every other command until
+the user enters the PIN in pi-dish, so `--private` takes `--name` but not
+`--prompt`, and the spawned session is not yours to follow up.
 
 Search treats the session corpus as long-term memory: before re-deriving a
 fix, config, or investigation, check whether a prior session already did it.

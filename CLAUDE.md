@@ -381,6 +381,26 @@ outside both. A discovered or live row whose file is inside the root carries
 `SessionFields.private = true` (client-visible; deliberately not in
 `ClientPrivateField`, so `view=client` keeps it).
 
+Private rows are PIN-gated server-side. `src/core/private-access.ts` owns the
+scrypt PIN hash (`~/.pi/dish/private-pin.json`), the wrong-PIN lockout and the
+in-memory unlock tokens; `src/core/private-session-handlers.ts` owns the
+`/api/private-sessions*` routes and the gates. `buildSessionCatalog()` hides
+private rows unless `includePrivate` is passed, and only request-scoped browse,
+relation and usage handlers pass it, from `privateUnlocked(req)`;
+`getActiveSessions()` stays unfiltered because lifecycle, hibernation, bounce and
+push consumers need every live row. The `/api/sessions/:id` gate and the
+terminal upgrade answer 404 for a private route (live claim or resolved source)
+without a token, so locked and unknown ids look identical. The browser keeps
+tokens per host base in memory only (`src/browser/private-sessions.ts`): the
+transport adds the `X-Pi-Dish-Private-Unlock` header, EventSource/WebSocket URLs
+add `privateUnlock`, and locking revokes then reloads the page.
+
+`DELETE /api/sessions/:id` (`src/core/session-delete.ts`) removes a closed
+session's exact-resolved `.jsonl` (lstat regular file, realpath inside one of
+`sessionRootsFor(descriptor)`) and, for `nestedSubsessions`, a non-symlink
+`<stem>/` subagent directory. It refuses when the route is live, a live row
+claims the file or anything in that subtree, or a live OMP parent owns it.
+
 `src/core/session-catalog.ts` composes active, historical and live-child rows and
 their relationship/routine hints from captured observations. The server retains
 registry grouping, live-child exit checks and existing process/tmux capability

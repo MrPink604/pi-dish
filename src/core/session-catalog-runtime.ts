@@ -69,7 +69,8 @@ export type SessionFileInfo = SessionInfo & {
 
 export interface CatalogRuntime {
   readonly options: SessionCatalogOptions;
-  buildSessionCatalog(options?: { activeOnly?: boolean }): SessionCatalog;
+  /** Private rows stay hidden unless `includePrivate` (a PIN-unlocked request). */
+  buildSessionCatalog(options?: { activeOnly?: boolean; includePrivate?: boolean }): SessionCatalog;
   getActiveSessions(registered?: readonly BridgeRegistryEntry[]): readonly CatalogSession[];
   enumerateSessionCandidates(excludeIds?: ReadonlySet<string>): DiscoveryCandidate[];
   filterSessionsByQuery(list: readonly CatalogSession[], query: string): readonly CatalogSession[];
@@ -306,7 +307,7 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     return resolveSessionRefAmong(catalog.list, ref, { exactOnly });
   }
 
-  function buildSessionCatalog({ activeOnly = false }: { activeOnly?: boolean } = {}): SessionCatalog {
+  function buildSessionCatalog({ activeOnly = false, includePrivate = false }: { activeOnly?: boolean; includePrivate?: boolean } = {}): SessionCatalog {
     const registered = listRegisteredSessions();
     const active = collectActiveObservations(registered);
     const liveChildren = liveSubsessionCandidates(active.map(observation => ({
@@ -340,7 +341,7 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
       } catch (error) { console.error('Error scanning sessions:', error); }
     }
     return composeSessionCatalog({
-      active, history, activeOnly, indexing, discoveryTruncated, discoverySkipped,
+      active, history, activeOnly, indexing, discoveryTruncated, discoverySkipped, hidePrivate: !includePrivate,
       launchParents: decodeLaunchParents(sessionProvenance.readLaunches()),
       routines: decodeRoutineAnnotations(routinesStore.invocationsBySessionId()),
     }, options);

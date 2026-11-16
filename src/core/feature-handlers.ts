@@ -1,4 +1,5 @@
 import type { RequestHandler } from 'express';
+import type { IncomingMessage } from 'http';
 import { requestBody, errorMessage } from './http-boundary';
 import { readDishSettings, writeDishSettings } from './dish-store';
 import { asRecord } from './wire-protocol';
@@ -25,6 +26,8 @@ export interface FeaturePorts {
   findSessionSource(id: string, options?: { exact?: boolean }): SessionSource | null;
   applicationRoot: string;
   piSettingsFile: string;
+  /** The request carries a private-session unlock token. */
+  privateUnlocked(req: IncomingMessage): boolean;
 }
 
 export interface FeatureHandlers {
@@ -207,7 +210,7 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
     }
   };
   return {
-    usageSummary: createUsageSummaryHandler(),
+    usageSummary: createUsageSummaryHandler(ports.privateUnlocked),
     ...createSkillFeatureHandlers(ports),
     ...createModelFeatureHandlers(ports),
     usageLimits,

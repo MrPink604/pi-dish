@@ -45,6 +45,8 @@ export interface SessionCatalogInput {
     readonly discoveryTruncated: boolean;
     readonly discoverySkipped: number;
     readonly activeOnly: boolean;
+    /** Omit `private` rows; set for every browse surface not unlocked by the private-session PIN. */
+    readonly hidePrivate?: boolean;
 }
 export interface SessionCatalogOptions {
     readonly harnesses: ReadonlyMap<SessionIdentity['harnessId'], Readonly<Pick<HarnessDescriptor, 'id' | 'label' | 'layout' | 'privateRootPath'>>>;

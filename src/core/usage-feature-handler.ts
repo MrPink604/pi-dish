@@ -6,6 +6,7 @@ import * as sessionIndex from './session-index';
 import type { UsageModel, UsageTotal } from './session-index-data';
 import { addUsage, compareUsageBuckets, compareUsageModels } from './helper-usage-math';
 import type { SessionSource } from './session-source';
+import type { IncomingMessage } from 'http';
 
 interface SummaryUsage extends UsageTotal {
   priced?: boolean;
@@ -29,8 +30,10 @@ function localDay(offset = 0): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-export function createUsageSummaryHandler(): FeatureHandler {
+/** Private sessions count toward totals; their rows stay hidden unless the request is unlocked. */
+export function createUsageSummaryHandler(privateUnlocked: (req: IncomingMessage) => boolean): FeatureHandler {
   return async (req, res) => {
+    const showPrivate = privateUnlocked(req);
     const range = String(req.query.days || '30');
     if (!['1', '7', '30', 'all'].includes(range)) return res.status(400).json({ error: 'days must be 1, 7, 30, or all' });
     const sort = String(req.query.sort || 'cost');
@@ -85,7 +88,7 @@ export function createUsageSummaryHandler(): FeatureHandler {
         }
       }
       addUsage(totals, selected);
-      if (selected.calls) {
+      if (selected.calls && (showPrivate || !c.private)) {
         addUsage(byWorkspace.get(info.cwd || usage.cwd || '(unknown)') || (byWorkspace.set(info.cwd || usage.cwd || '(unknown)', emptyUsage()), byWorkspace.get(info.cwd || usage.cwd || '(unknown)')!), selected);
         const routeId = c.routeId;
         bySession.set(routeId, {

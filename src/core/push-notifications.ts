@@ -44,6 +44,7 @@ export interface PushSessionRow {
   readonly askPending?: boolean;
   readonly compacting?: boolean;
   readonly sessionFile?: string | null;
+  readonly private?: boolean;
 }
 
 export type PushEventKind = 'finished' | 'waiting';
@@ -233,13 +234,14 @@ export function createPushNotifier(ports: PushNotifierPorts): PushNotifier {
     const { hostId, label } = ports.host();
     const { row, kind } = transition;
     let detail: string | null = null;
-    if (kind === 'finished' && row.sessionFile) {
+    // A lock screen is outside the PIN gate: private rows send no name or preview.
+    if (kind === 'finished' && row.sessionFile && !row.private) {
       try { detail = assistantPreview(ports.readMessages(row.sessionFile)); } catch {}
     }
     // Preview leads the body for the lock screen; the host rides in the title.
     return {
       kind, hostId, sessionId: row.id,
-      title: `${row.name || 'pi-dish session'} · ${label}`,
+      title: `${row.private ? 'Private session' : row.name || 'pi-dish session'} · ${label}`,
       body: detail || (kind === 'waiting' ? 'Waiting for your answer' : 'Finished'),
       tag: `${hostId}:${row.id}`,
     };

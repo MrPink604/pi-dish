@@ -18,8 +18,10 @@ const KEEP: Record<string, true> = {
   PI_DISH_REAL_BUN_BIN_DIR: true,
 };
 
-// Read straight by server.js at listen time.
-const DROP = ['HOST', 'PORT'];
+// Read straight by server.js at listen time. XDG_STATE_HOME locates the
+// private-session root; dropped, it follows each suite's temp HOME, so no test
+// reads the operator's private transcripts.
+const DROP = ['HOST', 'PORT', 'XDG_STATE_HOME'];
 
 // The OMP bridge suites spawn `bun`, which a non-interactive shell does not
 // find in its usual `~/.bun/bin`.

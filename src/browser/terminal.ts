@@ -125,7 +125,7 @@ export function createTerminalController(options: {
     const ready = () => owns(current) && sequence === current.connection;
     if (!current.endpoint.token) { openSocket(current, url, sequence); return; }
     status(current.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
-    void options.ticket(current.endpoint, 'terminal').then(ticket => { if (ready()) openSocket(current, `${url}${query ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`, sequence); })
+    void options.ticket(current.endpoint, 'terminal').then(ticket => { if (ready()) openSocket(current, `${url}${url.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`, sequence); })
       .catch(() => { if (ready()) status('connect failed', 'error'); });
   }
   function openSocket(current: TerminalState, url: string, sequence: number) {

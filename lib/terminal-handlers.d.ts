@@ -9,6 +9,8 @@ export interface TerminalPorts {
     findSessionFile(id: string): string | null | undefined;
     resolveSessionCwd(id: string): unknown;
     locatePiPane(id: string): Promise<PaneTarget | null>;
+    /** A locked request must not reach a private session's shell or pane. */
+    privateRefused(req: IncomingMessage, id: string): boolean;
 }
 export interface TerminalHandlers {
     upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean;

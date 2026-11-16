@@ -2,9 +2,12 @@
 import type { RouteHandler } from './http-boundary';
 import type { CatalogRuntime } from './session-catalog-runtime';
 import type { SessionSource } from './session-source';
+import type { IncomingMessage } from 'http';
 export interface SessionRelationPorts {
     catalog: CatalogRuntime;
     resolveSessionCandidate(id: string): SessionSource | null;
+    /** The request carries a private-session unlock token. */
+    privateUnlocked(req: IncomingMessage): boolean;
 }
 export declare function createSessionRelationHandlers(ports: SessionRelationPorts): {
     related: (req: Parameters<RouteHandler>[0], res: Parameters<RouteHandler>[1]) => void;

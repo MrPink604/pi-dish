@@ -263,14 +263,37 @@ $XDG_STATE_HOME/pi-dish/private-sessions/<harness>/   # defaults to ~/.local/sta
 
 with the root created `0700`. The fleet's hourly session backup only copies
 the normal harness session directories, so this root is never captured while
-it stays outside those paths. The files are otherwise ordinary harness JSONLs:
-they list, open, search, resume, restart and auto-recover like any other
-session, and OMP subagents of a private parent stay beside it in that root.
-Sessions whose file is inside a private root carry `private: true` on the
-session row, and `GET /api/harnesses` reports `privateSessions` per harness
-(Prime is unsupported: its RLM artifacts live in the backed-up
-`~/.prime/agent/session-artifacts`). Private transcripts are never
-auto-expired or cleaned up; deleting one is a manual filesystem operation.
+it stays outside those paths. The files are otherwise ordinary harness JSONLs
+that open, resume, restart and auto-recover like any other session; OMP
+subagents of a private parent stay beside it in that root. Sessions whose file
+is inside a private root carry `private: true` on the session row, and
+`GET /api/harnesses` reports `privateSessions` per harness (Prime is
+unsupported: its RLM artifacts live in the backed-up
+`~/.prime/agent/session-artifacts`).
+
+Private sessions are hidden until a PIN reveals them. Each host stores only a
+scrypt hash of its PIN in `~/.pi/dish/private-pin.json` (0600); set or change it
+under Settings → Private sessions PIN (saved to every host that advertises the
+`privateUnlock` capability). The sidebar's eye button asks for the PIN and
+`POST /api/private-sessions/unlock` returns an in-memory unlock token. Requests
+without that token (`X-Pi-Dish-Private-Unlock` header, or the
+`privateUnlock` query parameter on the event stream and terminal socket) never
+see a private row in `/api/sessions`, `/api/search`, `/api/sessions/resolve`,
+related/lineage rows or per-session usage rows, and every
+`/api/sessions/:id/…` route and terminal upgrade for a private session answers
+404. Push notifications for a private session omit its name and preview.
+Tokens last until the tab reloads, the eye button locks again
+(`POST /api/private-sessions/lock`), the PIN changes or the server restarts.
+Five wrong PINs start an escalating lockout (30 s doubling to 15 minutes).
+With no PIN set, private sessions stay hidden. `spawn --private` cannot send
+a first prompt, because the CLI cannot see the session it created.
+
+Any closed session's transcript can be deleted:
+`DELETE /api/sessions/:id` (Stats → Delete transcript) permanently removes a
+closed session's JSONL and, for OMP, its sibling subagent directory. The file
+must be a regular `.jsonl` inside one of the harness's session roots; a live
+session, a live subagent in the subtree, or a live OMP parent of the transcript
+is refused with 409. Prime's RLM artifacts are left in place.
 
 OMP's `ask` tool uses the same UI context OMP gives extensions, so the wrapper
 races its browser form against the local TUI form and the first answer wins.

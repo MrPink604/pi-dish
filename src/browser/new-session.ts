@@ -48,6 +48,8 @@ export function createNewSession(options: {
   closeSettings: () => void;
   harnessCacheChanged: () => void;
   status: (message: string, kind?: 'working' | 'error') => void;
+  /** A private spawn is only offered where the private-session PIN has unlocked the host. */
+  privateUnlocked: (host: Readonly<NewSessionHost>) => boolean;
 }) {
   const { root, storage, models, request } = options;
   function element(id: string): HTMLElement {
@@ -68,7 +70,7 @@ export function createNewSession(options: {
   const cwdInput = input('newSessionCwd'), nameInput = input('newSessionName');
   const hostSelect = select('nsHostSelect'), harnessSelect = select('nsHarnessSelect');
   const thinkingSelect = select('nsThinkingSelect');
-  const privateToggle = input('nsPrivateToggle'), privateRow = element('nsPrivateRow');
+  const privateToggle = input('nsPrivateToggle'), privateRow = element('nsPrivateRow'), privateNote = element('nsPrivateNote');
   const modelInput = input('nsModelInput'), modelDropdown = element('nsModelDropdown');
   const spawnElement = element('nsSpawnBtn');
   if (!(spawnElement instanceof HTMLButtonElement)) throw new Error('Invalid spawn button');
@@ -178,13 +180,19 @@ export function createNewSession(options: {
     preferences.restore(harnessId); models.clear(); preferences.render(); renderPrivate(); refresh();
   }
   // Only harnesses with an alternate session root outside the backup set can
-  // take a private session; the toggle is hidden (and cleared) everywhere else.
+  // take a private session; the toggle is hidden (and cleared) everywhere else,
+  // and disabled while the host is locked, where the new row would be invisible.
   function renderPrivate(): void {
     if (disposed) return;
-    privateSupported = harnesses.rows().find(row => row.id === selectedHarness())?.privateSessions === true;
-    privateRow.style.display = privateSupported ? '' : 'none';
+    const harnessSupported = harnesses.rows().find(row => row.id === selectedHarness())?.privateSessions === true;
+    const unlocked = options.privateUnlocked(host());
+    privateSupported = harnessSupported && unlocked;
+    privateRow.style.display = harnessSupported ? '' : 'none';
     privateToggle.disabled = !privateSupported;
     if (!privateSupported) privateToggle.checked = false;
+    privateNote.textContent = unlocked
+      ? 'Hidden until the PIN is entered; stored outside backed-up session folders'
+      : 'Enter the private-sessions PIN from the sidebar to start one';
   }
   function refresh(): void {
     if (!isOpen()) return;

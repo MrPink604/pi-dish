@@ -1,5 +1,6 @@
 // Generated from src/core/feature-handlers.ts; edit that source and run npm run build:core.
 import type { RequestHandler } from 'express';
+import type { IncomingMessage } from 'http';
 import type { CatalogRuntime } from './session-catalog-runtime';
 import type { SessionSource } from './session-source';
 import type { SessionOwnership } from './session-ownership';
@@ -12,6 +13,8 @@ export interface FeaturePorts {
     }): SessionSource | null;
     applicationRoot: string;
     piSettingsFile: string;
+    /** The request carries a private-session unlock token. */
+    privateUnlocked(req: IncomingMessage): boolean;
 }
 export interface FeatureHandlers {
     harnesses: FeatureHandler;

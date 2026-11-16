@@ -4724,3 +4724,130 @@ test('GET /api/agent-docs/:topic serves markdown and gates the topic name', asyn
         assert.ok(!text.includes('Session refs'), `${attempt} must not serve doc content`);
     }
 });
+test('private sessions stay hidden from lists, search and session routes until the PIN unlocks them', async () => {
+    const privateId = '2026-07-05T10-00-00-privat01';
+    const privateFile = path.join(tmpHome, '.local', 'state', 'pi-dish', 'private-sessions', 'pi', `${privateId}.jsonl`);
+    fs.mkdirSync(path.dirname(privateFile), { recursive: true });
+    fs.writeFileSync(privateFile, [
+        { type: 'session', cwd: '/home/user/hidden', timestamp: '2026-07-05T10:00:00.000Z' },
+        { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'quokkaprivate hidden question' }], timestamp: '2026-07-05T10:00:01.000Z' } },
+    ].map(e => JSON.stringify(e)).join('\n') + '\n');
+    const route = `/api/sessions/${encodeURIComponent(privateId)}`;
+    const unlocked = (token) => ({ 'X-Pi-Dish-Private-Unlock': token });
+    const listed = async (headers = {}) => {
+        const response = await fetch(`${base}/api/sessions`, { headers });
+        return (0, test_types_js_1.records)((0, test_types_js_1.record)(await response.json()).previous).find(row => row.id === privateId);
+    };
+    const searched = async (headers = {}) => {
+        const response = await fetch(`${base}/api/search?q=quokkaprivate`, { headers });
+        return (0, test_types_js_1.records)((0, test_types_js_1.record)(await response.json()).results).map(row => row.id);
+    };
+    try {
+        assert.equal(await listed(), undefined, 'a locked list omits the row');
+        assert.deepEqual(await searched(), [], 'a locked search omits its content');
+        assert.equal((await get(`${route}/messages`)).status, 404, 'a locked route looks unknown');
+        assert.equal((await get(`/api/sessions/resolve?id=${privateId.slice(0, 12)}`)).status, 404);
+        assert.equal((await post('/api/private-sessions/unlock', { pin: '1234' })).status, 409, 'no PIN set yet');
+        assert.equal((await put('/api/private-sessions/pin', { pin: '12' })).status, 400);
+        assert.equal((await put('/api/private-sessions/pin', { pin: '1234' })).status, 200);
+        assert.equal((await put('/api/private-sessions/pin', { pin: '5678' })).status, 401, 'a change needs the current PIN');
+        assert.equal((await post('/api/private-sessions/unlock', { pin: '9999' })).status, 401);
+        const opened = await post('/api/private-sessions/unlock', { pin: '1234' });
+        assert.equal(opened.status, 200);
+        const token = text(opened.body.token);
+        assert.ok(token);
+        assert.equal((0, test_types_js_1.present)(await listed(unlocked(token))).private, true);
+        assert.deepEqual(await searched(unlocked(token)), [privateId]);
+        assert.equal((await fetch(`${base}${route}/messages`, { headers: unlocked(token) })).status, 200);
+        assert.equal((await fetch(`${base}${route}/messages?privateUnlock=${encodeURIComponent(token)}`)).status, 200, 'EventSource-style query tokens unlock too');
+        assert.deepEqual(await (await fetch(`${base}/api/private-sessions`, { headers: unlocked(token) })).json(), { pinSet: true, unlocked: true });
+        await fetch(`${base}/api/private-sessions/lock`, { method: 'POST', headers: unlocked(token) });
+        assert.equal((await fetch(`${base}${route}/messages`, { headers: unlocked(token) })).status, 404, 'locking revokes the token');
+        assert.equal(await listed(unlocked(token)), undefined);
+    }
+    finally {
+        fs.rmSync(privateFile, { force: true });
+        fs.rmSync(path.join(tmpHome, '.pi', 'dish', 'private-pin.json'), { force: true });
+        await get('/api/sessions');
+    }
+});
+test('wrong private-session PINs escalate to a timed lockout', () => {
+    const { createPrivateAccess } = require('../lib/private-access');
+    let now = 1_000_000;
+    const access = createPrivateAccess(() => now);
+    access.setPin('2468', undefined);
+    const status = (pin) => { try {
+        access.unlock(pin);
+        return 200;
+    }
+    catch (error) {
+        return Number((0, test_types_js_1.record)(error).statusCode);
+    } };
+    try {
+        for (let attempt = 0; attempt < 5; attempt++)
+            assert.equal(status('0000'), 401);
+        assert.equal(status('2468'), 429, 'the correct PIN waits out the lockout');
+        now += 30_000;
+        assert.equal(status('2468'), 200);
+        assert.equal(status('0000'), 401, 'success resets the failure count');
+    }
+    finally {
+        fs.rmSync(path.join(tmpHome, '.pi', 'dish', 'private-pin.json'), { force: true });
+    }
+});
+test('DELETE /api/sessions/:id removes a closed transcript and its OMP subagents, never a live one', async () => {
+    const parentId = 'omp-delete-parent';
+    const parentRoute = encodeSessionKey('omp', (0, test_types_js_1.nativeId)(parentId));
+    const childRoute = encodeSessionKey('omp', (0, test_types_js_1.nativeId)('omp-delete-child'));
+    const parentFile = path.join(tmpHome, '.omp', 'agent', 'sessions', 'project', `${parentId}.jsonl`);
+    const childDir = parentFile.slice(0, -'.jsonl'.length);
+    fs.writeFileSync(parentFile, [
+        { type: 'session', version: 3, id: parentId, cwd: ompCwd },
+        { type: 'message', id: 'del-u1', parentId: null, message: { role: 'user', content: [{ type: 'text', text: 'delete me' }] } },
+    ].map(e => JSON.stringify(e)).join('\n') + '\n');
+    fs.mkdirSync(childDir, { recursive: true });
+    fs.writeFileSync(path.join(childDir, 'Helper.jsonl'), [
+        { type: 'session', version: 3, id: 'omp-delete-child', cwd: ompCwd },
+        { type: 'custom', customType: 'session_exit', id: 'exit-1', parentId: null, data: { reason: 'dispose', kind: 'normal' } },
+    ].map(e => JSON.stringify(e)).join('\n') + '\n');
+    const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
+    fs.mkdirSync(registryDir, { recursive: true });
+    const socket = path.join(tmpHome, 'omp-delete-parent.sock');
+    fs.writeFileSync(socket, 'stub');
+    const identity = (0, test_types_js_1.present)(processIdentity(process.pid));
+    const registryPath = path.join(registryDir, 'omp-delete-parent.json');
+    fs.writeFileSync(registryPath, JSON.stringify({
+        protocolVersion: 2,
+        wrapper: { harnessId: 'omp', name: 'Oh My Pi', wrapperVersion: 'test' },
+        harnessId: 'omp', nativeSessionId: parentId, sessionId: parentId,
+        bridgeInstanceId: 'omp-delete-parent', instanceId: 'omp-delete-parent',
+        socketPath: socket, cwd: ompCwd, sessionFile: parentFile,
+        pid: identity.pid, startTime: identity.startTime, capabilities: {}, spawnToken: null,
+    }));
+    invalidateRegistryCache();
+    try {
+        await get('/api/sessions');
+        const live = await del(`/api/sessions/${encodeURIComponent(parentRoute)}`);
+        assert.equal(live.status, 409, JSON.stringify(live.body));
+        const liveParent = await del(`/api/sessions/${encodeURIComponent(childRoute)}`);
+        assert.equal(liveParent.status, 409, 'a live parent may resume its subagent');
+        assert.ok(fs.existsSync(parentFile) && fs.existsSync(path.join(childDir, 'Helper.jsonl')));
+        fs.rmSync(registryPath, { force: true });
+        invalidateRegistryCache();
+        const deleted = await del(`/api/sessions/${encodeURIComponent(parentRoute)}`);
+        assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+        assert.ok(!fs.existsSync(parentFile), 'the transcript is gone');
+        assert.ok(!fs.existsSync(childDir), 'its subagent directory is gone');
+        const ids = (0, test_types_js_1.records)((await get('/api/sessions')).body.previous).map(row => row.id);
+        assert.ok(!ids.includes(parentRoute) && !ids.includes(childRoute));
+        assert.equal((await del(`/api/sessions/${encodeURIComponent(parentRoute)}`)).status, 404);
+    }
+    finally {
+        fs.rmSync(registryPath, { force: true });
+        fs.rmSync(socket, { force: true });
+        fs.rmSync(parentFile, { force: true });
+        fs.rmSync(childDir, { recursive: true, force: true });
+        invalidateRegistryCache();
+        await get('/api/sessions');
+    }
+});

@@ -74,7 +74,7 @@ function updateSessionHeader() {
     const isPrivate = !!current.private;
     privateEl.style.display = isPrivate ? '' : 'none';
     privateEl.textContent = isPrivate ? 'private' : '';
-    privateEl.title = 'Private session — stored outside backed-up session folders';
+    privateEl.title = 'Private session — hidden until the PIN is entered; stored outside backed-up session folders';
     privateEl.setAttribute('aria-label', isPrivate ? 'Private session' : '');
   }
   const cpTree = element('cpTreeRow');
