@@ -8227,6 +8227,9 @@ mark.comment-mark {
 .private-sessions-btn.unlocked .private-eye { display: inline; }
 .private-sessions-btn.unlocked .private-eye-off { display: none; }
 .private-unlock-modal { width: min(320px, calc(100vw - 32px)); }
+/* Opened from the sidebar, which sits at z-index 200 when it slides over on
+   phones; the PIN prompt must land above it, and the list it reveals stays open. */
+#privateUnlockModal { z-index: 210; }
 .private-unlock-form { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px; }
 .private-unlock-form input {
   flex: 1; min-width: 0; padding: 8px; color: var(--text); background: var(--bg-card);
