@@ -308,11 +308,18 @@ of the same kind and needs no new abstraction.
 - Add `HarnessId` `agy` with `liveTransport:'acp'`, `command:'agy'`
   (overridable with `PI_DISH_AGY_COMMAND`), no `argv.new/resume` (no tmux),
   and `closeMode` set to an owned process.
-- Run one `agy acp --disable-telemetry --log-file <dish log dir>` child per
-  live session, with cwd set to the session cwd. This matches RPC ownership:
-  close means `session/close` then SIGTERM, and a hung turn affects only its
-  own process. Memory is the cost (≥170 MB each). Revisit
-  `--process-per-session` with one shared front if that becomes a problem.
+- Run one `agy acp --dangerously-skip-permissions --disable-telemetry
+  --log-file <dish log dir>` child per live session, with cwd set to the
+  session cwd. This matches RPC ownership: close means `session/close` then
+  SIGTERM, and a hung turn affects only its own process. Memory is the cost
+  (≥170 MB each). Revisit `--process-per-session` with one shared front if
+  that becomes a problem.
+- **Permissions (owner decision, 2026-11-17):** always skip them, matching
+  how pi-dish runs Pi and OMP. Verified on `framework` (`yolo-elicit.jsonl`):
+  with the flag, `run_command` and `write_file` ran with no
+  `session/request_permission`, while the advertised mode stays `default`.
+  pi-dish still answers an unexpected permission request by showing it as a
+  `select` dialog rather than hanging the turn.
 - Do not set `GEMINI_HOME`/`--gemini-dir`. pi-dish uses the user's normal
   `agy` profile, so the TUI and pi-dish share one sign-in and one account.
   Strip ambient `GEMINI_API_KEY`/`GOOGLE_*` unless the configured auth method
@@ -322,9 +329,9 @@ of the same kind and needs no new abstraction.
 
 `initialize` sends `{protocolVersion:1, clientInfo:{name:"pi-dish",
 title:"pi-dish", version}, clientCapabilities:{fs:{readTextFile:false,
-writeTextFile:false}, terminal:false}}`. Fail closed unless
-`agentInfo.name === "Antigravity ACP Server"`, `loadSession` is true and
-`sessionCapabilities.resume` is present.
+writeTextFile:false}, terminal:false, elicitation:{form:{}}}}`. Fail closed
+unless `agentInfo.name === "Antigravity ACP Server"`, `loadSession` is true
+and `sessionCapabilities.resume` is present.
 
 If a request returns `-32000`, report "agy is not signed in; run `agy` or
 `agy acp --login` on <host>". pi-dish does not run OAuth itself in phase 1.
@@ -344,8 +351,8 @@ If a request returns `-32000`, report "agy is not signed in; run `agy` or
 | `current_mode_update`, `config_option_update` | state for model/thinking/mode pickers |
 | `session_info_update` (title) | session name |
 | `session/prompt` result `stopReason` | `message_end` (assistant) + `turn_end` + `agent_end`; `cancelled` = aborted; `refusal` surfaced like OMP classifier refusals |
-| inbound `session/request_permission` | `extension_ui_request` `select` (options from ACP `options[]`, kinds `allow_once`/`allow_always`/`reject_once`/`reject_always`); `respondExtensionUI` → `{outcome:{outcome:"selected", optionId}}`; dismissed → `cancelled` |
-| `ask_question` tool parked in `pending` (no elicitation capability) | `ask` dialog; the answer is sent as the next prompt, which `agy` consumes as the tool result |
+| inbound `session/request_permission` (not expected with the flag) | `extension_ui_request` `select` over ACP `options[]`; `respondExtensionUI` → `{outcome:{outcome:"selected", optionId}}`; dismissed → `cancelled` |
+| inbound `elicitation/create` (`mode:"form"`, `toolCallId` of the pending `ask_question`) | `extension_ui_request` `ask`, from the `ask_question` call's `args.questions[]`: `question`, `options` (a `(Recommended)` prefix sets `recommended`), `is_multi_select` → `multi`. The answer becomes `{action:"accept", content:{q1:"<1-based option const>", q1_other:"<free text>"}}`; dismissing it → `cancel`. The turn continues in place. |
 | child exit | `session_ended` |
 
 Commands: `abort` → `session/cancel` (notification) followed by awaiting the
@@ -360,13 +367,43 @@ ACP exposes no transcript file. Every pi-dish history surface (messages,
 search, usage, comments, export, shares) reads Pi-format JSONL through
 `session-files`/`session-index`.
 
-- **Recommended:** pi-dish writes a derived Pi-format JSONL mirror
-  (`~/.pi/dish/agy/sessions/<agySessionId>.jsonl`, with a header containing
-  cwd and the agy id) from the same events it streams. The descriptor's
-  `rootPath` points at the mirror, so the existing discovery and readers work
-  unchanged. This would be the first pi-dish-owned transcript writer, which is
-  a real architectural change; the mirror is a cache, and agy's own store
-  stays authoritative.
+- **Recommended: translate at write time.** pi-dish writes a Pi-format JSONL
+  mirror (`~/.pi/dish/agy/sessions/<agySessionId>.jsonl`) and points the
+  descriptor's `rootPath` at it, so discovery and every reader work unchanged.
+  It is small because the transport already builds Pi-shaped messages for SSE:
+  `assistantFrame()` assembles the assistant message, and tool completion
+  carries the result. The writer appends what is already emitted:
+  - a `{"type":"session","version":3,id,cwd,timestamp}` header;
+  - user `message_end` → `{type:"message", message:{role:"user", content}}`;
+  - assistant `message_end` → `role:"assistant"` with text, thinking and
+    `toolCall` blocks (`name` = `agy`'s native tool name, `arguments` =
+    `args`), `model` from the `model` config option, `provider:"antigravity"`,
+    `stopReason` and `usage`. `PromptResponse.usage` maps to `input`,
+    `output`, `cacheRead`, `cacheWrite` and `reasoning`. The cost is
+    unavailable because this is a subscription.
+  - `tool_execution_end` → `role:"toolResult"`, `toolCallId`, `toolName`,
+    `content` (text, command output, or the edit diff rendered as text),
+    `isError` for `failed`;
+  - `model_change`, `thinking_level_change` and `session_info` entries when
+    the config options or title change.
+
+  Entries chain `id`/`parentId` linearly (no tree). The estimate is about
+  150–250 lines plus tests. This is the first pi-dish-owned transcript
+  writer, and it writes only under its own root. `agy`'s store stays
+  authoritative.
+- **Raw sidecar:** append every inbound ACP frame to `<id>.acp.jsonl` beside
+  the mirror. No reader touches it. It allows the mirror to be rebuilt if the
+  translation is wrong or improves, since `session/load` replay is lossy.
+- **Rejected: ACP as an alternative read format.** ACP is a stream of chunks,
+  not messages: one assistant message spans many frames, and steer and
+  question answers interleave. Reading it would mean reassembling it in
+  `parseSessionEntries` and keeping that correct through the incremental
+  readers (`extendSearchIndexFromEntries`, `extendIndexedUsageFromEntries`,
+  `readSessionTailEntry`, tree/leaf reads) and the modules that parse
+  transcript lines themselves (`session-discovery`, `session-index`,
+  `session-hibernation`, `recovery-runner`, `omp-export`). The existing
+  `SessionFileProfile` mechanism (`omp-v1`) covers small differences in entry
+  shape, not a different record model.
 - Sessions started outside pi-dish come from `session/list`. They are
   imported into the mirror on first open with `session/load`, whose
   history-replay `session/update`s go through the same writer. Later live use
