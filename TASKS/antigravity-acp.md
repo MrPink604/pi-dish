@@ -182,8 +182,8 @@ addresses; the only account data is the tier name.
 
   **Claude and GPT models were offered to pi-dish**, despite the docs and the
   11-02 forum reply saying non-Gemini models are limited to first-party
-  surfaces. Treat them as outside the approval and hide them unless the owner
-  decides otherwise.
+  surfaces. **Owner decision (2026-11-17):** pi-dish offers only the `gemini-*`
+  values of the `model` option and hides the Claude and GPT entries.
 - **`session/list`** with cwd `/tmp/agy-capture` returned the owner's TUI
   conversation from cwd `/home/jyarwood` (id, cwd, title, `updatedAt`). TUI
   conversations are therefore listed across workspaces. The store is
