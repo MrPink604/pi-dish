@@ -1,13 +1,12 @@
 # Spike: Antigravity CLI (`agy`) through ACP
 
 **Priority:** P2
-**Status:** Spike complete (2026-11-17). Not implemented. Feasible; the
-binding constraint is Google's terms, not the protocol.
+**Status:** Spike complete (2026-11-17). Not implemented. Feasible. The owner
+has accepted the terms risk of programmatic prompts (see Owner decision).
 **Affects (if built):** new `src/core/acp-session.ts`, `contracts.ts`,
 `harnesses.ts`, `session-capabilities.ts`, `session-ownership.ts`,
 `session-catalog-runtime.ts`, `session-launch.ts`, `session-operations.ts`,
-`session-hibernation.ts`, prompt-origin gates in `routine-runner.ts`,
-`recovery-runner.ts` and `session-command-handlers.ts`, generated `lib/`, tests.
+`session-hibernation.ts`, generated `lib/`, tests.
 
 ## Goal
 
@@ -20,11 +19,20 @@ sign-in, tools, settings and transcript store.
 
 ## Verdict
 
-ACP is the correct mechanism, and pi-dish can stay on the permitted side
-**only as an interactive client**. With consumer sign-in (`oauth-personal`, the
-Pro/Ultra subscription), every prompt sent to an `agy` session must come
-from the user typing in pi-dish. Anything pi-dish or another agent generates
-programmatically must be refused for `agy` sessions.
+ACP is the correct mechanism. Google permits it on consumer sign-in
+(`oauth-personal`, the Pro/Ultra subscription) only while a human types every
+prompt. Prompts that pi-dish or another agent generates are outside that line.
+
+### Owner decision (2026-11-17)
+
+`agy` sessions get the same prompt sources as every other harness: browser
+prompts, peer-agent messages and holds, `pi-dish-sessions` spawns,
+`#ref` delegation, routines and recovery auto-continue. pi-dish does not gate
+on prompt origin. The owner accepts that, per the maintainer answer below,
+agent-generated prompts on `oauth-personal` are a §6 breach subject to
+automated enforcement and possible suspension. Switching `agy` to
+`gemini-api-key` or `agent-platform` removes that exposure without code
+changes.
 
 ### Terms boundary (primary sources)
 
@@ -70,13 +78,7 @@ not observed on the wire]**, so pi-dish must identify itself honestly.
    entries). t3code's usage-limit probe does this; do not copy it.
 3. Do not use `_meta.antigravity.systemPrompt.append`, even though `initialize`
    advertises it. Do not inject preambles, skills text or history into prompts.
-4. On `oauth-personal`, accept only prompts typed by a human: browser prompt,
-   steer, follow-up and permission/question answers. Refuse these sources
-   with a 409 that explains the restriction: routines, recovery
-   auto-continue, the `pi-dish-sessions` peer-control CLI, peer message holds,
-   `#ref` delegation and agent spawns. With `gemini-api-key` or
-   `agent-platform`, the gate can be lifted.
-5. One account per pi-dish host. Never rotate accounts.
+4. One account per pi-dish host. Never rotate accounts.
 
 ## Alternatives considered
 
@@ -84,7 +86,7 @@ not observed on the wire]**, so pi-dish must identify itself honestly.
 |---|---|---|---|
 | A. Google's [Remote Control](https://antigravity.google/docs/remote-control) (`agy --remote-control`, `agy remote-control start`, web UI at antigravity.google.com) | None: first-party | Google's web UI, push notifications | None |
 | B. `agy` TUI as a tmux-only harness: pi-dish launches `agy --remote-control` in a managed pane and exposes the terminal view plus Google's remote link | None: pi-dish starts the official TUI and a human types into it | pi-dish terminal view, not the transcript UI | S |
-| C. pi-dish ACP client for `agy acp` (this spike) | Low if rule 4 holds; undefined at the edges | Native pi-dish transcript, tools, approvals | L |
+| C. pi-dish ACP client for `agy acp` (this spike) | Accepted by owner: agent-driven prompts breach §6 on `oauth-personal` | Native pi-dish transcript, tools, approvals | L |
 | D. Reuse Antigravity OAuth in Pi/OMP/opencode | Explicit §6 breach | — | Rejected |
 
 A is the zero-risk baseline and already gives phone control. C is what
@@ -185,8 +187,8 @@ is a real ACP client. Worth copying:
 - Requests with `interaction_*` tool-call ids are questions, not permissions.
   "Allow always" wording comes from `_meta["agy.security.warning"]`.
 - `agy` cannot rewind, so t3code's "edit from here" starts a new session and
-  resends the kept turns. pi-dish must not copy this on `oauth-personal`
-  (rules 3 and 4).
+  resends the kept turns. pi-dish must not copy this, because it injects
+  history (rule 3).
 - Sign-in: the stdout line `Open the following link to authenticate the ACP
   server: <url>`, then the remote `127.0.0.1` callback paste.
 
@@ -286,18 +288,13 @@ lost. A later phase can add a small detached relay that owns `agy`'s stdio
 behind a Unix socket (the bridge-socket pattern) so turns survive updates.
 Hibernation must skip `agy` sessions mid-turn.
 
-### Prompt-origin gate (rule 4)
+### Prompt sources
 
-`session-command-handlers.ts` serves both the browser and the peer-control
-CLI, and its provenance is advisory, so there is nothing to enforce against
-today. The gate needs a positive browser-origin signal: a per-page token
-issued with the app shell and required on prompt/steer/follow-up for a
-`liveTransport:'acp'` session whose auth method is `oauth-personal`.
-`routine-runner.ts:309-311`, `recovery-runner.ts:345` and
-`message-hold.ts:109` (it delivers batched messages from peer agents, keyed by
-`PeerSender`) refuse `agy` targets outright, and routine creation rejects them
-up front. New-session spawns for `agy` follow the same rule: the browser can
-create one, agents cannot.
+No origin gate. Every existing route (`session-command-handlers.ts`,
+`routine-runner.ts:309-311`, `recovery-runner.ts:345`, `message-hold.ts:109`,
+`POST /api/sessions/new`) treats `agy` like any harness, subject only to the
+transport's capability table. Routines and recovery rely on `session/resume`
+after a restart, because owned children do not survive one.
 
 ### Capability matrix (planned)
 
@@ -316,7 +313,7 @@ create one, agents cannot.
 | Live list, resume | yes (`session/list`, `session/resume`) |
 | Close / restart owned | yes (`session/close` + SIGTERM; respawn + resume) |
 | Terminal view | no (no tmux pane) |
-| Routines, peer control, recovery auto-continue | **refused on `oauth-personal`** |
+| Routines, peer control, recovery auto-continue | yes (owner decision; §6 exposure on `oauth-personal`) |
 | Usage limits | no (would need the token file; rule 2) |
 
 ## Phased plan
@@ -324,7 +321,7 @@ create one, agents cannot.
 | Phase | Scope | Size | Main uncertainty |
 |---|---|---|---|
 | 0 | Option B: `agy` tmux harness with `--remote-control`, terminal view only | S | Pane lifecycle for a TUI that has no bridge |
-| 1 | `AcpSession` transport, descriptor, live new/prompt/steer/abort/approvals, mirror writer, prompt-origin gate, fake ACP agent fixture for `npm test` | L | Real `session/update` shapes (needs one signed-in capture) |
+| 1 | `AcpSession` transport, descriptor, live new/prompt/steer/abort/approvals, mirror writer, fake ACP agent fixture for `npm test` | L | Real `session/update` shapes (needs one signed-in capture) |
 | 2 | `session/list` import, resume after restart, model/mode pickers, commands | M | Whether `session/list` includes TUI conversations |
 | 3 | Detached relay so turns survive pi-dish updates | M | Ownership record and relay authentication |
 
@@ -339,8 +336,5 @@ exact `agy` version, because `agy` updates itself in the background.
 
 1. Is the phase-0 terminal and Remote Control route enough, or is the native
    transcript UI (phase 1) worth an L-sized change?
-2. Should `agy` sessions be allowed on `oauth-personal` at all, given the
-   unanswered "framework-injected context" question and automated
-   enforcement, or only with `GEMINI_API_KEY`/`agent-platform`?
-3. Is the first pi-dish-owned transcript writer (the JSONL mirror) acceptable,
+2. Is the first pi-dish-owned transcript writer (the JSONL mirror) acceptable,
    or should `agy` history stay outside pi-dish's search and usage?
