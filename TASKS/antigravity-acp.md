@@ -344,7 +344,7 @@ after a restart, because owned children do not survive one.
 
 | Phase | Scope | Size | Main uncertainty |
 |---|---|---|---|
-| 0 | Option B: `agy` tmux harness with `--remote-control`, terminal view only | S | Pane lifecycle for a TUI that has no bridge |
+| 0 | Dropped by owner (2026-11-17): native transcript only | — | — |
 | 1 | `AcpSession` transport, descriptor, live new/prompt/steer/abort/approvals, mirror writer, fake ACP agent fixture for `npm test` | L | Real `session/update` shapes (needs one signed-in capture) |
 | 2 | `session/list` import, resume after restart, model/mode pickers, commands | M | Whether `session/list` includes TUI conversations |
 | 3 | Detached relay so turns survive pi-dish updates | M | Ownership record and relay authentication |
@@ -356,9 +356,36 @@ keep the subscription out of development traffic, and repeat it on
 `oauth-personal` only to confirm model and option ids. Pin the canary to an
 exact `agy` version, because `agy` updates itself in the background.
 
+### Size and containment
+
+The comparable precedent is Prime's daemon transport (`72bdd54`). It changed
+18 `src/core` files (+1604/−320, with `prime-daemon.ts` at 634 lines) plus
+fixtures and tests. ACP is about the same size: it has no tmux adoption or
+roster ownership, but it adds the mirror writer and the permission mapping.
+`TransportSession` (`18db751`) already gives RPC and Prime a shared base, and
+`AcpSession` extends it unchanged.
+
+The change is additive for the Pi lineage:
+
+- **Unchanged:** the bridge extensions, `rpc-session.ts`,
+  `prime-daemon.ts`, `session-files`/`session-index` parsers, SSE coalescing
+  and the browser renderers. The mirror emits existing Pi entry shapes, so no
+  parser learns an ACP shape.
+- **Shared files that gain an `acp` branch:** the dispatch points already
+  branching for Prime (`session-ownership.ts`, `session-launch.ts`,
+  `session-operations.ts`, `session-catalog-runtime.ts`,
+  `session-stream-handler.ts`, `live-sessions.ts`, `session-capabilities.ts`,
+  `session-hibernation.ts`, `session-bounces.ts`). These are the only
+  regression surface, and `npm test` plus `npm run test:lineage` cover it.
+- **Closed unions:** `HarnessId` and `liveTransport` in `contracts.ts`. The
+  compiler catches exhaustive switches and `Record<HarnessId, …>` maps. The
+  `if` chains on `liveTransport === 'prime-daemon'` need a manual review.
+
+A fourth transport is where a small transport registry would replace the
+repeated `instanceof`/`liveTransport` chains. That is a separate refactor
+stage, not part of this change.
+
 ## Open questions for the owner
 
-1. Is the phase-0 terminal and Remote Control route enough, or is the native
-   transcript UI (phase 1) worth an L-sized change?
-2. Is the first pi-dish-owned transcript writer (the JSONL mirror) acceptable,
+1. Is the first pi-dish-owned transcript writer (the JSONL mirror) acceptable,
    or should `agy` history stay outside pi-dish's search and usage?
