@@ -1,5 +1,5 @@
 import { createBridge, PUBLIC_EVENT_PROFILE, type BridgeDescriptor, type SideTurnInput } from "../pi-dish-bridge/core.js";
-import { getOmpNativeProjection, subscribeOmpNativeProjection, ompFastModeState, setOmpFastMode, getOmpNativeCaptureStats, getOmpNativeSession, patchOmpAgentSession } from "./native-state.js";
+import { getOmpNativeProjection, subscribeOmpNativeProjection, ompFastModeState, setOmpFastMode, getOmpNativeCaptureStats, getOmpNativeSession, patchOmpAgentSession, ompMentionCheck, ompScopedModels } from "./native-state.js";
 import { ompLogin, useOmpAuthModule } from "./login.js";
 import { parseOmpForm, patchOmpExtensionUiController, routeOmpHostDialogs, useOmpFormParser } from "./host-dialogs.js";
 import { field, isObject } from "../pi-dish-bridge/host.js";
@@ -110,6 +110,13 @@ export const bridgeDescriptor = {
   fastMode: {
     state: ompFastModeState,
     set: setOmpFastMode,
+  },
+  // ^model mentions resolve only inside the session's enabledModels scope;
+  // report that scope so the catalog matches it and refuse a send whose
+  // selector OMP would leave literal.
+  modelMentions: {
+    check: ompMentionCheck,
+    scope: ompScopedModels,
   },
   routeHostDialogs: routeOmpHostDialogs,
   parseForm: parseOmpForm,

@@ -153,6 +153,18 @@ class FakeOmpAgentSession {
   fastModeEnabled = false;
   fastModeActive = false;
   fastModeSettable = true;
+  // OMP's AgentSession.scopedModels/resolveModelMention() pair: the picker
+  // allow-list that ^model mentions resolve against. Empty simulates a host
+  // without enabledModels, where OMP searches every credentialed model.
+  scopedModels: Array<{ model: { provider: string; id: string } }> =
+    (process.env.FAKE_OMP_MODEL_SCOPE || '').split(',').filter(Boolean).map(selector => {
+      const slash = selector.indexOf('/');
+      return { model: { provider: selector.slice(0, slash), id: selector.slice(slash + 1) } };
+    });
+  resolveModelMention(selector: string) {
+    const known = this.scopedModels.some(entry => `${entry.model.provider}/${entry.model.id}` === selector);
+    return known ? { selector, name: selector } : undefined;
+  }
   getTodoPhases() { return this.todos; }
   setTodoPhases(phases: unknown[]) { this.todos = phases; }
   getPlanModeState() { return this.planMode; }
@@ -227,6 +239,9 @@ class FakeOmpAgentSession {
   // missing-credential check; 'admit' starts the agent and keeps the turn
   // running, so the call's promise never settles while the test runs.
   async sendUserMessage(_content: unknown, _options: unknown) {
+    if (process.env.FAKE_OMP_SEND_LOG) {
+      fs.appendFileSync(process.env.FAKE_OMP_SEND_LOG, JSON.stringify({ content: _content, options: _options ?? null }) + '\n');
+    }
     if (process.env.FAKE_OMP_PROMPT_MODE === 'signed-out') {
       throw new Error('No API key found for anthropic.\nUse /login, set an API key environment variable, or create agent.db');
     }
@@ -242,7 +257,7 @@ let subagentSession: FakeOmpAgentSession | null = null;
 // patched-accessor call publishes — OMP's status line does this constantly;
 // the fake calls subscribe() once instead. /btw tests need the capture even
 // without the projection step driver.
-if (stepFile || process.env.FAKE_OMP_HAS_BTW === '1' || process.env.FAKE_OMP_PROMPT_MODE) {
+if (stepFile || process.env.FAKE_OMP_HAS_BTW === '1' || process.env.FAKE_OMP_PROMPT_MODE || process.env.FAKE_OMP_MODEL_SCOPE) {
   patchOmpAgentSession(FakeOmpAgentSession);
   nativeSession = new FakeOmpAgentSession(ctx.sessionManager);
   nativeSession.subscribe();

@@ -308,10 +308,15 @@ the pi-dish composer and select a model from that session's catalog. For
 example, `Ask ^opencode/deepseek-v4.1-flash to review this change` registers
 OMP's session-local, general-purpose model agent; the parent session keeps its
 own model. The agent can reuse that model agent on later tasks without another
-mention. Steers carry a mention, as in OMP's TUI; queued follow-ups and prompts
-held during compaction do not, so pi-dish refuses those instead of sending inert text.
-After OMP expands a mention, the transcript shows `^` plus the registered
-agent name in the user bubble instead of the internal `<model .../>` annotation.
+mention. OMP registers only selectors inside the session's model scope — the
+same `enabledModels` (filtered by credentials) list as its `Alt+P` picker — and
+leaves anything else as literal text; pi-dish therefore lists that same scope
+as the session catalog and refuses an out-of-scope mention with the scope in
+the error instead of sending inert text. Steers carry a mention, as in OMP's
+TUI; queued follow-ups and prompts held during compaction do not, so pi-dish
+refuses those as well. After OMP expands a mention, the transcript shows `^`
+plus the registered agent name in the user bubble instead of the internal
+`<model .../>` annotation.
 
 Current alternative-harness support is capability-detected:
 

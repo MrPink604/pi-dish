@@ -30,11 +30,12 @@ interface FakeHostOptions {
   promptMode?: 'signed-out' | 'admit';
   hostDialogs?: boolean;
   turnErrors?: boolean;
+  modelScope?: string;
 }
 async function startFakeHost(hasCompact: boolean, {
   swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false,
   askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false, promptMode,
-  hostDialogs = false, turnErrors = false,
+  hostDialogs = false, turnErrors = false, modelScope = '',
 }: FakeHostOptions = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
   const home = path.join(root, 'home');
@@ -49,6 +50,7 @@ async function startFakeHost(hasCompact: boolean, {
   const uiRestoreResultFile = path.join(root, 'ui-restore-result.json');
   const hostDialogResultFile = path.join(root, 'host-dialogs.json');
   const lifecycleFile = path.join(root, 'lifecycle.json');
+  const sendLogFile = path.join(root, 'sends.jsonl');
   fs.writeFileSync(lifecycleFile, 'null');
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
@@ -78,6 +80,8 @@ async function startFakeHost(hasCompact: boolean, {
       FAKE_OMP_PROMPT_MODE: promptMode ?? '',
       FAKE_OMP_HOST_DIALOG_RESULT: hostDialogs ? hostDialogResultFile : '',
       FAKE_OMP_TURN_ERRORS: turnErrors ? '1' : '',
+      FAKE_OMP_MODEL_SCOPE: modelScope,
+      FAKE_OMP_SEND_LOG: sendLogFile,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -104,7 +108,7 @@ async function startFakeHost(hasCompact: boolean, {
   const registryPath = path.join(registryDir, registryName);
   const claim = bridgeEntry(record(JSON.parse(fs.readFileSync(registryPath, 'utf8'))));
   return {
-    root, sessionFile, callFile, askResultFile, askTriggerFile, lifecycleFile, hostDialogResultFile, registryPath, claim, child,
+    root, sessionFile, callFile, askResultFile, askTriggerFile, lifecycleFile, hostDialogResultFile, sendLogFile, registryPath, claim, child,
     async close() {
       child.kill('SIGTERM');
       await new Promise<void>(resolve => child.once('exit', () => resolve()));
@@ -152,6 +156,47 @@ test('OMP bridge reports a prompt the host refuses before admitting it', async (
     // caller must still learn the prompt never reached the session.
     await assert.rejects(session.prompt('the prompt that must not vanish'),
       /Oh My Pi did not accept the message: No API key found for anthropic/);
+  } finally {
+    session.close();
+    await host.close();
+  }
+});
+
+test('OMP bridge refuses a mention outside the session scope instead of sending inert text', async () => {
+  const host = await startFakeHost(false, { promptMode: 'admit', modelScope: 'openai/gpt-4o-mini' });
+  const session = new BridgeSession(host.claim);
+  try {
+    await session.connect();
+    // OMP's own prompt() expansion leaves an out-of-scope selector literal and
+    // sendUserMessage() resolves anyway; the bridge must refuse before sending.
+    await assert.rejects(session.prompt('^anthropic/claude-fable-5-2'),
+      /OMP cannot register \^anthropic\/claude-fable-5-2 as a model agent: not in this session's model scope.*openai\/gpt-4o-mini/);
+    // A mid-turn steer takes the same expansion path, so it must refuse the
+    // same selector instead of queueing inert text.
+    await assert.rejects(session.steer('^anthropic/claude-fable-5-2'),
+      /OMP cannot register \^anthropic\/claude-fable-5-2 as a model agent/);
+    assert.equal(fs.existsSync(host.sendLogFile) ? fs.readFileSync(host.sendLogFile, 'utf8').trim() : '',
+      '', 'nothing reaches the host for an unregisterable mention');
+    // An in-scope mention still takes the expanding prompt path.
+    assert.deepEqual(await session.prompt('^openai/gpt-4o-mini'), { queued: false });
+    const sent = fs.readFileSync(host.sendLogFile, 'utf8').trim().split('\n').map(line => record(JSON.parse(line)));
+    assert.deepEqual(sent.map(entry => [entry.content, entry.options]), [['^openai/gpt-4o-mini', {}]]);
+  } finally {
+    session.close();
+    await host.close();
+  }
+});
+
+test('OMP bridge advertises the session picker scope as its model catalog', async () => {
+  const host = await startFakeHost(false, { modelScope: 'openai/gpt-4o-mini,anthropic/claude-opus-5-5' });
+  const session = new BridgeSession(host.claim);
+  try {
+    await session.connect();
+    // The web picker and the ^model autocomplete read this list; offering a
+    // model outside OMP's scope is how an unregisterable mention got typed.
+    const models = records(record(await session.getAvailableModels()).models);
+    assert.deepEqual(models.map(model => `${String(model.provider)}/${String(model.id)}`),
+      ['openai/gpt-4o-mini', 'anthropic/claude-opus-5-5']);
   } finally {
     session.close();
     await host.close();

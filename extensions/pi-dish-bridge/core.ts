@@ -34,6 +34,24 @@ export type HostDialogRace = (
 type HostModel = HostObject & { provider: string; id: string };
 type HostCommand = HostObject & { name: string; source: string };
 type FastModeBridgeState = { available: boolean; enabled: boolean; active: boolean };
+// The session's mention scope (OMP's Alt+P picker) plus the selectors the host
+// would leave as literal text. `scope` is empty when the host cannot report it.
+export type ModelMentionCheck = { scope: readonly string[]; unresolved: readonly string[] };
+const MODEL_MENTION_SELECTOR = /(?:^|\s)\^([^\s^]+)(?=\s|$)/g;
+
+function modelMentionSelectors(content: UserContent): string[] {
+  const texts = typeof content === "string"
+    ? [content]
+    : content.filter((part): part is { type: "text"; text: string } => part.type === "text").map(part => part.text);
+  const selectors: string[] = [];
+  for (const text of texts) {
+    for (const match of text.matchAll(MODEL_MENTION_SELECTOR)) {
+      const selector = match[1];
+      if (selector && !selectors.includes(selector)) selectors.push(selector);
+    }
+  }
+  return selectors;
+}
 
 function errorText(error: unknown): string {
   return String(field(error, "message") || error);
@@ -384,6 +402,18 @@ export type BridgeDescriptor = {
   fastMode?: {
     state: (sessionManager: unknown) => FastModeBridgeState | null;
     set: (sessionManager: unknown, enabled: boolean) => { ok: boolean; state: FastModeBridgeState | null; message?: string };
+  };
+  // OMP registers `^provider/model` mentions only inside the session's model
+  // scope (its Alt+P picker: enabledModels, filtered by credentials) and
+  // silently leaves every other selector as literal user text. `check` names
+  // the selectors the host will not register so the bridge can refuse the send
+  // instead of acknowledging inert text; `scope` feeds the model catalog so the
+  // web picker offers the same models the TUI picker and mentions accept. Both
+  // return null when the host session cannot be inspected (discovery-loaded
+  // bridge without the wrapper's host import).
+  modelMentions?: {
+    check: (sessionManager: unknown, selectors: readonly string[]) => ModelMentionCheck | null;
+    scope: (sessionManager: unknown) => unknown[] | null;
   };
   selfPrime?: boolean;
   piLifecycleEvents?: boolean;
@@ -2140,9 +2170,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // message was queued so callers can tell the client.
   async function deliverUserMessage(content: UserContent, deliverAs?: unknown): Promise<{ queued: boolean }> {
     let delivery = deliverAsOptions(deliverAs);
-    if (descriptor.harnessId === "omp"
-        && (typeof content === "string" ? /(?:^|\s)\^[^\s^]+(?=\s|$)/.test(content)
-          : content.some(part => part.type === "text" && /(?:^|\s)\^[^\s^]+(?=\s|$)/.test(part.text)))) {
+    const mentions = descriptor.harnessId === "omp" ? modelMentionSelectors(content) : [];
+    if (mentions.length) {
       // OMP expands ^model only in prompt(). An omitted deliverAs reaches it
       // with streamingBehavior "steer" (the TUI's own steer path); an explicit
       // deliverAs, compaction buffering and follow-ups bypass the expansion.
@@ -2152,6 +2181,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
         throw new Error("OMP model mentions cannot be queued as follow-ups; steer or send this prompt after the current turn finishes");
       }
       delivery = {};
+      assertMentionsRegister(mentions);
     }
     if (compacting) {
       compactionQueue.push(content);
@@ -2160,6 +2190,23 @@ export function createBridge(descriptor: BridgeDescriptor) {
     }
     await sendToHost(content, delivery);
     return { queued: false };
+  }
+
+  // OMP keeps the `^selector` verbatim when it is outside the session's model
+  // scope (enabledModels minus missing credentials), and sendUserMessage()
+  // resolves either way. Refuse here: no turn starts, nothing is queued, and
+  // the composer gets the host's refusal instead of silently inert text.
+  function assertMentionsRegister(selectors: readonly string[]): void {
+    const check = descriptor.modelMentions?.check(lastCtx?.sessionManager, selectors);
+    if (!check || check.unresolved.length === 0) return;
+    const scope = check.scope.length
+      ? ` This session's model scope: ${check.scope.slice(0, 12).join(", ")}${check.scope.length > 12 ? ", …" : ""}.`
+      : "";
+    throw new Error(
+      `OMP cannot register ${check.unresolved.map(selector => `^${selector}`).join(", ")} as a model agent: `
+      + `not in this session's model scope (enabledModels filtered by credentials — the same scope as OMP's Alt+P picker).${scope} `
+      + "Mention a model from that scope, or ask the operator to add it to enabledModels.",
+    );
   }
 
   // Hand a message to the host and report a refusal the host would otherwise
@@ -2444,6 +2491,11 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
         case "get_available_models": {
           if (!lastCtx) return respond(false, undefined, "no active context");
+          const scoped = descriptor.modelMentions?.scope(lastCtx.sessionManager);
+          if (scoped && scoped.length > 0) {
+            respond(true, { models: scoped });
+            return;
+          }
           const models = await callHost(lastCtx.modelRegistry, "getAvailable");
           respond(true, { models });
           return;

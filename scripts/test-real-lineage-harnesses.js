@@ -340,6 +340,22 @@ async function testOmp() {
     assert.equal(fastOffState.active, false, `real OMP fast mode active after /fast off: ${JSON.stringify(fastOff.body)}`);
     const plainTurn = await runStreamedTurn(id, 'pi-dish managed OMP standard-tier canary');
     assert.notEqual(plainTurn.providerServiceTier, 'priority', 'fast mode must be gone from the provider payload after /fast off');
+    // A `^provider/model` mention must reach OMP's prompt() expansion, not sit in
+    // the transcript as literal text: the user message persists the host's
+    // <model agent="m1" .../> tag and the session records the mention entry.
+    const mentionTurn = await runStreamedTurn(id, '^openai/gpt-4o-mini');
+    const mentionTranscript = await get(`/api/sessions/${encodeURIComponent(id)}/messages`);
+    assert.equal(mentionTranscript.status, 200, JSON.stringify(mentionTranscript.body));
+    assert.ok((0, test_types_js_1.records)(mentionTranscript.body.messages).some(message => String(message.role) === 'user'
+        && Array.isArray(message.content)
+        && (0, test_types_js_1.records)(message.content).some(part => typeof part.text === 'string' && part.text.includes('<model agent="m1"'))), JSON.stringify({ mentionTurn: mentionTurn.assistantText, messages: mentionTranscript.body.messages }));
+    // A selector outside the session's mention scope is refused before it reaches
+    // the host, so the client learns instead of the model reading an inert token.
+    const requestsBeforeRejection = fakeRequestCount;
+    const rejectedMention = await post(`/api/sessions/${encodeURIComponent(id)}/prompt`, { message: '^anthropic/claude-opus-5-5' });
+    assert.equal(rejectedMention.status, 500, JSON.stringify(rejectedMention.body));
+    assert.match(text(rejectedMention.body.error), /OMP cannot register \^anthropic\/claude-opus-5-5 as a model agent: not in this session's model scope/);
+    assert.equal(fakeRequestCount, requestsBeforeRejection, 'a refused mention starts no turn');
     // /btw starts an asynchronous side chat: the ask returns immediately and the
     // answer streams into the side chat state, never the transcript.
     const sideChatAsk = await post(`/api/sessions/${encodeURIComponent(id)}/side-chat`, { question: 'summarize this session' });
@@ -406,6 +422,8 @@ async function testOmp() {
         fastModeEnabledProviderTier: turn.providerServiceTier,
         fastModeDisabledState: fastOffState,
         fastModeDisabledProviderTier: plainTurn.providerServiceTier,
+        mentionAgentRegistered: true,
+        unregisterableMentionRefused: true,
         persistedAssistantMessage: true,
         liveTreeRead: true,
         inactiveTreeReadRefused: true,
@@ -698,10 +716,10 @@ async function cleanup() {
         const result = {};
         for (const id of selected)
             result[id] = await (id === 'omp' ? testOmp() : testPrime());
-        // OMP: two streamed turns (fast on, then off) plus one side-chat turn.
-        // Prime: the managed turn, the held/aborted turn, restart, two peer turns,
-        // the post-resume turn and the manual TUI prompt.
-        const expectedCalls = (selected.includes('omp') ? 3 : 0) + (selected.includes('prime') ? 7 : 0);
+        // OMP: two streamed turns (fast on, then off), one mention turn, plus one
+        // side-chat turn. Prime: the managed turn, the held/aborted turn, restart,
+        // two peer turns, the post-resume turn and the manual TUI prompt.
+        const expectedCalls = (selected.includes('omp') ? 4 : 0) + (selected.includes('prime') ? 7 : 0);
         assert.equal(fakeRequestCount, expectedCalls, 'each streamed turn must use the local fake provider');
         result.fakeProviderRequests = fakeRequestCount;
         console.log(JSON.stringify(result, null, 2));

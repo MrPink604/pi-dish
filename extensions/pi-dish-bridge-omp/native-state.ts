@@ -1,4 +1,5 @@
 import { observeSendUserMessage } from "../pi-dish-bridge/send-observer.js";
+import type { ModelMentionCheck } from "../pi-dish-bridge/core.js";
 import { field, isHostMethod, isObject, type HostObject, type HostMethod } from "../pi-dish-bridge/host.js";
 
 export type OmpNativeProjection = {
@@ -131,6 +132,54 @@ export function ompFastModeStateOf(session: HostSession | null): OmpNativeProjec
 }
 
 export type OmpFastModeSetResult = { ok: boolean; state: OmpNativeProjection["fastMode"]; message?: string };
+
+/** `provider/id` of a host model object, or null when it is not one. */
+function modelSelector(model: unknown): string | null {
+  if (!isObject(model)) return null;
+  const provider = model.provider;
+  const id = model.id;
+  return typeof provider === "string" && provider && typeof id === "string" && id ? `${provider}/${id}` : null;
+}
+
+/**
+ * The session's picker/mention scope as model objects; null when the host has
+ * no allow-list (OMP then falls back to every credentialed model) or when the
+ * session was never captured. `session.scopedModels` is the same list the
+ * Alt+P picker cycles and ModelMentionRegistry.resolve() searches.
+ */
+export function ompScopedModels(sessionManager: unknown): unknown[] | null {
+  const session = getOmpNativeSession(sessionManager);
+  if (!session) return null;
+  let scoped: unknown;
+  try { scoped = session.scopedModels; } catch { return null; }
+  if (!Array.isArray(scoped) || scoped.length === 0) return null;
+  const models = scoped
+    .map(entry => (isObject(entry) ? entry.model : undefined))
+    .filter((model): model is HostObject => isObject(model));
+  return models.length > 0 ? models : null;
+}
+
+/**
+ * Which of `selectors` this OMP session can register as mention agents.
+ * AgentSession.resolveModelMention() is the exact call prompt() uses while
+ * expanding `^provider/model`, so its answer is authoritative — including the
+ * scope check and `:effort` suffix handling — and an unresolved selector is a
+ * token OMP would leave as literal text. Null when the session or the method
+ * is unavailable (a discovery-loaded bridge, or a host older than mentions).
+ */
+export function ompMentionCheck(sessionManager: unknown, selectors: readonly string[]): ModelMentionCheck | null {
+  const session = getOmpNativeSession(sessionManager);
+  if (!session) return null;
+  const resolve = session.resolveModelMention;
+  if (!isHostMethod(resolve)) return null;
+  const unresolved = selectors.filter(selector => {
+    try { return !isObject(Reflect.apply(resolve, session, [selector])); } catch { return false; }
+  });
+  const scope = (ompScopedModels(sessionManager) ?? [])
+    .map(modelSelector)
+    .filter((selector): selector is string => selector !== null);
+  return { scope, unresolved };
+}
 
 /** Toggle the priority tier on the captured AgentSession (its setFastMode). */
 export function setOmpFastMode(sessionManager: unknown, fast: boolean): OmpFastModeSetResult {
