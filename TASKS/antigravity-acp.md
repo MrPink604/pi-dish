@@ -160,10 +160,83 @@ duplicates of the capability keys.)
   token storage because SSH session detected").
 - The default CCPA endpoint in `--help` is `daily-cloudcode-pa.googleapis.com`.
 
-Not verified (blocked on sign-in, which this spike deliberately avoided):
-`session/update` shapes, permission option ids, model and mode option ids,
-whether `session/list` includes conversations started in the TUI, and
-steering behavior.
+### Signed-in capture (2026-11-17, `framework`, Google AI Ultra)
+
+The owner signed in with `oauth-personal`, ran `agy` 1.5.10 on `framework`,
+and had the spike drive a throwaway recorder in a tern pane. It sent
+`clientInfo {name:"pi-dish"}` and no `fs`/`terminal`/elicitation
+capabilities, and worked in a scratch git repo. The raw frames are in
+[`docs/agy-acp-capture/`](../docs/agy-acp-capture/): `live-turns.jsonl` (both
+directions), `load.jsonl` and `resume.jsonl`. They contain no tokens or email
+addresses; the only account data is the tier name.
+
+- **`session/new`** returns `modes` (`default`, `accept-edits`, `auto`,
+  `plan`; current `default`), `models.currentModelId`
+  (`gemini-4-carbon-medium`) and three `configOptions`:
+  - `model`: `gemini-4-carbon`, `gemini-4-argon`, `gemini-4-hydrogen`,
+    `gemini-pro-orchestrator`, `gemini-pro-orchestrator-argon`,
+    `gemini-3.8-flash`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`,
+    `gpt-oss-120b-medium`
+  - `thought_level`: `low`, `medium`, `high`
+  - `mode`
+
+  **Claude and GPT models were offered to pi-dish**, despite the docs and the
+  11-02 forum reply saying non-Gemini models are limited to first-party
+  surfaces. Treat them as outside the approval and hide them unless the owner
+  decides otherwise.
+- **`session/list`** with cwd `/tmp/agy-capture` returned the owner's TUI
+  conversation from cwd `/home/jyarwood` (id, cwd, title, `updatedAt`). TUI
+  conversations are therefore listed across workspaces. The store is
+  `conversations/<uuid>.db`, SQLite with protobuf blobs in `steps`; pi-dish
+  must not parse it.
+- **`available_commands_update`** lists `goal`, `compact`, `schedule`,
+  `browser`, `plan`, `grill-me`, `teamwork`, `learn`, `boost`,
+  `agy-customizations`, `antigravity-guide`, `run-workflow` and `swarm`.
+  `compact` is present, unlike t3code's docs.
+- **Tool calls** carry non-ACP `name` and `args` fields with `agy`'s native
+  tool names (`read_file`, `edit_file`, `run_command`, `ask_question`)
+  alongside ACP's `kind`, `title`, `locations` and `rawInput`. These names
+  map directly to pi-dish's tool cards. Status moves
+  `in_progress → pending` (waiting for permission)
+  `→ in_progress → completed | failed`.
+  - Edit completions carry `content:[{type:"diff",path,oldText,newText}]`
+    (whole file).
+  - `run_command` completions carry text content plus
+    `rawOutput {output, exit_code}`.
+  - Reads finish with no content.
+- **Permissions:** in `default` mode, `run_command` produced
+  `session/request_permission` with options `allow`/`allow_once` and
+  `deny`/`reject_once`, and `toolCall` set to the pending tool call. Edits in
+  the workspace were not prompted. Deny made the tool `failed` with empty
+  output, and the turn ended `end_turn`.
+- **Questions:** without client elicitation support, `ask_question` (args
+  `questions[{question, options[], is_multi_select}]`) parks in `pending`.
+  The question is streamed as assistant text and the turn ends `end_turn`.
+  The next user prompt is consumed as the answer, and the tool then
+  completes. pi-dish can render the pending `ask_question` as an `ask`
+  dialog whose answer is sent as the next prompt.
+- **Steer:** a `session/prompt` sent during a running turn returned
+  `{stopReason:"end_turn"}` immediately, with no usage. The original turn
+  continued, took the instruction into account, and its own response
+  carried the usage. pi-dish must not treat the steer's response as the end
+  of the turn.
+- **Cancel:** `session/cancel` made the in-flight prompt return
+  `stopReason:"cancelled"` with usage within about 1 s.
+- **Usage:** `PromptResponse.usage` gives `inputTokens`, `outputTokens`,
+  `cachedReadTokens`, `cachedWriteTokens`, `thoughtTokens` and
+  `totalTokens`. `usage_update` gives `{used, size}` context (`size`
+  1048576).
+- **`session_info_update`** sets the title after the first prompt.
+- **`session/load`** (707 ms, fresh process) replays history:
+  `user_message_chunk` for each user prompt, one `agent_message_chunk` per
+  assistant message, thought chunks, and a single final-state `tool_call` per
+  tool, including diff and command content. It sends no `tool_call_update`s.
+  The replay is lossy: the answer consumed by `ask_question` and some
+  assistant text were missing. Write the mirror from the live stream and use
+  `load` only to import sessions started elsewhere.
+- **`session/resume`** (567 ms) replays nothing (only commands and title),
+  as documented.
+- Turns were slow: 20–60 s each, even for a one-line read.
 
 ## Documented `agy acp` behavior
 
@@ -272,7 +345,7 @@ If a request returns `-32000`, report "agy is not signed in; run `agy` or
 | `session_info_update` (title) | session name |
 | `session/prompt` result `stopReason` | `message_end` (assistant) + `turn_end` + `agent_end`; `cancelled` = aborted; `refusal` surfaced like OMP classifier refusals |
 | inbound `session/request_permission` | `extension_ui_request` `select` (options from ACP `options[]`, kinds `allow_once`/`allow_always`/`reject_once`/`reject_always`); `respondExtensionUI` → `{outcome:{outcome:"selected", optionId}}`; dismissed → `cancelled` |
-| `interaction_*` permission / elicitation | `ask`/`form` dialog |
+| `ask_question` tool parked in `pending` (no elicitation capability) | `ask` dialog; the answer is sent as the next prompt, which `agy` consumes as the tool result |
 | child exit | `session_ended` |
 
 Commands: `abort` → `session/cancel` (notification) followed by awaiting the
@@ -349,12 +422,9 @@ after a restart, because owned children do not survive one.
 | 2 | `session/list` import, resume after restart, model/mode pickers, commands | M | Whether `session/list` includes TUI conversations |
 | 3 | Detached relay so turns survive pi-dish updates | M | Ownership record and relay authentication |
 
-Phase 1 needs one signed-in, human-driven capture of a real turn (text,
-thinking, a read, an edit with permission, a question, a cancel) to pin event
-shapes for the fake-agent fixture. Do the capture with a `GEMINI_API_KEY` to
-keep the subscription out of development traffic, and repeat it on
-`oauth-personal` only to confirm model and option ids. Pin the canary to an
-exact `agy` version, because `agy` updates itself in the background.
+Event shapes for the fake-agent fixture come from the signed-in capture
+above. Pin the canary to an exact `agy` version, because `agy` updates itself
+in the background.
 
 ### Size and containment
 
