@@ -42,8 +42,11 @@ export interface DiscoveryOptions {
     readonly private?: boolean;
 }
 export interface LiveSourceObservation {
-    /** `prime-daemon`: a root agent read from Prime's resident daemon roster. */
-    readonly kind: 'registered' | 'rpc' | 'prime-daemon';
+    /**
+     * `prime-daemon`: a root agent read from Prime's resident daemon roster.
+     * `acp`: an owned `agy acp` stdio child's Pi-format mirror.
+     */
+    readonly kind: 'registered' | 'rpc' | 'prime-daemon' | 'acp';
     readonly harnessId: HarnessId;
     readonly nativeSessionId: NativeSessionId;
     readonly file: string | null;

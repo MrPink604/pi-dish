@@ -132,6 +132,7 @@ function decorateCandidate(candidate: CandidateHint, descriptor: HarnessDescript
 function candidateForFile(file: string, workspaceDirName: string, depth: number, descriptor: HarnessDescriptor, readHeader = readSessionHeader): CandidateHint | null {
   const basename = path.basename(file, '.jsonl');
   if (descriptor.layout === 'flat') {
+    if (descriptor.auxiliaryJsonlSuffixes?.some(suffix => file.endsWith(suffix))) return null;
     return { file, id: basename, dirName: workspaceDirName, depth, identitySource: 'basename' };
   }
   // Pi keeps one named JSONL directly under the workspace dir. Launcher dirs
@@ -284,6 +285,8 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
   } else if (descriptor.layout === 'flat') {
     eachEntry(rootDir, (entry) => {
       if (!entry.isFile() || !entry.name.endsWith('.jsonl')) return;
+      // Auxiliary JSONL (agy's raw ACP sidecar) is never a session route.
+      if (descriptor.auxiliaryJsonlSuffixes?.some(suffix => entry.name.endsWith(suffix))) return;
       if (filesSeen >= maxFiles) { truncated = true; return; }
       filesSeen += 1;
       add(candidateForFile(path.join(rootDir, entry.name), path.basename(rootDir), 0, descriptor, readHeader));

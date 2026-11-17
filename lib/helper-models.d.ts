@@ -11,6 +11,7 @@ export declare const THINKING_LEVEL_NAMES: string[];
 export declare function stripThinkingSuffix(pattern: string): string;
 export declare const OMP_THINKING_LEVEL_NAMES: string[];
 export declare const PRIME_THINKING_LEVEL_NAMES: string[];
+export declare const AGY_THINKING_LEVEL_NAMES: string[];
 export declare const ALL_THINKING_LEVEL_NAMES: string[];
 /** Fixed per-harness vocabulary; OMP's per-model trimming lives in thinkingLevelsFor. */
 export declare function thinkingLevelNamesFor(harnessId?: string): string[];

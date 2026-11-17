@@ -3,6 +3,7 @@ import path = require('node:path');
 import * as piSDK from './pi-sdk';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
+import { AcpSession } from './acp-session';
 import { getHarness } from './harnesses';
 import { isModelEnabled } from './helper-models';
 import { EMULATED_COMMAND_METADATA } from './helper-command-metadata';
@@ -22,6 +23,14 @@ const RPC_BUILTIN_COMMANDS = [
   { name: 'new', description: 'Start a new session' },
   { name: 'export', description: 'Export session to HTML', args: '[path]' },
   EMULATED_COMMAND_METADATA.reload,
+];
+
+/** ACP has no pi builtins: abort/model/thinking are pi-dish-side, everything
+ * else is an agy command sent as prompt text. */
+const AGY_BUILTIN_COMMANDS = [
+  EMULATED_COMMAND_METADATA.abort,
+  EMULATED_COMMAND_METADATA.model,
+  EMULATED_COMMAND_METADATA.thinking,
 ];
 
 const BRIDGE_COMMAND_CAPABILITIES: Readonly<Record<string, BridgeCapability>> = {
@@ -113,6 +122,9 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
         const sessionModels = await ports.catalog.getSessionModels(sessionId as string);
         if (sessionModels) {
           if (identity.harnessId === 'pi') return res.json(annotateEnabled(sessionModels));
+          // ACP reports the session's own config options already filtered to
+          // Gemini, with per-model thinking; no catalog enrichment applies.
+          if (identity.harnessId === 'agy') return res.json(sessionModels);
           if (!sessionModels.some(model => model.reasoning !== false && !Array.isArray(model.thinking))) return res.json(sessionModels);
           // Legacy bridges need catalog enrichment, but project model overrides
           // belong to this session's cwd, never the server's working directory.
@@ -198,6 +210,17 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
             const data = await sess.getCommands();
             const listed = responseCommands(data);
             if (listed) return res.json(primeCommandRows(sess, listed));
+          } else if (sess instanceof AcpSession) {
+            if (!liveSessionSupports(sess, 'commands')) {
+              return res.status(409).json({ error: 'This session does not support command discovery.' });
+            }
+            const raw = await sess.getCommands();
+            const listed = responseCommands(raw) ?? (Array.isArray(raw) ? raw : []);
+            if (!Array.isArray(listed)) throw new TypeError('(data?.commands || []).map is not a function');
+            return res.json([
+              ...AGY_BUILTIN_COMMANDS.map(command => ({ ...command, source: 'builtin', supported: true })),
+              ...(listed as unknown[]).map(command => ({ ...Object(command), source: 'agy', supported: true })),
+            ]);
           } else if (sess) {
             const data = await sess.getCommands();
             const listed = responseCommands(data) || [];

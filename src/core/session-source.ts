@@ -48,8 +48,11 @@ export interface DiscoveryOptions {
   readonly private?: boolean;
 }
 export interface LiveSourceObservation {
-  /** `prime-daemon`: a root agent read from Prime's resident daemon roster. */
-  readonly kind: 'registered' | 'rpc' | 'prime-daemon';
+  /**
+   * `prime-daemon`: a root agent read from Prime's resident daemon roster.
+   * `acp`: an owned `agy acp` stdio child's Pi-format mirror.
+   */
+  readonly kind: 'registered' | 'rpc' | 'prime-daemon' | 'acp';
   readonly harnessId: HarnessId;
   readonly nativeSessionId: NativeSessionId;
   readonly file: string | null;
@@ -125,8 +128,9 @@ function createSessionSourceResolver(options: ResolverOptions = {}): SessionSour
       if (!descriptor) return null;
       // The adapter supplies only an unambiguous registered claim. Order the
       // observations here, independent of their order in the caller's snapshot.
-      for (const kind of ['prime-daemon', 'registered', 'rpc'] as const) {
+      for (const kind of ['prime-daemon', 'acp', 'registered', 'rpc'] as const) {
         if (kind === 'rpc' && identity.harnessId !== 'pi') continue;
+        if (kind === 'acp' && identity.harnessId !== 'agy') continue;
         const live = input.live.find(observation => observation.kind === kind
           && observation.harnessId === identity.harnessId
           && observation.nativeSessionId === identity.nativeSessionId);

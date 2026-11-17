@@ -6,13 +6,14 @@ import { setTimeout as delay } from 'timers/promises';
 import type { BridgeRegistryEntry, HarnessDescriptor, HarnessEnvironment, HarnessId, ProcessIdentity, ProcessIdentityInput, SessionIdentity } from './contracts';
 import { harnessLaunchSpec } from './harness-launch-spec';
 import { createRPCSession, resumeRPCSession } from './rpc-session';
+import { createAcpSession, resumeAcpSession } from './acp-session';
 import { REGISTRY_DIR, getRegisteredSessionByNativeId, invalidateRegistryCache, pruneRegisteredSession, sameRegistryClaim, validRegistryClaimShape } from './bridge-session';
 import { getPrimeDaemon } from './prime-daemon';
 import type { PrimeAgentSummary, PrimeDaemon } from './prime-daemon';
 import { ensurePrivateRoot, privateRootFor } from './private-sessions';
 import { LifecycleInterruption, proveBridgeRegistryClaim, registryIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
 import type { BeforeLifecycleAction } from './session-ownership';
-import { formatModelRef, parseModelId } from './helper-models';
+import { AGY_THINKING_LEVEL_NAMES, formatModelRef, parseModelId } from './helper-models';
 import type { ModelRef } from './helper-types';
 import { dishDir } from './dish-store';
 import { record } from './helper-values';
@@ -620,6 +621,18 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
   }
 
   async function validateHarnessPilotSelection(descriptor: HarnessDescriptor, { model, thinking, cwd }: PilotValidationInput): Promise<void> {
+    // ACP config options cannot be validated without a live child, so reject
+    // the shapes agy never offers before spawning one.
+    if (descriptor.id === 'agy') {
+      if (thinking && !AGY_THINKING_LEVEL_NAMES.includes(String(thinking))) {
+        throw new LaunchError(`Thinking level ${String(thinking)} is not valid for ${descriptor.label}; valid levels: ${AGY_THINKING_LEVEL_NAMES.join(', ')}.`, 400);
+      }
+      const parsed = model ? parseModelId(String(model)) : null;
+      if (parsed?.provider && parsed.provider !== 'google-antigravity') {
+        throw new LaunchError(`${descriptor.label} only offers Gemini models on the google-antigravity provider.`, 400);
+      }
+      return;
+    }
     if (descriptor.id !== 'omp' || (!model && !thinking)) return;
     if (thinking && !model) throw new LaunchError('Choose an Oh My Pi model before overriding its thinking level.', 400);
     const models = await observations.runHarnessModelCommand(descriptor, { cwd });
@@ -640,6 +653,17 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
       const sessionDir = privateSession ? privateRootFor(descriptor) : null;
       if (privateSession && !sessionDir) throw new LaunchError(`${descriptor.label} does not support private sessions.`, 400);
       if (sessionDir) ensurePrivateRoot(sessionDir);
+      // ACP owns one stdio child per session: no tmux window, no target, and no
+      // rename path, so reject a name before spawning instead of orphaning it.
+      if (descriptor.liveTransport === 'acp') {
+        if (name) throw new LaunchError(`${descriptor.label} does not support naming a new session; it sets the title after the first prompt.`, 400);
+        const acp = await createAcpSession({
+          cwd: cwd ? String(cwd) : (process.env.HOME || os.homedir()),
+          model: model ? String(model) : null,
+          thinking: thinking ? String(thinking) : null,
+        });
+        return { kind: 'ready', id: routeSessionId('agy', acp.id) };
+      }
       const args = descriptor.argv.new({
         model: model ?? undefined, thinking: thinking ?? undefined, ...(sessionDir ? { sessionDir } : {}),
       });
@@ -668,6 +692,15 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
 
   async function launchResumedSession({ descriptor, sessionFile, cwd, name, target, model, thinking }: ResumeSessionLaunchOptions): Promise<LaunchOutcome> {
     try {
+      // ACP resumes by native session id over stdio; the mirror header carries cwd.
+      if (descriptor.liveTransport === 'acp') {
+        const acp = await resumeAcpSession(sessionFile, {
+          ...(cwd ? { cwd } : {}),
+          model: model ?? null,
+          thinking: thinking ?? null,
+        });
+        return { kind: 'ready', id: routeSessionId('agy', acp.id) };
+      }
       const args = descriptor.argv.resume({ file: sessionFile, model: model ?? undefined });
       if (thinking && (descriptor.id === 'pi' || descriptor.id === 'omp')) args.push('--thinking', thinking);
       return await launchInTmuxOrRpc({ descriptor, target, args, cwd, name }, 'resume',

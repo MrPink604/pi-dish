@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { setTimeout as delay } from 'timers/promises';
 import { BridgeSession, sameRegistryClaim } from './bridge-session';
+import { AcpSession } from './acp-session';
 import { getHarness } from './harnesses';
 import { record as isRecord } from './helper-values';
 import { errorMessage } from './http-boundary';
@@ -274,7 +275,10 @@ export function lifecycleBlockers(state: unknown, live: LiveSession | null | und
   return blockers;
 }
 
-function trackBounceActivity(live: LiveSession): void {
+/** Bulk safety state belongs to pane/worker transports; owned ACP children have neither. */
+type BounceLive = Exclude<LiveSession, AcpSession>;
+
+function trackBounceActivity(live: BounceLive): void {
   if (live.bounceActivityRevision !== undefined) return;
   live.bounceActivityRevision = 0;
   const events = ['turn_start', 'compaction_start', 'queue_update', 'extension_ui_request', 'session_switch', 'message_start'];
@@ -287,7 +291,7 @@ function trackBounceActivity(live: LiveSession): void {
   }
 }
 
-async function readBounceState(live: LiveSession): Promise<unknown> {
+async function readBounceState(live: BounceLive): Promise<unknown> {
   const state = await live.send('get_state', {}, { timeout: 5000 });
   if (live instanceof BridgeSession) return state;
   // RPC's public state contract uses different names. It is a server-owned
@@ -324,6 +328,11 @@ export function createSessionLifecycleActions({ operations, ownership }: Session
       return { eligible: true, blockers: [`Cannot connect to the original live agent: ${errorMessage(error)}`] };
     }
     if (!live?.alive) return { eligible: true, blockers: ['Waiting for a connected live agent.'] };
+    // Owned ACP children are never captured for bulk actions; keep the refusal
+    // explicit if a future caller bypasses capture.
+    if (live instanceof AcpSession) {
+      return { eligible: false, reason: 'Owned Antigravity sessions are not part of bulk operations.', blockers: [] };
+    }
     if (mode === 'reload' && (!(live instanceof BridgeSession) || live.capabilities?.guardedReload !== true)) {
       return { eligible: false, reason: 'This runtime lacks safe guarded reload. Upgrade the bridge manually or choose Restart.', blockers: [] };
     }
@@ -354,6 +363,7 @@ export function createSessionLifecycleActions({ operations, ownership }: Session
     const live = inspected.live;
     // Only a successful, unblocked inspection reaches execute; absence is an internal failure, not retry admission.
     if (!live) throw new Error('The inspected live agent is unavailable.');
+    if (live instanceof AcpSession) throw new Error('Owned Antigravity sessions are not part of bulk operations.');
     operations.beginBounceAction(authority.sessionId, live);
     const beforeAction: BeforeLifecycleAction = async () => {
       const revision = live.bounceActivityRevision;

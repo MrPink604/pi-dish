@@ -1,5 +1,6 @@
 import { BridgeSession } from './bridge-session';
 import { getPrimeDaemon, PrimeDaemonSession } from './prime-daemon';
+import { AcpSession, getAcpSession } from './acp-session';
 import { isAskDialog, removeExtensionUIDialog } from './extension-ui-state';
 import { getHarness } from './harnesses';
 import { routeIdentity, routeSessionId } from './session-ownership';
@@ -9,6 +10,12 @@ import type { LiveSession } from './session-ownership';
 export function primeLiveSession(sessionId: string): PrimeDaemonSession | null {
   const identity = routeIdentity(sessionId);
   return identity?.harnessId === 'prime' ? getPrimeDaemon().byNativeId(identity.nativeSessionId) : null;
+}
+
+/** The owned ACP child for an agy route, without touching other harnesses. */
+export function agyLiveSession(sessionId: string): AcpSession | null {
+  const identity = routeIdentity(sessionId);
+  return identity?.harnessId === 'agy' ? getAcpSession(identity.nativeSessionId) ?? null : null;
 }
 
 export interface LiveSessionLifecyclePorts {
@@ -27,6 +34,7 @@ export function createSessionLifecycleObserver(ports: LiveSessionLifecyclePorts)
 
   function liveRouteId(session: LiveSession): string {
     if (session instanceof PrimeDaemonSession) return routeSessionId('prime', session.id);
+    if (session instanceof AcpSession) return routeSessionId('agy', session.id);
     if (session instanceof BridgeSession) return routeSessionId(getHarness(session.harnessId)?.id || 'pi', session.id);
     return session.id;
   }

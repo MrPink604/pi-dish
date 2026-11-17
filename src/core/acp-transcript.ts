@@ -1,0 +1,452 @@
+/**
+ * Antigravity (`agy` ACP) → Pi JSONL translation and the mirror writer.
+ *
+ * The ACP stream is chunks and tool calls, not messages; `AcpSession` segments
+ * it into Pi messages and hands the finished records here. Every entry is
+ * appended synchronously so a reader that reacts to the emitted `message_end`
+ * already sees the transcript. `session/load` replay is not used: this writer
+ * covers the live stream only.
+ *
+ * Beside the mirror (`.jsonl`) the raw frames of both directions are kept in a
+ * `.acp.jsonl` sidecar as `{t, dir, msg}`, the same shape as the captures in
+ * `docs/agy-acp-capture/`. No reader consumes the sidecar; it exists so the
+ * mirror can be rebuilt if the translation changes.
+ */
+import fs = require('fs');
+import path = require('path');
+import crypto = require('crypto');
+import type { ProtocolRecord } from './wire-protocol';
+import { record as isRecord, finite, text } from './helper-values';
+
+/** Model provider string for every agy session (also a zero-rate plan provider). */
+export const AGY_PROVIDER = 'google-antigravity';
+
+function nonempty(value: unknown): value is string { return typeof value === 'string' && value.length > 0; }
+
+/** ACP `PromptResponse.usage` → Pi's usage counters. */
+export function acpUsage(value: unknown): ProtocolRecord | null {
+  if (!isRecord(value)) return null;
+  const mapping: ReadonlyArray<readonly [string, string]> = [
+    ['inputTokens', 'input'],
+    ['outputTokens', 'output'],
+    ['cachedReadTokens', 'cacheRead'],
+    ['cachedWriteTokens', 'cacheWrite'],
+    ['thoughtTokens', 'reasoning'],
+    ['totalTokens', 'totalTokens'],
+  ];
+  const usage: ProtocolRecord = {};
+  for (const [from, to] of mapping) {
+    const amount = value[from];
+    if (finite(amount)) usage[to] = amount;
+  }
+  return Object.keys(usage).length ? usage : null;
+}
+
+/** ACP stop reasons → Pi's assistant `stopReason` vocabulary. */
+export function acpStopReason(value: unknown): string {
+  switch (value) {
+    case 'end_turn': return 'stop';
+    case 'max_tokens': return 'length';
+    case 'cancelled': return 'aborted';
+    case 'refusal': return 'error';
+    default: return 'stop';
+  }
+}
+
+export interface AcpToolCall {
+  /** Pi-dish tool name the existing cards understand. */
+  toolName: string;
+  args: ProtocolRecord;
+  /** agy's own tool name, kept for diagnostics and question matching. */
+  nativeName: string;
+  title: string;
+  kind: string;
+}
+
+function locationPath(update: ProtocolRecord): string {
+  const locations = Array.isArray(update.locations) ? update.locations : [];
+  for (const row of locations) {
+    if (!isRecord(row)) continue;
+    if (nonempty(row.path)) return row.path;
+  }
+  return '';
+}
+
+/** agy sends its native call in non-ACP `name`/`args` next to ACP's `title`/`kind`. */
+export function normalizeAcpTool(update: unknown): AcpToolCall {
+  const value = isRecord(update) ? update : {};
+  const nativeName = nonempty(value.name) ? value.name : 'tool';
+  const args = isRecord(value.args) ? value.args : (isRecord(value.rawInput) ? value.rawInput : {});
+  const filePath = nonempty(args.Path) ? args.Path : locationPath(value);
+  const title = nonempty(value.title) ? value.title : nativeName;
+  const kind = text(value.kind);
+  switch (nativeName) {
+    case 'run_command':
+      return { toolName: 'bash', args: { command: text(args.CommandLine) }, nativeName, title, kind };
+    case 'read_file':
+      return { toolName: 'read', args: { path: filePath }, nativeName, title, kind };
+    case 'edit_file':
+      return { toolName: 'edit', args: { path: filePath, oldText: text(args.Target), newText: text(args.Replacement) }, nativeName, title, kind };
+    case 'write_file':
+      return { toolName: 'write', args: { path: filePath, content: text(args.Content) }, nativeName, title, kind };
+    default:
+      return { toolName: nativeName, args, nativeName, title, kind };
+  }
+}
+
+/** Whole-file diff blocks arrive as `{type:'diff', path, oldText, newText}`. */
+function diffText(block: ProtocolRecord): string {
+  const filePath = text(block.path);
+  const before = text(block.oldText);
+  const after = text(block.newText);
+  return `${filePath ? filePath + '\n' : ''}--- before\n${before}\n+++ after\n${after}`;
+}
+
+export interface AcpToolResult {
+  text: string;
+  details?: ProtocolRecord;
+}
+
+/** Completion content plus agy's `rawOutput`; bash keeps the exit status as Pi details. */
+export function acpToolResult(update: unknown, call: AcpToolCall): AcpToolResult {
+  const value = isRecord(update) ? update : {};
+  const chunks = Array.isArray(value.content) ? value.content : [];
+  const parts: string[] = [];
+  for (const item of chunks) {
+    if (!isRecord(item)) continue;
+    if (item.type === 'diff') { parts.push(diffText(item)); continue; }
+    const block = isRecord(item.content) ? item.content : item;
+    if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+  }
+  const raw = isRecord(value.rawOutput) ? value.rawOutput : {};
+  const output = text(raw.output);
+  let body = parts.filter(Boolean).join('\n');
+  if (call.nativeName === 'run_command' && output) body = output;
+  else if (!body) body = output;
+  if (call.nativeName === 'run_command') {
+    const exitCode = raw.exit_code;
+    return {
+      text: body,
+      details: {
+        kind: 'bash',
+        timedOut: raw.timed_out === true || raw.timedOut === true,
+        timeoutDisabled: true,
+        ...(finite(exitCode) ? { exitCode } : {}),
+      },
+    };
+  }
+  return { text: body };
+}
+
+/** ACP `plan` update → a read-only widget, the only surface Pi has for it. */
+export function planWidgetRequest(id: string, entries: unknown): ProtocolRecord | null {
+  if (!Array.isArray(entries)) return null;
+  const lines = entries.flatMap((entry): string[] => {
+    if (!isRecord(entry)) return [];
+    const content = nonempty(entry.content) ? entry.content : nonempty(entry.title) ? entry.title : null;
+    if (!content) return [];
+    const mark = entry.status === 'completed' ? '[x]' : entry.status === 'in_progress' ? '[>]' : '[ ]';
+    return [`${mark} ${content}`];
+  });
+  if (!lines.length) return null;
+  return { type: 'extension_ui_request', id, method: 'setWidget', widgetKey: 'agy-plan', widgetLines: lines, widgetPlacement: 'aboveEditor' };
+}
+
+export interface AcpAskOption {
+  label: string;
+  /** ACP form `const` sent back in the elicitation content. */
+  value: string;
+}
+export interface AcpAskQuestionSpec {
+  key: string;
+  multi: boolean;
+  options: AcpAskOption[];
+}
+export interface AcpAsk {
+  request: ProtocolRecord;
+  questions: AcpAskQuestionSpec[];
+}
+
+function stripRecommended(label: string): { label: string; recommended: boolean } {
+  const match = /^\(recommended\)\s*/i.exec(label);
+  return match ? { label: label.slice(match[0].length), recommended: true } : { label, recommended: false };
+}
+
+/**
+ * One `elicitation/create` form → the browser's `ask` dialog. Each non-`_other`
+ * property is a question; the recommended mark comes from the pending
+ * `ask_question` call, which is the only place agy states it.
+ */
+export function askFromElicitation(id: string, params: unknown, pendingQuestions: unknown): AcpAsk | null {
+  const record = isRecord(params) ? params : {};
+  const schema = isRecord(record.requestedSchema) ? record.requestedSchema : {};
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const pending = Array.isArray(pendingQuestions) ? pendingQuestions : [];
+  const questions: AcpAskQuestionSpec[] = [];
+  const display: ProtocolRecord[] = [];
+  let questionIndex = 0;
+  for (const [key, raw] of Object.entries(properties)) {
+    if (key.endsWith('_other') || !isRecord(raw)) continue;
+    const multi = raw.type === 'array';
+    const pendingQuestion = isRecord(pending[questionIndex]) ? pending[questionIndex] as ProtocolRecord : {};
+    const pendingOptions = Array.isArray(pendingQuestion.options) ? pendingQuestion.options : [];
+    const oneOf = Array.isArray(raw.oneOf) ? raw.oneOf.filter(isRecord) : [];
+    const options: AcpAskOption[] = [];
+    let recommended: number | null = null;
+    const count = Math.max(oneOf.length, pendingOptions.length);
+    for (let i = 0; i < count; i++) {
+      const entry = oneOf[i];
+      const pendingOption = pendingOptions[i];
+      const pendingLabel = typeof pendingOption === 'string' ? pendingOption
+        : isRecord(pendingOption) ? text(pendingOption.label) || text(pendingOption.title) : '';
+      const strippedPending = stripRecommended(pendingLabel);
+      const rawLabel = entry ? text(entry.title) || text(entry.label) : '';
+      const label = rawLabel ? stripRecommended(rawLabel).label : strippedPending.label;
+      if (!label) continue;
+      const value = entry && entry.const !== undefined ? String(entry.const)
+        : isRecord(pendingOption) && pendingOption.value !== undefined ? String(pendingOption.value) : label;
+      if (strippedPending.recommended && recommended === null) recommended = options.length;
+      options.push({ label, value });
+    }
+    const question = text(raw.title) || text(pendingQuestion.question) || `Question ${key}`;
+    questions.push({ key, multi, options });
+    display.push({
+      id: key,
+      question,
+      header: text(raw.description),
+      multi,
+      recommended,
+      options: options.map(option => ({ label: option.label, description: '', preview: '' })),
+    });
+    questionIndex++;
+  }
+  if (!questions.length) return null;
+  return {
+    request: {
+      type: 'extension_ui_request',
+      id,
+      method: 'ask',
+      title: text(record.message) || 'Question',
+      questions: display,
+    },
+    questions,
+  };
+}
+
+const ASK_OPTION_LIMIT = 64;
+
+/** The browser's ask response → the elicitation result (`accept` / `decline` / `cancel`). */
+export function askElicitationResult(response: ProtocolRecord, questions: readonly AcpAskQuestionSpec[]): ProtocolRecord {
+  if (response.cancelled === true) return { action: 'cancel' };
+  const value = isRecord(response.value) ? response.value : {};
+  if (value.kind === 'chat') return { action: 'decline' };
+  if (value.kind !== 'submit' || !Array.isArray(value.results)) return { action: 'cancel' };
+  const content: ProtocolRecord = {};
+  for (const question of questions) {
+    const row = value.results.slice(0, ASK_OPTION_LIMIT).find(item => isRecord(item) && item.id === question.key);
+    if (!isRecord(row)) continue;
+    const selected = Array.isArray(row.selectedOptions)
+      ? row.selectedOptions.filter((item): item is string => typeof item === 'string')
+      : [];
+    const values = selected.flatMap(label => {
+      const match = question.options.find(option => option.label === label);
+      return match ? [match.value] : [];
+    });
+    if (values.length) content[question.key] = question.multi ? values : values[0];
+    const custom = typeof row.customInput === 'string' ? row.customInput.trim() : '';
+    if (custom) content[`${question.key}_other`] = custom;
+  }
+  return { action: 'accept', content };
+}
+
+export interface AcpPermissionOption {
+  optionId: string;
+  label: string;
+}
+
+/** An unexpected permission request becomes a `select` dialog rather than hanging the turn. */
+export function permissionDialog(id: string, params: unknown): { request: ProtocolRecord; options: AcpPermissionOption[] } | null {
+  const record = isRecord(params) ? params : {};
+  const raw = Array.isArray(record.options) ? record.options : [];
+  const options: { optionId: string; label: string; description: string }[] = [];
+  for (const row of raw) {
+    if (!isRecord(row) || typeof row.optionId !== 'string' || !row.optionId) continue;
+    options.push({ optionId: row.optionId, label: text(row.name) || row.optionId, description: text(row.kind) });
+  }
+  if (!options.length) return null;
+  const call = isRecord(record.toolCall) ? record.toolCall : {};
+  return {
+    options: options.map(option => ({ optionId: option.optionId, label: option.label })),
+    request: {
+      type: 'extension_ui_request',
+      id,
+      method: 'select',
+      title: 'Permission required',
+      message: text(call.title) || text(call.name) || text(record.sessionId) || 'Antigravity requested permission',
+      options: options.map(option => ({ label: option.label, description: option.description })),
+    },
+  };
+}
+
+/** The select response → ACP's `{outcome:{outcome:'selected'|'cancelled'}}`. */
+export function permissionResult(response: ProtocolRecord, options: readonly AcpPermissionOption[]): ProtocolRecord {
+  if (response.cancelled === true) return { outcome: { outcome: 'cancelled' } };
+  const label = typeof response.value === 'string' ? response.value : '';
+  const match = options.find(option => option.label === label) ?? options.find(option => option.optionId === label);
+  return match
+    ? { outcome: { outcome: 'selected', optionId: match.optionId } }
+    : { outcome: { outcome: 'cancelled' } };
+}
+
+export interface AcpTranscriptOptions {
+  file: string;
+  sessionId: string;
+  cwd: string;
+  agentVersion: string | null;
+}
+
+export interface AcpMirrorHeader {
+  id: string;
+  cwd: string | null;
+  agentVersion: string | null;
+}
+
+const TAIL_BYTES = 1024 * 1024;
+
+function lastEntryIdIn(content: string): string | null {
+  const lines = content.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const entry: unknown = JSON.parse(line);
+      if (isRecord(entry) && entry.type !== 'session' && nonempty(entry.id)) return entry.id;
+    } catch { /* A torn tail line cannot anchor the chain. */ }
+  }
+  return null;
+}
+
+/** Mirrors reach tens of MB; read the tail unless one entry exceeds the window. */
+function lastEntryId(file: string): string | null {
+  const stats = fs.statSync(file);
+  const length = Math.min(stats.size, TAIL_BYTES);
+  const buffer = Buffer.alloc(length);
+  const fd = fs.openSync(file, 'r');
+  try { fs.readSync(fd, buffer, 0, length, stats.size - length); } finally { fs.closeSync(fd); }
+  const found = lastEntryIdIn(buffer.toString('utf8'));
+  if (found || length === stats.size) return found;
+  return lastEntryIdIn(fs.readFileSync(file, 'utf8'));
+}
+
+/** Read the mirror header (id, cwd, agy version); throws when the file is not a mirror. */
+export function readAcpMirrorHeader(file: string): AcpMirrorHeader {
+  const buffer = Buffer.alloc(4096);
+  const fd = fs.openSync(file, 'r');
+  let read = 0;
+  try { read = fs.readSync(fd, buffer, 0, buffer.length, 0); } finally { fs.closeSync(fd); }
+  const first = buffer.subarray(0, read).toString('utf8').split('\n')[0];
+  let header: unknown;
+  try { header = JSON.parse(first); } catch { header = null; }
+  if (!isRecord(header) || header.type !== 'session' || !nonempty(header.id)) {
+    throw new Error(`Not an Antigravity session mirror: ${file}`);
+  }
+  const agy = isRecord(header.agy) ? header.agy : {};
+  return {
+    id: header.id,
+    cwd: nonempty(header.cwd) ? header.cwd : null,
+    agentVersion: nonempty(agy.version) ? agy.version : null,
+  };
+}
+
+/** Linear parent chain; agy has no branches, so every entry extends the last. */
+export class AcpTranscript {
+  readonly file: string;
+  readonly sidecarFile: string;
+  private parentId: string | null = null;
+
+  constructor(options: AcpTranscriptOptions) {
+    this.file = options.file;
+    this.sidecarFile = options.file.replace(/\.jsonl$/, '.acp.jsonl');
+    fs.mkdirSync(path.dirname(options.file), { recursive: true });
+    let size = 0;
+    try { size = fs.statSync(options.file).size; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (size > 0) {
+      this.parentId = lastEntryId(options.file);
+      return;
+    }
+    const header = {
+      type: 'session',
+      version: 3,
+      id: options.sessionId,
+      cwd: options.cwd,
+      timestamp: new Date().toISOString(),
+      agy: { version: options.agentVersion },
+    };
+    fs.writeFileSync(options.file, JSON.stringify(header) + '\n');
+  }
+
+  /** Append one entry; `timestamp` is the Pi entry stamp, not the message start. */
+  private entry(type: string, fields: ProtocolRecord): ProtocolRecord {
+    const entry: ProtocolRecord = {
+      type,
+      id: crypto.randomUUID(),
+      parentId: this.parentId,
+      timestamp: new Date().toISOString(),
+      ...fields,
+    };
+    fs.appendFileSync(this.file, JSON.stringify(entry) + '\n');
+    this.parentId = entry.id as string;
+    return entry;
+  }
+
+  appendUser(content: string, timestamp = Date.now()): void {
+    this.entry('message', { message: { role: 'user', content: [{ type: 'text', text: content }], timestamp } });
+  }
+
+  /** `message` is the finished assistant snapshot emitted on `message_end`. */
+  appendAssistant(message: ProtocolRecord): void {
+    this.entry('message', { message });
+  }
+
+  appendToolResult(data: {
+    toolCallId: string;
+    toolName: string;
+    content: string;
+    isError?: boolean;
+    details?: ProtocolRecord;
+    timestamp?: number;
+  }): void {
+    this.entry('message', {
+      message: {
+        role: 'toolResult',
+        toolCallId: data.toolCallId,
+        toolName: data.toolName,
+        content: [{ type: 'text', text: data.content }],
+        isError: data.isError === true,
+        timestamp: data.timestamp ?? Date.now(),
+        ...(data.details ? { details: data.details } : {}),
+      },
+    });
+  }
+
+  appendModelChange(modelId: string): void {
+    this.entry('model_change', { modelId, provider: AGY_PROVIDER });
+  }
+
+  appendThinkingLevel(thinkingLevel: string): void {
+    this.entry('thinking_level_change', { thinkingLevel });
+  }
+
+  appendSessionInfo(name: string): void {
+    this.entry('session_info', { name });
+  }
+
+  /** Raw frame sidecar: `{t, dir, msg}` exactly as the capture recorder wrote it. */
+  appendRaw(dir: 'in' | 'out', msg: unknown): void {
+    try {
+      fs.appendFileSync(this.sidecarFile, JSON.stringify({ t: Date.now(), dir, msg }) + '\n');
+    } catch { /* A missing sidecar directory must not break the transport. */ }
+  }
+}

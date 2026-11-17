@@ -15,6 +15,17 @@ const PRIME_DAEMON_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
 });
 
 /**
+ * What the owned `agy acp` transport carries. Fixed: ACP has no pi extension
+ * or bridge advertisement. Absent: followUp (a prompt during a turn steers),
+ * compact, rename (no ACP method), reload, queue*, tree*, sideChat, fastMode,
+ * login, shareSnapshot, guardedReload.
+ */
+const AGY_ACP_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
+  prompt: true, steer: true, abort: true, models: true, setModel: true,
+  setThinking: true, commands: true, extensionUI: true,
+});
+
+/**
  * Pi permits missing flags; alternative wrappers (known or not) must
  * explicitly opt in. Policy only, not harness-id validation.
  */
@@ -34,7 +45,9 @@ function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities: Advertise
   };
   const pi = harnessId === 'pi';
   const closeMode = getHarness(harnessId)?.closeMode || 'unsupported';
-  const advertised = (name: BridgeCapability) => active && bridgeSupports(harnessId, bridgeCapabilities, name);
+  // The ACP transport has no bridge advertisement; its command set is fixed.
+  const caps = harnessId === 'agy' ? AGY_ACP_CAPABILITIES : bridgeCapabilities;
+  const advertised = (name: BridgeCapability) => active && bridgeSupports(harnessId, caps, name);
   return {
     prompt: advertised('prompt'),
     steer: advertised('steer'),
@@ -66,4 +79,4 @@ function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities: Advertise
   };
 }
 
-export = { bridgeSupports, sessionCapabilities, PRIME_DAEMON_CAPABILITIES };
+export = { bridgeSupports, sessionCapabilities, PRIME_DAEMON_CAPABILITIES, AGY_ACP_CAPABILITIES };

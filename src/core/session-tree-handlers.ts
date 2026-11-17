@@ -112,6 +112,9 @@ export function createSessionTreeHandler({ ownership, findSessionSource }: Sessi
     try {
       const identity = routeIdentity(req.params.id);
       if (!identity) return res.status(400).json({ error: 'Invalid session ID' });
+      if (identity.harnessId === 'agy') {
+        return res.status(409).json({ error: 'Antigravity has no branch or tree control; ACP exposes no tree navigation.' });
+      }
       if (identity.harnessId !== 'pi' && identity.harnessId !== 'omp' && identity.harnessId !== 'prime') {
         return res.status(409).json({ error: 'Session tree navigation is not supported for this harness.' });
       }

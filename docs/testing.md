@@ -18,6 +18,7 @@ pull requests, and manual dispatch. All jobs use Ubuntu 24.04 x64 and `npm ci`.
 | Pi SDK/TUI 1.5.1, pinned together | Real Pi bridge canary in every backend job; local host Pi must match |
 | OMP 18.5.0 | Opt-in real CLI canary, including fast-mode on/off provider payloads, verified locally on 2026-10-04 |
 | Prime Agent 0.10.2 | Opt-in real CLI canary over the resident daemon: managed launch, streaming, queue update/cancel, abort, tree, same-pane restart, roster-proven close, resume, and manual-TUI ownership refusal (daemon protocol verified live on 2026-11-03); see [prime-agent.md](prime-agent.md) |
+| Antigravity CLI (`agy`) 1.5.10 | Backend suite drives a fake `agy acp` agent built from captured frames (`test/acp-session.test.js`, `test/agy-acp.test.js`). Real end-to-end check run manually on 2026-11-17 through a pi-dish server: tool turn, ask dialog, Gemini-only models, model/thinking switch, close/resume. No automated real canary; see [TASKS/antigravity-acp.md](../TASKS/antigravity-acp.md) |
 
 Linux is the automated baseline. Other operating systems are outside this
 matrix. Node's `>=22.19.0` engine declaration does not imply

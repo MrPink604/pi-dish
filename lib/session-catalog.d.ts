@@ -13,8 +13,11 @@ export interface CatalogAdvice {
     readonly liveInstanceCount: number;
 }
 export interface CatalogLiveObservation extends Readonly<SessionIdentity> {
-    /** `prime`: a root agent read from Prime's daemon roster (no bridge registry row). */
-    readonly kind: 'registered' | 'rpc' | 'prime';
+    /**
+     * `prime`: a root agent read from Prime's daemon roster (no bridge registry row).
+     * `acp`: an owned `agy acp` stdio child (no bridge registry row).
+     */
+    readonly kind: 'registered' | 'rpc' | 'prime' | 'acp';
     /** Reported even before the JSONL exists. This is not a resolved read source. */
     readonly claimedFile: string | null;
     readonly source: SessionSource | null;
@@ -102,6 +105,9 @@ declare function rpcSessionObservation(value: unknown, context: ObservationConte
  * busy state, while the transcript (when it exists) supplies history counters.
  * Only root agents reach here; RLM children stay silent helper semantics. */
 declare function primeSessionObservation(value: unknown, context: ObservationContext): CatalogLiveObservation;
+/** An owned `agy acp` child: its transport state carries name, model, thinking
+ * and mode; the mirror supplies history counters once it exists. */
+declare function acpSessionObservation(value: unknown, context: ObservationContext): CatalogLiveObservation;
 /** Validate advisory store snapshots without migrating or granting authority to
  * those stores. Invalid records are ignored individually. */
 declare function decodeLaunchParents(value: unknown): ReadonlyMap<SessionId, SessionId>;
@@ -128,6 +134,7 @@ declare const _default: {
     registeredSessionObservation: typeof registeredSessionObservation;
     rpcSessionObservation: typeof rpcSessionObservation;
     primeSessionObservation: typeof primeSessionObservation;
+    acpSessionObservation: typeof acpSessionObservation;
     decodeLaunchParents: typeof decodeLaunchParents;
     decodeRoutineAnnotations: typeof decodeRoutineAnnotations;
     withSessionContext: typeof withSessionContext;

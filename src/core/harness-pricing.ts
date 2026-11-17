@@ -49,6 +49,9 @@ const ZAI_PLAN_PROVIDERS: Readonly<Record<string, true>> = { zai: true, 'zai-cod
 const PLAN_PROVIDERS: Readonly<Record<string, Readonly<Record<string, true>> | undefined>> = {
   pi: ZAI_PLAN_PROVIDERS,
   omp: { ...ZAI_PLAN_PROVIDERS, 'kimi-code': true, 'google-antigravity': true, 'openai-codex': true },
+  // An Antigravity subscription bills nothing per request, so its zero rates
+  // mean "plan", not "free".
+  agy: { 'google-antigravity': true },
 };
 const states = new Map<string, PricingState>();
 

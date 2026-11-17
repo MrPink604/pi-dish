@@ -34,6 +34,10 @@ export const OMP_THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'hig
 // Pi's ladder plus a top 'max' rung (no 'auto').
 export const PRIME_THINKING_LEVEL_NAMES = [...THINKING_LEVEL_NAMES, 'max'];
 
+// agy 1.5.x `thought_level` config option; level names come from the option,
+// not the ACP docs (which list Extra/Max that 1.5.10 does not offer).
+export const AGY_THINKING_LEVEL_NAMES = ['low', 'medium', 'high'];
+
 // Cheap gate before a session's harness is known; thinkingLevelNamesFor decides.
 export const ALL_THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto'];
 
@@ -41,6 +45,7 @@ export const ALL_THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'hig
 export function thinkingLevelNamesFor(harnessId?: string) {
   if (harnessId === 'omp') return OMP_THINKING_LEVEL_NAMES;
   if (harnessId === 'prime') return PRIME_THINKING_LEVEL_NAMES;
+  if (harnessId === 'agy') return AGY_THINKING_LEVEL_NAMES;
   return THINKING_LEVEL_NAMES;
 }
 

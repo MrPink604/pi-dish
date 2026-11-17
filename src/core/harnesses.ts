@@ -3,6 +3,7 @@ import type { HarnessDescriptor, HarnessId, ResumeFileOptions, ResumeOptions } f
 
 import os = require('os');
 import path = require('path');
+import dishStore = require('./dish-store');
 import { runtimeResourcePath } from './runtime-resources';
 import { privateRootPath } from './private-sessions';
 
@@ -182,6 +183,25 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
     // per-child rlm-subagent.json display entry proves liveness.
     subagentArtifacts: true,
     argv: { new: ({ model, thinking } = {}) => [...(model ? ['--model', model] : []), ...(thinking ? ['--thinking', thinking] : [])], resume: primeResume, models: ['model', 'list'] },
+  },
+  agy: {
+    id: 'agy', label: 'Antigravity', wrapperEntrypoint: null, eventProfile: 'agy-v1', profileId: 'agy-v1', profileVersion: 1,
+    // Pi-format mirror written by the ACP transport; agy keeps its own store.
+    rootPath: () => path.join(dishStore.dishDir(), 'agy', 'sessions'),
+    layout: 'flat', commandEnv: 'PI_DISH_AGY_COMMAND', command: 'agy',
+    // The raw ACP sidecar sits beside each mirror and is not a session.
+    auxiliaryJsonlSuffixes: ['.acp.jsonl'],
+    rpcFallback: false, modelCatalog: null, closeMode: 'owned-agent',
+    // One `agy acp` stdio child per live session; models/commands come from ACP.
+    liveTransport: 'acp',
+    // No tmux or CLI resume path exists for ACP: the transport spawns `agy acp`
+    // and resumes by native session id. These argv rows only keep the descriptor
+    // total for generic harness tooling.
+    argv: {
+      new: () => ['acp', '--dangerously-skip-permissions', '--disable-telemetry'],
+      resume: () => ['acp', '--dangerously-skip-permissions', '--disable-telemetry'],
+      models: [],
+    },
   },
 };
 

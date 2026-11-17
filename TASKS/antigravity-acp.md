@@ -1,12 +1,12 @@
 # Spike: Antigravity CLI (`agy`) through ACP
 
 **Priority:** P2
-**Status:** Spike complete (2026-11-17). Not implemented. Feasible. The owner
-has accepted the terms risk of programmatic prompts (see Owner decision).
-**Affects (if built):** new `src/core/acp-session.ts`, `contracts.ts`,
-`harnesses.ts`, `session-capabilities.ts`, `session-ownership.ts`,
-`session-catalog-runtime.ts`, `session-launch.ts`, `session-operations.ts`,
-`session-hibernation.ts`, generated `lib/`, tests.
+**Status:** Phase 1 implemented (2026-11-17): `src/core/acp-session.ts`,
+`src/core/acp-transcript.ts`, the `agy` harness wiring, and tests against a
+fake ACP agent. It was verified end to end against real `agy` 1.5.10 on
+`framework`. Phase 2 (importing TUI conversations, staleness, recovery) and
+phase 3 (detached relay) remain. The owner has accepted the terms risk of
+programmatic prompts (see Owner decision).
 
 ## Goal
 
@@ -565,8 +565,9 @@ A fourth transport is where a small transport registry would replace the
 repeated `instanceof`/`liveTransport` chains. That is a separate refactor
 stage, not part of this change.
 
-## Open questions for the owner
+## Owner decisions on the design (2026-11-17)
 
-1. Confirm the write-time Pi-JSONL mirror with its raw sidecar (recommended
-   above; the owner has asked about it but not approved it), versus keeping
-   `agy` history out of pi-dish's search and usage.
+- Transcripts: pi-dish writes its own Pi-format JSONL mirror live, with the
+  raw ACP frames kept in a sidecar beside it. `session/load` is used only to
+  import conversations started outside pi-dish. (Approved; implementation
+  started.)

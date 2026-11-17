@@ -58,7 +58,13 @@ export function createSessionDelete(ports: SessionDeletePorts) {
     }
     fs.unlinkSync(file);
     invalidateSessionHeader(file);
-    if (subtree) fs.rmSync(subtree, { recursive: true });
-    return { deleted: subtree ? [file, subtree] : [file] };
+    const deleted = [file];
+    // Auxiliary files (agy's raw ACP sidecar) belong to this transcript only.
+    for (const suffix of descriptor.auxiliaryJsonlSuffixes || []) {
+      const sidecar = stem + suffix;
+      try { if (fs.lstatSync(sidecar).isFile()) { fs.unlinkSync(sidecar); deleted.push(sidecar); } } catch {}
+    }
+    if (subtree) { fs.rmSync(subtree, { recursive: true }); deleted.push(subtree); }
+    return { deleted };
   };
 }

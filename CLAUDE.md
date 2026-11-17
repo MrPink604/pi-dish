@@ -814,6 +814,39 @@ record, leaving an ordinary inactive session. Startup recovery reports
 hibernated sessions as pending; explicit retry still restores. Host setting
 `hibernation` is `pressure` (default) or `off`.
 
+## Antigravity ACP transport (src/core/acp-session.ts, src/core/acp-transcript.ts)
+
+`agy` sessions use `liveTransport: 'acp'`: one owned `agy acp
+--dangerously-skip-permissions` stdio child per session, a JSON-RPC ACP v1
+client, and no tmux or bridge. The design and real frames are in
+`TASKS/antigravity-acp.md` and `docs/agy-acp-capture/`. Invariants:
+
+- **Turn ownership:** a prompt sent during a turn is a steer, and it hands the
+  turn to the newest prompt. `agy` then answers the earlier prompt with a
+  no-usage `end_turn`, which is ignored. Only the newest prompt's response
+  ends the turn. `prompt()` resolves once the request is written; completion
+  is tracked through events.
+- **Assistant segments:** ACP interleaves text and tool calls, so the open
+  assistant message closes at each `tool_call`. The mirror therefore writes
+  every assistant `toolCall` before its `toolResult`.
+- **Mirror before events:** the Pi-format mirror
+  (`~/.pi/dish/agy/sessions/<id>.jsonl`) is appended synchronously before
+  the matching `message_end`/`turn_end` is emitted, because the browser
+  re-reads JSONL on `turn_end`. `<id>.acp.jsonl` records the raw frames in
+  both directions. It is never discovered as a session
+  (`auxiliaryJsonlSuffixes`) and is deleted with the transcript.
+- **Tool names:** `agy` tools are normalised to pi-dish names
+  (`run_command`→`bash`, `read_file`→`read`, `edit_file`→`edit`,
+  `write_file`→`write`) so the existing cards render.
+- **Questions:** `elicitation/create` becomes an `ask` dialog;
+  `session/request_permission` becomes a `select` dialog.
+- **Models:** only `gemini-*` model options are offered. Thinking levels come
+  from `agy`'s `thought_level` option.
+- **Never:** read `agy`'s tokens, send `_meta.antigravity.systemPrompt`, or
+  report a `clientInfo` other than `pi-dish`.
+- **Capabilities:** a fixed `AGY_ACP_CAPABILITIES` table. No follow-up queue,
+  compaction control, rename, tree, export, hibernation, bounce or recovery.
+
 ## tmux spawning (lib/tmux.js)
 
 `src/core/session-launch.ts` owns launch construction/registration and fallback;

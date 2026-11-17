@@ -1,4 +1,5 @@
 // Generated from src/core/session-operations.ts; edit that source and run npm run build:core.
+import { type AcpSession } from './acp-session';
 import type { SessionSource } from './session-source';
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import type { HarnessLaunchTarget, SessionLaunch } from './session-launch';
@@ -105,6 +106,8 @@ export declare class SessionOperationError extends Error {
     readonly status: number;
     constructor(status: number, message: string);
 }
+/** Bulk actions capture a tmux pane or daemon worker; an owned ACP child has neither. */
+export type BounceLiveSession = Exclude<LiveSession, AcpSession>;
 export interface SessionOperations {
     createSession(options: CreateSessionOptions): Promise<string>;
     startSessionSpawn(options: CreateSessionOptions): string;
@@ -125,8 +128,8 @@ export interface SessionOperations {
         beforeAction: BeforeLifecycleAction;
     }): Promise<SessionOperationOutcome>;
     /** Execution exclusion is intentionally not resume/close/restart admission. */
-    beginBounceAction(canonicalRoute: string, live: LiveSession): void;
-    endBounceAction(canonicalRoute: string, live: LiveSession): void;
+    beginBounceAction(canonicalRoute: string, live: BounceLiveSession): void;
+    endBounceAction(canonicalRoute: string, live: BounceLiveSession): void;
     admitHttpAction(requestedId: string, method: string): SessionOperationResponse | null;
 }
 export declare function createSessionOperations(observations: SessionOperationObservations): SessionOperations;

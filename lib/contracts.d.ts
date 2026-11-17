@@ -10,7 +10,7 @@ export type SessionId = string & {
 export type HostId = string & {
     readonly [identityKind]: 'host';
 };
-export type HarnessId = 'pi' | 'omp' | 'prime';
+export type HarnessId = 'pi' | 'omp' | 'prime' | 'agy';
 export type BridgeCapability = 'prompt' | 'steer' | 'followUp' | 'abort' | 'compact' | 'models' | 'setModel' | 'setThinking' | 'rename' | 'commands' | 'reload' | 'queueRead' | 'queueCancel' | 'treeRead' | 'treeNavigation' | 'extensionUI' | 'shareSnapshot' | 'guardedReload' | 'sideChat' | 'fastMode' | 'login';
 /** One asynchronous answer inside the ephemeral side chat (never the transcript). */
 export type SideChatTurnStatus = 'running' | 'complete' | 'error' | 'cancelled';
@@ -135,10 +135,17 @@ export interface HarnessDescriptor {
     spawnTokenMode?: 'wrapper';
     discoveryExtensionsDir?: (env?: HarnessEnvironment) => string;
     /**
+     * Flat-layout files that are not sessions: the ACP transport keeps a raw
+     * `<id>.acp.jsonl` sidecar beside each mirror, and nothing may discover it
+     * as a route.
+     */
+    auxiliaryJsonlSuffixes?: readonly string[];
+    /**
      * Absent: live sessions come from the bridge extension registry (plus Pi RPC).
      * `'prime-daemon'`: no extensions; roots come from the daemon roster and socket.
+     * `'acp'`: one owned `agy acp` stdio child per session; no tmux.
      */
-    liveTransport?: 'prime-daemon';
+    liveTransport?: 'prime-daemon' | 'acp';
     spawnEnv?: Record<string, string>;
     pilotConfig?: Record<string, string>;
     /** CLI tab order for the settings editor; the schema is read at request time so new settings need no pi-dish change. */

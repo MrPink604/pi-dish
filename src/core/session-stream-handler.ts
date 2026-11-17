@@ -209,6 +209,8 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     sub('auto_retry_end', (data) => send('auto_retry_end', data));
 
     const onClose = () => { clearPendingUpdate(); clearSideChatTimer(); toolEvents.clear(); send('session_ended', {}); };
+    // Bridge and Prime events are application-level close; RPC and owned ACP
+    // children report their stdio exit instead.
     if (session instanceof BridgeSession || session instanceof PrimeDaemonSession) {
       const remove = session instanceof BridgeSession ? session.once('close', onClose) : session.once('close', onClose);
       offs.push(typeof remove === 'function' ? remove : () => session.off('close', onClose));

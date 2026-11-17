@@ -275,17 +275,21 @@ function settingArgument(row: SettingRow, value: unknown): string {
 
 export const harnesses: Handler = (_req, res) => {
   res.json({
-    harnesses: listHarnesses().map(descriptor => ({
-      id: descriptor.id,
-      label: descriptor.label,
-      available: harnessCommandAvailable(descriptor),
-      rpcFallback: descriptor.rpcFallback,
-      closeMode: descriptor.closeMode,
-      privateSessions: typeof descriptor.privateRootPath === 'function',
-      // Settings view: pilot defaults plus model roles, and the task-agent hub where supported.
-      pilotConfig: !!descriptor.pilotConfig,
-      taskAgents: agentSettingsSupported(descriptor),
-    })),
+    harnesses: listHarnesses()
+      // Antigravity is optional tooling, so an unresolved `agy` hides it from the
+      // picker entirely rather than presenting a row that can never launch.
+      .filter(descriptor => descriptor.id !== 'agy' || harnessCommandAvailable(descriptor))
+      .map(descriptor => ({
+        id: descriptor.id,
+        label: descriptor.label,
+        available: harnessCommandAvailable(descriptor),
+        rpcFallback: descriptor.rpcFallback,
+        closeMode: descriptor.closeMode,
+        privateSessions: typeof descriptor.privateRootPath === 'function',
+        // Settings view: pilot defaults plus model roles, and the task-agent hub where supported.
+        pilotConfig: !!descriptor.pilotConfig,
+        taskAgents: agentSettingsSupported(descriptor),
+      })),
   });
 };
 

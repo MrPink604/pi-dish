@@ -7,7 +7,7 @@ import { PrimeDaemonSession } from './prime-daemon';
 import { getHarness } from './harnesses';
 import { asRecord } from './wire-protocol';
 import { record as isRecord } from './helper-values';
-import { primeLiveSession } from './live-sessions';
+import { agyLiveSession, primeLiveSession } from './live-sessions';
 import type { CatalogRuntime } from './session-catalog-runtime';
 import { errorMessage } from './http-boundary';
 import { extractTextContent, getToolSummary } from './helper-content.js';
@@ -172,9 +172,10 @@ async function liveTreeLeafId(session: InstanceType<typeof BridgeSession>): Prom
 export function createSessionReadHandlers({ ownership, catalog, findSessionSource }: SessionReadPorts): SessionReadHandlers {
   const { liveSessionHistoryPending, getRegisteredSession, getRPCSession, getLiveSession, describeRuntime } = ownership;
 
-  /** Any transport: bridge registry, pi-dish RPC child, or Prime daemon root. */
+  /** Any transport: bridge registry, pi-dish RPC child, Prime daemon root, owned ACP child. */
   function isLive(sessionId: string): boolean {
-    return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive || !!primeLiveSession(sessionId);
+    return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive
+      || !!primeLiveSession(sessionId) || !!agyLiveSession(sessionId)?.alive;
   }
 
   /** Live context usage, whichever backend reports it (roster beats transport stats). */
@@ -184,7 +185,9 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
     const stats = getRPCSession(sessionId)?.lastStats;
     if (stats != null) return (isRecord(stats) && stats.contextUsage) || null;
     const primeStats = primeLiveSession(sessionId)?.lastStats;
-    return isRecord(primeStats) ? primeStats.contextUsage || null : null;
+    if (isRecord(primeStats)) return primeStats.contextUsage || null;
+    const acpStats = agyLiveSession(sessionId)?.lastStats;
+    return isRecord(acpStats) ? acpStats.contextUsage || null : null;
   }
 
   async function getOmpShareSnapshot(session: SessionSource): Promise<unknown> {
@@ -402,6 +405,9 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
         }
         res.json(primeSessionTree(await sess.readTree()));
         return;
+      }
+      if (identity.harnessId === 'agy') {
+        res.status(409).json({ error: 'Antigravity sessions have no pi-dish session tree; agy owns its transcript and ACP exposes no tree.' }); return;
       }
       if (identity.harnessId !== 'pi') {
         res.status(409).json({ error: 'Session tree reads are not supported for this harness.' }); return;

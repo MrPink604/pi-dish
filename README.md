@@ -251,6 +251,41 @@ verified pane process. Manual Prime sessions stay controllable but
 uncloseable. History is discovered from `~/.prime/agent/sessions/`. See
 [docs/prime-agent.md](docs/prime-agent.md) for the full status and gaps.
 
+### Antigravity (`agy`)
+
+pi-dish drives Google's Antigravity CLI through its official Agent Client
+Protocol server, `agy acp`. The new-session picker lists **Antigravity** when
+`agy` (or `PI_DISH_AGY_COMMAND`) resolves on the host. Each live session is one
+pi-dish-owned `agy acp --dangerously-skip-permissions` child, launched in the
+session's cwd. It is not a tmux pane, so there is no terminal view. `agy` keeps
+its own sign-in. Run `agy` or `agy acp --login` once on the host; pi-dish never
+reads its tokens. The client identifies itself to `agy` as `pi-dish`.
+
+- Prompt, steer (a prompt during a turn) and abort work. Follow-up queueing,
+  compaction controls, rename, tree and HTML export are refused, because ACP
+  has no equivalent. `agy`'s own slash commands (`/goal`, `/plan`, `/compact`,
+  …) are sent as prompt text.
+- Questions from `agy`'s `ask_question` tool open the normal ask dialog
+  (ACP form elicitation). An unexpected permission request opens a select.
+- The model picker lists only the Gemini models the account offers, and the
+  thinking picker offers `agy`'s levels.
+- History: pi-dish writes a Pi-format transcript live under
+  `~/.pi/dish/agy/sessions/<id>.jsonl`, with the raw ACP frames beside it in
+  `<id>.acp.jsonl`. Search, usage and comments read that transcript. `agy`'s
+  own store under `~/.gemini/` is never parsed.
+- Lifecycle: close stops the child. Resume and restart start a new child and
+  reopen the conversation with `session/resume`. A turn that is running when
+  pi-dish restarts is lost.
+- Not yet supported: importing conversations started in the `agy` TUI,
+  session recovery, and hibernation.
+
+Google's terms permit an interactive ACP client like this on a consumer
+subscription. They name agent- or schedule-driven prompts on `oauth-personal`
+as a breach, which applies to peer messages, routines and recovery; using
+`GEMINI_API_KEY` or Vertex auth avoids that. See
+[TASKS/antigravity-acp.md](TASKS/antigravity-acp.md) for the protocol
+evidence and design.
+
 ### Private sessions
 
 `POST /api/sessions/new` accepts `private: true` (and `pi-dish-sessions spawn
