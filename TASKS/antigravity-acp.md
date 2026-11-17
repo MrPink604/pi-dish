@@ -163,12 +163,18 @@ duplicates of the capability keys.)
 ### Signed-in capture (2026-11-17, `framework`, Google AI Ultra)
 
 The owner signed in with `oauth-personal`, ran `agy` 1.5.10 on `framework`,
-and had the spike drive a throwaway recorder in a tern pane. It sent
-`clientInfo {name:"pi-dish"}` and no `fs`/`terminal`/elicitation
-capabilities, and worked in a scratch git repo. The raw frames are in
-[`docs/agy-acp-capture/`](../docs/agy-acp-capture/): `live-turns.jsonl` (both
-directions), `load.jsonl` and `resume.jsonl`. They contain no tokens or email
-addresses; the only account data is the tier name.
+and had the spike drive throwaway recorders. Both runs sent
+`clientInfo {name:"pi-dish"}` and no `fs`/`terminal` capabilities, and
+worked in scratch git repos. The raw frames are in
+[`docs/agy-acp-capture/`](../docs/agy-acp-capture/):
+- `live-turns.jsonl`: both directions; default permissions, elicitation not
+  advertised.
+- `load.jsonl` and `resume.jsonl`: replays of that session.
+- `yolo-elicit.jsonl`: both directions; `--dangerously-skip-permissions`
+  with `elicitation.form` advertised.
+
+The frames contain no tokens or email addresses; the only account data is
+the tier name.
 
 - **`session/new`** returns `modes` (`default`, `accept-edits`, `auto`,
   `plan`; current `default`), `models.currentModelId`
@@ -194,9 +200,12 @@ addresses; the only account data is the tier name.
   `agy-customizations`, `antigravity-guide`, `run-workflow` and `swarm`.
   `compact` is present, unlike t3code's docs.
 - **Tool calls** carry non-ACP `name` and `args` fields with `agy`'s native
-  tool names (`read_file`, `edit_file`, `run_command`, `ask_question`)
-  alongside ACP's `kind`, `title`, `locations` and `rawInput`. These names
-  map directly to pi-dish's tool cards. Status moves
+  tool names (`read_file`, `edit_file`, `write_file`, `run_command`,
+  `ask_question`) and argument keys (`Path`, `Target`/`Replacement`,
+  `Content`, `CommandLine`), alongside ACP's `kind`, `title`, `locations` and
+  `rawInput`. pi-dish's renderers (`src/browser/tool-format.ts`) only
+  special-case `bash`, `eval` and `wait` and read `args.command`, so these
+  need normalising (see Event mapping). Status moves
   `in_progress → pending` (waiting for permission)
   `→ in_progress → completed | failed`.
   - Edit completions carry `content:[{type:"diff",path,oldText,newText}]`
@@ -215,25 +224,29 @@ addresses; the only account data is the tier name.
   The next user prompt is consumed as the answer, and the tool then
   completes. pi-dish can render the pending `ask_question` as an `ask`
   dialog whose answer is sent as the next prompt.
-- **Steer:** a `session/prompt` sent during a running turn returned
-  `{stopReason:"end_turn"}` immediately, with no usage. The original turn
-  continued, took the instruction into account, and its own response
-  carried the usage. pi-dish must not treat the steer's response as the end
-  of the turn.
-- **Cancel:** `session/cancel` made the in-flight prompt return
-  `stopReason:"cancelled"` with usage within about 1 s.
+- **Steer:** a `session/prompt` sent during a running turn takes the turn
+  over. In `live-turns.jsonl`, prompt id 9 was running. Steer id 10 was sent
+  at …348312, and **id 9** returned `{stopReason:"end_turn"}` with no usage
+  2 ms later. Id 10 carried the rest of the turn and returned `cancelled`
+  with usage at …381910. The turn therefore ends with the response to the
+  newest outstanding prompt. An earlier prompt's no-usage `end_turn` is a
+  handover, not the end of the turn.
+- **Cancel:** `session/cancel` (…381907) made the newest prompt return
+  `stopReason:"cancelled"` with usage 3 ms later.
 - **Usage:** `PromptResponse.usage` gives `inputTokens`, `outputTokens`,
   `cachedReadTokens`, `cachedWriteTokens`, `thoughtTokens` and
   `totalTokens`. `usage_update` gives `{used, size}` context (`size`
   1048576).
 - **`session_info_update`** sets the title after the first prompt.
-- **`session/load`** (707 ms, fresh process) replays history:
-  `user_message_chunk` for each user prompt, one `agent_message_chunk` per
-  assistant message, thought chunks, and a single final-state `tool_call` per
-  tool, including diff and command content. It sends no `tool_call_update`s.
-  The replay is lossy: the answer consumed by `ask_question` and some
-  assistant text were missing. Write the mirror from the live stream and use
-  `load` only to import sessions started elsewhere.
+- **`session/load`** (707 ms, fresh process) replays history as
+  `user_message_chunk` per user prompt, `agent_message_chunk` and thought
+  chunks, and `tool_call` frames already in their final `completed`/`failed`
+  state, including diff and command content. It sends no
+  `tool_call_update`s and no prompt results. All 8 tool calls replayed,
+  including `ask_question`. The replay is still lossy: the user's
+  "1. Also add…" prompt (consumed as the question answer) and the question's
+  streamed assistant text are missing. Write the mirror from the live stream,
+  and use `load` only to import sessions started elsewhere.
 - **`session/resume`** (567 ms) replays nothing (only commands and title),
   as documented.
 - Turns were slow: 20–60 s each, even for a one-line read.
@@ -243,11 +256,13 @@ addresses; the only account data is the tier name.
 From the [ACP guide](https://antigravity.google/docs/ide/extensions/acp):
 
 - It uses ACP v1 over stdio, with the project directory as cwd.
-- Session options are **Model** and **Thinking level**
-  (`Low`/`Medium`/`High`/`Extra`/`Max`). "Gemini models are available in every
-  client. Third-party models are only offered to JetBrains IDEs …, Android
-  Studio, …, Zed, and Xcode." pi-dish should therefore expect Gemini models
-  only.
+- Session options are **Model** and **Thinking level**. The docs list
+  `Low`/`Medium`/`High`/`Extra`/`Max`, but 1.5.10's `thought_level` option
+  offered only `low`/`medium`/`high`, and model ids such as
+  `gemini-4-hydrogen-xhigh` carry their own effort. The picker must take its
+  levels from `configOptions`, not from these docs. "Gemini models are
+  available in every client. Third-party models are only offered to
+  JetBrains IDEs …, Android Studio, …, Zed, and Xcode."
 - "Sending a prompt while a turn runs steers that turn." This maps directly to
   pi-dish steer. ACP has no follow-up queue.
 - Cancel ends open tool calls and abandons pending permission requests.
@@ -306,14 +321,21 @@ of the same kind and needs no new abstraction.
 ### Descriptor and process model
 
 - Add `HarnessId` `agy` with `liveTransport:'acp'`, `command:'agy'`
-  (overridable with `PI_DISH_AGY_COMMAND`), no `argv.new/resume` (no tmux),
-  and `closeMode` set to an owned process.
+  (overridable with `PI_DISH_AGY_COMMAND`) and `closeMode:'owned-agent'`.
+  `HarnessDescriptor.argv.new/resume/models` is required
+  (`contracts.ts:177-180`). Either make it optional for transports that
+  never launch through tmux, or supply the `agy acp` argv there (Prime still
+  fills it).
 - Run one `agy acp --dangerously-skip-permissions --disable-telemetry
-  --log-file <dish log dir>` child per live session, with cwd set to the
-  session cwd. This matches RPC ownership: close means `session/close` then
-  SIGTERM, and a hung turn affects only its own process. Memory is the cost
-  (≥170 MB each). Revisit `--process-per-session` with one shared front if
-  that becomes a problem.
+  --log-file <dish log dir>/agy-<session>.log` child per live session (the
+  flag takes a file), with cwd set to the session cwd. This matches RPC
+  ownership: close means `session/close` then SIGTERM, and a hung turn
+  affects only its own process. Memory is the cost (≥170 MB each). Revisit
+  `--process-per-session` with one shared front if that becomes a problem.
+- Record `agentInfo.version` from every spawn in the mirror header and the
+  sidecar. Warn in the session (status line) when it differs from the
+  versions the fixture was captured on. `agy` updates itself, and the
+  `name`/`args` fields and the `q1`/`q1_other` schema are not part of ACP.
 - **Permissions (owner decision, 2026-11-17):** always skip them, matching
   how pi-dish runs Pi and OMP. Verified on `framework` (`yolo-elicit.jsonl`):
   with the flag, `run_command` and `write_file` ran with no
@@ -333,30 +355,52 @@ writeTextFile:false}, terminal:false, elicitation:{form:{}}}}`. Fail closed
 unless `agentInfo.name === "Antigravity ACP Server"`, `loadSession` is true
 and `sessionCapabilities.resume` is present.
 
-If a request returns `-32000`, report "agy is not signed in; run `agy` or
+If a request fails with `-32000` and the message "Authentication required"
+(`-32000` alone is generic), report "agy is not signed in; run `agy` or
 `agy acp --login` on <host>". pi-dish does not run OAuth itself in phase 1.
 
 ### Event mapping
 
 | ACP | pi-dish |
 |---|---|
-| `session/prompt` sent | `turn_start` + user `message_end` |
-| `session/prompt` while turn running | steer (same request; agy steers) |
-| `agent_message_chunk` / `agent_thought_chunk` | `assistantFrame()` → coalesced `message_update` (text / thinking blocks) |
-| `tool_call` | `tool_execution_start` (`toolCallId`, `title` → toolName, `kind`, `rawInput` → args, `locations`) |
+| `session/prompt` sent while idle | `agent_start` + `turn_start` + user `message_end`; record it as the turn's newest prompt id |
+| `session/prompt` sent during a turn | steer: user `message_end`, and it becomes the newest prompt id. agy then answers the previous prompt with a no-usage `end_turn`, which is ignored. |
+| `agent_message_chunk` / `agent_thought_chunk` | Open an assistant segment if none is open (`message_start`), then `assistantFrame()` → coalesced `message_update` (text / thinking blocks) |
+| `tool_call` | If an assistant segment is open, append the `toolCall` block and close it (`message_end`), since ACP interleaves text and tools and Pi needs the assistant message before its tool results. Then `tool_execution_start` with the normalised name and args (below). The next chunk opens a new segment. |
 | `tool_call_update` (`in_progress`, content/diff) | `tool_execution_update` (latest-wins, existing 50 ms lane) |
 | `tool_call_update` `completed`/`failed` | `tool_execution_end` (`isError` on failed) |
 | `plan` | `extension_ui_request` `setWidget` (read-only plan list) |
 | `available_commands_update` | `getCommands()` cache for the slash picker |
 | `current_mode_update`, `config_option_update` | state for model/thinking/mode pickers |
+| `usage_update` `{used,size}` | context meter (`lastStats`) |
 | `session_info_update` (title) | session name |
-| `session/prompt` result `stopReason` | `message_end` (assistant) + `turn_end` + `agent_end`; `cancelled` = aborted; `refusal` surfaced like OMP classifier refusals |
+| Result of the **newest** prompt | Close the open segment (`message_end`, with the prompt's usage on the last assistant message), then `turn_end` + `agent_end`. `cancelled` = aborted; `refusal` is shown like an OMP classifier refusal. |
 | inbound `session/request_permission` (not expected with the flag) | `extension_ui_request` `select` over ACP `options[]`; `respondExtensionUI` → `{outcome:{outcome:"selected", optionId}}`; dismissed → `cancelled` |
-| inbound `elicitation/create` (`mode:"form"`, `toolCallId` of the pending `ask_question`) | `extension_ui_request` `ask`, from the `ask_question` call's `args.questions[]`: `question`, `options` (a `(Recommended)` prefix sets `recommended`), `is_multi_select` → `multi`. The answer becomes `{action:"accept", content:{q1:"<1-based option const>", q1_other:"<free text>"}}`; dismissing it → `cancel`. The turn continues in place. |
+| inbound `elicitation/create` (`mode:"form"`) | `extension_ui_request` `ask`, built from `requestedSchema`. Each non-`_other` property is a question: its `title`, plus option labels from its `oneOf[].title`. The schema doesn't mark a recommended option, so that comes from the pending `ask_question` call (matched by `toolCallId`): an option with a `(Recommended)` prefix gets that prefix stripped and its index set as `recommended`. Answer mapping: browser `selectedOptions` labels → their `oneOf` `const`, and `customInput` → `<key>_other`, sent as `{action:"accept", content}`. The browser's `{kind:'chat'}` maps to `decline`, and a dismissal to `cancel`. The turn continues in place. The multi-select schema shape has not been observed. |
 | child exit | `session_ended` |
 
+**Tool normalisation.** The pi-dish `toolCall`, `tool_execution_*` and
+`toolResult` records use pi-dish's existing tool vocabulary so the current
+cards render. `agy`'s native call is kept in the sidecar.
+
+| agy `name` | pi-dish `toolName` |
+|---|---|
+| `run_command` | `bash` with `{command: CommandLine}`; `exit_code` → bash details |
+| `read_file` | `read` with `{path: Path}` |
+| `edit_file` | `edit` with `{path, oldText: Target, newText: Replacement}` |
+| `write_file` | `write` with `{path, content: Content}` |
+| other names | passed through; `title` is the display label |
+
+**`prompt()` contract.** `AcpSession.prompt()` resolves once the request is
+written, not when ACP answers. That answer comes at turn end, which in the
+capture took 20–60 s or more, and steer can hand the turn to a later
+prompt. Turn completion is tracked through events. There is no 120 s RPC
+timeout (`rpc-session.ts:188`). `message-hold.ts:109` and
+`routine-runner.ts:309-311` await `prompt()` and then behave as they do for
+the other transports.
+
 Commands: `abort` → `session/cancel` (notification) followed by awaiting the
-prompt response. `setModel`/`setThinkingLevel` →
+newest prompt's response. `setModel`/`setThinkingLevel` →
 `session/set_config_option`. Mode → `session/set_mode`. `setName`, compact,
 tree, queue cancel and follow-up queueing are unsupported (capability false).
 Slash commands are sent as prompt text, as Zed does.
@@ -371,16 +415,21 @@ search, usage, comments, export, shares) reads Pi-format JSONL through
   mirror (`~/.pi/dish/agy/sessions/<agySessionId>.jsonl`) and points the
   descriptor's `rootPath` at it, so discovery and every reader work unchanged.
   It is small because the transport already builds Pi-shaped messages for SSE:
-  `assistantFrame()` assembles the assistant message, and tool completion
-  carries the result. The writer appends what is already emitted:
-  - a `{"type":"session","version":3,id,cwd,timestamp}` header;
+  the assistant segments (see Event mapping) close at each tool call and at
+  turn end, and tool completion carries the result. The writer appends what is
+  already emitted, in emission order, so an assistant message is always
+  written before the `toolResult`s for its `toolCall`s:
+  - a `{"type":"session","version":3,id,cwd,timestamp}` header, plus the
+    `agy` version;
   - user `message_end` → `{type:"message", message:{role:"user", content}}`;
   - assistant `message_end` → `role:"assistant"` with text, thinking and
-    `toolCall` blocks (`name` = `agy`'s native tool name, `arguments` =
-    `args`), `model` from the `model` config option, `provider:"antigravity"`,
-    `stopReason` and `usage`. `PromptResponse.usage` maps to `input`,
-    `output`, `cacheRead`, `cacheWrite` and `reasoning`. The cost is
-    unavailable because this is a subscription.
+    `toolCall` blocks (normalised `name`/`arguments`), `model` from the
+    `model` config option, `provider:"google-antigravity"`, and `stopReason`
+    and `usage` on the turn's last segment. `PromptResponse.usage` maps to
+    `input`, `output`, `cacheRead`, `cacheWrite` and `reasoning`. Add
+    `agy: {'google-antigravity': true}` to `PLAN_PROVIDERS`
+    (`harness-pricing.ts:51`, where OMP already lists `google-antigravity`) so
+    zero rates read as "plan" rather than `costUnavailable`;
   - `tool_execution_end` → `role:"toolResult"`, `toolCallId`, `toolName`,
     `content` (text, command output, or the edit diff rendered as text),
     `isError` for `failed`;
@@ -391,9 +440,12 @@ search, usage, comments, export, shares) reads Pi-format JSONL through
   150–250 lines plus tests. This is the first pi-dish-owned transcript
   writer, and it writes only under its own root. `agy`'s store stays
   authoritative.
-- **Raw sidecar:** append every inbound ACP frame to `<id>.acp.jsonl` beside
-  the mirror. No reader touches it. It allows the mirror to be rebuilt if the
-  translation is wrong or improves, since `session/load` replay is lossy.
+- **Raw sidecar:** append every ACP frame **in both directions** as
+  `{t,dir,msg}` to `<id>.acp.jsonl` beside the mirror, as the capture does.
+  User prompts and elicitation answers exist only in outbound frames (live
+  sessions emit no `user_message_chunk`). No reader touches it. It allows
+  the mirror to be rebuilt if the translation is wrong or improves, since
+  `session/load` replay is lossy.
 - **Rejected: ACP as an alternative read format.** ACP is a stream of chunks,
   not messages: one assistant message spans many frames, and steer and
   question answers interleave. Reading it would mean reassembling it in
@@ -405,9 +457,19 @@ search, usage, comments, export, shares) reads Pi-format JSONL through
   `SessionFileProfile` mechanism (`omp-v1`) covers small differences in entry
   shape, not a different record model.
 - Sessions started outside pi-dish come from `session/list`. They are
-  imported into the mirror on first open with `session/load`, whose
-  history-replay `session/update`s go through the same writer. Later live use
-  goes through `session/resume`.
+  imported into the mirror on first open with `session/load`. Replay needs
+  its own rules in the same writer:
+  - `user_message_chunk` starts a user message and closes the previous
+    message;
+  - a `tool_call` already `completed`/`failed` counts as start plus end;
+  - the `session/load` response flushes the open message.
+
+  Later live use goes through `session/resume`.
+- **Staleness:** `session/resume` replays nothing, so turns taken in the
+  `agy` TUI never reach the mirror on their own. On open, compare
+  `session/list` `updatedAt` with the mirror's last entry. If it is newer,
+  re-import through `session/load` into a fresh mirror (the old one and its
+  sidecar are kept), and mark the transcript "imported, lossy".
 - Rejected: replaying history through `session/load` on every view. That
   spawns an authenticated process per read, breaks search and usage, and adds
   backend traffic that is not driven by a human.
@@ -425,10 +487,15 @@ Hibernation must skip `agy` sessions mid-turn.
 ### Prompt sources
 
 No origin gate. Every existing route (`session-command-handlers.ts`,
-`routine-runner.ts:309-311`, `recovery-runner.ts:345`, `message-hold.ts:109`,
-`POST /api/sessions/new`) treats `agy` like any harness, subject only to the
-transport's capability table. Routines and recovery rely on `session/resume`
-after a restart, because owned children do not survive one.
+`routine-runner.ts:309-311`, `message-hold.ts:109`, `POST /api/sessions/new`)
+treats `agy` like any harness, subject only to the transport's capability
+table and the `prompt()` contract above.
+
+Recovery does not work yet: `recovery-runner.ts:240` and `:341` hard-code
+`['pi','omp']`, so `agy` currently gets "no verified recovery prompt path"
+or a 409. Add `agy` there and give it a resume path: respawn, then
+`session/resume`, then prompt, since owned children do not survive a
+restart.
 
 ### Capability matrix (planned)
 
@@ -438,11 +505,11 @@ after a restart, because owned children do not survive one.
 | Follow-up queue, queue read/cancel | no |
 | Abort | yes (`session/cancel`) |
 | Streaming text, thinking, tools, diffs | yes |
-| Approvals / questions | yes (`request_permission`, elicitation) |
+| Questions | yes (`elicitation/create` → `ask`); permission requests are not expected under the skip flag, with a `select` fallback |
 | Model / thinking / mode | yes (config options; Gemini only) |
 | Commands | yes (`available_commands_update`, sent as text) |
 | Rename | no ACP method; title is read-only from `session_info_update` |
-| Compact, tree, branch | no |
+| Compact, tree, branch | no pi-dish control; `/compact` is an `agy` command sent as text |
 | History / search / usage | through the pi-dish mirror |
 | Live list, resume | yes (`session/list`, `session/resume`) |
 | Close / restart owned | yes (`session/close` + SIGTERM; respawn + resume) |
@@ -455,20 +522,22 @@ after a restart, because owned children do not survive one.
 | Phase | Scope | Size | Main uncertainty |
 |---|---|---|---|
 | 0 | Dropped by owner (2026-11-17): native transcript only | — | — |
-| 1 | `AcpSession` transport, descriptor, live new/prompt/steer/abort/approvals, mirror writer, fake ACP agent fixture for `npm test` | L | Real `session/update` shapes (needs one signed-in capture) |
-| 2 | `session/list` import, resume after restart, model/mode pickers, commands | M | Whether `session/list` includes TUI conversations |
+| 1 | `AcpSession` transport, descriptor, live new/prompt/steer/abort/questions, mirror writer with raw sidecar, tool normalisation, fake ACP agent fixture for `npm test` | L | Assistant segmentation and steer handover, against the captured frames |
+| 2 | `session/list` import and staleness re-import, resume after restart, recovery, model/thinking/mode pickers, commands | M | Replay loss on import; unobserved multi-select elicitation schema |
 | 3 | Detached relay so turns survive pi-dish updates | M | Ownership record and relay authentication |
 
-Event shapes for the fake-agent fixture come from the signed-in capture
-above. Pin the canary to an exact `agy` version, because `agy` updates itself
-in the background.
+Event shapes for the fake-agent fixture come from the signed-in captures
+above. `agy` updates itself in the background, so pin the canary to an exact
+version, and have the runtime warn on unverified versions (Descriptor and
+process model).
 
 ### Size and containment
 
 The comparable precedent is Prime's daemon transport (`72bdd54`). It changed
 18 `src/core` files (+1604/−320, with `prime-daemon.ts` at 634 lines) plus
 fixtures and tests. ACP is about the same size: it has no tmux adoption or
-roster ownership, but it adds the mirror writer and the permission mapping.
+roster ownership, but it adds the mirror writer, assistant segmentation, tool
+normalisation and the question mapping.
 `TransportSession` (`18db751`) already gives RPC and Prime a shared base, and
 `AcpSession` extends it unchanged.
 
@@ -478,12 +547,16 @@ The change is additive for the Pi lineage:
   `prime-daemon.ts`, `session-files`/`session-index` parsers, SSE coalescing
   and the browser renderers. The mirror emits existing Pi entry shapes, so no
   parser learns an ACP shape.
-- **Shared files that gain an `acp` branch:** the dispatch points already
-  branching for Prime (`session-ownership.ts`, `session-launch.ts`,
-  `session-operations.ts`, `session-catalog-runtime.ts`,
+- **Shared files that gain an `agy`/`acp` branch:** the dispatch points that
+  already branch for Prime or by harness (`session-ownership.ts`,
+  `session-launch.ts`, `session-operations.ts`, `session-catalog-runtime.ts`,
   `session-stream-handler.ts`, `live-sessions.ts`, `session-capabilities.ts`,
-  `session-hibernation.ts`, `session-bounces.ts`). These are the only
-  regression surface, and `npm test` plus `npm run test:lineage` cover it.
+  `session-hibernation.ts`, `session-source.ts:129`, `session-read-handlers`,
+  `session-mutation-handlers`, `session-slash-handlers`,
+  `session-tree-handlers`, `model-feature-handlers`, `helper-models`,
+  `publication-handlers`), plus the harness lists in `recovery-runner.ts`
+  and `harness-pricing.ts`. This is the regression surface, and `npm test`
+  plus `npm run test:lineage` cover it.
 - **Closed unions:** `HarnessId` and `liveTransport` in `contracts.ts`. The
   compiler catches exhaustive switches and `Record<HarnessId, …>` maps. The
   `if` chains on `liveTransport === 'prime-daemon'` need a manual review.
@@ -494,5 +567,6 @@ stage, not part of this change.
 
 ## Open questions for the owner
 
-1. Is the first pi-dish-owned transcript writer (the JSONL mirror) acceptable,
-   or should `agy` history stay outside pi-dish's search and usage?
+1. Confirm the write-time Pi-JSONL mirror with its raw sidecar (recommended
+   above; the owner has asked about it but not approved it), versus keeping
+   `agy` history out of pi-dish's search and usage.
