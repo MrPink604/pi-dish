@@ -162,9 +162,9 @@ test('a handed-over prompt that reports usage adds it to the turn total', async 
     assert.equal(usage.totalTokens, 260, 'both prompts report usage and the turn keeps both');
     assert.equal(usage.input, 240);
 });
-test('work agy resumes on its own after the prompt ends becomes its own turn in the mirror', async (t) => {
+test('background commands keep the turn alive past end_turn until completion and autonomous idle', async (t) => {
     const saved = process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
-    process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = '150';
+    process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = '120';
     t.after(() => {
         if (saved === undefined)
             delete process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
@@ -175,10 +175,18 @@ test('work agy resumes on its own after the prompt ends becomes its own turn in 
     cleanup(t, session);
     const events = capture(session);
     await session.prompt('run the tests');
-    await until(() => events.filter(event => event.event === 'turn_end').length === 2, 5000);
+    // Once the interim message closes (at end_turn), the background tool is still
+    // running so the turn and runningToolCalls must remain active.
+    await until(() => assistantText(messages(events, 'assistant')).includes('Tests are running in the background.'));
+    assert.equal(session.turnInProgress, true, 'turn stays active while background command runs');
+    assert.equal(session.hasActiveToolWork, true);
+    assert.equal(session.runningToolCalls.has('call-bg-1'), true, 'running tool card stays live');
+    assert.equal(events.filter(event => event.event === 'turn_end').length, 0);
+    await until(() => events.some(event => event.event === 'turn_end'), 5000);
     const order = events.map(event => event.event).filter(name => name === 'turn_start' || name === 'turn_end');
-    assert.deepEqual(order, ['turn_start', 'turn_end', 'turn_start', 'turn_end'], 'the resumed work runs as a second turn');
+    assert.deepEqual(order, ['turn_start', 'turn_end'], 'background work completes within one continuous turn');
     assert.equal(session.turnInProgress, false);
+    assert.equal(session.hasActiveToolWork, false);
     // The background command's result and the text after it reach the mirror in order.
     const mirrored = mirrorEntries(session.sessionFile)
         .filter(entry => entry.type === 'message').map(entry => asRecord(entry.message));
@@ -186,6 +194,65 @@ test('work agy resumes on its own after the prompt ends becomes its own turn in 
     assert.deepEqual(roles, ['user', 'assistant', 'assistant', 'toolResult:bash', 'assistant']);
     assert.match(assistantText([mirrored[4]]), /Background tests passed\./);
     assert.equal(blockAt(mirrored[1].content).type, 'toolCall', 'the call precedes its result');
+});
+test('chained long background commands outliving autonomous idle keep the turn active and preserve mirror order', async (t) => {
+    const saved = process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+    process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = '80';
+    t.after(() => {
+        if (saved === undefined)
+            delete process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+        else
+            process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = saved;
+    });
+    const session = await launch('background-chain');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('verify everything');
+    await until(() => events.some(event => event.event === 'tool_execution_start' && asRecord(event.data).toolCallId === 'call-bg-2'));
+    // Wait longer than PI_DISH_AGY_AUTONOMOUS_IDLE_MS (80ms) while call-bg-2 is still running (260ms).
+    await (0, promises_1.setTimeout)(140);
+    assert.equal(session.turnInProgress, true, 'autonomous idle timer does not end the turn while call-bg-2 runs');
+    assert.equal(session.hasActiveToolWork, true);
+    assert.equal(session.runningToolCalls.has('call-bg-2'), true);
+    assert.equal(events.filter(event => event.event === 'turn_end').length, 0);
+    await until(() => events.some(event => event.event === 'turn_end'), 5000);
+    const order = events.map(event => event.event).filter(name => name === 'turn_start' || name === 'turn_end');
+    assert.deepEqual(order, ['turn_start', 'turn_end']);
+    assert.equal(session.turnInProgress, false);
+    const mirrored = mirrorEntries(session.sessionFile)
+        .filter(entry => entry.type === 'message').map(entry => asRecord(entry.message));
+    const roles = mirrored.map(message => `${String(message.role)}${message.toolName ? `:${String(message.toolName)}` : ''}`);
+    assert.deepEqual(roles, [
+        'user',
+        'assistant', 'assistant', 'toolResult:bash',
+        'assistant', 'assistant', 'toolResult:bash',
+        'assistant',
+    ]);
+    assert.match(assistantText([mirrored[5]]), /Waiting on full test suite\./);
+    assert.match(assistantText([mirrored[7]]), /All tests passed\./);
+});
+test('daemon tool calls (IsDaemon: true) do not hold a turn open after end_turn', async (t) => {
+    const session = await launch('background-daemon');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('start dev server');
+    await until(() => events.some(event => event.event === 'turn_end'), 5000);
+    assert.equal(session.turnInProgress, false);
+    assert.equal(session.hasActiveToolWork, false);
+    assert.match(assistantText(messages(events, 'assistant')), /Dev server started\./);
+});
+test('abort ends a turn that is waiting on a background tool after end_turn', async (t) => {
+    const session = await launch('background-abort');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('run forever');
+    await until(() => assistantText(messages(events, 'assistant')).includes('Running long background task.'));
+    assert.equal(session.turnInProgress, true);
+    assert.equal(session.hasActiveToolWork, true);
+    await session.abort();
+    assert.equal(session.turnInProgress, false);
+    assert.equal(session.hasActiveToolWork, false);
+    assert.equal(events.filter(event => event.event === 'turn_end').length, 1);
 });
 test('normalises tool calls, orders the mirror, and keeps bash exit details', async (t) => {
     const session = await launch('tool');

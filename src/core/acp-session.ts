@@ -248,6 +248,7 @@ interface TrackedTool {
   call: AcpToolCall;
   startedAt: number;
   waitMsBeforeAsync: number | null;
+  isDaemon: boolean;
 }
 
 interface InboundDialog {
@@ -398,6 +399,14 @@ export class AcpSession extends TransportSession {
     return this.proc.pid ?? null;
   }
 
+  /** True while a non-daemon tool call has started and not yet completed or failed. */
+  get hasActiveToolWork(): boolean {
+    for (const tracked of this.toolCalls.values()) {
+      if (!tracked.isDaemon) return true;
+    }
+    return false;
+  }
+
   // ---- wire ----------------------------------------------------------------
 
   private _writeFrame(frame: ProtocolRecord): void {
@@ -457,6 +466,7 @@ export class AcpSession extends TransportSession {
         waiter.reject(new Error(message));
         if (id === this.newestPromptId) {
           this.newestPromptId = null;
+          this.toolCalls.clear();
           this._closeSegment('error', this._takeHandoverUsage(), message, true);
           this._endTurn();
         }
@@ -474,6 +484,14 @@ export class AcpSession extends TransportSession {
       const stop = text(result.stopReason);
       this._closeSegment(acpStopReason(stop), this._takeHandoverUsage(acpUsage(result.usage)),
         stop === 'refusal' ? 'Antigravity refused this request.' : null, true);
+      // agy answers session/prompt with end_turn when a background command or
+      // subagent yields the turn, before its tool_call_update(completed) arrives.
+      // Keep the turn active and the running tool card live until it finishes.
+      if (stop !== 'cancelled' && stop !== 'refusal' && this.hasActiveToolWork) {
+        this._armAutonomousTimer();
+        return;
+      }
+      if (stop === 'cancelled' || stop === 'refusal') this.toolCalls.clear();
       this._endTurn();
       return;
     }
@@ -726,9 +744,12 @@ export class AcpSession extends TransportSession {
     const startedAt = Date.now();
     const rawArgs = isRecord(update.args) ? update.args : (isRecord(update.rawInput) ? update.rawInput : {});
     const waitMs = finite(rawArgs.WaitMsBeforeAsync) && rawArgs.WaitMsBeforeAsync > 0 ? rawArgs.WaitMsBeforeAsync : null;
+    const isDaemon = rawArgs.IsDaemon === true;
     const status = text(update.status);
     this.nextStepStartedAt = status === 'pending' ? null : (waitMs !== null ? startedAt + waitMs : null);
-    this.toolCalls.set(toolCallId, { call, startedAt, waitMsBeforeAsync: waitMs });
+    if (status !== 'completed' && status !== 'failed') {
+      this.toolCalls.set(toolCallId, { call, startedAt, waitMsBeforeAsync: waitMs, isDaemon });
+    }
     if (call.nativeName === 'ask_question') {
       const args = isRecord(update.args) ? update.args : {};
       this.askQuestions.set(toolCallId, Array.isArray(args.questions) ? args.questions : []);
@@ -749,6 +770,9 @@ export class AcpSession extends TransportSession {
     const status = text(update.status);
     const result = acpToolResult(update, tracked.call);
     if (status === 'completed' || status === 'failed') {
+      // If the agent spoke while a background tool ran, close that interim
+      // segment before recording the toolResult so transcript order stays chronological.
+      if (this.segment) this._closeSegment('stop', null, null);
       const isError = status === 'failed';
       this.toolCalls.delete(toolCallId);
       this.askQuestions.delete(toolCallId);
@@ -802,10 +826,10 @@ export class AcpSession extends TransportSession {
   }
 
   /**
-   * agy keeps working without a prompt when a background command it started
-   * finishes after its turn was answered. That work is a turn of its own: open
-   * one on the first frame, and end it once frames stop and no dialog awaits an
-   * answer, since no prompt response will arrive to end it.
+   * agy keeps working without an open prompt when a background command or
+   * subagent runs past `session/prompt`'s `end_turn` response (or wakes the
+   * agent later). Keep the turn alive while non-daemon tool calls or dialogs
+   * are open, and end it once frames go quiet with nothing pending.
    */
   private _noteActivity(): void {
     if (!this.turnInProgress) {
@@ -818,6 +842,10 @@ export class AcpSession extends TransportSession {
       this.emitEvent('turn_start', { type: 'turn_start' });
     }
     if (this.newestPromptId !== null) return;
+    this._armAutonomousTimer();
+  }
+
+  private _armAutonomousTimer(): void {
     this._clearAutonomousTimer();
     this.autonomousTimer = setTimeout(() => this._autonomousIdle(), autonomousIdleMs());
     this.autonomousTimer.unref();
@@ -826,9 +854,11 @@ export class AcpSession extends TransportSession {
   private _autonomousIdle(): void {
     this.autonomousTimer = null;
     if (!this.alive || this.newestPromptId !== null || !this.turnInProgress) return;
-    if (this.inbound.size > 0) {
-      this.autonomousTimer = setTimeout(() => this._autonomousIdle(), autonomousIdleMs());
-      this.autonomousTimer.unref();
+    if (this.inbound.size > 0 || this.hasActiveToolWork) {
+      // Flush any interim assistant status text while waiting on a long
+      // background tool so reconnects see it and post-tool output starts fresh.
+      if (this.hasActiveToolWork && this.segment) this._closeSegment('stop', null, null, true);
+      this._armAutonomousTimer();
       return;
     }
     this._closeSegment('stop', this._takeHandoverUsage(), null, true);
@@ -1192,7 +1222,14 @@ export class AcpSession extends TransportSession {
     const newest = this.newestPromptId;
     const waiter = newest === null ? undefined : this.promptResponses.get(newest);
     this._notify('session/cancel', { sessionId: this.nativeSessionId });
-    if (!waiter) return { ok: true };
+    if (!waiter) {
+      if (this.turnInProgress) {
+        this.toolCalls.clear();
+        this._closeSegment('aborted', this._takeHandoverUsage(), null, true);
+        this._endTurn();
+      }
+      return { ok: true };
+    }
     const deadline = new Promise<never>((_, reject) => {
       const timer = setTimeout(() => reject(new Error('Antigravity did not acknowledge the cancel')), 20000);
       timer.unref();

@@ -224,11 +224,12 @@ async function main(): Promise<void> {
 
   function lifecycleSnapshot(): ProtocolRecord {
     const pendingDialogs = session.extUIState.dialogs.size;
+    const backgroundWork = session.hasActiveToolWork;
     return {
-      idle: !session.turnInProgress && pendingDialogs === 0,
+      idle: !session.turnInProgress && pendingDialogs === 0 && !backgroundWork,
       pendingMessages: false,
       pendingDialogs,
-      backgroundWork: false,
+      backgroundWork,
     };
   }
 
@@ -261,6 +262,16 @@ async function main(): Promise<void> {
     const ui = session.extUIState;
     for (const request of [...ui.widgets.values(), ...ui.statuses.values(), ...ui.dialogs.values()]) {
       send(sock, { type: 'event', event: 'extension_ui_request', data: request });
+    }
+  }
+
+  function replayRunningTools(sock: net.Socket): void {
+    for (const [toolCallId, call] of session.runningToolCalls) {
+      const common = { toolCallId, toolName: call.toolName, args: call.args, startedAt: call.startedAt };
+      send(sock, { type: 'event', event: 'tool_execution_start', data: common });
+      if (call.lastPartialResult != null) {
+        send(sock, { type: 'event', event: 'tool_execution_update', data: { ...common, partialResult: call.lastPartialResult } });
+      }
     }
   }
 
@@ -408,6 +419,7 @@ async function main(): Promise<void> {
     });
     send(sock, { type: 'hello', ...claim(), lifecycle: lifecycleSnapshot() });
     replayExtensionUI(sock);
+    replayRunningTools(sock);
   }
 
   function unlinkOwnedClaim(): void {

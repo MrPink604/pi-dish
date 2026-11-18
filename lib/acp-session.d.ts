@@ -91,6 +91,8 @@ export declare class AcpSession extends TransportSession {
     private turnTtftSumMs;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
+    /** True while a non-daemon tool call has started and not yet completed or failed. */
+    get hasActiveToolWork(): boolean;
     private _writeFrame;
     /** The sidecar is named by the agy session id, which startup frames precede; flush on adopt. */
     private _bufferFrame;
@@ -114,12 +116,13 @@ export declare class AcpSession extends TransportSession {
     private _emitTool;
     private _endTurn;
     /**
-     * agy keeps working without a prompt when a background command it started
-     * finishes after its turn was answered. That work is a turn of its own: open
-     * one on the first frame, and end it once frames stop and no dialog awaits an
-     * answer, since no prompt response will arrive to end it.
+     * agy keeps working without an open prompt when a background command or
+     * subagent runs past `session/prompt`'s `end_turn` response (or wakes the
+     * agent later). Keep the turn alive while non-daemon tool calls or dialogs
+     * are open, and end it once frames go quiet with nothing pending.
      */
     private _noteActivity;
+    private _armAutonomousTimer;
     private _autonomousIdle;
     private _clearAutonomousTimer;
     private _takeHandoverUsage;

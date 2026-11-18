@@ -334,6 +334,79 @@ function handlePrompt(id: number, params: Frame): void {
       }, 5);
       return;
     }
+    case 'background-chain': {
+      // Observed live: first background command yields end_turn; when it finishes,
+      // agy launches a second long background command that outlives the autonomous
+      // idle window and emits interim status text while waiting for it.
+      setTimeout(() => {
+        toolCall('call-bg-1', 'run_command', { CommandLine: 'npm run check', WaitMsBeforeAsync: 5000 }, 'npm run check', 'execute');
+        textChunk('Running check in the background.');
+        usageUpdate(700);
+        finishPrompt(id, 'end_turn');
+        setTimeout(() => {
+          toolUpdate('call-bg-1', 'run_command', 'completed', {
+            title: 'npm run check',
+            kind: 'execute',
+            content: [{ type: 'content', content: { type: 'text', text: 'check ok\n' } }],
+            rawOutput: { output: 'check ok\n', exit_code: 0 },
+          });
+          toolCall('call-bg-2', 'run_command', { CommandLine: 'npm test', WaitMsBeforeAsync: 5000 }, 'npm test', 'execute');
+          textChunk('Waiting on full test suite.');
+          usageUpdate(800);
+          setTimeout(() => {
+            toolUpdate('call-bg-2', 'run_command', 'completed', {
+              title: 'npm test',
+              kind: 'execute',
+              content: [{ type: 'content', content: { type: 'text', text: 'suite ok\n' } }],
+              rawOutput: { output: 'suite ok\n', exit_code: 0 },
+            });
+            textChunk('All tests passed.');
+            usageUpdate(900);
+          }, 260);
+        }, 50);
+      }, 5);
+      return;
+    }
+    case 'background-daemon': {
+      // A daemon command (IsDaemon: true) is meant to keep running after the turn ends.
+      setTimeout(() => {
+        toolCall('call-daemon-1', 'run_command', { CommandLine: 'npm run dev', WaitMsBeforeAsync: 500, IsDaemon: true }, 'npm run dev', 'execute');
+        textChunk('Dev server started.');
+        usageUpdate(700);
+        finishPrompt(id, 'end_turn');
+      }, 5);
+      return;
+    }
+    case 'background-abort': {
+      // Background command stays running after end_turn until the client aborts.
+      setTimeout(() => {
+        toolCall('call-bg-hang', 'run_command', { CommandLine: 'npm test', WaitMsBeforeAsync: 5000 }, 'npm test', 'execute');
+        textChunk('Running long background task.');
+        usageUpdate(700);
+        finishPrompt(id, 'end_turn');
+      }, 5);
+      return;
+    }
+    case 'background-reconnect': {
+      // Background command stays running long enough for a bridge reconnect test.
+      setTimeout(() => {
+        toolCall('call-bg-reconn', 'run_command', { CommandLine: 'npm test', WaitMsBeforeAsync: 5000 }, 'npm test', 'execute');
+        textChunk('Running background suite.');
+        usageUpdate(700);
+        finishPrompt(id, 'end_turn');
+        setTimeout(() => {
+          toolUpdate('call-bg-reconn', 'run_command', 'completed', {
+            title: 'npm test',
+            kind: 'execute',
+            content: [{ type: 'content', content: { type: 'text', text: 'suite ok\n' } }],
+            rawOutput: { output: 'suite ok\n', exit_code: 0 },
+          });
+          textChunk('Background suite finished.');
+          usageUpdate(850);
+        }, 700);
+      }, 5);
+      return;
+    }
     case 'slow':
       textChunk('Working on it.');
       return;

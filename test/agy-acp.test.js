@@ -387,6 +387,49 @@ test('a dropped server connection does not lose a running turn', { timeout: 6000
         assert.equal(closed.status, 200, JSON.stringify(closed.body));
     }
 });
+test('agy relay keeps background tool turns live across end_turn and replays running tools on reconnect', { timeout: 60000 }, async () => {
+    const savedIdle = process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+    process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = '150';
+    process.env.PI_DISH_AGY_COMMAND = agyCommand('background-reconnect');
+    const created = await post('/api/sessions/new', { harness: 'agy', cwd: projDir });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const sessionId = String((0, test_types_js_1.present)(created.body.id));
+    try {
+        const first = await bridgeLib.getBridgeSession((0, test_types_js_1.present)(claimFor(sessionId), 'the session registered'));
+        await first.waitForHello({ timeout: 5000 });
+        const firstEvents = capture(first);
+        const prompted = await post(sessionPath(sessionId, '/prompt'), { message: 'run background suite' });
+        assert.equal(prompted.status, 200, JSON.stringify(prompted.body));
+        await until(() => assistantText(firstEvents).includes('Running background suite.'));
+        assert.equal(first.turnInProgress, true, 'turn stays active after end_turn while background command runs');
+        assert.equal(first.runningToolCalls.has('call-bg-reconn'), true, 'running tool stays tracked on bridge');
+        assert.equal(readClaim(sessionId).turnInProgress, true, 'registry claim reports active turn');
+        const state = (0, test_types_js_1.record)(await first.send('get_state'));
+        assert.equal((0, test_types_js_1.record)(state.lifecycle).backgroundWork, true, 'lifecycle reports active backgroundWork');
+        assert.equal((0, test_types_js_1.record)(state.lifecycle).idle, false);
+        // Reconnect a fresh bridge socket while the background command is still running.
+        first.close();
+        bridgeLib.invalidateRegistryCache();
+        const second = await bridgeLib.getBridgeSession((0, test_types_js_1.present)(claimFor(sessionId), 'the running session is still registered'));
+        const secondEvents = capture(second);
+        const hello = await second.waitForHello({ timeout: 5000 });
+        assert.equal(hello.turnInProgress, true);
+        await until(() => second.runningToolCalls.has('call-bg-reconn'), 5000);
+        await until(() => secondEvents.some(entry => entry.event === 'turn_end'), 10000);
+        assert.equal(second.turnInProgress, false);
+        assert.equal(second.runningToolCalls.size, 0);
+        assert.match(assistantText(secondEvents), /Background suite finished\./);
+    }
+    finally {
+        if (savedIdle === undefined)
+            delete process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+        else
+            process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = savedIdle;
+        process.env.PI_DISH_AGY_COMMAND = agyBinary;
+        const closed = await post(sessionPath(sessionId, '/close'), {});
+        assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    }
+});
 test('agy sessions refuse capabilities the relay does not carry', async () => {
     const created = await post('/api/sessions/new', { harness: 'agy', cwd: projDir });
     assert.equal(created.status, 200, JSON.stringify(created.body));

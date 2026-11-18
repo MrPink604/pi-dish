@@ -828,8 +828,13 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
 - **Turn ownership:** a prompt sent during a turn is a steer, and it hands the
   turn to the newest prompt. `agy` then answers the earlier prompt with a
   no-usage `end_turn`, which is ignored. Only the newest prompt's response
-  ends the turn. `prompt()` resolves once the request is written; completion
-  is tracked through events.
+  ends the turn — unless non-daemon tool calls (e.g. a backgrounded
+  `run_command`) are still open when `end_turn` arrives, in which case the
+  interim assistant message closes and the turn stays active (and its running
+  tool card stays live, replayed to reconnecting bridge clients) until active
+  tools complete and autonomous frames go quiet. Daemon tool calls
+  (`IsDaemon: true`) do not hold a turn open. `prompt()` resolves once the
+  request is written; completion is tracked through events.
 - **Assistant segments:** ACP interleaves text and tool calls, so the open
   assistant message closes at each `tool_call`. The mirror therefore writes
   every assistant `toolCall` before its `toolResult`.
