@@ -44,6 +44,8 @@ const MODEL_CONTEXT_WINDOWS = {
   'gpt-4o': 128000, 'gpt-4-turbo': 128000, 'gpt-4': 8192,
   'o1': 200000, 'o3': 200000,
   'gemini-2': 1000000, 'gemini-1.5': 1000000,
+  // Antigravity's Gemini ids (agy reports usage_update size 1048576 for each).
+  'gemini-4': 1048576, 'gemini-3': 1048576, 'gemini-pro-orchestrator': 1048576,
   'default': 200000,
 };
 const DEFAULT_CONTEXT_WINDOW = MODEL_CONTEXT_WINDOWS.default;
