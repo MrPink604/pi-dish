@@ -5,42 +5,13 @@ description: Spawn, message, and read ordinary peer Pi sessions through the pi-d
 
 # Pi-dish peer sessions
 
-Use the bundled CLI. It talks only to pi-dish's semantic HTTP routes; it
-never writes Pi JSONL or signals processes itself.
+Use the bundled CLI; never write Pi JSONL or signal processes yourself.
 
 ```bash
 CLI=~/.pi/agent/skills/pi-dish-sessions/scripts/pi-dish-sessions.js
-node "$CLI" list --active
-```
-
-`PI_DISH_URL` is inherited by sessions spawned through pi-dish and otherwise
-defaults to `http://127.0.0.1:3333`; set `PI_DISH_TOKEN` when the server
-requires a bearer. The CLI identifies the current session automatically; use
-`--session <id>` only if it reports ambiguity. `--json` everywhere for
-machine-readable output.
-
-## Session refs
-
-Anywhere a command takes a session id, it takes a **ref**: a full id, its
-uuid tail, a unique ≥4-char prefix of either (`01a070d2`), or a
-host-qualified form (`tycho/01a070d2` — no `--host` needed). `list`,
-`search` and `resolve` print the shortest ref for each session in their
-first column; pass that along. Never retype an encoded `~sk1_…` route id —
-it is ~100 base64 characters and a one-character slip still decodes, so the
-server can only say `Session not found`. Users copy refs from the pi-dish
-UI; treat a pasted short id as a ref, and `resolve <ref>` to see what it
-points at.
-
-A prompt written in the pi-dish composer can carry `#ref` mentions, and the
-server appends a `<session-refs>` block listing each one with its name, host
-and cwd. Those are live handles, not citations: `read` the session before
-reasoning about what it did, and `send`/`steer`/`follow-up` to talk to it.
-
-## Hot path
-
-```bash
 node "$CLI" search "jsonl torn tail recovery" --limit 5   # find prior work
 node "$CLI" search "index compaction" --all-hosts          # whole fleet
+node "$CLI" list --active                                  # live sessions
 node "$CLI" read tycho/8f3ab2c1                            # transcript as markdown
 node "$CLI" send <ref> "Run the tests"                     # prompt (queues mid-turn)
 node "$CLI" steer <ref> "Check the nested case first"      # redirect current turn
@@ -50,45 +21,52 @@ node "$CLI" spawn --cwd "$PWD" --name "investigation" \
 node "$CLI" resume <ref>                                   # revive an inactive session
 ```
 
-`send` and `follow-up` carry this session as their sender. When the target's
-host sets `messageHoldWindowMs` (integer milliseconds, default `0` = off), it
-holds a peer message for that window instead of interrupting and answers
-`held`/`until`; held messages coalesce into one batch, each prefixed with the
-sender's ref, name and time, and a held message to an inactive session waits
-for an explicit `resume` (the hold never resumes it). A missing sender
-delivers immediately, and `steer` is always immediate — it interrupts, so it
-carries no sender. A host under memory pressure may *hibernate* a long-idle
-peer (its `hibernation` field says why); `send` and `follow-up` resume it
-before delivering, `steer` does not.
+Also: `resolve`, `show` (raw JSON window), `related`, `interrupt`, `close`
+(graceful), `share <ref>` (public link), `hosts` (the fleet; `--host <name>`
+puts any command on that host), `host` (this server's identity and
+capabilities; the "is pi-dish up?" check), `load` (how busy a host is — check
+before heavy builds or fanning out peers), `config`, `usage`, `models`,
+`attach`, `session`. Use these instead of `curl`. `--json` works everywhere.
+`help <command>` has every flag and an example; `docs` has the server's own
+topics (`refs`, `search` grammar, `fleet`, `sessions`) and beats this file
+in a mixed-version fleet.
 
-A spawned peer runs the same harness as the session spawning it (Pi from Pi,
-OMP from OMP), so it has the same tools and skills you do. Pass
-`--harness pi|omp|prime` to cross over deliberately; the spawn result names
-the harness it launched.
+Output is bounded by default: `list` 50 rows, `search` 20 results, text
+about 12,000 chars, `--json` rows a compact field set. A `#` notice says
+when something was cut. Raise with `--limit N`, `--max-chars N` (`0` = no
+cap), `--fields A,B|all`, or `--full` for everything; page `read`/`show`
+with `--before INDEX`. Don't pipe through `head`.
 
-`spawn --private` keeps the transcript under the host's private session root
-(`$XDG_STATE_HOME/pi-dish/private-sessions/<harness>`, defaulting under
-`~/.local/state`) instead of the ordinary session store, so the fleet session
-backup never captures it. Pi and OMP support it; Prime does not. A private
-session is hidden from `list`, `search`, `read` and every other command until
-the user enters the PIN in pi-dish, so `--private` takes `--name` but not
-`--prompt`, and the spawned session is not yours to follow up.
+## Refs
 
-Search treats the session corpus as long-term memory: before re-deriving a
-fix, config, or investigation, check whether a prior session already did it.
-If a first query misses, reformulate with terms you'd expect *in the
-transcript* — an error string, a file path, a command line. Search finds the
-session; `read` reads it.
+Anywhere a command takes a session id it takes a **ref**: a full id, its
+uuid tail, a unique ≥4-char prefix of either (`01a070d2`), or a
+host-qualified form (`tycho/01a070d2`, no `--host` needed). `list`, `search`
+and `resolve` print the shortest ref in their first column; pass that along.
+Never retype an encoded `~sk1_…` route id: a one-character slip still
+decodes and the server can only say `Session not found`.
 
-Also available: `show` (raw JSON window), `related`, `interrupt`, `close`
-(graceful, no force-kill), `hosts` (the fleet; `--host <name>` puts any
-command on that host), `load` (how busy this host is; `--all-hosts` for the
-fleet — check before heavy builds or fanning out peers), `attach` (join a live session's tmux pane from this
-terminal — local only), `resolve`, `session`.
+A `#ref` mention or `<session-refs>` block in a prompt is a live handle, not
+a citation: `read` the session before reasoning about what it did, and
+`send`/`steer`/`follow-up` to talk to it.
 
-## Going deeper
+## Behavior you cannot infer
 
-- `node "$CLI" --help` and `help <command>` — full flags and examples.
-- `node "$CLI" docs` — server-versioned topics (`refs`, `search` grammar,
-  `fleet` semantics, `sessions` control details). In a mixed-version fleet
-  the server's own docs beat this file; `docs --host <name>` reads a peer's.
+- **Search is long-term memory.** Check for prior work before re-deriving a
+  fix or investigation. On a miss, retry with terms you'd expect *in the
+  transcript*: an error string, a file path, a command line.
+- **Held messages.** `send` and `follow-up` carry this session as sender. A
+  target host with a message hold window answers `held`/`until` instead of
+  interrupting; a held message to an inactive session waits for an explicit
+  `resume`. `steer` is always immediate.
+- **Hibernation.** A host under memory pressure may hibernate a long-idle
+  peer. `send` and `follow-up` resume it first; `steer` does not.
+- **Harness.** A spawned peer runs the same harness as you; pass
+  `--harness pi|omp|prime` to cross over.
+- **Private spawn.** `spawn --private` keeps the transcript out of the fleet
+  backup and hides the session from every command until the user enters the
+  PIN, so it takes `--name` but not `--prompt` and is not yours to follow up
+  (Pi and OMP only).
+- **Connection.** `PI_DISH_URL` defaults to `http://127.0.0.1:3333`; set
+  `PI_DISH_TOKEN` if the server needs a bearer. Pass `--session <id>` only
+  if the CLI reports it cannot identify the calling session.
