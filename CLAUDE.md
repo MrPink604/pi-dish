@@ -844,8 +844,11 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   `write_file`→`write`) so the existing cards render.
 - **Questions:** `elicitation/create` becomes an `ask` dialog;
   `session/request_permission` becomes a `select` dialog.
-- **Models:** only `gemini-*` model options are offered. Thinking levels come
-  from `agy`'s `thought_level` option.
+- **Models & quota:** only `gemini-*` model options are offered. Thinking levels
+  come from `agy`'s `thought_level` option. `/api/usage-limits` runs
+  `agy -p /usage --output-format json` (zero-turn CLI builtin) and pairs its
+  Gemini buckets with the tier name saved in `~/.pi/dish/agy/tier.json` on ACP
+  session open.
 - **Never:** read `agy`'s tokens, send `_meta.antigravity.systemPrompt`, or
   report a `clientInfo` other than `pi-dish`.
 - **Relay ownership:** the claim's `pid`/`startTime` are the relay's (the pane

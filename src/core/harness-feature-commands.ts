@@ -37,6 +37,12 @@ function resolveHarnessCwd(value: unknown): string {
   return path.resolve(expanded);
 }
 
+function harnessCommandEnv(descriptor: HarnessDescriptor, specEnv: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of descriptor.unsetEnv ?? []) delete env[key];
+  return { ...env, ...specEnv };
+}
+
 /** Run the configured harness, preserving its cwd, environment and extensions. */
 export function runHarnessJsonCommand(
   descriptor: HarnessDescriptor,
@@ -49,12 +55,25 @@ export function runHarnessJsonCommand(
     let settled = false;
     let completeJsonTimer: NodeJS.Timeout | undefined;
     let streamedStdout = '';
+    let streamedStderr = '';
     let child: ChildProcess;
     const settle = (callback: (value: unknown) => void, value: unknown) => {
       if (settled) return;
       settled = true;
       clearTimeout(completeJsonTimer);
       callback(value);
+    };
+    const rejectInteractiveAuth = () => {
+      const combined = `${streamedStderr}\n${streamedStdout}`;
+      if (!/Authentication required/i.test(combined)
+          || !/Waiting for authentication|Please visit the URL to log in/i.test(combined)) {
+        return;
+      }
+      const hint = descriptor.id === 'agy'
+        ? 'Antigravity is not signed in on this host; run `agy` or `agy acp --login` there'
+        : `${descriptor.label} is not signed in on this host; run \`${descriptor.command}\` there`;
+      settle(reject, new Error(hint));
+      child.kill();
     };
     const acceptStreamedJson = () => {
       if (!acceptCompleteJson || completeJsonTimer || !/[\r\n]\s*$/.test(streamedStdout)) return;
@@ -68,7 +87,7 @@ export function runHarnessJsonCommand(
       }, HARNESS_JSON_EXIT_GRACE_MS);
     };
     child = execFile(spec.argv[0], args, {
-      env: { ...process.env, ...spec.env },
+      env: harnessCommandEnv(descriptor, spec.env),
       cwd: resolveHarnessCwd(cwd),
       timeout: 15_000,
       maxBuffer: 10 * 1024 * 1024,
@@ -86,13 +105,24 @@ export function runHarnessJsonCommand(
         settle(reject, new Error(`Could not parse ${descriptor.label} command output: ${parseError instanceof Error ? parseError.message : undefined}`));
       }
     });
-    if (acceptCompleteJson && child.stdout) {
+    child.stdin?.end();
+    if (child.stdout) {
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => {
-        clearTimeout(completeJsonTimer);
-        completeJsonTimer = undefined;
+        if (acceptCompleteJson) {
+          clearTimeout(completeJsonTimer);
+          completeJsonTimer = undefined;
+        }
         if (streamedStdout.length <= 10 * 1024 * 1024) streamedStdout += chunk;
+        rejectInteractiveAuth();
         acceptStreamedJson();
+      });
+    }
+    if (child.stderr) {
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk: string) => {
+        if (streamedStderr.length <= 64 * 1024) streamedStderr += chunk;
+        rejectInteractiveAuth();
       });
     }
   });
@@ -101,7 +131,7 @@ export function runHarnessJsonCommand(
 /** Plain-text variant for CLI listings that have no JSON form; colour stays off. */
 export function runHarnessTextCommand(descriptor: HarnessDescriptor, commandArgs: string[], { cwd }: { cwd?: unknown } = {}): Promise<string> {
   const spec = harnessLaunchSpec(descriptor);
-  const env: NodeJS.ProcessEnv = { ...process.env, ...spec.env, NO_COLOR: '1' };
+  const env: NodeJS.ProcessEnv = { ...harnessCommandEnv(descriptor, spec.env), NO_COLOR: '1' };
   delete env.FORCE_COLOR;
   return new Promise((resolve, reject) => {
     execFile(spec.argv[0], [...spec.argv.slice(1), ...commandArgs], {

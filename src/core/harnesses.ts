@@ -202,6 +202,10 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
     // pi-dish restart. `PI_DISH_AGY_COMMAND` still names the agy binary; the
     // relay spawns it and speaks pi-dish's bridge protocol to the server.
     launchCommand: () => [process.execPath, path.join(repo, 'lib', 'agy-relay.js')],
+    unsetEnv: [
+      'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_APPLICATION_CREDENTIALS',
+      'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION', 'GOOGLE_GENAI_USE_VERTEXAI',
+    ],
     argv: {
       new: ({ model, thinking, cwd } = {}) => [
         'new',
@@ -211,6 +215,8 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
       ],
       resume: agyResume,
       models: [],
+      // Answered directly by the agy CLI (`num_turns: 0`, no conversation or token file read).
+      usage: ['-p', '/usage', '--output-format', 'json'],
     },
   },
 };

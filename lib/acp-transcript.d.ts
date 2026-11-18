@@ -4,6 +4,32 @@ import type { ProtocolRecord } from './wire-protocol';
 export declare const AGY_PROVIDER = "google-antigravity";
 /** ACP `PromptResponse.usage` → Pi's usage counters. */
 export declare function acpUsage(value: unknown): ProtocolRecord | null;
+/** `_meta.antigravity.tier.name` from `session/new` or `session/resume`. */
+export declare function extractAcpPlanTier(result: unknown): string | null;
+export interface NormalizedAgyUsageLimit {
+    id: string | null;
+    label: string;
+    windowLabel: string | null;
+    resetsAt: number | null;
+    usedFraction: number;
+    unit: string;
+    status: string;
+}
+export interface NormalizedAgyUsageReport {
+    provider: string;
+    fetchedAt: number;
+    planType: string | null;
+    limits: NormalizedAgyUsageLimit[];
+    resetCredits: null;
+}
+/**
+ * `agy -p /usage --output-format json` → pi-dish's `/api/usage-limits` reports.
+ * Only Gemini quota buckets are projected (matching agy's Gemini-only model scope).
+ */
+export declare function normalizeAgyUsageReports(parsed: unknown, options?: {
+    planType?: string | null;
+    fetchedAt?: number;
+}): NormalizedAgyUsageReport[];
 /** ACP stop reasons → Pi's assistant `stopReason` vocabulary. */
 export declare function acpStopReason(value: unknown): string;
 export interface AcpToolCall {

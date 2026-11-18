@@ -10,6 +10,8 @@ import { MAX_MESSAGE_HOLD_WINDOW_MS, messageHoldWindowMs } from './message-hold'
 import { hibernationMode } from './session-hibernation';
 import { listHarnesses } from './harnesses';
 import { harnessCommandAvailable, runHarnessJsonCommand } from './harness-feature-commands';
+import { readAgyPlanTier } from './acp-session';
+import { normalizeAgyUsageReports } from './acp-transcript';
 import type { CatalogRuntime } from './session-catalog-runtime';
 import type { SessionSource } from './session-source';
 import type { SessionOwnership } from './session-ownership';
@@ -126,6 +128,13 @@ export function createFeatureHandlers(ports: FeaturePorts): FeatureHandlers {
     const results = await Promise.all(harnesses.map(async d => {
       try {
         const parsed = await runHarnessJsonCommand(d, d.argv.usage!);
+        if (d.id === 'agy') {
+          return {
+            harness: d.id,
+            label: d.label,
+            reports: normalizeAgyUsageReports(parsed, { planType: readAgyPlanTier(), fetchedAt: Date.now() }),
+          };
+        }
         if (parsed === null || parsed === undefined) throw new TypeError(`Cannot read properties of ${parsed} (reading 'reports')`);
         const rawReports = asRecord(parsed).reports;
         // Even redacted upstream reports can contain account IDs/emails.

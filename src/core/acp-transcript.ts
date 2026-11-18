@@ -42,6 +42,106 @@ export function acpUsage(value: unknown): ProtocolRecord | null {
   return Object.keys(usage).length ? usage : null;
 }
 
+/** `_meta.antigravity.tier.name` from `session/new` or `session/resume`. */
+export function extractAcpPlanTier(result: unknown): string | null {
+  if (!isRecord(result)) return null;
+  const meta = isRecord(result._meta) ? result._meta : {};
+  const agy = isRecord(meta.antigravity) ? meta.antigravity : {};
+  const tier = isRecord(agy.tier) ? agy.tier : {};
+  const name = typeof tier.name === 'string' ? tier.name.trim() : '';
+  return name ? name.slice(0, 40) : null;
+}
+
+export interface NormalizedAgyUsageLimit {
+  id: string | null;
+  label: string;
+  windowLabel: string | null;
+  resetsAt: number | null;
+  usedFraction: number;
+  unit: string;
+  status: string;
+}
+
+export interface NormalizedAgyUsageReport {
+  provider: string;
+  fetchedAt: number;
+  planType: string | null;
+  limits: NormalizedAgyUsageLimit[];
+  resetCredits: null;
+}
+
+function agyWindowLabel(windowValue: string, rawName: string, id: string): { label: string; rank: number } {
+  if (windowValue === '5h') return { label: '5 hours', rank: 0 };
+  if (windowValue === 'weekly') return { label: '7 days', rank: 1 };
+  const stripped = rawName.replace(/\s*limit\s+remaining$/i, '').trim();
+  return { label: stripped || windowValue || id || 'Quota', rank: 2 };
+}
+
+/**
+ * `agy -p /usage --output-format json` → pi-dish's `/api/usage-limits` reports.
+ * Only Gemini quota buckets are projected (matching agy's Gemini-only model scope).
+ */
+export function normalizeAgyUsageReports(
+  parsed: unknown,
+  options: { planType?: string | null; fetchedAt?: number } = {},
+): NormalizedAgyUsageReport[] {
+  const envelope = isRecord(parsed) ? parsed : {};
+  if (envelope.status === 'ERROR') {
+    const message = typeof envelope.error === 'string' && envelope.error.trim()
+      ? envelope.error.trim()
+      : 'Antigravity /usage failed';
+    throw new Error(message);
+  }
+  const command = isRecord(envelope.command) ? envelope.command : {};
+  const data = isRecord(command.data) ? command.data : {};
+  if (command.name !== 'usage' || !Array.isArray(data.groups)) {
+    throw new Error('Unexpected Antigravity /usage output');
+  }
+  const geminiGroups = data.groups.filter((group): group is ProtocolRecord =>
+    isRecord(group) && !/\b(?:claude|gpt)\b/i.test(text(group.name)));
+  const qualifyGroup = geminiGroups.length > 1;
+  const ranked: { rank: number; limit: NormalizedAgyUsageLimit }[] = [];
+  for (const group of geminiGroups) {
+    const groupName = text(group.name).trim();
+    const buckets = Array.isArray(group.buckets) ? group.buckets : [];
+    for (const raw of buckets) {
+      if (!isRecord(raw)) continue;
+      const id = text(raw.id).trim();
+      if (id.startsWith('3p-')) continue;
+      const remaining = Number(raw.remaining_fraction);
+      if (!Number.isFinite(remaining)) continue;
+      const usedFraction = Math.min(1, Math.max(0, 1 - remaining));
+      const { label: baseLabel, rank } = agyWindowLabel(text(raw.window).trim(), text(raw.name).trim(), id);
+      const label = qualifyGroup && groupName ? `${groupName} · ${baseLabel}` : baseLabel;
+      const parsedReset = typeof raw.reset_time === 'string' && raw.reset_time ? Date.parse(raw.reset_time) : NaN;
+      ranked.push({
+        rank,
+        limit: {
+          id: id ? id.slice(0, 60) : null,
+          label: label.slice(0, 120),
+          windowLabel: baseLabel.slice(0, 60),
+          resetsAt: Number.isFinite(parsedReset) ? parsedReset : null,
+          usedFraction,
+          unit: 'percent',
+          status: remaining <= 0 ? 'exhausted' : 'ok',
+        },
+      });
+    }
+  }
+  ranked.sort((a, b) => a.rank - b.rank || a.limit.label.localeCompare(b.limit.label));
+  if (!ranked.length) return [];
+  const planType = typeof options.planType === 'string' && options.planType.trim()
+    ? options.planType.trim().slice(0, 40)
+    : null;
+  return [{
+    provider: AGY_PROVIDER,
+    fetchedAt: finite(options.fetchedAt) ? options.fetchedAt : Date.now(),
+    planType,
+    limits: ranked.map(entry => entry.limit),
+    resetCredits: null,
+  }];
+}
+
 /** ACP stop reasons → Pi's assistant `stopReason` vocabulary. */
 export function acpStopReason(value: unknown): string {
   switch (value) {

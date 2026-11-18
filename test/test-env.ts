@@ -45,11 +45,12 @@ function sanitizeTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEn
     if (key.startsWith('PI_DISH_') && KEEP[key] !== true) delete next[key];
   }
   for (const key of DROP) delete next[key];
-  // Prime live rows come from a resident daemon socket outside HOME; pin a
-  // nonexistent path so no test attaches to the operator's daemon. A suite
-  // that needs a fake daemon sets its own path afterwards.
-  next.PRIME_AGENT_DAEMON_SOCKET = path.join(
-    fs.mkdtempSync(path.join(os.tmpdir(), 'dish-prime-daemon-')), 'daemon.sock');
+  // Prime live rows come from a resident daemon socket outside HOME, and `agy`
+  // `/usage` probes a host binary on PATH; pin nonexistent paths so no test
+  // touches the operator's live daemon or Antigravity account unless opted in.
+  const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'dish-prime-daemon-'));
+  next.PRIME_AGENT_DAEMON_SOCKET = path.join(isolated, 'daemon.sock');
+  next.PI_DISH_AGY_COMMAND = path.join(isolated, 'no-agy');
   next.HOST = '127.0.0.1';
   next.PORT = '0';
   return withBunOnPath(next);

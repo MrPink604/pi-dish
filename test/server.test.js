@@ -36,6 +36,7 @@ for (const key of ['PI_DISH_URL', 'PI_DISH_SHARE_PORT', 'PI_DISH_SHARE_HOST',
 // outside HOME. Pin a missing path under this suite's temp HOME so a real
 // daemon can never contribute accidental active rows.
 process.env.PRIME_AGENT_DAEMON_SOCKET = path.join(tmpHome, 'no-prime-daemon.sock');
+process.env.PI_DISH_AGY_COMMAND = path.join(tmpHome, 'no-agy');
 process.env.PI_DISH_OMP_COMMAND = `${process.execPath} ${path.join(__dirname, 'fixtures', 'fake-omp-export.js')}`;
 const IDLE_CHILD = path.join(__dirname, 'fixtures', 'idle-child.js');
 const SERVER_URL_HOST = path.join(__dirname, 'fixtures', 'server-url-host.js');

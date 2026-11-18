@@ -13,7 +13,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import fs = require('fs');
 import path = require('path');
 import crypto = require('crypto');
-import { dishDir } from './dish-store';
+import { dishDir, replaceFile } from './dish-store';
 import { createJsonLineSplitter } from './line-splitter';
 import { PendingRequests } from './pending-requests';
 import { asRecord, type ProtocolRecord } from './wire-protocol';
@@ -34,6 +34,7 @@ import {
   acpUsage,
   askElicitationResult,
   askFromElicitation,
+  extractAcpPlanTier,
   normalizeAcpTool,
   permissionDialog,
   permissionResult,
@@ -84,6 +85,28 @@ const ACTIVITY_UPDATES: Readonly<Record<string, true>> = {
 
 export function agyMirrorRoot(): string {
   return path.join(dishDir(), 'agy', 'sessions');
+}
+
+function agyTierFile(): string {
+  return path.join(dishDir(), 'agy', 'tier.json');
+}
+
+/** Persist the tier name (`Google AI Ultra`, `Google AI Pro`) observed on ACP session open. */
+export function recordAgyPlanTier(planType: string | null): void {
+  if (!planType) return;
+  try {
+    replaceFile(agyTierFile(), JSON.stringify({ planType, updatedAt: Date.now() }) + '\n', 0o600);
+  } catch { /* Advisory display metadata for `/api/usage-limits`; never fail a session. */ }
+}
+
+export function readAgyPlanTier(): string | null {
+  try {
+    const raw: unknown = JSON.parse(fs.readFileSync(agyTierFile(), 'utf8'));
+    const planType = isRecord(raw) && typeof raw.planType === 'string' ? raw.planType.trim() : '';
+    return planType ? planType.slice(0, 40) : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface AcpLaunchOptions {
@@ -755,6 +778,7 @@ export class AcpSession extends TransportSession {
       mode: null,
     };
     this._refreshStateFromConfig();
+    recordAgyPlanTier(extractAcpPlanTier(result));
     this.transcript = new AcpTranscript({ file: sessionFile, sessionId, cwd: this.cwd, agentVersion: this.agentVersion });
     for (const frame of this.earlyFrames) this.transcript.appendRaw(frame.dir, frame.msg);
     this.earlyFrames = [];

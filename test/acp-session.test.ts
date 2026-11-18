@@ -483,3 +483,42 @@ test('formats multi-region diffs, caps giant writes, and fills read_file placeho
     '/proj/README.md\n(content not reported by agy)',
   );
 });
+
+test('normalises agy /usage JSON to Gemini-only windows and rejects error envelopes', () => {
+  const reports = acpTranscript.normalizeAgyUsageReports({
+    status: 'SUCCESS',
+    command: {
+      name: 'usage',
+      data: {
+        groups: [{
+          name: 'Gemini Models',
+          buckets: [
+            { id: 'gemini-weekly', name: 'Weekly Limit Remaining', window: 'weekly', remaining_fraction: 0.9, reset_time: '2026-11-24T23:38:49Z' },
+            { id: 'gemini-5h', name: 'Five Hour Limit Remaining', window: '5h', remaining_fraction: 0, reset_time: '2026-11-18T04:38:49Z' },
+          ],
+        }, {
+          name: 'Claude and GPT models',
+          buckets: [
+            { id: '3p-weekly', name: 'Weekly Limit Remaining', window: 'weekly', remaining_fraction: 0.5, reset_time: '2026-11-25T01:38:04Z' },
+          ],
+        }],
+      },
+    },
+  }, { planType: 'Google AI Ultra', fetchedAt: 1700000000000 });
+
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].provider, 'google-antigravity');
+  assert.equal(reports[0].planType, 'Google AI Ultra');
+  assert.equal(reports[0].limits.length, 2, '3p buckets are excluded');
+  assert.equal(reports[0].limits[0].label, '5 hours');
+  assert.equal(reports[0].limits[0].usedFraction, 1);
+  assert.equal(reports[0].limits[0].status, 'exhausted');
+  assert.equal(reports[0].limits[1].label, '7 days');
+  assert.ok(Math.abs(reports[0].limits[1].usedFraction - 0.1) < 1e-9);
+  assert.equal(reports[0].limits[1].resetsAt, Date.parse('2026-11-24T23:38:49Z'));
+
+  assert.throws(
+    () => acpTranscript.normalizeAgyUsageReports({ status: 'ERROR', error: 'authentication required' }),
+    /authentication required/,
+  );
+});

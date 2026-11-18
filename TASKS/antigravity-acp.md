@@ -519,7 +519,7 @@ restart.
 | Close / restart owned | yes (kill the relay pane; respawn relay + resume) |
 | Terminal view | yes (the relay's tmux pane logs the relay lifecycle) |
 | Routines, peer control, recovery auto-continue | yes (owner decision; §6 exposure on `oauth-personal`) |
-| Usage limits | no (would need the token file; rule 2) |
+| Usage limits | yes (`agy -p /usage --output-format json`, Gemini buckets + ACP tier; no token-file access) |
 
 ## Phased plan
 

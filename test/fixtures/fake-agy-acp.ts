@@ -25,6 +25,57 @@ const VERSION = '1.5.10';
 const UNVERIFIED_VERSION = '1.5.11';
 let sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const SCRIPT = process.env.FAKE_AGY_SCRIPT || 'default';
+const cliArgs = process.argv.slice(2);
+if (cliArgs[0] === '-p' && cliArgs[1] === '/usage' && cliArgs.includes('--output-format') && cliArgs.includes('json')) {
+  if (SCRIPT === 'auth') {
+    process.stderr.write(
+      'Authentication required. Please visit the URL to log in:\n'
+      + '  https://accounts.google.com/o/oauth2/auth\n\n'
+      + 'Waiting for authentication (timeout 60s)...\n',
+    );
+    setTimeout(() => process.exit(1), 10000).unref();
+  } else {
+    process.stdout.write(JSON.stringify({
+      conversation_id: '',
+      status: 'SUCCESS',
+      response: 'Gemini Models\tWeekly Limit Remaining\t99%\t2026-11-24T23:38:49Z\n',
+      duration_seconds: 0,
+      num_turns: 0,
+      usage: { input_tokens: 0, output_tokens: 0, thinking_tokens: 0, cache_read_tokens: 0, total_tokens: 0 },
+      command: {
+        name: 'usage',
+        data: {
+          groups: [{
+            name: 'Gemini Models',
+            buckets: [{
+              id: 'gemini-weekly',
+              name: 'Weekly Limit Remaining',
+              window: 'weekly',
+              remaining_fraction: 0.91,
+              reset_time: '2026-11-24T23:38:49Z',
+            }, {
+              id: 'gemini-5h',
+              name: 'Five Hour Limit Remaining',
+              window: '5h',
+              remaining_fraction: 0.75,
+              reset_time: '2026-11-18T04:38:49Z',
+            }],
+          }, {
+            name: 'Claude and GPT models',
+            buckets: [{
+              id: '3p-weekly',
+              name: 'Weekly Limit Remaining',
+              window: 'weekly',
+              remaining_fraction: 1,
+              reset_time: '2026-11-25T01:38:04Z',
+            }],
+          }],
+        },
+      },
+    }) + '\n');
+    process.exit(0);
+  }
+}
 const USAGE = {
   inputTokens: 120,
   outputTokens: 8,
@@ -116,6 +167,7 @@ function sessionState(sessionId: string, title?: string): Frame {
       ],
     },
     configOptions: configOptions(),
+    _meta: { antigravity: { tier: { name: 'Google AI Ultra', id: 'g1-ultra-tier', upgradeUri: '' } } },
     ...(title ? { title } : {}),
   };
 }

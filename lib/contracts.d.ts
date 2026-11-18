@@ -155,6 +155,8 @@ export interface HarnessDescriptor {
      */
     launchCommand?: () => string[];
     spawnEnv?: Record<string, string>;
+    /** Ambient process env vars stripped before running this harness unless set in `commandEnv`. */
+    unsetEnv?: readonly string[];
     pilotConfig?: Record<string, string>;
     /** CLI tab order for the settings editor; the schema is read at request time so new settings need no pi-dish change. */
     settingsTabs?: readonly string[];

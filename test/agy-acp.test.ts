@@ -363,3 +363,33 @@ test('agy sessions refuse capabilities the relay does not carry', async () => {
     assert.equal(closed.status, 200, JSON.stringify(closed.body));
   }
 });
+
+test('/api/usage-limits reports Gemini windows with the ACP tier and fails fast when signed out', async () => {
+  const host = await get('/api/host');
+  assert.equal(record(host.body.capabilities).usageLimits, true);
+
+  const ok = await get('/api/usage-limits');
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const agy = record(present(records(ok.body.harnesses).map(row => record(row)).find(row => row.harness === 'agy')));
+  assert.equal(agy.error, undefined);
+  const reports = records(agy.reports).map(row => record(row));
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].provider, 'google-antigravity');
+  assert.equal(reports[0].planType, 'Google AI Ultra');
+  const limits = records(reports[0].limits).map(row => record(row));
+  assert.deepEqual(limits.map(row => row.label), ['5 hours', '7 days']);
+  assert.equal(limits[0].usedFraction, 0.25);
+  assert.ok(Math.abs(Number(limits[1].usedFraction) - 0.09) < 1e-9);
+
+  process.env.PI_DISH_AGY_COMMAND = agyCommand('auth');
+  const started = Date.now();
+  try {
+    const unauth = await get('/api/usage-limits');
+    assert.equal(unauth.status, 200);
+    const failed = record(present(records(unauth.body.harnesses).map(row => record(row)).find(row => row.harness === 'agy')));
+    assert.match(String(failed.error), /not signed in on this host/);
+    assert.ok(Date.now() - started < 5000, 'interactive auth prompt aborts immediately');
+  } finally {
+    process.env.PI_DISH_AGY_COMMAND = agyBinary;
+  }
+});

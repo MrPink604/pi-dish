@@ -270,7 +270,9 @@ its tokens. The client identifies itself to `agy` as `pi-dish`.
 - Questions from `agy`'s `ask_question` tool open the normal ask dialog
   (ACP form elicitation). An unexpected permission request opens a select.
 - The model picker lists only the Gemini models the account offers, and the
-  thinking picker offers `agy`'s levels.
+  thinking picker offers `agy`'s levels. Subscription quota windows (`5 hours`
+  and `7 days` on `google-antigravity`) appear in the Usage → Limits view via
+  `agy -p /usage --output-format json` (zero tokens, no token-file reads).
 - History: pi-dish writes a Pi-format transcript live under
   `~/.pi/dish/agy/sessions/<id>.jsonl`, with the raw ACP frames beside it in
   `<id>.acp.jsonl`. Search, usage and comments read that transcript. `agy`'s

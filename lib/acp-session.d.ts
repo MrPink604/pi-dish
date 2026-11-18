@@ -17,6 +17,9 @@ import type { NativeSessionId, PromptOptions } from './contracts';
 /** Versions the fake agent and the captures were verified against. */
 export declare const AGY_VERIFIED_VERSIONS: readonly string[];
 export declare function agyMirrorRoot(): string;
+/** Persist the tier name (`Google AI Ultra`, `Google AI Pro`) observed on ACP session open. */
+export declare function recordAgyPlanTier(planType: string | null): void;
+export declare function readAgyPlanTier(): string | null;
 export interface AcpLaunchOptions {
     cwd: string;
     /** Bare agy model id (`gemini-4-carbon`) or `google-antigravity/<id>`. */
