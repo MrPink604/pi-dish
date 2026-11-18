@@ -1,11 +1,12 @@
 # Spike: Antigravity CLI (`agy`) through ACP
 
 **Priority:** P2
-**Status:** Phase 1 implemented (2026-11-17): `src/core/acp-session.ts`,
+**Status:** Phases 1 and 3 implemented (2026-11-17): `src/core/acp-session.ts`,
 `src/core/acp-transcript.ts`, the `agy` harness wiring, and tests against a
 fake ACP agent. It was verified end to end against real `agy` 1.5.10 on
-`framework`. Phase 2 (importing TUI conversations, staleness, recovery) and
-phase 3 (detached relay) remain. The owner has accepted the terms risk of
+`framework`. Phase 3 is the tmux-hosted relay (`src/core/agy-relay.ts`), so a
+turn now survives a pi-dish restart. Phase 2 (importing TUI conversations,
+staleness, recovery) remains. The owner has accepted the terms risk of
 programmatic prompts (see Owner decision).
 
 ## Goal
@@ -320,12 +321,10 @@ of the same kind and needs no new abstraction.
 
 ### Descriptor and process model
 
-- Add `HarnessId` `agy` with `liveTransport:'acp'`, `command:'agy'`
-  (overridable with `PI_DISH_AGY_COMMAND`) and `closeMode:'owned-agent'`.
-  `HarnessDescriptor.argv.new/resume/models` is required
-  (`contracts.ts:177-180`). Either make it optional for transports that
-  never launch through tmux, or supply the `agy acp` argv there (Prime still
-  fills it).
+- Add `HarnessId` `agy` with `command:'agy'` (overridable with
+  `PI_DISH_AGY_COMMAND`) and `closeMode:'owned-pane'`; phase 3 moves the live
+  process into a tmux-hosted relay declared by `launchCommand`, and
+  `argv.new/resume` produce the relay's arguments rather than the agy argv.
 - Run one `agy acp --dangerously-skip-permissions --disable-telemetry
   --log-file <dish log dir>/agy-<session>.log` child per live session (the
   flag takes a file), with cwd set to the session cwd. This matches RPC
@@ -474,15 +473,20 @@ search, usage, comments, export, shares) reads Pi-format JSONL through
   spawns an authenticated process per read, breaks search and usage, and adds
   backend traffic that is not driven by a human.
 
-### Restart behavior
+### Restart behavior (phase 3, implemented)
 
-Owned children die when pi-dish restarts, as RPC sessions do today (no spawn
-record; `closeResources` does not adopt them). Phase 1 accepts this. After a
-restart a session shows as inactive, and resuming it (`POST /api/sessions/:id/resume`)
-respawns `agy acp` and runs `session/resume` against the mirror's native session id.
-A turn running during a pi-dish update is lost. A later phase can add a small
-detached relay that owns `agy`'s stdio behind a Unix socket (the bridge-socket
-pattern) so turns survive updates. Hibernation skips `agy` sessions altogether.
+Each session's ACP client lives in its own tmux pane under the pi-dish relay
+(`src/core/agy-relay.ts`, generated `lib/agy-relay.js`). The relay owns the
+`agy acp` child, keeps the mirror and sidecar writer, publishes the protocol-v2
+bridge claim and socket, and speaks pi-dish's bridge protocol. pi-dish therefore
+sees agy through the same `BridgeSession` path as any other bridge: it
+rediscovers the live session from `~/.pi/dish/sessions/` after a restart and
+reconnects mid-turn. A turn that is running when the server restarts finishes in
+the pane and reaches the mirror.
+
+Close kills the relay pane (the claim and socket are unlinked on SIGTERM), and
+resume/restart respawn the relay with `resume <mirror>` and run
+`session/resume` against the native id. Hibernation still skips `agy` sessions.
 
 ### Prompt sources
 
@@ -512,8 +516,8 @@ restart.
 | Compact, tree, branch | no pi-dish control; `/compact` is an `agy` command sent as text |
 | History / search / usage | through the pi-dish mirror |
 | Live list, resume | yes (`session/list`, `session/resume`) |
-| Close / restart owned | yes (`session/close` + SIGTERM; respawn + resume) |
-| Terminal view | no (no tmux pane) |
+| Close / restart owned | yes (kill the relay pane; respawn relay + resume) |
+| Terminal view | yes (the relay's tmux pane logs the relay lifecycle) |
 | Routines, peer control, recovery auto-continue | yes (owner decision; §6 exposure on `oauth-personal`) |
 | Usage limits | no (would need the token file; rule 2) |
 
@@ -524,7 +528,7 @@ restart.
 | 0 | Dropped by owner (2026-11-17): native transcript only | — | — |
 | 1 | `AcpSession` transport, descriptor, live new/resume/close/restart, prompt/steer/abort/questions, model/thinking/mode config options, commands, mirror writer with raw sidecar, tool normalisation, fake ACP agent fixture for `npm test` | L | Assistant segmentation and steer handover, against the captured frames |
 | 2 | `session/list` import and staleness re-import, recovery | M | Replay loss on import; unobserved multi-select elicitation schema |
-| 3 | Detached relay so turns survive pi-dish updates | M | Ownership record and relay authentication |
+| 3 | Detached relay so turns survive pi-dish updates — implemented as the tmux-hosted bridge relay (`src/core/agy-relay.ts`) | M | Ownership record and relay authentication |
 
 Event shapes for the fake-agent fixture come from the signed-in captures
 above. `agy` updates itself in the background, so pin the canary to an exact

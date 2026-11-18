@@ -84,6 +84,8 @@ export interface ProcessAncestry {
 export interface LaunchOptions {
   model?: unknown;
   thinking?: unknown;
+  /** Working directory the host will start in; relay-style launchers pass it explicitly. */
+  cwd?: unknown;
   /** Alternate session directory (`--session-dir`); private roots only. */
   sessionDir?: string;
 }
@@ -156,9 +158,15 @@ export interface HarnessDescriptor {
   /**
    * Absent: live sessions come from the bridge extension registry (plus Pi RPC).
    * `'prime-daemon'`: no extensions; roots come from the daemon roster and socket.
-   * `'acp'`: one owned `agy acp` stdio child per session; no tmux.
    */
-  liveTransport?: 'prime-daemon' | 'acp';
+  liveTransport?: 'prime-daemon';
+  /**
+   * tmux argv prefix that hosts the bridge in place of the harness CLI, e.g.
+   * agy's relay, which owns the ACP child and registers the bridge itself.
+   * `command`/`commandEnv` keep naming the harness binary for availability and
+   * child spawning; the relay reads `commandEnv` for its own child.
+   */
+  launchCommand?: () => string[];
   spawnEnv?: Record<string, string>;
   pilotConfig?: Record<string, string>;
   /** CLI tab order for the settings editor; the schema is read at request time so new settings need no pi-dish change. */

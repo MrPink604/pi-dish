@@ -1,5 +1,4 @@
 // Generated from src/core/session-operations.ts; edit that source and run npm run build:core.
-import { type AcpSession } from './acp-session';
 import type { SessionSource } from './session-source';
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
 import type { HarnessLaunchTarget, SessionLaunch } from './session-launch';
@@ -106,8 +105,8 @@ export declare class SessionOperationError extends Error {
     readonly status: number;
     constructor(status: number, message: string);
 }
-/** Bulk actions capture a tmux pane or daemon worker; an owned ACP child has neither. */
-export type BounceLiveSession = Exclude<LiveSession, AcpSession>;
+/** Bulk actions capture a tmux pane or daemon worker. */
+export type BounceLiveSession = LiveSession;
 export interface SessionOperations {
     createSession(options: CreateSessionOptions): Promise<string>;
     startSessionSpawn(options: CreateSessionOptions): string;

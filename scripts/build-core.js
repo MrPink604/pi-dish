@@ -11,7 +11,7 @@ const check = (0, build_output_js_1.checkRequested)('build-core.js');
     }
     const outputs = new Map(files.map(file => [
         `lib/${file}`,
-        { source: `src/core/${file.replace(/\.js$|\.d\.ts$/, '.ts')}`, executable: false },
+        { source: `src/core/${file.replace(/\.js$|\.d\.ts$/, '.ts')}`, executable: file === 'agy-relay.js' },
     ]));
     const orphaned = (0, build_output_js_1.orphanedOutputs)(['lib'], BANNER, outputs, false);
     if (orphaned.length)

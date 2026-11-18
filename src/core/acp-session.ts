@@ -164,7 +164,9 @@ function launchAgy(opts: { command?: string; args?: string[]; env?: NodeJS.Proce
       launchEnv = parsed.env;
     }
   }
-  if (!opts.command && !argv.includes('acp')) argv.push(...ACP_ARGS, '--log-file', logFileFor(opts.sessionId));
+  // The relay passes the configured agy binary explicitly; the ACP argv is
+  // still ours unless that command already carries it.
+  if (!argv.includes('acp')) argv.push(...ACP_ARGS, '--log-file', logFileFor(opts.sessionId));
   const env: NodeJS.ProcessEnv = { ...process.env, ...launchEnv, ...opts.env };
   for (const key of STRIPPED_ENV) delete env[key];
   return { argv, env };

@@ -4,12 +4,11 @@ import { BridgeSession } from './bridge-session';
 import { RPCSession } from './rpc-session';
 import { PrimeDaemonSession } from './prime-daemon';
 import type { PrimeAgentSummary, PrimeDaemon } from './prime-daemon';
-import { AcpSession } from './acp-session';
 import type { DiscoveryCandidate, LiveSourceObservation, SessionSource, SessionSourceResolver } from './session-source';
 import * as tmux from './tmux';
 import type { RecoveryRecord } from './session-recovery';
-/** The four live transports: bridge extension, Pi RPC child, Prime daemon root, owned ACP child. */
-export type LiveSession = InstanceType<typeof BridgeSession> | InstanceType<typeof RPCSession> | PrimeDaemonSession | AcpSession;
+/** The three live transports: bridge extension, Pi RPC child, Prime daemon root. */
+export type LiveSession = InstanceType<typeof BridgeSession> | InstanceType<typeof RPCSession> | PrimeDaemonSession;
 export interface OwnershipObservations {
     /** Presentation listeners only; the selected transport cannot be replaced. */
     onLive(session: LiveSession): void;

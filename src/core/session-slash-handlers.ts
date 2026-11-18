@@ -1,7 +1,6 @@
 import { errorMessage, errorStatus, httpError, requestBody, type RouteHandler } from './http-boundary';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
-import { AcpSession } from './acp-session';
 import { parseModelId, thinkingLevelNamesFor } from './helper-models.js';
 import { getHarness } from './harnesses';
 import { liveSessionSupports } from './session-ownership';
@@ -252,47 +251,6 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
     }
   }
 
-  /**
-   * Slash commands against an owned ACP child. abort/model/thinking are ACP
-   * requests; agy's own commands are verified against `getCommands` and sent as
-   * prompt text, which is how Zed drives them.
-   */
-  async function runAcpSlashCommand(acp: AcpSession, message: string): Promise<{ info?: unknown }> {
-    const { name, args } = splitCommand(message);
-    if (!liveSessionSupports(acp, 'commands')) throw new Error('This session does not support remote commands.');
-    switch (name) {
-      case 'abort':
-        await acp.abort();
-        return { info: 'Aborted' };
-      case 'thinking':
-        if (!args) throw new Error(`usage: /thinking <${thinkingLevelNamesFor('agy').join('|')}>`);
-        await acp.setThinkingLevel(args);
-        return { info: `Thinking level: ${args}` };
-      case 'model': {
-        if (!args) throw new Error('usage: /model <provider/model-id>');
-        let { provider, id } = parseModelId(args);
-        if (!provider) {
-          const listed = await acp.getAvailableModels();
-          const models = availableModels(Array.isArray(listed) ? { models: listed } : listed);
-          const match = models.find(candidate => candidate.id === args)
-            || models.find(candidate => candidate.id.includes(args));
-          if (!match) throw new Error(`model not found: ${args}`);
-          provider = match.provider;
-          id = match.id;
-        }
-        await acp.setModel(provider, id);
-        return { info: `Model set to ${provider}/${id}` };
-      }
-      default: {
-        const raw = await acp.getCommands().catch(() => null);
-        const known = commandNames(Array.isArray(raw) ? { commands: raw } : raw);
-        if (!known.includes(name)) throw new Error(`unknown or unsupported command: /${name}`);
-        await acp.prompt(message);
-        return {};
-      }
-    }
-  }
-
   const command: RouteHandler = async (req, res) => {
     const { message, deliverAs } = requestBody(req);
     if (typeof message !== 'string' || !message.startsWith('/')) {
@@ -356,16 +314,6 @@ export function createSlashCommandHandler(ports: SlashCommandPorts) {
           return res.status(409).json({ error: 'This Prime Agent session does not support signing in from pi-dish.' });
         }
         const result = await runPrimeSlashCommand(sess, message);
-        return res.json({ success: true, info: result.info });
-      }
-      if (sess instanceof AcpSession) {
-        if (/^\/btw(\s|$)/.test(message)) {
-          return res.status(409).json({ error: 'This session does not support side chats.' });
-        }
-        if (/^\/login(\s|$)/.test(message)) {
-          return res.status(409).json({ error: 'This Antigravity session does not support signing in from pi-dish; run `agy acp --login` on the host.' });
-        }
-        const result = await runAcpSlashCommand(sess, message);
         return res.json({ success: true, info: result.info });
       }
       const result = await runRpcSlashCommand(sess, message);

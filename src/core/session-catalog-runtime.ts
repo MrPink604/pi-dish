@@ -2,9 +2,8 @@ import fs = require('fs');
 import path = require('path');
 import { listRegisteredSessions } from './bridge-session';
 import { getAllRPCSessions } from './rpc-session';
-import { getAllAcpSessions, type AcpSession } from './acp-session';
 import { getHarness, listHarnesses } from './harnesses';
-import { AGY_ACP_CAPABILITIES, PRIME_DAEMON_CAPABILITIES, sessionCapabilities } from './session-capabilities';
+import { PRIME_DAEMON_CAPABILITIES, sessionCapabilities } from './session-capabilities';
 import { getPrimeDaemon, type PrimeDaemon, type PrimeDaemonSession } from './prime-daemon';
 import tmux = require('./tmux');
 import sessionIndex = require('./session-index');
@@ -16,7 +15,7 @@ import {
 import { resolveSessionRefAmong } from './helper-refs.js';
 import { normalizeModels } from './session-api';
 import {
-  acpSessionObservation, composeSessionCatalog, decodeLaunchParents, decodeRoutineAnnotations,
+  composeSessionCatalog, decodeLaunchParents, decodeRoutineAnnotations,
   primeSessionObservation, registeredSessionObservation, rpcSessionObservation, withSessionContext,
 } from './session-catalog';
 import sessionProvenance = require('./session-provenance');
@@ -62,8 +61,6 @@ export interface CatalogRuntimePorts {
   ownership: SessionOwnership;
   /** Roster-discovered Prime roots attach their lifecycle listeners here. */
   onPrimeSession?(session: PrimeDaemonSession): void;
-  /** Owned ACP children attach their lifecycle listeners here. */
-  onAcpSession?(session: AcpSession): void;
 }
 
 export type SessionFileInfo = SessionInfo & {
@@ -224,25 +221,6 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
         },
       }));
       seen.add(rpc.id);
-    }
-
-    // Owned `agy acp` children never register with the bridge, so their
-    // lifecycle listeners attach here too.
-    for (const acp of getAllAcpSessions()) {
-      const routeId = routeSessionId('agy', acp.id);
-      if (!acp.alive || seen.has(routeId)) continue;
-      ports.onAcpSession?.(acp);
-      const { source, info } = observedSource('agy', acp.id, acp.sessionFile);
-      active.push(acpSessionObservation(acp, {
-        nativeSessionId: acp.id, source, info,
-        advice: {
-          capabilities: sessionCapabilities('agy', AGY_ACP_CAPABILITIES, {
-            active: true, conflicted: false, closeAllowed: acp.alive, restartAllowed: acp.alive,
-          }),
-          closeMode: getHarness('agy')!.closeMode, conflicted: false, liveInstanceCount: 1,
-        },
-      }));
-      seen.add(routeId);
     }
 
     // Prime roots exist only in the daemon roster, so their lifecycle

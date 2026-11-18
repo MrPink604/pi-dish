@@ -29,6 +29,12 @@ function primeResume({ file, model }: ResumeOptions = {}): (string | undefined)[
   return ['--resume', file, ...(model ? ['--model', model] : [])];
 }
 
+function agyResume(options: ResumeFileOptions): string[];
+function agyResume(options?: ResumeOptions): (string | undefined)[];
+function agyResume({ file, model }: ResumeOptions = {}): (string | undefined)[] {
+  return ['resume', file, ...(model ? ['--model', model] : [])];
+}
+
 const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
   pi: {
     id: 'pi', label: 'Pi', wrapperEntrypoint: null, eventProfile: 'pi-v3', profileId: 'pi-v3', profileVersion: 1,
@@ -186,20 +192,24 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
   },
   agy: {
     id: 'agy', label: 'Antigravity', wrapperEntrypoint: null, eventProfile: 'agy-v1', profileId: 'agy-v1', profileVersion: 1,
-    // Pi-format mirror written by the ACP transport; agy keeps its own store.
+    // Pi-format mirror written by the relay; agy keeps its own store.
     rootPath: () => path.join(dishStore.dishDir(), 'agy', 'sessions'),
     layout: 'flat', commandEnv: 'PI_DISH_AGY_COMMAND', command: 'agy',
     // The raw ACP sidecar sits beside each mirror and is not a session.
     auxiliaryJsonlSuffixes: ['.acp.jsonl'],
-    rpcFallback: false, modelCatalog: null, closeMode: 'owned-agent',
-    // One `agy acp` stdio child per live session; models/commands come from ACP.
-    liveTransport: 'acp',
-    // No tmux or CLI resume path exists for ACP: the transport spawns `agy acp`
-    // and resumes by native session id. These argv rows only keep the descriptor
-    // total for generic harness tooling.
+    rpcFallback: false, modelCatalog: null, closeMode: 'owned-pane',
+    // Each session's ACP client lives in its own tmux pane, so it survives a
+    // pi-dish restart. `PI_DISH_AGY_COMMAND` still names the agy binary; the
+    // relay spawns it and speaks pi-dish's bridge protocol to the server.
+    launchCommand: () => [process.execPath, path.join(repo, 'lib', 'agy-relay.js')],
     argv: {
-      new: () => ['acp', '--dangerously-skip-permissions', '--disable-telemetry'],
-      resume: () => ['acp', '--dangerously-skip-permissions', '--disable-telemetry'],
+      new: ({ model, thinking, cwd } = {}) => [
+        'new',
+        ...(typeof cwd === 'string' && cwd ? ['--cwd', cwd] : []),
+        ...(model ? ['--model', String(model)] : []),
+        ...(thinking ? ['--thinking', String(thinking)] : []),
+      ],
+      resume: agyResume,
       models: [],
     },
   },

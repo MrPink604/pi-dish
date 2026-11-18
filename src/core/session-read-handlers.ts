@@ -7,7 +7,7 @@ import { PrimeDaemonSession } from './prime-daemon';
 import { getHarness } from './harnesses';
 import { asRecord } from './wire-protocol';
 import { record as isRecord } from './helper-values';
-import { agyLiveSession, primeLiveSession } from './live-sessions';
+import { primeLiveSession } from './live-sessions';
 import type { CatalogRuntime } from './session-catalog-runtime';
 import { errorMessage } from './http-boundary';
 import { extractTextContent, getToolSummary } from './helper-content.js';
@@ -172,10 +172,10 @@ async function liveTreeLeafId(session: InstanceType<typeof BridgeSession>): Prom
 export function createSessionReadHandlers({ ownership, catalog, findSessionSource }: SessionReadPorts): SessionReadHandlers {
   const { liveSessionHistoryPending, getRegisteredSession, getRPCSession, getLiveSession, describeRuntime } = ownership;
 
-  /** Any transport: bridge registry, pi-dish RPC child, Prime daemon root, owned ACP child. */
+  /** Any transport: bridge registry, pi-dish RPC child, Prime daemon root. */
   function isLive(sessionId: string): boolean {
     return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive
-      || !!primeLiveSession(sessionId) || !!agyLiveSession(sessionId)?.alive;
+      || !!primeLiveSession(sessionId);
   }
 
   /** Live context usage, whichever backend reports it (roster beats transport stats). */
@@ -185,9 +185,7 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
     const stats = getRPCSession(sessionId)?.lastStats;
     if (stats != null) return (isRecord(stats) && stats.contextUsage) || null;
     const primeStats = primeLiveSession(sessionId)?.lastStats;
-    if (isRecord(primeStats)) return primeStats.contextUsage || null;
-    const acpStats = agyLiveSession(sessionId)?.lastStats;
-    return isRecord(acpStats) ? acpStats.contextUsage || null : null;
+    return isRecord(primeStats) ? primeStats.contextUsage || null : null;
   }
 
   async function getOmpShareSnapshot(session: SessionSource): Promise<unknown> {
@@ -336,9 +334,6 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
         userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput,
       } = getSessionStats(source);
       const reg = getRegisteredSession(sessionId);
-      const acp = agyLiveSession(sessionId);
-      const acpState = isRecord(acp?.state) ? acp.state : {};
-      const acpThinking = typeof acpState.thinkingLevel === 'string' && acpState.thinkingLevel ? acpState.thinkingLevel : null;
       const contextUsage = getLiveContextUsage(sessionId);
       const info = catalog.parseSessionFile(source);
       res.json({
@@ -346,9 +341,9 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
         sessionId: source.routeId,
         ...sessionIdentityFields(source.harnessId, source.nativeSessionId),
         runtime: await describeRuntime(sessionId),
-        cwd: reg?.cwd || acp?.cwd || info.cwd || null,
+        cwd: reg?.cwd || info.cwd || null,
         model: reg?.model || info.model || null,
-        thinkingLevel: reg?.thinkingLevel || acpThinking || null,
+        thinkingLevel: reg?.thinkingLevel || null,
         userMessages, assistantMessages, toolCalls, toolResults, compactions,
         totalMessages: userMessages + assistantMessages + toolResults,
         tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },

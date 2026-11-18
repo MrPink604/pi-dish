@@ -17,7 +17,6 @@ import type { SessionSource } from './session-source';
 import type { SessionOwnership } from './session-ownership';
 import type { CatalogRuntime } from './session-catalog-runtime';
 import { listRegisteredSessions } from './bridge-session';
-import { getAcpSession } from './acp-session';
 import type { BridgeRegistryEntry } from './contracts';
 import type { SessionReadHandlers } from './session-read-handlers';
 import type { PublicArtifactRelay } from './relay-handlers';
@@ -225,9 +224,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
         && candidate.nativeSessionId === identity.nativeSessionId;
     });
     const rpc = identity.harnessId === 'pi' && getRPCSession(value)?.id === identity.nativeSessionId;
-    // An owned ACP child never registers with the bridge; its route is live too.
-    const acp = identity.harnessId === 'agy' && !!getAcpSession(identity.nativeSessionId)?.alive;
-    const active = registered || rpc || acp;
+    const active = registered || rpc;
     const historical = !active && enumerateSessionCandidates().some((candidate) =>
       candidate.harnessId === identity.harnessId
         && candidate.nativeSessionId === identity.nativeSessionId);

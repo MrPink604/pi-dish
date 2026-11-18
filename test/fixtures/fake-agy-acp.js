@@ -237,6 +237,16 @@ function handlePrompt(id, params) {
         case 'slow':
             textChunk('Working on it.');
             return;
+        case 'delayed':
+            // Two chunks far apart, so a test can drop and re-open the bridge socket
+            // mid-turn; the relay must keep streaming and finish the mirror.
+            setTimeout(() => { textChunk('First part. '); usageUpdate(1200); }, 10);
+            setTimeout(() => {
+                textChunk('Second part.');
+                usageUpdate(1400);
+                finishPrompt(id, 'end_turn');
+            }, 700);
+            return;
         case 'prompt-error': {
             setTimeout(() => {
                 const index = openPrompts.indexOf(id);

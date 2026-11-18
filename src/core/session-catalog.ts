@@ -21,11 +21,8 @@ export interface CatalogAdvice {
   readonly liveInstanceCount: number;
 }
 export interface CatalogLiveObservation extends Readonly<SessionIdentity> {
-  /**
-   * `prime`: a root agent read from Prime's daemon roster (no bridge registry row).
-   * `acp`: an owned `agy acp` stdio child (no bridge registry row).
-   */
-  readonly kind: 'registered' | 'rpc' | 'prime' | 'acp';
+  /** `prime`: a root agent read from Prime's daemon roster (no bridge registry row). */
+  readonly kind: 'registered' | 'rpc' | 'prime';
   /** Reported even before the JSONL exists. This is not a resolved read source. */
   readonly claimedFile: string | null;
   readonly source: SessionSource | null;
@@ -182,22 +179,6 @@ function primeSessionObservation(value: unknown, context: ObservationContext): C
   }, number(asRecord(value.summary).workerPid) ?? null, context);
 }
 
-/** An owned `agy acp` child: its transport state carries name, model, thinking
- * and mode; the mirror supplies history counters once it exists. */
-function acpSessionObservation(value: unknown, context: ObservationContext): CatalogLiveObservation {
-  if (!isRecord(value)) throw new TypeError('Invalid ACP session observation');
-  const state = asRecord(value.state);
-  const usage = asRecord(asRecord(value.lastStats).contextUsage);
-  return observation('acp', 'agy', string(value.sessionFile), {
-    name: string(state.sessionName) || string(state.name),
-    model: modelRef(state.model), thinkingLevel: string(state.thinkingLevel),
-    contextTokens: number(usage.tokens), contextPercent: number(usage.percent), contextWindow: number(usage.contextWindow),
-    lastActivity: timestamp(value.lastActivityAt),
-    turnInProgress: value.turnInProgress === true, askPending: hasPendingAskDialog(value.extUIState),
-    compacting: value.compacting === true, cwd: string(value.cwd),
-  }, number(value.pid) ?? null, context);
-}
-
 /** Validate advisory store snapshots without migrating or granting authority to
  * those stores. Invalid records are ignored individually. */
 function decodeLaunchParents(value: unknown): ReadonlyMap<SessionId, SessionId> {
@@ -250,9 +231,9 @@ function identityFields(harnessId: HarnessId, nativeSessionId: NativeSessionId, 
 
 function buildActiveSession(live: CatalogLiveObservation, options: SessionCatalogOptions): CatalogSession {
   const fields = live.fields;
-  // Roster rows (bridge registry, Prime daemon, owned ACP child) carry current
-  // name/model/busy state; RPC children report their own state object instead.
-  const registered = live.kind === 'registered' || live.kind === 'prime' || live.kind === 'acp';
+  // Roster rows (bridge registry, Prime daemon) carry current name/model/busy
+  // state; RPC children report their own state object instead.
+  const registered = live.kind === 'registered' || live.kind === 'prime';
   const info = live.info ? withSessionContext(live.info, options.contextWindowForModel, options.cacheRetention) : null;
   const model = registered ? fields.model || info?.model : fields.model;
   const percent = registered ? fields.contextPercent ?? info?.contextPercent : fields.contextPercent;
@@ -329,7 +310,7 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
   const seen = new Set<SessionId>();
   // A registered row owns the logical session even when the RPC snapshot was
   // collected first. Conflicted rows remain visible; advice already disables control.
-  for (const kind of ['registered', 'prime', 'acp', 'rpc'] as const) {
+  for (const kind of ['registered', 'prime', 'rpc'] as const) {
     for (const live of input.active) {
       if (live.kind !== kind || seen.has(live.id)) continue;
       const row = buildActiveSession(live, options);
@@ -380,7 +361,7 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
 }
 
 export = {
-  registeredSessionObservation, rpcSessionObservation, primeSessionObservation, acpSessionObservation, decodeLaunchParents, decodeRoutineAnnotations,
+  registeredSessionObservation, rpcSessionObservation, primeSessionObservation, decodeLaunchParents, decodeRoutineAnnotations,
   withSessionContext, subsessionLabel, buildActiveSession, buildSourceSession, buildHistoricalSession, composeSessionCatalog,
   decodeDirToCwd,
 };

@@ -52,7 +52,6 @@ import { createSessionHibernation } from './session-hibernation';
 import { createPushNotifier } from './push-notifications';
 import { expandSessionRefs } from './session-refs';
 import { getPrimeDaemon } from './prime-daemon';
-import { getAcpSession, shutdownAcpSessions } from './acp-session';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
 import { createPrivateAccess } from './private-access';
@@ -162,7 +161,7 @@ export function startServer(rootDirectory: string): Server {
     wakeSession: routeId => { messageHold.wake(routeId); },
     adoptSessionSwitch: (session, data) => { adoptBridgeSessionSwitch(session, data); },
   });
-  const catalog = createCatalogRuntime({ ownership, onPrimeSession: lifecycleObserver, onAcpSession: lifecycleObserver });
+  const catalog = createCatalogRuntime({ ownership, onPrimeSession: lifecycleObserver });
 
   function findSessionSource(sessionId: unknown, { exact = false } = {}): SessionSource | null {
     return sessionSources.resolve({ route: sessionId, exact, live: liveSourceObservations(sessionId) });
@@ -171,9 +170,7 @@ export function startServer(rootDirectory: string): Server {
     return findSessionSource(sessionId, options)?.file || null;
   }
   function sessionKnown(sessionId: string): boolean {
-    const identity = routeIdentity(sessionId);
-    const acp = identity?.harnessId === 'agy' ? getAcpSession(identity.nativeSessionId) : null;
-    return !!acp?.alive || !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive
+    return !!getRegisteredSession(sessionId) || !!getRPCSession(sessionId)?.alive
       || !!findSessionSource(sessionId, { exact: true });
   }
 
@@ -197,10 +194,6 @@ export function startServer(rootDirectory: string): Server {
     // A fresh Prime root may not have a JSONL header yet; its roster row does.
     const primeCwd = primeLiveSession(sessionId)?.cwd;
     if (primeCwd) return primeCwd;
-    // ACP children hold cwd; their mirror header may lag the live session.
-    const identity = routeIdentity(sessionId);
-    const acp = identity?.harnessId === 'agy' ? getAcpSession(identity.nativeSessionId) : null;
-    if (acp?.cwd) return acp.cwd;
     const session = findSessionSource(sessionId);
     if (session) {
       try { return catalog.parseSessionFile(session).cwd || null; } catch {}
@@ -630,8 +623,6 @@ export function startServer(rootDirectory: string): Server {
     messageHold.stop();
     // Detach from Prime's daemon: the poller and socket belong to this server.
     getPrimeDaemon().shutdown();
-    // Owned ACP children die with the server: close ACP, then SIGTERM.
-    shutdownAcpSessions().catch((error: unknown) => console.error(`ACP shutdown failed: ${errorMessage(error)}`));
     if (shareServer) { try { shareServer.close(); } catch {} }
     remoteHosts.shutdown();
     sessionBounces.stop();

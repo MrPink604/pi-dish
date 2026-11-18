@@ -15,10 +15,11 @@ const PRIME_DAEMON_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
 });
 
 /**
- * What the owned `agy acp` transport carries. Fixed: ACP has no pi extension
- * or bridge advertisement. Absent: followUp (a prompt during a turn steers),
- * compact, rename (no ACP method), reload, queue*, tree*, sideChat, fastMode,
- * login, shareSnapshot, guardedReload.
+ * What the agy relay advertises in its bridge claim. Fixed: ACP has no pi
+ * extension to advertise through, so the relay publishes this exact set.
+ * Absent: followUp (a prompt during a turn steers), compact, rename (no ACP
+ * method), reload, queue*, tree*, sideChat, fastMode, login, shareSnapshot,
+ * guardedReload.
  */
 const AGY_ACP_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
   prompt: true, steer: true, abort: true, models: true, setModel: true,
@@ -45,9 +46,7 @@ function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities: Advertise
   };
   const pi = harnessId === 'pi';
   const closeMode = getHarness(harnessId)?.closeMode || 'unsupported';
-  // The ACP transport has no bridge advertisement; its command set is fixed.
-  const caps = harnessId === 'agy' ? AGY_ACP_CAPABILITIES : bridgeCapabilities;
-  const advertised = (name: BridgeCapability) => active && bridgeSupports(harnessId, caps, name);
+  const advertised = (name: BridgeCapability) => active && bridgeSupports(harnessId, bridgeCapabilities, name);
   return {
     prompt: advertised('prompt'),
     steer: advertised('steer'),

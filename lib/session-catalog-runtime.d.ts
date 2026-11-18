@@ -1,5 +1,4 @@
 // Generated from src/core/session-catalog-runtime.ts; edit that source and run npm run build:core.
-import { type AcpSession } from './acp-session';
 import { type PrimeDaemonSession } from './prime-daemon';
 import type { SessionOwnership } from './session-ownership';
 import type { BridgeRegistryEntry } from './contracts';
@@ -13,8 +12,6 @@ export interface CatalogRuntimePorts {
     ownership: SessionOwnership;
     /** Roster-discovered Prime roots attach their lifecycle listeners here. */
     onPrimeSession?(session: PrimeDaemonSession): void;
-    /** Owned ACP children attach their lifecycle listeners here. */
-    onAcpSession?(session: AcpSession): void;
 }
 export type SessionFileInfo = SessionInfo & {
     contextWindow: number;

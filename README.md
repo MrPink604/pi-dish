@@ -255,11 +255,13 @@ uncloseable. History is discovered from `~/.prime/agent/sessions/`. See
 
 pi-dish drives Google's Antigravity CLI through its official Agent Client
 Protocol server, `agy acp`. The new-session picker lists **Antigravity** when
-`agy` (or `PI_DISH_AGY_COMMAND`) resolves on the host. Each live session is one
-pi-dish-owned `agy acp --dangerously-skip-permissions` child, launched in the
-session's cwd. It is not a tmux pane, so there is no terminal view. `agy` keeps
-its own sign-in. Run `agy` or `agy acp --login` once on the host; pi-dish never
-reads its tokens. The client identifies itself to `agy` as `pi-dish`.
+`agy` (or `PI_DISH_AGY_COMMAND`) resolves on the host. Each live session runs in
+its own pi-dish-owned tmux window: a small relay (`lib/agy-relay.js`) owns the
+`agy acp --dangerously-skip-permissions` child, writes the transcript, and
+registers as a normal bridge session. The pane is the terminal view of the
+relay, so the agent does not die with the pi-dish server. `agy` keeps its own
+sign-in. Run `agy` or `agy acp --login` once on the host; pi-dish never reads
+its tokens. The client identifies itself to `agy` as `pi-dish`.
 
 - Prompt, steer (a prompt during a turn) and abort work. Follow-up queueing,
   compaction controls, rename, tree and HTML export are refused, because ACP
@@ -273,9 +275,11 @@ reads its tokens. The client identifies itself to `agy` as `pi-dish`.
   `~/.pi/dish/agy/sessions/<id>.jsonl`, with the raw ACP frames beside it in
   `<id>.acp.jsonl`. Search, usage and comments read that transcript. `agy`'s
   own store under `~/.gemini/` is never parsed.
-- Lifecycle: close stops the child. Resume and restart start a new child and
-  reopen the conversation with `session/resume`. A turn that is running when
-  pi-dish restarts is lost.
+- Lifecycle: close kills the relay pane, which closes the ACP child and
+  removes its registry claim and socket. Resume and restart respawn the relay
+  and reopen the conversation with `session/resume`. A turn that is running
+  when pi-dish restarts keeps running in the pane; the server rediscovers the
+  session and reconnects to the stream.
 - Not yet supported: importing conversations started in the `agy` TUI,
   session recovery, and hibernation.
 

@@ -9,7 +9,6 @@ import { formatModelRef } from './helper-models';
 import { record } from './helper-values';
 import { errorMessage, errorStatus } from './http-boundary';
 import { getPrimeDaemon } from './prime-daemon';
-import { getAcpSession, resumeAcpSession, type AcpSession } from './acp-session';
 import { processIdentityAlive } from './process-identity';
 import { canonicalSessionId } from './session-key';
 import { sourceForIdentity } from './session-source';
@@ -128,8 +127,8 @@ export class SessionOperationError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-/** Bulk actions capture a tmux pane or daemon worker; an owned ACP child has neither. */
-export type BounceLiveSession = Exclude<LiveSession, AcpSession>;
+/** Bulk actions capture a tmux pane or daemon worker. */
+export type BounceLiveSession = LiveSession;
 
 export interface SessionOperations {
   createSession(options: CreateSessionOptions): Promise<string>;
@@ -257,25 +256,6 @@ export function createSessionOperations(observations: SessionOperationObservatio
     const descriptor = getHarness(route.harnessId);
     if (!descriptor || descriptor.closeMode === 'unsupported') {
       return noAction(409, `Closing ${descriptor?.label || route.harnessId} sessions is not supported; close the owning tmux client directly.`);
-    }
-    // Owned ACP children are closed over ACP, with no pane or daemon roster.
-    if (descriptor.liveTransport === 'acp') {
-      const acp = getAcpSession(route.nativeSessionId);
-      if (!acp?.alive) return noAction(404, 'Session not active');
-      const finalCheck = beforeAction ? await beforeAction() : null;
-      try {
-        finalCheck?.();
-        await acp.close();
-      } catch (error) {
-        if (!acp.alive) {
-          return { kind: 'cleanup-failed', stopped: true, status: 500,
-            error: `Failed to close ${descriptor.label}: ${errorMessage(error)}`, cause: error,
-            closeIntent: { preserve: true, stopped: true } };
-        }
-        return { kind: 'stop-uncertain', status: 500,
-          error: `Failed to close ${descriptor.label}: ${errorMessage(error)}`, cause: error };
-      }
-      return { kind: 'stopped' };
     }
     if (descriptor.closeMode === 'owned-pane') {
       let capture;
@@ -441,13 +421,8 @@ export function createSessionOperations(observations: SessionOperationObservatio
     const identity = routeIdentity(sessionId);
     return identity?.harnessId === 'prime' ? getPrimeDaemon().byNativeId(identity.nativeSessionId) : null;
   }
-  /** The owned ACP child for this route, from the transport's session map. */
-  function acpSessionFor(sessionId: unknown) {
-    const identity = routeIdentity(sessionId);
-    return identity?.harnessId === 'agy' ? getAcpSession(identity.nativeSessionId) ?? null : null;
-  }
   function sessionIsActive(sessionId: string): boolean {
-    return !!primeRootFor(sessionId) || !!acpSessionFor(sessionId)?.alive
+    return !!primeRootFor(sessionId)
       || !!ownership.getRegisteredSession(sessionId) || !!ownership.getRPCSession(sessionId)?.alive;
   }
   /** A timed-out tmux placement keeps blocking another writer until its pane or process is gone. */
@@ -464,9 +439,8 @@ export function createSessionOperations(observations: SessionOperationObservatio
     const registered = ownership.getRegisteredSession(sessionId);
     const rpc = ownership.getRPCSession(sessionId);
     const prime = primeRootFor(sessionId);
-    const acp = acpSessionFor(sessionId);
-    if (!registered && !rpc?.alive && !prime && !acp?.alive) return false;
-    const activeFile = registered?.sessionFile || rpc?.sessionFile || rpc?.state?.sessionFile || prime?.sessionFile || acp?.sessionFile;
+    if (!registered && !rpc?.alive && !prime) return false;
+    const activeFile = registered?.sessionFile || rpc?.sessionFile || rpc?.state?.sessionFile || prime?.sessionFile;
     if (activeFile) {
       try { clearResumeQuarantines(fs.realpathSync(filePath(activeFile))); } catch {}
     }
@@ -489,12 +463,6 @@ export function createSessionOperations(observations: SessionOperationObservatio
         if (routeSessionId('prime', root.nativeSessionId) === sessionId || sameTranscriptFile(root.sessionFile, sessionFile)) {
           throw new SessionOperationError(409, 'A live Prime agent claims this transcript; refusing to start another writer.');
         }
-      }
-    }
-    if (getHarness(identity.harnessId)?.liveTransport === 'acp') {
-      const live = getAcpSession(identity.nativeSessionId);
-      if (live?.alive && sameTranscriptFile(live.sessionFile, sessionFile)) {
-        throw new SessionOperationError(409, 'The live Antigravity session claims this transcript; refusing to start another writer.');
       }
     }
     const boot = recoveryStore.bootId();
@@ -643,8 +611,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
     if (!descriptor || descriptor.closeMode === 'unsupported') return noAction(409, `${descriptor?.label || route.harnessId} does not support agent restart.`);
     if (restartFlights.has(sessionId) || closeFlights.has(sessionId)) return noAction(409, 'The session is already being restarted or closed.');
     const activeFile = ownership.getRPCSession(sessionId)?.sessionFile
-      || ownership.getRegisteredSession(sessionId)?.sessionFile
-      || acpSessionFor(sessionId)?.sessionFile;
+      || ownership.getRegisteredSession(sessionId)?.sessionFile;
     if (activeFile) {
       try {
         if (resumeFlights.has(fs.realpathSync(filePath(activeFile)))) return noAction(409, 'The session is still being resumed.');
@@ -673,35 +640,6 @@ export function createSessionOperations(observations: SessionOperationObservatio
       }
 
       let restartCapture;
-      // Owned ACP children restart by respawning and resuming their own mirror;
-      // there is no tmux pane or daemon worker to capture.
-      if (descriptor.liveTransport === 'acp') {
-        const acp = acpSessionFor(sessionId);
-        if (!acp?.alive) return noAction(409, 'Restart is available only for a live Antigravity session.');
-        let sessionFile: string;
-        try { sessionFile = fs.realpathSync(filePath(acp.sessionFile)); }
-        catch { return noAction(409, 'The active Antigravity session has no resumable transcript.'); }
-        const finalCheck = beforeAction ? await beforeAction() : null;
-        try {
-          finalCheck?.();
-          await acp.close();
-        } catch (error) {
-          if (acp.alive) {
-            return { kind: 'stop-uncertain', status: 500,
-              error: `The agent did not stop cleanly, so no replacement was started: ${errorMessage(error)}`, cause: error };
-          }
-          return { kind: 'replacement-not-ready', stopped: true, status: 500,
-            error: `The agent stopped, but closing it reported an error: ${errorMessage(error)}`, cause: error };
-        }
-        try {
-          const replacement = await resumeAcpSession(sessionFile);
-          return { kind: 'stopped', replacement: { id: routeSessionId('agy', replacement.id), placement: 'rpc' } };
-        } catch (error) {
-          console.error('Failed to restart ACP session:', error);
-          return { kind: 'replacement-not-ready', stopped: true, status: 500,
-            error: `The agent stopped, but its Antigravity replacement failed to start: ${errorMessage(error)}`, cause: error };
-        }
-      }
       try { restartCapture = await ownership.capturePaneRestart(sessionId, descriptor); }
       catch (error) {
         if (error instanceof OwnershipRefusal) return noAction(error.status, error.message, error);

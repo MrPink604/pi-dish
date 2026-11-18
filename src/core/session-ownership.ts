@@ -5,8 +5,7 @@ import { BridgeSession, getBridgeSession as getBridgeSessionForClaim, getRegiste
 import { getRPCSession as getRawRPCSession, RPCSession } from './rpc-session';
 import { getPrimeDaemon, PrimeDaemonSession } from './prime-daemon';
 import type { PrimeAgentSummary, PrimeDaemon } from './prime-daemon';
-import { getAcpSession, AcpSession } from './acp-session';
-import { AGY_ACP_CAPABILITIES, bridgeSupports, PRIME_DAEMON_CAPABILITIES } from './session-capabilities';
+import { bridgeSupports, PRIME_DAEMON_CAPABILITIES } from './session-capabilities';
 import { getHarness } from './harnesses';
 import { inspectProcessAncestry, processIdentity, processIdentityAlive } from './process-identity';
 import { encodeSessionKey, resolveSessionRoute, validSessionId, VERSION } from './session-key';
@@ -20,8 +19,8 @@ import * as recoveryStore from './session-recovery';
 import type { RecoveryRecord } from './session-recovery';
 import { errorMessage } from './http-boundary';
 
-/** The four live transports: bridge extension, Pi RPC child, Prime daemon root, owned ACP child. */
-export type LiveSession = InstanceType<typeof BridgeSession> | InstanceType<typeof RPCSession> | PrimeDaemonSession | AcpSession;
+/** The three live transports: bridge extension, Pi RPC child, Prime daemon root. */
+export type LiveSession = InstanceType<typeof BridgeSession> | InstanceType<typeof RPCSession> | PrimeDaemonSession;
 
 export interface OwnershipObservations {
   /** Presentation listeners only; the selected transport cannot be replaced. */
@@ -353,8 +352,6 @@ export function spawnAllowsRestart(spawn: tmux.SpawnPlacement | null | undefined
 export function liveSessionSupports(session: LiveSession, capability: BridgeCapability): boolean {
   // Prime daemon roots have no bridge advertisement; the transport fixes the command set.
   if (session instanceof PrimeDaemonSession) return PRIME_DAEMON_CAPABILITIES[capability] === true;
-  // The ACP transport is likewise fixed: ACP has no extension capability claim.
-  if (session instanceof AcpSession) return AGY_ACP_CAPABILITIES[capability] === true;
   if (!(session instanceof BridgeSession)) return true;
   return bridgeSupports(session.harnessId, session.capabilities, capability);
 }
@@ -376,8 +373,7 @@ export function sessionIdentityFields(harnessId: HarnessId, nativeSessionId: Nat
 export function sessionSwitchRouteData(session: LiveSession, input: unknown) {
   if (!record(input) || !input.sessionId || !input.previousSessionId) return null;
   const descriptor = session instanceof PrimeDaemonSession ? getHarness('prime')
-    : session instanceof AcpSession ? getHarness('agy')
-      : session instanceof BridgeSession ? getHarness(session.harnessId || 'pi') : getHarness('pi');
+    : session instanceof BridgeSession ? getHarness(session.harnessId || 'pi') : getHarness('pi');
   if (!descriptor || !validSessionId(input.sessionId) || !validSessionId(input.previousSessionId)) return null;
   return {
     ...input,
@@ -548,8 +544,8 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     const reg = getRegisteredSession(sessionId);
     const spawn = tmux.getSpawn(sessionId);
     const descriptor = getHarness(row.harnessId || 'pi');
-    // Owned-agent transports (Prime, agy/ACP) expose no pane identity a bulk
-    // operation may capture, so they stay out of bounces by design.
+    // Prime's daemon worker has no pane identity a bulk operation may capture,
+    // so owned-agent transports stay out of bounces by design.
     if (!descriptor || descriptor.closeMode === 'owned-agent' || descriptor.closeMode === 'unsupported' || row.conflicted) return null;
     if (rpc?.alive) {
       return {
@@ -744,12 +740,6 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
       const live = primeDaemonSessionFor(identity);
       return live ? [{ kind: 'prime-daemon', ...identity, file: typeof live.sessionFile === 'string' ? live.sessionFile || null : null }] : [];
     }
-    // An owned ACP child is the only live source for agy routes, and its mirror
-    // is the only transcript: ACP has no session file of its own to register.
-    if (getHarness(identity.harnessId)?.liveTransport === 'acp') {
-      const live = getAcpSession(identity.nativeSessionId);
-      return live ? [{ kind: 'acp', ...identity, file: typeof live.sessionFile === 'string' ? live.sessionFile || null : null }] : [];
-    }
     const registered = getRegisteredSession(sessionId);
     const rpc = identity.harnessId === 'pi' ? getRPCSession(sessionId) : null;
     const out: LiveSourceObservation[] = [];
@@ -770,10 +760,6 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     if (identity && getHarness(identity.harnessId)?.liveTransport === 'prime-daemon') {
       const prime = primeDaemonSessionFor(identity);
       return !!prime && (!prime.sessionFile || !fs.existsSync(prime.sessionFile));
-    }
-    if (identity && getHarness(identity.harnessId)?.liveTransport === 'acp') {
-      const acp = getAcpSession(identity.nativeSessionId);
-      return !!acp?.alive && (!acp.sessionFile || !fs.existsSync(acp.sessionFile));
     }
     const registered = getRegisteredSession(sessionId);
     if (registered) return typeof registered.sessionFile !== 'string' || !registered.sessionFile || !fs.existsSync(registered.sessionFile);
@@ -797,10 +783,6 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
       await daemon.refresh();
       const fresh = daemon.byNativeId(identity.nativeSessionId);
       return fresh ? track(fresh) : null;
-    }
-    if (identity && getHarness(identity.harnessId)?.liveTransport === 'acp') {
-      const acp = getAcpSession(identity.nativeSessionId);
-      return acp?.alive ? track(acp) : null;
     }
     const registered = getRegisteredSession(sessionId);
     if (registered) {
@@ -859,10 +841,6 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     const rpc = getRPCSession(sessionId);
     if (rpc?.alive) return { kind: 'rpc', pid: rpc.proc?.pid ?? null };
     const identity = routeIdentity(sessionId);
-    if (identity?.harnessId === 'agy') {
-      const acp = getAcpSession(identity.nativeSessionId);
-      return acp?.alive ? { kind: 'rpc', pid: acp.pid } : null;
-    }
     if (identity?.harnessId === 'prime') return describePrimeRuntime(sessionId);
     const reg = getRegisteredSession(sessionId);
     if (!reg) return null;

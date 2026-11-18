@@ -3,7 +3,6 @@ import path = require('node:path');
 import * as piSDK from './pi-sdk';
 import { BridgeSession } from './bridge-session';
 import { PrimeDaemonSession } from './prime-daemon';
-import { AcpSession } from './acp-session';
 import { getHarness } from './harnesses';
 import { isModelEnabled } from './helper-models';
 import { EMULATED_COMMAND_METADATA } from './helper-command-metadata';
@@ -122,8 +121,8 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
         const sessionModels = await ports.catalog.getSessionModels(sessionId as string);
         if (sessionModels) {
           if (identity.harnessId === 'pi') return res.json(annotateEnabled(sessionModels));
-          // ACP reports the session's own config options already filtered to
-          // Gemini, with per-model thinking; no catalog enrichment applies.
+          // agy reports its own config options already filtered to Gemini,
+          // with per-model thinking; no catalog enrichment applies.
           if (identity.harnessId === 'agy') return res.json(sessionModels);
           if (!sessionModels.some(model => model.reasoning !== false && !Array.isArray(model.thinking))) return res.json(sessionModels);
           // Legacy bridges need catalog enrichment, but project model overrides
@@ -200,6 +199,14 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
             const data = await sess.getCommands();
             const listed = responseCommands(data);
             if (listed) {
+              // agy's own commands are prompt text; pi-dish-side abort/model/
+              // thinking stay first, exactly as the ACP transport presented them.
+              if (sess.harnessId === 'agy') {
+                return res.json([
+                  ...AGY_BUILTIN_COMMANDS.map(command => ({ ...command, source: 'builtin', supported: true })),
+                  ...commandList(listed).map(command => ({ ...Object(command), source: 'agy', supported: true })),
+                ]);
+              }
               const filtered = filterBridgeCommands(sess, listed);
               return res.json(await appendHostBuiltins(ports, sessionId as string, sess, filtered));
             }
@@ -210,17 +217,6 @@ export function createModelFeatureHandlers(ports: FeaturePorts): Pick<FeatureHan
             const data = await sess.getCommands();
             const listed = responseCommands(data);
             if (listed) return res.json(primeCommandRows(sess, listed));
-          } else if (sess instanceof AcpSession) {
-            if (!liveSessionSupports(sess, 'commands')) {
-              return res.status(409).json({ error: 'This session does not support command discovery.' });
-            }
-            const raw = await sess.getCommands();
-            const listed = responseCommands(raw) ?? (Array.isArray(raw) ? raw : []);
-            if (!Array.isArray(listed)) throw new TypeError('(data?.commands || []).map is not a function');
-            return res.json([
-              ...AGY_BUILTIN_COMMANDS.map(command => ({ ...command, source: 'builtin', supported: true })),
-              ...(listed as unknown[]).map(command => ({ ...Object(command), source: 'agy', supported: true })),
-            ]);
           } else if (sess) {
             const data = await sess.getCommands();
             const listed = responseCommands(data) || [];

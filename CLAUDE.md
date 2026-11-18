@@ -814,12 +814,16 @@ record, leaving an ordinary inactive session. Startup recovery reports
 hibernated sessions as pending; explicit retry still restores. Host setting
 `hibernation` is `pressure` (default) or `off`.
 
-## Antigravity ACP transport (src/core/acp-session.ts, src/core/acp-transcript.ts)
+## Antigravity ACP transport (src/core/acp-session.ts, src/core/acp-transcript.ts, src/core/agy-relay.ts)
 
-`agy` sessions use `liveTransport: 'acp'`: one owned `agy acp
---dangerously-skip-permissions` stdio child per session, a JSON-RPC ACP v1
-client, and no tmux or bridge. The design and real frames are in
-`TASKS/antigravity-acp.md` and `docs/agy-acp-capture/`. Invariants:
+`agy` sessions are tmux-launched bridge sessions: the descriptor's
+`launchCommand` starts `lib/agy-relay.js` in the session's pane, and the relay
+owns one `agy acp --dangerously-skip-permissions` stdio child (a JSON-RPC ACP
+v1 client), writes the mirror/sidecar, binds its registry claim and socket, and
+serves pi-dish's bridge protocol. The server never spawns `agy acp` itself, so
+`LiveSession` has no ACP member and there is no `'acp'` catalog/source kind.
+The design and real frames are in `TASKS/antigravity-acp.md` and
+`docs/agy-acp-capture/`. Invariants:
 
 - **Turn ownership:** a prompt sent during a turn is a steer, and it hands the
   turn to the newest prompt. `agy` then answers the earlier prompt with a
@@ -844,8 +848,21 @@ client, and no tmux or bridge. The design and real frames are in
   from `agy`'s `thought_level` option.
 - **Never:** read `agy`'s tokens, send `_meta.antigravity.systemPrompt`, or
   report a `clientInfo` other than `pi-dish`.
-- **Capabilities:** a fixed `AGY_ACP_CAPABILITIES` table. No follow-up queue,
-  compaction control, rename, tree, export, hibernation, bounce or recovery.
+- **Relay ownership:** the claim's `pid`/`startTime` are the relay's (the pane
+  process), never the agy child, so close/restart ancestry proofs match the
+  pane. The relay refreshes the claim at turn/message boundaries and unlinks
+  both claim and socket on SIGTERM/SIGHUP/SIGINT or agy exit. `get_state`
+  includes `lifecycle` because bulk operations refuse bridges without it.
+- **Bridge protocol:** hello per connection repeats the immutable claim fields
+  (`protocolVersion`, `wrapper`, ids, `sessionFile`, `socketPath`, pid,
+  `startTime`, `capabilities`, `spawnToken`) plus live state; responses are
+  `{type:'response', id, command, success}`; AcpSession events fan out as
+  `{type:'event'}` to every socket, with extension UI widgets/dialogs replayed
+  to each new connection and `extension_ui_resolved` emitted on answer.
+- **Capabilities:** the relay advertises exactly `AGY_ACP_CAPABILITIES` in its
+  claim and `sessionCapabilities` trusts the claim like any bridge. No
+  follow-up queue, compaction control, rename, tree, export, hibernation or
+  recovery; restart/resume work through the pane.
 
 ## tmux spawning (lib/tmux.js)
 
