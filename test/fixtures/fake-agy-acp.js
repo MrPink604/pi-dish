@@ -313,6 +313,37 @@ function handlePrompt(id, params) {
             }, 5);
             return;
         }
+        case 'timing': {
+            const file = `${cwd}/README.md`;
+            // Step 1: 110ms TTFT -> usage_update -> two sibling tool calls in one batch.
+            setTimeout(() => {
+                usageUpdate(400);
+                toolCall('call-r1', 'read_file', { Path: file }, 'File README.md', 'read');
+                toolUpdate('call-r1', 'read_file', 'completed', { title: 'File README.md', kind: 'read' });
+                setTimeout(() => {
+                    toolCall('call-r2', 'run_command', { CommandLine: 'sleep 0.14', WaitMsBeforeAsync: 5000 }, 'sleep 0.14', 'execute');
+                    // 140ms of synchronous tool execution (must NOT count toward LLM genMs).
+                    setTimeout(() => {
+                        toolUpdate('call-r2', 'run_command', 'completed', {
+                            title: 'sleep 0.14',
+                            kind: 'execute',
+                            content: [{ type: 'content', content: { type: 'text', text: 'done\n' } }],
+                            rawOutput: { output: 'done\n', exit_code: 0 },
+                        });
+                        // Step 2: 110ms TTFT -> quick 10ms stream -> turn end.
+                        setTimeout(() => {
+                            textChunk('Measured ');
+                            setTimeout(() => {
+                                textChunk('reply.');
+                                usageUpdate(520);
+                                finishPrompt(id, 'end_turn');
+                            }, 10);
+                        }, 110);
+                    }, 140);
+                }, 5);
+            }, 110);
+            return;
+        }
         case 'tool-only': {
             const file = `${cwd}/big.py`;
             const lines = Array.from({ length: 400 }, (_, i) => `line_${i} = ${i}`);

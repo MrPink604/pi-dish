@@ -434,17 +434,30 @@ export function sanitizeUsage(usage: unknown): SanitizedUsage | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+/** Single-step API call span: `message.timestamp` (request start) → `entry.timestamp` (append). */
+function assistantStepDurationMs(entry: Record<string, unknown>): number | undefined {
+  const m = fields(entry.message);
+  if (m.role !== 'assistant') return undefined;
+  const start = m.timestamp;
+  const end = entry.timestamp ? entryDate(entry.timestamp).getTime() : NaN;
+  if (typeof start !== 'number' || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return undefined;
+  return end - start;
+}
+
 /**
- * message.timestamp is stamped at API call start, the entry's when appended.
- * Empty when either is missing or inverted.
+ * Generation timing paired with `message.usage.output`. Harnesses that report
+ * cumulative turn usage only on the closing segment (ACP) stamp `turnDurationMs`
+ * with the sum of the turn's model-step spans so speed matches the token scope.
  */
 function assistantGenStats(entry: Record<string, unknown>): AssistantGenStats {
   const m = fields(entry.message);
   if (m.role !== 'assistant') return {};
-  const start = m.timestamp;
-  const end = entry.timestamp ? entryDate(entry.timestamp).getTime() : NaN;
-  if (typeof start !== 'number' || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) return {};
-  return { durationMs: end - start, outputTokens: fields(m.usage ?? EMPTY_FIELDS).output || 0 };
+  const turnMs = typeof m.turnDurationMs === 'number' && Number.isFinite(m.turnDurationMs) && m.turnDurationMs > 0
+    ? m.turnDurationMs
+    : undefined;
+  const durationMs = turnMs ?? assistantStepDurationMs(entry);
+  if (!durationMs) return {};
+  return { durationMs, outputTokens: fields(m.usage ?? EMPTY_FIELDS).output || 0 };
 }
 
 const messagesCache = new Map<string, Cached<MessageData>>();
@@ -696,7 +709,8 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
         genMs += gen.durationMs;
         genOutput += tokenAmount(gen.outputTokens);
       }
-      if (gen.durationMs) responseDurations.push(gen.durationMs);
+      const stepMs = assistantStepDurationMs(entry);
+      if (stepMs) responseDurations.push(stepMs);
     }
   }
   responseDurations.sort((a, b) => a - b);
@@ -764,7 +778,7 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
     const ref = `${p}/${mid}`;
     const ts = entryDate(e.timestamp || m.timestamp);
     const day = Number.isFinite(ts.getTime()) ? `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')}` : 'unknown';
-    const duration = assistantGenStats(e).durationMs || 0;
+    const duration = assistantStepDurationMs(e) || 0;
     const u = { ...fields(m.usage ?? EMPTY_FIELDS), cost: usageCost(candidate, p, mid, m.usage, estimateCost, providerUnderFastTier(p, tiers.value)) };
     add(total, u, duration); add(days[day] ||= {}, u, duration);
     const modelBucket = models[ref] ||= { provider: p, model: mid, days: {} };

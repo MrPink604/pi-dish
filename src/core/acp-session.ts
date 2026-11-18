@@ -204,6 +204,7 @@ interface PromptWaiter {
 interface TrackedTool {
   call: AcpToolCall;
   startedAt: number;
+  waitMsBeforeAsync: number | null;
 }
 
 interface InboundDialog {
@@ -244,6 +245,12 @@ export class AcpSession extends TransportSession {
   declare private autonomousTimer: NodeJS.Timeout | null;
   /** Usage reported by prompts that handed their turn to a steer; added to the turn's total. */
   declare private handoverUsage: ProtocolRecord | null;
+  /** Request-start timestamp of the in-flight or upcoming LLM step (includes TTFT). */
+  declare private nextStepStartedAt: number | null;
+  /** Distinguishes a new LLM step from sibling `tool_call`s emitted in one batch. */
+  declare private sawStepSignal: boolean;
+  /** Sum of earlier model-step durations in the active turn (excludes tool/dialog waits). */
+  declare private turnGenMs: number;
 
   constructor(proc: ChildProcessWithoutNullStreams, cwd: string) {
     super();
@@ -274,6 +281,9 @@ export class AcpSession extends TransportSession {
     this.earlyFrames = [];
     this.autonomousTimer = null;
     this.handoverUsage = null;
+    this.nextStepStartedAt = null;
+    this.sawStepSignal = false;
+    this.turnGenMs = 0;
 
     // A failed spawn (ENOENT) emits only 'error': settle startup and drop timers.
     this.spawnFailure = new Promise<never>((_, reject) => {
@@ -308,10 +318,13 @@ export class AcpSession extends TransportSession {
     proc.on('exit', (code) => {
       this._clearAutonomousTimer();
       // Keep whatever the agent already said: an open segment would be lost otherwise.
-      if (this.segment) this._closeSegment('error', this._takeHandoverUsage(), `agy exited with code ${code}`);
+      if (this.segment) this._closeSegment('error', this._takeHandoverUsage(), `agy exited with code ${code}`, true);
       this.alive = false;
       this.turnInProgress = false;
       this.segment = null;
+      this.turnGenMs = 0;
+      this.nextStepStartedAt = null;
+      this.sawStepSignal = false;
       const error = new Error(`agy exited with code ${code}${this.stderrTail.length ? ': ' + this.stderrTail.join(' | ') : ''}`);
       this.pending.failAll(error);
       for (const waiter of this.promptResponses.values()) waiter.reject(error);
@@ -388,7 +401,7 @@ export class AcpSession extends TransportSession {
         waiter.reject(new Error(message));
         if (id === this.newestPromptId) {
           this.newestPromptId = null;
-          this._closeSegment('error', this._takeHandoverUsage(), message);
+          this._closeSegment('error', this._takeHandoverUsage(), message, true);
           this._endTurn();
         }
         return;
@@ -404,7 +417,7 @@ export class AcpSession extends TransportSession {
       this.newestPromptId = null;
       const stop = text(result.stopReason);
       this._closeSegment(acpStopReason(stop), this._takeHandoverUsage(acpUsage(result.usage)),
-        stop === 'refusal' ? 'Antigravity refused this request.' : null);
+        stop === 'refusal' ? 'Antigravity refused this request.' : null, true);
       this._endTurn();
       return;
     }
@@ -422,7 +435,10 @@ export class AcpSession extends TransportSession {
     const method = text(frame.method);
     const params = asRecord(frame.params);
     const key = String(id);
-    if (method === 'session/request_permission' || method === 'elicitation/create') this._noteActivity();
+    if (method === 'session/request_permission' || method === 'elicitation/create') {
+      this._noteActivity();
+      this.nextStepStartedAt = null;
+    }
     if (method === 'session/request_permission') {
       const dialog = permissionDialog(key, params);
       if (!dialog) {
@@ -492,6 +508,7 @@ export class AcpSession extends TransportSession {
         this._applyConfigUpdate(update);
         return;
       case 'usage_update': {
+        if (this.turnInProgress) this.sawStepSignal = true;
         const used = update.used;
         if (!finite(used)) return;
         const size = finite(update.size) ? update.size : null;
@@ -542,6 +559,7 @@ export class AcpSession extends TransportSession {
   }
 
   private _pushChunk(type: 'text' | 'thinking', chunk: string): void {
+    this.sawStepSignal = true;
     this._ensureSegment();
     const message = this.segment!;
     const content = message.content as ProtocolRecord[];
@@ -556,12 +574,17 @@ export class AcpSession extends TransportSession {
     this.emitEvent('message_update', { type: 'message_update', message: structuredClone(message) });
   }
 
-  private _ensureSegment(): void {
+  private _ensureSegment(consumeStepStart = true): void {
     if (this.segment) return;
+    const now = Date.now();
+    const startedAt = consumeStepStart && this.nextStepStartedAt !== null && this.nextStepStartedAt <= now
+      ? this.nextStepStartedAt
+      : now;
+    if (consumeStepStart) this.nextStepStartedAt = null;
     const message: ProtocolRecord = {
       role: 'assistant',
       content: [],
-      timestamp: Date.now(),
+      timestamp: startedAt,
       provider: AGY_PROVIDER,
     };
     const model = this._currentModelId();
@@ -570,22 +593,45 @@ export class AcpSession extends TransportSession {
     this.emitEvent('message_start', { type: 'message_start', message: structuredClone(message) });
   }
 
-  private _closeSegment(stopReason: string, usage: ProtocolRecord | null, errorMessage: string | null): void {
+  private _closeSegment(stopReason: string, usage: ProtocolRecord | null, errorMessage: string | null, resetTurn = false): void {
     // A turn that ends right after a tool call, cancels early, or fails/refuses
     // before streaming any chunk has no open segment; open a shell so usage,
     // abort state and errors reach the mirror and SSE.
     if (!this.segment && (errorMessage || usage || stopReason === 'aborted' || stopReason === 'error')) {
-      this._ensureSegment();
+      this._ensureSegment(true);
     }
     const message = this.segment;
-    if (!message) return;
+    const closedAt = Date.now();
+    if (!message) {
+      if (resetTurn) {
+        this.turnGenMs = 0;
+        this.nextStepStartedAt = null;
+        this.sawStepSignal = false;
+      }
+      return;
+    }
     this.segment = null;
+    const startedAt = finite(message.timestamp) ? message.timestamp : closedAt;
+    const stepMs = Math.max(0, closedAt - startedAt);
     message.stopReason = stopReason;
-    if (usage) message.usage = usage;
+    if (usage) {
+      const totalGenMs = this.turnGenMs + stepMs;
+      if (totalGenMs > 0) message.turnDurationMs = totalGenMs;
+      this.turnGenMs = 0;
+      message.usage = usage;
+    } else if (resetTurn) {
+      this.turnGenMs = 0;
+    } else {
+      this.turnGenMs += stepMs;
+    }
+    if (resetTurn) {
+      this.nextStepStartedAt = null;
+      this.sawStepSignal = false;
+    }
     if (errorMessage) message.errorMessage = errorMessage;
     const event = { type: 'message_end', message };
     // The mirror must be on disk before `message_end`: the browser re-reads it on turn_end.
-    this.transcript?.appendAssistant(message);
+    this.transcript?.appendAssistant(message, closedAt);
     this.lastActivityAt = new Date();
     this.emitEvent('message_end', event);
     this.endAssistantMessage(event);
@@ -594,14 +640,20 @@ export class AcpSession extends TransportSession {
   private _toolCall(update: ProtocolRecord): void {
     const call = normalizeAcpTool(update);
     const toolCallId = text(update.toolCallId) || `call-${++this.counter}`;
+    const consumeStep = this.sawStepSignal;
+    this.sawStepSignal = false;
     if (this.segment || this.turnInProgress) {
-      this._ensureSegment();
+      this._ensureSegment(consumeStep);
       (this.segment!.content as ProtocolRecord[]).push({ type: 'toolCall', id: toolCallId, name: call.toolName, arguments: call.args });
       // Pi needs the assistant message before its tool results; ACP interleaves them.
       this._closeSegment('toolUse', null, null);
     }
     const startedAt = Date.now();
-    this.toolCalls.set(toolCallId, { call, startedAt });
+    const rawArgs = isRecord(update.args) ? update.args : (isRecord(update.rawInput) ? update.rawInput : {});
+    const waitMs = finite(rawArgs.WaitMsBeforeAsync) && rawArgs.WaitMsBeforeAsync > 0 ? rawArgs.WaitMsBeforeAsync : null;
+    const status = text(update.status);
+    this.nextStepStartedAt = status === 'pending' ? null : (waitMs !== null ? startedAt + waitMs : null);
+    this.toolCalls.set(toolCallId, { call, startedAt, waitMsBeforeAsync: waitMs });
     if (call.nativeName === 'ask_question') {
       const args = isRecord(update.args) ? update.args : {};
       this.askQuestions.set(toolCallId, Array.isArray(args.questions) ? args.questions : []);
@@ -625,6 +677,8 @@ export class AcpSession extends TransportSession {
       const isError = status === 'failed';
       this.toolCalls.delete(toolCallId);
       this.askQuestions.delete(toolCallId);
+      this.nextStepStartedAt = Date.now();
+      this.sawStepSignal = false;
       this.transcript?.appendToolResult({
         toolCallId,
         toolName: tracked.call.toolName,
@@ -641,6 +695,11 @@ export class AcpSession extends TransportSession {
         result: { content: [{ type: 'text', text: result.text }], ...(result.details ? { details: result.details } : {}) },
       });
       return;
+    }
+    if (status === 'pending') {
+      this.nextStepStartedAt = null;
+    } else if (status === 'in_progress') {
+      this.nextStepStartedAt = tracked.waitMsBeforeAsync !== null ? Date.now() + tracked.waitMsBeforeAsync : null;
     }
     const progress = result.text || (status === 'pending' ? 'Waiting for approval' : 'Running…');
     this._emitTool('tool_execution_update', {
@@ -676,6 +735,10 @@ export class AcpSession extends TransportSession {
   private _noteActivity(): void {
     if (!this.turnInProgress) {
       this.turnInProgress = true;
+      if (this.newestPromptId === null) {
+        this.nextStepStartedAt ??= Date.now();
+        this.sawStepSignal = true;
+      }
       this.emitEvent('agent_start', { type: 'agent_start' });
       this.emitEvent('turn_start', { type: 'turn_start' });
     }
@@ -693,7 +756,7 @@ export class AcpSession extends TransportSession {
       this.autonomousTimer.unref();
       return;
     }
-    this._closeSegment('stop', this._takeHandoverUsage(), null);
+    this._closeSegment('stop', this._takeHandoverUsage(), null, true);
     this._endTurn();
   }
 
@@ -902,8 +965,12 @@ export class AcpSession extends TransportSession {
       return Promise.reject(error);
     }
     // What agy said before this prompt stays before it in the transcript.
-    if (this.segment) this._closeSegment('stop', null, null);
+    const steering = this.newestPromptId !== null;
+    if (this.segment) this._closeSegment('stop', null, null, !steering);
+    else if (!steering) this.turnGenMs = 0;
     const timestamp = Date.now();
+    this.nextStepStartedAt = timestamp;
+    this.sawStepSignal = true;
     this.transcript?.appendUser(content, timestamp);
     if (!this.turnInProgress) {
       this.turnInProgress = true;

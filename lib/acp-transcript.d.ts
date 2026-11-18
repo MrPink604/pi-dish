@@ -107,7 +107,7 @@ export declare class AcpTranscript {
     private entry;
     appendUser(content: string | readonly ProtocolRecord[], timestamp?: number): void;
     /** `message` is the finished assistant snapshot emitted on `message_end`. */
-    appendAssistant(message: ProtocolRecord): void;
+    appendAssistant(message: ProtocolRecord, at?: number): void;
     appendToolResult(data: {
         toolCallId: string;
         toolName: string;

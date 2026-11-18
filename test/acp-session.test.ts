@@ -522,3 +522,32 @@ test('normalises agy /usage JSON to Gemini-only windows and rejects error envelo
     /authentication required/,
   );
 });
+
+test('includes TTFT per LLM step, skips tool execution and sibling batch calls, and pairs turn usage with turnDurationMs', async (t) => {
+  const sessionFiles: typeof import('../lib/session-files.js') = require('../lib/session-files.js');
+  const session = await launch('timing');
+  cleanup(t, session);
+  const events = capture(session);
+
+  await session.prompt('measure generation speed');
+  await until(() => events.some(event => event.event === 'turn_end'));
+
+  const parsed = sessionFiles.readSessionMessages(session.sessionFile);
+  const assistants = parsed.filter(m => m.role === 'assistant');
+  assert.equal(assistants.length, 3, 'two toolUse segments + final stop segment');
+  assert.ok((assistants[0].durationMs ?? 0) >= 90, `step 1 includes TTFT (${assistants[0].durationMs}ms)`);
+  assert.equal(assistants[1].durationMs, undefined, 'sibling tool call in the same LLM batch does not invent a second step');
+  assert.ok((assistants[2].durationMs ?? 0) >= 200,
+    `closing message durationMs covers both LLM steps including TTFT (${assistants[2].durationMs}ms), not just the 10ms streaming tail`);
+  assert.ok((assistants[2].durationMs ?? 0) < 350,
+    `closing message durationMs excludes the 140ms tool execution window (${assistants[2].durationMs}ms)`);
+
+  const stats = sessionFiles.getSessionStats(session.sessionFile);
+  assert.equal(stats.responseTiming.measured, 2, 'only the two real LLM calls count as measured responses');
+  assert.equal(stats.genMs, assistants[2].durationMs, 'session genMs matches the turn LLM duration without double counting');
+  assert.equal(stats.genOutput, 8);
+
+  const indexed = sessionFiles.buildIndexedUsageFromContent(fs.readFileSync(session.sessionFile, 'utf8'));
+  assert.equal(indexed.total.measured, 2);
+  assert.equal(indexed.total.durationMs, stats.genMs, 'indexed per-step sum equals turnDurationMs without double counting');
+});

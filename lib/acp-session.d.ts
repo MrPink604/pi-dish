@@ -61,6 +61,12 @@ export declare class AcpSession extends TransportSession {
     private autonomousTimer;
     /** Usage reported by prompts that handed their turn to a steer; added to the turn's total. */
     private handoverUsage;
+    /** Request-start timestamp of the in-flight or upcoming LLM step (includes TTFT). */
+    private nextStepStartedAt;
+    /** Distinguishes a new LLM step from sibling `tool_call`s emitted in one batch. */
+    private sawStepSignal;
+    /** Sum of earlier model-step durations in the active turn (excludes tool/dialog waits). */
+    private turnGenMs;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
     private _writeFrame;

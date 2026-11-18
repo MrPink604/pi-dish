@@ -563,6 +563,27 @@ test('getSessionStats sums generation time over measurable assistant messages on
     assert.equal(stats.tokens.output, 350, 'token totals still count everything');
     assert.deepEqual(stats.responseTiming, { measured: 2, medianMs: 7500, slowestMs: 10000 });
 });
+test('turnDurationMs pairs cumulative turn usage with multi-step LLM time without double counting per-step latencies', () => {
+    const file = writeSession([
+        { type: 'message', timestamp: '2026-07-01T10:00:10.000Z', message: { role: 'assistant',
+                stopReason: 'toolUse', content: [{ type: 'toolCall', id: 'c1', name: 'read', arguments: {} }],
+                timestamp: Date.parse('2026-07-01T10:00:00.000Z') } },
+        { type: 'message', timestamp: '2026-07-01T10:00:55.000Z', message: { role: 'assistant',
+                stopReason: 'stop', content: [{ type: 'text', text: 'Done.' }],
+                timestamp: Date.parse('2026-07-01T10:00:50.000Z'),
+                turnDurationMs: 15000, usage: { output: 300 } } },
+    ]);
+    const messages = SF.readSessionMessages(file);
+    assert.equal(messages[0].durationMs, 10000, 'intermediate step keeps its own step latency');
+    assert.equal(messages[1].durationMs, 15000, 'closing message uses turnDurationMs so tok/s covers all 300 tokens (20 tok/s, not 60 tok/s)');
+    const stats = SF.getSessionStats(file);
+    assert.equal(stats.genMs, 15000, 'genMs counts the 15s turn once');
+    assert.equal(stats.genOutput, 300);
+    assert.deepEqual(stats.responseTiming, { measured: 2, medianMs: 7500, slowestMs: 10000 });
+    const indexed = SF.buildIndexedUsageFromContent(fs.readFileSync(file, 'utf8'));
+    assert.equal(indexed.total.measured, 2);
+    assert.equal(indexed.total.durationMs, 15000, 'per-step durations sum to 15s without double counting');
+});
 test('an engaged fast tier prices turns by the reported tier cost, not the flat estimate', () => {
     // OMP's service_tier_change carries the per-family tier map /fast writes.
     // Under an engaged tier OMP scales its own persisted usage cost (the

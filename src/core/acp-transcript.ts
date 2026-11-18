@@ -602,12 +602,12 @@ export class AcpTranscript {
   }
 
   /** Append one entry; `timestamp` is the Pi entry stamp, not the message start. */
-  private entry(type: string, fields: ProtocolRecord): ProtocolRecord {
+  private entry(type: string, fields: ProtocolRecord, at = Date.now()): ProtocolRecord {
     const entry: ProtocolRecord = {
       type,
       id: crypto.randomUUID(),
       parentId: this.parentId,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(at).toISOString(),
       ...fields,
     };
     fs.appendFileSync(this.file, JSON.stringify(entry) + '\n');
@@ -621,8 +621,8 @@ export class AcpTranscript {
   }
 
   /** `message` is the finished assistant snapshot emitted on `message_end`. */
-  appendAssistant(message: ProtocolRecord): void {
-    this.entry('message', { message });
+  appendAssistant(message: ProtocolRecord, at?: number): void {
+    this.entry('message', { message }, at);
   }
 
   appendToolResult(data: {
