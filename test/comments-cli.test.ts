@@ -123,4 +123,26 @@ test('comments CLI reports the canonical route for an alternative registry entry
   assert.equal(session.stdout.trim(), encodeSessionKey('omp', checkedNativeId('omp-native')));
 });
 
+// Agents probe `--help` first; it must answer without a session to discover.
+test('comments CLI help exits 0 with usage, with or without a command', async (t) => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-comments-help-'));
+  t.after(() => fs.rmSync(tmpHome, { recursive: true, force: true }));
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: tmpHome, PI_DISH_URL: 'http://127.0.0.1:9' };
+  delete env.PI_DISH_SESSION_ID;
+  for (const argv of [['--help'], ['-h'], ['help']]) {
+    const { stdout } = await run(process.execPath, [cli, ...argv], { env });
+    assert.match(stdout, /^Usage: pi-dish-comments <command>/m, argv.join(' '));
+    for (const command of ['list', 'get', 'ack', 'count', 'session']) assert.match(stdout, new RegExp(`^  ${command}\\b`, 'm'));
+  }
+  for (const argv of [['help', 'ack'], ['ack', '--help']]) {
+    assert.match((await run(process.execPath, [cli, ...argv], { env })).stdout, /^ack <id> \[<id> \.\.\.\]/, argv.join(' '));
+  }
+  await assert.rejects(run(process.execPath, [cli, 'frobnicate'], { env }), (error: unknown) => {
+    const detail = record(error);
+    assert.equal(detail.code, 1);
+    assert.match(String(detail.stderr), /unknown command: frobnicate .*--help/);
+    return true;
+  });
+});
+
 export {};

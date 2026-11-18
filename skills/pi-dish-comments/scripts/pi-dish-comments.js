@@ -19,6 +19,40 @@ catch (e) {
 }
 const { makeFail, defaultBase, discoverSession, request, jsonInit, parseCommandLine, print } = core;
 const fail = makeFail('pi-dish-comments');
+const HELP = {
+    list: 'list [--json] — compact index of every open comment for this session (the default command)',
+    get: 'get <id> [<id> ...] [--json] — full contents of the chosen comments',
+    ack: 'ack <id> [<id> ...] [--json] — acknowledge comments you actually handled',
+    count: 'count [--json] — number of open comments, without their contents',
+    session: "session — print this caller's auto-discovered session id",
+};
+function usage() {
+    return [
+        'pi-dish-comments — read and acknowledge anchored pi-dish review comments for this session.',
+        '',
+        'Usage: pi-dish-comments <command> [args] [--json] [--session ID] [--url URL]',
+        '',
+        'Commands:',
+        ...Object.values(HELP).map(line => `  ${line}`),
+        '',
+        'Flags:',
+        "  --json         machine-readable JSON",
+        "  --session ID   this caller's session id, when discovery cannot infer it",
+        '  --url URL      pi-dish base URL (default $PI_DISH_URL, else http://127.0.0.1:3333)',
+        '',
+        'Listing and fetching never change comment state; only ack does.',
+    ].join('\n');
+}
+const helpLine = (name) => (name && Object.hasOwn(HELP, name) ? HELP[name] : null);
+/** Help text for `--help`/`-h`/`help [command]`, or null when the call is not a help request. */
+function helpFor(argv) {
+    const [first, second] = argv;
+    if (first === 'help')
+        return helpLine(second) || usage();
+    if (!argv.includes('--help') && !argv.includes('-h'))
+        return null;
+    return helpLine(first) || usage();
+}
 function commentsIn(result) {
     if (!Array.isArray(result.comments))
         throw new TypeError('comments must be an array');
@@ -86,8 +120,14 @@ function printIndex(value) {
     process.stdout.write(`${result.total} open comments indexed. Use get <id> [<id> ...] for any inferred group.\n`);
 }
 async function main() {
+    const argv = process.argv.slice(2);
+    const help = helpFor(argv);
+    if (help)
+        return void process.stdout.write(help + '\n');
     try {
-        const args = parseCommandLine(process.argv.slice(2), 'list');
+        const args = parseCommandLine(argv, 'list');
+        if (!helpLine(args.command))
+            throw new Error(`unknown command: ${args.command} (use list, get, ack, count, or session; run --help for usage)`);
         const base = defaultBase(args.url);
         const sessionId = discoverSession(args.session);
         const ids = args.positional;
@@ -136,7 +176,7 @@ async function main() {
                 process.stdout.write(`Acknowledged ${ids.join(', ')}\n`);
             return;
         }
-        throw new Error(`unknown command: ${args.command} (use list, get, ack, count, or session)`);
+        throw new Error(`unhandled command: ${args.command}`);
     }
     catch (error) {
         fail(core.errorMessage(error));

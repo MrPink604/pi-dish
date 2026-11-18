@@ -130,6 +130,18 @@ test('pages preserves raw null JSON and absent hub mappings without false human 
   assert.deepEqual(JSON.parse(viaJson.stdout), { ...page, hub: null, hubError: null });
 });
 
+test('pages help exits 0 with usage instead of treating --help as a command', async t => {
+  const { env } = fixture(t);
+  const pageCli = path.join(__dirname, '../skills/pi-dish-pages/scripts/pi-dish-pages.js');
+  for (const argv of [['--help'], ['-h'], ['help'], ['publish', '--help'], []]) {
+    const { stdout } = await run(process.execPath, [pageCli, ...argv], { env });
+    assert.match(stdout, /^Usage: pi-dish-pages publish <path>/m, argv.join(' '));
+    assert.match(stdout, /--via HUB/);
+  }
+  await assert.rejects(run(process.execPath, [pageCli, 'frobnicate'], { env }), (error: unknown) =>
+    record(error).code === 1 && /unknown command: frobnicate \(use publish; run --help for usage\)/.test(errorMessage(error)));
+});
+
 test('CLI field consumers reject missing response bodies while raw JSON remains readable', async t => {
   const { env } = fixture(t);
   const commentsCli = path.join(__dirname, '../skills/pi-dish-comments/scripts/pi-dish-comments.js');

@@ -23,6 +23,26 @@ catch (e) {
 }
 const { makeFail, defaultBase, discoverSessionQuietly, request, hostPath, jsonInit, parseCommandLine } = core;
 const fail = makeFail('pi-dish-pages');
+const USAGE = `pi-dish-pages — publish an HTML file or directory as a pi-dish page.
+
+Usage: pi-dish-pages publish <path> [--title TEXT] [--via HUB] [--json]
+
+Flags:
+  --title TEXT   page title shown in pi-dish
+  --via HUB      also map the page on fleet hub HUB and print its link
+                 (default $PI_DISH_PUBLIC_VIA)
+  --json         the raw response, plus the hub mapping
+  --session ID   this caller's session id, when discovery cannot infer it
+  --url URL      pi-dish base URL (default $PI_DISH_URL, else http://127.0.0.1:3333)
+
+The page is served live from disk: after edits, refresh; do not re-publish.
+
+Example:
+  pi-dish-pages publish "$PWD/plan.html" --title "Refactor plan"`;
+function isHelp(argv) {
+    const [first] = argv;
+    return !first || first === 'help' || argv.includes('--help') || argv.includes('-h');
+}
 async function publishViaHub(base, hub, page) {
     const { data } = await request(base, '/api/host');
     const host = core.record(data ?? {});
@@ -41,15 +61,18 @@ async function publishViaHub(base, hub, page) {
     }
 }
 async function main() {
+    const argv = process.argv.slice(2);
+    if (isHelp(argv))
+        return void process.stdout.write(USAGE + '\n');
     let args;
     try {
-        args = parseCommandLine(process.argv.slice(2), 'publish', ['title', 'via']);
+        args = parseCommandLine(argv, 'publish', ['title', 'via']);
     }
     catch (error) {
         return fail(core.errorMessage(error));
     }
     if (args.command !== 'publish') {
-        return fail(`unknown command: ${args.command} (use publish)`);
+        return fail(`unknown command: ${args.command} (use publish; run --help for usage)`);
     }
     const target = args.positional[0];
     if (!target)
