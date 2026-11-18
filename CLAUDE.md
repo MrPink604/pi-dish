@@ -1073,6 +1073,20 @@ the symlink's realpath, so skills must be installed by symlinking the skill
 dirs from the repo (install.sh does; it links only dirs carrying a SKILL.md,
 so `skills/lib` never lands in the registry as a bogus skill).
 
+**Output bounds**: agents read CLI output into their context, so
+`pi-dish-sessions` bounds it by default (`list` 50 rows, `search` 20,
+`read`/`show`/text output about 12000 chars, compact `--json` field sets) and
+each cut prints one line naming the flag that lifts it (`--limit`,
+`--max-chars`, `--fields`, `--full`; stderr under `--json` so JSON stays
+parseable). `read` and `show` cut from the oldest end of the window and point
+at the `--before` page that holds what they dropped. Refs are computed over
+the whole catalog before rows are cut, so a printed ref never collides with an
+unprinted session. `GET /api/sessions` takes opt-in `limit`/`fields` for raw
+callers; the browser sends neither, and without them the payload is
+byte-for-byte what it was. Read-only verbs `host` (the liveness check — there
+is no `/api/health`), `config`, `usage` and `models` wrap their routes, and
+`--json` returns the route payload unchanged.
+
 ## New-session takeover (public/app.js)
 
 The sidebar footer is a single "+ New session" button that opens

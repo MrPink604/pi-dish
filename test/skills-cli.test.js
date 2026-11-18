@@ -334,3 +334,47 @@ test('a ref for a session that does not exist is a plain not-found', async () =>
         return true;
     });
 });
+test('host answers "is pi-dish up" with GET /api/host, and names the URL when nothing answers', async () => {
+    const rest = (0, test_types_js_1.record)(await (await fetch(`${base}/api/host`)).json());
+    assert.deepEqual(JSON.parse((await run(['host', '--json'])).stdout), rest);
+    const { stdout } = await run(['host']);
+    const capabilities = (0, test_types_js_1.record)(rest.capabilities);
+    assert.equal(stdout, [
+        `up: ${base}`, `hostId: ${rest.hostId}`, `label: ${rest.label}`, `version: ${rest.version}`,
+        `capabilities: ${Object.keys(capabilities).filter(key => capabilities[key]).join(',')}`,
+    ].join('\n') + '\n');
+    await assert.rejects(run(['host', '--url', 'http://127.0.0.1:9']), (error) => {
+        assert.equal((0, test_types_js_1.record)(error).code, 1);
+        assert.match((0, test_types_js_1.errorMessage)(error), /no pi-dish answering at http:\/\/127\.0\.0\.1:9 /);
+        return true;
+    });
+});
+test('config prints GET /api/config as key lines and as JSON', async () => {
+    const rest = (0, test_types_js_1.record)(await (await fetch(`${base}/api/config`)).json());
+    assert.deepEqual(JSON.parse((await run(['config', '--json'])).stdout), rest);
+    assert.equal((await run(['config'])).stdout, Object.entries(rest).map(([key, value]) => `${key}: ${JSON.stringify(value)}\n`).join(''));
+});
+test('usage summarizes GET /api/usage-summary and --json is the route payload', async () => {
+    const rest = await (await fetch(`${base}/api/usage-summary?days=7&sort=tokens`)).json();
+    assert.deepEqual(JSON.parse((await run(['usage', '--days', '7', '--sort', 'tokens', '--json'])).stdout), rest);
+    const { stdout } = await run(['usage', '--days', '7', '--sort', 'tokens']);
+    assert.match(stdout, /^usage last 7d, ranked by tokens$/m);
+    assert.match(stdout, /^total\t\$\d+\.\d\d\t\d+(\.\d[kMB])? calls\tin /m);
+    assert.match(stdout, /^spend\ttoday \$\d+\.\d\d\t7d \$/m);
+    await assert.rejects(run(['usage', '--days', '3']), (error) => /days must be 1, 7, 30, or all/.test((0, test_types_js_1.errorMessage)(error)));
+});
+test('share publishes a session link idempotently, matching the share route', async () => {
+    // The usage summary above refreshes pricing, which re-indexes in the background.
+    await settleIndex();
+    const shared = await run(['share', '2026-08-24']);
+    const rest = (0, test_types_js_1.record)(await (await fetch(`${base}/api/sessions/${encodeURIComponent(UNIQUE_ID)}/share`)).json());
+    assert.match(String(rest.path), /^\/share\/[\w-]+$/);
+    assert.equal(shared.stdout, `${rest.url || rest.path}\n`);
+    assert.deepEqual(JSON.parse((await run(['share', '2026-08-24', '--json'])).stdout), rest, 'a second share answers the same link');
+});
+test('every new verb has a help entry', async () => {
+    for (const verb of ['host', 'config', 'usage', 'models', 'share']) {
+        assert.match((await run(['help', verb])).stdout, new RegExp(`^Usage: ${verb}\\b`, 'm'), verb);
+        assert.match((await run(['--help'])).stdout, new RegExp(`^\\s+${verb}\\s+`, 'm'), verb);
+    }
+});

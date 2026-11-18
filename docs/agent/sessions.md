@@ -81,13 +81,30 @@ dropped messages):
 | `search` | 20 results (the server caps at 100) | `--limit N`, `--full` |
 | `read` | about 12000 chars; the oldest messages of the window go first | `--max-chars N` (0 = no cap), `--full` |
 | `show` | about 12000 chars of JSON: strings over 2000 chars are clipped, then the oldest messages dropped | `--max-chars N`, `--full` |
-| `list`, `search`, `hosts` text | about 12000 chars, cut at a line | `--max-chars N`, `--full` |
+| `list`, `search`, `hosts`, `models` text | about 12000 chars, cut at a line | `--max-chars N`, `--full` |
 | `list`, `search`, `resolve`, `show` `--json` | rows keep a compact field set (`id`, `ref`, `name`, `cwd`, state, `lastActivity`, …) | `--fields A,B`, `--fields all`, `--full` |
 
 Raw HTTP callers get the same choice from the server: `GET /api/sessions`
 accepts opt-in `limit=N` (applied across live, child, then historical rows;
 the response adds `total`) and `fields=a,b` (each row keeps `id` plus those
 fields). Without them the response is unchanged.
+
+## Host and server state
+
+- `host` — `GET /api/host`: host id, label, version and capabilities. It is
+  the "is pi-dish up?" check: it needs no token and fails naming the URL
+  when nothing answers. There is no `/api/health`; `load` reads
+  `GET /api/host/health` (CPU, memory, disk, live sessions).
+- `config` — `GET /api/config`: terminal, tmux and speech-to-text availability.
+- `usage [--days 1|7|30|all] [--sort cost|tokens]` — `GET /api/usage-summary`:
+  totals, spend by period and the top rows per model, provider, workspace and
+  session; `--json` is the whole payload.
+- `models [--harness ID] [--cwd DIR]` — `GET /api/models`: the models a
+  harness can run, with context window and enabled state.
+- `share <ref>` — `POST /api/sessions/:id/share`: a public, read-only HTML
+  link to a Pi or OMP transcript (idempotent; the user revokes it in pi-dish).
+
+Each takes `--host NAME` and `--json` (the route's own payload).
 
 ## Lifecycle
 

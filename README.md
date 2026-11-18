@@ -812,6 +812,16 @@ node "$CLI" related <session-id>
 node "$CLI" follow-up <session-id> "Then summarize the result"
 ```
 
+Agents read this output into their context, so it is bounded by default:
+`list` shows 50 rows, `search` 20 results, and `read`/`show` and long text
+output stop near 12000 characters, each cut ending with one line that says how
+to get the rest (`--limit N`, `--max-chars N`, `--fields A,B|all`, or `--full`).
+`GET /api/sessions` takes the same opt-in `limit` and `fields` query
+parameters; the browser sends neither, so its payload is unchanged. Read-only
+verbs cover the server state agents otherwise curl: `host` (identity,
+version and capabilities; the "is pi-dish up?" check), `config`, `usage`,
+and `models`; `share <ref>` publishes a session's public HTML link.
+
 Pi's native `parentSession` header is read when present. Launches requested
 through this CLI also get advisory provenance in
 `~/.pi/dish/session-provenance.json`; pi-dish never appends custom control

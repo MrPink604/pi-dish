@@ -176,6 +176,17 @@ const COMMANDS = [
         example: 'close 8f3ab2c1',
     },
     {
+        name: 'share',
+        usage: 'share <ref> [--host NAME] [--json]',
+        summary: 'Publish a read-only public HTML link to a Pi or OMP session transcript (POST /api/sessions/:id/share).',
+        flags: [],
+        example: 'share 8f3ab2c1',
+        notes: [
+            'Idempotent: a session that is already shared answers its existing link. Anyone holding the link can read the transcript; the user revokes it in pi-dish.',
+            'Prints the absolute URL when the host has a public base, else the /share/<token> path relative to the address the user browses pi-dish at.',
+        ],
+    },
+    {
         name: 'attach',
         usage: 'attach [session-or-query] [--json]',
         summary: "Attach this terminal to a live session's tmux pane (local host only).",
@@ -206,6 +217,45 @@ const COMMANDS = [
             'A coarse snapshot, not monitoring: CPU is the busy share since the previous reading (or a short sample).',
             'Before starting heavy work (builds, test suites, spawning several peers), check whether another host is idler.',
         ],
+    },
+    {
+        name: 'host',
+        usage: 'host [--host NAME] [--json]',
+        summary: "Is pi-dish up? This server's identity, version and capabilities (GET /api/host).",
+        flags: [],
+        example: 'host',
+        notes: [
+            'There is no /api/health route: `host` is the liveness check (it needs no token) and fails naming the URL when nothing answers; `load` reads GET /api/host/health.',
+        ],
+    },
+    {
+        name: 'config',
+        usage: 'config [--host NAME] [--json]',
+        summary: 'Server features the UI gates on: terminal, tmux, speech-to-text (GET /api/config).',
+        flags: [],
+        example: 'config --json',
+    },
+    {
+        name: 'usage',
+        usage: 'usage [--days 1|7|30|all] [--sort cost|tokens] [--limit N] [--host NAME] [--json]',
+        summary: 'Token and cost usage across every session on a host (GET /api/usage-summary).',
+        flags: [
+            ['--days D', 'range: 1, 7, 30 (default) or all'],
+            ['--sort KEY', 'rank groups by cost (default) or tokens'],
+            ['--limit N', 'rows per group in the text summary (default 5, max 20); --json is the whole route payload'],
+        ],
+        example: 'usage --days 7',
+    },
+    {
+        name: 'models',
+        usage: 'models [--harness ID] [--cwd DIR] [--max-chars N] [--host NAME] [--json]',
+        summary: 'Models a harness can run on a host, with context window and enabled state (GET /api/models).',
+        flags: [
+            ['--harness ID', 'harness whose catalog to list (default pi)'],
+            ['--cwd DIR', 'project directory, for harnesses with per-project model overrides'],
+            MAX_CHARS_FLAG,
+        ],
+        example: 'models --harness omp',
     },
     {
         name: 'docs',
@@ -266,7 +316,7 @@ function globalHelp() {
         ...padded(SHARED_FLAGS),
         '',
         `Output bounds (default; each cut prints one \`# …\` line saying how to get more, on stderr under --json):`,
-        `  list ${DEFAULT_LIST_ROWS} rows, search ${DEFAULT_SEARCH_ROWS} results; read, show and list/search/hosts text about ${DEFAULT_MAX_CHARS} chars;`,
+        `  list ${DEFAULT_LIST_ROWS} rows, search ${DEFAULT_SEARCH_ROWS} results; read, show and list/search/hosts/models text about ${DEFAULT_MAX_CHARS} chars;`,
         '  list/search/resolve/show --json rows keep a compact field set. Raise with --limit N, --max-chars N (0 = no cap),',
         '  --fields A,B (all = every field); --full lifts them all.',
         '',
@@ -304,6 +354,7 @@ const VALUE_FLAGS = new Map([
     ['--url', 'url'], ['--session', 'session'], ['--cwd', 'cwd'], ['--harness', 'harness'],
     ['--model', 'model'], ['--name', 'name'], ['--prompt', 'prompt'], ['--limit', 'limit'],
     ['--host', 'host'], ['--before', 'before'], ['--max-chars', 'max_chars'], ['--fields', 'fields'],
+    ['--days', 'days'], ['--sort', 'sort'],
 ]);
 const BOOL_FLAGS = new Map([
     ['--json', 'json'], ['--active', 'active'], ['--no-wait', 'no_wait'], ['--private', 'private'],
@@ -722,6 +773,63 @@ function loadLine(data) {
     return `${live}\tcpu ${percent(cpu.utilization)} load ${load}/${Number(cpu.cores) || '?'}` +
         `\tmem ${usedShare(health.memory)}\tdisk ${usedShare(health.disk)}`;
 }
+function compactCount(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n))
+        return '?';
+    for (const [scale, suffix] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'k']]) {
+        if (Math.abs(n) >= scale)
+            return `${(n / scale).toFixed(1)}${suffix}`;
+    }
+    return String(n);
+}
+function dollars(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? `$${n.toFixed(2)}` : '?';
+}
+function usageCells(value) {
+    const row = core.record(value ?? {});
+    const tokens = core.record(row.tokens ?? {}), costs = core.record(row.costs ?? {});
+    return `${dollars(costs.total)}\t${compactCount(row.calls)} calls\tin ${compactCount(tokens.input)} out ${compactCount(tokens.output)}` +
+        ` cache r/w ${compactCount(tokens.cacheRead)}/${compactCount(tokens.cacheWrite)}`;
+}
+/** `/api/usage-summary` as a short report: totals, spend by period, the top `rows` of each group. */
+function usageText(data, rows) {
+    const lines = [`usage ${data.range === 'all' ? 'all time' : `last ${data.range}d`}, ranked by ${data.sort}`];
+    lines.push(`total\t${usageCells(data.totals)}`);
+    const spend = core.record(data.headlineCosts ?? {});
+    lines.push(`spend\ttoday ${dollars(spend.today)}\t7d ${dollars(spend.days7)}\t30d ${dollars(spend.days30)}\tmonth ${dollars(spend.month)}\tall ${dollars(spend.all)}`);
+    const groups = core.record(data.groups ?? {});
+    let cut = false;
+    for (const name of ['models', 'providers', 'workspaces', 'sessions']) {
+        const list = wireArray(groups[name]);
+        if (!list.length)
+            continue;
+        cut ||= list.length > rows;
+        lines.push(`${name} (top ${Math.min(rows, list.length)}):`);
+        for (const value of list.slice(0, rows)) {
+            const row = core.record(value);
+            lines.push(`  ${usageCells(row)}\t${name === 'sessions' ? `${row.name || row.id}\t${row.id}` : row.key}`);
+        }
+    }
+    if (cut)
+        lines.push(`# Groups show their top ${rows}; --limit N (max 20) or --json for the whole payload.`);
+    if (Number(data.unpricedModelCalls) > 0)
+        lines.push(`# ${data.unpricedModelCalls} calls have no known price; their cost is missing from the totals.`);
+    if (data.indexing)
+        lines.push('# Session index is still building; totals may be partial — retry shortly.');
+    return lines.join('\n') + '\n';
+}
+function modelLine(value) {
+    const model = core.record(value ?? {});
+    const flags = [
+        model.reasoning || (Array.isArray(model.thinking) && model.thinking.length) ? 'reasoning' : '',
+        model.free ? 'free' : '',
+        model.enabled === false ? 'disabled' : '',
+    ].filter(Boolean).join(',');
+    const context = Number(model.contextWindow) > 0 ? compactCount(model.contextWindow) : '?';
+    return `${model.selector || `${model.provider}/${model.id}`}\t${model.name || model.id}\tctx ${context}\t${flags || '-'}`;
+}
 async function fleetLoad(base, json) {
     const hosts = await fleetHosts(base);
     if (!hosts)
@@ -900,7 +1008,7 @@ async function runAttach(args) {
         return print(selected, true);
     attachToTmux(selected.socket, selected.pane);
 }
-const REF_COMMANDS = new Set(['resolve', 'read', 'show', 'related', 'send', 'steer', 'follow-up', 'interrupt', 'resume', 'close']);
+const REF_COMMANDS = new Set(['resolve', 'read', 'show', 'related', 'send', 'steer', 'follow-up', 'interrupt', 'resume', 'close', 'share']);
 async function main() {
     let args;
     try {
@@ -952,6 +1060,62 @@ async function main() {
                 process.stdout.write('# Add --host <name> to any command to act on that host.\n');
             else
                 process.stdout.write('# No remotes configured; this host is the whole fleet.\n');
+            return;
+        }
+        if (spec.name === 'host') {
+            const url = base + core.hostPath(hostFlag, '');
+            let data;
+            try {
+                ({ data } = await api(base, hostFlag, '/api/host'));
+            }
+            catch (error) {
+                if (core.errorStatus(error) === undefined)
+                    throw new Error(`no pi-dish answering at ${url} (${core.errorMessage(error)})`);
+                throw error;
+            }
+            if (args.json)
+                return print(data, true);
+            const info = core.record(data ?? {});
+            const capabilities = core.record(info.capabilities ?? {});
+            process.stdout.write([
+                `up: ${url}`,
+                `hostId: ${info.hostId ?? ''}`,
+                `label: ${info.label ?? ''}`,
+                `version: ${info.version ?? ''}`,
+                `capabilities: ${Object.keys(capabilities).filter(key => capabilities[key]).join(',') || 'none'}`,
+            ].join('\n') + '\n');
+            return;
+        }
+        if (spec.name === 'config') {
+            const { data } = await api(base, hostFlag, '/api/config');
+            if (args.json)
+                return print(data, true);
+            for (const [key, value] of Object.entries(core.record(data ?? {})))
+                process.stdout.write(`${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}\n`);
+            return;
+        }
+        if (spec.name === 'usage') {
+            const params = new URLSearchParams({ days: args.days || '30', sort: args.sort || 'cost' });
+            const { data } = await api(base, hostFlag, `/api/usage-summary?${params}`);
+            if (args.json)
+                return print(data, true);
+            process.stdout.write(usageText(core.record(data ?? {}), intArg(args.limit, 5, 20)));
+            return;
+        }
+        if (spec.name === 'models') {
+            const bounds = outputBounds(args, null);
+            const params = new URLSearchParams();
+            if (args.harness)
+                params.set('harness', args.harness);
+            if (args.cwd)
+                params.set('cwd', args.cwd);
+            const { data } = await api(base, hostFlag, `/api/models${params.size ? `?${params}` : ''}`);
+            if (args.json)
+                return print(data, true);
+            const models = wireArray(data);
+            writeCapped(models.map(model => modelLine(model) + '\n').join(''), bounds.chars, '--max-chars N or --full for more, or --json and filter.');
+            if (!models.length)
+                process.stdout.write('No models.\n');
             return;
         }
         if (spec.name === 'load') {
@@ -1145,6 +1309,14 @@ async function main() {
                 ].filter(Boolean);
                 cutNotice(true, `show cut to fit --max-chars ${bounds.chars}: ${parts.join('; ')}; --max-chars 0 or --full for everything.`);
             }
+            return;
+        }
+        if (spec.name === 'share') {
+            const { data } = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/share`, jsonInit({}));
+            if (args.json)
+                return print(data, true);
+            const link = core.record(data ?? {});
+            process.stdout.write(`${link.url || link.path}\n`);
             return;
         }
         if (spec.name === 'related') {

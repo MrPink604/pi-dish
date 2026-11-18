@@ -373,3 +373,22 @@ test('peer-session CLI load reports each capable host and names skipped ones', a
     const hosts = await run(['hosts'], base);
     assert.match(hosts.stdout, /^\(self\)\treachable\tself\tsessions,hostHealth$/m);
 });
+test('peer-session CLI models lists GET /api/models as lines and as the route JSON', async (t) => {
+    const catalog = [
+        { id: 'big', provider: 'acme', name: 'Acme Big', selector: 'acme/big', contextWindow: 200000, reasoning: true, thinking: ['low', 'high'], pricing: null, free: false, enabled: true },
+        { id: 'tiny', provider: 'acme', name: 'tiny', contextWindow: 0, pricing: { input: 0, output: 0 }, free: true, enabled: false },
+    ];
+    const urls = [];
+    const server = http.createServer((req, res) => {
+        urls.push(req.url ?? '');
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(catalog));
+    });
+    const base = await listenServer(server);
+    t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+    assert.deepEqual(JSON.parse((await run(['models', '--json'], base)).stdout), catalog);
+    assert.equal(urls.at(-1), '/api/models', 'no harness means the route default');
+    const text = await run(['models', '--harness', 'omp', '--cwd', '/work/api'], base);
+    assert.equal(urls.at(-1), '/api/models?harness=omp&cwd=%2Fwork%2Fapi');
+    assert.equal(text.stdout, 'acme/big\tAcme Big\tctx 200.0k\treasoning\nacme/tiny\ttiny\tctx ?\tfree,disabled\n');
+});
