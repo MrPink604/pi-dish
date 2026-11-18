@@ -14,6 +14,14 @@ interface UsageSource {
     readonly measured?: number;
     readonly durationMs?: number;
     readonly slowestMs?: number;
+    readonly genOutput?: number;
+    readonly genMs?: number;
+    readonly ttftCount?: number;
+    readonly ttftMs?: number;
+    readonly slowestTtftMs?: number;
+    readonly streamOutput?: number;
+    readonly streamMs?: number;
+    readonly fastCalls?: number;
 }
 interface UsageTotal {
     tokens: Record<TokenKey, number>;
@@ -23,6 +31,14 @@ interface UsageTotal {
     measured: number;
     durationMs: number;
     slowestMs: number;
+    genOutput?: number;
+    genMs?: number;
+    ttftCount?: number;
+    ttftMs?: number;
+    slowestTtftMs?: number;
+    streamOutput?: number;
+    streamMs?: number;
+    fastCalls?: number;
 }
 /** Unknown amounts leave the known subtotal (including an absent subtotal) alone. */
 export declare function addKnownUsageCost<T extends number | null | undefined>(to: T, from: number | null | undefined): T | number;

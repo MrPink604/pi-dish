@@ -4,7 +4,7 @@ import type { SessionState, SelectionOwner, SessionEntry } from './session-state
 import type { SessionShare, PublishedPage } from './session-info-data';
 import { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './session-info-data';
 import { escapeHtml } from '../core/helper-format';
-import { countLabel, formatTokSpeed, formatTokens, formatDuration, formatUsageCost, formatCacheStat, formatRuntime, formatRelativeTime } from './helper-format';
+import { countLabel, formatTokSpeed, formatTokens, formatDuration, formatLatency, formatUsageCost, formatCacheStat, formatRuntime, formatRelativeTime } from './helper-format';
 
 import { record } from '../core/helper-values';
 export function createSessionInfo(options: {
@@ -81,10 +81,15 @@ export function createSessionInfo(options: {
         const cu = s.contextUsage || {};
         // Only messages with measurable timing count toward speed.
         const avgSpeed = formatTokSpeed(s.genOutput, s.genMs);
+        const streamSpeed = formatTokSpeed(s.streamOutput, s.streamMs);
+        const providerDetail = s.providers.length
+          ? `${s.providers.join(', ')}${s.apis.length ? ` (${s.apis.join(', ')})` : ''}${s.fastCalls ? ` · ${countLabel(s.fastCalls, 'fast call')}` : ''}`
+          : null;
         const rows: ([string, string, boolean?] | null)[] = [
           ['__section', 'Summary'],
           ['Ref', ref, !!ref],
           ['Model', s.model || '—'],
+          providerDetail ? ['Provider', providerDetail] : null,
           ['Thinking', s.thinkingLevel || '—'],
           ['Context', (cu.tokens != null ? formatTokens(cu.tokens) : '—') +
             ' / ' + (cu.contextWindow ? formatTokens(cu.contextWindow) : '—') +
@@ -93,8 +98,10 @@ export function createSessionInfo(options: {
           // Always shown, including zero.
           ['Compactions', String(s.compactions ?? 0)],
           ['__section', 'Performance'],
+          s.ttftTiming.measured ? ['TTFT', `${formatLatency(s.ttftTiming.medianMs)} median · ${formatLatency(s.ttftTiming.slowestMs)} slowest · ${s.ttftTiming.measured} measured`] : null,
           s.responseTiming?.medianMs ? ['Response time', `${formatDuration(s.responseTiming.medianMs)} median · ${formatDuration(s.responseTiming.slowestMs)} slowest`] : null,
           avgSpeed ? ['Effective speed', `${avgSpeed} avg · ${formatDuration(s.genMs)} measured response time`] : null,
+          streamSpeed ? ['Streaming speed', `${streamSpeed} avg (post-TTFT)`] : null,
           ['__section', 'Tokens & cache'],
           ['Tokens in / out', `${formatTokens(s.tokens?.input)} / ${formatTokens(s.tokens?.output)}`],
           s.reasoningTokens ? ['Reasoning', formatTokens(s.reasoningTokens)] : null,

@@ -2881,19 +2881,48 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // Latest assistant outcome when it is a dropped error; a retry or fallback
   // model's next assistant message supersedes it before the run settles.
   let droppedTurnError: TurnErrorEntryData | null = null;
+  let assistantStartMs: number | null = null;
+  let assistantFirstTokenMs: number | null = null;
   for (const ev of descriptor.eventProfile) {
     on(ev, (event: HostObject, ctx: HostObject) => {
       wrapExtensionUI(ctx);
       lastCtx = ctx ?? lastCtx;
       refreshModel(ctx);
       recoveryObserver.event(ev, event);
-      if (ev === "message_end" && field(event.message, "role") === "assistant") {
+      if (ev === "message_start" && field(event.message, "role") === "assistant") {
+        const ts = field(event.message, "timestamp");
+        assistantStartMs = typeof ts === "number" && Number.isFinite(ts) ? ts : Date.now();
+        assistantFirstTokenMs = null;
+      } else if (ev === "message_update" && field(event.message, "role") === "assistant") {
+        if (assistantStartMs !== null && assistantFirstTokenMs === null) {
+          const subType = field(event.assistantMessageEvent, "type");
+          const content = field(event.message, "content");
+          const hasDelta = typeof subType === "string"
+            ? (subType !== "start" && subType !== "done" && subType !== "error")
+            : (Array.isArray(content) && content.length > 0);
+          if (hasDelta) assistantFirstTokenMs = Date.now();
+        }
+      } else if (ev === "message_end" && field(event.message, "role") === "assistant") {
+        if (assistantStartMs !== null && assistantFirstTokenMs !== null && field(event.message, "ttft") === undefined) {
+          const ttft = Math.max(0, assistantFirstTokenMs - assistantStartMs);
+          try {
+            if (event.message && typeof event.message === "object" && Object.isExtensible(event.message)) {
+              (event.message as Record<string, unknown>).ttft = ttft;
+            }
+          } catch {}
+        }
+        assistantStartMs = null;
+        assistantFirstTokenMs = null;
         droppedTurnError = descriptor.unpersistedErrorTurn?.(event.message) ? turnErrorData(event.message) : null;
       } else if (ev === "agent_end" && droppedTurnError && event.willContinue !== true) {
         const data = droppedTurnError;
         droppedTurnError = null;
         try { callHost(pi, "appendEntry", TURN_ERROR_ENTRY_TYPE, data); }
         catch (e) { try { process.stderr.write(`[pi-dish-bridge] could not record turn error: ${e}\n`); } catch {} }
+      }
+      if (ev === "turn_end" || ev === "agent_end") {
+        assistantStartMs = null;
+        assistantFirstTokenMs = null;
       }
       if (ev === "agent_start" || ev === "turn_start") admitPendingSends();
       if (ev === "turn_start") {

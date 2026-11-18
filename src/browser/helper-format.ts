@@ -121,6 +121,15 @@ export function formatTokSpeed(outputTokens?: number | null, durationMs?: number
   return (rate >= 10 ? Math.round(rate) : Math.round(rate * 10) / 10) + ' tok/s';
 }
 
+/** Sub-minute latency formatter for TTFT and call spans ("420ms", "2.0s", "14s", "1:30"). */
+export function formatLatency(ms?: number | null) {
+  if (!finite(ms) || ms < 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 10000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+  return formatDuration(ms);
+}
+
 /** Harness-catalog estimate; deliberately never presented as a provider bill. */
 export function formatEstimatedCost(value: unknown, digits = 4) {
   if (!finite(value)) return 'Unavailable';

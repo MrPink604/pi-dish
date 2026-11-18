@@ -7,6 +7,8 @@ export interface ResponseMetadata {
   readonly usage?: { readonly output?: number; readonly cost?: { readonly total?: number | null } };
   readonly outputTokens?: number;
   readonly durationMs?: number;
+  readonly ttftMs?: number;
+  readonly streamMs?: number;
   readonly pricingKnown?: boolean;
 }
 export type CostKey = 'input' | 'output' | 'cacheRead' | 'cacheWrite' | 'total';
@@ -21,6 +23,14 @@ export interface UsageBucket {
   measured?: number;
   durationMs?: number;
   slowestMs?: number;
+  genOutput?: number;
+  genMs?: number;
+  ttftCount?: number;
+  ttftMs?: number;
+  slowestTtftMs?: number;
+  streamOutput?: number;
+  streamMs?: number;
+  fastCalls?: number;
   priced?: boolean;
   unpricedCalls?: number;
 }
@@ -36,13 +46,30 @@ export interface MergedUsage extends UsageBucket {
 export interface UsageModel { ref: string; provider?: string; model?: string; calls?: number; cost?: number | null; costUnavailable?: Partial<Record<CostKey, number>>; tokens?: Tokens }
 export interface MergedUsageModel extends UsageModel { calls: number; cost: number; costUnavailable: Partial<Record<CostKey, number>>; tokens: Record<TokenKey, number> }
 export interface UsageDay extends UsageBucket { day: string; days?: number; models?: readonly UsageModel[] }
-export interface UsageGroup extends UsageBucket { name?: string; workspace?: string; key?: string; id?: string; provider?: string; model?: string; host?: string | null; hostLabel?: string | null }
+export interface UsageGroup extends UsageBucket {
+  name?: string;
+  workspace?: string;
+  key?: string;
+  id?: string;
+  provider?: string;
+  model?: string;
+  apis?: readonly string[];
+  models?: readonly string[];
+  modelCount?: number;
+  host?: string | null;
+  hostLabel?: string | null;
+}
 export interface UsageSummary {
   range?: string;
   sort?: string;
   models?: readonly string[] | null;
   totals?: UsageBucket;
-  groups?: { models?: readonly UsageGroup[]; workspaces?: readonly UsageGroup[]; sessions?: readonly UsageGroup[] };
+  groups?: {
+    providers?: readonly UsageGroup[];
+    models?: readonly UsageGroup[];
+    workspaces?: readonly UsageGroup[];
+    sessions?: readonly UsageGroup[];
+  };
   daily?: readonly UsageDay[];
   headlineCosts?: Readonly<Record<string, number | null>>;
   headlineCostsByBucket?: Readonly<Record<string, Costs | null>>;

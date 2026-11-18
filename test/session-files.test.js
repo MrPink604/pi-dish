@@ -584,6 +584,45 @@ test('turnDurationMs pairs cumulative turn usage with multi-step LLM time withou
     assert.equal(indexed.total.measured, 2);
     assert.equal(indexed.total.durationMs, 15000, 'per-step durations sum to 15s without double counting');
 });
+test('TTFT, post-TTFT streaming speed, API wire family, and fast-tier counts project into session stats and indexed usage', () => {
+    const file = writeSession([
+        { type: 'service_tier_change', serviceTier: { anthropic: 'priority' } },
+        { type: 'message', timestamp: '2026-07-01T10:00:10.000Z', message: {
+                role: 'assistant', provider: 'anthropic', model: 'claude-sonnet-4-6', api: 'anthropic-messages',
+                content: [], timestamp: Date.parse('2026-07-01T10:00:00.000Z'), ttft: 2000,
+                usage: { input: 500, output: 400 },
+            } },
+        { type: 'service_tier_change', serviceTier: null },
+        { type: 'message', timestamp: '2026-07-01T10:00:25.000Z', message: {
+                role: 'assistant', provider: 'openai', model: 'gpt-5', api: 'openai-responses',
+                content: [], timestamp: Date.parse('2026-07-01T10:00:10.000Z'), ttft: 5000,
+                usage: { input: 300, output: 500 },
+            } },
+    ]);
+    const messages = SF.readSessionMessages(file);
+    assert.equal(messages[0].ttftMs, 2000);
+    assert.equal(messages[0].streamMs, 8000);
+    assert.equal(messages[1].ttftMs, 5000);
+    assert.equal(messages[1].streamMs, 10000);
+    const stats = SF.getSessionStats(file);
+    assert.deepEqual(stats.ttftTiming, { measured: 2, medianMs: 3500, slowestMs: 5000 });
+    assert.equal(stats.streamMs, 18000);
+    assert.equal(stats.streamOutput, 900);
+    assert.deepEqual(stats.providers, ['anthropic', 'openai']);
+    assert.deepEqual(stats.apis, ['anthropic-messages', 'openai-responses']);
+    assert.equal(stats.fastCalls, 1);
+    const indexed = SF.buildIndexedUsageFromContent(fs.readFileSync(file, 'utf8'));
+    assert.equal(indexed.total.ttftCount, 2);
+    assert.equal(indexed.total.ttftMs, 7000);
+    assert.equal(indexed.total.slowestTtftMs, 5000);
+    assert.equal(indexed.total.streamMs, 18000);
+    assert.equal(indexed.total.streamOutput, 900);
+    assert.equal(indexed.total.genMs, 25000);
+    assert.equal(indexed.total.genOutput, 900);
+    assert.equal(indexed.total.fastCalls, 1);
+    assert.deepEqual(indexed.models['anthropic/claude-sonnet-4-6'].apis, ['anthropic-messages']);
+    assert.deepEqual(indexed.models['openai/gpt-5'].apis, ['openai-responses']);
+});
 test('an engaged fast tier prices turns by the reported tier cost, not the flat estimate', () => {
     // OMP's service_tier_change carries the per-family tier map /fast writes.
     // Under an engaged tier OMP scales its own persisted usage cost (the

@@ -28,7 +28,12 @@ export interface SanitizedUsage extends Partial<UsageTokens> {
   cost?: Readonly<Partial<UsageCosts>>;
   cacheWrite1h?: number;
 }
-export interface AssistantGenStats { readonly durationMs?: number; readonly outputTokens?: unknown }
+export interface AssistantGenStats {
+  readonly durationMs?: number;
+  readonly outputTokens?: unknown;
+  readonly ttftMs?: number;
+  readonly streamMs?: number;
+}
 /** Borrowed display projection: external payloads retain their original values. */
 export interface SessionMessage extends AssistantGenStats {
   readonly id?: unknown;
@@ -56,6 +61,7 @@ export interface SessionStats {
   readonly costs: Readonly<UsageCosts>;
   readonly costUnavailable: Readonly<UsageCosts>;
   readonly responseTiming: Readonly<{ measured: number; medianMs: number | null; slowestMs: number | null }>;
+  readonly ttftTiming: Readonly<{ measured: number; medianMs: number | null; slowestMs: number | null }>;
   readonly userMessages: number;
   readonly assistantMessages: number;
   readonly toolCalls: number;
@@ -63,6 +69,11 @@ export interface SessionStats {
   readonly compactions: number;
   readonly genMs: number;
   readonly genOutput: number;
+  readonly streamMs: number;
+  readonly streamOutput: number;
+  readonly providers: readonly string[];
+  readonly apis: readonly string[];
+  readonly fastCalls: number;
   readonly hardCacheMisses: number;
 }
 /** Direct parser output retains malformed JSON tree ids; the index validates its leaf. */
@@ -444,20 +455,46 @@ function assistantStepDurationMs(entry: Record<string, unknown>): number | undef
   return end - start;
 }
 
+/** Per-step TTFT (`message.ttft` in ms, recorded natively by OMP and by ACP / Pi bridge). */
+function assistantStepTtftMs(entry: Record<string, unknown>, stepMs?: number): number | undefined {
+  const m = fields(entry.message);
+  if (m.role !== 'assistant') return undefined;
+  const raw = m.ttft;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return undefined;
+  const rounded = Math.round(raw);
+  return stepMs !== undefined ? Math.min(stepMs, rounded) : rounded;
+}
+
 /**
  * Generation timing paired with `message.usage.output`. Harnesses that report
  * cumulative turn usage only on the closing segment (ACP) stamp `turnDurationMs`
- * with the sum of the turn's model-step spans so speed matches the token scope.
+ * (and `turnTtftMs`) with the sum of the turn's model-step spans so effective
+ * and post-TTFT streaming speeds match the token scope.
  */
 function assistantGenStats(entry: Record<string, unknown>): AssistantGenStats {
   const m = fields(entry.message);
   if (m.role !== 'assistant') return {};
+  const stepMs = assistantStepDurationMs(entry);
+  const stepTtftMs = assistantStepTtftMs(entry, stepMs);
   const turnMs = typeof m.turnDurationMs === 'number' && Number.isFinite(m.turnDurationMs) && m.turnDurationMs > 0
     ? m.turnDurationMs
     : undefined;
-  const durationMs = turnMs ?? assistantStepDurationMs(entry);
-  if (!durationMs) return {};
-  return { durationMs, outputTokens: fields(m.usage ?? EMPTY_FIELDS).output || 0 };
+  const turnTtftMs = typeof m.turnTtftMs === 'number' && Number.isFinite(m.turnTtftMs) && m.turnTtftMs >= 0
+    ? Math.round(m.turnTtftMs)
+    : undefined;
+  const durationMs = turnMs ?? stepMs;
+  if (!durationMs) {
+    return stepTtftMs !== undefined ? { ttftMs: stepTtftMs } : {};
+  }
+  const ttftMs = stepTtftMs ?? (turnTtftMs !== undefined ? Math.min(durationMs, turnTtftMs) : undefined);
+  const ttftSpan = turnMs !== undefined ? (turnTtftMs ?? stepTtftMs) : stepTtftMs;
+  const streamMs = ttftSpan !== undefined && durationMs > ttftSpan ? durationMs - ttftSpan : undefined;
+  return {
+    durationMs,
+    outputTokens: fields(m.usage ?? EMPTY_FIELDS).output || 0,
+    ...(ttftMs !== undefined ? { ttftMs } : {}),
+    ...(streamMs ? { streamMs } : {}),
+  };
 }
 
 const messagesCache = new Map<string, Cached<MessageData>>();
@@ -678,8 +715,11 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
   let reasoningTokens = 0, hardCacheMisses = 0;
   let userMessages = 0, assistantMessages = 0, toolCalls = 0, toolResults = 0, compactions = 0;
   // Sums only measurable messages so speed is not diluted.
-  let genMs = 0, genOutput = 0;
+  let genMs = 0, genOutput = 0, streamMs = 0, streamOutput = 0, fastCalls = 0;
   const responseDurations: number[] = [];
+  const ttftDurations: number[] = [];
+  const providers = new Set<string>();
+  const apis = new Set<string>();
   const model: ModelContinuity = { provider: null, model: null };
   const tiers: { value: ServiceTierContinuity } = { value: null };
   for (const raw of readSessionFileEntries(filePath, stats).entries) {
@@ -694,6 +734,13 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
     else if (m.role === 'assistant') {
       assistantMessages++;
       if (Array.isArray(m.content)) toolCalls += m.content.filter(c => fields(c).type === 'toolCall').length;
+      const provider = typeof m.provider === 'string' && m.provider
+        ? m.provider
+        : (typeof model.provider === 'string' && model.provider ? model.provider : null);
+      if (provider && providers.size < 16) providers.add(provider);
+      const api = assistantApiName(m, provider);
+      if (api && apis.size < 16) apis.add(api);
+      if (providerUnderFastTier(provider, tiers.value)) fastCalls++;
       const u = m.usage ? fields(m.usage) : null;
       if (u) {
         tokens.input += tokenAmount(u.input);
@@ -705,26 +752,49 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
       }
       addReportedCosts(costBucket, messageUsageCost(candidate, m, model, estimateCost, tiers.value));
       const gen = assistantGenStats(entry);
+      const out = tokenAmount(gen.outputTokens);
       if (gen.durationMs && gen.outputTokens) {
         genMs += gen.durationMs;
-        genOutput += tokenAmount(gen.outputTokens);
+        genOutput += out;
+      }
+      if (gen.streamMs && out) {
+        streamMs += gen.streamMs;
+        streamOutput += out;
       }
       const stepMs = assistantStepDurationMs(entry);
       if (stepMs) responseDurations.push(stepMs);
+      const stepTtft = assistantStepTtftMs(entry, stepMs);
+      if (stepTtft !== undefined) ttftDurations.push(stepTtft);
     }
   }
-  responseDurations.sort((a, b) => a - b);
-  const middle = Math.floor(responseDurations.length / 2);
-  const responseTiming = {
-    measured: responseDurations.length,
-    medianMs: responseDurations.length ? (responseDurations.length % 2 ? responseDurations[middle] : (responseDurations[middle - 1] + responseDurations[middle]) / 2) : null,
-    slowestMs: responseDurations.length ? responseDurations[responseDurations.length - 1] : null,
-  };
+  const responseTiming = summarizeDurations(responseDurations);
+  const ttftTiming = summarizeDurations(ttftDurations);
   const { costs, costUnavailable } = costBucket;
-  return { tokens, reasoningTokens, hardCacheMisses, cost: costs.total, costs, costUnavailable, responseTiming, userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput };
+  return {
+    tokens, reasoningTokens, hardCacheMisses, cost: costs.total, costs, costUnavailable,
+    responseTiming, ttftTiming, userMessages, assistantMessages, toolCalls, toolResults, compactions,
+    genMs, genOutput, streamMs, streamOutput, providers: [...providers], apis: [...apis], fastCalls,
+  };
 }
 
 /** Derived during the same read as metadata/text. */
+
+function summarizeDurations(samples: number[]): { measured: number; medianMs: number | null; slowestMs: number | null } {
+  samples.sort((a, b) => a - b);
+  const n = samples.length;
+  const mid = Math.floor(n / 2);
+  return {
+    measured: n,
+    medianMs: n ? (n % 2 ? samples[mid] : (samples[mid - 1] + samples[mid]) / 2) : null,
+    slowestMs: n ? samples[n - 1] : null,
+  };
+}
+
+function assistantApiName(message: Record<string, unknown>, provider: string | null): string {
+  if (typeof message.api === 'string' && message.api) return message.api;
+  if (provider === 'google-antigravity') return 'acp';
+  return '';
+}
 export function buildIndexedUsageFromContent(content: string, candidate: SessionFileProfile = {}): IndexedUsage {
   return buildIndexedUsageFromEntries(parseSessionEntries(content), candidate);
 }
@@ -752,7 +822,17 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
   const model = { provider: usage.state?.provider ?? null, model: usage.state?.model ?? 'unknown' };
   const tiers: { value: ServiceTierContinuity } = { value: usage.state?.serviceTier ?? null };
   let cwd = usage.cwd ?? null;
-  const add = (bucket: UsageBucket, u: Record<string, unknown> & { cost?: Partial<UsageCosts> }, duration: number) => {
+  const add = (
+    bucket: UsageBucket,
+    u: Record<string, unknown> & { cost?: Partial<UsageCosts> },
+    duration: number,
+    genPairMs: number,
+    genPairOut: number,
+    stepTtft: number | undefined,
+    streamPairMs: number,
+    streamPairOut: number,
+    fast: boolean,
+  ) => {
     bucket.calls = (bucket.calls || 0) + 1;
     bucket.tokens ||= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 };
     for (const k of TOKEN_KEYS) {
@@ -760,6 +840,10 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
     }
     addReportedCosts(bucket, u?.cost);
     if (duration) { bucket.measured = (bucket.measured || 0) + 1; bucket.durationMs = (bucket.durationMs || 0) + duration; bucket.slowestMs = Math.max(bucket.slowestMs || 0, duration); }
+    if (genPairMs && genPairOut) { bucket.genMs = (bucket.genMs || 0) + genPairMs; bucket.genOutput = (bucket.genOutput || 0) + genPairOut; }
+    if (stepTtft !== undefined) { bucket.ttftCount = (bucket.ttftCount || 0) + 1; bucket.ttftMs = (bucket.ttftMs || 0) + stepTtft; bucket.slowestTtftMs = Math.max(bucket.slowestTtftMs || 0, stepTtft); }
+    if (streamPairMs && streamPairOut) { bucket.streamMs = (bucket.streamMs || 0) + streamPairMs; bucket.streamOutput = (bucket.streamOutput || 0) + streamPairOut; }
+    if (fast) bucket.fastCalls = (bucket.fastCalls || 0) + 1;
   };
   for (const raw of entries) {
     const e = fields(raw);
@@ -778,11 +862,26 @@ function accumulateIndexedUsage(usage: IndexedUsage, entries: SessionEntries, ca
     const ref = `${p}/${mid}`;
     const ts = entryDate(e.timestamp || m.timestamp);
     const day = Number.isFinite(ts.getTime()) ? `${ts.getFullYear()}-${String(ts.getMonth() + 1).padStart(2, '0')}-${String(ts.getDate()).padStart(2, '0')}` : 'unknown';
-    const duration = assistantStepDurationMs(e) || 0;
-    const u = { ...fields(m.usage ?? EMPTY_FIELDS), cost: usageCost(candidate, p, mid, m.usage, estimateCost, providerUnderFastTier(p, tiers.value)) };
-    add(total, u, duration); add(days[day] ||= {}, u, duration);
+    const stepMs = assistantStepDurationMs(e);
+    const duration = stepMs || 0;
+    const stepTtft = assistantStepTtftMs(e, stepMs);
+    const gen = assistantGenStats(e);
+    const out = tokenAmount(gen.outputTokens);
+    const genPairMs = gen.durationMs && out ? gen.durationMs : 0;
+    const genPairOut = genPairMs ? out : 0;
+    const streamPairMs = gen.streamMs && out ? gen.streamMs : 0;
+    const streamPairOut = streamPairMs ? out : 0;
+    const fast = providerUnderFastTier(p, tiers.value);
+    const api = assistantApiName(m, p);
+    const u = { ...fields(m.usage ?? EMPTY_FIELDS), cost: usageCost(candidate, p, mid, m.usage, estimateCost, fast) };
+    add(total, u, duration, genPairMs, genPairOut, stepTtft, streamPairMs, streamPairOut, fast);
+    add(days[day] ||= {}, u, duration, genPairMs, genPairOut, stepTtft, streamPairMs, streamPairOut, fast);
     const modelBucket = models[ref] ||= { provider: p, model: mid, days: {} };
-    add(modelBucket, u, duration); add(modelBucket.days[day] ||= {}, u, duration);
+    if (api && (!modelBucket.apis || (!modelBucket.apis.includes(api) && modelBucket.apis.length < 8))) {
+      (modelBucket.apis ||= []).push(api);
+    }
+    add(modelBucket, u, duration, genPairMs, genPairOut, stepTtft, streamPairMs, streamPairOut, fast);
+    add(modelBucket.days[day] ||= {}, u, duration, genPairMs, genPairOut, stepTtft, streamPairMs, streamPairOut, fast);
   }
   usage.cwd = cwd;
   usage.state = { provider: model.provider, model: model.model, ...(tiers.value ? { serviceTier: tiers.value } : {}) };

@@ -25,6 +25,14 @@ export interface UsageBucket {
   measured?: number;
   durationMs?: number;
   slowestMs?: number;
+  genOutput?: number;
+  genMs?: number;
+  ttftCount?: number;
+  ttftMs?: number;
+  slowestTtftMs?: number;
+  streamOutput?: number;
+  streamMs?: number;
+  fastCalls?: number;
 }
 export interface UsageTotal extends UsageBucket {
   tokens: UsageTokens;
@@ -38,6 +46,7 @@ export interface UsageTotal extends UsageBucket {
 export interface UsageModel extends UsageBucket {
   provider: string;
   model: string;
+  apis?: string[];
   days: Record<string, UsageBucket>;
 }
 export interface IndexedUsage {
@@ -75,18 +84,23 @@ function usageState(value: unknown): value is UsageState {
 export const TOKEN_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'] as const;
 export const COST_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
 const COUNTER_KEYS = ['calls', 'measured', 'durationMs', 'slowestMs'] as const;
+const OPTIONAL_COUNTER_KEYS = [
+  'genOutput', 'genMs', 'ttftCount', 'ttftMs', 'slowestTtftMs', 'streamOutput', 'streamMs', 'fastCalls',
+] as const;
 function numericFields(value: unknown, keys: readonly string[], required: boolean): boolean {
   return isRecord(value) && keys.every(key => (!required && value[key] === undefined) || finite(value[key]));
 }
 function usageBucket(value: unknown): value is UsageBucket {
   return isRecord(value) &&
     COUNTER_KEYS.every(key => value[key] === undefined || finite(value[key])) &&
+    OPTIONAL_COUNTER_KEYS.every(key => value[key] === undefined || finite(value[key])) &&
     (value.tokens === undefined || numericFields(value.tokens, TOKEN_KEYS, false)) &&
     (value.costs === undefined || numericFields(value.costs, COST_KEYS, false)) &&
     (value.costUnavailable === undefined || numericFields(value.costUnavailable, COST_KEYS, false));
 }
 function usageTotal(value: unknown): value is UsageTotal {
   return isRecord(value) && numericFields(value, COUNTER_KEYS, true) &&
+    OPTIONAL_COUNTER_KEYS.every(key => value[key] === undefined || finite(value[key])) &&
     numericFields(value.tokens, TOKEN_KEYS, true) &&
     numericFields(value.costs, COST_KEYS, true) &&
     numericFields(value.costUnavailable, COST_KEYS, true);
@@ -96,7 +110,9 @@ function usageDays(value: unknown): value is Record<string, UsageBucket> {
 }
 function usageModel(value: unknown): value is UsageModel {
   return isRecord(value) && usageBucket(value) &&
-    typeof value.provider === 'string' && typeof value.model === 'string' && usageDays(value.days);
+    typeof value.provider === 'string' && typeof value.model === 'string' &&
+    (value.apis === undefined || (Array.isArray(value.apis) && value.apis.every(api => typeof api === 'string'))) &&
+    usageDays(value.days);
 }
 function indexedUsage(value: unknown): value is IndexedUsage {
   return isRecord(value) && usageTotal(value.total) && usageDays(value.days) && isRecord(value.models) &&

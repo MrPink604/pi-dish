@@ -27,6 +27,14 @@ export interface UsageBucket {
     measured?: number;
     durationMs?: number;
     slowestMs?: number;
+    genOutput?: number;
+    genMs?: number;
+    ttftCount?: number;
+    ttftMs?: number;
+    slowestTtftMs?: number;
+    streamOutput?: number;
+    streamMs?: number;
+    fastCalls?: number;
 }
 export interface UsageTotal extends UsageBucket {
     tokens: UsageTokens;
@@ -40,6 +48,7 @@ export interface UsageTotal extends UsageBucket {
 export interface UsageModel extends UsageBucket {
     provider: string;
     model: string;
+    apis?: string[];
     days: Record<string, UsageBucket>;
 }
 export interface IndexedUsage {

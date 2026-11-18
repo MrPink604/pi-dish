@@ -251,6 +251,10 @@ export class AcpSession extends TransportSession {
   declare private sawStepSignal: boolean;
   /** Sum of earlier model-step durations in the active turn (excludes tool/dialog waits). */
   declare private turnGenMs: number;
+  /** Arrival timestamp of the first chunk/tool frame in the open segment. */
+  declare private segmentFirstOutputAt: number | null;
+  /** Sum of earlier model-step TTFTs in the active turn, for multi-step streaming rate. */
+  declare private turnTtftSumMs: number;
 
   constructor(proc: ChildProcessWithoutNullStreams, cwd: string) {
     super();
@@ -284,6 +288,8 @@ export class AcpSession extends TransportSession {
     this.nextStepStartedAt = null;
     this.sawStepSignal = false;
     this.turnGenMs = 0;
+    this.segmentFirstOutputAt = null;
+    this.turnTtftSumMs = 0;
 
     // A failed spawn (ENOENT) emits only 'error': settle startup and drop timers.
     this.spawnFailure = new Promise<never>((_, reject) => {
@@ -323,6 +329,8 @@ export class AcpSession extends TransportSession {
       this.turnInProgress = false;
       this.segment = null;
       this.turnGenMs = 0;
+      this.segmentFirstOutputAt = null;
+      this.turnTtftSumMs = 0;
       this.nextStepStartedAt = null;
       this.sawStepSignal = false;
       const error = new Error(`agy exited with code ${code}${this.stderrTail.length ? ': ' + this.stderrTail.join(' | ') : ''}`);
@@ -561,6 +569,7 @@ export class AcpSession extends TransportSession {
   private _pushChunk(type: 'text' | 'thinking', chunk: string): void {
     this.sawStepSignal = true;
     this._ensureSegment();
+    this.segmentFirstOutputAt ??= Date.now();
     const message = this.segment!;
     const content = message.content as ProtocolRecord[];
     const last = content[content.length - 1];
@@ -602,9 +611,12 @@ export class AcpSession extends TransportSession {
     }
     const message = this.segment;
     const closedAt = Date.now();
+    const firstOutputAt = this.segmentFirstOutputAt;
+    this.segmentFirstOutputAt = null;
     if (!message) {
       if (resetTurn) {
         this.turnGenMs = 0;
+        this.turnTtftSumMs = 0;
         this.nextStepStartedAt = null;
         this.sawStepSignal = false;
       }
@@ -613,16 +625,26 @@ export class AcpSession extends TransportSession {
     this.segment = null;
     const startedAt = finite(message.timestamp) ? message.timestamp : closedAt;
     const stepMs = Math.max(0, closedAt - startedAt);
+    const stepTtftMs = stepMs > 0 && firstOutputAt !== null
+      ? Math.min(stepMs, Math.max(0, firstOutputAt - startedAt))
+      : null;
+    if (stepTtftMs !== null) message.ttft = stepTtftMs;
     message.stopReason = stopReason;
     if (usage) {
-      const totalGenMs = this.turnGenMs + stepMs;
+      const priorGenMs = this.turnGenMs;
+      const totalGenMs = priorGenMs + stepMs;
+      const totalTtftMs = this.turnTtftSumMs + (stepTtftMs ?? 0);
       if (totalGenMs > 0) message.turnDurationMs = totalGenMs;
+      if (priorGenMs > 0 && totalTtftMs > 0) message.turnTtftMs = totalTtftMs;
       this.turnGenMs = 0;
+      this.turnTtftSumMs = 0;
       message.usage = usage;
     } else if (resetTurn) {
       this.turnGenMs = 0;
+      this.turnTtftSumMs = 0;
     } else {
       this.turnGenMs += stepMs;
+      this.turnTtftSumMs += stepTtftMs ?? 0;
     }
     if (resetTurn) {
       this.nextStepStartedAt = null;
@@ -644,6 +666,7 @@ export class AcpSession extends TransportSession {
     this.sawStepSignal = false;
     if (this.segment || this.turnInProgress) {
       this._ensureSegment(consumeStep);
+      if (consumeStep) this.segmentFirstOutputAt ??= Date.now();
       (this.segment!.content as ProtocolRecord[]).push({ type: 'toolCall', id: toolCallId, name: call.toolName, arguments: call.args });
       // Pi needs the assistant message before its tool results; ACP interleaves them.
       this._closeSegment('toolUse', null, null);
@@ -967,7 +990,10 @@ export class AcpSession extends TransportSession {
     // What agy said before this prompt stays before it in the transcript.
     const steering = this.newestPromptId !== null;
     if (this.segment) this._closeSegment('stop', null, null, !steering);
-    else if (!steering) this.turnGenMs = 0;
+    else if (!steering) {
+      this.turnGenMs = 0;
+      this.turnTtftSumMs = 0;
+    }
     const timestamp = Date.now();
     this.nextStepStartedAt = timestamp;
     this.sawStepSignal = true;

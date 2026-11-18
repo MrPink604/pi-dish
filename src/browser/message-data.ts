@@ -10,7 +10,7 @@ export interface RenderMessage {
   readonly role: string; readonly id?: string; readonly index?: number; readonly timestamp?: Timestamp; readonly content?: string | readonly (MessageBlock | string)[];
   readonly model?: string; readonly responseModel?: string; readonly provider?: string; readonly stopReason?: string; readonly errorMessage?: string;
   readonly toolName?: string; readonly toolCallId?: string; readonly isError?: boolean; readonly customType?: string; readonly display?: boolean;
-  readonly usage?: MessageUsage; readonly cacheExpiry?: CacheExpiryProjection; readonly durationMs?: number; readonly outputTokens?: number; readonly sessionRefs?: readonly RefContextEntry[]; readonly details?: MessageDetails;
+  readonly usage?: MessageUsage; readonly cacheExpiry?: CacheExpiryProjection; readonly durationMs?: number; readonly outputTokens?: number; readonly ttftMs?: number; readonly streamMs?: number; readonly sessionRefs?: readonly RefContextEntry[]; readonly details?: MessageDetails;
   /** Formatted tool-result details (OMP bash timing, wait job rows). */
   readonly toolDetails?: ToolDetails;
 }
@@ -43,7 +43,7 @@ export function decodeRenderMessage(value: unknown): RenderMessage {
     content: decodeMessageContent(row.content), model: string(row.model), responseModel: string(row.responseModel), provider: string(row.provider), stopReason: string(row.stopReason), errorMessage: string(row.errorMessage),
     toolName: string(row.toolName), toolCallId: string(row.toolCallId), isError: row.isError === true, customType: string(row.customType), display: typeof row.display === 'boolean' ? row.display : undefined,
     toolDetails: row.role === 'toolResult' ? decodeToolDetails(string(row.toolName), row.details) : undefined,
-    usage: decodeMessageUsage(row.usage), cacheExpiry: decodeCacheExpiry(row.cacheExpiry), durationMs: number(row.durationMs), outputTokens: number(row.outputTokens),
+    usage: decodeMessageUsage(row.usage), cacheExpiry: decodeCacheExpiry(row.cacheExpiry), durationMs: number(row.durationMs), outputTokens: number(row.outputTokens), ttftMs: number(row.ttftMs), streamMs: number(row.streamMs),
     sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry: unknown): RefContextEntry[] => record(entry) && typeof entry.ref === 'string' ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : undefined,
     details: details ? { notes: Array.isArray(details.notes) ? details.notes.flatMap((note: unknown): AdvisorNote[] => typeof note === 'string' ? [{ note }] : record(note) && typeof note.note === 'string' ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : undefined,
       jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job: unknown) => record(job) ? [{ label: string(job.label), jobId: string(job.jobId), type: string(job.type), status: string(job.status), agentId: string(job.agentId), durationMs: number(job.durationMs) }] : []) : undefined,

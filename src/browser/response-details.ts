@@ -4,8 +4,8 @@ import type { RenderMessage, MessageUsage } from './message-data';
 import type { ResponseMode } from './display-preferences';
 import { sessionRefKey } from './helper-identity';
 import { escapeHtml } from '../core/helper-format';
-import { cacheExpiryPresentation, formatResponseMetadata, formatDuration, formatTokSpeed, formatTokens, formatEstimatedCost } from './helper-format';
-interface Detail { key: string | null; selectedModel: string; usage?: MessageUsage; cacheExpiry?: CacheExpiryProjection; durationMs?: number; outputTokens?: number; provider?: string; model?: string; responseModel?: string; stopReason?: string; pricingKnown: boolean }
+import { cacheExpiryPresentation, formatResponseMetadata, formatDuration, formatLatency, formatTokSpeed, formatTokens, formatEstimatedCost } from './helper-format';
+interface Detail { key: string | null; selectedModel: string; usage?: MessageUsage; cacheExpiry?: CacheExpiryProjection; durationMs?: number; outputTokens?: number; ttftMs?: number; streamMs?: number; provider?: string; model?: string; responseModel?: string; stopReason?: string; pricingKnown: boolean }
 export function createResponseDetails(options: { document: Document; sessionState: SessionState; mode: () => ResponseMode }) {
   const { document, sessionState } = options;
   const responseDetails = new Map<string, Detail>(); let responseDetailSeq = 0, disposed = false;
@@ -38,6 +38,8 @@ function responseDetailProjection(msg: RenderMessage): Detail {
     cacheExpiry: msg.cacheExpiry,
     durationMs: msg.durationMs,
     outputTokens: msg.outputTokens,
+    ttftMs: msg.ttftMs,
+    streamMs: msg.streamMs,
     provider: msg.provider,
     model: msg.model,
     responseModel: msg.responseModel,
@@ -68,10 +70,14 @@ function openResponseDetails(id: string) {
   const modelRows = m.responseModel && m.responseModel !== selected
     ? [['Selected model', selected], ['Response model', model]]
     : [['Model', model]];
+  const out = m.outputTokens || u.output;
+  const streamSpeed = formatTokSpeed(out, m.streamMs);
   const rows = [
     ...modelRows, ['Provider', m.provider || '—'],
+    ['TTFT', m.ttftMs != null ? formatLatency(m.ttftMs) : '—'],
     ['Response time', m.durationMs ? formatDuration(m.durationMs) : '—'],
-    ['Effective speed', formatTokSpeed(m.outputTokens || u.output, m.durationMs) || '—'],
+    ['Effective speed', formatTokSpeed(out, m.durationMs) || '—'],
+    ...(streamSpeed ? [['Streaming speed', `${streamSpeed} (post-TTFT)`]] : []),
     ['Tokens', `${formatTokens(u.input)} input · ${formatTokens(u.output)} output${u.reasoning ? ` · ${formatTokens(u.reasoning)} reasoning` : ''}`],
     ['Cache', `${formatTokens(u.cacheRead)} read · ${formatTokens(u.cacheWrite)} write${prompt ? ` · ${Math.round((u.cacheRead||0)/prompt*100)}% hit` : ''}`],
     ['Cache result', cacheResult],

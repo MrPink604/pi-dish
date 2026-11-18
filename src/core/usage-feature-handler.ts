@@ -12,7 +12,8 @@ interface SummaryUsage extends UsageTotal {
   priced?: boolean;
   unpricedCalls?: number;
 }
-type ModelUsage = SummaryUsage & Pick<UsageModel, 'provider' | 'model'>;
+type ModelUsage = SummaryUsage & Pick<UsageModel, 'provider' | 'model'> & { apis?: string[] };
+type ProviderUsage = SummaryUsage & { provider: string; apis: string[]; models: string[]; modelCount: number };
 type SessionUsage = SummaryUsage & Pick<SessionSource, 'sessionKey' | 'harnessId' | 'nativeSessionId'> & {
   id: SessionSource['routeId'];
   name: string;
@@ -51,7 +52,7 @@ export function createUsageSummaryHandler(privateUnlocked: (req: IncomingMessage
     const candidates = discovery.candidates;
     const scan = sessionIndex.scanSessions(candidates);
     const cutoff = range === 'all' ? null : localDay(Number(range) - 1);
-    const totals = emptyUsage(), byModel = new Map<string, ModelUsage>(), byWorkspace = new Map<string, SummaryUsage>(), bySession = new Map<string, SessionUsage>();
+    const totals = emptyUsage(), byProvider = new Map<string, ProviderUsage>(), byModel = new Map<string, ModelUsage>(), byWorkspace = new Map<string, SummaryUsage>(), bySession = new Map<string, SessionUsage>();
     const dailyMap = new Map<string, SummaryUsage>(), dailyModels = new Map<string, Map<string, ModelUsage>>();
     const headlineUsage = { today: emptyUsage(), days7: emptyUsage(), days30: emptyUsage(), all: emptyUsage(), month: emptyUsage() };
     const now = new Date(), monthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-`;
@@ -83,7 +84,15 @@ export function createUsageSummaryHandler(privateUnlocked: (req: IncomingMessage
         }
         else if (!cutoff) addUsage(modelSelected, bucket); // pre-days bucket
         if (modelSelected.calls) {
-          addUsage(byModel.get(ref) || (byModel.set(ref, { ...emptyUsage(), provider: bucket.provider, model: bucket.model }), byModel.get(ref)!), modelSelected);
+          let modelRow = byModel.get(ref);
+          if (!modelRow) {
+            modelRow = { ...emptyUsage(), provider: bucket.provider, model: bucket.model };
+            byModel.set(ref, modelRow);
+          }
+          addUsage(modelRow, modelSelected);
+          for (const api of bucket.apis || []) {
+            if (!modelRow.apis?.includes(api) && (modelRow.apis?.length || 0) < 8) (modelRow.apis ||= []).push(api);
+          }
           if (modelFilter?.has(ref)) addUsage(selected, modelSelected);
         }
       }
@@ -106,9 +115,27 @@ export function createUsageSummaryHandler(privateUnlocked: (req: IncomingMessage
     for (const [ref, b] of byModel) {
       b.priced = !b.costUnavailable.total;
       b.unpricedCalls = b.costUnavailable.total;
+      b.apis?.sort();
       // The bottom-of-view notice reflects the filtered totals; the facet list
       // keeps every model's own unavailable annotation.
       if (!modelFilter || modelFilter.has(ref)) unpricedModelCalls += b.unpricedCalls;
+      const providerKey = b.provider || 'unknown';
+      let prov = byProvider.get(providerKey);
+      if (!prov) {
+        prov = { ...emptyUsage(), provider: providerKey, apis: [], models: [], modelCount: 0 };
+        byProvider.set(providerKey, prov);
+      }
+      addUsage(prov, b);
+      for (const api of b.apis || []) {
+        if (!prov.apis.includes(api) && prov.apis.length < 8) prov.apis.push(api);
+      }
+      prov.modelCount++;
+      if (prov.models.length < 40) prov.models.push(ref);
+    }
+    for (const prov of byProvider.values()) {
+      prov.priced = !prov.costUnavailable.total;
+      prov.unpricedCalls = prov.costUnavailable.total;
+      prov.apis.sort();
     }
     for (const bucket of [...byWorkspace.values(), ...bySession.values()]) {
       bucket.priced = !bucket.costUnavailable.total;
@@ -151,6 +178,6 @@ export function createUsageSummaryHandler(privateUnlocked: (req: IncomingMessage
     // Per-component twins of the headline scalars for client-side KPI pivots.
     const headlineCostsByBucket = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costs]));
     const headlineCostUnavailable = Object.fromEntries(Object.entries(headlineUsage).map(([key, bucket]) => [key, bucket.costUnavailable.total]));
-    res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostsByBucket, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
+    res.json({ range, sort, models: modelFilter ? [...modelFilter] : null, totals, groups: { providers: top(byProvider), models: top(byModel), workspaces: top(byWorkspace), sessions: [...bySession.values()].sort(compare).slice(0, 20) }, headlineCosts, headlineCostsByBucket, headlineCostUnavailable, daily, unpricedModelCalls, indexing: scan.indexing, discoveryTruncated: discovery.truncated, discoverySkipped: discovery.skipped, monthlyBudgetUsd: readDishSettings().monthlyBudgetUsd ?? null });
   };
 }

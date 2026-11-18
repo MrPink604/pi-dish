@@ -4,9 +4,9 @@ import { requiredElement } from './dom';
 import type { HelperHost } from '../core/helper-types';
 import type { Costs, Tokens, UsageBucket, UsageModel, UsageDay, UsageGroup, UsageSummary, HostUsageSummary, UsageLimitEntry } from './shared-helper-types';
 import { escapeHtml } from '../core/helper-format';
-import { countLabel, formatEstimatedCost, formatUsageCost, formatTokens, formatCacheStat, shortCwd } from './helper-format';
+import { countLabel, formatEstimatedCost, formatUsageCost, formatTokens, formatCacheStat, formatLatency, formatTokSpeed, shortCwd } from './helper-format';
 import { hostDisplayLabel } from './helper-identity';
-import { mergeUsageSummaries, createFanoutRenderQueue, aggregateUsageWeekly, niceTicks, formatUsageDay, usageUnattributedCost, usageLimitsHtml, shortModelName } from './helper-usage';
+import { mergeUsageSummaries, mergeUsageLimits, addMergedUsage, emptyMergedUsage, createFanoutRenderQueue, aggregateUsageWeekly, niceTicks, formatUsageDay, usageUnattributedCost, usageLimitsHtml, shortModelName } from './helper-usage';
 import { finite } from '../core/helper-values';
 import { usageDisplayTokens } from '../core/helper-usage-math';
 import { decodeUsageSummary, decodeUsageLimits } from './usage-data';
@@ -27,7 +27,7 @@ export function createUsageView(options: {
   const localStorage = options.storage, isMultiHost = options.multiHost;
   const element = requiredElement(document, 'usage');
   let disposed = false, dataSequence = 0;
-  let bodyEvents = new AbortController(), chartEvents = new AbortController(), detailEvents = new AbortController();
+  let bodyEvents = new AbortController(), chartEvents = new AbortController(), detailEvents = new AbortController(), providerEvents = new AbortController();
   const events = new AbortController();
   let renderGeneration = 0;
   let renderQueue: ReturnType<typeof createFanoutRenderQueue> | null = null;
@@ -46,7 +46,7 @@ export function createUsageView(options: {
   function sameHost(host: UsageHost): boolean {
     return sameCapturedHost(options.host(host.hostId), host);
   }
-  function retireRender(): void { renderGeneration++; bodyEvents.abort(); chartEvents.abort(); detailEvents.abort(); cacheLifetimeEvents.abort(); hideUsageTooltip(); }
+  function retireRender(): void { renderGeneration++; bodyEvents.abort(); chartEvents.abort(); detailEvents.abort(); providerEvents.abort(); cacheLifetimeEvents.abort(); hideUsageTooltip(); }
   // Chart series colors are the --chart-N theme tokens: the range's top five
   // models take slots 1–5 and the rest fold into "other".
   const USAGE_RANGES = [['1', 'Today'], ['7', '7 days'], ['30', '30 days'], ['all', 'All time']];
@@ -152,6 +152,15 @@ export function createUsageView(options: {
     else usageModelFilter.add(ref);
     loadUsageView();
   }
+  function toggleUsageProviderFilter(refs: readonly string[]) {
+    if (!isUsageViewOpen() || !refs.length) return;
+    const allSelected = refs.every(ref => usageModelFilter.has(ref));
+    for (const ref of refs) {
+      if (allSelected) usageModelFilter.delete(ref);
+      else usageModelFilter.add(ref);
+    }
+    loadUsageView();
+  }
   function clearUsageModelFilter() {
     if (!isUsageViewOpen()) return;
     if (!usageModelFilter.size) return;
@@ -174,6 +183,7 @@ export function createUsageView(options: {
     const publish = () => {
       usageLimitsEntries = [...entries.values()].sort((a, b) => a.hostLabel.localeCompare(b.hostLabel));
       if (usageTab === 'limits') renderLimitsTab();
+      else if (usageTab === 'usage') renderProvidersSlot();
     };
     await Promise.all(hosts.map(async host => {
       const hostLabel = hostDisplayLabel(host);
@@ -216,6 +226,7 @@ export function createUsageView(options: {
       // Fleet order (self first), not arrival order, so the default host is stable.
       cacheLifetimeHosts = hosts.map(host => results.get(host.hostId || host.base)).filter((host): host is CacheLifetimeHost => !!host);
       renderCacheLifetimes();
+      if (usageTab === 'usage') renderProvidersSlot();
     }));
   }
   function renderCacheLifetimes(): void {
@@ -330,6 +341,47 @@ export function createUsageView(options: {
     if (prompt > 0 && (t.cacheRead || 0) > 0) parts.push(`${Math.round((t.cacheRead || 0) / prompt * 100)}% cached`);
     return parts.join(' · ');
   }
+  function bucketPerfParts(b?: UsageBucket | null, opts: { stream?: boolean; response?: boolean } = {}) {
+    if (!b) return [];
+    const parts: string[] = [];
+    const eff = formatTokSpeed(b.genOutput, b.genMs);
+    const stream = opts.stream ? formatTokSpeed(b.streamOutput, b.streamMs) : null;
+    if (eff) parts.push(stream && stream !== eff ? `${eff} (${stream} stream)` : eff);
+    else if (stream) parts.push(`${stream} stream`);
+    if (b.ttftCount) parts.push(`${formatLatency((b.ttftMs || 0) / b.ttftCount)} TTFT`);
+    if (opts.response && b.measured) parts.push(`${formatLatency((b.durationMs || 0) / b.measured)} avg`);
+    return parts;
+  }
+  function bucketPerfTooltip(b?: UsageBucket | null) {
+    if (!b) return null;
+    const parts: string[] = [];
+    const eff = formatTokSpeed(b.genOutput, b.genMs);
+    const stream = formatTokSpeed(b.streamOutput, b.streamMs);
+    if (eff) parts.push(`Effective ${eff}`);
+    if (stream) parts.push(`Streaming ${stream}`);
+    if (b.ttftCount) {
+      parts.push(`TTFT ${formatLatency((b.ttftMs || 0) / b.ttftCount)} avg · ${formatLatency(b.slowestTtftMs || 0)} slowest (${b.ttftCount} measured)`);
+    }
+    if (b.measured) {
+      parts.push(`Response ${formatLatency((b.durationMs || 0) / b.measured)} avg · ${formatLatency(b.slowestMs || 0)} slowest (${b.measured} measured)`);
+    }
+    return parts.length ? parts.join(' · ') : null;
+  }
+  function shortApiLabel(api: string): string {
+    switch (api) {
+      case 'anthropic-messages': return 'messages';
+      case 'openai-responses': return 'responses';
+      case 'openai-codex-responses': return 'codex-responses';
+      case 'azure-openai-responses': return 'azure-responses';
+      case 'openai-completions': return 'completions';
+      case 'google-generative-ai': return 'gemini-api';
+      case 'google-vertex': return 'vertex';
+      case 'bedrock-converse-stream': return 'bedrock';
+      case 'mistral-conversations': return 'conversations';
+      case 'acp': return 'ACP';
+      default: return api;
+    }
+  }
 
   function renderActiveTab() {
     if (!isUsageViewOpen()) return;
@@ -365,9 +417,17 @@ export function createUsageView(options: {
     const body = element('usageViewBody'), totals = d.totals || {};
     body.classList.remove('usage-refreshing');
     const prompt = (tokens?: Tokens) => (tokens?.input || 0) + (tokens?.cacheRead || 0) + (tokens?.cacheWrite || 0);
-    const timing = (bucket: UsageBucket) => bucket.measured
-      ? `${((bucket.durationMs || 0) / bucket.measured / 1000).toFixed(1)}s average · ${((bucket.slowestMs || 0) / 1000).toFixed(1)}s slowest · ${bucket.measured} measured`
-      : 'No response timings recorded';
+    const timing = (bucket: UsageBucket) => {
+      if (!bucket.measured && !bucket.ttftCount) return 'No response timings recorded';
+      const parts: string[] = [];
+      const eff = formatTokSpeed(bucket.genOutput, bucket.genMs);
+      if (eff) parts.push(eff);
+      if (bucket.ttftCount) parts.push(`${((bucket.ttftMs || 0) / bucket.ttftCount / 1000).toFixed(1)}s TTFT`);
+      if (bucket.measured) {
+        parts.push(`${((bucket.durationMs || 0) / bucket.measured / 1000).toFixed(1)}s average`, `${((bucket.slowestMs || 0) / 1000).toFixed(1)}s slowest`, `${bucket.measured} measured`);
+      }
+      return parts.join(' · ');
+    };
     const rows = (d.groups?.models || [])
       .filter(model => !usageModelFilter.size || usageModelFilter.has(model.key || ''))
       .map(model => `<div class="usage-row">
@@ -421,8 +481,10 @@ export function createUsageView(options: {
       }
     }
 
+    const perfSummary = bucketPerfTooltip(t);
     const summary = `<div class="usage-total-line"><strong>${formatUsageCost(t.costs?.total, t.costUnavailable?.total)}</strong> · ${t.calls || 0} calls · ${formatTokens(usageDisplayTokens(t.tokens))} tokens in ${USAGE_RANGE_LABELS[d.range || ''] || 'the selected range'}</div>` +
-      `<div class="usage-token-line">${formatTokens(t.tokens?.input)} in · ${formatTokens(t.tokens?.output)} out · cache ${formatCacheStat(t.tokens?.cacheRead, t.tokens?.cacheWrite, t.tokens?.input)}</div>`;
+      `<div class="usage-token-line">${formatTokens(t.tokens?.input)} in · ${formatTokens(t.tokens?.output)} out · cache ${formatCacheStat(t.tokens?.cacheRead, t.tokens?.cacheWrite, t.tokens?.input)}</div>` +
+      (perfSummary ? `<div class="usage-perf-line">${escapeHtml(perfSummary)}</div>` : '');
     const filterNote = usageModelFilter.size
       ? `<div class="usage-filter-note">Filtered to ${[...usageModelFilter].map(r => `<b title="${escapeHtml(r)}">${escapeHtml(shortModelName(r))}</b>`).join(', ')}<button class="usage-range-btn" data-clear-models>✕ clear</button></div>`
       : '';
@@ -461,6 +523,7 @@ export function createUsageView(options: {
       ${usageBucketShareHtml(t)}
       ${chartSection}
       <div id="usageDayDetail"></div>
+      <div id="usageProvidersSlot"></div>
       ${usageModelShareHtml(d, metric)}
       <div class="usage-columns">
         ${usageGroupListHtml('Workspaces', d.groups?.workspaces, 'workspace', metric)}
@@ -491,6 +554,7 @@ export function createUsageView(options: {
       }, listener);
     });
     if (showChart) drawUsageChart();
+    renderProvidersSlot();
     renderUsageDayDetail();
   }
 
@@ -635,11 +699,16 @@ export function createUsageView(options: {
       ? `Week of ${formatUsageDay(bucket.day)} <small>· ${bucket.days} days</small>`
       : formatUsageDay(bucket.day, 'long');
     const tok = bucket.tokens || {};
+    const effSpeed = formatTokSpeed(bucket.genOutput, bucket.genMs);
+    const streamSpeed = formatTokSpeed(bucket.streamOutput, bucket.streamMs);
+    const avgTtft = bucket.ttftCount ? formatLatency((bucket.ttftMs || 0) / bucket.ttftCount) : null;
     const stats = [
       ['Estimated spend', formatUsageCost(bucket.costs?.total, bucket.costUnavailable?.total)],
       ['Calls', String(bucket.calls || 0)],
       ['Tokens in / out', `${formatTokens(tok.input)} / ${formatTokens(tok.output)}`],
       ['Cache', formatCacheStat(tok.cacheRead, tok.cacheWrite, tok.input)],
+      ...(effSpeed ? [['Effective speed', streamSpeed && streamSpeed !== effSpeed ? `${effSpeed} (${streamSpeed} stream)` : effSpeed]] : []),
+      ...(avgTtft ? [['Avg TTFT', avgTtft]] : []),
       ...(finite(bucket.costs?.total)
         ? [
             ...USAGE_COST_BUCKETS.map(([key, label]) => [label, formatEstimatedCost(bucket.costs?.[key])]),
@@ -665,6 +734,114 @@ export function createUsageView(options: {
       ${rows || '<small class="usage-empty">No usage this day.</small>'}
     </section>`;
     holder.querySelector('[data-close-day]')?.addEventListener('click', () => { if (generation === renderGeneration && day === usageSelectedDay) toggleUsageDay(day); }, { signal: detailEvents.signal });
+  }
+
+  function providerMetadata(provider: string) {
+    const { reports } = mergeUsageLimits(usageLimitsEntries);
+    const limitReport = reports.find(r => r.provider === provider);
+    const planType = limitReport?.planType || null;
+    let quota: string | null = null;
+    if (limitReport?.limits.length) {
+      const top = [...limitReport.limits].sort((a, b) => b.usedFraction - a.usedFraction)[0];
+      quota = `${Math.round(top.usedFraction * 100)}% ${top.windowLabel || top.label} quota`;
+    }
+    const ttls = new Set<string>();
+    for (const host of cacheLifetimeHosts) {
+      for (const row of host.rows) {
+        if (row.provider === provider && row.effective?.retention) ttls.add(row.effective.retention);
+      }
+    }
+    return { planType, quota, ttl: ttls.size ? `${[...ttls].join('/')} TTL` : null };
+  }
+
+  function deriveProvidersFromModels(models: readonly UsageGroup[] | undefined): UsageGroup[] {
+    const map = new Map<string, UsageGroup & ReturnType<typeof emptyMergedUsage> & { _apis: Set<string>; _models: Set<string> }>();
+    for (const m of models || []) {
+      const key = m.provider || 'unknown';
+      let row = map.get(key);
+      if (!row) {
+        row = { key, provider: key, ...emptyMergedUsage(), _apis: new Set(), _models: new Set() };
+        map.set(key, row);
+      }
+      addMergedUsage(row, m);
+      for (const api of m.apis || []) row._apis.add(api);
+      if (m.key) row._models.add(m.key);
+    }
+    return [...map.values()].map(({ _apis, _models, ...rest }) => ({
+      ...rest,
+      unpricedCalls: rest.costUnavailable.total,
+      priced: !rest.costUnavailable.total,
+      ...(_apis.size ? { apis: [..._apis].sort() } : {}),
+      ...(_models.size ? { models: [..._models], modelCount: _models.size } : {}),
+    }));
+  }
+
+  function usageProvidersHtml(d: UsageSummary, metric: UsageMetric) {
+    const providers = d.groups?.providers?.length ? d.groups.providers : deriveProvidersFromModels(d.groups?.models);
+    if (!providers.length) return '';
+    const filtered = usageModelFilter.size > 0;
+    const refsFor = (p: UsageGroup): string[] => p.models?.length
+      ? [...p.models]
+      : (d.groups?.models || []).filter(m => (m.provider || 'unknown') === (p.provider || p.key || 'unknown')).flatMap(m => m.key ? [m.key] : []);
+    const isOn = (refs: readonly string[]) => !filtered || refs.some(ref => usageModelFilter.has(ref));
+    const val = (p: UsageGroup) => usageGroupValue(p, metric);
+    const active = providers.filter(p => isOn(refsFor(p)));
+    const total = active.reduce((s, p) => s + val(p), 0);
+    const maxV = Math.max(1e-9, ...providers.map(val));
+    const rows = providers.map(p => {
+      const name = p.provider || p.key || 'unknown';
+      const refs = refsFor(p);
+      const on = isOn(refs);
+      const share = on && total > 0 ? val(p) / total : 0;
+      const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + '%' : '—';
+      const extra = providerMetadata(name);
+      const badges: string[] = [];
+      if (extra.planType) badges.push(extra.planType);
+      if (p.apis?.length) badges.push(p.apis.map(shortApiLabel).join(', '));
+      const modelCount = p.modelCount || refs.length;
+      if (modelCount > 0) badges.push(countLabel(modelCount, 'model'));
+      if (p.fastCalls) badges.push(countLabel(p.fastCalls, 'fast call'));
+      if (extra.ttl) badges.push(extra.ttl);
+      if (extra.quota) badges.push(extra.quota);
+      const perf = bucketPerfParts(p, { stream: true, response: true });
+      const spend = `${formatUsageCost(p.costs?.total, p.unpricedCalls)}${p.unpricedCalls ? ` · ${p.unpricedCalls} unpriced` : ''}`;
+      const detail = usageDisplayTokens(p.tokens) > 0 ? ` · ${usageTokensDetail(p.tokens)}` : '';
+      const perfMeta = perf.length ? ` · ${perf.join(' · ')}` : '';
+      const tooltip = [
+        name,
+        refs.length ? `Models: ${refs.map(shortModelName).join(', ')}` : null,
+        bucketPerfTooltip(p),
+        usageCostBreakdown(p.costs),
+      ].filter(Boolean).join('\n');
+      const canToggle = refs.length > 0;
+      const toggleAttrs = canToggle
+        ? ` data-provider-models="${escapeHtml(refs.join(','))}" role="button" tabindex="0" aria-pressed="${on}"`
+        : '';
+      return `<div class="usage-row usage-bar-row usage-provider-row${canToggle ? ` model-toggle${filtered ? (on ? ' on' : ' off') : ''}` : ''}"${toggleAttrs} title="${escapeHtml(tooltip)}${canToggle ? ' — click to toggle provider filter' : ''}">
+        <span class="usage-row-name"><strong>${escapeHtml(name)}</strong>${badges.length ? `<small class="usage-provider-badges">${escapeHtml(badges.join(' · '))}</small>` : ''}</span>
+        <span class="usage-row-meta">${pct} · ${p.calls || 0} calls${perfMeta} · ${formatTokens(usageDisplayTokens(p.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
+        <span class="usage-row-bar" style="width:${(val(p) / maxV * 100).toFixed(1)}%"></span>
+      </div>`;
+    }).join('');
+    return `<section class="usage-section"><h4>Providers <small class="usage-hint">click to filter</small></h4>${rows}</section>`;
+  }
+
+  function renderProvidersSlot() {
+    if (!isUsageViewOpen() || usageTab !== 'usage' || !usageData) return;
+    const holder = document.getElementById('usageProvidersSlot');
+    if (!holder) return;
+    providerEvents.abort(); providerEvents = new AbortController();
+    const generation = renderGeneration;
+    const owns = () => generation === renderGeneration && isUsageViewOpen() && usageTab === 'usage';
+    const listener = { signal: providerEvents.signal };
+    const metric = usageChart?.metric || 'cost';
+    holder.innerHTML = usageProvidersHtml(usageData, metric);
+    holder.querySelectorAll<HTMLElement>('[data-provider-models]').forEach(row => {
+      const refs = (row.dataset.providerModels || '').split(',').filter(Boolean);
+      const activate = () => { if (owns() && refs.length) toggleUsageProviderFilter(refs); };
+      row.addEventListener('click', activate, listener);
+      row.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); activate(); } }, listener);
+    });
   }
 
   // Follows the model filter through `totals`; unpriced calls stay out of the
@@ -712,11 +889,14 @@ export function createUsageView(options: {
       const pct = share > 0 ? (share * 100 < 1 ? (share * 100).toFixed(1) : Math.round(share * 100)) + '%' : '—';
       const spend = `${formatUsageCost(m.costs?.total, m.unpricedCalls)}${m.unpricedCalls ? ` · ${m.unpricedCalls} unpriced` : ''}`;
       const detail = usageDisplayTokens(m.tokens) > 0 ? ` · ${usageTokensDetail(m.tokens)}` : '';
+      const perf = bucketPerfParts(m);
+      const perfMeta = perf.length ? ` · ${perf.join(' · ')}` : '';
       const breakdown = usageCostBreakdown(m.costs);
-      return `<div class="usage-row model-toggle${filtered ? (on ? ' on' : ' off') : ''}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml([m.key, breakdown].filter(Boolean).join('\n'))} — click to toggle model filter">
+      const perfTip = bucketPerfTooltip(m);
+      return `<div class="usage-row model-toggle${filtered ? (on ? ' on' : ' off') : ''}" data-model-ref="${escapeHtml(m.key)}" role="button" tabindex="0" aria-pressed="${on}" title="${escapeHtml([m.key, perfTip, breakdown].filter(Boolean).join('\n'))} — click to toggle model filter">
         <i class="swatch ${on ? usageSlot(m.key) : 'soff'}"></i>
         <span class="usage-row-name">${escapeHtml(shortModelName(m.model || m.key))}<small>${escapeHtml(m.provider || '')}</small></span>
-        <span class="usage-row-meta">${pct} · ${m.calls} calls · ${formatTokens(usageDisplayTokens(m.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
+        <span class="usage-row-meta">${pct} · ${m.calls} calls${perfMeta} · ${formatTokens(usageDisplayTokens(m.tokens))} tok${detail} · ${escapeHtml(spend)}</span>
       </div>`;
     };
     const rows = models.map(m => rowHtml(m, isOn(m.key))).join('');

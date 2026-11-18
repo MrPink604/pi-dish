@@ -330,8 +330,9 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
       }
       if (source.harnessId === 'pi' || source.harnessId === 'omp') await refreshHarnessPricing(source.harnessId);
       const {
-        tokens, reasoningTokens, hardCacheMisses, cost, costs, costUnavailable, responseTiming,
-        userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput,
+        tokens, reasoningTokens, hardCacheMisses, cost, costs, costUnavailable, responseTiming, ttftTiming,
+        userMessages, assistantMessages, toolCalls, toolResults, compactions,
+        genMs, genOutput, streamMs, streamOutput, providers, apis, fastCalls,
       } = getSessionStats(source);
       const reg = getRegisteredSession(sessionId);
       const contextUsage = getLiveContextUsage(sessionId);
@@ -347,7 +348,8 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
         userMessages, assistantMessages, toolCalls, toolResults, compactions,
         totalMessages: userMessages + assistantMessages + toolResults,
         tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },
-        cost, costs, costUnavailable, reasoningTokens, hardCacheMisses, responseTiming, genMs, genOutput,
+        cost, costs, costUnavailable, reasoningTokens, hardCacheMisses,
+        responseTiming, ttftTiming, genMs, genOutput, streamMs, streamOutput, providers, apis, fastCalls,
         contextUsage: contextUsage || {
           tokens: info.contextTokens || null,
           contextWindow: info.contextWindow,

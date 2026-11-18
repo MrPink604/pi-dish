@@ -25,6 +25,8 @@ export interface SanitizedUsage extends Partial<UsageTokens> {
 export interface AssistantGenStats {
     readonly durationMs?: number;
     readonly outputTokens?: unknown;
+    readonly ttftMs?: number;
+    readonly streamMs?: number;
 }
 /** Borrowed display projection: external payloads retain their original values. */
 export interface SessionMessage extends AssistantGenStats {
@@ -57,6 +59,11 @@ export interface SessionStats {
         medianMs: number | null;
         slowestMs: number | null;
     }>;
+    readonly ttftTiming: Readonly<{
+        measured: number;
+        medianMs: number | null;
+        slowestMs: number | null;
+    }>;
     readonly userMessages: number;
     readonly assistantMessages: number;
     readonly toolCalls: number;
@@ -64,6 +71,11 @@ export interface SessionStats {
     readonly compactions: number;
     readonly genMs: number;
     readonly genOutput: number;
+    readonly streamMs: number;
+    readonly streamOutput: number;
+    readonly providers: readonly string[];
+    readonly apis: readonly string[];
+    readonly fastCalls: number;
     readonly hardCacheMisses: number;
 }
 /** Direct parser output retains malformed JSON tree ids; the index validates its leaf. */
@@ -94,7 +106,6 @@ export declare const SEARCH_TEXT_SESSION_CAP = 4000000;
 export declare function buildSearchTextFromContent(content: string): string;
 export declare function buildSearchIndexFromEntries(entries: SessionEntries): SessionSearchProjection;
 export declare function extendSearchIndexFromEntries(entries: SessionEntries, tree: boolean, leafId: string | null): SessionSearchProjection | null;
-/** Derived during the same read as metadata/text. */
 export declare function buildIndexedUsageFromContent(content: string, candidate?: SessionFileProfile): IndexedUsage;
 export declare function buildIndexedUsageFromEntries(entries: SessionEntries, candidate?: SessionFileProfile, estimateCost?: UsageCostEstimator): IndexedUsage;
 /** O(delta) for append-only files; requires `state` and mutates `usage`. */

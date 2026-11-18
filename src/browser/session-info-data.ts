@@ -4,23 +4,30 @@ import { USAGE_MERGE_COST_KEYS, USAGE_MERGE_TOKEN_KEYS } from './helper-usage';
 export interface SessionStats {
   readonly model: string; readonly thinkingLevel: string; readonly cwd: string; readonly sessionFile: string;
   readonly userMessages: number; readonly assistantMessages: number; readonly toolCalls: number; readonly compactions: number; readonly hardCacheMisses: number;
-  readonly genOutput: number; readonly genMs: number; readonly reasoningTokens: number; readonly cost: number | null;
+  readonly genOutput: number; readonly genMs: number; readonly streamOutput: number; readonly streamMs: number; readonly reasoningTokens: number; readonly cost: number | null;
+  readonly providers: readonly string[]; readonly apis: readonly string[]; readonly fastCalls: number;
   readonly contextUsage: { readonly tokens: number | null; readonly contextWindow: number | null; readonly percent: number | null };
-  readonly responseTiming: { readonly medianMs: number; readonly slowestMs: number };
+  readonly responseTiming: { readonly measured: number; readonly medianMs: number; readonly slowestMs: number };
+  readonly ttftTiming: { readonly measured: number; readonly medianMs: number; readonly slowestMs: number };
   readonly costs: Costs; readonly costUnavailable: Readonly<Record<CostKey, number>>; readonly tokens: Tokens; readonly runtime: RuntimeInfo | null;
 }
 export interface PublishedPage { readonly token: string; readonly path: string; readonly url: string; readonly title: string; readonly root: string; readonly missing: boolean; readonly createdAt: number }
 export interface SessionShare { readonly path: string; readonly url: string }
 const nullable = (value: unknown) => finite(value) ? value : null;
 const object = (value: unknown) => record(value) ? value : {};
+const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
 export function decodeSessionStats(value: unknown): SessionStats {
   if (!record(value)) throw new Error('Invalid session stats');
   if (typeof value.error === 'string' && value.error) throw new Error(value.error);
-  const context = object(value.contextUsage), timing = object(value.responseTiming), costs = object(value.costs), unavailable = object(value.costUnavailable), tokens = object(value.tokens), runtime = object(value.runtime);
+  const context = object(value.contextUsage), timing = object(value.responseTiming), ttft = object(value.ttftTiming), costs = object(value.costs), unavailable = object(value.costUnavailable), tokens = object(value.tokens), runtime = object(value.runtime);
   return { model: text(value.model), thinkingLevel: text(value.thinkingLevel), cwd: text(value.cwd), sessionFile: text(value.sessionFile),
     userMessages: count(value.userMessages), assistantMessages: count(value.assistantMessages), toolCalls: count(value.toolCalls), compactions: count(value.compactions), hardCacheMisses: count(value.hardCacheMisses),
-    genOutput: count(value.genOutput), genMs: count(value.genMs), reasoningTokens: count(value.reasoningTokens), cost: nullable(value.cost),
-    contextUsage: { tokens: nullable(context.tokens), contextWindow: nullable(context.contextWindow), percent: nullable(context.percent) }, responseTiming: { medianMs: count(timing.medianMs), slowestMs: count(timing.slowestMs) },
+    genOutput: count(value.genOutput), genMs: count(value.genMs), streamOutput: count(value.streamOutput), streamMs: count(value.streamMs),
+    reasoningTokens: count(value.reasoningTokens), cost: nullable(value.cost),
+    providers: strings(value.providers), apis: strings(value.apis), fastCalls: count(value.fastCalls),
+    contextUsage: { tokens: nullable(context.tokens), contextWindow: nullable(context.contextWindow), percent: nullable(context.percent) },
+    responseTiming: { measured: count(timing.measured), medianMs: count(timing.medianMs), slowestMs: count(timing.slowestMs) },
+    ttftTiming: { measured: count(ttft.measured), medianMs: count(ttft.medianMs), slowestMs: count(ttft.slowestMs) },
     costs: Object.fromEntries(USAGE_MERGE_COST_KEYS.map(key => [key, nullable(costs[key])])), costUnavailable: Object.fromEntries(USAGE_MERGE_COST_KEYS.map(key => [key, count(unavailable[key])])) as Record<CostKey, number>, tokens: Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map(key => [key, count(tokens[key])])),
     runtime: typeof runtime.kind === 'string' ? { kind: runtime.kind, pid: nullable(runtime.pid), server: text(runtime.server), tmuxSession: text(runtime.tmuxSession), windowIndex: nullable(runtime.windowIndex), windowName: text(runtime.windowName) } : null };
 }

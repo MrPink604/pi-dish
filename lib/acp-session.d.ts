@@ -67,6 +67,10 @@ export declare class AcpSession extends TransportSession {
     private sawStepSignal;
     /** Sum of earlier model-step durations in the active turn (excludes tool/dialog waits). */
     private turnGenMs;
+    /** Arrival timestamp of the first chunk/tool frame in the open segment. */
+    private segmentFirstOutputAt;
+    /** Sum of earlier model-step TTFTs in the active turn, for multi-step streaming rate. */
+    private turnTtftSumMs;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
     private _writeFrame;

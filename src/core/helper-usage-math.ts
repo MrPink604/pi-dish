@@ -15,6 +15,14 @@ interface UsageSource {
   readonly measured?: number;
   readonly durationMs?: number;
   readonly slowestMs?: number;
+  readonly genOutput?: number;
+  readonly genMs?: number;
+  readonly ttftCount?: number;
+  readonly ttftMs?: number;
+  readonly slowestTtftMs?: number;
+  readonly streamOutput?: number;
+  readonly streamMs?: number;
+  readonly fastCalls?: number;
 }
 interface UsageTotal {
   tokens: Record<TokenKey, number>;
@@ -24,6 +32,14 @@ interface UsageTotal {
   measured: number;
   durationMs: number;
   slowestMs: number;
+  genOutput?: number;
+  genMs?: number;
+  ttftCount?: number;
+  ttftMs?: number;
+  slowestTtftMs?: number;
+  streamOutput?: number;
+  streamMs?: number;
+  fastCalls?: number;
 }
 
 /** Unknown amounts leave the known subtotal (including an absent subtotal) alone. */
@@ -58,6 +74,14 @@ export function addUsage<T extends UsageTotal>(to: T, from?: UsageSource | null)
   to.measured += from.measured || 0;
   to.durationMs += from.durationMs || 0;
   to.slowestMs = Math.max(to.slowestMs, from.slowestMs || 0);
+  if (from.genOutput) to.genOutput = (to.genOutput || 0) + from.genOutput;
+  if (from.genMs) to.genMs = (to.genMs || 0) + from.genMs;
+  if (from.ttftCount) to.ttftCount = (to.ttftCount || 0) + from.ttftCount;
+  if (from.ttftMs) to.ttftMs = (to.ttftMs || 0) + from.ttftMs;
+  if (from.slowestTtftMs) to.slowestTtftMs = Math.max(to.slowestTtftMs || 0, from.slowestTtftMs);
+  if (from.streamOutput) to.streamOutput = (to.streamOutput || 0) + from.streamOutput;
+  if (from.streamMs) to.streamMs = (to.streamMs || 0) + from.streamMs;
+  if (from.fastCalls) to.fastCalls = (to.fastCalls || 0) + from.fastCalls;
   return to;
 }
 

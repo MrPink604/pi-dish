@@ -5,18 +5,34 @@ const object = (value: unknown): Record<string, unknown> => record(value) ? valu
 function costs(value: unknown): Costs { const row = object(value); return Object.fromEntries(USAGE_MERGE_COST_KEYS.map(key => [key, finite(row[key]) ? row[key] : null])); }
 function counts(value: unknown) { const row = object(value); return Object.fromEntries(USAGE_MERGE_COST_KEYS.map(key => [key, count(row[key])])); }
 function tokens(value: unknown): Tokens { const row = object(value); return Object.fromEntries(USAGE_MERGE_TOKEN_KEYS.map(key => [key, count(row[key])])); }
+const stringList = (value: unknown): string[] | undefined => {
+  if (!Array.isArray(value)) return undefined;
+  const list = value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+  return list.length ? list : undefined;
+};
 function bucket(value: unknown): UsageBucket {
   const row = object(value);
-  return { tokens: tokens(row.tokens), costs: costs(row.costs), costUnavailable: counts(row.costUnavailable), calls: count(row.calls),
-    measured: count(row.measured), durationMs: count(row.durationMs), slowestMs: count(row.slowestMs), priced: row.priced === true, unpricedCalls: count(row.unpricedCalls) };
+  return {
+    tokens: tokens(row.tokens), costs: costs(row.costs), costUnavailable: counts(row.costUnavailable), calls: count(row.calls),
+    measured: count(row.measured), durationMs: count(row.durationMs), slowestMs: count(row.slowestMs),
+    genOutput: count(row.genOutput), genMs: count(row.genMs),
+    ttftCount: count(row.ttftCount), ttftMs: count(row.ttftMs), slowestTtftMs: count(row.slowestTtftMs),
+    streamOutput: count(row.streamOutput), streamMs: count(row.streamMs), fastCalls: count(row.fastCalls),
+    priced: row.priced === true, unpricedCalls: count(row.unpricedCalls),
+  };
 }
 export function decodeUsageSummary(value: unknown, host: { hostId: string | null; label: string }): UsageSummary {
   if (!record(value)) throw new Error('Invalid usage summary');
   const groups = object(value.groups);
-  const decodeGroups = (value: unknown, kind: 'models' | 'workspaces' | 'sessions'): UsageGroup[] => Array.isArray(value) ? value.flatMap((row: unknown) => {
+  const decodeGroups = (value: unknown, kind: 'providers' | 'models' | 'workspaces' | 'sessions'): UsageGroup[] => Array.isArray(value) ? value.flatMap((row: unknown) => {
     if (!record(row) || (kind === 'sessions' ? typeof row.id !== 'string' : typeof row.key !== 'string')) return [];
-    return [{ ...bucket(row), key: text(row.key), id: text(row.id), name: text(row.name), workspace: text(row.workspace),
-      provider: text(row.provider), model: text(row.model), ...(kind === 'models' ? {} : { host: host.hostId, hostLabel: host.label }) }];
+    const apis = stringList(row.apis), models = stringList(row.models), modelCount = count(row.modelCount);
+    return [{
+      ...bucket(row), key: text(row.key), id: text(row.id), name: text(row.name), workspace: text(row.workspace),
+      provider: text(row.provider), model: text(row.model),
+      ...(apis ? { apis } : {}), ...(models ? { models } : {}), ...(modelCount ? { modelCount } : {}),
+      ...(kind === 'models' || kind === 'providers' ? {} : { host: host.hostId, hostLabel: host.label }),
+    }];
   }) : [];
   const daily: UsageDay[] = Array.isArray(value.daily) ? value.daily.flatMap((row: unknown) => {
     if (!record(row) || typeof row.day !== 'string') return [];
@@ -27,7 +43,7 @@ export function decodeUsageSummary(value: unknown, host: { hostId: string | null
     }) : [] }];
   }) : [];
   return { range: text(value.range), sort: text(value.sort), models: Array.isArray(value.models) ? value.models.filter((value): value is string => typeof value === 'string') : null,
-    totals: bucket(value.totals), groups: { models: decodeGroups(groups.models, 'models'), workspaces: decodeGroups(groups.workspaces, 'workspaces'), sessions: decodeGroups(groups.sessions, 'sessions') }, daily,
+    totals: bucket(value.totals), groups: { providers: decodeGroups(groups.providers, 'providers'), models: decodeGroups(groups.models, 'models'), workspaces: decodeGroups(groups.workspaces, 'workspaces'), sessions: decodeGroups(groups.sessions, 'sessions') }, daily,
     headlineCosts: Object.fromEntries(Object.entries(object(value.headlineCosts)).map(([key, value]) => [key, finite(value) ? value : null])),
     headlineCostsByBucket: Object.fromEntries(Object.entries(object(value.headlineCostsByBucket)).map(([key, value]) => [key, costs(value)])),
     headlineCostUnavailable: Object.fromEntries(Object.entries(object(value.headlineCostUnavailable)).map(([key, value]) => [key, count(value)])),

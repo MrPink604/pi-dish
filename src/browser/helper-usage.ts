@@ -79,7 +79,8 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
   const headlineCosts: Record<string, number> = Object.create(null), headlineCostUnavailable: Record<string, number> = Object.create(null);
   const headlineCostsByBucket: Record<string, Record<CostKey, number>> = Object.create(null);
   const days = new Map<string, { bucket: MergedUsage; models: Map<string, MergedUsageModel> }>();          // day -> { bucket, models: Map(ref -> row) }
-  const models = new Map<string, UsageGroup & MergedUsage>();        // ref -> bucket
+  const providers = new Map<string, UsageGroup & MergedUsage & { _apis: Set<string>; _models: Set<string> }>(); // provider -> bucket
+  const models = new Map<string, UsageGroup & MergedUsage & { _apis: Set<string> }>();        // ref -> bucket
   const workspaces = new Map<string, UsageGroup & MergedUsage>();    // host + cwd -> bucket
   const sessionRows = new Map<string, UsageGroup & MergedUsage>();   // host + id -> row
   let indexing = false, discoveryTruncated = false, discoverySkipped = 0;
@@ -123,14 +124,40 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
         row.cost = addKnownUsageCost(row.cost, model.cost);
       }
     }
+    const hostProviders = summary.groups?.providers;
+    if (hostProviders?.length) {
+      for (const bucket of hostProviders) {
+        if (!bucket || !bucket.key) continue;
+        let row = providers.get(bucket.key);
+        if (!row) {
+          row = { key: bucket.key, provider: bucket.provider || bucket.key, ...emptyMergedUsage(), _apis: new Set(), _models: new Set() };
+          providers.set(bucket.key, row);
+        }
+        addUsage(row, bucket);
+        for (const api of bucket.apis || []) row._apis.add(api);
+        for (const ref of bucket.models || []) row._models.add(ref);
+      }
+    }
     for (const bucket of summary.groups?.models || []) {
       if (!bucket || !bucket.key) continue;
       let row = models.get(bucket.key);
       if (!row) {
-        row = { key: bucket.key, provider: bucket.provider, model: bucket.model, ...emptyMergedUsage() };
+        row = { key: bucket.key, provider: bucket.provider, model: bucket.model, ...emptyMergedUsage(), _apis: new Set() };
         models.set(bucket.key, row);
       }
       addUsage(row, bucket);
+      for (const api of bucket.apis || []) row._apis.add(api);
+      if (!hostProviders?.length) {
+        const pKey = bucket.provider || 'unknown';
+        let prov = providers.get(pKey);
+        if (!prov) {
+          prov = { key: pKey, provider: pKey, ...emptyMergedUsage(), _apis: new Set(), _models: new Set() };
+          providers.set(pKey, prov);
+        }
+        addUsage(prov, bucket);
+        for (const api of bucket.apis || []) prov._apis.add(api);
+        prov._models.add(bucket.key);
+      }
     }
     for (const bucket of summary.groups?.workspaces || []) {
       if (!bucket || bucket.key == null) continue;
@@ -170,13 +197,24 @@ export function mergeUsageSummaries(list?: readonly (UsageSummary | HostUsageSum
   const rank = <T extends MergedUsage>(rows: T[]) => rows.map(pricedUsageFields)
     .sort((a, b) => compareUsageBuckets(a, b, sort)).slice(0, 20);
 
+  const finalizeModels = [...models.values()].map(({ _apis, ...rest }) => ({
+    ...rest,
+    ...(_apis.size ? { apis: [..._apis].sort() } : {}),
+  }));
+  const finalizeProviders = [...providers.values()].map(({ _apis, _models, ...rest }) => ({
+    ...rest,
+    ...(_apis.size ? { apis: [..._apis].sort() } : {}),
+    ...(_models.size ? { models: [..._models], modelCount: _models.size } : {}),
+  }));
+
   return {
     range: first.range,
     sort: first.sort,
     models: first.models || null,
     totals,
     groups: {
-      models: rank([...models.values()]),
+      providers: rank(finalizeProviders),
+      models: rank(finalizeModels),
       workspaces: rank([...workspaces.values()]),
       sessions: rank([...sessionRows.values()]),
     },
@@ -266,6 +304,17 @@ export function aggregateUsageWeekly(daily: readonly UsageDay[]) {
       addUsageTokens(agg.tokens, d.tokens);
       addUsageCosts(agg.costs, d.costs);
       addUsageUnavailable(agg.costUnavailable, d.costUnavailable);
+      if (d.measured) agg.measured = (agg.measured || 0) + d.measured;
+      if (d.durationMs) agg.durationMs = (agg.durationMs || 0) + d.durationMs;
+      if (d.slowestMs) agg.slowestMs = Math.max(agg.slowestMs || 0, d.slowestMs);
+      if (d.genOutput) agg.genOutput = (agg.genOutput || 0) + d.genOutput;
+      if (d.genMs) agg.genMs = (agg.genMs || 0) + d.genMs;
+      if (d.ttftCount) agg.ttftCount = (agg.ttftCount || 0) + d.ttftCount;
+      if (d.ttftMs) agg.ttftMs = (agg.ttftMs || 0) + d.ttftMs;
+      if (d.slowestTtftMs) agg.slowestTtftMs = Math.max(agg.slowestTtftMs || 0, d.slowestTtftMs);
+      if (d.streamOutput) agg.streamOutput = (agg.streamOutput || 0) + d.streamOutput;
+      if (d.streamMs) agg.streamMs = (agg.streamMs || 0) + d.streamMs;
+      if (d.fastCalls) agg.fastCalls = (agg.fastCalls || 0) + d.fastCalls;
       for (const dm of d.models || []) {
         const t = models.get(dm.ref) || { ref: dm.ref, provider: dm.provider, model: dm.model, calls: 0, cost: 0, costUnavailable: { total: 0 }, tokens: emptyTokens() };
         t.calls += dm.calls || 0;

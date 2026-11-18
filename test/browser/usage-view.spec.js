@@ -170,3 +170,46 @@ async function mockSummary(page, indexing = false) {
     await (0, fixtures_js_1.expect)(page.locator('.main')).not.toHaveClass(/usage-open/);
     await (0, fixtures_js_1.expect)(page.locator('#usageTooltip')).toHaveCount(0);
 });
+(0, fixtures_js_1.test)('providers section surfaces TTFT, effective and streaming tok/s, protocol/plan/TTL metadata, and filters by provider', async ({ page, fleet }) => {
+    void fleet;
+    const providerBucket = {
+        ...bucket,
+        genOutput: 300, genMs: 10000, streamOutput: 300, streamMs: 6000,
+        ttftCount: 2, ttftMs: 4000, slowestTtftMs: 2500, fastCalls: 1,
+    };
+    const requestedModels = [];
+    await page.route('**/api/usage-summary?*', route => {
+        const url = new URL(route.request().url());
+        requestedModels.push(url.searchParams.get('models'));
+        return route.fulfill({ json: {
+                range: '30', indexing: false, totals: providerBucket,
+                groups: {
+                    providers: [{ ...providerBucket, key: 'google-antigravity', provider: 'google-antigravity', apis: ['acp'], models: ['google-antigravity/gemini-4-carbon'], modelCount: 1 }],
+                    models: [{ ...providerBucket, key: 'google-antigravity/gemini-4-carbon', provider: 'google-antigravity', model: 'gemini-4-carbon', apis: ['acp'] }],
+                    workspaces: [], sessions: [],
+                },
+                daily: ['2026-09-08', '2026-09-09'].map(day => ({ ...providerBucket, day, models: [{ ref: 'google-antigravity/gemini-4-carbon', provider: 'google-antigravity', model: 'gemini-4-carbon', cost: 0.5, calls: 2 }] })),
+            } });
+    });
+    await page.route('**/api/usage-limits', route => route.fulfill({ json: {
+            harnesses: [{ harness: 'agy', label: 'Antigravity', reports: [{
+                            provider: 'google-antigravity', planType: 'Google AI Ultra',
+                            limits: [{ label: '5 hours', windowLabel: '5 hours', usedFraction: 0.15 }],
+                        }] }],
+        } }));
+    await page.route('**/api/cache-lifetimes', route => route.fulfill({ json: { identities: [{
+                    api: 'acp', provider: 'google-antigravity', model: 'gemini-4-carbon', source: 'builtin',
+                    effective: { retentionMs: 300000, retention: '5m', basis: 'estimate' },
+                    probes: { total: 2, hits: 1, misses: 1, maxHitGapMs: 60000, minMissGapMs: 600000, lastAt: 1 },
+                    gates: [{ id: 'support', pass: false, value: 2, need: 30 }],
+                    points: [[60000, 1], [600000, 0]],
+                }] } }));
+    await page.evaluate(() => fixtureApp.features.usageController.open());
+    const providerRow = page.locator('.usage-provider-row');
+    await (0, fixtures_js_1.expect)(providerRow).toContainText('google-antigravity');
+    await (0, fixtures_js_1.expect)(providerRow).toContainText('Google AI Ultra · ACP · 1 model · 2 fast calls · 5m TTL · 15% 5 hours quota');
+    await (0, fixtures_js_1.expect)(providerRow).toContainText('30 tok/s (50 tok/s stream) · 2.0s TTFT');
+    await (0, fixtures_js_1.expect)(page.locator('.usage-perf-line')).toContainText('Effective 30 tok/s · Streaming 50 tok/s · TTFT 2.0s avg');
+    await providerRow.click();
+    await fixtures_js_1.expect.poll(() => requestedModels.includes('google-antigravity/gemini-4-carbon')).toBe(true);
+});

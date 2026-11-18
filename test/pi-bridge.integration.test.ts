@@ -437,9 +437,16 @@ test('prompt round-trip: real agent turn → bridge events → SSE → JSONL', {
 
     // The turn was persisted by real pi — the JSONL reader sees both sides.
     const { body: msgs } = await get(`/api/sessions/${sessionId}/messages`);
-    const texts = records(msgs.messages).map(messageText);
+    const list = records(msgs.messages);
+    const texts = list.map(messageText);
     assert.ok(texts.includes('hello integration'), 'user message persisted');
     assert.ok(texts.includes('echo: hello integration'), 'assistant reply persisted');
+    const persistedAssistant = present(list.find(m => m.role === 'assistant'));
+    assert.equal(typeof persistedAssistant.ttftMs, 'number', 'pi-dish-bridge stamps ttft onto live Pi assistant messages');
+
+    const { body: statsBody } = await get(`/api/sessions/${sessionId}/stats`);
+    assert.equal(record(statsBody.ttftTiming).measured, 1);
+    assert.deepEqual(statsBody.providers, ['fakeprov']);
   } finally {
     stream.close();
   }

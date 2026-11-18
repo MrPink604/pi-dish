@@ -536,18 +536,32 @@ test('includes TTFT per LLM step, skips tool execution and sibling batch calls, 
   const assistants = parsed.filter(m => m.role === 'assistant');
   assert.equal(assistants.length, 3, 'two toolUse segments + final stop segment');
   assert.ok((assistants[0].durationMs ?? 0) >= 90, `step 1 includes TTFT (${assistants[0].durationMs}ms)`);
+  assert.ok((assistants[0].ttftMs ?? 0) >= 90, `step 1 records TTFT (${assistants[0].ttftMs}ms)`);
   assert.equal(assistants[1].durationMs, undefined, 'sibling tool call in the same LLM batch does not invent a second step');
+  assert.equal(assistants[1].ttftMs, undefined);
   assert.ok((assistants[2].durationMs ?? 0) >= 200,
     `closing message durationMs covers both LLM steps including TTFT (${assistants[2].durationMs}ms), not just the 10ms streaming tail`);
   assert.ok((assistants[2].durationMs ?? 0) < 350,
     `closing message durationMs excludes the 140ms tool execution window (${assistants[2].durationMs}ms)`);
+  assert.ok((assistants[2].ttftMs ?? 0) >= 90, `closing step records its own TTFT (${assistants[2].ttftMs}ms)`);
+  assert.ok((assistants[2].streamMs ?? 0) > 0 && (assistants[2].streamMs ?? 0) < 100,
+    `closing message streamMs isolates post-TTFT streaming (${assistants[2].streamMs}ms)`);
 
   const stats = sessionFiles.getSessionStats(session.sessionFile);
   assert.equal(stats.responseTiming.measured, 2, 'only the two real LLM calls count as measured responses');
+  assert.equal(stats.ttftTiming.measured, 2, 'both real LLM calls report TTFT');
+  assert.ok((stats.ttftTiming.medianMs ?? 0) >= 90);
   assert.equal(stats.genMs, assistants[2].durationMs, 'session genMs matches the turn LLM duration without double counting');
   assert.equal(stats.genOutput, 8);
+  assert.equal(stats.streamOutput, 8);
+  assert.deepEqual(stats.providers, ['google-antigravity']);
+  assert.deepEqual(stats.apis, ['acp']);
 
   const indexed = sessionFiles.buildIndexedUsageFromContent(fs.readFileSync(session.sessionFile, 'utf8'));
   assert.equal(indexed.total.measured, 2);
+  assert.equal(indexed.total.ttftCount, 2);
   assert.equal(indexed.total.durationMs, stats.genMs, 'indexed per-step sum equals turnDurationMs without double counting');
+  assert.equal(indexed.total.genMs, stats.genMs);
+  assert.equal(indexed.total.genOutput, 8);
+  assert.deepEqual(indexed.models['google-antigravity/gemini-4-carbon'].apis, ['acp']);
 });

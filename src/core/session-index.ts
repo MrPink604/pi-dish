@@ -84,7 +84,7 @@ const SYNC_BUDGET_DEFAULT = 20;
 const FLUSH_MS = 500;
 const COMPACT_MIN_DEAD_BYTES = 1_000_000;
 // Bumping a schema version re-indexes stale entries through the bounded backlog.
-const META_SCHEMA_VERSION = 13;
+const META_SCHEMA_VERSION = 14;
 const TEXT_SCHEMA_VERSION = 3;
 const SKILLS_SCHEMA_VERSION = 1;
 
