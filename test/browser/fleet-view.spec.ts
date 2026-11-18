@@ -18,7 +18,7 @@ test('opening Fleet renders one card per host with its own capacity meters', asy
   await expect(page.locator('.main')).toHaveClass(/fleet-open/);
   await expect(page.locator('#fleetHosts .fleet-host')).toHaveCount(2);
   for (const card of await page.locator('#fleetHosts .fleet-host').all()) {
-    await expect(card.locator('.fleet-meter')).toHaveCount(3);
+    await expect.poll(() => card.locator('.fleet-meter').count()).toBeGreaterThanOrEqual(3);
     await expect(card.locator('.fleet-meter[role="meter"]').first()).toHaveAttribute('aria-label', 'CPU');
     await expect(card.locator('.fleet-sessions')).toContainText('live');
   }
@@ -107,6 +107,39 @@ test('Settings links to Fleet, which replaces the modal, and Escape closes Fleet
   await expect(page.locator('.main')).not.toHaveClass(/fleet-open/);
   await page.locator('#btnFleet').click();
   await expect(page.locator('.main')).toHaveClass(/fleet-open/);
+});
+
+test('Fleet cards render all partitions and GPUs while falling back cleanly for legacy peers', async ({ page, fleet }) => {
+  const GB = 1024 ** 3;
+  await page.route(`${fleet.self.base}/api/host/health`, route => route.fulfill({ json: health('legacy-os', 1) }));
+  await page.route(`${fleet.peer.base}/api/host/health`, route => route.fulfill({
+    json: {
+      ...health('gpu-os', 2),
+      disks: [
+        { path: '/', fsType: 'ext4', totalBytes: 500 * GB, availableBytes: 250 * GB },
+        { path: '/boot/efi', fsType: 'vfat', totalBytes: 1 * GB, availableBytes: 0.9 * GB },
+        { path: '/mnt/models', fsType: 'xfs', totalBytes: 4000 * GB, availableBytes: 200 * GB },
+      ],
+      gpus: [
+        { name: 'NVIDIA RTX 4090', utilization: 0.62, memory: { totalBytes: 24 * GB, availableBytes: 2 * GB }, temperatureC: 66 },
+        { name: 'NVIDIA RTX 4090', utilization: 0.14, memory: { totalBytes: 24 * GB, availableBytes: 20 * GB }, temperatureC: 41 },
+      ],
+    },
+  }));
+  await openFleet(page);
+  const selfCard = page.locator('.fleet-host').filter({ hasText: 'this server' });
+  await expect(selfCard.locator('.fleet-meter[role="meter"]')).toHaveCount(3);
+  await expect(selfCard.locator('.fleet-meter[aria-label="Disk ~"]')).toBeVisible();
+
+  const peer = peerCard(page);
+  // CPU + Memory + 2*(GPU + VRAM) + 3 partitions = 9 meters
+  await expect(peer.locator('.fleet-meter[role="meter"]')).toHaveCount(9);
+  await expect(peer.locator('.fleet-meter[aria-label="GPU 0"]')).toContainText('62% · 66°C · NVIDIA RTX 4090');
+  await expect(peer.locator('.fleet-meter[aria-label="VRAM 0"]')).toHaveAttribute('data-level', 'crit');
+  await expect(peer.locator('.fleet-meter[aria-label="GPU 1"]')).toContainText('14% · 41°C · NVIDIA RTX 4090');
+  await expect(peer.locator('.fleet-meter[aria-label="Disk /"]')).toContainText('/ · 250 GB / 500 GB');
+  await expect(peer.locator('.fleet-meter[aria-label="Disk /boot/efi"]')).toBeVisible();
+  await expect(peer.locator('.fleet-meter[aria-label="Disk /mnt/models"]')).toHaveAttribute('data-level', 'crit');
 });
 
 export {};

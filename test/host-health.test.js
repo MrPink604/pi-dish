@@ -11,8 +11,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
  */
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { createHostHealth, parseMemAvailable, defaultHostHealthDeps } = require('../lib/host-health.js');
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { createHostHealth, parseMemAvailable, parseProcMounts, parseMacOsDf, parseNvidiaSmi, parseMacOsGpus, readLinuxDrmGpus, defaultHostHealthDeps, } = require('../lib/host-health.js');
 const GB = 1024 ** 3;
+const MIB = 1024 ** 2;
 const MEMINFO = 'MemTotal:       16384000 kB\nMemFree:         1024000 kB\nMemAvailable:    8192000 kB\nBuffers:          100 kB\n';
 /** Two cores whose cumulative busy/idle times the test advances explicitly. */
 function fakeDeps(overrides = {}) {
@@ -76,6 +80,8 @@ test('a first read takes its own short sample and reports the full snapshot shap
     // MemAvailable wins over freemem, which counts page cache as used.
     assert.deepEqual(health.memory, { totalBytes: 16 * GB, availableBytes: 8192000 * 1024 });
     assert.deepEqual(health.disk, { path: '~', totalBytes: 4096 * 1000, availableBytes: 4096 * 250 });
+    assert.deepEqual(health.disks, [{ path: '~', fsType: null, totalBytes: 4096 * 1000, availableBytes: 4096 * 250 }]);
+    assert.deepEqual(health.gpus, []);
     assert.deepEqual(fake.calls.statfs, ['/home/fixture']);
 });
 test('a later read reports the busy share since the previous snapshot without sampling', async () => {
@@ -148,12 +154,218 @@ test('non-Linux hosts use freemem; Windows reports no load average', async () =>
 test('an unreadable or empty home filesystem reports disk as null', async () => {
     const failed = await createHostHealth(fakeDeps({ statfs: () => null }).deps).read();
     assert.equal(failed.disk, null);
+    assert.deepEqual(failed.disks, []);
     const empty = await createHostHealth(fakeDeps({ statfs: () => ({ bsize: 4096, blocks: 0, bavail: 0 }) }).deps).read();
     assert.equal(empty.disk, null);
+    assert.deepEqual(empty.disks, []);
     const noCpus = await createHostHealth(fakeDeps({ cpus: () => [] }).deps).read();
     assert.equal(noCpus.cpu.cores, 0);
     assert.equal(noCpus.cpu.model, null);
     assert.equal(noCpus.cpu.utilization, null);
+});
+test('parseProcMounts filters virtual/snap mounts, unescapes spaces and deduplicates devices', () => {
+    const mounts = [
+        'tmpfs /run tmpfs rw 0 0',
+        'rootfs / rootfs rw 0 0',
+        '/dev/nvme0n1p2 / btrfs rw,subvol=/@ 0 0',
+        '/dev/nvme0n1p2 /home btrfs rw,subvol=/@home 0 0',
+        '/dev/nvme0n1p2 /var/log btrfs rw,subvol=/@log 0 0',
+        '/dev/nvme0n1p1 /boot/efi vfat rw 0 0',
+        '/dev/sdb1 /mnt/Big\\040Data xfs rw 0 0',
+        '/dev/sdc1 /run/media/user/usb exfat rw 0 0',
+        '/dev/loop0 /snap/core24/1643 squashfs ro 0 0',
+        '/dev/nvme0n1p2 /var/lib/docker/overlay2/abc ext4 rw 0 0',
+        'overlay /var/lib/docker/overlay2/abc/merged overlay rw 0 0',
+        'tank/models /tank/models zfs rw 0 0',
+        'proc /proc proc rw 0 0',
+        'efivarfs /sys/firmware/efi/efivars efivarfs rw 0 0',
+    ].join('\n');
+    assert.deepEqual(parseProcMounts(mounts), [
+        { source: '/dev/nvme0n1p2', mount: '/', fsType: 'btrfs' },
+        { source: '/dev/nvme0n1p1', mount: '/boot/efi', fsType: 'vfat' },
+        { source: '/dev/sdb1', mount: '/mnt/Big Data', fsType: 'xfs' },
+        { source: '/dev/sdc1', mount: '/run/media/user/usb', fsType: 'exfat' },
+        { source: 'tank/models', mount: '/tank/models', fsType: 'zfs' },
+    ]);
+    // Container root overlay is kept while nested overlays are ignored.
+    assert.deepEqual(parseProcMounts('overlay / overlay rw 0 0\noverlay /sub overlay rw 0 0\n'), [
+        { source: 'overlay', mount: '/', fsType: 'overlay' },
+    ]);
+    assert.deepEqual(parseProcMounts(null), []);
+});
+test('parseMacOsDf keeps local disk partitions and skips internal APFS system volumes', () => {
+    const df = [
+        'Filesystem     1024-blocks      Used Available Capacity  Mounted on',
+        '/dev/disk3s1s1   971350180  10500000 450000000     3%    /',
+        'devfs                  200       200         0   100%    /dev',
+        '/dev/disk3s6     971350180   2097152 450000000     1%    /System/Volumes/VM',
+        '/dev/disk3s5     971350180 500000000 450000000    53%    /System/Volumes/Data',
+        '/dev/disk4s1    1953525164 400000000 1553525164   21%    /Volumes/Scratch Disk',
+        'map auto_home            0         0         0   100%    /System/Volumes/Data/home',
+    ].join('\n');
+    assert.deepEqual(parseMacOsDf(df), [
+        { source: '/dev/disk3s1s1', mount: '/', fsType: null },
+        { source: '/dev/disk4s1', mount: '/Volumes/Scratch Disk', fsType: null },
+    ]);
+    assert.deepEqual(parseMacOsDf(null), []);
+});
+test('parseNvidiaSmi reads single/multi GPUs, unified memory N/A and clamps ranges', () => {
+    const smi = [
+        '0, NVIDIA GeForce RTX 4090, 35, 12288, 24564, 52',
+        '1, NVIDIA GB10, 120, [N/A], [Not Supported], 48',
+        '2, Broken Card, [N/A], [N/A], [N/A], [N/A]',
+        '3, Card, Rev 2, 10, 1024, 4096, 61.6',
+    ].join('\n');
+    assert.deepEqual(parseNvidiaSmi(smi), [
+        {
+            name: 'NVIDIA GeForce RTX 4090',
+            utilization: 0.35,
+            memory: { totalBytes: 24564 * MIB, availableBytes: (24564 - 12288) * MIB },
+            temperatureC: 52,
+        },
+        { name: 'NVIDIA GB10', utilization: 1, memory: null, temperatureC: 48 },
+        {
+            name: 'Card, Rev 2',
+            utilization: 0.1,
+            memory: { totalBytes: 4096 * MIB, availableBytes: 3072 * MIB },
+            temperatureC: 62,
+        },
+    ]);
+    assert.deepEqual(parseNvidiaSmi(null), []);
+});
+test('parseMacOsGpus reads Apple Silicon and discrete macOS IOAccelerator entries', () => {
+    const ioreg = [
+        '+-o AGXAccelerator  <class AGXAcceleratorG14X, id 0x100000412>',
+        '    {',
+        '      "model" = "Apple M2 Max"',
+        '      "PerformanceStatistics" = {"Device Utilization %"=28,"In use system memory"=1073741824}',
+        '    }',
+        '+-o AMDRadeonX6000  <class AMDRadeonX6000, id 0x100000499>',
+        '    {',
+        '      "model" = "AMD Radeon Pro 5500M"',
+        '      "VRAM,totalMB" = 8192',
+        '      "PerformanceStatistics" = {"Device Utilization %"=64,"vramUsedBytes"=2147483648}',
+        '    }',
+    ].join('\n');
+    assert.deepEqual(parseMacOsGpus(ioreg), [
+        { name: 'Apple M2 Max', utilization: 0.28, memory: null, temperatureC: null },
+        {
+            name: 'AMD Radeon Pro 5500M',
+            utilization: 0.64,
+            memory: { totalBytes: 8192 * MIB, availableBytes: 8192 * MIB - 2 * GB },
+            temperatureC: null,
+        },
+    ]);
+    assert.deepEqual(parseMacOsGpus(null), []);
+});
+test('readLinuxDrmGpus reads AMD sysfs metrics, skips NVIDIA and skips headless BMC VGA', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-drm-'));
+    try {
+        const write = (rel, value) => {
+            const full = path.join(tmp, rel);
+            fs.mkdirSync(path.dirname(full), { recursive: true });
+            fs.writeFileSync(full, value);
+        };
+        // card0: NVIDIA (skipped to avoid duplicating nvidia-smi)
+        write('card0/device/uevent', 'DRIVER=nvidia\n');
+        write('card0/device/gpu_busy_percent', '50\n');
+        // card1: AMD GPU with busy%, VRAM, hwmon temperature
+        write('card1/device/uevent', 'DRIVER=amdgpu\n');
+        write('card1/device/vendor', '0x1002\n');
+        write('card1/device/gpu_busy_percent', '42\n');
+        write('card1/device/mem_info_vram_total', String(8 * GB));
+        write('card1/device/mem_info_vram_used', String(2 * GB));
+        write('card1/device/hwmon/hwmon3/temp1_input', '63400\n');
+        // card2: BMC VGA without busy% or VRAM (skipped)
+        write('card2/device/uevent', 'DRIVER=ast\n');
+        // card10: AMD discrete GPU with explicit product_name (numeric sort after card1)
+        write('card10/device/uevent', 'DRIVER=amdgpu\n');
+        write('card10/device/product_name', 'AMD Radeon RX 7900 XTX\n');
+        write('card10/device/gpu_busy_percent', '85\n');
+        // connector symlink/entry (ignored)
+        fs.mkdirSync(path.join(tmp, 'card1-DP-1'), { recursive: true });
+        fs.mkdirSync(path.join(tmp, 'renderD128'), { recursive: true });
+        assert.deepEqual(readLinuxDrmGpus(tmp), [
+            {
+                name: 'AMD GPU',
+                utilization: 0.42,
+                memory: { totalBytes: 8 * GB, availableBytes: 6 * GB },
+                temperatureC: 63,
+            },
+            { name: 'AMD Radeon RX 7900 XTX', utilization: 0.85, memory: null, temperatureC: null },
+        ]);
+    }
+    finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+});
+test('Linux host health enumerates all partitions (redacting homedir) and combines NVIDIA + DRM GPUs', async () => {
+    const sizes = {
+        '/home/fixture': { bsize: 4096, blocks: 1000, bavail: 400 },
+        '/': { bsize: 4096, blocks: 2000, bavail: 1000 },
+        '/boot/efi': { bsize: 4096, blocks: 100, bavail: 90 },
+        '/home/fixture/models': { bsize: 4096, blocks: 5000, bavail: 500 },
+        '/mnt/data': { bsize: 4096, blocks: 4000, bavail: 2000 },
+    };
+    const fake = fakeDeps({
+        readMounts: () => [
+            '/dev/sda2 / ext4 rw 0 0',
+            '/dev/sda1 /boot/efi vfat rw 0 0',
+            '/dev/sdb1 /mnt/data xfs rw 0 0',
+            '/dev/sdc1 /home/fixture/models ext4 rw 0 0',
+            '/dev/sdd1 /unreadable ext4 rw 0 0',
+        ].join('\n'),
+        statfs: target => sizes[target] ?? null,
+        execCommand: async (file) => file === 'nvidia-smi'
+            ? '0, NVIDIA RTX 5090, 75, 16384, 32768, 67\n'
+            : null,
+        readDrmGpus: () => [{ name: 'AMD GPU', utilization: 0.05, memory: null, temperatureC: 45 }],
+    });
+    const health = await createHostHealth(fake.deps).read();
+    assert.deepEqual(health.disks, [
+        { path: '/', fsType: 'ext4', totalBytes: 4096 * 2000, availableBytes: 4096 * 1000 },
+        { path: '/boot/efi', fsType: 'vfat', totalBytes: 4096 * 100, availableBytes: 4096 * 90 },
+        { path: '/mnt/data', fsType: 'xfs', totalBytes: 4096 * 4000, availableBytes: 4096 * 2000 },
+        { path: '~/models', fsType: 'ext4', totalBytes: 4096 * 5000, availableBytes: 4096 * 500 },
+    ]);
+    assert.deepEqual(health.gpus, [
+        {
+            name: 'NVIDIA RTX 5090',
+            utilization: 0.75,
+            memory: { totalBytes: 32768 * MIB, availableBytes: 16384 * MIB },
+            temperatureC: 67,
+        },
+        { name: 'AMD GPU', utilization: 0.05, memory: null, temperatureC: 45 },
+    ]);
+});
+test('macOS host health reads partitions from df and GPUs from ioreg', async () => {
+    const fake = fakeDeps({
+        platform: 'darwin',
+        statfs: target => target === '/Volumes/Work'
+            ? { bsize: 4096, blocks: 500, bavail: 100 }
+            : { bsize: 4096, blocks: 1000, bavail: 500 },
+        execCommand: async (file) => {
+            if (file === 'df') {
+                return [
+                    'Filesystem 1024-blocks Used Available Capacity Mounted on',
+                    '/dev/disk3s1s1 1000 500 500 50% /',
+                    '/dev/disk4s1 500 400 100 80% /Volumes/Work',
+                ].join('\n');
+            }
+            if (file === 'ioreg') {
+                return '+-o AGXAccelerator <class AGX>\n"model" = "Apple M3 Pro"\n"PerformanceStatistics" = {"Device Utilization %"=19}\n';
+            }
+            return null;
+        },
+    });
+    const health = await createHostHealth(fake.deps).read();
+    assert.deepEqual(health.disks, [
+        { path: '/', fsType: null, totalBytes: 4096 * 1000, availableBytes: 4096 * 500 },
+        { path: '/Volumes/Work', fsType: null, totalBytes: 4096 * 500, availableBytes: 4096 * 100 },
+    ]);
+    assert.deepEqual(health.gpus, [
+        { name: 'Apple M3 Pro', utilization: 0.19, memory: null, temperatureC: null },
+    ]);
 });
 test('default dependencies read this machine without throwing', async () => {
     const health = await createHostHealth(defaultHostHealthDeps).read();
@@ -162,4 +374,14 @@ test('default dependencies read this machine without throwing', async () => {
     assert.ok(health.memory.availableBytes >= 0 && health.memory.availableBytes <= health.memory.totalBytes);
     assert.equal(health.platform, process.platform);
     assert.ok(health.disk === null || health.disk.totalBytes > 0);
+    assert.ok(Array.isArray(health.disks));
+    for (const d of health.disks) {
+        assert.ok(typeof d.path === 'string' && d.path.length > 0);
+        assert.ok(d.totalBytes > 0 && d.availableBytes >= 0 && d.availableBytes <= d.totalBytes);
+    }
+    assert.ok(Array.isArray(health.gpus));
+    for (const g of health.gpus) {
+        assert.ok(g.utilization === null || (g.utilization >= 0 && g.utilization <= 1));
+        assert.ok(g.memory === null || (g.memory.totalBytes > 0 && g.memory.availableBytes >= 0));
+    }
 });

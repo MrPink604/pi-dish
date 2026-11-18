@@ -14,6 +14,16 @@ export interface FleetHost extends HostEndpoint {
   readonly capabilities?: Readonly<Record<string, boolean | undefined>>;
 }
 export interface FleetBytes { readonly totalBytes: number; readonly availableBytes: number }
+export interface FleetDisk extends FleetBytes {
+  readonly path: string;
+  readonly fsType: string | null;
+}
+export interface FleetGpu {
+  readonly name: string | null;
+  readonly utilization: number | null;
+  readonly memory: FleetBytes | null;
+  readonly temperatureC: number | null;
+}
 export interface FleetSessions {
   readonly live: number; readonly working: number; readonly waiting: number; readonly subagents: number;
 }
@@ -23,6 +33,8 @@ export interface FleetHealth {
   readonly cpu: { readonly cores: number; readonly utilization: number | null; readonly load: readonly number[] | null };
   readonly memory: FleetBytes | null;
   readonly disk: FleetBytes | null;
+  readonly disks: readonly FleetDisk[];
+  readonly gpus: readonly FleetGpu[];
   readonly sessions: FleetSessions | null;
 }
 
@@ -30,6 +42,32 @@ const count = (value: unknown) => finite(value) && value >= 0 ? Math.round(value
 function bytes(value: unknown): FleetBytes | null {
   if (!record(value) || !finite(value.totalBytes) || !finite(value.availableBytes) || value.totalBytes <= 0) return null;
   return { totalBytes: value.totalBytes, availableBytes: Math.min(value.totalBytes, Math.max(0, value.availableBytes)) };
+}
+function decodeDisks(value: unknown): FleetDisk[] {
+  if (!Array.isArray(value)) return [];
+  const disks: FleetDisk[] = [];
+  for (const item of value) {
+    if (!record(item) || typeof item.path !== 'string' || !item.path.trim()) continue;
+    const b = bytes(item);
+    if (!b) continue;
+    const fsType = typeof item.fsType === 'string' && item.fsType.trim() ? item.fsType.trim() : null;
+    disks.push({ path: item.path.trim(), fsType, ...b });
+  }
+  return disks;
+}
+function decodeGpus(value: unknown): FleetGpu[] {
+  if (!Array.isArray(value)) return [];
+  const gpus: FleetGpu[] = [];
+  for (const item of value) {
+    if (!record(item)) continue;
+    const utilization = finite(item.utilization) ? Math.min(1, Math.max(0, item.utilization)) : null;
+    const memory = bytes(item.memory);
+    if (utilization === null && memory === null) continue;
+    const name = typeof item.name === 'string' && item.name.trim() ? item.name.trim() : null;
+    const temperatureC = finite(item.temperatureC) ? Math.round(item.temperatureC) : null;
+    gpus.push({ name, utilization, memory, temperatureC });
+  }
+  return gpus;
 }
 /** Narrow one host's `/api/host/health` body; malformed parts degrade to absent. */
 export function decodeFleetHealth(value: unknown): FleetHealth {
@@ -48,6 +86,8 @@ export function decodeFleetHealth(value: unknown): FleetHealth {
     },
     memory: bytes(value.memory),
     disk: bytes(value.disk),
+    disks: decodeDisks(value.disks),
+    gpus: decodeGpus(value.gpus),
     sessions: sessions ? { live: count(sessions.live), working: count(sessions.working), waiting: count(sessions.waiting), subagents: count(sessions.subagents) } : null,
   };
 }
@@ -68,20 +108,51 @@ export function meterLevel(fraction: number): 'ok' | 'warn' | 'crit' {
   return fraction >= 0.9 ? 'crit' : fraction >= 0.75 ? 'warn' : 'ok';
 }
 
-function meterHtml(label: string, fraction: number | null, value: string, title = ''): string {
+function meterHtml(label: string, fraction: number | null, value: string, title = '', ariaLabel = label): string {
   if (fraction === null) {
-    return `<div class="fleet-meter unknown"><span class="fleet-meter-label">${label}</span><span class="fleet-meter-bar"></span><span class="fleet-meter-value">${escapeHtml(value)}</span></div>`;
+    return `<div class="fleet-meter unknown"><span class="fleet-meter-label">${escapeHtml(label)}</span><span class="fleet-meter-bar"></span><span class="fleet-meter-value">${escapeHtml(value)}</span></div>`;
   }
   const pct = Math.round(fraction * 100);
-  return `<div class="fleet-meter" data-level="${meterLevel(fraction)}" role="meter" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"${title ? ` title="${escapeHtml(title)}"` : ''}>` +
-    `<span class="fleet-meter-label">${label}</span><span class="fleet-meter-bar"><i style="width:${pct}%"></i></span>` +
+  return `<div class="fleet-meter" data-level="${meterLevel(fraction)}" role="meter" aria-label="${escapeHtml(ariaLabel)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"${title ? ` title="${escapeHtml(title)}"` : ''}>` +
+    `<span class="fleet-meter-label">${escapeHtml(label)}</span><span class="fleet-meter-bar"><i style="width:${pct}%"></i></span>` +
     `<span class="fleet-meter-value">${escapeHtml(value)}</span></div>`;
 }
-function usedMeter(label: string, value: FleetBytes | null): string {
-  if (!value) return meterHtml(label, null, 'unavailable');
+function usedMeter(label: string, value: FleetBytes | null, prefix = '', title = '', ariaLabel = label): string {
+  if (!value) return meterHtml(label, null, 'unavailable', title, ariaLabel);
   const used = value.totalBytes - value.availableBytes;
-  return meterHtml(label, used / value.totalBytes, `${formatBytes(used)} / ${formatBytes(value.totalBytes)}`,
-    `${formatBytes(value.availableBytes)} available`);
+  const usage = `${formatBytes(used)} / ${formatBytes(value.totalBytes)}`;
+  const display = prefix ? `${prefix} · ${usage}` : usage;
+  const tooltip = title || `${formatBytes(value.availableBytes)} available`;
+  return meterHtml(label, used / value.totalBytes, display, tooltip, ariaLabel);
+}
+function gpuMetersHtml(gpus: readonly FleetGpu[]): string {
+  const multi = gpus.length > 1;
+  return gpus.map((gpu, i) => {
+    const suffix = multi ? ` ${i}` : '';
+    const gpuLabel = `GPU${suffix}`;
+    const vramLabel = `VRAM${suffix}`;
+    const temp = gpu.temperatureC !== null ? `${gpu.temperatureC}°C` : '';
+    const utilValue = gpu.utilization === null
+      ? ['unavailable', temp, gpu.name || ''].filter(Boolean).join(' · ')
+      : [`${Math.round(gpu.utilization * 100)}%`, temp, gpu.name || ''].filter(Boolean).join(' · ');
+    const gpuTitle = [gpu.name, temp].filter(Boolean).join(' · ');
+    const vramTitle = gpu.memory
+      ? [gpu.name, `${formatBytes(gpu.memory.availableBytes)} available`].filter(Boolean).join(' · ')
+      : '';
+    return meterHtml(gpuLabel, gpu.utilization, utilValue, gpuTitle) +
+      (gpu.memory ? usedMeter(vramLabel, gpu.memory, '', vramTitle) : '');
+  }).join('');
+}
+function diskMetersHtml(disks: readonly FleetDisk[], fallback: FleetBytes | null): string {
+  if (!disks.length) return usedMeter('Disk ~', fallback);
+  if (disks.length === 1 && disks[0].path === '~') {
+    return usedMeter('Disk ~', disks[0], '', `${formatBytes(disks[0].availableBytes)} available`, 'Disk ~');
+  }
+  return disks.map((disk, i) => {
+    const label = i === 0 ? 'Disk' : '';
+    const title = `${disk.path}${disk.fsType ? ` (${disk.fsType})` : ''} · ${formatBytes(disk.availableBytes)} available`;
+    return usedMeter(label, disk, disk.path, title, `Disk ${disk.path}`);
+  }).join('');
 }
 
 export function fleetSessionsHtml(sessions: FleetSessions | null, fallback: { live: number; working: number } | null): string {
@@ -100,7 +171,7 @@ export function fleetHealthHtml(health: FleetHealth): string {
   const cpuValue = cpu.utilization === null ? 'unavailable'
     : [`${Math.round(cpu.utilization * 100)}%`, load, cpu.cores ? `${cpu.cores} cores` : ''].filter(Boolean).join(' · ');
   const cpuTitle = cpu.load ? `Load average ${cpu.load.map(n => n.toFixed(2)).join(' / ')} (1/5/15 min)` : '';
-  return `<div class="fleet-meters">${meterHtml('CPU', cpu.utilization, cpuValue, cpuTitle)}${usedMeter('Memory', health.memory)}${usedMeter('Disk ~', health.disk)}</div>`;
+  return `<div class="fleet-meters">${meterHtml('CPU', cpu.utilization, cpuValue, cpuTitle)}${usedMeter('Memory', health.memory)}${gpuMetersHtml(health.gpus)}${diskMetersHtml(health.disks, health.disk)}</div>`;
 }
 
 type Connection = 'reachable' | 'connecting' | 'backoff' | 'blocked';

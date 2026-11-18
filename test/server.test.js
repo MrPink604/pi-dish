@@ -508,6 +508,17 @@ test('GET /api/host/health reports capacity plus live sessions and subagents fro
         assert.equal(disk.path, '~', 'the disk path never discloses the home directory');
         assert.ok(numeric(disk.totalBytes) && numeric(disk.availableBytes));
     }
+    assert.ok(Array.isArray(body.disks), 'disks is always an array');
+    for (const item of body.disks) {
+        const entry = (0, test_types_js_1.record)(item);
+        assert.equal(typeof entry.path, 'string');
+        assert.ok(numeric(entry.totalBytes) && numeric(entry.availableBytes));
+    }
+    assert.ok(Array.isArray(body.gpus), 'gpus is always an array');
+    for (const item of body.gpus) {
+        const gpu = (0, test_types_js_1.record)(item);
+        assert.ok(gpu.utilization === null || (numeric(gpu.utilization) && Number(gpu.utilization) >= 0 && Number(gpu.utilization) <= 1));
+    }
     const baseline = (0, test_types_js_1.record)(body.sessions);
     for (const key of ['live', 'working', 'waiting', 'subagents'])
         assert.ok(numeric(baseline[key]), key);

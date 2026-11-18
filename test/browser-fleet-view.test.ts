@@ -11,6 +11,17 @@ test('host health wire data narrows numbers and degrades malformed parts to abse
     cpu: { cores: 7.6, model: 'm', utilization: 1.4, windowMs: 10, load: [1, 2, 3] },
     memory: { totalBytes: 16 * GB, availableBytes: 20 * GB },
     disk: { path: '~', totalBytes: 100 * GB, availableBytes: -5 },
+    disks: [
+      { path: ' / ', fsType: 'ext4', totalBytes: 200 * GB, availableBytes: 50 * GB },
+      { path: '/mnt/data', fsType: 123, totalBytes: 500 * GB, availableBytes: 600 * GB },
+      { path: '', totalBytes: 10 * GB, availableBytes: 5 * GB },
+      { path: '/bad', totalBytes: 0, availableBytes: 0 },
+    ],
+    gpus: [
+      { name: ' RTX 4090 ', utilization: 1.2, memory: { totalBytes: 24 * GB, availableBytes: -10 }, temperatureC: 64.6 },
+      { name: 'Apple M2', utilization: -0.2, memory: null, temperatureC: 'hot' },
+      { name: 'Empty', utilization: null, memory: null },
+    ],
     sessions: { live: 3, working: -1, waiting: '2', subagents: 1.6, byHarness: { pi: 3 } },
   };
   assert.deepEqual(plain(decodeFleetHealth(wire)), {
@@ -18,12 +29,20 @@ test('host health wire data narrows numbers and degrades malformed parts to abse
     cpu: { cores: 8, utilization: 1, load: [1, 2, 3] },
     memory: { totalBytes: 16 * GB, availableBytes: 16 * GB },
     disk: { totalBytes: 100 * GB, availableBytes: 0 },
+    disks: [
+      { path: '/', fsType: 'ext4', totalBytes: 200 * GB, availableBytes: 50 * GB },
+      { path: '/mnt/data', fsType: null, totalBytes: 500 * GB, availableBytes: 500 * GB },
+    ],
+    gpus: [
+      { name: 'RTX 4090', utilization: 1, memory: { totalBytes: 24 * GB, availableBytes: 0 }, temperatureC: 65 },
+      { name: 'Apple M2', utilization: 0, memory: null, temperatureC: null },
+    ],
     sessions: { live: 3, working: 0, waiting: 0, subagents: 2 },
   });
-  const sparse = decodeFleetHealth({ cpu: { utilization: 'high', load: [1, 2] }, memory: { totalBytes: 0, availableBytes: 0 }, disk: null, sessions: [] });
+  const sparse = decodeFleetHealth({ cpu: { utilization: 'high', load: [1, 2] }, memory: { totalBytes: 0, availableBytes: 0 }, disk: null, disks: 'bad', gpus: {}, sessions: [] });
   assert.deepEqual(plain(sparse), {
     uptimeSec: null, platform: '', arch: '', cpu: { cores: 0, utilization: null, load: null },
-    memory: null, disk: null, sessions: null,
+    memory: null, disk: null, disks: [], gpus: [], sessions: null,
   });
   assert.equal(decodeFleetHealth({ cpu: { load: [1, Infinity, 3] } }).cpu.load, null);
   assert.equal(decodeFleetHealth({ cpu: { utilization: -0.5 } }).cpu.utilization, 0);
@@ -77,6 +96,42 @@ test('health meters carry levels and mark absent readings unavailable', () => {
   const idle = fleetHealthHtml(decodeFleetHealth({ cpu: {}, memory: { totalBytes: GB, availableBytes: GB } }));
   assert.match(idle, /fleet-meter unknown"><span class="fleet-meter-label">CPU/);
   assert.match(idle, /data-level="ok" role="meter" aria-label="Memory"[^>]*aria-valuenow="0"/);
+});
+
+test('health meters render multiple partitions, single and multiple GPUs, and escape wire strings', () => {
+  const single = fleetHealthHtml(decodeFleetHealth({
+    cpu: { cores: 8, utilization: 0.25 },
+    memory: { totalBytes: 32 * GB, availableBytes: 16 * GB },
+    gpus: [{ name: 'NVIDIA RTX 4090', utilization: 0.35, memory: { totalBytes: 24 * GB, availableBytes: 2 * GB }, temperatureC: 58 }],
+    disks: [
+      { path: '/', fsType: 'ext4', totalBytes: 200 * GB, availableBytes: 100 * GB },
+      { path: '/mnt/<data>', fsType: 'xfs', totalBytes: 1000 * GB, availableBytes: 50 * GB },
+    ],
+  }));
+  assert.match(single, /data-level="ok" role="meter" aria-label="GPU"[^>]*aria-valuenow="35"/);
+  assert.match(single, /35% · 58°C · NVIDIA RTX 4090/);
+  assert.match(single, /data-level="crit" role="meter" aria-label="VRAM"[^>]*aria-valuenow="92"/);
+  assert.match(single, /22 GB \/ 24 GB/);
+  assert.match(single, /data-level="ok" role="meter" aria-label="Disk \/"[^>]*title="\/ \(ext4\) · 100 GB available"/);
+  assert.match(single, /<span class="fleet-meter-label">Disk<\/span>.*\/ · 100 GB \/ 200 GB/);
+  assert.match(single, /data-level="crit" role="meter" aria-label="Disk \/mnt\/&lt;data&gt;"[^>]*aria-valuenow="95"/);
+  assert.match(single, /<span class="fleet-meter-label"><\/span>.*\/mnt\/&lt;data&gt; · 950 GB \/ 1000 GB/);
+  assert.doesNotMatch(single, /<data>/);
+
+  const multi = fleetHealthHtml(decodeFleetHealth({
+    cpu: { cores: 16, utilization: 0.1 },
+    memory: { totalBytes: 64 * GB, availableBytes: 48 * GB },
+    gpus: [
+      { name: 'RTX 5090', utilization: 0.8, memory: { totalBytes: 32 * GB, availableBytes: 8 * GB }, temperatureC: 70 },
+      { name: 'Apple M2', utilization: 0.15, memory: null, temperatureC: null },
+    ],
+    disks: [{ path: '~', fsType: null, totalBytes: 100 * GB, availableBytes: 50 * GB }],
+  }));
+  assert.match(multi, /aria-label="GPU 0"[^>]*aria-valuenow="80"/);
+  assert.match(multi, /aria-label="VRAM 0"[^>]*aria-valuenow="75"/);
+  assert.match(multi, /aria-label="GPU 1"[^>]*aria-valuenow="15"/);
+  assert.doesNotMatch(multi, /aria-label="VRAM 1"/);
+  assert.match(multi, /aria-label="Disk ~"[^>]*aria-valuenow="50"/);
 });
 
 export {};

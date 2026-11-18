@@ -1662,7 +1662,8 @@ WebWorker. `manifest.webmanifest` and the PNG icons are static assets.
 
 The Fleet takeover (`.main.fleet-open`, boat icon in the sidebar header)
 shows one card per effective host — live/working/waiting session and
-subagent counts over three meters: CPU, memory, home-directory disk — above
+subagent counts over capacity meters: CPU, memory, GPUs (utilization and
+VRAM when present), and mounted local disk partitions — above
 the fleet-wide controls that used to crowd the Settings modal (the Hosts
 list/add form, Bounce agents, session recovery preferences). Settings keeps
 device/display preferences and an "Open Fleet" pointer.
@@ -1674,8 +1675,12 @@ request (shared for 2s across concurrent callers): CPU utilization is the
 busy share of aggregate `os.cpus()` time since the previous snapshot when that
 is 1s–5min old, otherwise a 250ms sample — so a viewer polling every 10s sees
 a 10s window, not one noisy instant; memory prefers Linux `MemAvailable`
-(`os.freemem()` counts page cache as used); disk is `statfs` of `$HOME`,
-where sessions, workspaces and harness stores live; load average is null on
+(`os.freemem()` counts page cache as used); `disk` keeps `statfs` of `$HOME`
+(as `~`) for backward compatibility while `disks` enumerates mounted local
+partitions (`/proc/mounts` on Linux, `df -kPl` on macOS, skipping virtual/snap
+mounts and redacting `$HOME` prefixes to `~`); `gpus` reads NVIDIA GPUs via
+`nvidia-smi`, non-NVIDIA Linux GPUs via `/sys/class/drm/card*/device` when
+busy% or VRAM is exposed, and macOS accelerators via `ioreg`; load average is null on
 Windows. The route adds this host's counts from the same active-only catalog
 composition the sidebar's Active poll uses, and is advertised as the
 `hostHealth` capability. The client fans out per capable host (client is the
