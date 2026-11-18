@@ -3250,8 +3250,11 @@ pre.tool-code code.hljs {
   color: var(--success);
 }
 
+/* An error is the reason an action failed; show all of it. */
 .status.error {
   color: var(--error);
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Buttons */
@@ -3631,10 +3634,15 @@ pre.tool-code code.hljs {
     display: none;
   }
 
+  /* An error gets its own line under the chips instead of a sideways scroll. */
+  .session-chips:has(.status.error) {
+    flex-wrap: wrap;
+  }
+
   .session-chips .status.error {
-    display: inline;
-    flex: none;
-    white-space: nowrap;
+    display: block;
+    flex: 1 0 100%;
+    order: 1;
   }
 
   .session-relations {

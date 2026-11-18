@@ -22,7 +22,10 @@ interface FixtureContext {
     getSessionFile(): string;
     getSessionId(): string;
   };
-  modelRegistry: { getAvailable(): Promise<readonly unknown[]> };
+  modelRegistry: {
+    getAvailable(): Promise<readonly unknown[]>;
+    authStorage?: { listDisabledCredentials(provider?: string): Promise<unknown[]> };
+  };
   abort(): void;
   isIdle?: () => boolean;
   hasPendingMessages?: () => boolean;
@@ -110,6 +113,14 @@ const ctx: FixtureContext = {
   modelRegistry: { async getAvailable() { return []; } },
   abort() {},
 };
+
+// OMP 18's credential tombstones (AuthStorage.listDisabledCredentials).
+if (process.env.FAKE_OMP_DISABLED_CREDENTIALS) {
+  const rows = JSON.parse(process.env.FAKE_OMP_DISABLED_CREDENTIALS) as { provider: string }[];
+  ctx.modelRegistry.authStorage = {
+    async listDisabledCredentials(provider) { return rows.filter(row => !provider || row.provider === provider); },
+  };
+}
 
 if (process.env.FAKE_OMP_LIFECYCLE_FILE) {
   ctx.isIdle = () => true;

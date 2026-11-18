@@ -2222,14 +2222,31 @@ export function createBridge(descriptor: BridgeDescriptor) {
     try {
       const promise = captureSendUserMessage(() => callHost(pi, "sendUserMessage", content, delivery));
       if (promise) {
-        await Promise.race([promise, admitted]).catch((error: unknown) => {
-          throw new Error(`${descriptor.name} did not accept the message: ${errorText(error)}`);
+        await Promise.race([promise, admitted]).catch(async (error: unknown) => {
+          throw new Error(`${descriptor.name} did not accept the message: ${await refusalReason(error)}`);
         });
       }
     } finally {
       clearTimeout(timer);
       admissionWaiters.delete(admit);
     }
+  }
+
+  // Pi and OMP refuse a prompt whose provider has no usable credential before
+  // the turn starts, naming remedies only a terminal can apply (env vars, the
+  // auth database path). Say why when the host knows (an expired sign-in) and
+  // name the remedies a pi-dish client can send.
+  async function refusalReason(error: unknown): Promise<string> {
+    const text = errorText(error);
+    const provider = /^No API key found for "?([^\s".]+)/.exec(text)?.[1];
+    if (!provider) return text;
+    const ctx = lastCtx;
+    const cause = await descriptor.login?.disabledCause?.(ctx, provider).catch(() => null) ?? null;
+    const problem = cause ? `the ${provider} sign-in stopped working (${cause}).` : `not signed in to ${provider}.`;
+    const login = descriptor.login?.available(ctx)
+      ? `Send /login to sign in${cause ? " again" : ""}`
+      : `Sign in to ${provider} in the ${descriptor.name} terminal`;
+    return `${problem} ${login}, or switch models with /model.`;
   }
 
   function admitPendingSends(): void {

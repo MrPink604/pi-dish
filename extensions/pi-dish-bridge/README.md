@@ -138,7 +138,11 @@ delivered. `send-observer.ts` wraps the host `AgentSession.sendUserMessage()`
 API also returns that call's promise, which settles only when the turn ends.
 The core never awaits it directly: it waits up to 10 s for agent/turn start,
 pre-prompt compaction, or the call to settle, and returns a refusal as the
-prompt's error. The web composer then restores the prompt text.
+prompt's error. The web composer then restores the prompt text. A refusal for a
+provider with no usable credential is reworded to name the provider, the
+host's disable cause when it keeps one (OMP's `listDisabledCredentials()`,
+e.g. `Refresh token expired`), and the remedies a client can send: `/login`
+and `/model`.
 
 Remote `/login` (`login.ts`) drives the host's own sign-in: Pi's private
 `modelRegistry.runtime` login (`pi-login.ts`) or OMP's

@@ -21,11 +21,43 @@ try {
   useOmpAuthModule(await import("@oh-my-pi/pi-ai"));
 } catch {}
 
-function oauthApi(ctx: unknown): HostObject | null {
+function authStorage(ctx: unknown): HostObject | null {
   const registry = isObject(ctx) ? ctx.modelRegistry : undefined;
   const storage = isObject(registry) ? registry.authStorage : undefined;
-  const oauth = isObject(storage) ? storage.oauth : undefined;
+  return isObject(storage) ? storage : null;
+}
+
+function oauthApi(ctx: unknown): HostObject | null {
+  const oauth = authStorage(ctx)?.oauth;
   return isObject(oauth) && method(oauth, "login") ? oauth : null;
+}
+
+// A broker-backed store answers over the network; a prompt refusal must not
+// wait on it for long.
+const DISABLED_LOOKUP_MS = 2000;
+
+// OMP 18 keeps a tombstone when it disables a credential, e.g. an OAuth
+// refresh refused with invalid_grant; the cause is the verbatim error.
+async function disabledCause(ctx: unknown, provider: string): Promise<string | null> {
+  const storage = authStorage(ctx);
+  const list = method(storage, "listDisabledCredentials");
+  if (!storage || !list) return null;
+  const signal = AbortSignal.timeout(DISABLED_LOOKUP_MS);
+  const rows = await Promise.race([
+    Reflect.apply(list, storage, [provider, signal]),
+    new Promise<null>(resolve => signal.addEventListener("abort", () => resolve(null), { once: true })),
+  ]);
+  if (!Array.isArray(rows)) return null;
+  let cause: string | null = null, newest = -1;
+  for (const row of rows) {
+    if (!isObject(row) || typeof row.cause !== "string" || !row.cause) continue;
+    const at = typeof row.disabledAtMs === "number" ? row.disabledAtMs : 0;
+    if (at > newest) { newest = at; cause = row.cause; }
+  }
+  if (!cause) return null;
+  // `oauth refresh failed: OAuthError: … 400 {"error": "invalid_grant",
+  // "error_description": "Refresh token expired"}`: the description says it.
+  return /"error_description"\s*:\s*"([^"]+)"/.exec(cause)?.[1] ?? cause;
 }
 
 function promptText(value: unknown): { message: string; placeholder?: string } {
@@ -92,4 +124,5 @@ export const ompLogin: LoginAdapter = {
     const email = isObject(result) && typeof result.email === "string" ? result.email : undefined;
     return { account: email, method: isObject(result) && result.type === "api_key" ? "api_key" : "oauth" };
   },
+  disabledCause,
 };

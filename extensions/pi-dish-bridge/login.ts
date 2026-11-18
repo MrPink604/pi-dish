@@ -35,6 +35,11 @@ export type LoginAdapter = {
   providers(ctx: unknown): LoginProvider[];
   /** Runs the host flow, persists credentials, refreshes the provider's models. */
   login(ctx: unknown, provider: LoginProvider, interaction: LoginInteraction): Promise<LoginResult>;
+  /**
+   * Why the host stopped using the provider's newest credential (a refresh the
+   * provider refused), or null when the host keeps no such record.
+   */
+  disabledCause?(ctx: unknown, provider: string): Promise<string | null>;
 };
 
 export type LoginDialogPort = {
