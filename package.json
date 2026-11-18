@@ -33,7 +33,7 @@
     "email": "pi-dish@localhost"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.5.1",
+    "@earendil-works/pi-coding-agent": "1.5.2",
     "@earendil-works/pi-server": "^1.1.0",
     "@ff-labs/fff-node": "^0.9.6",
     "compression": "^1.8.2",
@@ -48,7 +48,7 @@
     "yaml": "^2.9.1"
   },
   "devDependencies": {
-    "@earendil-works/pi-tui": "1.5.1",
+    "@earendil-works/pi-tui": "1.5.2",
     "@playwright/test": "1.65.0",
     "@types/compression": "1.8.1",
     "@types/express": "4.17.25",

@@ -80,6 +80,14 @@ Chromium binary. Run one focused scenario with
 `npm run test:lineage -- omp` (or `prime`) is an opt-in real harness canary
 with explicit executable paths; omit the selector to run both; see README. Report skips or unavailable checks.
 
+If `npm test` fails `bundled pi SDK version matches the host pi`, do not dismiss
+it as an unrelated pre-existing failure: bump the exact-pinned
+`@earendil-works/pi-coding-agent` and `@earendil-works/pi-tui` versions to match
+the host `pi --version` (`npm i --save-exact @earendil-works/pi-coding-agent@<ver>`
+and `npm i -D --save-exact @earendil-works/pi-tui@<ver>`), verify `npm run check`
+and `test/pi-bridge.integration.test.js`, and commit the lockfile update as its
+own small maintenance commit.
+
 ## Invariants
 
 - Use the existing test environment sanitization and temporary homes, sockets,
