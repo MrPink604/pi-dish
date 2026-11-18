@@ -190,6 +190,29 @@ test('a failed stop records nothing and does not cascade to the next candidate',
     assert.equal(hibernation.records().size, 0);
     assert.equal(errors.length, 1);
 });
+test('an idle agy relay hibernates and a message wake resumes the mirror', async () => {
+    const rows = [row('agy-idle', 5 * 3_600_000, { harnessId: 'agy' })];
+    const { hibernation, executed, resumed } = sampler(rows);
+    assert.deepEqual(await hibernation.tick(), { hibernated: 'agy-idle' });
+    assert.deepEqual(executed, ['agy-idle'], 'the owned relay pane is closed through the generic path');
+    assert.equal(hibernation.isHibernated('agy-idle'), true);
+    assert.equal(await hibernation.wake('agy-idle'), true);
+    assert.deepEqual(resumed, ['agy-idle']);
+    assert.equal(hibernation.isHibernated('agy-idle'), false);
+});
+test('a working, asking or watched agy relay is never hibernated', async () => {
+    const hour = 3_600_000;
+    const rows = [
+        row('agy-working', 5 * hour, { harnessId: 'agy', turnInProgress: true }),
+        row('agy-asking', 5 * hour, { harnessId: 'agy', askPending: true }),
+        row('agy-viewed', 5 * hour, { harnessId: 'agy' }),
+        row('agy-blocked', 5 * hour, { harnessId: 'agy', blockers: ['Waiting for running tools to finish.'] }),
+    ];
+    const { hibernation, executed } = sampler(rows, { viewers: { 'agy-viewed': 1 } });
+    assert.deepEqual(await hibernation.tick(), { skipped: 'No idle session is safe to hibernate.' });
+    assert.deepEqual(executed, []);
+    assert.equal(hibernation.records().size, 0);
+});
 test('wake resumes once for concurrent messages, then forgets; live sessions shed stale records', async () => {
     const rows = [row('sleepy', 9 * 3_600_000)];
     const fixture = sampler(rows);

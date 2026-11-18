@@ -34,13 +34,17 @@ import {
   acpUsage,
   askElicitationResult,
   askFromElicitation,
+  backupAcpMirror,
   extractAcpPlanTier,
   normalizeAcpTool,
   permissionDialog,
   permissionResult,
   planWidgetRequest,
   readAcpMirrorHeader,
+  readAcpMirrorLastTimestamp,
+  restoreAcpMirror,
   type AcpAskQuestionSpec,
+  type AcpMirrorBackup,
   type AcpPermissionOption,
   type AcpToolCall,
 } from './acp-transcript';
@@ -65,6 +69,45 @@ const AUTONOMOUS_IDLE_DEFAULT_MS = 15000;
 function autonomousIdleMs(): number {
   const override = Number(process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS);
   return Number.isFinite(override) && override > 0 ? override : AUTONOMOUS_IDLE_DEFAULT_MS;
+}
+
+/**
+ * agy persists a conversation slightly after pi-dish closes the mirror entry;
+ * a comparison this loose still catches TUI turns, which are minutes apart.
+ */
+export const AGY_STALE_TOLERANCE_MS = 5000;
+
+/** One conversation from `session/list`; the same shape in every workspace. */
+export interface AgyConversation {
+  sessionId: NativeSessionId;
+  cwd: string | null;
+  title: string | null;
+  /** Epoch ms; agy may send an ISO string or seconds. */
+  updatedAt: number | null;
+}
+
+function conversationTime(value: unknown): number | null {
+  if (finite(value)) return value > 1e11 ? value : value * 1000;
+  if (typeof value !== 'string' || !value) return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? at : null;
+}
+
+/** Defensive read of `session/list`; unknown rows drop instead of breaking an import run. */
+export function parseAgyConversationList(value: unknown): AgyConversation[] {
+  const result = asRecord(value);
+  const rows = Array.isArray(result.sessions) ? result.sessions : Array.isArray(value) ? value : [];
+  return rows.flatMap((row): AgyConversation[] => {
+    const record = asRecord(row);
+    const sessionId = text(record.sessionId) || text(record.session_id);
+    if (!validSessionId(sessionId)) return [];
+    return [{
+      sessionId: sessionId as NativeSessionId,
+      cwd: text(record.cwd) || null,
+      title: text(record.title) || text(record.name) || null,
+      updatedAt: conversationTime(record.updatedAt ?? record.updated_at),
+    }];
+  });
 }
 
 function sumUsage(a: ProtocolRecord | null, b: ProtocolRecord | null): ProtocolRecord | null {
@@ -227,6 +270,9 @@ export class AcpSession extends TransportSession {
   declare private pending: InstanceType<typeof PendingRequests>;
   declare private nextRequestId: number;
   declare private transcript: AcpTranscript | null;
+  /** True while `session/load` replay frames are being written to a fresh mirror. */
+  declare private replaying: boolean;
+  declare private initialized: boolean;
   declare private configOptions: ProtocolRecord[];
   declare private modes: ProtocolRecord | null;
   declare private currentMode: string | null;
@@ -261,6 +307,8 @@ export class AcpSession extends TransportSession {
     this.harnessId = 'agy';
     this.proc = proc;
     this.cwd = cwd;
+    this.replaying = false;
+    this.initialized = false;
     this.id = crypto.randomUUID() as NativeSessionId;
     this.nativeSessionId = this.id;
     this.sessionFile = '';
@@ -477,6 +525,10 @@ export class AcpSession extends TransportSession {
   private _sessionUpdate(raw: unknown): void {
     const update = isRecord(raw) ? raw : {};
     const kind = text(update.sessionUpdate);
+    if (this.replaying) {
+      this.transcript?.applyReplayUpdate(update);
+      return;
+    }
     if (Object.hasOwn(ACTIVITY_UPDATES, kind)) this._noteActivity();
     switch (kind) {
       case 'agent_message_chunk': {
@@ -490,7 +542,7 @@ export class AcpSession extends TransportSession {
         return;
       }
       case 'user_message_chunk':
-        // Live sessions never emit these; import via `session/load` is a later phase.
+        // Only `session/load` replay emits these; live prompts are mirrored outbound.
         return;
       case 'tool_call':
         this._toolCall(update);
@@ -847,7 +899,12 @@ export class AcpSession extends TransportSession {
     this.state = state;
   }
 
-  private _adoptSession(result: ProtocolRecord, sessionId: string, sessionFile: string): void {
+  private _adoptSession(
+    result: ProtocolRecord,
+    sessionId: string,
+    sessionFile: string,
+    options: { transcript?: AcpTranscript; register?: boolean } = {},
+  ): void {
     if (!validSessionId(sessionId)) throw new TypeError('Invalid Antigravity session id');
     this.id = sessionId as NativeSessionId;
     this.nativeSessionId = this.id;
@@ -865,10 +922,15 @@ export class AcpSession extends TransportSession {
     };
     this._refreshStateFromConfig();
     recordAgyPlanTier(extractAcpPlanTier(result));
-    this.transcript = new AcpTranscript({ file: sessionFile, sessionId, cwd: this.cwd, agentVersion: this.agentVersion });
+    this.transcript = options.transcript ?? new AcpTranscript({
+      file: sessionFile,
+      sessionId,
+      cwd: this.cwd,
+      agentVersion: this.agentVersion,
+    });
     for (const frame of this.earlyFrames) this.transcript.appendRaw(frame.dir, frame.msg);
     this.earlyFrames = [];
-    registerAcpSession(this);
+    if (options.register !== false) registerAcpSession(this);
   }
 
   // ---- startup -------------------------------------------------------------
@@ -884,7 +946,8 @@ export class AcpSession extends TransportSession {
     });
   }
 
-  private async _initialize(): Promise<void> {
+  async _initialize(): Promise<void> {
+    if (this.initialized) return;
     // A spawn failure (ENOENT) never yields a frame; race it so startup fails fast.
     const result = await Promise.race([
       this._request('initialize', {
@@ -908,12 +971,17 @@ export class AcpSession extends TransportSession {
       throw new Error('Antigravity ACP does not support session resume');
     }
     this.agentVersion = typeof info.version === 'string' && info.version ? info.version : null;
+    this.initialized = true;
     this._warnUnverifiedVersion();
   }
 
   private async _setConfigOption(configId: string, value: string): Promise<unknown> {
     const result = await this._request('session/set_config_option',
       { sessionId: this.nativeSessionId, configId, value }, { timeout: 15000 });
+    // agy 1.5.10 returns the refreshed options (e.g. Hydrogen's xhigh ladder) in the
+    // result rather than as a config_option_update notification.
+    const options = asRecord(result).configOptions;
+    if (Array.isArray(options)) this._applyConfigUpdate({ configOptions: options });
     const option = this._configOption(configId);
     if (option) option.currentValue = value;
     this._refreshStateFromConfig();
@@ -941,9 +1009,86 @@ export class AcpSession extends TransportSession {
     }
   }
 
-  /** Resume: initialize → `session/resume` (no history replay) → keep the existing mirror. */
+  /**
+   * Rebuild a conversation's mirror from `session/load` replay. The previous
+   * mirror and sidecar are kept as `.bak`; a failed replay restores them.
+   */
+  private async _replayInto(
+    sessionId: string,
+    sessionFile: string,
+    cwd: string,
+    options: { register: boolean; title?: string | null },
+  ): Promise<{ result: ProtocolRecord; backup: AcpMirrorBackup }> {
+    const backup = backupAcpMirror(sessionFile);
+    try {
+      const transcript = new AcpTranscript({
+        file: sessionFile,
+        sessionId,
+        cwd,
+        agentVersion: this.agentVersion,
+        imported: { at: Date.now(), source: 'session/load' },
+      });
+      this.transcript = transcript;
+      for (const frame of this.earlyFrames) transcript.appendRaw(frame.dir, frame.msg);
+      this.earlyFrames = [];
+      this.replaying = true;
+      let result: ProtocolRecord;
+      try {
+        result = asRecord(await this._request('session/load',
+          { sessionId, cwd, mcpServers: [] }, { timeout: 120000 }));
+      } finally {
+        this.replaying = false;
+      }
+      transcript.flushReplay();
+      if (!text(result.title) && options.title) result.title = options.title;
+      this._adoptSession(result, sessionId, sessionFile, { transcript, register: options.register });
+      const model = this._currentModelId();
+      if (model) transcript.appendModelChange(model);
+      const level = this._configValue('thought_level');
+      if (level) transcript.appendThinkingLevel(level);
+      const title = text(result.title) || options.title;
+      if (title) transcript.appendSessionInfo(title);
+      return { result, backup };
+    } catch (error) {
+      this.transcript = null;
+      restoreAcpMirror(sessionFile, backup);
+      throw error;
+    }
+  }
+
+  /** `session/list` newer than the mirror's tail means turns happened outside pi-dish. */
+  private async _agyHasNewerTurns(sessionId: string, sessionFile: string): Promise<boolean> {
+    const conversations = await this.listConversations();
+    const conversation = conversations.find(entry => entry.sessionId === sessionId);
+    if (!conversation || conversation.updatedAt === null) return false;
+    const last = readAcpMirrorLastTimestamp(sessionFile);
+    return last === null || conversation.updatedAt > last + AGY_STALE_TOLERANCE_MS;
+  }
+
+  /**
+   * Resume: compare `session/list` with the mirror. A newer conversation is
+   * rebuilt with `session/load` so the live session continues with complete
+   * history; otherwise `session/resume` keeps the existing mirror and replays
+   * nothing.
+   */
   async _startResume(sessionId: string, sessionFile: string, opts: Partial<AcpLaunchOptions>): Promise<void> {
     await this._initialize();
+    let stale = false;
+    try {
+      stale = await this._agyHasNewerTurns(sessionId, sessionFile);
+    } catch (error) {
+      console.error(`[agy] session/list failed while checking ${sessionId}: ${errorMessage(error)}`);
+    }
+    if (stale) {
+      try {
+        await this._replayInto(sessionId, sessionFile, this.cwd, { register: true });
+        if (opts.model) await this.setModel(AGY_PROVIDER, opts.model);
+        if (opts.thinking) await this.setThinkingLevel(opts.thinking);
+        return;
+      } catch (error) {
+        console.error(`[agy] re-import failed; keeping the existing mirror: ${errorMessage(error)}`);
+      }
+    }
     const result = asRecord(await this._request('session/resume',
       { sessionId, cwd: this.cwd, mcpServers: [] }, { timeout: 30000 }));
     const returned = text(result.sessionId);
@@ -951,6 +1096,25 @@ export class AcpSession extends TransportSession {
     this._adoptSession(result, sessionId, sessionFile);
     if (opts.model) await this.setModel(AGY_PROVIDER, opts.model);
     if (opts.thinking) await this.setThinkingLevel(opts.thinking);
+  }
+
+  /** Every conversation agy knows about, across workspaces (`session/list`). */
+  async listConversations(timeout = 20000): Promise<AgyConversation[]> {
+    await this._initialize();
+    return parseAgyConversationList(await this._request('session/list', { cwd: this.cwd }, { timeout }));
+  }
+
+  /**
+   * Import one conversation started outside pi-dish into a fresh mirror. The
+   * caller owns the short-lived child (see `createAcpImportAgent`).
+   */
+  async importConversation(conversation: AgyConversation, sessionFile: string): Promise<{ file: string; backup: string | null }> {
+    await this._initialize();
+    const { backup } = await this._replayInto(conversation.sessionId, sessionFile, conversation.cwd || this.cwd, {
+      register: false,
+      title: conversation.title,
+    });
+    return { file: sessionFile, backup: backup.mirror };
   }
 
   // ---- public transport surface -------------------------------------------
@@ -1162,6 +1326,21 @@ export async function createAcpSession(opts: AcpLaunchOptions): Promise<AcpSessi
   const session = new AcpSession(spawnAcp(opts.cwd, opts), opts.cwd);
   try {
     await session._start(opts);
+    return session;
+  } catch (error) {
+    session.kill();
+    throw error;
+  }
+}
+
+/**
+ * A short-lived ACP child for `session/list` + `session/load` import work. It
+ * is not registered as a live session; the caller closes it when the batch ends.
+ */
+export async function createAcpImportAgent(opts: AcpLaunchOptions): Promise<AcpSession> {
+  const session = new AcpSession(spawnAcp(opts.cwd, opts), opts.cwd);
+  try {
+    await session._initialize();
     return session;
   } catch (error) {
     session.kill();

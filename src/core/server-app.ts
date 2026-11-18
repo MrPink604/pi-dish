@@ -52,6 +52,7 @@ import { createSessionHibernation } from './session-hibernation';
 import { createPushNotifier } from './push-notifications';
 import { expandSessionRefs } from './session-refs';
 import { getPrimeDaemon } from './prime-daemon';
+import { createAgyImportRuntime } from './agy-import';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
 import { createPrivateAccess } from './private-access';
@@ -223,6 +224,8 @@ export function startServer(rootDirectory: string): Server {
     piSettingsFile: path.join(os.homedir(), '.pi', 'agent', 'settings.json'),
     privateUnlocked,
   });
+  // One short-lived agy child per batch; skips conversations a relay already owns.
+  const agyImport = createAgyImportRuntime({ readSettings: readDishSettings });
 
   app.use('/api/sessions/:id', privateSessions.sessionGate);
   app.use('/api/sessions/:id', (req: ApplicationRequest, res: ApplicationResponse, next: NextFunction) => {
@@ -336,6 +339,10 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/sessions/:id/branch',
     createSessionTreeHandler({ ownership, findSessionSource }).branch);
 
+  app.post('/api/harnesses/agy/import', async (_req: ApplicationRequest, res: ApplicationResponse) => {
+    try { res.json(await agyImport.run('api')); }
+    catch (error) { res.status(500).json({ error: errorMessage(error) }); }
+  });
   app.get('/api/harnesses', featureHandlers.harnesses);
   app.get('/api/harnesses/:id/config', featureHandlers.harnessConfig);
   app.put('/api/harnesses/:id/model-roles', featureHandlers.updateModelRoles);
@@ -501,7 +508,11 @@ export function startServer(rootDirectory: string): Server {
 
   const hibernation = createSessionHibernation({
     readSettings: readDishSettings,
-    readMeminfo: () => { try { return fs.readFileSync('/proc/meminfo', 'utf8'); } catch { return null; } },
+    // A file seam keeps pressure tests off the real host budget.
+    readMeminfo: () => {
+      try { return fs.readFileSync(process.env.PI_DISH_MEMINFO_FILE || '/proc/meminfo', 'utf8'); }
+      catch { return null; }
+    },
     candidates: () => { invalidateRegistryCache(); return catalog.getActiveSessions(); },
     viewers: id => { try { return streamViewers.get(canonicalSessionId(id)) || 0; } catch { return 0; } },
     capture: lifecycleActions.capture,
@@ -628,6 +639,7 @@ export function startServer(rootDirectory: string): Server {
     sessionBounces.stop();
     hibernation.stop();
     pushNotifier.stop();
+    agyImport.stop();
   }
 
   // Fleet relay takes precedence even when the terminal is disabled; unclaimed sockets are destroyed.
@@ -651,6 +663,7 @@ export function startServer(rootDirectory: string): Server {
       sessionBounces.start();
       hibernation.start();
       pushNotifier.start();
+      agyImport.start();
       // Prime roots live in the daemon roster, not the bridge registry, so poll it.
       getPrimeDaemon().start();
       // A restored idle session is interrupted work, not a completed oneShot.

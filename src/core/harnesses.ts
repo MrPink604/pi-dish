@@ -197,7 +197,7 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
     layout: 'flat', commandEnv: 'PI_DISH_AGY_COMMAND', command: 'agy',
     // The raw ACP sidecar sits beside each mirror and is not a session.
     auxiliaryJsonlSuffixes: ['.acp.jsonl'],
-    rpcFallback: false, modelCatalog: null, closeMode: 'owned-pane',
+    rpcFallback: false, modelCatalog: 'command', modelsFormat: 'agy-list', closeMode: 'owned-pane',
     // Each session's ACP client lives in its own tmux pane, so it survives a
     // pi-dish restart. `PI_DISH_AGY_COMMAND` still names the agy binary; the
     // relay spawns it and speaks pi-dish's bridge protocol to the server.
@@ -214,7 +214,9 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
         ...(thinking ? ['--thinking', String(thinking)] : []),
       ],
       resume: agyResume,
-      models: [],
+      // ACP sessions pick a base model plus a `thought_level`; `agy models`
+      // lists those base models with their `-low/-medium/-high/-xhigh` variants.
+      models: ['models'],
       // Answered directly by the agy CLI (`num_turns: 0`, no conversation or token file read).
       usage: ['-p', '/usage', '--output-format', 'json'],
     },

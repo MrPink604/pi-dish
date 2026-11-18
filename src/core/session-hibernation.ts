@@ -22,10 +22,12 @@ export const HIBERNATION_MIN_IDLE_MS = 2 * 60 * 60 * 1000;
 export const HIBERNATION_EVAL_WINDOW_MS = 8 * 60 * 60 * 1000;
 const PRESSURE_AVAILABLE_FRACTION = 0.10;
 const PRESSURE_SWAP_USED_FRACTION = 0.75;
-const SAMPLE_INTERVAL_MS = 60_000;
-// agy is absent by design: its relay pane has no human client whose attachment
-// could prove idleness, and hibernation is not part of its lifecycle yet.
-const HIBERNATION_HARNESSES: Record<string, true> = { omp: true, pi: true };
+/** Operational/test knob; production keeps the one-minute sample. */
+const SAMPLE_INTERVAL_MS = Number(process.env.PI_DISH_HIBERNATION_SAMPLE_MS) || 60_000;
+// Every harness with a pi-dish-owned pane whose live bridge reports full
+// lifecycle safety: closing the pane is recoverable (the transcript stays) and
+// the next message resumes it. Prime's daemon worker has no such pane.
+const HIBERNATION_HARNESSES: Record<string, true> = { omp: true, pi: true, agy: true };
 const STORE = 'hibernation.json';
 const EVAL_SCAN_CHUNK_BYTES = 256 * 1024;
 const EVAL_SCAN_MAX_BYTES = 64 * 1024 * 1024;

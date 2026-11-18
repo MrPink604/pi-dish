@@ -1,13 +1,14 @@
 # Spike: Antigravity CLI (`agy`) through ACP
 
 **Priority:** P2
-**Status:** Phases 1 and 3 implemented (2026-11-17): `src/core/acp-session.ts`,
+**Status:** Phases 1, 2 and 3 implemented (2026-11-17): `src/core/acp-session.ts`,
 `src/core/acp-transcript.ts`, the `agy` harness wiring, and tests against a
 fake ACP agent. It was verified end to end against real `agy` 1.5.10 on
-`framework`. Phase 3 is the tmux-hosted relay (`src/core/agy-relay.ts`), so a
-turn now survives a pi-dish restart. Phase 2 (importing TUI conversations,
-staleness, recovery) remains. The owner has accepted the terms risk of
-programmatic prompts (see Owner decision).
+`framework` and beelink. Phase 3 is the tmux-hosted relay
+(`src/core/agy-relay.ts`), so a turn survives a pi-dish restart. Phase 2
+added TUI conversation import and staleness re-import (`src/core/agy-import.ts`),
+hibernation, crash recovery, and the `agy models` new-session catalog. The
+owner has accepted the terms risk of programmatic prompts (see Owner decision).
 
 ## Goal
 
@@ -527,7 +528,7 @@ restart.
 |---|---|---|---|
 | 0 | Dropped by owner (2026-11-17): native transcript only | — | — |
 | 1 | `AcpSession` transport, descriptor, live new/resume/close/restart, prompt/steer/abort/questions, model/thinking/mode config options, commands, mirror writer with raw sidecar, tool normalisation, fake ACP agent fixture for `npm test` | L | Assistant segmentation and steer handover, against the captured frames |
-| 2 | `session/list` import and staleness re-import, recovery | M | Replay loss on import; unobserved multi-select elicitation schema |
+| 2 | `session/list` import and staleness re-import, recovery, hibernation, new-session model catalog — implemented (`src/core/agy-import.ts`, relay recovery observations, `parseAgyModelList`) | M | Replay loss on import; unobserved multi-select elicitation schema |
 | 3 | Detached relay so turns survive pi-dish updates — implemented as the tmux-hosted bridge relay (`src/core/agy-relay.ts`) | M | Ownership record and relay authentication |
 
 Event shapes for the fake-agent fixture come from the signed-in captures

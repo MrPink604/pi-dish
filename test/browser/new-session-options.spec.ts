@@ -122,7 +122,7 @@ test('the model picker filters as you type and keeps the picked model', async ({
   await expect(page.locator('#nsModelInput')).toHaveValue('Beta');
 });
 
-test('Antigravity disables pre-spawn naming, model lookup and tmux targets while offering its thinking levels', async ({ page, fleet }) => {
+test('Antigravity keeps pre-spawn naming and tmux targets off while offering its Gemini catalog', async ({ page, fleet }) => {
   let modelsRequested = 0;
   await page.route('**/api/harnesses', (route: Route) => route.fulfill({ json: { harnesses: [
     { id: 'pi', label: 'Pi', available: true }, { id: 'agy', label: 'Antigravity', available: true },
@@ -130,16 +130,30 @@ test('Antigravity disables pre-spawn naming, model lookup and tmux targets while
   await page.route('**/api/tmux/targets', (route: Route) => route.fulfill({ json: {
     available: true, servers: [{ name: 'default', socket: '/tmp/tmux', sessions: [{ name: 'work' }] }],
   } }));
-  await page.route('**/api/models*', (route: Route) => { modelsRequested++; return route.fulfill({ status: 501, json: { error: 'no catalog' } }); });
+  await page.route('**/api/models*', (route: Route) => {
+    modelsRequested++;
+    return route.fulfill({ json: [
+      { id: 'gemini-4-carbon', provider: 'google-antigravity', name: 'Gemini 4 Carbon',
+        selector: 'google-antigravity/gemini-4-carbon', reasoning: true, thinking: ['low', 'medium', 'high'] },
+      { id: 'gemini-4-hydrogen', provider: 'google-antigravity', name: 'Gemini 4 Hydrogen',
+        selector: 'google-antigravity/gemini-4-hydrogen', reasoning: true, thinking: ['low', 'medium', 'high', 'xhigh'] },
+    ] });
+  });
   await page.evaluate(() => { localStorage.setItem('pi-dish-new-harness', 'agy'); fixtureApp.features.newSessionController.open({ cwd: '/proj' }); });
   await expect(page.locator('#nsHarnessSelect')).toHaveValue('agy');
   await expect(page.locator('#newSessionName')).toBeDisabled();
-  await expect(page.locator('#nsModelInput')).toBeDisabled();
   await expect(page.locator('#newSessionTargetWrap')).toBeHidden();
+  // The CLI catalog supplies the ACP base models, so the picker stays usable.
+  await page.click('#nsModelInput');
+  await expect(page.locator('#nsModelDropdown')).toContainText('Gemini 4 Hydrogen');
+  await page.locator('#nsModelDropdown .cwd-option', { hasText: 'Gemini 4 Hydrogen' }).click();
+  await expect(page.locator('#nsModelInput')).toHaveValue('Gemini 4 Hydrogen');
   const levels = await page.locator('#nsThinkingSelect option').evaluateAll(options =>
     options.map(option => (option as HTMLOptionElement).value));
-  expect(levels).toEqual(['', 'low', 'medium', 'high']);
-  expect(modelsRequested).toBe(0);
+  expect(levels).toEqual(['', 'low', 'medium', 'high', 'xhigh']);
+  expect(await page.evaluate(() => fixtureApp.features.newSessionController.preferences.selectedModel()))
+    .toBe('google-antigravity/gemini-4-hydrogen');
+  expect(modelsRequested).toBeGreaterThan(0);
   void fleet;
 });
 

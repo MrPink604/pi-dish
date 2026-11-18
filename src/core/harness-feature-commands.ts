@@ -167,8 +167,9 @@ export async function runHarnessModelCatalog(
     if (!force && cached.time !== undefined && Date.now() - cached.time < MODELS_CACHE_TTL) return cached.catalog;
   }
   const entry: HarnessModelsCacheEntry = { signature };
-  entry.inFlight = runHarnessJsonCommand(
-    descriptor, descriptor.argv.models, { cwd: resolvedCwd, acceptCompleteJson: true },
+  entry.inFlight = (descriptor.modelsFormat === 'agy-list'
+    ? runHarnessTextCommand(descriptor, descriptor.argv.models, { cwd: resolvedCwd }).then(parseAgyModelList)
+    : runHarnessJsonCommand(descriptor, descriptor.argv.models, { cwd: resolvedCwd, acceptCompleteJson: true })
   ).then(parsed => {
     if (parsed === null || parsed === undefined) throw new TypeError(`Cannot read properties of ${parsed} (reading 'models')`);
     entry.catalog = parsed;
@@ -177,6 +178,52 @@ export async function runHarnessModelCatalog(
   }).finally(() => { delete entry.inFlight; });
   harnessModelsCache.set(cacheKey, entry);
   return entry.inFlight;
+}
+
+const AGY_MODEL_PROVIDER = 'google-antigravity';
+/** Thinking levels agy appends to a base model id, in display order. */
+const AGY_MODEL_LEVELS: readonly string[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const AGY_LEVEL_SUFFIXES = new Set(AGY_MODEL_LEVELS);
+
+/**
+ * `agy models` prints tab-separated `<id>\t<label>` rows after a banner line.
+ * ACP sessions pick a base model plus a `thought_level`, so `<base>-<level>`
+ * rows collapse into one entry carrying that ladder. Only Gemini is offered:
+ * agy's Claude/GPT rows are account models the ACP transport never serves.
+ */
+export function parseAgyModelList(text: string): CatalogModel[] {
+  const groups = new Map<string, { name: string; levels: string[] }>();
+  for (const line of text.split(/\r?\n/)) {
+    const tab = line.indexOf('\t');
+    if (tab <= 0) continue;
+    const id = line.slice(0, tab).trim(), label = line.slice(tab + 1).trim();
+    if (!id.startsWith('gemini-')) continue;
+    const dash = id.lastIndexOf('-');
+    const suffix = dash > 0 ? id.slice(dash + 1) : '';
+    const level = AGY_LEVEL_SUFFIXES.has(suffix) ? suffix : '';
+    const base = level ? id.slice(0, dash) : id;
+    const group = groups.get(base);
+    if (!group) {
+      // `Gemini 4 Carbon (Medium)` → `Gemini 4 Carbon`; unrelated trailing groups stay.
+      const stripped = /\s*\(([^()]*)\)\s*$/.exec(label);
+      const name = level && stripped && stripped[1].replace(/\s+/g, '').toLowerCase() === level
+        ? label.slice(0, stripped.index).trim() : label;
+      groups.set(base, { name: name || id, levels: level ? [level] : [] });
+    } else if (level) group.levels.push(level);
+    // A base row's label is the authoritative name, whenever it appears.
+    else group.name = label || id;
+  }
+  return [...groups].map(([base, group]) => ({
+    id: base,
+    provider: AGY_MODEL_PROVIDER,
+    name: group.name || base,
+    selector: `${AGY_MODEL_PROVIDER}/${base}`,
+    contextWindow: 0,
+    reasoning: group.levels.length > 0,
+    thinking: group.levels.length ? AGY_MODEL_LEVELS.filter(level => group.levels.includes(level)) : null,
+    pricing: null,
+    free: false,
+  }));
 }
 
 const catalogFileDigests = new Map<string, { stamp: string; digest: string }>();

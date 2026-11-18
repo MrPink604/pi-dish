@@ -168,13 +168,12 @@ export function createNewSession(options: {
   }
   function renderHarnessInputs(): void {
     if (disposed) return;
+    // agy names its sessions itself; every other field (model, thinking) is
+    // the same ACP pick the relay applies before the first prompt.
     const agy = selectedHarness() === 'agy';
     nameInput.disabled = agy;
     nameInput.placeholder = agy ? 'Set automatically after first prompt' : 'New Session';
     if (agy) nameInput.value = '';
-    modelInput.disabled = agy;
-    modelInput.placeholder = agy ? '(session default — switch after start)' : '(default)';
-    if (agy) modelPicker?.hide();
   }
   function renderHarnesses(): void {
     if (disposed) return;
@@ -210,12 +209,6 @@ export function createNewSession(options: {
   function refresh(): void {
     if (!isOpen()) return;
     const endpoint = Object.freeze({ ...host() }), harness = selectedHarness(), directory = cwd(), view = generation;
-    if (harness === 'agy') {
-      models.clear();
-      preferences.render();
-      void config.load(directory);
-      return;
-    }
     const ownsRows = () => view === generation && isOpen() && selectedHarness() === harness && sameDirectoryHost(endpoint, host());
     models.retire(); preferences.render();
     void models.load({ host: endpoint, harnessId: harness, cwd: directory }, () => ownsRows() && cwd() === directory, ownsRows)

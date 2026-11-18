@@ -793,7 +793,7 @@ sending an automatic continuation prompt. See README for operational limits.
 
 A server-owned sampler (60 s, unref'd) reads `/proc/meminfo`; pressure is
 `MemAvailable` below 10% of RAM or swap use above 75%. Each pressured sample
-stops at most one live Pi/OMP session, oldest activity first, then the next
+stops at most one live Pi/OMP/agy session, oldest activity first, then the next
 sample measures again. Cheap row filters (2 h idle, cold prompt cache, no
 turn/ask/compaction, no open SSE stream) precede deep checks: the agent's
 `/proc` tree (supervised services under an OMP launch broker block; eval
@@ -844,11 +844,33 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   `write_file`→`write`) so the existing cards render.
 - **Questions:** `elicitation/create` becomes an `ask` dialog;
   `session/request_permission` becomes a `select` dialog.
-- **Models & quota:** only `gemini-*` model options are offered. Thinking levels
-  come from `agy`'s `thought_level` option. `/api/usage-limits` runs
+- **Models & quota:** `agy` is `modelCatalog: 'command'` with
+  `modelsFormat: 'agy-list'`: `agy models` prints tab-separated
+  `<id>\t<label>` rows, and `parseAgyModelList`
+  (`src/core/harness-feature-commands.ts`) groups `<base>-<level>` variants
+  into one ACP base model (`provider: google-antigravity`, `thinking` = that
+  ladder), keeps suffix-free ids as single entries, and drops Claude/GPT rows.
+  `/api/models?harness=agy` feeds the new-session picker, and
+  `POST /api/sessions/new` validates model and thinking against it (clear
+  400s). `AGY_THINKING_LEVEL_NAMES` (low…xhigh) is only the union gate;
+  `AcpSession.setThinkingLevel` still rejects a level the model's live
+  `thought_level` options don't offer. `/api/usage-limits` runs
   `agy -p /usage --output-format json` (zero-turn CLI builtin) and pairs its
   Gemini buckets with the tier name saved in `~/.pi/dish/agy/tier.json` on ACP
-  session open.
+  session open. Both commands strip ambient `GEMINI_API_KEY`/`GOOGLE_*`.
+- **Import and staleness:** `src/core/agy-import.ts` runs one short-lived
+  `agy acp` per batch, calls `session/list`, and replays every conversation
+  with no mirror, or with a newer `updatedAt` than the mirror's tail, through
+  `session/load` into a fresh mirror. Conversations live in a relay are
+  skipped. The previous mirror and sidecar become `<id>.jsonl.<stamp>.bak` and
+  `<id>.acp.jsonl.<stamp>.bak`, and a failed replay restores them. Imported
+  headers carry `agy.imported:{at,source:'session/load'}` and are lossy.
+  Replay rules: `user_message_chunk` starts a user message; a completed or
+  failed `tool_call` is start plus end; the load response flushes. Runs about
+  15 s after start, every 15 min (`agyImportIntervalMinutes` or
+  `PI_DISH_AGY_IMPORT_INTERVAL_MS`; `0` disables), and on
+  `POST /api/harnesses/agy/import`. `resumeAcpSession` re-imports instead of
+  `session/resume` when `agy` is more than 5 s newer than the mirror.
 - **Never:** read `agy`'s tokens, send `_meta.antigravity.systemPrompt`, or
   report a `clientInfo` other than `pi-dish`.
 - **Relay ownership:** the claim's `pid`/`startTime` are the relay's (the pane
@@ -864,8 +886,16 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   to each new connection and `extension_ui_resolved` emitted on answer.
 - **Capabilities:** the relay advertises exactly `AGY_ACP_CAPABILITIES` in its
   claim and `sessionCapabilities` trusts the claim like any bridge. No
-  follow-up queue, compaction control, rename, tree, export, hibernation or
-  recovery; restart/resume work through the pane.
+  follow-up queue, compaction control, rename, tree or export; restart and
+  resume work through the pane.
+- **Hibernation and recovery:** `agy` is in `HIBERNATION_HARNESSES` and
+  `PROMPT_RECOVERY_HARNESSES`. The relay writes the same recovery observations
+  as the Pi/OMP bridge extensions (activity, run id, relay process identity,
+  mirror checkpoint, shutdown). On shutdown it retires claim and socket,
+  closes `AcpSession` (flushing an open segment to the mirror), and then
+  checkpoints. Stream `error` listeners and a 5 s hard-exit deadline keep a
+  relay from outliving its pane: a killed pane once raised an async `EPIPE`
+  that looped through logging at 100% CPU.
 
 ## tmux spawning (lib/tmux.js)
 

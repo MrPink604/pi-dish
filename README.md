@@ -269,10 +269,13 @@ its tokens. The client identifies itself to `agy` as `pi-dish`.
   …) are sent as prompt text.
 - Questions from `agy`'s `ask_question` tool open the normal ask dialog
   (ACP form elicitation). An unexpected permission request opens a select.
-- The model picker lists only the Gemini models the account offers, and the
-  thinking picker offers `agy`'s levels. Subscription quota windows (`5 hours`
-  and `7 days` on `google-antigravity`) appear in the Usage → Limits view via
-  `agy -p /usage --output-format json` (zero tokens, no token-file reads).
+- New sessions can pick a Gemini base model and its thinking level. The
+  picker is filled from `agy models`, so the per-level variants
+  (`-low`/`-medium`/`-high`/`-xhigh`) appear as one model; Claude and GPT
+  rows are hidden. Live sessions switch model and thinking through ACP.
+- Subscription quota windows (`5 hours` and `7 days` on `google-antigravity`)
+  appear in the Usage → Limits view via `agy -p /usage --output-format json`
+  (zero tokens, no token-file reads).
 - History: pi-dish writes a Pi-format transcript live under
   `~/.pi/dish/agy/sessions/<id>.jsonl`, with the raw ACP frames beside it in
   `<id>.acp.jsonl`. Search, usage and comments read that transcript. `agy`'s
@@ -281,9 +284,19 @@ its tokens. The client identifies itself to `agy` as `pi-dish`.
   removes its registry claim and socket. Resume and restart respawn the relay
   and reopen the conversation with `session/resume`. A turn that is running
   when pi-dish restarts keeps running in the pane; the server rediscovers the
-  session and reconnects to the stream.
-- Not yet supported: importing conversations started in the `agy` TUI,
-  session recovery, and hibernation.
+  session and reconnects to the stream. Memory-pressure hibernation closes
+  idle `agy` relays like idle OMP panes, never mid-turn or with an open
+  question; the next message resumes the relay. Session recovery continues an
+  interrupted `agy` run with the usual recovery prompt.
+- Conversations started in the `agy` TUI appear in pi-dish automatically: an
+  import runs shortly after startup, every 15 minutes, and on
+  `POST /api/harnesses/agy/import`. It replays each new or newer conversation
+  through `session/load` into a fresh transcript, and keeps the previous copy
+  as `.bak`. Replayed history omits some question answers and text, so
+  imported transcripts are marked as imported. Resume uses the same replay
+  when `agy` has turns pi-dish has not seen. To turn the automatic runs off,
+  set `agyImportIntervalMinutes: 0` in `~/.pi/dish/settings.json` or
+  `PI_DISH_AGY_IMPORT_INTERVAL_MS=0`.
 
 Google's terms permit an interactive ACP client like this on a consumer
 subscription. They name agent- or schedule-driven prompts on `oauth-personal`

@@ -8,10 +8,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
  *
  * Covers the wiring contract, not the transport's own units (test/acp-session
  * covers handshake, segmentation and the mirror): harness listing gated on the
- * binary, POST /api/sessions/new into a tmux pane, the bridge registry claim,
- * the SSE stream, a prompt turn, the Pi-format mirror, an ask round trip,
- * close (pane and claim gone), resume, and survival of a dropped server-side
- * bridge connection while a turn is still running.
+ * binary, the `agy models` catalog grouped into ACP base models, model/thinking
+ * validation on POST /api/sessions/new, POST /api/sessions/new into a tmux pane,
+ * the bridge registry claim, the SSE stream, a prompt turn, the Pi-format
+ * mirror, an ask round trip, close (pane and claim gone), resume, and survival
+ * of a dropped server-side bridge connection while a turn is still running.
  *
  * Run with: npm test
  */
@@ -36,7 +37,30 @@ process.env.TMUX_TMPDIR = tmuxDir;
 // Never attach to a resident Prime daemon; agy never looks at this socket.
 process.env.PRIME_AGENT_DAEMON_SOCKET = path.join(tmpHome, 'no-prime-daemon.sock');
 const fixture = path.join(__dirname, 'fixtures', 'fake-agy-acp.js');
-const agyBinary = `${process.execPath} ${fixture}`;
+/** `agy models` rows: per-level Gemini variants, a base-only row, and the Claude/GPT rows ACP never serves. */
+const modelListing = [
+    'Fetching available models...',
+    'gemini-4-carbon-medium\tGemini 4 Carbon (Medium)',
+    'gemini-4-carbon-high\tGemini 4 Carbon (High)',
+    'gemini-4-carbon-low\tGemini 4 Carbon (Low)',
+    'gemini-4-hydrogen-low\tGemini 4 Hydrogen (Low)',
+    'gemini-4-hydrogen-medium\tGemini 4 Hydrogen (Medium)',
+    'gemini-4-hydrogen-high\tGemini 4 Hydrogen (High)',
+    'gemini-4-hydrogen-xhigh\tGemini 4 Hydrogen (XHigh)',
+    'gemini-pro-orchestrator\tOrchestrator (Carbon)',
+    'gemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+    'claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)',
+    'gpt-oss-120b-medium\tGPT-OSS 120B (Medium)',
+].join('\\n');
+/**
+ * One `PI_DISH_AGY_COMMAND`: `models` answers the catalog listing (failing if
+ * ambient provider credentials leak through), every other argv is the ACP
+ * stand-in — so discovery and the relay's child share a single binary.
+ */
+const agyBinary = `sh -c 'if [ "$1" = models ]; then `
+    + '[ -z "$GEMINI_API_KEY$GOOGLE_API_KEY" ] || { echo "ambient provider credentials reached agy models" >&2; exit 1; }; '
+    + `printf "%b\\n" "${modelListing}"; `
+    + `else exec "${process.execPath}" "${fixture}" "$@"; fi' sh`;
 /** `env FAKE_AGY_SCRIPT=<script>` rides the command line into the relay's agy child. */
 const agyCommand = (script) => script ? `env FAKE_AGY_SCRIPT=${script} ${agyBinary}` : agyBinary;
 process.env.PI_DISH_AGY_COMMAND = agyBinary;
@@ -128,6 +152,57 @@ test('/api/harnesses lists Antigravity only when agy resolves', async () => {
     assert.equal(row.available, true);
     assert.equal(row.closeMode, 'owned-pane');
 });
+test('/api/models?harness=agy groups the Gemini listing into models with thinking levels', async () => {
+    const catalog = async () => {
+        const response = await fetch(`${base}/api/models?harness=agy&cwd=${encodeURIComponent(projDir)}`);
+        const body = await response.json();
+        assert.equal(response.status, 200, JSON.stringify(body));
+        return (0, test_types_js_1.records)(body);
+    };
+    const rows = await catalog();
+    assert.deepEqual(rows.map(row => String(row.id)).sort(), ['gemini-3.8-flash', 'gemini-4-carbon', 'gemini-4-hydrogen', 'gemini-pro-orchestrator'], 'one row per ACP base model; the Claude/GPT rows stay hidden');
+    const byId = new Map(rows.map(row => [String(row.id), row]));
+    const carbon = (0, test_types_js_1.record)((0, test_types_js_1.present)(byId.get('gemini-4-carbon'), 'the Carbon base model is listed'));
+    assert.equal(carbon.name, 'Gemini 4 Carbon', 'the level suffix is stripped from the label');
+    assert.equal(carbon.provider, 'google-antigravity');
+    assert.equal(carbon.selector, 'google-antigravity/gemini-4-carbon');
+    assert.equal(carbon.reasoning, true);
+    assert.deepEqual(carbon.thinking, ['low', 'medium', 'high']);
+    const hydrogen = (0, test_types_js_1.record)((0, test_types_js_1.present)(byId.get('gemini-4-hydrogen'), 'the Hydrogen base model is listed'));
+    assert.deepEqual(hydrogen.thinking, ['low', 'medium', 'high', 'xhigh'], 'Hydrogen also offers xhigh');
+    const orchestrator = (0, test_types_js_1.record)((0, test_types_js_1.present)(byId.get('gemini-pro-orchestrator'), 'a suffix-free id stays one entry'));
+    assert.equal(orchestrator.name, 'Orchestrator (Carbon)', 'an unrelated trailing group is not a level');
+    assert.equal(orchestrator.reasoning, false);
+    assert.equal(orchestrator.thinking, null);
+    // `agy` construction keys are what sign the CLI in; they must not reach `agy models`.
+    const savedKey = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = 'ambient-key-that-must-not-reach-agy';
+    try {
+        assert.equal((await catalog()).length, rows.length);
+    }
+    finally {
+        if (savedKey === undefined)
+            delete process.env.GEMINI_API_KEY;
+        else
+            process.env.GEMINI_API_KEY = savedKey;
+    }
+});
+test('agy new-session refuses a model or thinking level the catalog lacks', async () => {
+    const refusals = [{
+            body: { model: 'gemini-9-imaginary' }, error: /Model gemini-9-imaginary is not available from Antigravity/,
+        }, {
+            body: { model: 'gemini-4-carbon', thinking: 'xhigh' }, error: /Thinking level xhigh is not valid for gemini-4-carbon; valid levels: low, medium, high\./,
+        }, {
+            body: { model: 'claude-sonnet-4-6' }, error: /only offers Gemini models/,
+        }, {
+            body: { model: 'openai/gpt-5' }, error: /only offers Gemini models on the google-antigravity provider/,
+        }];
+    for (const refusal of refusals) {
+        const refused = await post('/api/sessions/new', { harness: 'agy', cwd: projDir, ...refusal.body });
+        assert.equal(refused.status, 400, `${JSON.stringify(refusal.body)} → ${JSON.stringify(refused.body)}`);
+        assert.match(String(refused.body.error), refusal.error);
+    }
+});
 test('agy session: relay in a tmux pane, new, streamed turn, mirror read, close, resume', { timeout: 90000 }, async () => {
     const created = await post('/api/sessions/new', { harness: 'agy', cwd: projDir });
     assert.equal(created.status, 200, JSON.stringify(created.body));
@@ -180,6 +255,16 @@ test('agy session: relay in a tmux pane, new, streamed turn, mirror read, close,
     assert.equal(switched.status, 200, JSON.stringify(switched.body));
     assert.equal(readClaim(sessionId).model, 'google-antigravity/gemini-4-argon');
     assert.equal(readClaim(sessionId).thinkingLevel, 'high');
+    // xhigh is part of agy's vocabulary, but ACP only offers it on Hydrogen.
+    const carbonXhigh = await post(sessionPath(sessionId, '/thinking'), { level: 'xhigh' });
+    assert.equal(carbonXhigh.status, 500, JSON.stringify(carbonXhigh.body));
+    assert.match(String(carbonXhigh.body.error), /did not offer thinking level xhigh/);
+    const hydrogen = await post(sessionPath(sessionId, '/model'), { modelId: 'google-antigravity/gemini-4-hydrogen' });
+    assert.equal(hydrogen.status, 200, JSON.stringify(hydrogen.body));
+    const hydrogenXhigh = await post(sessionPath(sessionId, '/thinking'), { level: 'xhigh' });
+    assert.equal(hydrogenXhigh.status, 200, JSON.stringify(hydrogenXhigh.body));
+    assert.equal(hydrogenXhigh.body.level, 'xhigh');
+    assert.equal(readClaim(sessionId).thinkingLevel, 'xhigh');
     const messages = await get(sessionPath(sessionId, '/messages'));
     assert.equal(messages.status, 200, JSON.stringify(messages.body));
     const history = (0, test_types_js_1.records)(messages.body.messages).map(message => (0, test_types_js_1.record)(message));
@@ -331,6 +416,27 @@ test('agy sessions refuse capabilities the relay does not carry', async () => {
     finally {
         const closed = await post(sessionPath(sessionId, '/close'), {});
         assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    }
+});
+test('agy new-session applies a catalog model and thinking level to the relay', { timeout: 90000 }, async () => {
+    const created = await post('/api/sessions/new', {
+        harness: 'agy', cwd: projDir, model: 'google-antigravity/gemini-4-hydrogen', thinking: 'high',
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const sessionId = String((0, test_types_js_1.present)(created.body.id));
+    try {
+        await until(() => fs.existsSync(claimFile(sessionId)));
+        const claim = readClaim(sessionId);
+        assert.equal(claim.model, 'google-antigravity/gemini-4-hydrogen', 'the relay started on the picked model');
+        assert.equal(claim.thinkingLevel, 'high', 'the relay applied the picked thought level');
+        const listed = await get('/api/sessions?active=1');
+        const row = (0, test_types_js_1.record)((0, test_types_js_1.present)((0, test_types_js_1.records)(listed.body.active).map(candidate => (0, test_types_js_1.record)(candidate))
+            .find(candidate => candidate.id === sessionId), 'the new agy route is listed'));
+        assert.equal(row.model, 'google-antigravity/gemini-4-hydrogen');
+        assert.equal(row.thinkingLevel, 'high');
+    }
+    finally {
+        await post(sessionPath(sessionId, '/close'), {});
     }
 });
 test('/api/usage-limits reports Gemini windows with the ACP tier and fails fast when signed out', async () => {

@@ -364,3 +364,21 @@ test('legacy report values survive without broadening literal ambiguity checks',
   assert.deepEqual(s.prompts, []);
   assert.deepEqual(s.control().attempt, attempt);
 });
+
+test('an interrupted agy relay receives one recovery prompt like Pi and OMP', async t => {
+  const s = scenario(t, { mode: 'continue', record: { harnessId: 'agy', activity: 'running', runId: 'run' } });
+  await s.runner.start();
+  assert.equal(s.row().status, 'continued');
+  assert.deepEqual(s.launches, ['session']);
+  assert.deepEqual(s.prompts, [RECOVERY_PROMPT]);
+});
+
+test('a harness without a verified recovery prompt path restores but never prompts', async t => {
+  const s = scenario(t, { mode: 'continue', record: { harnessId: 'prime', activity: 'running', runId: 'run' } });
+  await s.runner.start();
+  assert.deepEqual(s.launches, ['session'], 'the transcript is restored for review');
+  assert.equal(s.row().status, 'needs-review');
+  assert.match(String(s.row().reason), /no verified recovery prompt path/);
+  assert.deepEqual(s.prompts, []);
+});
+

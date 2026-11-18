@@ -17,6 +17,13 @@ export declare function runHarnessModelCatalog(descriptor: HarnessDescriptor, { 
     cwd?: unknown;
     force?: boolean;
 }): Promise<unknown>;
+/**
+ * `agy models` prints tab-separated `<id>\t<label>` rows after a banner line.
+ * ACP sessions pick a base model plus a `thought_level`, so `<base>-<level>`
+ * rows collapse into one entry carrying that ladder. Only Gemini is offered:
+ * agy's Claude/GPT rows are account models the ACP transport never serves.
+ */
+export declare function parseAgyModelList(text: string): CatalogModel[];
 export declare function runHarnessModelCommand(descriptor: HarnessDescriptor, options?: {
     cwd?: unknown;
 }): Promise<CatalogModel[]>;

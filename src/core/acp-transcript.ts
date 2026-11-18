@@ -4,8 +4,9 @@
  * The ACP stream is chunks and tool calls, not messages; `AcpSession` segments
  * it into Pi messages and hands the finished records here. Every entry is
  * appended synchronously so a reader that reacts to the emitted `message_end`
- * already sees the transcript. `session/load` replay is not used: this writer
- * covers the live stream only.
+ * already sees the transcript. The live stream is the primary source;
+ * `session/load` replay is used only to import conversations that started
+ * outside pi-dish (the mirror header then records the lossy import).
  *
  * Beside the mirror (`.jsonl`) the raw frames of both directions are kept in a
  * `.acp.jsonl` sidecar as `{t, dir, msg}`, the same shape as the captures in
@@ -15,7 +16,7 @@
 import fs = require('fs');
 import path = require('path');
 import crypto = require('crypto');
-import type { ProtocolRecord } from './wire-protocol';
+import { asRecord, type ProtocolRecord } from './wire-protocol';
 import { record as isRecord, finite, text } from './helper-values';
 
 /** Model provider string for every agy session (also a zero-rate plan provider). */
@@ -512,17 +513,25 @@ export function permissionResult(response: ProtocolRecord, options: readonly Acp
     : { outcome: { outcome: 'cancelled' } };
 }
 
+/** `session/load` rebuilds a lossy history; the header says so for the UI/docs. */
+export interface AcpMirrorImport {
+  at: number;
+  source: 'session/load';
+}
+
 export interface AcpTranscriptOptions {
   file: string;
   sessionId: string;
   cwd: string;
   agentVersion: string | null;
+  imported?: AcpMirrorImport | null;
 }
 
 export interface AcpMirrorHeader {
   id: string;
   cwd: string | null;
   agentVersion: string | null;
+  imported: AcpMirrorImport | null;
 }
 
 const TAIL_BYTES = 1024 * 1024;
@@ -541,15 +550,68 @@ function lastEntryIdIn(content: string): string | null {
 }
 
 /** Mirrors reach tens of MB; read the tail unless one entry exceeds the window. */
-function lastEntryId(file: string): string | null {
+function tailSlice(file: string): { text: string; complete: boolean } {
   const stats = fs.statSync(file);
   const length = Math.min(stats.size, TAIL_BYTES);
   const buffer = Buffer.alloc(length);
   const fd = fs.openSync(file, 'r');
   try { fs.readSync(fd, buffer, 0, length, stats.size - length); } finally { fs.closeSync(fd); }
-  const found = lastEntryIdIn(buffer.toString('utf8'));
-  if (found || length === stats.size) return found;
-  return lastEntryIdIn(fs.readFileSync(file, 'utf8'));
+  return { text: buffer.toString('utf8'), complete: length === stats.size };
+}
+
+function lastTimestampIn(content: string): number | null {
+  const lines = content.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const entry: unknown = JSON.parse(line);
+      if (!isRecord(entry) || entry.type === 'session') continue;
+      if (typeof entry.timestamp === 'number' && Number.isFinite(entry.timestamp)) return entry.timestamp;
+      if (typeof entry.timestamp === 'string') {
+        const at = Date.parse(entry.timestamp);
+        if (Number.isFinite(at)) return at;
+      }
+    } catch { /* A torn tail line cannot date the mirror. */ }
+  }
+  return null;
+}
+
+/** Timestamp of the mirror's newest entry; null when it has none (or no file). */
+export function readAcpMirrorLastTimestamp(file: string): number | null {
+  try {
+    const tail = tailSlice(file);
+    const found = lastTimestampIn(tail.text);
+    if (found !== null || tail.complete) return found;
+    return lastTimestampIn(fs.readFileSync(file, 'utf8'));
+  } catch { return null; }
+}
+
+export interface AcpMirrorBackup {
+  mirror: string | null;
+  sidecar: string | null;
+}
+
+/** Rename a mirror and sidecar aside before re-import; `.bak` never matches discovery. */
+export function backupAcpMirror(file: string): AcpMirrorBackup {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const sidecar = file.replace(/\.jsonl$/, '.acp.jsonl');
+  const move = (from: string): string | null => {
+    const to = `${from}.${stamp}.bak`;
+    try { fs.renameSync(from, to); return to; } catch { return null; }
+  };
+  return { mirror: move(file), sidecar: move(sidecar) };
+}
+
+/** Put a backup back after a failed replay so resume can fall back to `session/resume`. */
+export function restoreAcpMirror(file: string, backup: AcpMirrorBackup): void {
+  const sidecar = file.replace(/\.jsonl$/, '.acp.jsonl');
+  const restore = (from: string | null, to: string): void => {
+    if (!from) return;
+    try { fs.rmSync(to, { force: true }); fs.renameSync(from, to); } catch { /* Best effort. */ }
+  };
+  restore(backup.mirror, file);
+  restore(backup.sidecar, sidecar);
 }
 
 /** Read the mirror header (id, cwd, agy version); throws when the file is not a mirror. */
@@ -565,10 +627,15 @@ export function readAcpMirrorHeader(file: string): AcpMirrorHeader {
     throw new Error(`Not an Antigravity session mirror: ${file}`);
   }
   const agy = isRecord(header.agy) ? header.agy : {};
+  const rawImport = isRecord(agy.imported) ? agy.imported : null;
+  const imported = rawImport && typeof rawImport.source === 'string'
+    ? { at: finite(rawImport.at) ? rawImport.at : Date.parse(text(rawImport.at)) || 0, source: rawImport.source as AcpMirrorImport['source'] }
+    : null;
   return {
     id: header.id,
     cwd: nonempty(header.cwd) ? header.cwd : null,
     agentVersion: nonempty(agy.version) ? agy.version : null,
+    imported,
   };
 }
 
@@ -577,6 +644,8 @@ export class AcpTranscript {
   readonly file: string;
   readonly sidecarFile: string;
   private parentId: string | null = null;
+  private replayUserText: string | null = null;
+  private replayAssistant: ProtocolRecord | null = null;
 
   constructor(options: AcpTranscriptOptions) {
     this.file = options.file;
@@ -587,7 +656,11 @@ export class AcpTranscript {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
     if (size > 0) {
-      this.parentId = lastEntryId(options.file);
+      const tail = tailSlice(options.file);
+      this.parentId = lastEntryIdIn(tail.text);
+      if (!this.parentId && !tail.complete) {
+        this.parentId = lastEntryIdIn(fs.readFileSync(options.file, 'utf8'));
+      }
       return;
     }
     const header = {
@@ -596,7 +669,12 @@ export class AcpTranscript {
       id: options.sessionId,
       cwd: options.cwd,
       timestamp: new Date().toISOString(),
-      agy: { version: options.agentVersion },
+      agy: {
+        version: options.agentVersion,
+        ...(options.imported
+          ? { imported: { at: new Date(options.imported.at).toISOString(), source: options.imported.source } }
+          : {}),
+      },
     };
     fs.writeFileSync(options.file, JSON.stringify(header) + '\n');
   }
@@ -656,6 +734,94 @@ export class AcpTranscript {
 
   appendSessionInfo(name: string): void {
     this.entry('session_info', { name });
+  }
+
+  /**
+   * `session/load` replay: user chunks carry whole prompts, assistant text and
+   * completed tool calls arrive without updates or prompt results. A user chunk
+   * closes the previous message; a completed/failed call is start plus end; the
+   * load response flushes whatever is still open (`flushReplay`).
+   */
+  applyReplayUpdate(raw: unknown): void {
+    const update = isRecord(raw) ? raw : {};
+    const kind = text(update.sessionUpdate);
+    if (kind === 'user_message_chunk') {
+      const content = asRecord(update.content);
+      if (content.type !== 'text') return;
+      this.flushReplay();
+      this.replayUserText = text(content.text);
+      return;
+    }
+    if (kind === 'agent_message_chunk' || kind === 'agent_thought_chunk') {
+      const content = asRecord(update.content);
+      if (content.type !== 'text') return;
+      this.flushReplayUser();
+      this.ensureReplayAssistant();
+      const message = this.replayAssistant!;
+      const blocks = message.content as ProtocolRecord[];
+      const type = kind === 'agent_thought_chunk' ? 'thinking' : 'text';
+      const last = blocks[blocks.length - 1];
+      if (isRecord(last) && last.type === type) {
+        const key = type === 'text' ? 'text' : 'thinking';
+        last[key] = text(last[key]) + text(content.text);
+      } else {
+        blocks.push(type === 'text'
+          ? { type: 'text', text: text(content.text) }
+          : { type: 'thinking', thinking: text(content.text) });
+      }
+      return;
+    }
+    if (kind !== 'tool_call') return;
+    const status = text(update.status);
+    const call = normalizeAcpTool(update);
+    const toolCallId = text(update.toolCallId) || `call-replay-${crypto.randomUUID()}`;
+    this.flushReplayUser();
+    this.ensureReplayAssistant();
+    (this.replayAssistant!.content as ProtocolRecord[]).push({
+      type: 'toolCall', id: toolCallId, name: call.toolName, arguments: call.args,
+    });
+    this.flushReplayAssistant('toolUse');
+    if (status !== 'completed' && status !== 'failed') return;
+    const result = acpToolResult(update, call);
+    this.appendToolResult({
+      toolCallId,
+      toolName: call.toolName,
+      content: result.text,
+      isError: status === 'failed',
+      ...(result.details ? { details: result.details } : {}),
+    });
+  }
+
+  /** The `session/load` response ends the replay; write the open message. */
+  flushReplay(): void {
+    this.flushReplayAssistant('stop');
+    this.flushReplayUser();
+  }
+
+  private ensureReplayAssistant(): void {
+    if (this.replayAssistant) return;
+    const message: ProtocolRecord = {
+      role: 'assistant',
+      content: [],
+      timestamp: Date.now(),
+      provider: AGY_PROVIDER,
+    };
+    this.replayAssistant = message;
+  }
+
+  private flushReplayAssistant(stopReason: string): void {
+    const message = this.replayAssistant;
+    if (!message) return;
+    this.replayAssistant = null;
+    message.stopReason = stopReason;
+    this.appendAssistant(message);
+  }
+
+  private flushReplayUser(): void {
+    const content = this.replayUserText;
+    if (content === null) return;
+    this.replayUserText = null;
+    this.appendUser(content);
   }
 
   /** Raw frame sidecar: `{t, dir, msg}` exactly as the capture recorder wrote it. */

@@ -78,6 +78,8 @@ export interface RecoveryRuntimeOptions extends RecoveryPresentationOptions {
 const MAX_SESSIONS = 5000;
 export const RECOVERY_PROMPT = 'pi-dish recovery: this session was interrupted while work was in progress. Before continuing, inspect the transcript, working files, and any external state affected by prior tools. A tool or external action may have completed without its result being recorded. Do not blindly repeat commands, writes, deployments, purchases, or other side effects. Reconcile what actually happened, explain any uncertainty, and ask for confirmation where safe continuation cannot be established. Continue the existing task only after this inspection; this message is not an instruction to replay the last prompt or retry a tool.';
 const HIBERNATED_REASON = 'Hibernated under memory pressure; a message resumes it.';
+/** Harnesses whose lifecycle observations and bridge prompt path are verified. */
+const PROMPT_RECOVERY_HARNESSES: Record<string, true> = { pi: true, omp: true, agy: true };
 
 export function recoveryMode(value: unknown): RecoveryMode {
   return value === 'off' || value === 'restore' || value === 'continue' ? value : 'off';
@@ -236,8 +238,8 @@ export function createRecoveryRunner(deps: RecoveryRunnerOptions): RecoveryRunne
       if (!explicit && recoveryMode(getMode()) === 'continue' && record.activity !== 'idle') {
         safety = record.activity !== 'running' || !record.runId
           ? 'The interrupted activity cannot be classified safely.'
-          : !matched ? 'The transcript changed after the last durable observation; no prompt was sent.'
-            : !['pi', 'omp'].includes(record.harnessId) ? 'This harness has no verified recovery prompt path.'
+            : !matched ? 'The transcript changed after the last durable observation; no prompt was sent.'
+            : !Object.hasOwn(PROMPT_RECOVERY_HARNESSES, record.harnessId) ? 'This harness has no verified recovery prompt path.'
               : await continuationSafety(record.sessionFile);
       }
       // Durable intent precedes even the launch. A crash after this point is
@@ -338,7 +340,7 @@ export function createRecoveryRuntime({ operations, ownership, getMode, now, log
       return result;
     },
     continueSession: async (record, session, message) => {
-      if (!['pi', 'omp'].includes(record.harnessId) || !liveSessionSupports(session, 'prompt')) {
+      if (!Object.hasOwn(PROMPT_RECOVERY_HARNESSES, record.harnessId) || !liveSessionSupports(session, 'prompt')) {
         throw new SessionOperationError(409, 'The live harness does not support verified recovery prompts.');
       }
       if (session.turnInProgress || session.compacting) throw new SessionOperationError(409, 'The session started working or compacting before recovery delivery; no prompt was sent.');

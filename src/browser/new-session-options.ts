@@ -43,9 +43,15 @@ export function createNewSessionPreferences(options: {
     let disabled = selected?.reasoning === false;
     let note = disabled ? 'The selected model does not support configurable thinking' : '';
     if (harness === 'agy') {
-      levels = AGY_THINKING_LEVEL_NAMES;
+      // The agy catalog lists ACP base models with their `thought_level`
+      // ladder; without a model the union is what any session may pick.
+      const catalogLevels = [...new Set(options.rows().flatMap(row => row.thinking || []))];
+      levels = selected?.thinking?.length ? selected.thinking
+        : catalogLevels.length ? catalogLevels : AGY_THINKING_LEVEL_NAMES;
       disabled = false;
-      note = `Valid for Antigravity: ${levels.map(thinkingLabel).join(', ')}`;
+      note = selected
+        ? `Valid for this model: ${levels.map(thinkingLabel).join(', ')}`
+        : `Valid for Antigravity: ${levels.map(thinkingLabel).join(', ')}`;
     } else if (harness === 'omp') {
       levels = selected?.thinking || [];
       disabled = !selected || levels.length === 0;

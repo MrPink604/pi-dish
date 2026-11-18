@@ -16,6 +16,21 @@ import { TransportSession } from './transport-session';
 import type { NativeSessionId, PromptOptions } from './contracts';
 /** Versions the fake agent and the captures were verified against. */
 export declare const AGY_VERIFIED_VERSIONS: readonly string[];
+/**
+ * agy persists a conversation slightly after pi-dish closes the mirror entry;
+ * a comparison this loose still catches TUI turns, which are minutes apart.
+ */
+export declare const AGY_STALE_TOLERANCE_MS = 5000;
+/** One conversation from `session/list`; the same shape in every workspace. */
+export interface AgyConversation {
+    sessionId: NativeSessionId;
+    cwd: string | null;
+    title: string | null;
+    /** Epoch ms; agy may send an ISO string or seconds. */
+    updatedAt: number | null;
+}
+/** Defensive read of `session/list`; unknown rows drop instead of breaking an import run. */
+export declare function parseAgyConversationList(value: unknown): AgyConversation[];
 export declare function agyMirrorRoot(): string;
 /** Persist the tier name (`Google AI Ultra`, `Google AI Pro`) observed on ACP session open. */
 export declare function recordAgyPlanTier(planType: string | null): void;
@@ -43,6 +58,9 @@ export declare class AcpSession extends TransportSession {
     private pending;
     private nextRequestId;
     private transcript;
+    /** True while `session/load` replay frames are being written to a fresh mirror. */
+    private replaying;
+    private initialized;
     private configOptions;
     private modes;
     private currentMode;
@@ -114,12 +132,34 @@ export declare class AcpSession extends TransportSession {
     private _refreshStateFromConfig;
     private _adoptSession;
     private _warnUnverifiedVersion;
-    private _initialize;
+    _initialize(): Promise<void>;
     private _setConfigOption;
     /** New session: spawn → initialize → `session/new` → mirror header → initial options. */
     _start(opts: AcpLaunchOptions): Promise<void>;
-    /** Resume: initialize → `session/resume` (no history replay) → keep the existing mirror. */
+    /**
+     * Rebuild a conversation's mirror from `session/load` replay. The previous
+     * mirror and sidecar are kept as `.bak`; a failed replay restores them.
+     */
+    private _replayInto;
+    /** `session/list` newer than the mirror's tail means turns happened outside pi-dish. */
+    private _agyHasNewerTurns;
+    /**
+     * Resume: compare `session/list` with the mirror. A newer conversation is
+     * rebuilt with `session/load` so the live session continues with complete
+     * history; otherwise `session/resume` keeps the existing mirror and replays
+     * nothing.
+     */
     _startResume(sessionId: string, sessionFile: string, opts: Partial<AcpLaunchOptions>): Promise<void>;
+    /** Every conversation agy knows about, across workspaces (`session/list`). */
+    listConversations(timeout?: number): Promise<AgyConversation[]>;
+    /**
+     * Import one conversation started outside pi-dish into a fresh mirror. The
+     * caller owns the short-lived child (see `createAcpImportAgent`).
+     */
+    importConversation(conversation: AgyConversation, sessionFile: string): Promise<{
+        file: string;
+        backup: string | null;
+    }>;
     private _bareModelId;
     private _promptContent;
     private _sendPrompt;
@@ -146,6 +186,11 @@ export declare class AcpSession extends TransportSession {
     kill(): void;
 }
 export declare function createAcpSession(opts: AcpLaunchOptions): Promise<AcpSession>;
+/**
+ * A short-lived ACP child for `session/list` + `session/load` import work. It
+ * is not registered as a live session; the caller closes it when the batch ends.
+ */
+export declare function createAcpImportAgent(opts: AcpLaunchOptions): Promise<AcpSession>;
 /** Resume one mirror; concurrent resumes of the same file share a single child. */
 export declare function resumeAcpSession(sessionFile: string, opts?: Partial<AcpLaunchOptions>): Promise<AcpSession>;
 export declare function getAcpSession(nativeId: unknown): AcpSession | undefined;

@@ -16,6 +16,7 @@
  *   tool      - read_file + run_command completed tool calls
  *   elicit    - ask_question + elicitation/create form
  *   permission - an unexpected session/request_permission
+ *   crash     - partial turn + completed tool, then the agent dies; a resumed process replies
  *   version   - agentInfo.version outside the verified set
  */
 import { StringDecoder } from 'node:string_decoder';
@@ -85,6 +86,16 @@ const USAGE = {
   totalTokens: 130,
 };
 
+/** `FAKE_AGY_LIST` drives `session/list`; import tests seed external conversations. */
+const CONVERSATIONS: Record<string, unknown>[] = (() => {
+  try {
+    const parsed: unknown = JSON.parse(process.env.FAKE_AGY_LIST || '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object' && !Array.isArray(row))
+      : [];
+  } catch { return []; }
+})();
+
 type Frame = Record<string, unknown>;
 
 function write(frame: Frame): void {
@@ -104,6 +115,7 @@ let cwd = process.cwd();
 let model = 'gemini-4-carbon';
 let thinking = 'medium';
 let mode = 'default';
+let resumed = false;
 
 function configOptions(): Frame[] {
   return [{
@@ -131,6 +143,8 @@ function configOptions(): Frame[] {
       { value: 'low', name: 'Low' },
       { value: 'medium', name: 'Medium' },
       { value: 'high', name: 'High' },
+      // Hydrogen offers xhigh; Carbon does not, so the per-model ladder is testable.
+      ...(model.includes('hydrogen') ? [{ value: 'xhigh', name: 'XHigh' }] : []),
     ],
   }, {
     id: 'mode',
@@ -221,6 +235,34 @@ function toolUpdate(id: string, name: string, status: string, extra: Frame = {})
   sessionUpdate({ sessionUpdate: 'tool_call_update', toolCallId: id, name, status, ...extra });
 }
 
+/** `session/load` replay shaped like docs/agy-acp-capture/load.jsonl. */
+function replayHistory(): void {
+  const readme = `${cwd}/README.md`;
+  const calc = `${cwd}/calc.py`;
+  sessionUpdate({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Read README.md and tell me in one sentence what it says.' } });
+  sessionUpdate({
+    sessionUpdate: 'tool_call', toolCallId: 'call-load-read', name: 'read_file',
+    args: { Path: readme }, status: 'completed', kind: 'read', title: 'File README.md',
+    locations: [{ path: readme }], rawInput: { Path: readme },
+  });
+  sessionUpdate({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'I am thinking about the loaded history.' } });
+  sessionUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'README.md contains a single heading.' } });
+  sessionUpdate({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Fix add() in calc.py.' } });
+  sessionUpdate({
+    sessionUpdate: 'tool_call', toolCallId: 'call-load-edit', name: 'edit_file',
+    args: { Path: calc, Target: 'return a - b', Replacement: 'return a + b' },
+    status: 'completed', kind: 'edit', title: 'File calc.py', locations: [{ path: calc }],
+    rawInput: { Path: calc, Target: 'return a - b', Replacement: 'return a + b' },
+    content: [{
+      type: 'diff', path: calc,
+      oldText: 'def add(a, b):\n    return a - b\n',
+      newText: 'def add(a, b):\n    return a + b\n',
+    }],
+  });
+  sessionUpdate({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Fixed add().' } });
+  usageUpdate(2400);
+}
+
 function requestElicitation(id: number, toolCallId: string): void {
   pendingClientRequests.set(String(id), { kind: 'elicitation', toolCallId, promptId: lastPromptId });
   write({
@@ -295,6 +337,23 @@ function handlePrompt(id: number, params: Frame): void {
     case 'slow':
       textChunk('Working on it.');
       return;
+    case 'crash': {
+      if (resumed) {
+        setTimeout(() => {
+          textChunk('Fake Antigravity reply.');
+          usageUpdate(130);
+          finishPrompt(id, 'end_turn');
+        }, 40);
+        return;
+      }
+      setTimeout(() => {
+        textChunk('Partial before crash. ');
+        toolCall('call-crash-1', 'read_file', { Path: `${cwd}/README.md` }, 'File README.md', 'read');
+        toolUpdate('call-crash-1', 'read_file', 'completed', { title: 'File README.md', kind: 'read' });
+        setTimeout(() => process.exit(1), 30);
+      }, 10);
+      return;
+    }
     case 'delayed':
       // Two chunks far apart, so a test can drop and re-open the bridge socket
       // mid-turn; the relay must keep streaming and finish the mirror.
@@ -499,7 +558,20 @@ function handleRequest(id: unknown, method: string, params: Frame): void {
       usageUpdate(0);
       return;
     }
+    case 'session/list': {
+      respond(id, { sessions: CONVERSATIONS });
+      return;
+    }
+    case 'session/load': {
+      if (typeof params.sessionId === 'string' && params.sessionId) sessionId = params.sessionId;
+      if (typeof params.cwd === 'string' && params.cwd) cwd = params.cwd;
+      const row = CONVERSATIONS.find(entry => entry.sessionId === sessionId);
+      replayHistory();
+      respond(id, sessionState(sessionId, row && typeof row.title === 'string' ? row.title : 'Loaded Fake Session'));
+      return;
+    }
     case 'session/resume': {
+      resumed = true;
       if (typeof params.sessionId === 'string' && params.sessionId) sessionId = params.sessionId;
       respond(id, sessionState(sessionId, 'Resumed Fake Session'));
       announceCommands();
@@ -512,6 +584,8 @@ function handleRequest(id: unknown, method: string, params: Frame): void {
       if (configId === 'model') model = value;
       else if (configId === 'thought_level') thinking = value;
       else if (configId === 'mode') mode = value;
+      // Like agy 1.5.10: the refreshed options (Hydrogen adds xhigh) arrive only in
+      // the result, never as a config_option_update notification.
       respond(id, { configOptions: configOptions() });
       return;
     }

@@ -124,6 +124,11 @@ export interface HarnessDescriptor {
     command: string;
     rpcFallback: boolean;
     modelCatalog: 'pi-sdk' | 'command' | null;
+    /**
+     * Output shape of `argv.models`: absent means JSON. `'agy-list'` is agy's
+     * human listing (`<id>\t<label>` lines behind a "Fetching…" banner).
+     */
+    modelsFormat?: 'agy-list';
     closeMode: 'logical' | 'owned-pane' | 'owned-agent' | 'client-only' | 'unsupported';
     nestedSubsessions?: boolean;
     sessionExitCustomType?: string;

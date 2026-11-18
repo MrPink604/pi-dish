@@ -35,8 +35,9 @@ export const OMP_THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'hig
 export const PRIME_THINKING_LEVEL_NAMES = [...THINKING_LEVEL_NAMES, 'max'];
 
 // agy 1.5.x `thought_level` config option; level names come from the option,
-// not the ACP docs (which list Extra/Max that 1.5.10 does not offer).
-export const AGY_THINKING_LEVEL_NAMES = ['low', 'medium', 'high'];
+// not the ACP docs (which list Extra/Max that 1.5.10 does not offer). Newer
+// Hydrogen models add xhigh, and ACP still rejects a level the model lacks.
+export const AGY_THINKING_LEVEL_NAMES = ['low', 'medium', 'high', 'xhigh'];
 
 // Cheap gate before a session's harness is known; thinkingLevelNamesFor decides.
 export const ALL_THINKING_LEVEL_NAMES = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'auto'];

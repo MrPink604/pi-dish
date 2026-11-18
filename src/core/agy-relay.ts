@@ -20,6 +20,7 @@ import net = require('net');
 import path = require('path');
 import crypto = require('crypto');
 import { once } from 'events';
+import { setTimeout as delay } from 'timers/promises';
 import { createAcpSession, resumeAcpSession, type AcpSession } from './acp-session';
 import { AGY_PROVIDER } from './acp-transcript';
 import { AGY_ACP_CAPABILITIES } from './session-capabilities';
@@ -29,6 +30,8 @@ import { processIdentity } from './process-identity';
 import { removeExtensionUIDialog } from './extension-ui-state';
 import { asRecord, type ProtocolRecord } from './wire-protocol';
 import { record as isRecord } from './helper-values';
+import { createSessionObserver } from './session-recovery';
+import type { RecoverySnapshot } from './session-recovery';
 import { errorMessage } from './http-boundary';
 
 const REGISTRY_DIR = path.join(dishDir(), 'sessions');
@@ -52,6 +55,11 @@ interface RelayOptions {
   model?: string;
   thinking?: string;
 }
+
+// A closed pane (close, hibernation, user kill) breaks the pty; logging must
+// never turn that into an uncaught stream error that keeps the relay alive.
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
 
 function log(line: string): void {
   try { process.stdout.write(`[agy-relay] ${line}\n`); } catch {}
@@ -164,6 +172,26 @@ async function main(): Promise<void> {
     return id ? `${provider}/${id}` : null;
   }
 
+  /** Set by the last assistant `message_end`; the observer's agent_end needs it. */
+  let lastAssistantMessage: ProtocolRecord | null = null;
+
+  function recoverySnapshot(): RecoverySnapshot | null {
+    if (!session.sessionFile || !session.cwd) return null;
+    const state = asRecord(session.state);
+    return {
+      harnessId: 'agy', nativeSessionId: session.id, sessionFile: session.sessionFile, cwd: session.cwd,
+      name: typeof state.name === 'string' && state.name ? state.name : null,
+      model: modelSnapshot(),
+      thinkingLevel: typeof state.thinkingLevel === 'string' && state.thinkingLevel ? state.thinkingLevel : null,
+      pid: process.pid, startTime: relayProcess!.startTime, instanceId: relayInstanceId,
+    };
+  }
+
+  // The relay owns the agy process, so it publishes the same lifecycle
+  // observations the Pi/OMP bridge extensions write inside their hosts.
+  const recovery = createSessionObserver({ snapshot: recoverySnapshot });
+  recovery.initialize();
+
   /** Registry/hello claim: identity fields are immutable for this relay. */
   function claim(): ProtocolRecord {
     const state = asRecord(session.state);
@@ -210,6 +238,9 @@ async function main(): Promise<void> {
       fs.mkdirSync(REGISTRY_DIR, { recursive: true });
       fs.writeFileSync(path.join(REGISTRY_DIR, `${session.id}.json`),
         JSON.stringify({ ...claim(), updatedAt: new Date().toISOString() }, null, 2));
+      // The claim mirrors the lifecycle fields; name/model/thinking changes are
+      // metadata and are recorded with the same observation.
+      recovery.event('metadata');
     } catch (error) {
       log(`claim write failed: ${errorMessage(error)}`);
     }
@@ -396,9 +427,11 @@ async function main(): Promise<void> {
     } catch {}
   }
 
-  async function shutdown(reason: string, code: number): Promise<void> {
+  async function shutdown(reason: string, code: number, agentExited = false): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
+    // A stuck ACP close must not keep a dead pane's relay alive forever.
+    setTimeout(() => { process.exit(code); }, 5000).unref();
     log(`stopping: ${reason}`);
     for (const client of clients) {
       try { client.destroy(); } catch {}
@@ -410,21 +443,53 @@ async function main(): Promise<void> {
     // restart's replacement relay cannot inherit either path.
     unlinkOwnedClaim();
     unlinkOwnedSocket();
+    const wasAlive = session.alive;
+    // `close()` makes agy exit, and its exit handler appends the open assistant
+    // segment to the mirror: partial text survives a stop or a relay fault.
     try { await session.close(); } catch {}
+    if (agentExited) {
+      // Re-checkpoint the transcript the agent left behind; the interrupted
+      // turn keeps its identity, so recovery may continue from that state.
+      recovery.event('metadata');
+      await delay(0);
+    } else if (wasAlive) {
+      // A signal stopped the whole session, not the agent alone: review it.
+      recovery.event('shutdown');
+    }
+    recovery.dispose();
     process.exit(code);
   }
 
   for (const event of BRIDGE_EVENTS) {
     session.on(event, (data) => {
       broadcast({ type: 'event', event, data });
+      if (event === 'message_end') {
+        const message = asRecord(data).message;
+        if (isRecord(message) && message.role === 'assistant') lastAssistantMessage = message;
+        recovery.event('message_end', data);
+      } else if (event === 'agent_end') {
+        // Pi/OMP hosts hand agent_end the finished messages; agy has no such
+        // payload, but the last assistant message carries its stop reason.
+        recovery.event('agent_end', { messages: lastAssistantMessage ? [lastAssistantMessage] : [] });
+        lastAssistantMessage = null;
+      } else {
+        recovery.event(event, data);
+      }
       if (Object.hasOwn(CLAIM_BOUNDARIES, event)) writeClaim();
     });
   }
   session.on('exit', (data) => {
-    void shutdown(`agy exited with code ${String(asRecord(data).code)}`, 1);
+    void shutdown(`agy exited with code ${String(asRecord(data).code)}`, 1, true);
   });
   for (const signal of ['SIGTERM', 'SIGHUP', 'SIGINT'] as const) {
     process.on(signal, () => { void shutdown(signal, 0); });
+  }
+  // A relay fault must still flush the open segment and retire its claim.
+  for (const failure of ['uncaughtException', 'unhandledRejection'] as const) {
+    process.on(failure, (error: unknown) => {
+      log(`${failure}: ${errorMessage(error)}`);
+      void shutdown(failure, 1);
+    });
   }
 
   socketPath = socketPathFor(session.id);

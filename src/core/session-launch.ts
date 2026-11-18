@@ -12,7 +12,7 @@ import type { PrimeAgentSummary, PrimeDaemon } from './prime-daemon';
 import { ensurePrivateRoot, privateRootFor } from './private-sessions';
 import { LifecycleInterruption, proveBridgeRegistryClaim, registryIdentity, routeSessionId, sameProcessIdentity } from './session-ownership';
 import type { BeforeLifecycleAction } from './session-ownership';
-import { AGY_THINKING_LEVEL_NAMES, formatModelRef, parseModelId } from './helper-models';
+import { formatModelRef, parseModelId } from './helper-models';
 import type { ModelRef } from './helper-types';
 import { dishDir } from './dish-store';
 import { record } from './helper-values';
@@ -627,15 +627,40 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
   }
 
   async function validateHarnessPilotSelection(descriptor: HarnessDescriptor, { model, thinking, cwd }: PilotValidationInput): Promise<void> {
-    // ACP config options cannot be validated without a live child, so reject
-    // the shapes agy never offers before spawning one.
+    // ACP rejects an unknown model or thought level only after the relay pane
+    // has spawned, so validate the pick against `agy models` first.
     if (descriptor.id === 'agy') {
-      if (thinking && !AGY_THINKING_LEVEL_NAMES.includes(String(thinking))) {
-        throw new LaunchError(`Thinking level ${String(thinking)} is not valid for ${descriptor.label}; valid levels: ${AGY_THINKING_LEVEL_NAMES.join(', ')}.`, 400);
-      }
-      const parsed = model ? parseModelId(String(model)) : null;
+      const requested = typeof model === 'string' ? model.trim() : '';
+      const level = typeof thinking === 'string' ? thinking.trim() : '';
+      if (!requested && !level) return;
+      const parsed = requested ? parseModelId(requested) : null;
       if (parsed?.provider && parsed.provider !== 'google-antigravity') {
         throw new LaunchError(`${descriptor.label} only offers Gemini models on the google-antigravity provider.`, 400);
+      }
+      if (parsed?.id && !parsed.id.startsWith('gemini-')) {
+        throw new LaunchError(`${descriptor.label} only offers Gemini models; ${requested} is not one.`, 400);
+      }
+      let models: unknown;
+      try {
+        models = await observations.runHarnessModelCommand(descriptor, { cwd });
+      } catch (error) {
+        throw new LaunchError(`Could not read the ${descriptor.label} model catalog: ${errorMessage(error)}`, 400);
+      }
+      const rows: PilotModel[] = Array.isArray(models) ? models.filter(pilotModel) : [];
+      const selected = parsed
+        ? rows.find(entry => entry.id === parsed.id || entry.selector === requested || `${entry.provider}/${entry.id}` === requested)
+        : undefined;
+      if (parsed && !selected) {
+        throw new LaunchError(`Model ${requested} is not available from ${descriptor.label}; choose one from the Antigravity catalog.`, 400);
+      }
+      // Without a model the pick applies to the session's default model, so
+      // the valid levels are the union the catalog reports.
+      const levels = selected?.thinking?.length
+        ? selected.thinking
+        : [...new Set(rows.flatMap(entry => entry.thinking ?? []))];
+      if (level && !levels.includes(level)) {
+        const valid = levels.length ? levels.join(', ') : 'none';
+        throw new LaunchError(`Thinking level ${level} is not valid for ${requested || `${descriptor.label} models`}; valid levels: ${valid}.`, 400);
       }
       return;
     }

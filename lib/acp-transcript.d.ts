@@ -1,5 +1,5 @@
 // Generated from src/core/acp-transcript.ts; edit that source and run npm run build:core.
-import type { ProtocolRecord } from './wire-protocol';
+import { type ProtocolRecord } from './wire-protocol';
 /** Model provider string for every agy session (also a zero-rate plan provider). */
 export declare const AGY_PROVIDER = "google-antigravity";
 /** ACP `PromptResponse.usage` → Pi's usage counters. */
@@ -84,17 +84,34 @@ export declare function permissionDialog(id: string, params: unknown): {
 } | null;
 /** The select response → ACP's `{outcome:{outcome:'selected'|'cancelled'}}`. */
 export declare function permissionResult(response: ProtocolRecord, options: readonly AcpPermissionOption[]): ProtocolRecord;
+/** `session/load` rebuilds a lossy history; the header says so for the UI/docs. */
+export interface AcpMirrorImport {
+    at: number;
+    source: 'session/load';
+}
 export interface AcpTranscriptOptions {
     file: string;
     sessionId: string;
     cwd: string;
     agentVersion: string | null;
+    imported?: AcpMirrorImport | null;
 }
 export interface AcpMirrorHeader {
     id: string;
     cwd: string | null;
     agentVersion: string | null;
+    imported: AcpMirrorImport | null;
 }
+/** Timestamp of the mirror's newest entry; null when it has none (or no file). */
+export declare function readAcpMirrorLastTimestamp(file: string): number | null;
+export interface AcpMirrorBackup {
+    mirror: string | null;
+    sidecar: string | null;
+}
+/** Rename a mirror and sidecar aside before re-import; `.bak` never matches discovery. */
+export declare function backupAcpMirror(file: string): AcpMirrorBackup;
+/** Put a backup back after a failed replay so resume can fall back to `session/resume`. */
+export declare function restoreAcpMirror(file: string, backup: AcpMirrorBackup): void;
 /** Read the mirror header (id, cwd, agy version); throws when the file is not a mirror. */
 export declare function readAcpMirrorHeader(file: string): AcpMirrorHeader;
 /** Linear parent chain; agy has no branches, so every entry extends the last. */
@@ -102,6 +119,8 @@ export declare class AcpTranscript {
     readonly file: string;
     readonly sidecarFile: string;
     private parentId;
+    private replayUserText;
+    private replayAssistant;
     constructor(options: AcpTranscriptOptions);
     /** Append one entry; `timestamp` is the Pi entry stamp, not the message start. */
     private entry;
@@ -119,6 +138,18 @@ export declare class AcpTranscript {
     appendModelChange(modelId: string): void;
     appendThinkingLevel(thinkingLevel: string): void;
     appendSessionInfo(name: string): void;
+    /**
+     * `session/load` replay: user chunks carry whole prompts, assistant text and
+     * completed tool calls arrive without updates or prompt results. A user chunk
+     * closes the previous message; a completed/failed call is start plus end; the
+     * load response flushes whatever is still open (`flushReplay`).
+     */
+    applyReplayUpdate(raw: unknown): void;
+    /** The `session/load` response ends the replay; write the open message. */
+    flushReplay(): void;
+    private ensureReplayAssistant;
+    private flushReplayAssistant;
+    private flushReplayUser;
     /** Raw frame sidecar: `{t, dir, msg}` exactly as the capture recorder wrote it. */
     appendRaw(dir: 'in' | 'out', msg: unknown): void;
 }
