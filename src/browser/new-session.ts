@@ -112,7 +112,7 @@ export function createNewSession(options: {
     request, roleSummary: formatModelRoleSummary,
   });
   const directories = createDirectoryCatalog({ host, request });
-  const targets = createSpawnTargets({ host, supportsTmux: () => supports('tmux'), request,
+  const targets = createSpawnTargets({ host, supportsTmux: () => supports('tmux') && selectedHarness() !== 'agy', request,
     readSaved: () => storage.getItem('pi-dish-spawn-target'), save: key => storage.setItem('pi-dish-spawn-target', key),
     changed: () => targetPicker.sync(),
   });
@@ -166,18 +166,31 @@ export function createNewSession(options: {
     void directories.load(); void targets.load(); void harnesses.load();
     renderWorkspaces(); initTree(); changeHarness(selectedHarness());
   }
+  function renderHarnessInputs(): void {
+    if (disposed) return;
+    const agy = selectedHarness() === 'agy';
+    nameInput.disabled = agy;
+    nameInput.placeholder = agy ? 'Set automatically after first prompt' : 'New Session';
+    if (agy) nameInput.value = '';
+    modelInput.disabled = agy;
+    modelInput.placeholder = agy ? '(session default — switch after start)' : '(default)';
+    if (agy) modelPicker?.hide();
+  }
   function renderHarnesses(): void {
     if (disposed) return;
     const available = harnesses.rows().filter(row => row.available !== false);
     harnessSelect.innerHTML = available.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.label || row.id)}</option>`).join('');
     if (!available.some(row => row.id === harnessId)) harnessId = available[0]?.id || 'pi';
     harnessSelect.value = harnessId;
+    renderHarnessInputs();
     renderPrivate();
   }
   function changeHarness(value: string): void {
     if (disposed) return;
     harnessId = value || 'pi'; storage.setItem(NEW_SESSION_HARNESS_KEY, harnessId);
-    preferences.restore(harnessId); models.clear(); preferences.render(); renderPrivate(); refresh();
+    preferences.restore(harnessId); models.clear(); renderHarnessInputs(); preferences.render(); renderPrivate();
+    void targets.load();
+    refresh();
   }
   // Only harnesses with an alternate session root outside the backup set can
   // take a private session; the toggle is hidden (and cleared) everywhere else,
@@ -197,6 +210,12 @@ export function createNewSession(options: {
   function refresh(): void {
     if (!isOpen()) return;
     const endpoint = Object.freeze({ ...host() }), harness = selectedHarness(), directory = cwd(), view = generation;
+    if (harness === 'agy') {
+      models.clear();
+      preferences.render();
+      void config.load(directory);
+      return;
+    }
     const ownsRows = () => view === generation && isOpen() && selectedHarness() === harness && sameDirectoryHost(endpoint, host());
     models.retire(); preferences.render();
     void models.load({ host: endpoint, harnessId: harness, cwd: directory }, () => ownsRows() && cwd() === directory, ownsRows)
@@ -300,10 +319,12 @@ export function createNewSession(options: {
   }
   async function spawn(): Promise<void> {
     if (disposed || spawnButton.disabled) return;
-    const view = generation, ownsView = captureView();
-    let target;
-    try { target = selectedTarget(); } catch (caught) { error(errorMessage(caught)); return; }
-    const name = nameInput.value.trim(), directory = cwd();
+    const view = generation, ownsView = captureView(), agy = selectedHarness() === 'agy';
+    let target: SpawnTarget | null = null;
+    if (!agy) {
+      try { target = selectedTarget(); } catch (caught) { error(errorMessage(caught)); return; }
+    }
+    const name = agy ? '' : nameInput.value.trim(), directory = cwd();
     error(''); spawnButton.disabled = true; spawnButton.textContent = 'Starting…';
     try {
       if (directory) storage.setItem('pi-dish-cwd', directory);

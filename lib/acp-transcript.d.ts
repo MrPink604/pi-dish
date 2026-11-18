@@ -79,7 +79,7 @@ export declare class AcpTranscript {
     constructor(options: AcpTranscriptOptions);
     /** Append one entry; `timestamp` is the Pi entry stamp, not the message start. */
     private entry;
-    appendUser(content: string, timestamp?: number): void;
+    appendUser(content: string | readonly ProtocolRecord[], timestamp?: number): void;
     /** `message` is the finished assistant snapshot emitted on `message_end`. */
     appendAssistant(message: ProtocolRecord): void;
     appendToolResult(data: {

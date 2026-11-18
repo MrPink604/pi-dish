@@ -94,12 +94,122 @@ export function normalizeAcpTool(update: unknown): AcpToolCall {
   }
 }
 
-/** Whole-file diff blocks arrive as `{type:'diff', path, oldText, newText}`. */
+const DIFF_CONTEXT = 3;
+const DIFF_LINE_LIMIT = 200;
+
+interface DiffEdit {
+  oldStart: number;
+  oldEnd: number;
+  newStart: number;
+  newEnd: number;
+}
+
+function splitDiffLines(value: string): string[] {
+  if (!value) return [];
+  return value.replace(/\n$/, '').split('\n');
+}
+
+function uniqueLineMap(lines: readonly string[], start: number, end: number): Map<string, number> {
+  const seen = new Map<string, number>();
+  for (let i = start; i < end; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    seen.set(line, seen.has(line) ? -1 : i);
+  }
+  return seen;
+}
+
+function patienceEdits(oldLines: readonly string[], newLines: readonly string[],
+  start: number, oldEnd: number, newEnd: number): DiffEdit[] {
+  const oldUnique = uniqueLineMap(oldLines, start, oldEnd);
+  const newUnique = uniqueLineMap(newLines, start, newEnd);
+  const pairs: { oldIdx: number; newIdx: number }[] = [];
+  for (const [line, oldIdx] of oldUnique) {
+    if (oldIdx < 0) continue;
+    const newIdx = newUnique.get(line);
+    if (newIdx !== undefined && newIdx >= 0) pairs.push({ oldIdx, newIdx });
+  }
+  const tails: number[] = [];
+  const prev = new Array<number>(pairs.length).fill(-1);
+  for (let i = 0; i < pairs.length; i++) {
+    let lo = 0, hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (pairs[tails[mid]].newIdx < pairs[i].newIdx) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0) prev[i] = tails[lo - 1];
+    tails[lo] = i;
+  }
+  const anchors: { oldIdx: number; newIdx: number }[] = [];
+  for (let cur = tails.length ? tails[tails.length - 1] : -1; cur >= 0; cur = prev[cur]) anchors.push(pairs[cur]);
+  anchors.reverse();
+
+  const edits: DiffEdit[] = [];
+  let prevOld = start, prevNew = start;
+  for (const anchor of anchors) {
+    if (anchor.oldIdx < prevOld || anchor.newIdx < prevNew) continue;
+    let oi = anchor.oldIdx, ni = anchor.newIdx;
+    while (oi > prevOld && ni > prevNew && oldLines[oi - 1] === newLines[ni - 1]) { oi--; ni--; }
+    let len = 1;
+    while (oi + len < oldEnd && ni + len < newEnd && oldLines[oi + len] === newLines[ni + len]) len++;
+    if (prevOld < oi || prevNew < ni) edits.push({ oldStart: prevOld, oldEnd: oi, newStart: prevNew, newEnd: ni });
+    prevOld = oi + len;
+    prevNew = ni + len;
+  }
+  if (prevOld < oldEnd || prevNew < newEnd) {
+    edits.push({ oldStart: prevOld, oldEnd, newStart: prevNew, newEnd });
+  }
+  return edits;
+}
+
+/**
+ * Whole-file diff blocks arrive as `{type:'diff', path, oldText, newText}`; split
+ * unchanged spans into bounded unified diff hunks so single- and multi-region
+ * edits on large files never copy the whole file into the JSONL mirror.
+ */
 function diffText(block: ProtocolRecord): string {
   const filePath = text(block.path);
-  const before = text(block.oldText);
-  const after = text(block.newText);
-  return `${filePath ? filePath + '\n' : ''}--- before\n${before}\n+++ after\n${after}`;
+  const oldLines = splitDiffLines(text(block.oldText));
+  const newLines = splitDiffLines(text(block.newText));
+  let prefix = 0;
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < oldLines.length - prefix && suffix < newLines.length - prefix
+    && oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]) {
+    suffix++;
+  }
+  const head = filePath ? `${filePath}\n` : '';
+  if (prefix === oldLines.length && prefix === newLines.length) return `${head}(no changes)`;
+  const edits = patienceEdits(oldLines, newLines, prefix, oldLines.length - suffix, newLines.length - suffix);
+  const groups: DiffEdit[][] = [];
+  for (const edit of edits) {
+    const current = groups[groups.length - 1];
+    if (current && edit.oldStart - current[current.length - 1].oldEnd <= DIFF_CONTEXT * 2) current.push(edit);
+    else groups.push([edit]);
+  }
+  const rendered: string[] = [];
+  for (const group of groups) {
+    const first = group[0], last = group[group.length - 1];
+    const hunkOldStart = Math.max(0, first.oldStart - DIFF_CONTEXT);
+    const hunkOldEnd = Math.min(oldLines.length, last.oldEnd + DIFF_CONTEXT);
+    const hunkNewStart = Math.max(0, first.newStart - DIFF_CONTEXT);
+    const hunkNewEnd = Math.min(newLines.length, last.newEnd + DIFF_CONTEXT);
+    const oldCount = hunkOldEnd - hunkOldStart;
+    const newCount = hunkNewEnd - hunkNewStart;
+    rendered.push(`@@ -${oldCount ? hunkOldStart + 1 : 0},${oldCount} +${newCount ? hunkNewStart + 1 : 0},${newCount} @@`);
+    let cursorOld = hunkOldStart;
+    for (const edit of group) {
+      while (cursorOld < edit.oldStart) rendered.push(` ${oldLines[cursorOld++]}`);
+      for (let i = edit.oldStart; i < edit.oldEnd; i++) rendered.push(`-${oldLines[i]}`);
+      for (let j = edit.newStart; j < edit.newEnd; j++) rendered.push(`+${newLines[j]}`);
+      cursorOld = edit.oldEnd;
+    }
+    while (cursorOld < hunkOldEnd) rendered.push(` ${oldLines[cursorOld++]}`);
+  }
+  const omitted = rendered.length - DIFF_LINE_LIMIT;
+  const body = omitted > 0 ? [...rendered.slice(0, DIFF_LINE_LIMIT), `... (${omitted} more diff lines)`] : rendered;
+  return `${head}${body.join('\n')}`;
 }
 
 export interface AcpToolResult {
@@ -134,6 +244,10 @@ export function acpToolResult(update: unknown, call: AcpToolCall): AcpToolResult
         ...(finite(exitCode) ? { exitCode } : {}),
       },
     };
+  }
+  if (!body && call.nativeName === 'read_file' && value.status === 'completed') {
+    const readPath = text(call.args.path);
+    return { text: readPath ? `${readPath}\n(content not reported by agy)` : '(content not reported by agy)' };
   }
   return { text: body };
 }
@@ -401,8 +515,9 @@ export class AcpTranscript {
     return entry;
   }
 
-  appendUser(content: string, timestamp = Date.now()): void {
-    this.entry('message', { message: { role: 'user', content: [{ type: 'text', text: content }], timestamp } });
+  appendUser(content: string | readonly ProtocolRecord[], timestamp = Date.now()): void {
+    const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
+    this.entry('message', { message: { role: 'user', content: blocks, timestamp } });
   }
 
   /** `message` is the finished assistant snapshot emitted on `message_end`. */

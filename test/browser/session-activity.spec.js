@@ -151,3 +151,34 @@ fixtures_js_1.test.describe('side chat composer routing', () => {
     await page.evaluate(() => window.lateAsk);
     await (0, fixtures_js_1.expect)(page.locator('#sideChat')).toBeHidden();
 });
+fixtures_js_1.test.describe('steer-only composer routing', () => {
+    fixtures_js_1.test.use({ liveSessions: true });
+    (0, fixtures_js_1.test)('steer-only sessions hide Follow-up and route Enter during a turn to steer', async ({ page, fleet }) => {
+        await fleet.select(fleet.self);
+        await page.evaluate(() => {
+            fixtureApp.features.messageStreamController.stop();
+            window.fixtureSessionListPatch(fixtureCurrentSession().id, {
+                harnessId: 'agy',
+                capabilities: { prompt: true, steer: true, followUp: false, abort: true },
+            });
+            fixtureApp.features.sessionActivity.setTurn(true);
+        });
+        await (0, fixtures_js_1.expect)(page.locator('#btnSteer')).toBeVisible();
+        await (0, fixtures_js_1.expect)(page.locator('#btnFollowUp')).toBeHidden();
+        await (0, fixtures_js_1.expect)(page.locator('#btnSend')).toBeHidden();
+        const paths = await page.evaluate(async () => {
+            const recorded = [];
+            fixtureApp.features.apiTransport.request = (_host, path) => {
+                recorded.push(path);
+                return Promise.resolve(new Response(JSON.stringify({ success: true, result: { ok: true } })));
+            };
+            const input = fixtureInput(document.getElementById('promptInput'), '#promptInput');
+            input.value = 'steer this turn';
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+            await new Promise(resolve => setTimeout(resolve, 20));
+            return recorded;
+        });
+        (0, fixtures_js_1.expect)(paths).toHaveLength(1);
+        (0, fixtures_js_1.expect)(paths[0]).toMatch(/\/steer$/);
+    });
+});

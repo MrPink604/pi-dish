@@ -88,10 +88,28 @@ function packageVersion(): string {
   return version;
 }
 
-function logFileFor(): string {
+const MAX_AGY_LOG_FILES = 50;
+
+function pruneLogFiles(dir: string): void {
+  try {
+    const entries = fs.readdirSync(dir).filter(name => name.endsWith('.log'));
+    if (entries.length <= MAX_AGY_LOG_FILES) return;
+    const dated = entries.flatMap((name) => {
+      const full = path.join(dir, name);
+      try { return [{ full, mtimeMs: fs.statSync(full).mtimeMs }]; } catch { return []; }
+    }).sort((a, b) => a.mtimeMs - b.mtimeMs);
+    for (const entry of dated.slice(0, Math.max(0, dated.length - MAX_AGY_LOG_FILES))) {
+      try { fs.unlinkSync(entry.full); } catch {}
+    }
+  } catch {}
+}
+
+function logFileFor(sessionId?: string): string {
   const dir = path.join(dishDir(), 'agy', 'logs');
   fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `${crypto.randomUUID()}.log`);
+  pruneLogFiles(dir);
+  const stem = sessionId && validSessionId(sessionId) ? sessionId : crypto.randomUUID();
+  return path.join(dir, `${stem}.log`);
 }
 
 /** -32000 is generic; only this agent message means the host has no usable sign-in. */
@@ -106,7 +124,7 @@ function authInstruction(error: unknown): unknown {
  * `PI_DISH_AGY_COMMAND`/descriptor argv name the binary; the ACP argv is ours
  * unless the configured command already carries it (as tests do).
  */
-function launchAgy(opts: { command?: string; args?: string[]; env?: NodeJS.ProcessEnv }): { argv: string[]; env: NodeJS.ProcessEnv } {
+function launchAgy(opts: { command?: string; args?: string[]; env?: NodeJS.ProcessEnv; sessionId?: string }): { argv: string[]; env: NodeJS.ProcessEnv } {
   let argv: string[];
   let launchEnv: Record<string, string | undefined> = {};
   if (opts.command) {
@@ -123,7 +141,7 @@ function launchAgy(opts: { command?: string; args?: string[]; env?: NodeJS.Proce
       launchEnv = parsed.env;
     }
   }
-  if (!opts.command && !argv.includes('acp')) argv.push(...ACP_ARGS, '--log-file', logFileFor());
+  if (!opts.command && !argv.includes('acp')) argv.push(...ACP_ARGS, '--log-file', logFileFor(opts.sessionId));
   const env: NodeJS.ProcessEnv = { ...process.env, ...launchEnv, ...opts.env };
   for (const key of STRIPPED_ENV) delete env[key];
   return { argv, env };
@@ -242,6 +260,8 @@ export class AcpSession extends TransportSession {
       for (const waiter of this.promptResponses.values()) waiter.reject(error);
       this.promptResponses.clear();
       this.inbound.clear();
+      this.toolCalls.clear();
+      this.askQuestions.clear();
       this.emitEvent('exit', { code });
       this.emitEvent('close', {});
       if (acpSessions.get(this.id) === this) acpSessions.delete(this.id);
@@ -487,6 +507,12 @@ export class AcpSession extends TransportSession {
   }
 
   private _closeSegment(stopReason: string, usage: ProtocolRecord | null, errorMessage: string | null): void {
+    // A turn that ends right after a tool call, cancels early, or fails/refuses
+    // before streaming any chunk has no open segment; open a shell so usage,
+    // abort state and errors reach the mirror and SSE.
+    if (!this.segment && (errorMessage || usage || stopReason === 'aborted' || stopReason === 'error')) {
+      this._ensureSegment();
+    }
     const message = this.segment;
     if (!message) return;
     this.segment = null;
@@ -534,6 +560,7 @@ export class AcpSession extends TransportSession {
     if (status === 'completed' || status === 'failed') {
       const isError = status === 'failed';
       this.toolCalls.delete(toolCallId);
+      this.askQuestions.delete(toolCallId);
       this.transcript?.appendToolResult({
         toolCallId,
         toolName: tracked.call.toolName,
@@ -741,11 +768,14 @@ export class AcpSession extends TransportSession {
   }
 
   private _promptContent(message: string, opts: PromptOptions): ProtocolRecord[] {
-    const content: ProtocolRecord[] = [{ type: 'text', text: message }];
+    const images: ProtocolRecord[] = [];
     for (const image of opts.images ?? []) {
       if (!isRecord(image) || typeof image.data !== 'string' || !image.data) continue;
-      content.push({ type: 'image', data: image.data, mimeType: text(image.mimeType) || 'image/png' });
+      images.push({ type: 'image', data: image.data, mimeType: text(image.mimeType) || 'image/png' });
     }
+    const content: ProtocolRecord[] = [];
+    if (message || !images.length) content.push({ type: 'text', text: message });
+    content.push(...images);
     return content;
   }
 
@@ -764,7 +794,8 @@ export class AcpSession extends TransportSession {
       this.promptResponses.delete(id);
       return Promise.reject(error);
     }
-    this.transcript?.appendUser(message, Date.now());
+    const timestamp = Date.now();
+    this.transcript?.appendUser(content, timestamp);
     if (!this.turnInProgress) {
       this.turnInProgress = true;
       this.emitEvent('agent_start', { type: 'agent_start' });
@@ -772,7 +803,7 @@ export class AcpSession extends TransportSession {
     }
     this.emitEvent('message_end', {
       type: 'message_end',
-      message: { role: 'user', content, timestamp: Date.now() },
+      message: { role: 'user', content, timestamp },
     });
     this.newestPromptId = id;
     this.lastActivityAt = new Date();
@@ -918,7 +949,7 @@ function registerAcpSession(session: AcpSession): void {
   });
 }
 
-function spawnAcp(cwd: string, opts: { command?: string; args?: string[]; env?: NodeJS.ProcessEnv }): ChildProcessWithoutNullStreams {
+function spawnAcp(cwd: string, opts: { command?: string; args?: string[]; env?: NodeJS.ProcessEnv; sessionId?: string }): ChildProcessWithoutNullStreams {
   const { argv, env } = launchAgy(opts);
   return spawn(argv[0], argv.slice(1), { cwd, stdio: ['pipe', 'pipe', 'pipe'], env });
 }
@@ -941,7 +972,7 @@ async function _resumeAcpSession(sessionFile: string, opts: Partial<AcpLaunchOpt
   const live = acpSessions.get(header.id as NativeSessionId);
   if (live?.alive) return live;
   const cwd = opts.cwd || header.cwd || process.cwd();
-  const session = new AcpSession(spawnAcp(cwd, opts), cwd);
+  const session = new AcpSession(spawnAcp(cwd, { ...opts, sessionId: header.id }), cwd);
   try {
     await session._startResume(header.id, sessionFile, opts);
     return session;

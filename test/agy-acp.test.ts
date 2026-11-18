@@ -146,6 +146,7 @@ test('agy session: new, streamed turn, mirror read, close, resume', { timeout: 6
 
   const reopened = await get(sessionPath(sessionId, '/stats'));
   assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
+  assert.equal(reopened.body.thinkingLevel, 'medium');
   const runtime = record(reopened.body.runtime);
   assert.equal(runtime.kind, 'rpc');
   assert.equal(typeof runtime.pid, 'number');

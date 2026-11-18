@@ -478,11 +478,11 @@ search, usage, comments, export, shares) reads Pi-format JSONL through
 
 Owned children die when pi-dish restarts, as RPC sessions do today (no spawn
 record; `closeResources` does not adopt them). Phase 1 accepts this. After a
-restart a session shows as inactive, and the next human prompt respawns
-`agy acp` and runs `session/resume`. A turn running during a pi-dish update is
-lost. A later phase can add a small detached relay that owns `agy`'s stdio
-behind a Unix socket (the bridge-socket pattern) so turns survive updates.
-Hibernation must skip `agy` sessions mid-turn.
+restart a session shows as inactive, and resuming it (`POST /api/sessions/:id/resume`)
+respawns `agy acp` and runs `session/resume` against the mirror's native session id.
+A turn running during a pi-dish update is lost. A later phase can add a small
+detached relay that owns `agy`'s stdio behind a Unix socket (the bridge-socket
+pattern) so turns survive updates. Hibernation skips `agy` sessions altogether.
 
 ### Prompt sources
 
@@ -522,8 +522,8 @@ restart.
 | Phase | Scope | Size | Main uncertainty |
 |---|---|---|---|
 | 0 | Dropped by owner (2026-11-17): native transcript only | — | — |
-| 1 | `AcpSession` transport, descriptor, live new/prompt/steer/abort/questions, mirror writer with raw sidecar, tool normalisation, fake ACP agent fixture for `npm test` | L | Assistant segmentation and steer handover, against the captured frames |
-| 2 | `session/list` import and staleness re-import, resume after restart, recovery, model/thinking/mode pickers, commands | M | Replay loss on import; unobserved multi-select elicitation schema |
+| 1 | `AcpSession` transport, descriptor, live new/resume/close/restart, prompt/steer/abort/questions, model/thinking/mode config options, commands, mirror writer with raw sidecar, tool normalisation, fake ACP agent fixture for `npm test` | L | Assistant segmentation and steer handover, against the captured frames |
+| 2 | `session/list` import and staleness re-import, recovery | M | Replay loss on import; unobserved multi-select elicitation schema |
 | 3 | Detached relay so turns survive pi-dish updates | M | Ownership record and relay authentication |
 
 Event shapes for the fake-agent fixture come from the signed-in captures

@@ -1687,6 +1687,19 @@ body.sidebar-open {
   line-height: 1;
 }
 
+.message-role.assistant.gemini {
+  display: inline-flex;
+  align-items: center;
+  font-family: inherit;
+  font-style: normal;
+}
+
+.message-role.assistant.gemini .gemini-spark {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
 /* Turn rule: a hairline running from the turn marker (❯ / π) to the
    timestamp, so every turn boundary reads as a section break. flex `order`
    puts it between the badges and the time (a ::after would otherwise land
@@ -3693,6 +3706,11 @@ pre.tool-code code.hljs {
 
   .message-role {
     font-size: 13px;
+  }
+
+  .message-role.assistant.gemini .gemini-spark {
+    width: 12px;
+    height: 12px;
   }
 
   .message-content {
@@ -6760,6 +6778,11 @@ body.standalone-file-page {
 .harness-badge-pi {
   border-color: color-mix(in srgb, var(--cyan) 45%, transparent);
   color: color-mix(in srgb, var(--cyan) 55%, var(--text));
+}
+
+.harness-badge-agy {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: color-mix(in srgb, var(--accent) 55%, var(--text));
 }
 
 .session-item .harness-badge-icon-fallback {

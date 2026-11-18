@@ -121,3 +121,22 @@ async function setup(page) {
     await page.locator('#nsModelInput').blur();
     await (0, fixtures_js_1.expect)(page.locator('#nsModelInput')).toHaveValue('Beta');
 });
+(0, fixtures_js_1.test)('Antigravity disables pre-spawn naming, model lookup and tmux targets while offering its thinking levels', async ({ page, fleet }) => {
+    let modelsRequested = 0;
+    await page.route('**/api/harnesses', (route) => route.fulfill({ json: { harnesses: [
+                { id: 'pi', label: 'Pi', available: true }, { id: 'agy', label: 'Antigravity', available: true },
+            ] } }));
+    await page.route('**/api/tmux/targets', (route) => route.fulfill({ json: {
+            available: true, servers: [{ name: 'default', socket: '/tmp/tmux', sessions: [{ name: 'work' }] }],
+        } }));
+    await page.route('**/api/models*', (route) => { modelsRequested++; return route.fulfill({ status: 501, json: { error: 'no catalog' } }); });
+    await page.evaluate(() => { localStorage.setItem('pi-dish-new-harness', 'agy'); fixtureApp.features.newSessionController.open({ cwd: '/proj' }); });
+    await (0, fixtures_js_1.expect)(page.locator('#nsHarnessSelect')).toHaveValue('agy');
+    await (0, fixtures_js_1.expect)(page.locator('#newSessionName')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#nsModelInput')).toBeDisabled();
+    await (0, fixtures_js_1.expect)(page.locator('#newSessionTargetWrap')).toBeHidden();
+    const levels = await page.locator('#nsThinkingSelect option').evaluateAll(options => options.map(option => option.value));
+    (0, fixtures_js_1.expect)(levels).toEqual(['', 'low', 'medium', 'high']);
+    (0, fixtures_js_1.expect)(modelsRequested).toBe(0);
+    void fleet;
+});

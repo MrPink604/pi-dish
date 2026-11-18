@@ -19,6 +19,7 @@ fs.mkdirSync(workDir, { recursive: true });
 fs.writeFileSync(path.join(workDir, 'README.md'), '# scratch\n');
 const FIXTURE = path.join(__dirname, 'fixtures', 'fake-agy-acp.js');
 const acp = require('../lib/acp-session.js');
+const acpTranscript = require('../lib/acp-transcript.js');
 const { asRecord } = require('../lib/wire-protocol.js');
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 function launch(script, extra = {}) {
@@ -300,4 +301,90 @@ test('resumes a mirror without replaying or rewriting its header', async (t) => 
     assert.equal(entries.filter(entry => entry.type === 'session').length, 1, 'the header is written once');
     assert.equal(entries.filter(entry => asRecord(entry.message).role === 'user').length, 2);
     assert.equal(entries.filter(entry => asRecord(entry.message).role === 'assistant').length, 2);
+});
+test('surfaces prompt RPC errors and refusals even when no chunks streamed', async (t) => {
+    const errored = await launch('prompt-error');
+    cleanup(t, errored);
+    const errorEvents = capture(errored);
+    await errored.prompt('trigger quota error');
+    await until(() => errorEvents.some(event => event.event === 'turn_end'));
+    const errorAssistant = messages(errorEvents, 'assistant')[0];
+    assert.equal(errorAssistant.stopReason, 'error');
+    assert.equal(errorAssistant.errorMessage, 'Quota exhausted');
+    const persistedError = mirrorEntries(errored.sessionFile)
+        .flatMap(entry => asRecord(entry.message).role === 'assistant' ? [asRecord(entry.message)] : [])[0];
+    assert.equal(persistedError.errorMessage, 'Quota exhausted');
+    const refused = await launch('refusal');
+    cleanup(t, refused);
+    const refusalEvents = capture(refused);
+    await refused.prompt('trigger refusal');
+    await until(() => refusalEvents.some(event => event.event === 'turn_end'));
+    const refusalAssistant = messages(refusalEvents, 'assistant')[0];
+    assert.equal(refusalAssistant.stopReason, 'error');
+    assert.equal(refusalAssistant.errorMessage, 'Antigravity refused this request.');
+    assert.equal(asRecord(refusalAssistant.usage).totalTokens, 130);
+});
+test('preserves usage on tool-only turns and trims whole-file diffs into hunks', async (t) => {
+    const session = await launch('tool-only');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('edit big file');
+    await until(() => events.some(event => event.event === 'turn_end'));
+    const assistants = messages(events, 'assistant');
+    assert.equal(assistants.length, 2, 'toolUse segment plus trailing usage shell');
+    assert.equal(assistants[0].stopReason, 'toolUse');
+    assert.equal(assistants[1].stopReason, 'stop');
+    assert.deepEqual(assistants[1].content, []);
+    assert.equal(asRecord(assistants[1].usage).totalTokens, 130);
+    const entries = mirrorEntries(session.sessionFile);
+    const editResult = entries.flatMap(entry => {
+        const message = asRecord(entry.message);
+        return message.role === 'toolResult' && message.toolName === 'edit' ? [message] : [];
+    })[0];
+    const diff = String(blockAt(editResult.content).text ?? '');
+    assert.match(diff, /@@ -198,7 \+198,7 @@/);
+    assert.match(diff, /-line_200 = 200/);
+    assert.match(diff, /\+line_200 = "edited"/);
+    assert.ok(diff.split('\n').length < 20, `whole-file diff was not trimmed (${diff.split('\n').length} lines)`);
+});
+test('persists attached images in user mirror entries without empty text blocks', async (t) => {
+    const session = await launch('default');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('', { images: [{ type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' }] });
+    await until(() => events.some(event => event.event === 'turn_end'));
+    const entries = mirrorEntries(session.sessionFile);
+    const user = entries.flatMap(entry => asRecord(entry.message).role === 'user' ? [asRecord(entry.message)] : [])[0];
+    const content = Array.isArray(user.content) ? user.content.map(asRecord) : [];
+    assert.equal(content.length, 1, 'image-only prompt omits an empty text block');
+    assert.deepEqual(content[0], { type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' });
+});
+test('formats multi-region diffs, caps giant writes, and fills read_file placeholders', () => {
+    const base = Array.from({ length: 1000 }, (_, i) => `rule_${i} { color: red; }`);
+    const multi = [...base];
+    multi.splice(20, 1, 'rule_20 { color: blue; }', 'rule_20_extra { display: block; }');
+    multi.splice(801, 1, 'rule_800 { color: green; }');
+    const editCall = acpTranscript.normalizeAcpTool({ name: 'edit_file', args: { Path: '/proj/style.css' } });
+    const multiDiff = acpTranscript.acpToolResult({
+        status: 'completed',
+        content: [{ type: 'diff', path: '/proj/style.css', oldText: base.join('\n') + '\n', newText: multi.join('\n') + '\n' }],
+    }, editCall).text;
+    const hunks = multiDiff.split('\n').filter(line => line.startsWith('@@ '));
+    assert.equal(hunks.length, 2, 'far-apart edits split into two compact hunks');
+    assert.match(multiDiff, /-rule_20 \{ color: red; \}/);
+    assert.match(multiDiff, /\+rule_20_extra \{ display: block; \}/);
+    assert.match(multiDiff, /-rule_800 \{ color: red; \}/);
+    assert.match(multiDiff, /\+rule_800 \{ color: green; \}/);
+    assert.ok(multiDiff.split('\n').length < 30, `multi-region diff was not trimmed (${multiDiff.split('\n').length} lines)`);
+    const writeCall = acpTranscript.normalizeAcpTool({ name: 'write_file', args: { Path: '/proj/huge.txt' } });
+    const huge = Array.from({ length: 320 }, (_, i) => `added_${i}`).join('\n') + '\n';
+    const cappedDiff = acpTranscript.acpToolResult({
+        status: 'completed',
+        content: [{ type: 'diff', path: '/proj/huge.txt', oldText: '', newText: huge }],
+    }, writeCall).text;
+    assert.match(cappedDiff, /\.\.\. \(121 more diff lines\)$/);
+    assert.equal(cappedDiff.split('\n').length, 202, 'path line + 200 diff lines + omission trailer');
+    const readCall = acpTranscript.normalizeAcpTool({ name: 'read_file', args: { Path: '/proj/README.md' } });
+    assert.equal(acpTranscript.acpToolResult({ status: 'in_progress' }, readCall).text, '', 'running reads keep empty partial text');
+    assert.equal(acpTranscript.acpToolResult({ status: 'completed' }, readCall).text, '/proj/README.md\n(content not reported by agy)');
 });

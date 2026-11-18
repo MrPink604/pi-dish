@@ -135,6 +135,7 @@ test('agy session: new, streamed turn, mirror read, close, resume', { timeout: 6
     assert.equal(resumed.body.alreadyActive, undefined, 'a resumed mirror spawns a live child');
     const reopened = await get(sessionPath(sessionId, '/stats'));
     assert.equal(reopened.status, 200, JSON.stringify(reopened.body));
+    assert.equal(reopened.body.thinkingLevel, 'medium');
     const runtime = (0, test_types_js_1.record)(reopened.body.runtime);
     assert.equal(runtime.kind, 'rpc');
     assert.equal(typeof runtime.pid, 'number');

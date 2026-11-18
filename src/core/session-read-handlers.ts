@@ -336,6 +336,9 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
         userMessages, assistantMessages, toolCalls, toolResults, compactions, genMs, genOutput,
       } = getSessionStats(source);
       const reg = getRegisteredSession(sessionId);
+      const acp = agyLiveSession(sessionId);
+      const acpState = isRecord(acp?.state) ? acp.state : {};
+      const acpThinking = typeof acpState.thinkingLevel === 'string' && acpState.thinkingLevel ? acpState.thinkingLevel : null;
       const contextUsage = getLiveContextUsage(sessionId);
       const info = catalog.parseSessionFile(source);
       res.json({
@@ -343,9 +346,9 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
         sessionId: source.routeId,
         ...sessionIdentityFields(source.harnessId, source.nativeSessionId),
         runtime: await describeRuntime(sessionId),
-        cwd: reg?.cwd || info.cwd || null,
+        cwd: reg?.cwd || acp?.cwd || info.cwd || null,
         model: reg?.model || info.model || null,
-        thinkingLevel: reg?.thinkingLevel || null,
+        thinkingLevel: reg?.thinkingLevel || acpThinking || null,
         userMessages, assistantMessages, toolCalls, toolResults, compactions,
         totalMessages: userMessages + assistantMessages + toolResults,
         tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },

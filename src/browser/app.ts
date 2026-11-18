@@ -311,8 +311,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (composerDrafts.navigate(1, promptInput)) { e.preventDefault(); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
-      if (e.ctrlKey) { e.preventDefault(); composerSubmit.sendSteer(); }
-      else { e.preventDefault(); composerSubmit.sendPrompt(); }
+      e.preventDefault();
+      const steerOnlyTurn = sessionActivity.turn && !sideChat.active()
+        && sessionState.currentSession?.capabilities?.followUp === false
+        && sessionState.currentSession?.capabilities?.steer !== false
+        && !promptInput.value.trim().startsWith('/');
+      if (e.ctrlKey || steerOnlyTurn) composerSubmit.sendSteer();
+      else composerSubmit.sendPrompt();
     }
     // While dictating, Escape cancels the recording (handled by the document
     // listener) — it must not also abort the turn.
@@ -568,6 +573,7 @@ function renderSessions() {
 
 function refreshSessionControls() {
   sessionControls.updateThinking();
+  sessionActivity.syncComposerButtons();
   terminalController.updateButtons();
   composerSpeech.updateButton();
 }

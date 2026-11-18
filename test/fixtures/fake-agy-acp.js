@@ -211,6 +211,42 @@ function handlePrompt(id, params) {
         case 'slow':
             textChunk('Working on it.');
             return;
+        case 'prompt-error': {
+            setTimeout(() => {
+                const index = openPrompts.indexOf(id);
+                if (index >= 0)
+                    openPrompts.splice(index, 1);
+                respondError(id, -32000, 'Quota exhausted');
+            }, 5);
+            return;
+        }
+        case 'refusal': {
+            setTimeout(() => {
+                finishPrompt(id, 'refusal');
+            }, 5);
+            return;
+        }
+        case 'tool-only': {
+            const file = `${cwd}/big.py`;
+            const lines = Array.from({ length: 400 }, (_, i) => `line_${i} = ${i}`);
+            const oldText = lines.join('\n') + '\n';
+            const updated = [...lines];
+            updated[200] = 'line_200 = "edited"';
+            const newText = updated.join('\n') + '\n';
+            setTimeout(() => {
+                toolCall('call-edit-1', 'edit_file', {
+                    Path: file, Target: 'line_200 = 200', Replacement: 'line_200 = "edited"',
+                }, 'File big.py', 'edit');
+                toolUpdate('call-edit-1', 'edit_file', 'completed', {
+                    title: 'File big.py',
+                    kind: 'edit',
+                    content: [{ type: 'diff', path: file, oldText, newText }],
+                });
+                usageUpdate(1500);
+                finishPrompt(id, 'end_turn');
+            }, 5);
+            return;
+        }
         case 'tool': {
             const file = `${cwd}/README.md`;
             setTimeout(() => {

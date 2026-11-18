@@ -71,13 +71,14 @@ function syncActivityIndicator() {
 // Side chats are independent of the main turn, so Send stays; Steer/follow-up would misdeliver.
 function syncComposerButtons() {
   if (disposed) return;
-  const sideChat = !!options.sideChatActive(), steering = turnInProgress && !sideChat;
+  const sideChat = !!options.sideChatActive(), inTurn = turnInProgress && !sideChat;
+  const caps = sessionState.currentSession?.capabilities;
   const btnSteer = document.getElementById('btnSteer');
   const btnFollowUp = document.getElementById('btnFollowUp');
   const btnSend = document.getElementById('btnSend');
-  if (btnSteer) btnSteer.style.display = steering ? '' : 'none';
-  if (btnFollowUp) btnFollowUp.style.display = steering ? '' : 'none';
-  if (btnSend) btnSend.style.display = turnInProgress && !sideChat ? 'none' : '';
+  if (btnSteer) btnSteer.style.display = inTurn && caps?.steer !== false ? '' : 'none';
+  if (btnFollowUp) btnFollowUp.style.display = inTurn && caps?.followUp !== false ? '' : 'none';
+  if (btnSend) btnSend.style.display = inTurn ? 'none' : '';
 }
 
 function setTurnInProgress(active: boolean) {

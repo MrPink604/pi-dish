@@ -1,4 +1,5 @@
 import { escapeHtml } from '../core/helper-format';
+import { AGY_THINKING_LEVEL_NAMES } from '../core/helper-models';
 import { record } from '../core/helper-values';
 import type { CatalogModel } from '../core/session-api';
 import { errorMessage, responseError, type ApiRequest } from './api-client';
@@ -41,7 +42,11 @@ export function createNewSessionPreferences(options: {
     let levels: readonly string[] = Object.keys(NS_THINKING_LABELS);
     let disabled = selected?.reasoning === false;
     let note = disabled ? 'The selected model does not support configurable thinking' : '';
-    if (harness === 'omp') {
+    if (harness === 'agy') {
+      levels = AGY_THINKING_LEVEL_NAMES;
+      disabled = false;
+      note = `Valid for Antigravity: ${levels.map(thinkingLabel).join(', ')}`;
+    } else if (harness === 'omp') {
       levels = selected?.thinking || [];
       disabled = !selected || levels.length === 0;
       if (!selected) note = 'Select a model to choose an explicit thinking level';

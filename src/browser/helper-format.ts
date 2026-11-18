@@ -21,6 +21,25 @@ export function formatThinkingPreview(thinking: string): string {
   return thinking.substring(0, 80).replace(/\n/g, ' ') + '…';
 }
 
+const GEMINI_SPARK_SVG = '<svg class="gemini-spark" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">'
+  + '<path d="M12 1.5C12 7.3 16.7 12 22.5 12C16.7 12 12 16.7 12 22.5C12 16.7 7.3 12 1.5 12C7.3 12 12 7.3 12 1.5Z"/></svg>';
+
+/** Antigravity sessions and Gemini model turns wear the four-pointed Gemini star instead of π. */
+export function isGeminiAssistant(msg: { readonly provider?: string | null; readonly model?: string | null } | null | undefined,
+  session?: { readonly harnessId?: string | null; readonly model?: string | null } | null): boolean {
+  if (session?.harnessId === 'agy') return true;
+  const provider = msg?.provider || '';
+  if (provider === 'google-antigravity' || provider === 'google' || provider === 'google-vertex' || provider === 'google-gemini-cli') return true;
+  const model = msg?.model || session?.model || '';
+  return /(?:^|\/)gemini[-.0-9]/i.test(model);
+}
+
+export function assistantRoleHtml(gemini: boolean): string {
+  return gemini
+    ? `<span class="message-role assistant gemini" aria-label="Gemini">${GEMINI_SPARK_SVG}</span>`
+    : '<span class="message-role assistant">π</span>';
+}
+
 
 export function formatTokens(tokens?: number | null) {
   if (!tokens || tokens === 0) return '0';

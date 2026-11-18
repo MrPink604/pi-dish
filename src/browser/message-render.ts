@@ -3,7 +3,7 @@ import type { Timestamp, RefContextEntry } from '../core/helper-types';
 import type { RenderMessage, MessageBlock, AdvisorNote } from './message-data';
 import type { createResponseDetails } from './response-details';
 import { escapeHtml, truncate } from '../core/helper-format';
-import { formatTime, formatThinkingPreview } from './helper-format';
+import { assistantRoleHtml, formatTime, formatThinkingPreview, isGeminiAssistant } from './helper-format';
 import { sessionSupports } from './helper-identity';
 import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, evalTitle, evalBodyHtml, jobDeliveryOutputs, formatSpan } from './tool-format';
 import type { WaitJob } from './tool-format';
@@ -195,9 +195,10 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
   let speedHtml = '';
   const hasMetadata = !inPeek && !opts.streaming && (msg.usage || msg.durationMs);
   if (hasMetadata) speedHtml = options.details.button(msg);
+  const gemini = isGeminiAssistant(msg, options.peek ? { model: renderModel() ?? null } : options.sessionState.currentSession);
   return `<div${opts.attrs || ''} class="message assistant${streamingClass}${noTextClass}${msg.errorMessage ? ' error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}"${streamingAttr}>
     <div class="message-header">
-      <span class="message-role assistant">π</span>
+      ${assistantRoleHtml(gemini)}
       ${showModel ? `<span class="badge">${escapeHtml(msg.model)}</span>` : ''}
       ${opts.streaming ? '<span class="badge streaming">●</span>' : ''}
       ${speedHtml}

@@ -1,6 +1,6 @@
 import type { SessionState, SelectionOwner } from './session-state';
 import type { RenderMessage, MessageBlock } from './message-data';
-import { formatTime, formatThinkingPreview } from './helper-format';
+import { assistantRoleHtml, formatTime, formatThinkingPreview, isGeminiAssistant } from './helper-format';
 import { toolCallBodyHtml } from './tool-format';
 import { getToolSummary, messageHasVisibleText } from '../core/helper-content';
 
@@ -58,14 +58,15 @@ export function createStreamingRenderer(options: {
     });
   }
   function cancelScroll() { scrollRequest = null; cancelAnimationFrame(scrollFrame ?? 0); scrollFrame = null; }
-function ensureStreamingElement(container: HTMLElement) {
+function ensureStreamingElement(container: HTMLElement, message: RenderMessage) {
   let el = container.querySelector<HTMLElement>('.message.assistant[data-streaming="true"]');
   if (el) return el;
   const ts = Date.now();
+  const gemini = isGeminiAssistant(message, sessionState.currentSession);
   container.insertAdjacentHTML('beforeend',
     `<div class="message assistant streaming no-text" data-streaming="true" data-timestamp="${ts}">
       <div class="message-header">
-        <span class="message-role assistant">π</span>
+        ${assistantRoleHtml(gemini)}
         <span class="badge streaming">●</span>
         <span class="message-time">${formatTime(ts)}</span>
       </div>
@@ -101,7 +102,7 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
   // One layout read up front: `pinned()` already forces it, so the scroll
   // snapshot is free here and the deferred pass never touches layout again.
   const wasPinned = options.pinned(container), scrollTop = container.scrollTop;
-  const el = ensureStreamingElement(container)!;
+  const el = ensureStreamingElement(container, message)!;
 
   const blocks: readonly (MessageBlock | string)[] = typeof message.content === 'string'
     ? [{ type: 'text', text: message.content }]

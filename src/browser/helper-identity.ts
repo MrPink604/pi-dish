@@ -73,6 +73,7 @@ export function harnessBadgeInfo(harnessId?: string | null, harnessLabel?: strin
     pi: { label: 'Pi', icon: 'vendor/harness-pi.svg' },
     omp: { label: 'OMP', icon: 'vendor/harness-omp.svg' },
     prime: { label: 'Prime', icon: 'vendor/harness-prime.svg' },
+    agy: { label: 'AGY', icon: 'vendor/harness-agy.svg' },
   };
   return (harnessId && Object.hasOwn(known, harnessId) ? known[harnessId] : null) || {
     label: harnessLabel || harnessId || 'Agent',

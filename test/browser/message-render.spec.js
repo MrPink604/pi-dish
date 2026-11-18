@@ -160,3 +160,27 @@ const fixtures_js_1 = require("./fixtures.js");
     });
     (0, fixtures_js_1.expect)(result).toEqual({ modal: 'none', count: 0, unchanged: true });
 });
+(0, fixtures_js_1.test)('Gemini and Antigravity assistant turns render the Gemini star while Pi keeps pi', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const rendered = await page.evaluate(() => {
+        const parse = (html) => {
+            const template = document.createElement('template');
+            template.innerHTML = html;
+            const role = fixtureElement(template.content.querySelector('.message-role.assistant'), 'assistant role');
+            return { gemini: role.classList.contains('gemini'), spark: !!role.querySelector('svg.gemini-spark'), text: role.textContent };
+        };
+        const pi = parse(fixtureApp.features.messageRenderer.message({ role: 'assistant', model: 'claude-sonnet-4-6', provider: 'anthropic', content: 'hi' }));
+        const geminiModel = parse(fixtureApp.features.messageRenderer.message({ role: 'assistant', model: 'gemini-4-carbon', provider: 'google-antigravity', content: 'hi' }));
+        window.fixtureSessionListPatch(fixtureCurrentSession().id, { harnessId: 'agy' });
+        const root = fixtureElement(document.getElementById('messages'), '#messages');
+        root.innerHTML = '';
+        fixtureApp.features.streamingRenderer.render({ role: 'assistant', content: 'streaming' });
+        const streamRole = fixtureElement(root.querySelector('.message-role.assistant'), 'streaming assistant role');
+        const streaming = { gemini: streamRole.classList.contains('gemini'), spark: !!streamRole.querySelector('svg.gemini-spark') };
+        fixtureApp.features.streamingRenderer.cancel();
+        return { pi, geminiModel, streaming };
+    });
+    (0, fixtures_js_1.expect)(rendered.pi).toEqual({ gemini: false, spark: false, text: 'π' });
+    (0, fixtures_js_1.expect)(rendered.geminiModel).toEqual({ gemini: true, spark: true, text: '' });
+    (0, fixtures_js_1.expect)(rendered.streaming).toEqual({ gemini: true, spark: true });
+});
