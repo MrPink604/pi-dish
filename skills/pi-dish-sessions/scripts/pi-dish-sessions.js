@@ -27,21 +27,42 @@ const SHARED_FLAGS = [
     ['--url URL', 'pi-dish base URL (default $PI_DISH_URL, else http://127.0.0.1:3333)'],
     ['--session ID', "this caller's own session id, when discovery cannot infer it"],
 ];
+// Default bounds for agent callers: unbounded transcripts and session lists
+// were the bulk of what agents read and then cut down with head/grep/jq. Each
+// cut prints one `# …` line saying how to get more (stderr under --json).
+const DEFAULT_MAX_CHARS = 12000;
+const DEFAULT_LIST_ROWS = 50;
+const DEFAULT_SEARCH_ROWS = 20;
+const SEARCH_RESULT_CAP = 100;
+const SHOW_STRING_CAP = 2000;
+const SESSION_FIELDS = [
+    'id', 'ref', 'name', 'cwd', 'harnessId', 'model', 'isActive', 'turnInProgress', 'compacting',
+    'subagentLive', 'lastActivity', 'messageCount', 'hibernation', 'private',
+];
+const SEARCH_FIELDS = [...SESSION_FIELDS, 'matchCount', 'searchScore', 'snippets', 'host'];
+const MAX_CHARS_FLAG = ['--max-chars N', `cap text output at about N chars (default ${DEFAULT_MAX_CHARS}; 0 = no cap)`];
+const FIELDS_FLAG = ['--fields A,B', '--json: keep only these row fields (default: a compact set; `all` = every field)'];
+const FULL_FLAG = ['--full', 'lift every default bound (row limit, --max-chars, --fields)'];
 const COMMANDS = [
     {
         name: 'list',
-        usage: 'list [--active] [--host NAME] [--json]',
+        usage: 'list [--active] [--limit N] [--full] [--host NAME] [--json]',
         summary: 'List sessions on a host: live ones first, then historical.',
-        flags: [['--active', 'live sessions only (skips the historical scan — much faster)']],
+        flags: [
+            ['--active', 'live sessions only (skips the historical scan — much faster)'],
+            ['--limit N', `rows to show, live first (default ${DEFAULT_LIST_ROWS})`],
+            MAX_CHARS_FLAG, FIELDS_FLAG, FULL_FLAG,
+        ],
         example: 'list --active',
     },
     {
         name: 'search',
-        usage: 'search <query…> [--limit N] [--all-hosts | --host NAME] [--json]',
+        usage: 'search <query…> [--limit N] [--full] [--all-hosts | --host NAME] [--json]',
         summary: 'Search every indexed transcript. The corpus is long-term memory — search before re-deriving.',
         flags: [
-            ['--limit N', 'results to show (default 20)'],
+            ['--limit N', `results to show (default ${DEFAULT_SEARCH_ROWS}, max ${SEARCH_RESULT_CAP})`],
             ['--all-hosts', 'fan out to every reachable host advertising `search` and merge by relevance'],
+            MAX_CHARS_FLAG, FIELDS_FLAG, FULL_FLAG,
         ],
         example: 'search "jsonl torn tail" cwd:~/work/api since:30d --limit 5',
         notes: [
@@ -51,27 +72,34 @@ const COMMANDS = [
     },
     {
         name: 'resolve',
-        usage: 'resolve <ref> [--host NAME] [--json]',
+        usage: 'resolve <ref> [--fields A,B] [--host NAME] [--json]',
         summary: 'Show what a ref points at (full id, host, name, cwd, state) without touching the session.',
-        flags: [],
+        flags: [FIELDS_FLAG, FULL_FLAG],
         example: 'resolve 8f3ab2c1',
     },
     {
         name: 'read',
-        usage: 'read <ref> [--limit N] [--before INDEX] [--thinking] [--host NAME]',
+        usage: 'read <ref> [--limit N] [--before INDEX] [--thinking] [--max-chars N] [--host NAME]',
         summary: 'Render a session transcript as markdown — the way to recall what another session did.',
         flags: [
             ['--limit N', 'messages in the window, newest last (default 30)'],
             ['--before INDEX', 'page older history; use the index the previous page printed'],
             ['--thinking', 'include thinking blocks (omitted by default)'],
+            MAX_CHARS_FLAG, FULL_FLAG,
         ],
         example: 'read 8f3ab2c1 --limit 60',
+        notes: ['Past --max-chars the oldest messages of the window are dropped first; the cut line prints the command that pages back to them.'],
     },
     {
         name: 'show',
-        usage: 'show <ref> [--limit N] [--host NAME]',
+        usage: 'show <ref> [--limit N] [--before INDEX] [--max-chars N] [--host NAME]',
         summary: 'The same window as `read`, as raw JSON — when you need message ids or metadata.',
-        flags: [['--limit N', 'messages in the window (default 20)']],
+        flags: [
+            ['--limit N', 'messages in the window (default 20)'],
+            ['--before INDEX', 'page older history'],
+            ['--max-chars N', `cap the JSON at about N chars (default ${DEFAULT_MAX_CHARS}; 0 = no cap): strings over ${SHOW_STRING_CAP} chars are clipped, then the oldest messages dropped`],
+            FIELDS_FLAG, FULL_FLAG,
+        ],
         example: 'show 8f3ab2c1 --limit 5',
     },
     {
@@ -160,9 +188,9 @@ const COMMANDS = [
     },
     {
         name: 'hosts',
-        usage: 'hosts [--json]',
+        usage: 'hosts [--max-chars N] [--json]',
         summary: 'List this server and its fleet with reachability and capabilities.',
-        flags: [],
+        flags: [MAX_CHARS_FLAG, ['--fields A,B', '--json: keep only these host fields (name and self always stay)']],
         example: 'hosts',
         notes: ['Absent capability means unsupported — never assume a peer serves what this host serves.'],
     },
@@ -237,6 +265,11 @@ function globalHelp() {
         'Shared flags:',
         ...padded(SHARED_FLAGS),
         '',
+        `Output bounds (default; each cut prints one \`# …\` line saying how to get more, on stderr under --json):`,
+        `  list ${DEFAULT_LIST_ROWS} rows, search ${DEFAULT_SEARCH_ROWS} results; read, show and list/search/hosts text about ${DEFAULT_MAX_CHARS} chars;`,
+        '  list/search/resolve/show --json rows keep a compact field set. Raise with --limit N, --max-chars N (0 = no cap),',
+        '  --fields A,B (all = every field); --full lifts them all.',
+        '',
         'Environment:',
         ...padded([
             ['PI_DISH_URL', 'default base URL for this server'],
@@ -270,11 +303,11 @@ function commandHelp(name) {
 const VALUE_FLAGS = new Map([
     ['--url', 'url'], ['--session', 'session'], ['--cwd', 'cwd'], ['--harness', 'harness'],
     ['--model', 'model'], ['--name', 'name'], ['--prompt', 'prompt'], ['--limit', 'limit'],
-    ['--host', 'host'], ['--before', 'before'],
+    ['--host', 'host'], ['--before', 'before'], ['--max-chars', 'max_chars'], ['--fields', 'fields'],
 ]);
 const BOOL_FLAGS = new Map([
     ['--json', 'json'], ['--active', 'active'], ['--no-wait', 'no_wait'], ['--private', 'private'],
-    ['--thinking', 'thinking'], ['--all-hosts', 'all_hosts'],
+    ['--thinking', 'thinking'], ['--all-hosts', 'all_hosts'], ['--full', 'full'],
 ]);
 function parseArgs(argv) {
     const leading = argv[0];
@@ -300,6 +333,81 @@ function parseArgs(argv) {
 }
 function intArg(value, fallback, max = 100) {
     return Math.max(1, Math.min(max, Number.parseInt(value || String(fallback), 10) || fallback));
+}
+/** A command's output bounds: explicit flags win, `--full` lifts the defaults. */
+function outputBounds(args, fields) {
+    let chars = args.full ? null : DEFAULT_MAX_CHARS;
+    if (args.max_chars !== undefined) {
+        if (!/^\d+$/.test(args.max_chars))
+            throw new Error('--max-chars needs a whole number (0 = no cap)');
+        chars = Number(args.max_chars) || null;
+    }
+    let picked = args.full ? null : fields;
+    if (args.fields !== undefined) {
+        picked = args.fields === 'all' ? null : args.fields.split(',').map(name => name.trim()).filter(Boolean);
+    }
+    return { chars, fields: picked };
+}
+/** A wire row reduced to `fields` (null keeps every field); `keep` always stays. */
+function pickFields(row, fields, keep = ['id']) {
+    const source = core.record(row ?? {});
+    if (!fields)
+        return source;
+    const picked = {};
+    for (const name of [...keep, ...fields])
+        if (Object.hasOwn(source, name))
+            picked[name] = source[name];
+    return picked;
+}
+/** One `# …` line naming what a bound cut and how to get it: stdout for text, stderr under --json. */
+function cutNotice(json, message) {
+    (json ? process.stderr : process.stdout).write(`# ${message}\n`);
+}
+/** Write `text`, cut at the last line boundary within `maxChars` (null: no cap). */
+function writeCapped(text, maxChars, more) {
+    if (maxChars === null || text.length <= maxChars)
+        return void process.stdout.write(text);
+    const end = text.lastIndexOf('\n', maxChars - 1);
+    const kept = end > 0 ? text.slice(0, end + 1) : `${text.slice(0, maxChars)}\n`;
+    process.stdout.write(kept);
+    cutNotice(false, `Output cut at --max-chars ${maxChars} (${text.length - kept.length} more chars); ${more}`);
+}
+/** Clip every string longer than `max` inside a JSON value; `counter.clipped` counts them. */
+function clipStrings(value, max, counter) {
+    if (typeof value === 'string') {
+        if (value.length <= max)
+            return value;
+        counter.clipped++;
+        return `${value.slice(0, max)}…[+${value.length - max} chars]`;
+    }
+    if (Array.isArray(value))
+        return value.map(item => clipStrings(item, max, counter));
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, clipStrings(item, max, counter)]));
+    }
+    return value;
+}
+/**
+ * Fit a `/messages` window under `maxChars` of pretty JSON: clip long strings
+ * first, then drop the oldest messages. The kept window's `firstIndex` moves
+ * with it, so `--before firstIndex` pages back to what was dropped.
+ */
+function boundShow(payload, maxChars) {
+    const size = (value) => JSON.stringify(value, null, 2).length;
+    if (maxChars === null || size(payload) <= maxChars)
+        return { payload, dropped: 0, clipped: 0 };
+    const counter = { clipped: 0 };
+    const messages = wireArray(payload.messages).map(message => clipStrings(message, SHOW_STRING_CAP, counter));
+    let bounded = { ...payload, messages };
+    let dropped = 0;
+    while (size(bounded) > maxChars && messages.length - dropped > 1) {
+        dropped++;
+        bounded = { ...payload, messages: messages.slice(dropped) };
+        if (typeof payload.firstIndex === 'number')
+            bounded.firstIndex = payload.firstIndex + dropped;
+        bounded.hasMore = true;
+    }
+    return { payload: bounded, dropped, clipped: counter.clipped };
 }
 // Absent means unsupported (mixed-version fleets are the steady state); only
 // the capabilities an agent can act on are worth a column.
@@ -342,10 +450,8 @@ function searchRow(session, ref) {
     const matches = session.matchCount ? `${session.matchCount} match${session.matchCount === 1 ? '' : 'es'}` : 'metadata match';
     return `${sessionLine(session, ref)}\t${when}\t${matches}`;
 }
-function writeSnippets(session) {
-    for (const snippet of wireArray(session.snippets)) {
-        process.stdout.write(`    …${String(snippet).replace(/\s+/g, ' ').trim()}…\n`);
-    }
+function snippetText(session) {
+    return wireArray(session.snippets).map(snippet => `    …${String(snippet).replace(/\s+/g, ' ').trim()}…\n`).join('');
 }
 // The local server's identity, for the display ref of a cross-host peer
 // message sender (`<label>/<ref>`).
@@ -515,7 +621,7 @@ function abortInit() {
         return {};
     return { signal: AbortSignal.timeout(FLEET_SEARCH_TIMEOUT_MS) };
 }
-async function fleetSearch(base, query, limit, json) {
+async function fleetSearch(base, query, limit, bounds, json) {
     const hosts = await fleetHosts(base);
     if (!hosts)
         throw new Error('--all-hosts needs GET /api/hosts; this server did not answer it');
@@ -566,17 +672,27 @@ async function fleetSearch(base, query, limit, json) {
         }
     });
     const merged = mergeSearchResults(buckets, limit);
+    const available = buckets.reduce((sum, bucket) => sum + (bucket.results?.length || 0), 0);
+    const rowCut = merged.length < available
+        ? `${available - merged.length} more results not shown; refine the query, raise --limit (max ${SEARCH_RESULT_CAP}) or --full.` : null;
     // A partial result set must look partial: name every host that is missing.
     const unanswered = Object.entries(status).filter(([, value]) => value.status !== 'ok');
     if (json) {
-        return print({ results: merged.map((row) => ({ ...row.session, host: row.host })), hosts: status }, true);
+        print({
+            results: merged.map((row) => pickFields({
+                ...row.session, ref: refsByHost.get(row.host)?.get(row.session.id), host: row.host,
+            }, bounds.fields)),
+            hosts: status,
+        }, true);
+        if (rowCut)
+            cutNotice(true, rowCut);
+        return;
     }
-    for (const row of merged) {
-        process.stdout.write(`${row.host}\t${searchRow(row.session, refsByHost.get(row.host)?.get(row.session.id))}\n`);
-        writeSnippets(row.session);
-    }
+    writeCapped(merged.map((row) => `${row.host}\t${searchRow(row.session, refsByHost.get(row.host)?.get(row.session.id))}\n${snippetText(row.session)}`).join(''), bounds.chars, '--max-chars N or --full for more, or --limit fewer results.');
     if (!merged.length)
         process.stdout.write('No matches.\n');
+    if (rowCut)
+        cutNotice(false, rowCut);
     for (const [label, value] of unanswered) {
         process.stdout.write(`# ${label} did not answer (${value.error})\n`);
     }
@@ -823,12 +939,14 @@ async function main() {
             return await runAttach(args);
         }
         if (spec.name === 'hosts') {
+            const bounds = outputBounds(args, null);
             const { data } = await request(base, '/api/hosts');
-            if (args.json)
+            if (args.json && !bounds.fields)
                 return print(data, true);
             const hosts = wireArray(core.record(data).hosts);
-            for (const entry of hosts)
-                process.stdout.write(hostLine(entry) + '\n');
+            if (args.json)
+                return print({ ...core.record(data), hosts: hosts.map(entry => pickFields(entry, bounds.fields, ['name', 'self'])) }, true);
+            writeCapped(hosts.map(entry => hostLine(entry) + '\n').join(''), bounds.chars, '--max-chars N or --full for more, or --json --fields name,reachable.');
             const remotes = hosts.filter(entry => !core.fleetHost(entry).self);
             if (remotes.length)
                 process.stdout.write('# Add --host <name> to any command to act on that host.\n');
@@ -865,19 +983,36 @@ async function main() {
             return await showDoc(base, hostFlag, topic, args.json);
         }
         if (spec.name === 'list') {
+            const bounds = outputBounds(args, SESSION_FIELDS);
+            const limit = args.full ? Infinity : intArg(args.limit, DEFAULT_LIST_ROWS, Infinity);
             const qs = args.active ? '?active=1' : '';
             const { data } = await api(base, hostFlag, `/api/sessions${qs}`);
-            if (args.json)
+            if (args.json && (!data || typeof data !== 'object'))
                 return print(data, true);
             // `children` is what `--active` returns for subagents running inside a
             // live session: real sessions with transcripts, absent from `previous`
             // on that request (and already in it on a full list).
             const catalog = core.record(data);
             const rows = [...core.sessionRows(catalog.active), ...core.sessionRows(catalog.children), ...core.sessionRows(catalog.previous)];
+            // Refs are judged against the whole catalog, never just the rows shown.
             const refs = refIndex(rows, await entryForHostName(base, hostFlag));
-            for (const session of rows) {
-                process.stdout.write(sessionLine(session, refs.get(session.id)) + '\n');
+            const rowCut = rows.length > limit ? `Showing ${limit} of ${rows.length} sessions (live first); --limit N or --full for more.` : null;
+            if (args.json) {
+                let left = limit;
+                const take = (group) => {
+                    const kept = core.sessionRows(group).slice(0, left);
+                    left -= kept.length;
+                    return kept.map(session => pickFields({ ...session, ref: refs.get(session.id) }, bounds.fields));
+                };
+                const active = take(catalog.active), children = take(catalog.children), previous = take(catalog.previous);
+                print({ ...catalog, active, previous, children, total: rows.length }, true);
+                if (rowCut)
+                    cutNotice(true, rowCut);
+                return;
             }
+            writeCapped(rows.slice(0, limit).map(session => sessionLine(session, refs.get(session.id)) + '\n').join(''), bounds.chars, '--max-chars N or --full for more, or --limit fewer rows.');
+            if (rowCut)
+                cutNotice(false, rowCut);
             if (catalog.indexing)
                 process.stdout.write('# Session index is still building; repeat list for more.\n');
             if (catalog.discoveryTruncated)
@@ -926,25 +1061,29 @@ async function main() {
             const query = args.positional.join(' ').trim();
             if (!query)
                 throw new Error('search needs a query');
-            const limit = intArg(args.limit, 20);
+            const bounds = outputBounds(args, SEARCH_FIELDS);
+            const limit = args.full ? SEARCH_RESULT_CAP : intArg(args.limit, DEFAULT_SEARCH_ROWS, SEARCH_RESULT_CAP);
             if (args.all_hosts && hostFlag)
                 throw new Error('--all-hosts and --host are mutually exclusive');
             if (args.all_hosts)
-                return await fleetSearch(base, query, limit, args.json);
+                return await fleetSearch(base, query, limit, bounds, args.json);
             const { data } = await api(base, hostFlag, `/api/search?q=${encodeURIComponent(query)}`);
             const search = core.record(data);
             const results = core.sessionRows(search.results).slice(0, limit);
-            if (args.json)
-                return print({ ...search, results }, true);
             const searchRefs = refIndex(results, await entryForHostName(base, hostFlag));
-            for (const session of results) {
-                process.stdout.write(searchRow(session, searchRefs.get(session.id)) + '\n');
-                writeSnippets(session);
+            const rowCut = Number(search.total) > results.length
+                ? `${Number(search.total) - results.length} more results not shown; refine the query, raise --limit (max ${SEARCH_RESULT_CAP}) or --full.` : null;
+            if (args.json) {
+                print({ ...search, results: results.map(session => pickFields({ ...session, ref: searchRefs.get(session.id) }, bounds.fields)) }, true);
+                if (rowCut)
+                    cutNotice(true, rowCut);
+                return;
             }
+            writeCapped(results.map(session => `${searchRow(session, searchRefs.get(session.id))}\n${snippetText(session)}`).join(''), bounds.chars, '--max-chars N or --full for more, or --limit fewer results.');
             if (!results.length)
                 process.stdout.write('No matches.\n');
-            if (Number(search.total) > results.length)
-                process.stdout.write(`# ${Number(search.total) - results.length} more results not shown; refine the query or raise --limit.\n`);
+            if (rowCut)
+                cutNotice(false, rowCut);
             if (search.indexing)
                 process.stdout.write('# Session index is still building; results may be partial — retry shortly.\n');
             return;
@@ -961,8 +1100,10 @@ async function main() {
         const host = target.host;
         const id = target.id;
         if (spec.name === 'resolve') {
-            if (args.json)
-                return print({ host, id, ref: target.ref || null, session: target.session }, true);
+            if (args.json) {
+                const { fields } = outputBounds(args, SESSION_FIELDS);
+                return print({ host, id, ref: target.ref || null, session: pickFields(target.session, fields) }, true);
+            }
             const session = target.session;
             // The short ref first: it is what the caller should keep, and the full
             // id below it is what the routes speak.
@@ -985,14 +1126,26 @@ async function main() {
             // the resolved list entry backfills what it does not carry.
             const payload = { ...core.record(data), session: { ...target.session, ...core.record(core.record(data).session ?? {}) } };
             process.stdout.write(renderTranscript(payload, {
-                ref, host, limit, thinking: !!args.thinking,
+                ref, host, limit, thinking: !!args.thinking, maxChars: outputBounds(args, null).chars,
             }));
             return;
         }
         if (spec.name === 'show') {
+            const bounds = outputBounds(args, SESSION_FIELDS);
             const limit = intArg(args.limit, 20);
-            const messages = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/messages?limit=${limit}`);
-            return print({ session: target.session, ...core.record(messages.data ?? {}) }, true);
+            const before = args.before != null ? `&before=${encodeURIComponent(args.before)}` : '';
+            const messages = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/messages?limit=${limit}${before}`);
+            const window = { session: target.session, ...core.record(messages.data ?? {}) };
+            const shown = boundShow({ ...window, session: pickFields(window.session, bounds.fields) }, bounds.chars);
+            print(shown.payload, true);
+            if (shown.dropped || shown.clipped) {
+                const parts = [
+                    shown.clipped ? `${shown.clipped} string${shown.clipped === 1 ? '' : 's'} clipped to ${SHOW_STRING_CAP} chars` : '',
+                    shown.dropped ? `the ${shown.dropped} oldest message${shown.dropped === 1 ? '' : 's'} dropped (show ${ref} --limit ${limit} --before ${shown.payload.firstIndex} pages back)` : '',
+                ].filter(Boolean);
+                cutNotice(true, `show cut to fit --max-chars ${bounds.chars}: ${parts.join('; ')}; --max-chars 0 or --full for everything.`);
+            }
+            return;
         }
         if (spec.name === 'related') {
             const { data } = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/related`);

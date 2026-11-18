@@ -100,11 +100,13 @@ export interface SearchRow {
     host: unknown;
     session: SessionRow;
 }
+/** `maxChars` caps the rendered text (null or absent: no cap), dropping the oldest messages first. */
 export interface TranscriptOptions {
     host?: unknown;
     ref?: string;
     limit?: number;
     thinking?: boolean;
+    maxChars?: number | null;
 }
 /** Preserve native property access: nullish receivers fail; field values stay unknown. */
 export declare function record(value: unknown): Record<string, unknown>;

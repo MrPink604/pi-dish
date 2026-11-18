@@ -22,12 +22,61 @@ export interface SessionBrowsePorts {
 }
 
 const SEARCH_RESULT_CAP = 100;
+const FIELD_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
+
+/** Opt-in `/api/sessions` bounds for agent callers; the browser sends neither, so its payload is unchanged. */
+export interface CatalogBounds { limit: number | null; fields: readonly string[] | null }
+
+export function parseCatalogBounds(limit: unknown, fields: unknown): CatalogBounds | { error: string } {
+  let rowLimit: number | null = null;
+  if (limit !== undefined) {
+    if (typeof limit !== 'string' || !/^[1-9]\d{0,5}$/.test(limit)) return { error: 'limit must be a positive integer' };
+    rowLimit = Number(limit);
+  }
+  let names: string[] | null = null;
+  if (fields !== undefined) {
+    names = typeof fields === 'string' ? fields.split(',').map(name => name.trim()).filter(Boolean) : [];
+    if (!names.length || names.length > 64 || !names.every(name => FIELD_NAME_RE.test(name))) {
+      return { error: 'fields must be a comma-separated list of field names' };
+    }
+  }
+  return { limit: rowLimit, fields: names };
+}
+
+/**
+ * Apply `limit` across active, children, then previous — the order a caller
+ * reads them — and keep only `fields` (plus `id`) of each row. A limited
+ * response reports the unlimited row count as `total`.
+ */
+export function boundCatalog<T extends object>(groups: { active: readonly T[]; previous: readonly T[]; children: readonly T[] }, bounds: CatalogBounds) {
+  const project = (row: T): object => {
+    if (!bounds.fields) return row;
+    const source = row as Record<string, unknown>;
+    const picked: Record<string, unknown> = { id: source.id };
+    for (const name of bounds.fields) if (Object.hasOwn(source, name)) picked[name] = source[name];
+    return picked;
+  };
+  if (bounds.limit === null) {
+    if (!bounds.fields) return groups;
+    return { active: groups.active.map(project), previous: groups.previous.map(project), children: groups.children.map(project) };
+  }
+  let left = bounds.limit;
+  const take = (rows: readonly T[]) => {
+    const kept = rows.slice(0, left);
+    left -= kept.length;
+    return kept.map(project);
+  };
+  const active = take(groups.active), children = take(groups.children), previous = take(groups.previous);
+  return { active, previous, children, total: groups.active.length + groups.children.length + groups.previous.length };
+}
 
 export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
   const { catalog: runtime } = ports;
   const hostHealth = createHostHealth();
 
   const list: RouteHandler = async (req, res) => {
+    const bounds = parseCatalogBounds(req.query.limit, req.query.fields);
+    if ('error' in bounds) return void res.status(400).json({ error: bounds.error });
     const query = ((req.query.q || '') as string).trim().toLowerCase();
     await runtime.refreshPrimeRoster();
     const catalog = runtime.buildSessionCatalog({ activeOnly: req.query.active === '1', includePrivate: ports.privateUnlocked(req) });
@@ -42,10 +91,9 @@ export function createSessionBrowseHandlers(ports: SessionBrowsePorts) {
       const filtered = query ? runtime.filterSessionsByQuery(rows, query) : rows;
       return req.query.view === 'client' ? filtered.map(session => sessionForClient(session)) : filtered;
     };
+    const groups = { active: projection(catalog.active), previous: projection(previous), children: projection(catalog.children) };
     res.json({
-      active: projection(catalog.active),
-      previous: projection(previous),
-      children: projection(catalog.children),
+      ...boundCatalog(groups, bounds),
       indexing: catalog.indexing,
       discoveryTruncated: catalog.discoveryTruncated,
       discoverySkipped: catalog.discoverySkipped,

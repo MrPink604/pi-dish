@@ -9,6 +9,38 @@ export interface SessionBrowsePorts {
     /** The request carries a private-session unlock token. */
     privateUnlocked(req: IncomingMessage): boolean;
 }
+/** Opt-in `/api/sessions` bounds for agent callers; the browser sends neither, so its payload is unchanged. */
+export interface CatalogBounds {
+    limit: number | null;
+    fields: readonly string[] | null;
+}
+export declare function parseCatalogBounds(limit: unknown, fields: unknown): CatalogBounds | {
+    error: string;
+};
+/**
+ * Apply `limit` across active, children, then previous — the order a caller
+ * reads them — and keep only `fields` (plus `id`) of each row. A limited
+ * response reports the unlimited row count as `total`.
+ */
+export declare function boundCatalog<T extends object>(groups: {
+    active: readonly T[];
+    previous: readonly T[];
+    children: readonly T[];
+}, bounds: CatalogBounds): {
+    active: readonly T[];
+    previous: readonly T[];
+    children: readonly T[];
+} | {
+    active: object[];
+    previous: object[];
+    children: object[];
+    total?: undefined;
+} | {
+    active: object[];
+    previous: object[];
+    children: object[];
+    total: number;
+};
 export declare function createSessionBrowseHandlers(ports: SessionBrowsePorts): {
     list: RouteHandler;
     hostHealth: RouteHandler;

@@ -46,6 +46,7 @@
     "test/listener-lifecycle.test.ts",
     "test/skill-client-ingress.test.ts",
     "test/skills-cli.test.ts",
+    "test/sessions-cli-bounds.test.ts",
     "test/message-hold.test.ts",
     "test/session-command-handlers.test.ts",
     "test/session-hibernation.test.ts",

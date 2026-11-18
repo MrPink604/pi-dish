@@ -88,7 +88,8 @@ export interface ResolvedSession {
 }
 export interface SearchBucket { host?: unknown; results?: readonly SessionRow[] | null }
 export interface SearchRow { host: unknown; session: SessionRow }
-export interface TranscriptOptions { host?: unknown; ref?: string; limit?: number; thinking?: boolean }
+/** `maxChars` caps the rendered text (null or absent: no cap), dropping the oldest messages first. */
+export interface TranscriptOptions { host?: unknown; ref?: string; limit?: number; thinking?: boolean; maxChars?: number | null }
 
 /** Preserve native property access: nullish receivers fail; field values stay unknown. */
 export function record(value: unknown): Record<string, unknown> {
@@ -714,6 +715,8 @@ function renderTranscript(input: unknown, options: TranscriptOptions = {}) {
     return out.join('\n') + '\n';
   }
 
+  // One section per message, oldest first, so a cap can drop whole messages.
+  const sections: string[] = [];
   for (const value of messages) {
     const message: TranscriptMessage = record(value);
     const heading = ROLE_HEADINGS[String(message.role)] || message.role || 'message';
@@ -723,7 +726,7 @@ function renderTranscript(input: unknown, options: TranscriptOptions = {}) {
     if (message.isError) extra.push('error');
     if (message.role === 'custom' && message.customType) extra.push(message.customType);
     const suffix = extra.length ? ` [${extra.join(' · ')}]` : '';
-    out.push('', `## ${heading}${suffix}${when ? ` · ${when}` : ''}`);
+    const section = [`## ${heading}${suffix}${when ? ` · ${when}` : ''}`];
 
     const body = [];
     const content: unknown[] = Array.isArray(message.content) ? message.content : [];
@@ -755,15 +758,40 @@ function renderTranscript(input: unknown, options: TranscriptOptions = {}) {
       }
     }
     if (message.errorMessage) body.push(`! ${oneLine(message.errorMessage)}`);
-    if (body.length) out.push(body.join('\n\n'));
-    else out.push('_(no displayable content)_');
+    section.push(body.length ? body.join('\n\n') : '_(no displayable content)_');
+    sections.push(section.join('\n'));
   }
 
-  if (payload.hasMore && typeof payload.firstIndex === 'number' && Number.isFinite(payload.firstIndex) && payload.firstIndex > 0) {
-    const ref = options.ref || session.id || '<ref>';
-    const limit = options.limit || messages.length;
-    const older = payload.firstIndex;
-    out.push('', `— ${older} older message${older === 1 ? '' : 's'}. Page back with: read ${ref} --limit ${limit} --before ${older}`);
+  // The newest messages are what a reader came for: past the cap, drop from
+  // the oldest end, and clip a lone message that is still too long.
+  let dropped = 0, clipped = 0;
+  const maxChars = options.maxChars;
+  if (maxChars && maxChars > 0) {
+    const budget = maxChars - out.join('\n').length;
+    let size = sections.reduce((sum, section) => sum + section.length + 2, 0);
+    while (size > budget && sections.length - dropped > 1) size -= sections[dropped++].length + 2;
+    const last = sections.length - 1;
+    if (size > budget && dropped === last) {
+      const keep = Math.max(200, budget - 2);
+      clipped = sections[last].length - keep;
+      if (clipped > 0) sections[last] = sections[last].slice(0, keep).trimEnd();
+    }
+  }
+  for (const section of sections.slice(dropped)) out.push('', section);
+
+  const ref = options.ref || session.id || '<ref>';
+  const limit = options.limit || messages.length;
+  if (clipped > 0) {
+    out.push('', `— Message cut: ${clipped} more chars not shown (--max-chars ${maxChars}). Read it whole with: read ${ref} --max-chars 0`);
+  }
+  const first = typeof payload.firstIndex === 'number' && Number.isFinite(payload.firstIndex) ? payload.firstIndex : null;
+  if (dropped > 0 && first !== null) {
+    const older = first + dropped;
+    out.push('', `— Cut to fit --max-chars ${maxChars}: the ${dropped} oldest message${dropped === 1 ? '' : 's'} of this window not shown; ${older} older message${older === 1 ? '' : 's'} in all. Page back with: read ${ref} --limit ${limit} --before ${older} (or --max-chars 0 for no cap)`);
+  } else if (dropped > 0) {
+    out.push('', `— Cut to fit --max-chars ${maxChars}: the ${dropped} oldest message${dropped === 1 ? '' : 's'} of this window not shown; --max-chars 0 for no cap.`);
+  } else if (payload.hasMore && first !== null && first > 0) {
+    out.push('', `— ${first} older message${first === 1 ? '' : 's'}. Page back with: read ${ref} --limit ${limit} --before ${first}`);
   }
   return out.join('\n') + '\n';
 }

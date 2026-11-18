@@ -68,6 +68,27 @@ JSONL files under `~/.pi/agent/sessions/` is almost never the right move —
 the parsed routes handle branch navigation, image externalization, and
 harness-specific formats that raw JSONL reads get wrong.
 
+## Output bounds
+
+Output is agent-sized by default, and every cut prints one line saying how to
+get the rest (a `# …` line on stdout, on stderr under `--json`; `read` ends
+with a `— Cut to fit …` line that names the `--before` page holding the
+dropped messages):
+
+| Command | Default bound | Lift it with |
+|---|---|---|
+| `list` | 50 rows, live first | `--limit N`, `--full` |
+| `search` | 20 results (the server caps at 100) | `--limit N`, `--full` |
+| `read` | about 12000 chars; the oldest messages of the window go first | `--max-chars N` (0 = no cap), `--full` |
+| `show` | about 12000 chars of JSON: strings over 2000 chars are clipped, then the oldest messages dropped | `--max-chars N`, `--full` |
+| `list`, `search`, `hosts` text | about 12000 chars, cut at a line | `--max-chars N`, `--full` |
+| `list`, `search`, `resolve`, `show` `--json` | rows keep a compact field set (`id`, `ref`, `name`, `cwd`, state, `lastActivity`, …) | `--fields A,B`, `--fields all`, `--full` |
+
+Raw HTTP callers get the same choice from the server: `GET /api/sessions`
+accepts opt-in `limit=N` (applied across live, child, then historical rows;
+the response adds `total`) and `fields=a,b` (each row keeps `id` plus those
+fields). Without them the response is unchanged.
+
 ## Lifecycle
 
 - `spawn --cwd DIR [--name N] [--harness ID] [--model provider/id]
