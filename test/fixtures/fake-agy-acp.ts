@@ -10,6 +10,8 @@
  *   no-resume - loadSession true but no sessionCapabilities.resume
  *   auth      - session/new fails with -32000 "Authentication required"
  *   steer     - the first prompt hands over to the second (no usage)
+ *   steer-usage - like steer, but the handed-over prompt reports its own usage
+ *   background - the turn ends while a command runs; agy resumes on its own
  *   slow      - a prompt stays open until session/cancel
  *   tool      - read_file + run_command completed tool calls
  *   elicit    - ask_question + elicitation/create form
@@ -202,16 +204,40 @@ function handlePrompt(id: number, params: Frame): void {
   lastPromptId = id;
   openPrompts.push(id);
   switch (SCRIPT) {
-    case 'steer': {
+    case 'steer':
+    case 'steer-usage': {
       if (openPrompts.length === 1) return;
       const previous = openPrompts[0];
-      // The earlier prompt answers with no usage: a handover, not the turn end.
-      if (previous !== id) finishPrompt(previous, 'end_turn', false);
+      // The earlier prompt answers at the handover; agy 1.5.10 has been seen
+      // both with and without that prompt's own usage.
+      if (previous !== id) finishPrompt(previous, 'end_turn', SCRIPT === 'steer-usage');
       setTimeout(() => {
         textChunk('Steered turn answer.');
         usageUpdate(1200);
         finishPrompt(id, 'end_turn');
       }, 30);
+      return;
+    }
+    case 'background': {
+      // Observed live: a run_command goes async, the prompt is answered, and
+      // agy wakes up on its own when the command finishes, with no prompt open.
+      setTimeout(() => {
+        toolCall('call-bg-1', 'run_command', { CommandLine: 'npm test', WaitMsBeforeAsync: 5000 }, 'npm test', 'execute');
+        textChunk('Tests are running in the background.');
+        usageUpdate(700);
+        finishPrompt(id, 'end_turn');
+        setTimeout(() => {
+          toolUpdate('call-bg-1', 'run_command', 'completed', {
+            title: 'npm test',
+            kind: 'execute',
+            content: [{ type: 'content', content: { type: 'text', text: 'all passed\n' } }],
+            rawOutput: { output: 'all passed\n', exit_code: 0 },
+          });
+          sessionUpdate({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Tests passed.' } });
+          textChunk('Background tests passed.');
+          usageUpdate(800);
+        }, 60);
+      }, 5);
       return;
     }
     case 'slow':

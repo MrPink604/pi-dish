@@ -59,6 +59,29 @@ const STRIPPED_ENV = [
 
 const ACP_ARGS = ['acp', '--dangerously-skip-permissions', '--disable-telemetry'];
 
+/** Quiet period that ends a turn agy started on its own (no prompt response will). */
+const AUTONOMOUS_IDLE_DEFAULT_MS = 15000;
+function autonomousIdleMs(): number {
+  const override = Number(process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS);
+  return Number.isFinite(override) && override > 0 ? override : AUTONOMOUS_IDLE_DEFAULT_MS;
+}
+
+function sumUsage(a: ProtocolRecord | null, b: ProtocolRecord | null): ProtocolRecord | null {
+  if (!a) return b;
+  if (!b) return a;
+  const total: ProtocolRecord = { ...a };
+  for (const [key, value] of Object.entries(b)) {
+    const prior = total[key];
+    if (finite(value)) total[key] = (finite(prior) ? prior : 0) + value;
+  }
+  return total;
+}
+
+/** Updates that mean the agent is working (config/usage/title updates are not). */
+const ACTIVITY_UPDATES: Readonly<Record<string, true>> = {
+  agent_message_chunk: true, agent_thought_chunk: true, tool_call: true, tool_call_update: true, plan: true,
+};
+
 export function agyMirrorRoot(): string {
   return path.join(dishDir(), 'agy', 'sessions');
 }
@@ -192,6 +215,10 @@ export class AcpSession extends TransportSession {
   declare private counter: number;
   declare private spawnFailure: Promise<never>;
   declare private earlyFrames: { dir: 'in' | 'out'; msg: unknown }[];
+  /** Set while agy works with no outstanding prompt (a background command woke it). */
+  declare private autonomousTimer: NodeJS.Timeout | null;
+  /** Usage reported by prompts that handed their turn to a steer; added to the turn's total. */
+  declare private handoverUsage: ProtocolRecord | null;
 
   constructor(proc: ChildProcessWithoutNullStreams, cwd: string) {
     super();
@@ -220,6 +247,8 @@ export class AcpSession extends TransportSession {
     this.inbound = new Map();
     this.counter = 0;
     this.earlyFrames = [];
+    this.autonomousTimer = null;
+    this.handoverUsage = null;
 
     // A failed spawn (ENOENT) emits only 'error': settle startup and drop timers.
     this.spawnFailure = new Promise<never>((_, reject) => {
@@ -252,6 +281,9 @@ export class AcpSession extends TransportSession {
     });
 
     proc.on('exit', (code) => {
+      this._clearAutonomousTimer();
+      // Keep whatever the agent already said: an open segment would be lost otherwise.
+      if (this.segment) this._closeSegment('error', this._takeHandoverUsage(), `agy exited with code ${code}`);
       this.alive = false;
       this.turnInProgress = false;
       this.segment = null;
@@ -331,18 +363,22 @@ export class AcpSession extends TransportSession {
         waiter.reject(new Error(message));
         if (id === this.newestPromptId) {
           this.newestPromptId = null;
-          this._closeSegment('error', null, message);
+          this._closeSegment('error', this._takeHandoverUsage(), message);
           this._endTurn();
         }
         return;
       }
       waiter.resolve(frame.result);
-      // An earlier prompt answered while a newer one runs is a steer handover, not the turn end.
-      if (id !== this.newestPromptId) return;
-      this.newestPromptId = null;
       const result = asRecord(frame.result);
+      // An earlier prompt answered while a newer one runs is a steer handover, not the
+      // turn end. agy may report that prompt's own usage then; it is not repeated later.
+      if (id !== this.newestPromptId) {
+        this.handoverUsage = sumUsage(this.handoverUsage, acpUsage(result.usage));
+        return;
+      }
+      this.newestPromptId = null;
       const stop = text(result.stopReason);
-      this._closeSegment(acpStopReason(stop), acpUsage(result.usage),
+      this._closeSegment(acpStopReason(stop), this._takeHandoverUsage(acpUsage(result.usage)),
         stop === 'refusal' ? 'Antigravity refused this request.' : null);
       this._endTurn();
       return;
@@ -361,6 +397,7 @@ export class AcpSession extends TransportSession {
     const method = text(frame.method);
     const params = asRecord(frame.params);
     const key = String(id);
+    if (method === 'session/request_permission' || method === 'elicitation/create') this._noteActivity();
     if (method === 'session/request_permission') {
       const dialog = permissionDialog(key, params);
       if (!dialog) {
@@ -390,7 +427,9 @@ export class AcpSession extends TransportSession {
 
   private _sessionUpdate(raw: unknown): void {
     const update = isRecord(raw) ? raw : {};
-    switch (text(update.sessionUpdate)) {
+    const kind = text(update.sessionUpdate);
+    if (Object.hasOwn(ACTIVITY_UPDATES, kind)) this._noteActivity();
+    switch (kind) {
       case 'agent_message_chunk': {
         const content = asRecord(update.content);
         if (content.type === 'text') this._pushChunk('text', text(content.text));
@@ -594,12 +633,54 @@ export class AcpSession extends TransportSession {
   }
 
   private _endTurn(): void {
+    this._clearAutonomousTimer();
     this.turnInProgress = false;
     this.lastActivityAt = new Date();
     trackRunningToolCalls(this.runningToolCalls, 'turn_end', { type: 'turn_end' });
     this.emitEvent('turn_end', { type: 'turn_end' });
     this.emitEvent('agent_end', { type: 'agent_end' });
     this._refreshStats();
+  }
+
+  /**
+   * agy keeps working without a prompt when a background command it started
+   * finishes after its turn was answered. That work is a turn of its own: open
+   * one on the first frame, and end it once frames stop and no dialog awaits an
+   * answer, since no prompt response will arrive to end it.
+   */
+  private _noteActivity(): void {
+    if (!this.turnInProgress) {
+      this.turnInProgress = true;
+      this.emitEvent('agent_start', { type: 'agent_start' });
+      this.emitEvent('turn_start', { type: 'turn_start' });
+    }
+    if (this.newestPromptId !== null) return;
+    this._clearAutonomousTimer();
+    this.autonomousTimer = setTimeout(() => this._autonomousIdle(), autonomousIdleMs());
+    this.autonomousTimer.unref();
+  }
+
+  private _autonomousIdle(): void {
+    this.autonomousTimer = null;
+    if (!this.alive || this.newestPromptId !== null || !this.turnInProgress) return;
+    if (this.inbound.size > 0) {
+      this.autonomousTimer = setTimeout(() => this._autonomousIdle(), autonomousIdleMs());
+      this.autonomousTimer.unref();
+      return;
+    }
+    this._closeSegment('stop', this._takeHandoverUsage(), null);
+    this._endTurn();
+  }
+
+  private _clearAutonomousTimer(): void {
+    if (this.autonomousTimer) clearTimeout(this.autonomousTimer);
+    this.autonomousTimer = null;
+  }
+
+  private _takeHandoverUsage(final: ProtocolRecord | null = null): ProtocolRecord | null {
+    const usage = sumUsage(this.handoverUsage, final);
+    this.handoverUsage = null;
+    return usage;
   }
 
   // ---- state ---------------------------------------------------------------
@@ -794,6 +875,8 @@ export class AcpSession extends TransportSession {
       this.promptResponses.delete(id);
       return Promise.reject(error);
     }
+    // What agy said before this prompt stays before it in the transcript.
+    if (this.segment) this._closeSegment('stop', null, null);
     const timestamp = Date.now();
     this.transcript?.appendUser(content, timestamp);
     if (!this.turnInProgress) {
@@ -805,6 +888,8 @@ export class AcpSession extends TransportSession {
       type: 'message_end',
       message: { role: 'user', content, timestamp },
     });
+    // A prompt sent while agy works on its own takes the turn over; its response ends it.
+    this._clearAutonomousTimer();
     this.newestPromptId = id;
     this.lastActivityAt = new Date();
     // The ACP answer arrives at turn end (20–60 s); callers track completion by events.

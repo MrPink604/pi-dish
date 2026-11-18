@@ -54,6 +54,10 @@ export declare class AcpSession extends TransportSession {
     private counter;
     private spawnFailure;
     private earlyFrames;
+    /** Set while agy works with no outstanding prompt (a background command woke it). */
+    private autonomousTimer;
+    /** Usage reported by prompts that handed their turn to a steer; added to the turn's total. */
+    private handoverUsage;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
     private _writeFrame;
@@ -78,6 +82,16 @@ export declare class AcpSession extends TransportSession {
     private _toolUpdate;
     private _emitTool;
     private _endTurn;
+    /**
+     * agy keeps working without a prompt when a background command it started
+     * finishes after its turn was answered. That work is a turn of its own: open
+     * one on the first frame, and end it once frames stop and no dialog awaits an
+     * answer, since no prompt response will arrive to end it.
+     */
+    private _noteActivity;
+    private _autonomousIdle;
+    private _clearAutonomousTimer;
+    private _takeHandoverUsage;
     private _configOption;
     private _configValues;
     private _configValue;

@@ -170,6 +170,48 @@ test('steering hands the turn over: one turn_end with usage on the newest prompt
   assert.equal(session.turnInProgress, false);
 });
 
+test('a handed-over prompt that reports usage adds it to the turn total', async (t) => {
+  const session = await launch('steer-usage');
+  cleanup(t, session);
+  const events = capture(session);
+
+  await session.prompt('first');
+  await session.steer('second');
+  await until(() => events.some(event => event.event === 'turn_end'));
+
+  assert.equal(events.filter(event => event.event === 'turn_end').length, 1);
+  const usage = asRecord(messages(events, 'assistant').at(-1)?.usage);
+  assert.equal(usage.totalTokens, 260, 'both prompts report usage and the turn keeps both');
+  assert.equal(usage.input, 240);
+});
+
+test('work agy resumes on its own after the prompt ends becomes its own turn in the mirror', async (t) => {
+  const saved = process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+  process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = '150';
+  t.after(() => {
+    if (saved === undefined) delete process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+    else process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = saved;
+  });
+  const session = await launch('background');
+  cleanup(t, session);
+  const events = capture(session);
+
+  await session.prompt('run the tests');
+  await until(() => events.filter(event => event.event === 'turn_end').length === 2, 5000);
+
+  const order = events.map(event => event.event).filter(name => name === 'turn_start' || name === 'turn_end');
+  assert.deepEqual(order, ['turn_start', 'turn_end', 'turn_start', 'turn_end'], 'the resumed work runs as a second turn');
+  assert.equal(session.turnInProgress, false);
+
+  // The background command's result and the text after it reach the mirror in order.
+  const mirrored = mirrorEntries(session.sessionFile)
+    .filter(entry => entry.type === 'message').map(entry => asRecord(entry.message));
+  const roles = mirrored.map(message => `${String(message.role)}${message.toolName ? `:${String(message.toolName)}` : ''}`);
+  assert.deepEqual(roles, ['user', 'assistant', 'assistant', 'toolResult:bash', 'assistant']);
+  assert.match(assistantText([mirrored[4]]), /Background tests passed\./);
+  assert.equal(blockAt(mirrored[1].content).type, 'toolCall', 'the call precedes its result');
+});
+
 test('normalises tool calls, orders the mirror, and keeps bash exit details', async (t) => {
   const session = await launch('tool');
   cleanup(t, session);
