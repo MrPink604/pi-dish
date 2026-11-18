@@ -19,7 +19,7 @@ async function waitFor(predicate, timeoutMs = 3000) {
     }
     throw new Error('condition timeout');
 }
-async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false, askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false, promptMode, hostDialogs = false, turnErrors = false, modelScope = '', } = {}) {
+async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsession = false, askDialog = false, askThrow = false, askTrigger = false, checkUiRestore = false, nativeProjection = null, lifecycle = false, promptMode, hostDialogs = false, turnErrors = false, modelScope = '', disabledCredentials, } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-omp-compact-'));
     const home = path.join(root, 'home');
     const socketDir = path.join(root, 'sockets');
@@ -64,6 +64,7 @@ async function startFakeHost(hasCompact, { swallowOutcome = false, nestedSubsess
             FAKE_OMP_HOST_DIALOG_RESULT: hostDialogs ? hostDialogResultFile : '',
             FAKE_OMP_TURN_ERRORS: turnErrors ? '1' : '',
             FAKE_OMP_MODEL_SCOPE: modelScope,
+            FAKE_OMP_DISABLED_CREDENTIALS: disabledCredentials ? JSON.stringify(disabledCredentials) : '',
             FAKE_OMP_SEND_LOG: sendLogFile,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -138,8 +139,39 @@ test('OMP bridge reports a prompt the host refuses before admitting it', async (
     try {
         await session.connect();
         // OMP's public sendUserMessage() keeps this rejection in its TUI; the
-        // caller must still learn the prompt never reached the session.
-        await assert.rejects(session.prompt('the prompt that must not vanish'), /Oh My Pi did not accept the message: No API key found for anthropic/);
+        // caller must still learn the prompt never reached the session, without
+        // the TUI-only remedies (env vars, the auth database path).
+        await assert.rejects(session.prompt('the prompt that must not vanish'), (error) => {
+            assert.equal(error.message, 'Oh My Pi did not accept the message: not signed in to anthropic. '
+                + 'Sign in to anthropic in the Oh My Pi terminal, or switch models with /model.');
+            return true;
+        });
+    }
+    finally {
+        session.close();
+        await host.close();
+    }
+});
+test('OMP bridge names the newest disabled credential when a refused prompt has no key', async () => {
+    const host = await startFakeHost(false, {
+        promptMode: 'signed-out',
+        disabledCredentials: [
+            { id: 3, provider: 'anthropic', type: 'oauth', cause: 'oauth refresh failed: revoked', disabledAtMs: 1 },
+            {
+                id: 14, provider: 'anthropic', type: 'oauth', disabledAtMs: 2,
+                cause: 'oauth refresh failed: OAuthError: anthropic token refresh failed: 400 '
+                    + '{"error": "invalid_grant", "error_description": "Refresh token expired"}',
+            },
+        ],
+    });
+    const session = new BridgeSession(host.claim);
+    try {
+        await session.connect();
+        await assert.rejects(session.prompt('hello'), (error) => {
+            assert.equal(error.message, 'Oh My Pi did not accept the message: the anthropic sign-in stopped working '
+                + '(Refresh token expired). Sign in to anthropic in the Oh My Pi terminal, or switch models with /model.');
+            return true;
+        });
     }
     finally {
         session.close();
