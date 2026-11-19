@@ -107,6 +107,7 @@
     "test/browser/session-view.spec.ts",
     "test/fixtures/browser-app.ts",
     "test/browser-fleet-view.test.ts",
-    "test/browser/fleet-view.spec.ts"
+    "test/browser/fleet-view.spec.ts",
+    "test/browser/agy-tasks-swarm.spec.ts"
   ]
 }

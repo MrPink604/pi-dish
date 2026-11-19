@@ -53,6 +53,7 @@ import { createPushNotifier } from './push-notifications';
 import { expandSessionRefs } from './session-refs';
 import { getPrimeDaemon } from './prime-daemon';
 import { createAgyImportRuntime } from './agy-import';
+import { createAgySessionHandlers } from './agy-session-handlers';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
 import { createPrivateAccess } from './private-access';
@@ -240,12 +241,16 @@ export function startServer(rootDirectory: string): Server {
     privateUnlocked,
   });
   const relationHandlers = createSessionRelationHandlers({ catalog, resolveSessionCandidate, privateUnlocked });
+  const agySessionHandlers = createAgySessionHandlers({ ownership, findSessionSource });
 
   app.get('/api/sessions', browseHandlers.list);
   app.get('/api/host/health', browseHandlers.hostHealth);
   app.get('/api/sessions/resolve', browseHandlers.resolve);
   app.get('/api/sessions/:id/related', relationHandlers.related);
   app.get('/api/sessions/:id/lineage', relationHandlers.lineage);
+  app.get('/api/sessions/:id/tasks', agySessionHandlers.tasks);
+  app.get('/api/sessions/:id/tasks/:taskId/log', agySessionHandlers.taskLog);
+  app.get('/api/sessions/:id/swarm', agySessionHandlers.swarm);
   app.get('/api/search', browseHandlers.search);
 
   app.get('/api/usage-summary', featureHandlers.usageSummary);

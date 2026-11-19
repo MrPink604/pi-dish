@@ -12,6 +12,7 @@ import { encodeSessionKey, resolveSessionRoute, validSessionId, VERSION } from '
 import { createSessionSourceResolver } from './session-source';
 import { sessionRootsFor } from './private-sessions';
 import { discoverSubsessionCandidates, findSessionCandidate, readSessionHeader } from './session-discovery';
+import { isAgySubagentLive } from './agy-brain';
 import type { DiscoveryCandidate, LiveSourceObservation, SessionSource, SessionSourceResolver } from './session-source';
 import { record } from './helper-values';
 import * as tmux from './tmux';
@@ -919,6 +920,14 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
         return record(entry) && entry.type === 'rlm_subagent' && entry.status === 'running';
       } catch { return false; }
     }
+    if (descriptor.brainSubagents) {
+      const parentFile = candidate.parentSession;
+      if (!parentFile) return false;
+      const parentId = parentFile.endsWith(`${path.sep}transcript.jsonl`)
+        ? path.basename(path.dirname(path.dirname(path.dirname(parentFile))))
+        : path.basename(parentFile, '.jsonl');
+      return isAgySubagentLive(parentId, candidate.nativeSessionId);
+    }
     return false;
   }
 
@@ -927,7 +936,7 @@ export function createSessionOwnership(observations: OwnershipObservations): Ses
     const out: DiscoveryCandidate[] = [];
     for (const session of active) {
       const descriptor = getHarness(session.harnessId);
-      if (!descriptor || (!descriptor.nestedSubsessions && !descriptor.subagentArtifacts) || typeof session.sessionFile !== 'string' || !session.sessionFile) continue;
+      if (!descriptor || (!descriptor.nestedSubsessions && !descriptor.subagentArtifacts && !descriptor.brainSubagents) || typeof session.sessionFile !== 'string' || !session.sessionFile) continue;
       let candidates: DiscoveryCandidate[];
       try { candidates = discoverSubsessionCandidates(session.sessionFile, { descriptor }); } catch { continue; }
       for (const candidate of candidates) {

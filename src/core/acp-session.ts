@@ -36,6 +36,7 @@ import {
   askFromElicitation,
   backupAcpMirror,
   extractAcpPlanTier,
+  normalizeAcpPlan,
   normalizeAcpTool,
   permissionDialog,
   permissionResult,
@@ -47,10 +48,12 @@ import {
   type AcpMirrorBackup,
   type AcpPermissionOption,
   type AcpToolCall,
+  type NormalizedPlanEntry,
 } from './acp-transcript';
+import { findLatestToolStepOutput, readRunningTaskLogTail } from './agy-brain';
 
 /** Versions the fake agent and the captures were verified against. */
-export const AGY_VERIFIED_VERSIONS: readonly string[] = Object.freeze(['1.5.10']);
+export const AGY_VERIFIED_VERSIONS: readonly string[] = Object.freeze(['1.5.10', '1.5.13']);
 
 /** The child inherits the user's normal `agy` profile; ambient API keys would pick another auth method. */
 const STRIPPED_ENV = [
@@ -249,6 +252,7 @@ interface TrackedTool {
   startedAt: number;
   waitMsBeforeAsync: number | null;
   isDaemon: boolean;
+  lastStreamedLog: string;
 }
 
 interface InboundDialog {
@@ -302,6 +306,10 @@ export class AcpSession extends TransportSession {
   declare private segmentFirstOutputAt: number | null;
   /** Sum of earlier model-step TTFTs in the active turn, for multi-step streaming rate. */
   declare private turnTtftSumMs: number;
+  /** Latest ACP `plan` entries for this session. */
+  declare private planEntries: NormalizedPlanEntry[];
+  /** Polls live task-*.log tails onto long-running `run_command` tool cards. */
+  declare private taskLogTimer: NodeJS.Timeout | null;
 
   constructor(proc: ChildProcessWithoutNullStreams, cwd: string) {
     super();
@@ -339,6 +347,8 @@ export class AcpSession extends TransportSession {
     this.turnGenMs = 0;
     this.segmentFirstOutputAt = null;
     this.turnTtftSumMs = 0;
+    this.planEntries = [];
+    this.taskLogTimer = null;
 
     // A failed spawn (ENOENT) emits only 'error': settle startup and drop timers.
     this.spawnFailure = new Promise<never>((_, reject) => {
@@ -372,6 +382,7 @@ export class AcpSession extends TransportSession {
 
     proc.on('exit', (code) => {
       this._clearAutonomousTimer();
+      this._clearTaskLogTimer();
       // Keep whatever the agent already said: an open segment would be lost otherwise.
       if (this.segment) this._closeSegment('error', this._takeHandoverUsage(), `agy exited with code ${code}`, true);
       this.alive = false;
@@ -569,6 +580,7 @@ export class AcpSession extends TransportSession {
         this._toolUpdate(update);
         return;
       case 'plan': {
+        this.planEntries = normalizeAcpPlan(update.entries);
         const request = planWidgetRequest(`agy-plan-${++this.counter}`, update.entries);
         if (request) this._emitUI(request);
         return;
@@ -748,7 +760,8 @@ export class AcpSession extends TransportSession {
     const status = text(update.status);
     this.nextStepStartedAt = status === 'pending' ? null : (waitMs !== null ? startedAt + waitMs : null);
     if (status !== 'completed' && status !== 'failed') {
-      this.toolCalls.set(toolCallId, { call, startedAt, waitMsBeforeAsync: waitMs, isDaemon });
+      this.toolCalls.set(toolCallId, { call, startedAt, waitMsBeforeAsync: waitMs, isDaemon, lastStreamedLog: '' });
+      this._syncTaskLogTimer();
     }
     if (call.nativeName === 'ask_question') {
       const args = isRecord(update.args) ? update.args : {};
@@ -776,12 +789,16 @@ export class AcpSession extends TransportSession {
       const isError = status === 'failed';
       this.toolCalls.delete(toolCallId);
       this.askQuestions.delete(toolCallId);
+      this._syncTaskLogTimer();
       this.nextStepStartedAt = Date.now();
       this.sawStepSignal = false;
+      // agy ACP omits output on non-filesystem tools (`swarm`, `read_board`,
+      // `invoke_subagent`, `manage_task`, ...); enrich from brain step output when empty.
+      const resultText = result.text || findLatestToolStepOutput(this.nativeSessionId, tracked.call.nativeName) || '';
       this.transcript?.appendToolResult({
         toolCallId,
         toolName: tracked.call.toolName,
-        content: result.text,
+        content: resultText,
         isError,
         ...(result.details ? { details: result.details } : {}),
       });
@@ -791,7 +808,7 @@ export class AcpSession extends TransportSession {
         args: tracked.call.args,
         startedAt: tracked.startedAt,
         isError,
-        result: { content: [{ type: 'text', text: result.text }], ...(result.details ? { details: result.details } : {}) },
+        result: { content: [{ type: 'text', text: resultText }], ...(result.details ? { details: result.details } : {}) },
       });
       return;
     }
@@ -817,6 +834,7 @@ export class AcpSession extends TransportSession {
 
   private _endTurn(): void {
     this._clearAutonomousTimer();
+    this._syncTaskLogTimer();
     this.turnInProgress = false;
     this.lastActivityAt = new Date();
     trackRunningToolCalls(this.runningToolCalls, 'turn_end', { type: 'turn_end' });
@@ -868,6 +886,56 @@ export class AcpSession extends TransportSession {
   private _clearAutonomousTimer(): void {
     if (this.autonomousTimer) clearTimeout(this.autonomousTimer);
     this.autonomousTimer = null;
+  }
+
+  private _hasRunningShellTools(): boolean {
+    for (const tracked of this.toolCalls.values()) {
+      if (tracked.call.nativeName === 'run_command' && !tracked.isDaemon) return true;
+    }
+    return false;
+  }
+
+  private _syncTaskLogTimer(): void {
+    if (!this.alive || !this._hasRunningShellTools()) {
+      this._clearTaskLogTimer();
+      return;
+    }
+    if (this.taskLogTimer) return;
+    this.taskLogTimer = setInterval(() => this._pollRunningTaskLogs(), 1500);
+    this.taskLogTimer.unref();
+  }
+
+  private _clearTaskLogTimer(): void {
+    if (this.taskLogTimer) clearInterval(this.taskLogTimer);
+    this.taskLogTimer = null;
+  }
+
+  /** Stream live `.system_generated/tasks/task-*.log` tails onto backgrounded bash cards. */
+  private _pollRunningTaskLogs(): void {
+    if (!this.alive || !this._hasRunningShellTools()) {
+      this._clearTaskLogTimer();
+      return;
+    }
+    const now = Date.now();
+    for (const [toolCallId, tracked] of this.toolCalls) {
+      if (tracked.call.nativeName !== 'run_command' || tracked.isDaemon) continue;
+      const asyncAfter = tracked.waitMsBeforeAsync ?? 5000;
+      if (now - tracked.startedAt < asyncAfter) continue;
+      const tail = readRunningTaskLogTail(this.nativeSessionId, text(tracked.call.args.command));
+      if (!tail || tail === tracked.lastStreamedLog) continue;
+      tracked.lastStreamedLog = tail;
+      this._emitTool('tool_execution_update', {
+        toolCallId,
+        toolName: tracked.call.toolName,
+        args: tracked.call.args,
+        startedAt: tracked.startedAt,
+        partialResult: { content: [{ type: 'text', text: tail }] },
+      });
+    }
+  }
+
+  getPlan(): NormalizedPlanEntry[] {
+    return this.planEntries.map(entry => ({ ...entry }));
   }
 
   private _takeHandoverUsage(final: ProtocolRecord | null = null): ProtocolRecord | null {

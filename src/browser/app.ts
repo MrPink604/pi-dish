@@ -25,6 +25,8 @@ import { createModelCatalog, modelsCacheKey } from './model-catalog';
 import { sameDirectoryHost } from './directory-catalog';
 import { createSessionRelations } from './session-relations';
 import { createSubagentsView } from './subagents-view';
+import { createTasksView } from './tasks-view';
+import { createSwarmView } from './swarm-view';
 import { createSessionHeader } from './session-header';
 import { createSessionControls } from './session-controls';
 import { createSessionSearch } from './session-search';
@@ -390,10 +392,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('click', (e) => {
     const link = e.target instanceof Element ? e.target.closest<HTMLElement>('.job-agent-link') : null;
     const agentId = link?.dataset.agentId;
-    if (!agentId) return;
+    if (agentId) {
+      e.preventDefault();
+      const owner = sessionState.captureSelection(), endpoint = owner ? hostEntryFor(owner.host) : null;
+      if (owner && endpoint) subagentsController.open(owner, endpoint, sessionRelationsController.data, agentId);
+      return;
+    }
+    const swarmLink = e.target instanceof Element ? e.target.closest<HTMLElement>('.swarm-board-link, [data-open-swarm-board]') : null;
+    if (!swarmLink) return;
     e.preventDefault();
     const owner = sessionState.captureSelection(), endpoint = owner ? hostEntryFor(owner.host) : null;
-    if (owner && endpoint) subagentsController.open(owner, endpoint, sessionRelationsController.data, agentId);
+    if (owner && endpoint) swarmController.open(owner, endpoint);
   });
 
 
@@ -608,9 +617,11 @@ const sessionRelationsController: ReturnType<typeof createSessionRelations> = cr
   document, window, sessionState, request, endpoint: hostEntryFor,
   loadPrevious,
   openView: (owner, endpoint, initial) => subagentsController.open(owner, endpoint, initial),
-  // The takeover's own lineage poll covers an open view (the header chip is
-  // hidden there); the header poll defers to it instead of doubling requests.
-  takeoverActive: () => subagentsController.isOpen(),
+  openTasksView: (owner, endpoint, initial) => tasksController.open(owner, endpoint, initial),
+  openSwarmView: (owner, endpoint) => swarmController.open(owner, endpoint),
+  // The takeovers' own polls cover an open view (the header chips are
+  // hidden there); the header poll defers to them instead of doubling requests.
+  takeoverActive: () => subagentsController.isOpen() || tasksController.isOpen() || swarmController.isOpen(),
   selectSession, status: setStatus,
 });
 
@@ -797,6 +808,21 @@ const subagentsController: ReturnType<typeof createSubagentsView> = createSubage
   markdown: text => richText.format(text), assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), details: responseDetailsController,
 });
 
+const tasksController: ReturnType<typeof createTasksView> = createTasksView({
+  root: document.querySelector<HTMLElement>('.main')!, request, sessionState, endpoint: hostEntryFor,
+  closeOtherViews: () => mainPane.beforeTakeover('tasks'),
+  openSubagent: (owner, endpoint, subagentId) => subagentsController.open(owner, endpoint, sessionRelationsController.data, subagentId),
+  openSwarm: (owner, endpoint, focusMember) => swarmController.open(owner, endpoint, focusMember),
+});
+
+const swarmController: ReturnType<typeof createSwarmView> = createSwarmView({
+  root: document.querySelector<HTMLElement>('.main')!, request, sessionState, endpoint: hostEntryFor,
+  closeOtherViews: () => mainPane.beforeTakeover('swarm'),
+  loadPrevious,
+  selectSession, status: setStatus,
+  markdown: text => richText.format(text), assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), details: responseDetailsController,
+});
+
 
 const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools({
   document, sessionState, started: (id, name) => sessionActivity.toolStarted(id, name),
@@ -855,6 +881,10 @@ const sideChat: SideChatController = createSideChat({ document, sessionState, ma
 const composerSubmit: ReturnType<typeof createComposerSubmit> = createComposerSubmit({ document, sessionState, drafts: composerDrafts, delivery: promptDelivery, activity: sessionActivity, sideChat,
   request, endpoint: resolveHost, spawnId: () => sessionView.spawnId, spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
   refs: message => sessionReferences.hints(message), status: setStatus, openTree: () => transcriptTree.open(), hideAutocomplete: () => composerAutocomplete.hide(),
+  openTasks: () => { const owner = sessionState.captureSelection(), endpoint = owner ? hostEntryFor(owner.host) : null; if (owner && endpoint) tasksController.open(owner, endpoint, sessionRelationsController.tasks); },
+  openSubagents: () => { const owner = sessionState.captureSelection(), endpoint = owner ? hostEntryFor(owner.host) : null; if (owner && endpoint) subagentsController.open(owner, endpoint, sessionRelationsController.data); },
+  openSwarm: () => { const owner = sessionState.captureSelection(), endpoint = owner ? hostEntryFor(owner.host) : null; if (owner && endpoint) swarmController.open(owner, endpoint); },
+  hasSwarm: () => sessionRelationsController.hasSwarm,
   refresh: refreshSessions, follow: () => appChrome.follow(), scroll: chromeScroll.scroll, renderUser: (message, time, attrs) => messageRenderer.user(message, time, attrs),
   woke: async (id, host) => { await sidebarLists.refresh(); const current = sessionState.currentSession; if (current?.id === id && (current.host || null) === host) await sessionView.select(id, { host }); },
 });
@@ -1007,6 +1037,10 @@ document.addEventListener('keydown', function(e) {
     e.preventDefault(); harnessSettingsController.close();
   } else if ((document.getElementById('settingsModal') as HTMLElement).style.display !== 'none') {
     e.preventDefault(); closeSettingsModal();
+  } else if (swarmController.isOpen()) {
+    e.preventDefault(); swarmController.close();
+  } else if (tasksController.isOpen()) {
+    e.preventDefault(); tasksController.close();
   } else if (subagentsController.isOpen()) {
     e.preventDefault(); subagentsController.close();
   } else if ((document.getElementById('treeModal') as HTMLElement).style.display !== 'none') {
@@ -1087,6 +1121,8 @@ const mainPane = createMainPane({
     usage: { close: () => usageController.close() },
     search: { close: () => searchViewController.close() },
     subagents: { close: () => subagentsController.close(), clearsSessionSurfaces: true },
+    tasks: { close: () => tasksController.close(), clearsSessionSurfaces: true },
+    swarm: { close: () => swarmController.close(), clearsSessionSurfaces: true },
     newSession: { close: () => newSessionController.close() },
     skills: { close: () => skillsController.close() },
     routines: { close: () => routinesController.close() },
@@ -1179,6 +1215,10 @@ createAppBindings({ document, actions: {
   // changed while it was open.
   closeSubagentsView: () => { subagentsController.close(); const owner = sessionState.captureSelection(); if (owner) void sessionRelationsController.load(owner); },
   reloadSubagentsView: () => subagentsController.reload(),
+  closeTasksView: () => { tasksController.close(); const owner = sessionState.captureSelection(); if (owner) void sessionRelationsController.load(owner); },
+  reloadTasksView: () => tasksController.reload(),
+  closeSwarmView: () => { swarmController.close(); const owner = sessionState.captureSelection(); if (owner) void sessionRelationsController.load(owner); },
+  reloadSwarmView: () => swarmController.reload(),
   backdropCloseStatsModal: (event, node) => { if (event.target === node) sessionInfo.closeStats(); },
   closeStatsModal: () => sessionInfo.closeStats(),
   backdropCloseSettingsModal: (event, node) => { if (event.target === node) closeSettingsModal(); },

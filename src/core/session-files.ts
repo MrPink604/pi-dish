@@ -15,6 +15,7 @@ import { extractTextContent } from './helper-content.js';
 import { createUsageCostEstimator, isPlanProvider, pricingRevision } from './harness-pricing.js';
 import type { UsageCostEstimator } from './harness-pricing.js';
 import { TURN_ERROR_ENTRY_TYPE, turnErrorData } from './turn-error-entry.js';
+import { AGY_BRAIN_PROFILE_ID, isAgyBrainTranscriptPath, parseAgyBrainEntries } from './agy-brain.js';
 
 export interface SessionFileProfile {
   readonly profileId?: string;
@@ -123,18 +124,21 @@ function sameFile(left: fs.Stats, right: fs.Stats): boolean {
 
 // One opportunistic raw parse shared by all readers and the corpus index. WeakRef
 // avoids pinning a second large transcript; GC changes work, never freshness.
-let parsedFile: { file: string; stats: fs.Stats; entries: WeakRef<SessionEntries>; endsNl: boolean } | undefined;
-export function readSessionFileEntries(file: string, stats: fs.Stats = fs.statSync(file)): {
+let parsedFile: { file: string; profileId: string; stats: fs.Stats; entries: WeakRef<SessionEntries>; endsNl: boolean } | undefined;
+export function readSessionFileEntries(file: string, stats: fs.Stats = fs.statSync(file), profileId?: string): {
   entries: SessionEntries; endsNl: boolean;
 } {
-  if (parsedFile?.file === file && sameFile(parsedFile.stats, stats)) {
+  const effectiveProfile = profileId || (isAgyBrainTranscriptPath(file) ? AGY_BRAIN_PROFILE_ID : '');
+  if (parsedFile?.file === file && parsedFile.profileId === effectiveProfile && sameFile(parsedFile.stats, stats)) {
     const entries = parsedFile.entries.deref();
     if (entries) return { entries, endsNl: parsedFile.endsNl };
   }
   const content = fs.readFileSync(file, 'utf-8');
-  const entries = parseSessionEntries(content);
+  const entries = effectiveProfile === AGY_BRAIN_PROFILE_ID
+    ? parseAgyBrainEntries(content, file)
+    : parseSessionEntries(content);
   const endsNl = content.endsWith('\n');
-  parsedFile = { file, stats, entries: new WeakRef(entries), endsNl };
+  parsedFile = { file, profileId: effectiveProfile, stats, entries: new WeakRef(entries), endsNl };
   return { entries, endsNl };
 }
 
@@ -163,7 +167,7 @@ const infoCache = new Map<string, Cached<SessionInfo>>();
 
 export function getSessionInfo(filePath: string | SessionFileSource): SessionInfo {
   return { ...statCached(infoCache, filePath, 1000,
-    (fp, stats, candidate) => sessionInfoFromEntries(readSessionFileEntries(fp, stats).entries, stats.mtime, candidate), `cache:${cacheRetentionRevision()}`) };
+    (fp, stats, candidate) => sessionInfoFromEntries(readSessionFileEntries(fp, stats, candidate.profileId).entries, stats.mtime, candidate), `cache:${cacheRetentionRevision()}`) };
 }
 
 /**
@@ -502,7 +506,7 @@ const messagesCache = new Map<string, Cached<MessageData>>();
 export function readSessionMessages(filePath: string | SessionFileSource): readonly SessionMessage[] {
   // Sized above the client's 5-session retention (lazy images, warm-restore).
   return statCached(messagesCache, filePath, 8,
-    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate),
+    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats, candidate.profileId).entries, candidate),
     `cache:${cacheRetentionRevision()}`).messages;
 }
 
@@ -510,13 +514,13 @@ export function readSessionMessages(filePath: string | SessionFileSource): reado
 // decides the branch. Leaf is in the key: one open fires several page requests.
 export function readSessionMessagesAtLeaf(filePath: string | SessionFileSource, leafId: unknown): readonly SessionMessage[] {
   return statCached(messagesCache, filePath, 8,
-    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate, leafId),
+    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats, candidate.profileId).entries, candidate, leafId),
     `leaf:${leafId ?? ''}\0cache:${cacheRetentionRevision()}`).messages;
 }
 
 export function readSessionMessageById(filePath: string | SessionFileSource, entryId: unknown): SessionMessage | null {
   return statCached(messagesCache, filePath, 8,
-    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate),
+    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats, candidate.profileId).entries, candidate),
     `cache:${cacheRetentionRevision()}`).byId.get(entryId) || null;
 }
 
@@ -528,7 +532,7 @@ export function readSessionSearchText(filePath: string | SessionFileSource): {
   readonly messages: readonly SessionMessage[]; readonly texts: readonly string[];
 } {
   const data = statCached(messagesCache, filePath, 8,
-    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats).entries, candidate),
+    (fp, stats, candidate) => parseMessageData(readSessionFileEntries(fp, stats, candidate.profileId).entries, candidate),
     `cache:${cacheRetentionRevision()}`);
   if (!data.searchText) {
     data.searchText = data.messages.map(message => extractTextContent(message.content).toLowerCase());
@@ -722,7 +726,7 @@ function computeSessionStats(filePath: string, stats: fs.Stats, candidate: Sessi
   const apis = new Set<string>();
   const model: ModelContinuity = { provider: null, model: null };
   const tiers: { value: ServiceTierContinuity } = { value: null };
-  for (const raw of readSessionFileEntries(filePath, stats).entries) {
+  for (const raw of readSessionFileEntries(filePath, stats, candidate.profileId).entries) {
     const entry = fields(raw);
     if (entry.type === 'model_change') advanceModelChange(entry, model, candidate.profileId, 'display');
     advanceServiceTierChange(entry, tiers);

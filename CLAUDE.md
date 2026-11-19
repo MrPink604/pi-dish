@@ -901,6 +901,24 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   checkpoints. Stream `error` listeners and a 5 s hard-exit deadline keep a
   relay from outliving its pane: a killed pane once raised an async `EPIPE`
   that looped through logging at 100% CPU.
+- **Brain tasks, subagents, and swarms (`src/core/agy-brain.ts`,
+  `src/core/agy-session-handlers.ts`, `src/browser/tasks-view.ts`,
+  `src/browser/swarm-view.ts`):** read-only inspection of Antigravity's
+  documented `~/.gemini/antigravity-cli/brain/<id>/.system_generated/` files
+  (never touching tokens or SQLite `conversations/*.db`; lstat regular
+  non-symlink checks throughout, overridable via `PI_DISH_AGY_BRAIN_DIR`).
+  `agy` sets `brainSubagents: true`: `subagents/<childId>.json` and brain
+  `logs/transcript.jsonl` (`profileId: 'agy-brain-v1'`, `resume: false`) join
+  `/api/sessions/:id/lineage` and the Subagents takeover, with live working
+  state inferred from the tail step. `AcpSession` enriches empty
+  non-filesystem tool completions from brain step output, polls running
+  `tasks/task-<N>.log` tails onto live `bash` cards, tracks `plan` entries
+  (clearing the widget on empty updates), and `agy-relay.ts` reports
+  `backgroundWork` while brain subagents or non-daemon tasks are running so
+  hibernation does not interrupt an active swarm. `GET /api/sessions/:id/tasks`,
+  `/tasks/:taskId/log`, and `/swarm` (`?since=`, coordinator or worker route)
+  back the header chips, the Tasks and Swarm main-pane takeovers, `/tasks`,
+  `/agents`, `/swarm board`, and clickable inline `/swarm board` links.
 
 ## tmux spawning (lib/tmux.js)
 

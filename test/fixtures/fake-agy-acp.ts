@@ -503,6 +503,33 @@ function handlePrompt(id: number, params: Frame): void {
       }, 5);
       return;
     }
+    case 'tasks-and-plan': {
+      setTimeout(() => {
+        sessionUpdate({
+          sessionUpdate: 'plan',
+          entries: [
+            { content: 'Verify auth fix', status: 'in_progress', priority: 'high' },
+            { content: 'Run smoke tests', status: 'pending', priority: 'medium' },
+          ],
+        });
+        toolCall('call-swarm-1', 'swarm', { action: 'add', name: 'reader' }, 'swarm add', 'other');
+        toolUpdate('call-swarm-1', 'swarm', 'completed', { title: 'swarm add', kind: 'other' });
+        toolCall('call-bg-log', 'run_command', { CommandLine: 'npm run watch', WaitMsBeforeAsync: 500 }, 'npm run watch', 'execute');
+        setTimeout(() => {
+          toolUpdate('call-bg-log', 'run_command', 'completed', {
+            title: 'npm run watch',
+            kind: 'execute',
+            content: [{ type: 'content', content: { type: 'text', text: 'watch complete\n' } }],
+            rawOutput: { output: 'watch complete\n', exit_code: 0 },
+          });
+          sessionUpdate({ sessionUpdate: 'plan', entries: [] });
+          textChunk('All tasks finished.');
+          usageUpdate(950);
+          finishPrompt(id, 'end_turn');
+        }, 1700);
+      }, 5);
+      return;
+    }
     case 'tool': {
       const file = `${cwd}/README.md`;
       setTimeout(() => {

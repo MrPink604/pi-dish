@@ -17,6 +17,7 @@ export function createComposerSubmit(options: {
   activity: ReturnType<typeof createSessionActivity>; sideChat: SideChatController; request: ApiRequest; endpoint: (host: string | null) => HostEndpoint;
   spawnId: () => string | null; spawnPending: () => boolean; refs: ReturnType<typeof createSessionReferences>['hints'];
   status: (text: string, type?: string) => void; openTree: () => void; hideAutocomplete: () => void; refresh: () => unknown;
+  openTasks?: () => void; openSubagents?: () => void; openSwarm?: () => void; hasSwarm?: () => boolean;
   /** The prompt resumed a hibernated session: reload the list and attach its live stream. */
   woke: (id: string, host: string | null) => unknown;
   follow: () => void; scroll: (container: HTMLElement) => void; renderUser: (message: RenderMessage, time: string, attrs: string) => string;
@@ -93,6 +94,22 @@ async function sendPrompt() {
     return;
   }
   if (message === '/tree') { input.value = ''; options.openTree(); return; }
+  if (sessionState.currentSession.harnessId === 'agy') {
+    const openLocalView = (open: (() => void) | undefined) => {
+      if (!open) return false;
+      input.value = '';
+      input.style.height = '';
+      composerDrafts.record(message, ownerKey);
+      composerDrafts.clearDraft(ownerKey);
+      options.hideAutocomplete();
+      open();
+      return true;
+    };
+    if (/^\/tasks$/i.test(message) && openLocalView(options.openTasks)) return;
+    if (/^\/agents$/i.test(message) && openLocalView(options.openSubagents)) return;
+    if ((/^\/swarm\s+board$/i.test(message) || (/^\/swarm$/i.test(message) && options.hasSwarm?.()))
+      && openLocalView(options.openSwarm)) return;
+  }
   options.hideAutocomplete();
 
   if (message.startsWith('/')) {

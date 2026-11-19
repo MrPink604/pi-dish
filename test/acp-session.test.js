@@ -560,3 +560,43 @@ test('includes TTFT per LLM step, skips tool execution and sibling batch calls, 
     assert.equal(indexed.total.genOutput, 8);
     assert.deepEqual(indexed.models['google-antigravity/gemini-4-carbon'].apis, ['acp']);
 });
+test('plan widget clears on empty entries, tool results enrich from brain step output, and running bash streams task logs', async (t) => {
+    // Pure unit check on planWidgetRequest clearing empty plans.
+    const clearReq = acpTranscript.planWidgetRequest('plan-clear-1', []);
+    assert.ok(clearReq);
+    assert.equal(clearReq.widgetKey, 'agy-plan');
+    assert.deepEqual(clearReq.widgetLines, []);
+    const session = await launch('tasks-and-plan');
+    cleanup(t, session);
+    const events = capture(session);
+    // Seed Antigravity brain step output and running task log for this session id.
+    const sysDir = path.join(tmp, '.gemini', 'antigravity-cli', 'brain', session.id, '.system_generated');
+    fs.mkdirSync(path.join(sysDir, 'logs'), { recursive: true });
+    fs.mkdirSync(path.join(sysDir, 'steps', '2'), { recursive: true });
+    fs.mkdirSync(path.join(sysDir, 'tasks'), { recursive: true });
+    fs.writeFileSync(path.join(sysDir, 'logs', 'transcript.jsonl'), [
+        JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', tool_calls: [{ name: 'swarm', args: {} }] }),
+        JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'DONE', content: 'Spawned worker @reader' }),
+    ].join('\n') + '\n');
+    fs.writeFileSync(path.join(sysDir, 'steps', '2', 'output.txt'), 'Spawned worker @reader (conv-123)\n');
+    fs.writeFileSync(path.join(sysDir, 'tasks', 'task-7.log'), 'building bundle...\nwatching for changes...\n');
+    await session.prompt('run tasks');
+    await until(() => session.getPlan().length === 2, 3000);
+    assert.equal(session.getPlan()[0].content, 'Verify auth fix');
+    await until(() => events.some(e => e.event === 'turn_end'), 5000);
+    assert.deepEqual(session.getPlan(), [], 'empty plan update clears getPlan()');
+    const planWidgets = events
+        .filter(e => e.event === 'extension_ui_request' && asRecord(e.data).widgetKey === 'agy-plan')
+        .map(e => asRecord(e.data).widgetLines);
+    assert.equal(planWidgets.length, 2);
+    assert.equal(Array.isArray(planWidgets[0]) ? planWidgets[0].length : 0, 2);
+    assert.deepEqual(planWidgets[1], [], 'clearing widget emits empty widgetLines');
+    const swarmEnd = events.find(e => e.event === 'tool_execution_end' && asRecord(e.data).toolCallId === 'call-swarm-1');
+    assert.ok(swarmEnd, 'swarm tool_execution_end emitted');
+    const swarmText = blockAt(asRecord(asRecord(swarmEnd.data).result).content).text;
+    assert.match(String(swarmText ?? ''), /Spawned worker @reader \(conv-123\)/);
+    const bgUpdates = events
+        .filter(e => e.event === 'tool_execution_update' && asRecord(e.data).toolCallId === 'call-bg-log')
+        .map(e => String(blockAt(asRecord(asRecord(e.data).partialResult).content).text ?? ''));
+    assert.ok(bgUpdates.some(text => text.includes('watching for changes...')), `expected running bash tool to stream task-7.log tail, got: ${JSON.stringify(bgUpdates)}`);
+});

@@ -2,6 +2,7 @@ import { countLabel } from './helper-format';
 import type { ApiRequest, HostEndpoint } from './api-client';
 import type { SelectionOwner, SessionState } from './session-state';
 import { record, text } from '../core/helper-values';
+import { EMPTY_TASKS, decodeSessionTasks, type SessionTasksPayload } from './agy-views-data';
 
 // The family tree is assembled server-side by /api/sessions/:id/lineage.
 export interface LineageCapabilities { readonly prompt: boolean; readonly steer: boolean; readonly followUp: boolean; }
@@ -74,14 +75,22 @@ export function decodeSessionLineage(value: unknown): SessionLineage {
   return { session: decodeLineageSession(value.session), tree, members, truncated: value.truncated === true };
 }
 
+function countWorkingRelatives(node: LineageNode | null, excludeId: string | null): number {
+  if (!node) return 0;
+  const self = node.session.id !== excludeId && node.session.turnInProgress ? 1 : 0;
+  return self + node.children.reduce((count, child) => count + countWorkingRelatives(child, excludeId), 0);
+}
+
 export function createSessionRelations(options: {
   document: Document; window: Window; sessionState: SessionState; request: ApiRequest;
   endpoint: (host: string | null) => HostEndpoint | null;
   loadPrevious: () => Promise<unknown>; selectSession: (id: string, options: { host: string | null }) => Promise<unknown>;
   openView: (owner: SelectionOwner, endpoint: HostEndpoint, initial: SessionLineage) => void;
+  openTasksView?: (owner: SelectionOwner, endpoint: HostEndpoint, initial: SessionTasksPayload) => void;
+  openSwarmView?: (owner: SelectionOwner, endpoint: HostEndpoint) => void;
   status: (message: string, kind: 'error') => void;
-  // True while the subagents takeover owns the main pane. Its own poll covers
-  // the family there and the header chip is hidden, so this poll stands down.
+  // True while a related takeover owns the main pane. Its own poll covers
+  // the family/tasks/swarm there and the header chips are hidden, so this poll stands down.
   takeoverActive?: () => boolean;
 }) {
   const { document, sessionState } = options;
@@ -96,6 +105,7 @@ export function createSessionRelations(options: {
   let lastIndexing = false;
   let loadInFlight = false;
   let lineage: SessionLineage = EMPTY_LINEAGE;
+  let tasksData: SessionTasksPayload = EMPTY_TASKS;
 
   function sameEndpoint(host: string | null, endpoint: HostEndpoint | null): boolean {
     const current = options.endpoint(host);
@@ -110,14 +120,14 @@ export function createSessionRelations(options: {
     headerEvents.abort();
     renderOwner = null; renderEndpoint = null;
     lineage = EMPTY_LINEAGE;
+    tasksData = EMPTY_TASKS;
     const el = element('sessionRelations');
     if (!el) return;
     el.replaceChildren();
     el.style.display = 'none';
   }
 
-  // The family size is the glanceable signal; the takeover carries the tree,
-  // peeking and signaling.
+  // Glanceable header chips for session family, background tasks/plan, and live swarm.
   function renderRelationsLink(owner: SelectionOwner | null = renderOwner, endpoint: HostEndpoint | null = renderEndpoint) {
     if (!owns(owner, endpoint)) return;
     renderOwner = owner; renderEndpoint = endpoint;
@@ -126,38 +136,130 @@ export function createSessionRelations(options: {
     if (!el) return;
     el.replaceChildren();
     const others = lineage.tree ? lineage.members - 1 : 0;
-    if (others <= 0) {
+    const isAgy = sessionState.currentSession?.harnessId === 'agy';
+    const taskCount = isAgy ? tasksData.tasks.length : 0;
+    const planCount = isAgy ? tasksData.plan.length : 0;
+    const showTasks = isAgy && !!options.openTasksView && (taskCount > 0 || planCount > 0);
+    const swarmSummary = isAgy && !!options.openSwarmView ? tasksData.swarm : null;
+
+    if (others <= 0 && !showTasks && !swarmSummary) {
       el.style.display = 'none';
       return;
     }
     el.style.display = '';
-    const link = document.createElement('button');
-    link.type = 'button';
-    link.className = 'session-relation-chip session-relation-tree-link';
-    link.title = `View the session family tree (${countLabel(others, 'related session')})`;
-    const icon = document.createElement('span');
-    icon.className = 'session-relation-kind';
-    icon.textContent = '⎇';
-    const name = document.createElement('span');
-    name.className = 'session-relation-name';
-    name.textContent = `Subagents · ${others}`;
-    link.append(icon, name);
-    link.addEventListener('click', () => {
-      if (owns(owner, endpoint) && owner && endpoint) options.openView(owner, endpoint, lineage);
-    }, { signal: headerEvents.signal });
-    el.appendChild(link);
+
+    if (others > 0) {
+      const workingRelatives = countWorkingRelatives(lineage.tree, owner?.id ?? null);
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.className = 'session-relation-chip session-relation-tree-link';
+      link.title = `View the session family tree (${countLabel(others, 'related session')})`;
+      if (workingRelatives > 0) {
+        const dot = document.createElement('span');
+        dot.className = 'session-relation-dot working';
+        link.appendChild(dot);
+      }
+      const icon = document.createElement('span');
+      icon.className = 'session-relation-kind';
+      icon.textContent = '⎇';
+      const name = document.createElement('span');
+      name.className = 'session-relation-name';
+      name.textContent = `Subagents · ${others}`;
+      link.append(icon, name);
+      if (workingRelatives > 0) {
+        const badge = document.createElement('span');
+        badge.className = 'session-relation-badge';
+        badge.textContent = `${workingRelatives} working`;
+        link.appendChild(badge);
+      }
+      link.addEventListener('click', () => {
+        if (owns(owner, endpoint) && owner && endpoint) options.openView(owner, endpoint, lineage);
+      }, { signal: headerEvents.signal });
+      el.appendChild(link);
+    }
+
+    if (showTasks && options.openTasksView) {
+      const running = tasksData.tasks.filter(t => t.status === 'running').length;
+      const scheduled = tasksData.tasks.filter(t => t.status === 'scheduled').length;
+      const planDone = tasksData.plan.filter(p => p.status === 'completed').length;
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'session-relation-chip session-relation-tasks-link';
+      chip.title = 'View background tasks, scheduled jobs, and plan (/tasks)';
+      if (running > 0 || scheduled > 0) {
+        const dot = document.createElement('span');
+        dot.className = `session-relation-dot ${running > 0 ? 'working' : 'scheduled'}`;
+        chip.appendChild(dot);
+      }
+      const icon = document.createElement('span');
+      icon.className = 'session-relation-kind';
+      icon.textContent = '☰';
+      const name = document.createElement('span');
+      name.className = 'session-relation-name';
+      if (running > 0) name.textContent = `Tasks · ${running} running`;
+      else if (scheduled > 0) name.textContent = `Tasks · ${scheduled} scheduled`;
+      else if (taskCount > 0) name.textContent = `Tasks · ${taskCount}`;
+      else name.textContent = `Plan · ${planDone}/${planCount}`;
+      chip.append(icon, name);
+      const openTasks = options.openTasksView;
+      chip.addEventListener('click', () => {
+        if (owns(owner, endpoint) && owner && endpoint) openTasks(owner, endpoint, tasksData);
+      }, { signal: headerEvents.signal });
+      el.appendChild(chip);
+    }
+
+    if (swarmSummary && options.openSwarmView) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'session-relation-chip session-relation-swarm-link';
+      chip.title = `Open Swarm board: ${swarmSummary.title} (/swarm board)`;
+      if (swarmSummary.workingCount > 0) {
+        const dot = document.createElement('span');
+        dot.className = 'session-relation-dot working';
+        chip.appendChild(dot);
+      }
+      const icon = document.createElement('span');
+      icon.className = 'session-relation-kind';
+      icon.textContent = '⬡';
+      const name = document.createElement('span');
+      name.className = 'session-relation-name';
+      name.textContent = `Swarm · ${swarmSummary.title}`;
+      chip.append(icon, name);
+      const badge = document.createElement('span');
+      badge.className = 'session-relation-badge';
+      badge.textContent = swarmSummary.workingCount > 0
+        ? `${swarmSummary.workingCount} working`
+        : `#${swarmSummary.postCount}`;
+      chip.appendChild(badge);
+      const openSwarm = options.openSwarmView;
+      chip.addEventListener('click', () => {
+        if (owns(owner, endpoint) && owner && endpoint) openSwarm(owner, endpoint);
+      }, { signal: headerEvents.signal });
+      el.appendChild(chip);
+    }
   }
 
-  // Repoll so spawned subagents appear without a reselect; stands down once the session
-  // can't gain relatives and while the takeover polls its own copy.
+  // Repoll so spawned subagents/tasks/swarms appear without a reselect; stands down once the session
+  // can't gain relatives and while a takeover polls its own copy.
   function startPoll(owner: SelectionOwner, endpoint: HostEndpoint) {
     clearInterval(pollTimer);
     pollTimer = setInterval(() => {
       if (disposed || !owns(owner, endpoint) || loadInFlight) return;
       if (options.takeoverActive?.()) return;
-      if (!sessionState.currentSession?.isActive && !lastIndexing) return;
+      if (!sessionState.currentSession?.isActive && !lastIndexing && !tasksData.swarm?.active) return;
       void loadSessionRelations(owner);
     }, 4000);
+  }
+
+  async function fetchAgyTasks(owner: SelectionOwner, endpoint: HostEndpoint): Promise<SessionTasksPayload> {
+    try {
+      const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/tasks`);
+      if (!res.ok) return EMPTY_TASKS;
+      const payload: unknown = await res.json();
+      return decodeSessionTasks(payload);
+    } catch {
+      return EMPTY_TASKS;
+    }
   }
 
   async function loadSessionRelations(owner: SelectionOwner | null): Promise<void> {
@@ -166,18 +268,22 @@ export function createSessionRelations(options: {
     if (!resolved) return;
     const endpoint = Object.freeze({ ...resolved });
     const seq = ++sessionRelationsSeq;
+    const isAgy = sessionState.currentSession?.harnessId === 'agy';
     clearTimeout(indexingTimer);
     loadInFlight = true;
     startPoll(owner, endpoint);
     const current = () => seq === sessionRelationsSeq && owns(owner, endpoint);
+    const tasksPromise = isAgy ? fetchAgyTasks(owner, endpoint) : Promise.resolve(EMPTY_TASKS);
     try {
       const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(owner.id)}/lineage`);
       const data: unknown = await res.json();
+      const loadedTasks = await tasksPromise;
       if (!current()) return;
       if (!res.ok) throw new Error(record(data) && text(data.error) || `HTTP ${res.status}`);
       const indexing = record(data) && data.indexing === true;
       lastIndexing = indexing;
       lineage = decodeSessionLineage(data);
+      tasksData = loadedTasks;
       renderRelationsLink(owner, endpoint);
       if (indexing) indexingTimer = setTimeout(() => {
         if (current()) void loadSessionRelations(owner);
@@ -185,6 +291,7 @@ export function createSessionRelations(options: {
     } catch (error) {
       if (current()) {
         lineage = EMPTY_LINEAGE;
+        tasksData = await tasksPromise;
         renderRelationsLink(owner, endpoint);
         console.error('Failed to load session lineage:', error);
       }
@@ -203,6 +310,8 @@ export function createSessionRelations(options: {
 
   return { clear: clearSessionRelations, load: loadSessionRelations, openRelated: openRelatedSession,
     get data() { return lineage; },
+    get tasks() { return tasksData; },
+    get hasSwarm() { return !!tasksData.swarm; },
     dispose() { clearSessionRelations(); disposed = true; },
   };
 }

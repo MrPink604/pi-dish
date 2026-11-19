@@ -84,7 +84,7 @@ export interface SessionSearchProjection {
     tree: boolean;
     leafId: unknown;
 }
-export declare function readSessionFileEntries(file: string, stats?: fs.Stats): {
+export declare function readSessionFileEntries(file: string, stats?: fs.Stats, profileId?: string): {
     entries: SessionEntries;
     endsNl: boolean;
 };

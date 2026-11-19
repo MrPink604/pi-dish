@@ -3,6 +3,8 @@ import path = require('path');
 import { getHarness, listHarnesses } from './harnesses';
 import { canonicalSessionId, encodeSessionKey, resolveSessionRoute, VERSION } from './session-key';
 import { clearSessionHeaders, findSessionCandidate, invalidateSessionHeader } from './session-discovery';
+import { AGY_BRAIN_PROFILE_ID, conversationIdFromBrainTranscript, findAgySubagentParent, isAgyBrainTranscriptPath } from './agy-brain';
+import { dishDir } from './dish-store';
 import { sessionRootsFor } from './private-sessions';
 import type { HarnessDescriptor, HarnessId, NativeSessionId, SessionId } from './contracts';
 
@@ -80,6 +82,23 @@ interface ResolverOptions {
 
 function sourceWithDescriptor(descriptor: HarnessDescriptor, nativeSessionId: NativeSessionId, file: string): SessionSource {
   const sessionKey = encodeSessionKey(descriptor.id, nativeSessionId);
+  if (descriptor.brainSubagents && isAgyBrainTranscriptPath(file)) {
+    const convId = conversationIdFromBrainTranscript(file) || nativeSessionId;
+    const parentDesc = findAgySubagentParent(convId);
+    const parentMirror = parentDesc ? path.join(dishDir(), 'agy', 'sessions', `${parentDesc.parentId}.jsonl`) : null;
+    const parentTranscript = parentDesc
+      ? path.join(path.dirname(path.dirname(path.dirname(path.dirname(file)))), parentDesc.parentId, '.system_generated', 'logs', 'transcript.jsonl')
+      : null;
+    const parentSession = parentMirror && fs.existsSync(parentMirror)
+      ? parentMirror
+      : parentTranscript && fs.existsSync(parentTranscript) ? parentTranscript : null;
+    return {
+      file, harnessId: descriptor.id, nativeSessionId, sessionKey,
+      routeId: canonicalSessionId(sessionKey),
+      profileId: AGY_BRAIN_PROFILE_ID, profileVersion: descriptor.profileVersion,
+      parentSession,
+    };
+  }
   const parent = descriptor.nestedSubsessions ? `${path.dirname(file)}.jsonl` : null;
   return {
     file, harnessId: descriptor.id, nativeSessionId, sessionKey,

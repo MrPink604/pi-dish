@@ -353,17 +353,33 @@ export function acpToolResult(update: unknown, call: AcpToolCall): AcpToolResult
   return { text: body };
 }
 
-/** ACP `plan` update → a read-only widget, the only surface Pi has for it. */
-export function planWidgetRequest(id: string, entries: unknown): ProtocolRecord | null {
-  if (!Array.isArray(entries)) return null;
-  const lines = entries.flatMap((entry): string[] => {
+export interface NormalizedPlanEntry {
+  content: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  priority?: string;
+}
+
+/** Normalize ACP `plan` entries into structured checklist items. */
+export function normalizeAcpPlan(entries: unknown): NormalizedPlanEntry[] {
+  if (!Array.isArray(entries)) return [];
+  return entries.flatMap((entry): NormalizedPlanEntry[] => {
     if (!isRecord(entry)) return [];
     const content = nonempty(entry.content) ? entry.content : nonempty(entry.title) ? entry.title : null;
     if (!content) return [];
-    const mark = entry.status === 'completed' ? '[x]' : entry.status === 'in_progress' ? '[>]' : '[ ]';
-    return [`${mark} ${content}`];
+    const status: NormalizedPlanEntry['status'] = entry.status === 'completed'
+      ? 'completed' : entry.status === 'in_progress' ? 'in_progress' : 'pending';
+    const priority = nonempty(entry.priority) ? entry.priority : undefined;
+    return [{ content, status, ...(priority ? { priority } : {}) }];
   });
-  if (!lines.length) return null;
+}
+
+/** ACP `plan` update → a read-only widget (empty entries clear the widget). */
+export function planWidgetRequest(id: string, entries: unknown): ProtocolRecord | null {
+  if (!Array.isArray(entries)) return null;
+  const lines = normalizeAcpPlan(entries).map((entry) => {
+    const mark = entry.status === 'completed' ? '[x]' : entry.status === 'in_progress' ? '[>]' : '[ ]';
+    return `${mark} ${entry.content}`;
+  });
   return { type: 'extension_ui_request', id, method: 'setWidget', widgetKey: 'agy-plan', widgetLines: lines, widgetPlacement: 'aboveEditor' };
 }
 

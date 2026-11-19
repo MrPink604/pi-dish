@@ -23,6 +23,7 @@ import { once } from 'events';
 import { setTimeout as delay } from 'timers/promises';
 import { createAcpSession, resumeAcpSession, type AcpSession } from './acp-session';
 import { AGY_PROVIDER } from './acp-transcript';
+import { hasActiveAgyBrainWork } from './agy-brain';
 import { AGY_ACP_CAPABILITIES } from './session-capabilities';
 import { dishDir } from './dish-store';
 import { parseLaunchWords } from './harnesses';
@@ -224,13 +225,21 @@ async function main(): Promise<void> {
 
   function lifecycleSnapshot(): ProtocolRecord {
     const pendingDialogs = session.extUIState.dialogs.size;
-    const backgroundWork = session.hasActiveToolWork;
+    const backgroundWork = session.hasActiveToolWork || hasActiveAgyBrainWork(session.id);
     return {
       idle: !session.turnInProgress && pendingDialogs === 0 && !backgroundWork,
       pendingMessages: false,
       pendingDialogs,
       backgroundWork,
     };
+  }
+
+  function runningToolsSnapshot(): ProtocolRecord[] {
+    const out: ProtocolRecord[] = [];
+    for (const [toolCallId, call] of session.runningToolCalls) {
+      out.push({ toolCallId, toolName: call.toolName, args: call.args, startedAt: call.startedAt });
+    }
+    return out;
   }
 
   function writeClaim(): void {
@@ -298,6 +307,11 @@ async function main(): Promise<void> {
       await session.abort();
       return { info: 'Aborted' };
     }
+    if (name === 'tasks') return { info: 'Open the Tasks view in pi-dish to inspect background tasks and plans.' };
+    if (name === 'agents') return { info: 'Open the Subagents view in pi-dish to inspect subagents.' };
+    if (name === 'swarm' && /^board(?:\s|$)/i.test(args)) {
+      return { info: 'Open the Swarm view in pi-dish to watch the live board.' };
+    }
     if (name === 'thinking') {
       if (!args) throw new Error('usage: /thinking <level>');
       await session.setThinkingLevel(args);
@@ -326,7 +340,12 @@ async function main(): Promise<void> {
           respond(sock, cmd, true, { pong: true });
           return;
         case 'get_state':
-          respond(sock, cmd, true, { ...claim(), lifecycle: lifecycleSnapshot() });
+          respond(sock, cmd, true, {
+            ...claim(),
+            lifecycle: lifecycleSnapshot(),
+            plan: session.getPlan(),
+            runningTools: runningToolsSnapshot(),
+          });
           return;
         case 'prompt':
         case 'steer': {
@@ -366,9 +385,21 @@ async function main(): Promise<void> {
         case 'get_available_models':
           respond(sock, cmd, true, await session.getAvailableModels());
           return;
-        case 'get_commands':
-          respond(sock, cmd, true, await session.getCommands());
+        case 'get_commands': {
+          const base = asRecord(await session.getCommands());
+          const rows = Array.isArray(base.commands) ? [...base.commands] : [];
+          const names = new Set(rows.flatMap(row => isRecord(row) && typeof row.name === 'string' ? [row.name] : []));
+          const extras = [
+            { name: 'swarm board', description: 'Open the live Swarm board and worker roster in pi-dish.' },
+            { name: 'tasks', description: 'Open background tasks, live logs, subagents, and plan progress in pi-dish.' },
+            { name: 'agents', description: 'Open the Subagents family view in pi-dish.' },
+          ];
+          for (const extra of extras) {
+            if (!names.has(extra.name)) rows.push(extra);
+          }
+          respond(sock, cmd, true, { commands: rows });
           return;
+        }
         case 'run_command': {
           if (typeof cmd.message !== 'string' || !cmd.message.startsWith('/')) {
             return respond(sock, cmd, false, undefined, 'message must start with /');

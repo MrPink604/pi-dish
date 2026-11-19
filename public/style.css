@@ -1256,6 +1256,63 @@ body.sidebar-open {
   white-space: nowrap;
 }
 
+.session-relation-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+
+.session-relation-dot.working {
+  background: var(--success-bright);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 25%, transparent);
+}
+
+.session-relation-dot.scheduled {
+  background: var(--warning);
+}
+
+.session-relation-badge {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text);
+  font-size: 9.5px;
+}
+
+.session-relation-swarm-link .session-relation-kind {
+  color: var(--cyan);
+}
+
+.session-relation-tasks-link .session-relation-kind {
+  color: var(--warning);
+}
+
+button.swarm-board-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--cyan) 45%, var(--border));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--cyan) 12%, var(--bg-card));
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+
+button.swarm-board-link:hover,
+button.swarm-board-link:focus-visible {
+  background: color-mix(in srgb, var(--cyan) 22%, var(--bg-card));
+  border-color: var(--cyan);
+  color: var(--text-bright);
+  outline: none;
+}
+
 /* Session family tree rows (subagents takeover tree pane) */
 
 .lineage-row {
@@ -6257,6 +6314,435 @@ body.standalone-file-page {
   .subagents-body { flex-direction: column; }
   .subagents-tree { width: 100%; max-height: 40%; border-right: none; border-bottom: 1px solid var(--border); }
   .subagents-trace { padding: 12px 12px; }
+}
+
+/* --- Tasks view (main-pane takeover, .main.tasks-open) ---------------------
+   Session-scoped Antigravity task inspector: plan checklist, background
+   commands / cron schedules with live-tailing log viewer, and subagent links. */
+.tasks-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.main.tasks-open .tasks-view { display: flex; }
+.main.tasks-open .empty-state,
+.main.tasks-open .session-view { display: none !important; }
+
+.tasks-body { flex: 1; display: flex; min-height: 0; min-width: 0; }
+
+.tasks-list {
+  width: 340px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-right: 1px solid var(--border);
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tasks-section { display: flex; flex-direction: column; gap: 4px; }
+.tasks-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 2px 8px 4px;
+}
+.tasks-empty-note { padding: 6px 8px; font-size: 12px; color: var(--text-muted); }
+
+.tasks-plan-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.tasks-plan-row.status-in_progress { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text-bright); }
+.tasks-plan-row.status-completed { color: var(--text-muted); }
+.tasks-plan-mark { flex-shrink: 0; width: 14px; text-align: center; color: var(--text-muted); }
+.tasks-plan-row.status-completed .tasks-plan-mark { color: var(--success-bright); }
+.tasks-plan-row.status-in_progress .tasks-plan-mark { color: var(--accent); }
+.tasks-plan-text { min-width: 0; word-break: break-word; }
+
+.tasks-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.tasks-row:hover,
+.tasks-row:focus-visible { background: var(--bg-card); outline: none; }
+.tasks-row.selected { background: var(--bg-hover); border-color: var(--border); }
+.tasks-row-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.tasks-row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tasks-row-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tasks-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.tasks-dot.running { background: var(--success-bright); }
+.tasks-dot.scheduled { background: var(--warning); }
+
+.tasks-status-pill {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.tasks-status-pill.status-running,
+.tasks-status-pill.status-working { color: var(--success-bright); border-color: color-mix(in srgb, var(--success) 55%, var(--border)); }
+.tasks-status-pill.status-scheduled,
+.tasks-status-pill.status-waiting { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+.tasks-status-pill.status-failed,
+.tasks-status-pill.status-error { color: var(--error); border-color: color-mix(in srgb, var(--error) 55%, var(--border)); }
+.tasks-status-pill.status-completed,
+.tasks-status-pill.status-done { color: var(--cyan); }
+
+.tasks-detail { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tasks-detail-empty { margin: auto; }
+.tasks-detail-content { flex: 1; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+.tasks-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.tasks-detail-title { font-size: 14px; font-weight: 600; color: var(--text-bright); }
+.tasks-detail-meta { font-size: 11.5px; color: var(--text-muted); }
+.tasks-detail-command {
+  margin: 12px 16px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-darker);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.tasks-detail-log-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.tasks-detail-log-label { text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+.tasks-detail-log {
+  flex: 1;
+  min-height: 0;
+  margin: 0 16px 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-darker);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+}
+
+/* --- Swarm view (main-pane takeover, .main.swarm-open) ---------------------
+   Live shared board feed, member roster + trace peek, narrator/plan overview,
+   and coordinator prompt/steer bar for Antigravity native swarms. */
+.swarm-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.main.swarm-open .swarm-view { display: flex; }
+.main.swarm-open .empty-state,
+.main.swarm-open .session-view { display: none !important; }
+
+.swarm-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-darker);
+  margin-left: auto;
+}
+.swarm-tab {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.swarm-tab:hover { color: var(--text-bright); }
+.swarm-tab.active { background: var(--bg-card); color: var(--text-bright); font-weight: 500; }
+
+.swarm-body { flex: 1; display: flex; min-height: 0; min-width: 0; }
+.swarm-pane { flex: 1; display: flex; min-height: 0; min-width: 0; }
+.swarm-pane-overview { display: block; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+.swarm-roster {
+  width: 270px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border-right: 1px solid var(--border);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.swarm-member-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.swarm-member-row:hover,
+.swarm-member-row:focus-visible { background: var(--bg-card); outline: none; }
+.swarm-member-row.selected { background: var(--bg-hover); border-color: var(--border); }
+.swarm-member-row.filtered { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg-card)); }
+.swarm-member-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.swarm-member-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swarm-member-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swarm-member-action {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swarm-state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-muted);
+}
+.swarm-state-dot.state-working { background: var(--success-bright); }
+.swarm-state-dot.state-waiting { background: var(--warning); }
+.swarm-state-dot.state-killed { background: var(--error); }
+
+.swarm-state-pill {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.swarm-state-pill.state-working,
+.swarm-state-pill.state-active { color: var(--success-bright); border-color: color-mix(in srgb, var(--success) 55%, var(--border)); }
+.swarm-state-pill.state-waiting { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+.swarm-state-pill.state-killed,
+.swarm-state-pill.state-blocked { color: var(--error); border-color: color-mix(in srgb, var(--error) 55%, var(--border)); }
+.swarm-state-pill.state-done { color: var(--cyan); }
+
+.swarm-filter-mini {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.swarm-filter-mini:hover { color: var(--text-bright); background: var(--bg-hover); }
+.swarm-filter-mini.active { color: var(--accent); border-color: var(--accent); }
+
+.swarm-board-column { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.swarm-board-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.swarm-filter-spacer { flex: 1; }
+.swarm-filter-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.swarm-filter-chip:hover { color: var(--text-bright); border-color: var(--accent); }
+.swarm-filter-chip.active { background: color-mix(in srgb, var(--accent) 18%, var(--bg-card)); color: var(--text-bright); border-color: var(--accent); }
+
+.swarm-board-feed {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.swarm-post {
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.swarm-post.is-brief { border-left: 3px solid var(--accent); }
+.swarm-post.is-done { border-left: 3px solid var(--success); }
+.swarm-post.is-stall { border-left: 3px solid var(--warning); }
+.swarm-post.swarm-post-highlight { border-color: var(--cyan); background: color-mix(in srgb, var(--cyan) 14%, var(--bg-card)); }
+
+.swarm-post-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.swarm-post-seq { font-family: var(--font-mono); color: var(--text-muted); font-size: 11px; }
+.swarm-post-author {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.swarm-post-author:hover { text-decoration: underline; }
+.swarm-post-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.swarm-post-badge.tag-done { color: var(--success-bright); border-color: color-mix(in srgb, var(--success) 55%, var(--border)); }
+.swarm-post-badge.tag-stall { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+.swarm-post-badge.tag-blocked { color: var(--error); border-color: color-mix(in srgb, var(--error) 55%, var(--border)); }
+.swarm-post-mentions { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.swarm-post-time { margin-left: auto; font-size: 11px; color: var(--text-muted); }
+.swarm-post-body { font-size: 13px; line-height: 1.5; }
+
+.swarm-overview-body {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.swarm-overview-section { display: flex; flex-direction: column; gap: 8px; }
+.swarm-overview-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+}
+.swarm-overview-card.severity-high { border-left: 3px solid var(--error); }
+.swarm-overview-card.severity-med { border-left: 3px solid var(--warning); }
+.swarm-overview-member-btn { width: 100%; cursor: pointer; }
+.swarm-overview-member-btn:hover { background: var(--bg-hover); }
+.swarm-overview-heading { font-size: 15px; font-weight: 600; color: var(--text-bright); }
+.swarm-overview-item-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 13px; font-weight: 500; color: var(--text-bright); }
+.swarm-overview-line { font-size: 12.5px; color: var(--text-muted); }
+.swarm-overview-summary { font-size: 13px; color: var(--text); line-height: 1.5; }
+.swarm-overview-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.swarm-overview-tasks { margin: 4px 0 0 18px; display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+
+.swarm-composer {
+  border-top: 1px solid var(--border);
+  padding: 10px 16px 14px;
+  background: var(--bg-darker);
+}
+.swarm-composer textarea {
+  width: 100%;
+  resize: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  outline: none;
+}
+.swarm-composer textarea:focus { border-color: var(--accent); }
+
+@media (max-width: 768px) {
+  .tasks-body { flex-direction: column; }
+  .tasks-list { width: 100%; max-height: 44%; border-right: none; border-bottom: 1px solid var(--border); }
+  .swarm-board-roster { display: none; }
+  .swarm-pane-members { flex-direction: column; }
+  .swarm-members-list { width: 100%; max-height: 38%; border-right: none; border-bottom: 1px solid var(--border); }
+  .swarm-board-feed { padding: 10px 12px; }
+  .swarm-tabs { margin-left: 0; }
 }
 
 /* --- New session (main-pane takeover, .main.new-session-open) --------------

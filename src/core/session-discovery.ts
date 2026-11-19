@@ -7,13 +7,14 @@ import { record as isRecord } from './helper-values';
 import type { HarnessDescriptor, HarnessId, NativeSessionId } from './contracts';
 import type { DiscoveryCandidate, DiscoveryOptions, DiscoveryResult } from './session-source';
 import { readSessionTailEntry } from './session-files';
+import { AGY_BRAIN_PROFILE_ID, readAgySubagentDescriptors } from './agy-brain';
 import { errorMessage } from './http-boundary';
 
 interface SessionHeader { id: string | null; cwd: string | null; parentSession: string | null; }
 type Candidate = DiscoveryCandidate;
 interface CandidateHint {
   file: string; id: string; dirName: string; depth: number;
-  identitySource: 'basename' | 'header'; parentSession?: string;
+  identitySource: 'basename' | 'header'; parentSession?: string; profileId?: string;
 }
 interface HarnessDiscoveryOptions extends DiscoveryOptions {
   roots?: Partial<Record<HarnessId, string>>;
@@ -120,7 +121,7 @@ function decorateCandidate(candidate: CandidateHint, descriptor: HarnessDescript
     identitySource: candidate.identitySource,
     nativeSessionId: candidate.id,
     harnessId: descriptor.id,
-    profileId: options.profileId || descriptor.profileId,
+    profileId: candidate.profileId || options.profileId || descriptor.profileId,
     profileVersion: options.profileVersion ?? descriptor.profileVersion,
     sessionKey,
     routeId: canonicalSessionId(sessionKey),
@@ -323,6 +324,37 @@ function discoverSessionCandidates(rootDir: string, options: DiscoveryOptions = 
     walkArtifacts(artifactsRoot, 1);
   }
 
+  // Antigravity subagents & swarm workers live in agy's brain dir and link
+  // back to their parent mirror or parent subagent transcript.
+  if (descriptor.brainSubagents) {
+    const dirName = path.basename(rootDir);
+    const visited = new Set<string>();
+    const walkBrain = (parentId: string, parentFile: string, depth: number): void => {
+      if (truncated || depth > DEFAULT_ARTIFACTS_DEPTH || visited.has(parentId)) return;
+      visited.add(parentId);
+      for (const sub of readAgySubagentDescriptors(parentId)) {
+        if (truncated) return;
+        try {
+          const stat = fs.lstatSync(sub.transcriptFile);
+          if (!stat.isFile() || stat.isSymbolicLink()) continue;
+        } catch { continue; }
+        if (filesSeen >= maxFiles) { truncated = true; return; }
+        filesSeen += 1;
+        add({
+          file: sub.transcriptFile,
+          id: sub.conversationId,
+          dirName,
+          depth,
+          identitySource: 'header',
+          parentSession: parentFile,
+          profileId: AGY_BRAIN_PROFILE_ID,
+        });
+        walkBrain(sub.conversationId, sub.transcriptFile, depth + 1);
+      }
+    };
+    for (const root of [...candidates]) walkBrain(root.nativeSessionId, root.file, 1);
+  }
+
   candidates.sort((a, b) => a.file.localeCompare(b.file));
   return { candidates, truncated, skipped };
 }
@@ -383,6 +415,7 @@ function discoverSubsessionCandidates(parentFile: string, options: DiscoveryOpti
   if (!descriptor) throw new TypeError('Unknown harness descriptor');
   if (!parentFile.endsWith('.jsonl')) return [];
   if (descriptor.subagentArtifacts) return discoverArtifactSubsessions(parentFile, descriptor, options);
+  if (descriptor.brainSubagents) return discoverBrainSubsessions(parentFile, descriptor, options);
   if (!descriptor.nestedSubsessions) return [];
   const maxDepth = positiveInt(options.maxDepth, DEFAULT_MAX_DEPTH);
   const maxFiles = positiveInt(options.maxFiles, DEFAULT_SUBSESSION_FILES);
@@ -442,6 +475,43 @@ function discoverArtifactSubsessions(parentFile: string, descriptor: HarnessDesc
     }
   };
   walk(artifactsDir, 1);
+  return candidates.values();
+}
+
+/**
+ * Antigravity subagents and swarm workers for one live parent mirror.
+ */
+function discoverBrainSubsessions(parentFile: string, descriptor: HarnessDescriptor, options: DiscoveryOptions): Candidate[] {
+  const maxFiles = positiveInt(options.maxFiles, DEFAULT_SUBSESSION_FILES);
+  const rootId = path.basename(parentFile, '.jsonl');
+  if (!validSessionId(rootId)) return [];
+  const dirName = path.basename(path.dirname(parentFile));
+  const candidates = subsessionCollector(descriptor, options);
+  const visited = new Set<string>();
+  let files = 0;
+  const walk = (parentId: string, parentPath: string, depth: number): void => {
+    if (depth > DEFAULT_ARTIFACTS_DEPTH || files >= maxFiles || visited.has(parentId)) return;
+    visited.add(parentId);
+    for (const sub of readAgySubagentDescriptors(parentId)) {
+      if (files >= maxFiles) return;
+      try {
+        const stat = fs.lstatSync(sub.transcriptFile);
+        if (!stat.isFile() || stat.isSymbolicLink()) continue;
+      } catch { continue; }
+      files += 1;
+      candidates.add({
+        file: sub.transcriptFile,
+        id: sub.conversationId,
+        dirName,
+        depth,
+        identitySource: 'header',
+        parentSession: parentPath,
+        profileId: AGY_BRAIN_PROFILE_ID,
+      });
+      walk(sub.conversationId, sub.transcriptFile, depth + 1);
+    }
+  };
+  walk(rootId, parentFile, 1);
   return candidates.values();
 }
 

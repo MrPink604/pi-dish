@@ -49,7 +49,14 @@ export interface AcpToolResult {
 }
 /** Completion content plus agy's `rawOutput`; bash keeps the exit status as Pi details. */
 export declare function acpToolResult(update: unknown, call: AcpToolCall): AcpToolResult;
-/** ACP `plan` update → a read-only widget, the only surface Pi has for it. */
+export interface NormalizedPlanEntry {
+    content: string;
+    status: 'pending' | 'in_progress' | 'completed';
+    priority?: string;
+}
+/** Normalize ACP `plan` entries into structured checklist items. */
+export declare function normalizeAcpPlan(entries: unknown): NormalizedPlanEntry[];
+/** ACP `plan` update → a read-only widget (empty entries clear the widget). */
 export declare function planWidgetRequest(id: string, entries: unknown): ProtocolRecord | null;
 export interface AcpAskOption {
     label: string;

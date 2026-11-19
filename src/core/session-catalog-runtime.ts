@@ -25,6 +25,7 @@ import {
   spawnAllowsManagedClose, spawnAllowsRestart,
 } from './session-ownership';
 import { record as isRecord } from './helper-values';
+import { AGY_BRAIN_PROFILE_ID } from './agy-brain';
 import type { SessionOwnership } from './session-ownership';
 import type { AdvertisedCapabilities, BridgeRegistryEntry, HarnessId, NativeSessionId } from './contracts';
 import type { SessionInfo } from './session-metadata';
@@ -92,10 +93,11 @@ export function canonicalSessionPath(file: string | null): string | null {
 }
 
 export function historicalAdvice(source: SessionSource, liveChild = false): CatalogAdvice {
+  const noResume = liveChild || source.profileId === AGY_BRAIN_PROFILE_ID;
   return {
     capabilities: {
       ...sessionCapabilities(source.harnessId, {}, { active: false }),
-      ...(liveChild ? { resume: false } : {}),
+      ...(noResume ? { resume: false } : {}),
     },
     closeMode: getHarness(source.harnessId)!.closeMode,
     conflicted: false, liveInstanceCount: 0,

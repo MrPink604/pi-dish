@@ -152,6 +152,56 @@ function displayModelMentions(html: string) {
   return template.innerHTML;
 }
 
+// Antigravity prompts users to "Run /swarm board" when a swarm launches. Turn
+// those prose/inline-code mentions into an interactive button that opens pi-dish's
+// live Swarm takeover without disturbing fenced code blocks or raw HTML escaping.
+function linkifySwarmBoard(html: string) {
+  if (!html.includes('/swarm board')) return html;
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  const targets: Text[] = [];
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if (node.nodeType !== Node.TEXT_NODE) continue;
+    const parent = node.parentElement;
+    if (parent?.closest('pre, a, button')) continue;
+    if (node.nodeValue && /\/swarm board\b/i.test(node.nodeValue)) targets.push(node as Text);
+  }
+  for (const textNode of targets) {
+    const parent = textNode.parentElement;
+    const raw = textNode.nodeValue || '';
+    if (parent?.tagName === 'CODE' && raw.trim().toLowerCase() === '/swarm board' && parent.childNodes.length === 1) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'swarm-board-link';
+      btn.dataset.openSwarmBoard = '1';
+      btn.title = 'Open live Swarm board';
+      btn.textContent = raw.trim();
+      parent.replaceWith(btn);
+      continue;
+    }
+    const frag = document.createDocumentFragment();
+    const re = /\/swarm board\b/gi;
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(raw))) {
+      if (m.index > last) frag.appendChild(document.createTextNode(raw.slice(last, m.index)));
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'swarm-board-link';
+      btn.dataset.openSwarmBoard = '1';
+      btn.title = 'Open live Swarm board';
+      btn.textContent = m[0];
+      frag.appendChild(btn);
+      last = m.index + m[0].length;
+    }
+    if (last < raw.length) frag.appendChild(document.createTextNode(raw.slice(last)));
+    textNode.replaceWith(frag);
+  }
+  return template.innerHTML;
+}
+
 function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
   const rawText = extractTextContent(msg.content);
   const irc = parseIrcInterrupt(rawText);
@@ -206,7 +256,7 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
       ${messageActionsHtml(msg, 'assistant')}
     </div>
     ${thinkingHtml}${toolCallsHtml}
-    ${textHtml ? `<div class="message-content"><div class="markdown-body">${textHtml}</div></div>` : ''}
+    ${textHtml ? `<div class="message-content"><div class="markdown-body">${linkifySwarmBoard(textHtml)}</div></div>` : ''}
     ${errorHtml}
   </div>`;
 }

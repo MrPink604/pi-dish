@@ -44,6 +44,9 @@ export { decodeSkillDirectory, decodeSkillCoverage } from './skills-data';
 
 export { createSearchView } from './search-view';
 export { createSubagentsView } from './subagents-view';
+export { createTasksView } from './tasks-view';
+export { createSwarmView } from './swarm-view';
+export { decodeSessionTasks, decodeTaskLog, decodeSessionSwarm } from './agy-views-data';
 export { decodeSearchPayload, mergeSearchPayloads, queryHosts } from './search-data';
 
 export { createUsageView } from './usage-view';

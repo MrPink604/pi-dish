@@ -12,6 +12,7 @@ import type { SessionInfo } from './session-metadata';
 import type { DiscoveryCandidate, SessionSource } from './session-source';
 import type { CacheRetentionConfig } from './cache-retention';
 import { decodeFastModeState, type SessionFields } from './session-api';
+import { AGY_BRAIN_PROFILE_ID, inspectAgyTranscriptActivity } from './agy-brain';
 
 /** Already computed by lifecycle policy; presentation advice is never an ownership proof. */
 export interface CatalogAdvice {
@@ -219,8 +220,9 @@ function withSessionContext<T extends Readonly<SessionInfo>>(info: T,
 
 function subsessionLabel(source: SessionSource | null): string | null {
   if (!source?.parentSession) return null;
+  if (source.profileId === AGY_BRAIN_PROFILE_ID) return null;
   const handle = path.basename(source.file, '.jsonl');
-  return handle === 'session' ? null : handle;
+  return handle === 'session' || handle === 'transcript' ? null : handle;
 }
 function identityFields(harnessId: HarnessId, nativeSessionId: NativeSessionId, options: SessionCatalogOptions) {
   const harness = options.harnesses.get(harnessId);
@@ -276,6 +278,8 @@ function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advic
     const decoded = decodeDirToCwd(dirName);
     cwd = options.directoryExists(decoded) ? decoded : null;
   }
+  const isAgyBrain = source.profileId === AGY_BRAIN_PROFILE_ID;
+  const agyWorking = liveChild && isAgyBrain ? inspectAgyTranscriptActivity(source.nativeSessionId).working : false;
   return {
     ...identityFields(source.harnessId, source.nativeSessionId, options),
     capabilities: { ...advice.capabilities, ...(liveChild ? { resume: false } : {}) }, closeMode: advice.closeMode,
@@ -284,8 +288,10 @@ function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advic
     model: info.model || 'unknown', contextPercent: info.contextPercent || 0, contextTokens: info.contextTokens || 0,
     cacheExpiry: info.cacheExpiry, messageCount: info.messageCount || 0, lastActivity: info.lastActivity, isActive: false,
     ...(liveChild ? { subagentLive: true } : {}),
+    ...(agyWorking ? { turnInProgress: true } : {}),
     cwd, sessionFile: source.file, parentSession: info.parentSession || source.parentSession || null,
-    parentSessionSource: !info.parentSession && source.parentSession ? 'omp-subsession-layout' : null,
+    parentSessionSource: !info.parentSession && source.parentSession
+      ? (isAgyBrain ? 'agy-brain-subagent' : 'omp-subsession-layout') : null,
     ...(isPrivateSessionFile(options.harnesses.get(source.harnessId), source.file) ? { private: true } : {}),
   };
 }

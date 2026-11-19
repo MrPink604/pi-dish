@@ -26,6 +26,7 @@
     "test/session-api.test.ts",
     "test/prime-daemon.test.ts",
     "test/acp-session.test.ts",
+    "test/agy-brain.test.ts",
     "test/agy-import.test.ts",
     "test/agy-acp.test.ts",
     "test/agy-lifecycle.test.ts",

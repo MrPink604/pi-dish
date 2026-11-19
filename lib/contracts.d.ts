@@ -138,6 +138,12 @@ export interface HarnessDescriptor {
      * from the per-child `rlm-subagent.json`, not an in-file exit marker.
      */
     subagentArtifacts?: boolean;
+    /**
+     * Antigravity subagents & swarm workers persist under `~/.gemini/antigravity-cli/brain/`:
+     * `<parentId>/.system_generated/subagents/<childId>.json` points to
+     * `<childId>/.system_generated/logs/transcript.jsonl` (`agy-brain-v1`).
+     */
+    brainSubagents?: boolean;
     blobsPath?: () => string;
     spawnTokenMode?: 'wrapper';
     discoveryExtensionsDir?: (env?: HarnessEnvironment) => string;

@@ -510,3 +510,123 @@ test('/api/usage-limits reports Gemini windows with the ACP tier and fails fast 
         process.env.PI_DISH_AGY_COMMAND = agyBinary;
     }
 });
+test('agy brain subagents, background tasks, task logs, swarm board, and slash commands wire end-to-end', { timeout: 90000 }, async () => {
+    const created = await post('/api/sessions/new', { harness: 'agy', cwd: projDir });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const sessionId = String((0, test_types_js_1.present)(created.body.id));
+    const nativeId = (0, test_types_js_1.present)(routeIdentity(sessionId)?.nativeSessionId, 'agy native id');
+    const brainRoot = path.join(tmpHome, '.gemini', 'antigravity-cli', 'brain');
+    const coordSys = path.join(brainRoot, nativeId, '.system_generated');
+    const workerNativeId = '66666666-6666-6666-6666-666666666666';
+    const subNativeId = '77777777-7777-7777-7777-777777777777';
+    try {
+        await until(() => fs.existsSync(claimFile(sessionId)));
+        // Seed brain directory for the active agy session: background task, regular subagent, and live swarm.
+        fs.mkdirSync(path.join(coordSys, 'logs'), { recursive: true });
+        fs.mkdirSync(path.join(coordSys, 'tasks'), { recursive: true });
+        fs.mkdirSync(path.join(coordSys, 'subagents'), { recursive: true });
+        fs.mkdirSync(path.join(coordSys, 'swarm'), { recursive: true });
+        fs.mkdirSync(path.join(brainRoot, workerNativeId, '.system_generated', 'logs'), { recursive: true });
+        fs.mkdirSync(path.join(brainRoot, subNativeId, '.system_generated', 'logs'), { recursive: true });
+        fs.writeFileSync(path.join(coordSys, 'logs', 'transcript.jsonl'), [
+            {
+                step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-19T14:00:00Z',
+                tool_calls: [{ name: 'run_command', args: { CommandLine: JSON.stringify('npm test'), toolSummary: JSON.stringify('Run suite') } }],
+            },
+            {
+                step_index: 2, type: 'GENERIC', status: 'DONE', created_at: '2026-11-19T14:00:01Z',
+                content: `Tool is running as a background task with task id: ${nativeId}/task-42\nLog output:\nrunning tests`,
+            },
+        ].map(r => JSON.stringify(r)).join('\n') + '\n');
+        fs.writeFileSync(path.join(coordSys, 'tasks', 'task-42.log'), 'running tests\npass 1/2\n');
+        fs.writeFileSync(path.join(coordSys, 'subagents', `${subNativeId}.json`), JSON.stringify({
+            conversationId: subNativeId,
+            subagentDescriptor: { typeName: 'research', role: 'Codebase Researcher' },
+            state: 'SUBAGENT_STATE_ALIVE',
+            spawnStepIndex: 3,
+            workspaceUris: [`file://${projDir}`],
+        }));
+        fs.writeFileSync(path.join(brainRoot, subNativeId, '.system_generated', 'logs', 'transcript.jsonl'), [
+            { step_index: 0, type: 'USER_INPUT', status: 'DONE', created_at: '2026-11-19T14:00:05Z', content: 'Audit routes' },
+            { step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-19T14:00:06Z', model: 'gemini-3.8-flash', content: 'Checked routes.' },
+        ].map(r => JSON.stringify(r)).join('\n') + '\n');
+        fs.writeFileSync(path.join(coordSys, 'subagents', `${workerNativeId}.json`), JSON.stringify({
+            conversationId: workerNativeId,
+            subagentDescriptor: { typeName: 'worker', role: 'Swarm Worker (verifier)' },
+            state: 'SUBAGENT_STATE_ALIVE',
+            spawnStepIndex: 4,
+            workspaceUris: [`file://${projDir}`],
+        }));
+        fs.writeFileSync(path.join(brainRoot, workerNativeId, '.system_generated', 'logs', 'transcript.jsonl'), [
+            { step_index: 0, type: 'USER_INPUT', status: 'DONE', created_at: '2026-11-19T14:00:10Z', content: 'Verify fixes' },
+            { step_index: 1, type: 'PLANNER_RESPONSE', status: 'RUNNING', created_at: '2026-11-19T14:00:11Z', model: 'gemini-4-carbon', tool_calls: [{ name: 'run_command', args: { CommandLine: JSON.stringify('npm run check') } }] },
+        ].map(r => JSON.stringify(r)).join('\n') + '\n');
+        fs.writeFileSync(path.join(coordSys, 'swarm', 'swarm.json'), JSON.stringify({ version: 1, backend: 'local', swarm_id: 'sw-e2e' }));
+        fs.writeFileSync(path.join(coordSys, 'swarm', 'members.json'), JSON.stringify({
+            title: 'Fix tasks UI',
+            members: {
+                coordinator: { conversation_id: nativeId, role: 'coordinator', applied_model: 'gemini-4-carbon', phase: 'waiting', last_read_seq: 2 },
+                verifier: { conversation_id: workerNativeId, role: 'worker', applied_model: 'gemini-4-carbon', phase: 'working', last_read_seq: 1 },
+            },
+        }));
+        fs.writeFileSync(path.join(coordSys, 'swarm', 'board.jsonl'), [
+            { seq: 1, agent: 'coordinator', text: '@verifier check the build', time: '2026-11-19 14:00:12', kind: 'brief' },
+            { seq: 2, agent: 'verifier', text: '[done] @coordinator build is green', time: '2026-11-19 14:00:20' },
+        ].map(r => JSON.stringify(r)).join('\n') + '\n');
+        // 1. Tasks API + task log API + path traversal rejection.
+        const tasksRes = await get(sessionPath(sessionId, '/tasks'));
+        assert.equal(tasksRes.status, 200, JSON.stringify(tasksRes.body));
+        assert.equal(tasksRes.body.supported, true);
+        assert.equal((0, test_types_js_1.records)(tasksRes.body.tasks).length, 1);
+        assert.equal((0, test_types_js_1.records)(tasksRes.body.tasks)[0].id, 'task-42');
+        assert.equal((0, test_types_js_1.records)(tasksRes.body.subagents).length, 2);
+        assert.equal((0, test_types_js_1.record)(tasksRes.body.swarm).title, 'Fix tasks UI');
+        const logRes = await get(sessionPath(sessionId, '/tasks/task-42/log'));
+        assert.equal(logRes.status, 200, JSON.stringify(logRes.body));
+        assert.match(String(logRes.body.content), /pass 1\/2/);
+        const badLog = await get(sessionPath(sessionId, '/tasks/task-missing/log'));
+        assert.equal(badLog.status, 404);
+        // 2. Lineage exposes brain subagent & swarm worker; child messages parse cleanly; resume is refused.
+        const lineageRes = await get(sessionPath(sessionId, '/lineage'));
+        assert.equal(lineageRes.status, 200, JSON.stringify(lineageRes.body));
+        const tree = (0, test_types_js_1.record)(lineageRes.body.tree);
+        const children = (0, test_types_js_1.records)(tree.children);
+        assert.equal(children.length, 2, `expected 2 brain children in lineage, got ${JSON.stringify(children)}`);
+        const workerNode = (0, test_types_js_1.present)(children.find(c => (0, test_types_js_1.record)(c.session).name === '@verifier'), 'swarm worker in lineage');
+        const workerRouteId = String((0, test_types_js_1.present)((0, test_types_js_1.record)(workerNode.session).id));
+        assert.equal((0, test_types_js_1.record)(workerNode.session).subagentLive, true);
+        assert.equal((0, test_types_js_1.record)(workerNode.session).turnInProgress, true);
+        const subNode = (0, test_types_js_1.present)(children.find(c => (0, test_types_js_1.record)(c.session).name === 'Codebase Researcher'), 'subagent in lineage');
+        const subRouteId = String((0, test_types_js_1.present)((0, test_types_js_1.record)(subNode.session).id));
+        const subMsgs = await get(sessionPath(subRouteId, '/messages'));
+        assert.equal(subMsgs.status, 200, JSON.stringify(subMsgs.body));
+        assert.ok((0, test_types_js_1.records)(subMsgs.body.messages).some(m => messageText(m).includes('Checked routes.')));
+        const resumeSub = await post(sessionPath(subRouteId, '/resume'), {});
+        assert.equal(resumeSub.status, 409, 'native agy brain subagents must not be resumed directly');
+        // 3. Swarm API works from both coordinator and worker routes, including incremental ?since=.
+        const swarmRes = await get(sessionPath(sessionId, '/swarm'));
+        assert.equal(swarmRes.status, 200, JSON.stringify(swarmRes.body));
+        assert.equal(swarmRes.body.hasSwarm, true);
+        assert.equal(swarmRes.body.title, 'Fix tasks UI');
+        assert.equal((0, test_types_js_1.records)(swarmRes.body.posts).length, 2);
+        const swarmSince = await get(sessionPath(workerRouteId, '/swarm?since=1'));
+        assert.equal(swarmSince.status, 200, JSON.stringify(swarmSince.body));
+        assert.equal(swarmSince.body.coordinatorId, sessionId);
+        assert.equal((0, test_types_js_1.records)(swarmSince.body.posts).length, 1);
+        assert.equal((0, test_types_js_1.records)(swarmSince.body.posts)[0].seq, 2);
+        // 4. Slash commands list includes swarm board / tasks / agents, and /command handles them cleanly.
+        const cmdsResp = await fetch(`${base}/api/commands?sessionId=${encodeURIComponent(sessionId)}`);
+        assert.equal(cmdsResp.status, 200);
+        const cmdNames = (0, test_types_js_1.records)(await cmdsResp.json()).map(c => String(c.name));
+        assert.ok(cmdNames.includes('swarm board'), 'commands include swarm board');
+        assert.ok(cmdNames.includes('tasks'), 'commands include tasks');
+        assert.ok(cmdNames.includes('agents'), 'commands include agents');
+        for (const cmd of ['/swarm board', '/tasks', '/agents']) {
+            const ran = await post(sessionPath(sessionId, '/command'), { message: cmd });
+            assert.equal(ran.status, 200, `${cmd}: ${JSON.stringify(ran.body)}`);
+        }
+    }
+    finally {
+        await post(sessionPath(sessionId, '/close'), {});
+    }
+});

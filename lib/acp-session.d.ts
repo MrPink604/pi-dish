@@ -14,6 +14,7 @@ import { type ChildProcessWithoutNullStreams } from 'child_process';
 import { type ProtocolRecord } from './wire-protocol';
 import { TransportSession } from './transport-session';
 import type { NativeSessionId, PromptOptions } from './contracts';
+import { type NormalizedPlanEntry } from './acp-transcript';
 /** Versions the fake agent and the captures were verified against. */
 export declare const AGY_VERIFIED_VERSIONS: readonly string[];
 /**
@@ -89,6 +90,10 @@ export declare class AcpSession extends TransportSession {
     private segmentFirstOutputAt;
     /** Sum of earlier model-step TTFTs in the active turn, for multi-step streaming rate. */
     private turnTtftSumMs;
+    /** Latest ACP `plan` entries for this session. */
+    private planEntries;
+    /** Polls live task-*.log tails onto long-running `run_command` tool cards. */
+    private taskLogTimer;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
     /** True while a non-daemon tool call has started and not yet completed or failed. */
@@ -125,6 +130,12 @@ export declare class AcpSession extends TransportSession {
     private _armAutonomousTimer;
     private _autonomousIdle;
     private _clearAutonomousTimer;
+    private _hasRunningShellTools;
+    private _syncTaskLogTimer;
+    private _clearTaskLogTimer;
+    /** Stream live `.system_generated/tasks/task-*.log` tails onto backgrounded bash cards. */
+    private _pollRunningTaskLogs;
+    getPlan(): NormalizedPlanEntry[];
     private _takeHandoverUsage;
     private _configOption;
     private _configValues;

@@ -40,6 +40,69 @@ export function getToolSummary(toolName: string, args: unknown) {
     return ipythonCodeSummary(args.code);
   }
   if (['Read', 'read', 'Edit', 'edit', 'Write', 'write'].includes(toolName)) return typeof args.path === 'string' ? args.path : '';
+  if (toolName === 'invoke_subagent') {
+    const role = typeof args.Role === 'string' ? args.Role.trim() : '';
+    const typeName = typeof args.TypeName === 'string' ? args.TypeName.trim() : '';
+    const label = role && typeName ? `${role} (${typeName})` : (role || typeName);
+    if (label) return truncate(label, 60);
+  }
+  if (toolName === 'manage_subagents' && typeof args.Action === 'string') return truncate(args.Action, 40);
+  if (toolName === 'define_subagent' && typeof args.Name === 'string') return truncate(args.Name, 50);
+  if (toolName === 'send_message') {
+    const to = typeof args.Recipient === 'string' ? args.Recipient.slice(0, 8) : '';
+    const msg = typeof args.Message === 'string' ? args.Message.split('\n')[0].trim() : '';
+    if (to || msg) return truncate(to && msg ? `→ ${to}: ${msg}` : (msg || `→ ${to}`), 60);
+  }
+  if (toolName === 'manage_task') {
+    const action = typeof args.Action === 'string' ? args.Action : '';
+    const rawId = typeof args.TaskId === 'string' ? args.TaskId : '';
+    const shortId = rawId.includes('/') ? rawId.slice(rawId.lastIndexOf('/') + 1) : rawId;
+    if (action || shortId) return truncate([action, shortId].filter(Boolean).join(' '), 50);
+  }
+  if (toolName === 'schedule') {
+    const when = typeof args.CronExpression === 'string' && args.CronExpression
+      ? args.CronExpression
+      : (typeof args.DurationSeconds === 'number' ? `${args.DurationSeconds}s` : '');
+    const prompt = typeof args.Prompt === 'string' ? args.Prompt.split('\n')[0].trim() : '';
+    if (when || prompt) return truncate([when, prompt].filter(Boolean).join(': '), 60);
+  }
+  if (toolName === 'run_workflow') {
+    const desc = typeof args.Description === 'string' && args.Description.trim()
+      ? args.Description.trim()
+      : (typeof args.ScriptPath === 'string' ? args.ScriptPath : '');
+    if (desc) return truncate(desc, 60);
+  }
+  if (toolName === 'swarm') {
+    const action = typeof args.action === 'string' ? args.action : '';
+    const name = typeof args.name === 'string' ? args.name : '';
+    if (action === 'add' && name) {
+      const count = Array.isArray(args.tasks) ? ` (${args.tasks.length})` : (typeof args.n === 'number' && args.n > 1 ? ` ×${args.n}` : '');
+      return truncate(`add @${name}${count}`, 60);
+    }
+    if (action === 'title' && typeof args.title === 'string') return truncate(`title "${args.title}"`, 60);
+    if (action === 'kill' && name) return truncate(`kill @${name}`, 60);
+    if (action === 'model') {
+      const target = name ? `@${name}` : '@coordinator';
+      const model = typeof args.model === 'string' ? ` → ${args.model}` : '';
+      return truncate(`model ${target}${model}`, 60);
+    }
+    if (action) return truncate(action, 40);
+  }
+  if (toolName === 'post_message' && typeof args.text === 'string') {
+    const ch = typeof args.channel === 'string' && args.channel ? `#${args.channel} ` : '';
+    return truncate(`${ch}${args.text.split('\n')[0].trim()}`, 60);
+  }
+  if (toolName === 'read_board') {
+    if (args.status === true) return 'status';
+    const ch = typeof args.channel === 'string' && args.channel ? `#${args.channel} ` : '';
+    return typeof args.since === 'number' ? `${ch}since #${args.since}` : (ch ? ch.trim() : 'all');
+  }
+  if (toolName === 'swarm_wait') {
+    const since = typeof args.since === 'number' ? `since #${args.since}` : '';
+    const all = args.mentions_only === false ? ' (all)' : '';
+    return truncate(`wait ${since}${all}`.trim(), 50);
+  }
+  if (toolName === 'search_web' && typeof args.query === 'string') return truncate(args.query, 60);
   const keys = Object.keys(args);
   if (keys.length) return truncate(String(args[keys[0]]), 40);
   return '';

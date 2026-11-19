@@ -66,7 +66,7 @@ export function createSubagentsView(options: {
   function focusPendingAgent() {
     if (!pendingAgentId) return;
     const agentId = pendingAgentId;
-    const node = findNode(lineage.tree, session => session.agentId === agentId);
+    const node = findNode(lineage.tree, session => session.agentId === agentId || session.id === agentId);
     if (node) { pendingAgentId = null; selectNode(node.session.id); return; }
     if (!loadInFlight && !lastIndexing) { pendingAgentId = null; options.status(`Subagent run ${agentId} is not indexed yet`, 'error'); }
   }

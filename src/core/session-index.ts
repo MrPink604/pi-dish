@@ -22,6 +22,7 @@ import {
   parseSessionEntries, readSessionFileEntries, buildSearchIndexFromEntries, extendSearchIndexFromEntries,
   buildIndexedUsageFromEntries, extendIndexedUsageFromEntries, SEARCH_TEXT_SESSION_CAP,
 } from './session-files.js';
+import { AGY_BRAIN_PROFILE_ID } from './agy-brain.js';
 import { mineSkillsFromEntries } from './skill-mining.js';
 import { createUsageCostEstimator, pricingRevision } from './harness-pricing.js';
 import type { UsageCostEstimator } from './harness-pricing.js';
@@ -322,7 +323,7 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
   ctx: ScanContext): IndexedSessionInfo {
   const file = candidate.file;
   // Reuse the last raw parse if another reader just opened this file.
-  const { entries, endsNl } = readSessionFileEntries(file, stats);
+  const { entries, endsNl } = readSessionFileEntries(file, stats, candidate.profileId);
   observeCacheLifetimeFromEntries(entries, file, candidate.profileId);
   const { nativeSessionId, sessionKey } = candidate;
   const info: IndexedSessionInfo = {
@@ -382,6 +383,7 @@ function isEntryFresh(st: IndexState, file: string, candidate: SessionSource, st
  */
 function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs.Stats,
   ctx: ScanContext): IndexedSessionInfo | null {
+  if (candidate.profileId === AGY_BRAIN_PROFILE_ID) return null;
   const file = candidate.file;
   const meta = st.meta.get(file), text = st.text.get(file), skills = st.skills.get(file);
   if (!meta || !text || !skills) return null;
