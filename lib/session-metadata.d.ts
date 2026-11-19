@@ -32,6 +32,7 @@ export interface SessionEntries extends ReadonlyArray<unknown> {
 interface MetadataProfile {
     readonly profileId?: string;
 }
+export declare function isImplicitCacheProvider(provider: string, model: string): boolean;
 export declare function cacheIdentity(message: Record<string, unknown>): string;
 export declare function cacheTokens(usage: Record<string, unknown>, key: 'cacheRead' | 'cacheWrite' | 'cacheWrite1h'): number;
 export declare function hasCacheActivity(message: Record<string, unknown>): boolean;

@@ -919,6 +919,13 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   `/tasks/:taskId/log`, and `/swarm` (`?since=`, coordinator or worker route)
   back the header chips, the Tasks and Swarm main-pane takeovers, `/tasks`,
   `/agents`, `/swarm board`, and clickable inline `/swarm board` links.
+- **Cache warmth:** Gemini (`google-antigravity`/`google*` `gemini-*`) carries a
+  built-in `~5m` `estimate` retention and refreshes on implicit-cache turns
+  (`input >= 1024`, including `cacheRead: 0`) and mid-turn `toolUse` steps.
+  `session-index.ts` mines `cache-lifetime.ts` from per-step brain
+  `PLANNER_RESPONSE` entries (`readAgyBrainCacheProbeEntries`) when available
+  so multi-step turns do not mask step-1 cold misses, and `cache-lifetime.ts`
+  records implicit-cache cold misses while skipping sharp compaction drops.
 
 ## tmux spawning (lib/tmux.js)
 

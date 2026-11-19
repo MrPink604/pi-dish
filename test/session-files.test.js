@@ -312,6 +312,30 @@ test('cache TTL policy supports built-in model slugs and live provider overrides
     assert.equal((0, test_types_js_1.present)(SF.getSessionInfo(anthropic).cacheExpiry).expiresAt, startedAt + 60 * 60_000);
     fs.rmSync(dishSettingsFile);
 });
+test('google-antigravity Gemini sessions project ~5m cache warmth on implicit cache turns and mid-turn toolUse steps', () => {
+    const t0 = Date.parse('2026-07-01T10:00:00.000Z');
+    const t1 = Date.parse('2026-07-01T10:03:00.000Z');
+    const file = writeSession([
+        { type: 'session', cwd: '/agy' },
+        { type: 'model_change', provider: 'google-antigravity', modelId: 'gemini-4-carbon' },
+        { type: 'message', timestamp: '2026-07-01T10:00:05.000Z', message: {
+                role: 'assistant', provider: 'google-antigravity', model: 'gemini-4-carbon', timestamp: t0,
+                content: [], stopReason: 'stop', usage: { input: 18_000, output: 120, cacheRead: 0, cacheWrite: 0, totalTokens: 18_120 },
+            } },
+        { type: 'message', timestamp: '2026-07-01T10:03:05.000Z', message: {
+                role: 'assistant', provider: 'google-antigravity', model: 'gemini-4-carbon', timestamp: t1,
+                content: [{ type: 'toolCall', id: 'c1', name: 'bash', arguments: { command: 'ls' } }],
+                stopReason: 'toolUse',
+            } },
+    ]);
+    const messages = SF.readSessionMessages(file);
+    assert.equal((0, test_types_js_1.present)(messages[0].cacheExpiry).retention, '~5m');
+    assert.equal((0, test_types_js_1.present)(messages[0].cacheExpiry).basis, 'estimate');
+    assert.equal((0, test_types_js_1.present)(messages[0].cacheExpiry).expiresAt, t0 + 5 * 60_000);
+    const info = SF.getSessionInfo(file);
+    assert.equal((0, test_types_js_1.present)(info.cacheExpiry).retention, '~5m');
+    assert.equal((0, test_types_js_1.present)(info.cacheExpiry).expiresAt, t1 + 5 * 60_000, 'usage-less agy toolUse steps keep cache warmth refreshed mid-turn');
+});
 test('sanitizeUsage preserves missing and explicit-zero cost components', () => {
     assert.deepEqual(SF.sanitizeUsage({
         input: 12,

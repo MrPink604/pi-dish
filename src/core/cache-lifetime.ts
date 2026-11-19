@@ -127,10 +127,19 @@ const BRIER_ALPHA = 0.15;
 const REFIT_MS = 60_000;
 const MAX_CHAINS = 5000;
 const TIER_1H_SUFFIX = '\u00001h';
+const IMPLICIT_MISS_MIN_INPUT = 1024;
+const COMPACTION_DROP_RATIO = 0.5;
+const LEGACY_AGY_EMPTY_API_PREFIX = '\u0000google-antigravity\u0000';
+
+interface ChainAnchor {
+  readonly ts: number;
+  readonly tier1h: boolean;
+  readonly contextTokens: number;
+}
 
 const stores = new Map<string, LifetimeStore>();
-/** Per-file last cache-active anchor: identity -> { ts, tier1h } of the entry being probed. */
-const chains = new Map<string, Map<string, { ts: number; tier1h: boolean }>>();
+/** Per-file last cache-active anchor: identity -> { ts, tier1h, contextTokens } of the entry being probed. */
+const chains = new Map<string, Map<string, ChainAnchor>>();
 
 function storeFile(): string {
   return path.join(dishDir(), 'cache-lifetime.json');
@@ -182,13 +191,18 @@ function admitObservation(window: Observation[], obs: Observation, now: number):
   return evicted;
 }
 
-function decodeStore(value: unknown): Map<string, IdentityState> {
+function decodeStore(value: unknown): { identities: Map<string, IdentityState>; droppedLegacy: boolean } {
   const identities = new Map<string, IdentityState>();
+  let droppedLegacy = false;
   const rawIdentities = isRecord(value) && isRecord(value.identities) ? value.identities : null;
-  if (!rawIdentities) return identities;
+  if (!rawIdentities) return { identities, droppedLegacy };
   const now = Date.now();
   for (const [key, raw] of Object.entries(rawIdentities)) {
     if (key.length > 500 || !isRecord(raw)) continue;
+    // Legacy empty-api agy entries were mined from cumulative multi-step mirrors
+    // before per-step brain probing and canonical `acp` identities. Drop them so
+    // the re-indexed per-step probes replace them cleanly without duplicate rows.
+    if (key.startsWith(LEGACY_AGY_EMPTY_API_PREFIX)) { droppedLegacy = true; continue; }
     // Re-admit in time order so the current window policy applies to old stores.
     const obs: Observation[] = [];
     for (const o of decodeObservations(raw.obs).sort((a, b) => a.t - b.t)) admitObservation(obs, o, now);
@@ -200,7 +214,7 @@ function decodeStore(value: unknown): Map<string, IdentityState> {
       fit: null, fitDirty: true, fitAt: 0,
     });
   }
-  return identities;
+  return { identities, droppedLegacy };
 }
 
 function getStore(): LifetimeStore {
@@ -214,7 +228,8 @@ function getStore(): LifetimeStore {
   if (existing && existing.stamp === stamp) return existing;
   let parsed: unknown = null;
   try { parsed = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
-  const store: LifetimeStore = { stamp, identities: decodeStore(parsed), dirty: false };
+  const decoded = decodeStore(parsed);
+  const store: LifetimeStore = { stamp, identities: decoded.identities, dirty: decoded.droppedLegacy };
   stores.set(file, store);
   return store;
 }
@@ -367,7 +382,7 @@ function recordObservation(key: string, obs: Observation, now: number): void {
 }
 
 function extractObservations(entries: SessionEntries, file: string,
-  chain: Map<string, { ts: number; tier1h: boolean }>, profileId: string): void {
+  chain: Map<string, ChainAnchor>, profileId: string): void {
   const fh = createHash('sha256').update(file).digest('hex').slice(0, 8);
   let currentModel: string | null = null;
   for (const raw of entries) {
@@ -379,7 +394,7 @@ function extractObservations(entries: SessionEntries, file: string,
     }
     if (raw.type !== 'message') continue;
     const message = isRecord(raw.message) ? raw.message : null;
-    if (message?.role !== 'assistant' || !hasCacheActivity(message)) continue;
+    if (message?.role !== 'assistant' || !isRecord(message.usage)) continue;
     const ts = new Date((message.timestamp ?? raw.timestamp) as string | number | Date).getTime();
     if (!Number.isFinite(ts)) continue;
     // Mirror accumulateSessionInfo: a message without a model inherits the
@@ -390,19 +405,39 @@ function extractObservations(entries: SessionEntries, file: string,
     if (!target.provider && !target.model) continue;
     const identity = cacheIdentity(attributed);
     const usage = message.usage as Record<string, unknown>;
+    const read = cacheTokens(usage, 'cacheRead');
+    const wrote = cacheTokens(usage, 'cacheWrite');
+    const input = typeof usage.input === 'number' && Number.isFinite(usage.input) && usage.input > 0 ? usage.input : 0;
+    const contextTokens = input + read + wrote;
     const anchor = chain.get(identity);
+    const explicit = read > 0 || wrote > 0;
+    // Providers with implicit prompt caching (Gemini, OpenAI, DeepSeek, ZAI)
+    // report cacheRead=0, cacheWrite=0, input=N on a cold miss. Treat that as
+    // a cold probe once the chain is already anchored (or for Gemini implicit caching).
+    const implicitMiss = !explicit && anchor !== undefined && input >= IMPLICIT_MISS_MIN_INPUT;
+    if (!explicit && !implicitMiss && !hasCacheActivity(attributed)) continue;
     if (anchor && ts > anchor.ts) {
+      // A sharp drop in total prompt size with zero cache read/write marks a
+      // context compaction or reset (e.g. agy compacting without a Pi compaction
+      // entry), not cache expiry — re-anchor without recording a false miss.
+      if (read === 0 && wrote === 0 && anchor.contextTokens > 0 && contextTokens < anchor.contextTokens * COMPACTION_DROP_RATIO) {
+        chain.set(identity, { ts, tier1h: false, contextTokens });
+        continue;
+      }
       recordObservation(anchor.tier1h ? `${identity}${TIER_1H_SUFFIX}` : identity,
-        { t: ts, gap: ts - anchor.ts, hit: cacheTokens(usage, 'cacheRead') > 0, fh }, Date.now());
+        { t: ts, gap: ts - anchor.ts, hit: read > 0, fh }, Date.now());
     }
     // A write sets the probed entry's tier; a pure read leaves it unchanged.
-    const wrote = cacheTokens(usage, 'cacheWrite') > 0;
-    chain.set(identity, { ts, tier1h: wrote ? cacheTier1h(usage, target.provider === 'anthropic') : (anchor?.tier1h ?? false) });
+    chain.set(identity, {
+      ts,
+      tier1h: wrote > 0 ? cacheTier1h(usage, target.provider === 'anthropic') : (anchor?.tier1h ?? false),
+      contextTokens,
+    });
   }
 }
 
-function trackChain(file: string): Map<string, { ts: number; tier1h: boolean }> {
-  const chain = new Map<string, { ts: number; tier1h: boolean }>();
+function trackChain(file: string): Map<string, ChainAnchor> {
+  const chain = new Map<string, ChainAnchor>();
   chains.set(file, chain);
   if (chains.size > MAX_CHAINS) chains.delete(chains.keys().next().value!);
   return chain;

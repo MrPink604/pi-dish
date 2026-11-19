@@ -22,7 +22,7 @@ import {
   parseSessionEntries, readSessionFileEntries, buildSearchIndexFromEntries, extendSearchIndexFromEntries,
   buildIndexedUsageFromEntries, extendIndexedUsageFromEntries, SEARCH_TEXT_SESSION_CAP,
 } from './session-files.js';
-import { AGY_BRAIN_PROFILE_ID } from './agy-brain.js';
+import { AGY_BRAIN_PROFILE_ID, readAgyBrainCacheProbeEntries } from './agy-brain.js';
 import { mineSkillsFromEntries } from './skill-mining.js';
 import { createUsageCostEstimator, pricingRevision } from './harness-pricing.js';
 import type { UsageCostEstimator } from './harness-pricing.js';
@@ -85,7 +85,7 @@ const SYNC_BUDGET_DEFAULT = 20;
 const FLUSH_MS = 500;
 const COMPACT_MIN_DEAD_BYTES = 1_000_000;
 // Bumping a schema version re-indexes stale entries through the bounded backlog.
-const META_SCHEMA_VERSION = 14;
+const META_SCHEMA_VERSION = 15;
 const TEXT_SCHEMA_VERSION = 3;
 const SKILLS_SCHEMA_VERSION = 1;
 
@@ -324,7 +324,11 @@ function indexFile(st: IndexState, candidate: SessionSource, stats: fs.Stats,
   const file = candidate.file;
   // Reuse the last raw parse if another reader just opened this file.
   const { entries, endsNl } = readSessionFileEntries(file, stats, candidate.profileId);
-  observeCacheLifetimeFromEntries(entries, file, candidate.profileId);
+  const agyBrainProbes = candidate.harnessId === 'agy' && candidate.profileId !== AGY_BRAIN_PROFILE_ID
+    ? readAgyBrainCacheProbeEntries(candidate.nativeSessionId)
+    : null;
+  if (agyBrainProbes) observeCacheLifetimeFromEntries(agyBrainProbes.entries, agyBrainProbes.file, AGY_BRAIN_PROFILE_ID);
+  else observeCacheLifetimeFromEntries(entries, file, candidate.profileId);
   const { nativeSessionId, sessionKey } = candidate;
   const info: IndexedSessionInfo = {
     ...sessionInfoFromEntries(entries, stats.mtime, candidate, ctx.cacheConfig),
@@ -410,7 +414,11 @@ function tryExtendIndexEntry(st: IndexState, candidate: SessionSource, stats: fs
   if (!extension) return null;
   try {
     extendSessionInfoFromEntries(meta.info, entries, stats.mtime, candidate, ctx.cacheConfig);
-    extendCacheLifetimeFromEntries(entries, file, candidate.profileId);
+    const agyBrainProbes = candidate.harnessId === 'agy' && candidate.profileId !== AGY_BRAIN_PROFILE_ID
+      ? readAgyBrainCacheProbeEntries(candidate.nativeSessionId)
+      : null;
+    if (agyBrainProbes) observeCacheLifetimeFromEntries(agyBrainProbes.entries, agyBrainProbes.file, AGY_BRAIN_PROFILE_ID);
+    else extendCacheLifetimeFromEntries(entries, file, candidate.profileId);
     extendIndexedUsageFromEntries(meta.info.usage, entries, candidate, ctx.estimateCost(candidate.harnessId));
     const mined = mineSkillsFromEntries(entries, {
       sessionId: candidate.harnessId === 'pi' ? meta.info.nativeSessionId : meta.info.sessionKey,

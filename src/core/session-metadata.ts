@@ -59,8 +59,32 @@ function decodeCacheExpiry(value: unknown): CacheExpiry | null {
     ...(value.tier === '1h' ? { tier: '1h' as const } : {}) };
 }
 
+const IMPLICIT_CACHE_MIN_INPUT = 1024;
+const AGY_MODEL_LEVEL_RE = /-(?:low|medium|high|xhigh)$/i;
+
+function normalizeCacheApi(api: string, provider: string): string {
+  if (api) return api;
+  return provider.toLowerCase() === 'google-antigravity' ? 'acp' : '';
+}
+
+function normalizeCacheModel(provider: string, model: string): string {
+  if (provider.toLowerCase() === 'google-antigravity' && /^gemini-/i.test(model)) {
+    return model.replace(AGY_MODEL_LEVEL_RE, '');
+  }
+  return model;
+}
+
+export function isImplicitCacheProvider(provider: string, model: string): boolean {
+  const normalized = provider.toLowerCase();
+  return (normalized === 'google-antigravity' || normalized === 'google' || normalized === 'google-vertex' || normalized === 'google-gemini-cli')
+    && /^gemini-/i.test(model);
+}
+
 export function cacheIdentity(message: Record<string, unknown>): string {
-  return [message.api, message.provider, message.model].map(value => typeof value === 'string' ? value : '').join('\u0000');
+  const rawApi = typeof message.api === 'string' ? message.api : '';
+  const provider = typeof message.provider === 'string' ? message.provider : '';
+  const rawModel = typeof message.model === 'string' ? message.model : '';
+  return [normalizeCacheApi(rawApi, provider), provider, normalizeCacheModel(provider, rawModel)].join('\u0000');
 }
 export function cacheTokens(usage: Record<string, unknown>, key: 'cacheRead' | 'cacheWrite' | 'cacheWrite1h'): number {
   const value = finiteNumber(usage[key]);
@@ -68,7 +92,11 @@ export function cacheTokens(usage: Record<string, unknown>, key: 'cacheRead' | '
 }
 export function hasCacheActivity(message: Record<string, unknown>): boolean {
   if (!isRecord(message.usage)) return false;
-  return cacheTokens(message.usage, 'cacheRead') > 0 || cacheTokens(message.usage, 'cacheWrite') > 0;
+  if (cacheTokens(message.usage, 'cacheRead') > 0 || cacheTokens(message.usage, 'cacheWrite') > 0) return true;
+  const target = resolveCacheTarget(message);
+  if (!isImplicitCacheProvider(target.provider, target.model)) return false;
+  const input = finiteNumber(message.usage.input);
+  return input !== null && input >= IMPLICIT_CACHE_MIN_INPUT;
 }
 export function isHardCacheMiss(usage: unknown): boolean {
   return isRecord(usage) && cacheTokens(usage, 'cacheRead') === 0 && cacheTokens(usage, 'cacheWrite') > 0;
@@ -81,7 +109,7 @@ export interface CacheTarget {
 }
 
 export function resolveCacheTarget(message: Record<string, unknown>): CacheTarget {
-  const api = typeof message.api === 'string' ? message.api : '';
+  let api = typeof message.api === 'string' ? message.api : '';
   let provider = typeof message.provider === 'string' ? message.provider.toLowerCase() : '';
   let model = typeof message.model === 'string' ? message.model : '';
   if (!provider) {
@@ -96,6 +124,8 @@ export function resolveCacheTarget(message: Record<string, unknown>): CacheTarge
     else if (api === 'bedrock-converse-stream') provider = 'amazon-bedrock';
     else if (api.startsWith('openai-')) provider = 'openai';
   }
+  api = normalizeCacheApi(api, provider);
+  model = normalizeCacheModel(provider, model);
   return { api, provider, model };
 }
 
@@ -136,6 +166,9 @@ export function builtinCacheRetention(target: CacheTarget, long1h: boolean): { r
     return explicit
       ? { retentionMs: 30 * 60_000, retention: '30m', basis: 'minimum' }
       : { retentionMs: 10 * 60_000, retention: '~10m', basis: 'estimate' };
+  }
+  if (isImplicitCacheProvider(provider, model)) {
+    return { retentionMs: 5 * 60_000, retention: '~5m', basis: 'estimate' };
   }
   return null;
 }
@@ -249,13 +282,24 @@ function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candi
       const ts = new Date(entry.timestamp).getTime();
       if (Number.isFinite(ts) && ts > new Date(info.lastActivity).getTime()) info.lastActivity = new Date(ts);
     }
-    if (entry.type === 'message' && message?.role === 'assistant' && isRecord(message.usage)) {
-      const tokens = message.usage.totalTokens;
-      info.contextTokens = typeof tokens === 'number' && Number.isFinite(tokens) ? tokens : 0;
-      if (hasCacheActivity(message)) {
-        info.cacheExpiry = cacheExpiryForMessage(
-          message.model === undefined ? { ...message, model: info.model } : message,
-          info.cacheExpiry, entry.timestamp, config);
+    if (entry.type === 'message' && message?.role === 'assistant') {
+      const attributed = message.model === undefined ? { ...message, model: info.model } : message;
+      if (isRecord(message.usage)) {
+        const tokens = message.usage.totalTokens;
+        info.contextTokens = typeof tokens === 'number' && Number.isFinite(tokens) ? tokens : 0;
+        if (hasCacheActivity(attributed)) {
+          info.cacheExpiry = cacheExpiryForMessage(attributed, info.cacheExpiry, entry.timestamp, config);
+        }
+      } else if (message.stopReason === 'toolUse') {
+        // agy ACP omits per-step usage until end_turn; keep warmth fresh across
+        // long multi-tool turns once the session has an active Gemini context.
+        const target = resolveCacheTarget(attributed);
+        if (target.provider === 'google-antigravity' && isImplicitCacheProvider(target.provider, target.model)
+            && (info.cacheExpiry !== null || info.contextTokens >= IMPLICIT_CACHE_MIN_INPUT)) {
+          info.cacheExpiry = cacheExpiryForMessage(
+            { ...attributed, usage: { input: Math.max(IMPLICIT_CACHE_MIN_INPUT, info.contextTokens), cacheRead: 0, cacheWrite: 0 } },
+            info.cacheExpiry, entry.timestamp, config);
+        }
       }
     }
     if (entry.type === 'compaction') {

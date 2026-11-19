@@ -113,6 +113,21 @@ export declare function findLatestToolStepOutput(nativeSessionId: string, native
  * backgrounded `run_command` (matching `command` if multiple tasks run).
  */
 export declare function readRunningTaskLogTail(nativeSessionId: string, commandHint?: string): string | null;
+/**
+ * Per-step LLM cache probes from Antigravity's brain `transcript.jsonl`.
+ * Mirrors only carry cumulative per-turn `PromptResponse.usage` (where a
+ * multi-step turn's warm step 2 masks a cold step 1); brain steps report
+ * exact per-call `input_tokens` and `cache_read_tokens` for the learner.
+ */
+export declare function readAgyBrainCacheProbeEntries(nativeSessionId: string): {
+    file: string;
+    entries: SessionEntries;
+} | null;
+/**
+ * Latest per-step usage from brain `transcript.jsonl`, used as a fallback for
+ * autonomous ACP turns that finish without a `PromptResponse.usage` frame.
+ */
+export declare function readLatestAgyBrainStepUsage(nativeSessionId: string, minTimestampMs?: number): ProtocolRecord | null;
 export interface AgyPlanItem {
     content: string;
     status: 'pending' | 'in_progress' | 'completed';

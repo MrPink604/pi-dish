@@ -407,14 +407,16 @@ function parseMessageData(entries: SessionEntries, candidate?: SessionFileProfil
       if (entry.type === 'compaction') cacheExpiry = null;
       let responseCacheExpiry: CacheExpiry | null = null;
       const rawMessage = entry.type === 'message' && entry.message ? fields(entry.message) : null;
-      if (rawMessage?.role === 'assistant' && hasCacheActivity(rawMessage)) {
+      if (rawMessage?.role === 'assistant') {
         const cacheMessage = {
           ...rawMessage,
           provider: rawMessage.provider ?? model.provider,
           model: rawMessage.model ?? model.model,
         };
-        responseCacheExpiry = cacheExpiryForMessage(cacheMessage, cacheExpiry, entry.timestamp, cacheConfig);
-        cacheExpiry = responseCacheExpiry;
+        if (hasCacheActivity(cacheMessage)) {
+          responseCacheExpiry = cacheExpiryForMessage(cacheMessage, cacheExpiry, entry.timestamp, cacheConfig);
+          cacheExpiry = responseCacheExpiry;
+        }
       }
       const message = messageFromEntry(entry, candidate, estimateCost, model, applyLearnedCacheExpiry(responseCacheExpiry, cacheConfig), tiers.value);
       if (!message) continue;

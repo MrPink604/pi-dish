@@ -220,3 +220,79 @@ test('scanSessions mines observations from indexed sessions and their appends', 
     index.scanSessions([source]);
     assert.equal((0, test_types_js_1.present)(snapshotFor(openAiIdentity)).rawObservations, mined.rawObservations + 1, 'append extends the chain');
 });
+test('Gemini implicit caching learns from zero-cacheWrite misses, skips compactions, and mines per-step agy brain probes', () => {
+    const ttl = 5 * MIN;
+    const agyIdentity = ['acp', 'google-antigravity', 'gemini-4-neon'].join(SEP);
+    const start = cliffStart(ttl, 36);
+    const agyMsg = (t, input, cacheRead, model = 'gemini-4-neon') => ({
+        type: 'message',
+        timestamp: t,
+        message: {
+            role: 'assistant', provider: 'google-antigravity', model, timestamp: t, content: [],
+            usage: { input, cacheRead, cacheWrite: 0 },
+        },
+    });
+    // Built-in estimate is ~5m even on Turn 1 (cacheRead=0, cacheWrite=0, input >= 1024)
+    // and normalizes missing api -> 'acp' plus thinking-level model suffixes.
+    const turn1 = (0, test_types_js_1.present)(SM.cacheExpiryForMessage(agyMsg(start, 20_000, 0, 'gemini-4-neon-xhigh').message));
+    assert.equal(turn1.retention, '~5m');
+    assert.equal(turn1.basis, 'estimate');
+    assert.equal(turn1.identity, agyIdentity);
+    // Implicit-cache cliff: warm hits have cacheRead > 0; cold misses have cacheRead=0, cacheWrite=0, input ~ prevCtx.
+    // Insert a mid-session context compaction (200k -> 15k, cacheRead=0 at a 2m gap) that must NOT count as a miss.
+    const entries = [agyMsg(start, 200_000, 0, 'gemini-4-neon-xhigh')];
+    const warmGaps = [0.4, 0.55, 0.7, 0.85];
+    const coldGaps = [1.4, 1.8, 2.2, 2.8];
+    let t = start;
+    for (let i = 0; i < 36; i++) {
+        const warm = i % 2 === 0;
+        t += Math.round(ttl * (warm ? warmGaps[i % warmGaps.length] : coldGaps[i % coldGaps.length]));
+        entries.push(warm ? agyMsg(t, 4_000, 200_000) : agyMsg(t, 204_000, 0));
+        if (i === 10) {
+            t += 2 * MIN;
+            entries.push(agyMsg(t, 15_000, 0)); // sharp compaction drop -> re-anchor, not a cold miss
+            t += MIN;
+            entries.push(agyMsg(t, 200_000, 15_000)); // back to full context
+        }
+    }
+    observe(entries);
+    const learned = (0, test_types_js_1.present)(snapshotFor(agyIdentity));
+    assert.equal(learned.active, true, 'implicit-cache cold misses activate the learner');
+    assert.ok(learned.ttlMs > ttl * 0.65 && learned.ttlMs < ttl * 1.45, `learned ${learned.ttlMs} near ${ttl}`);
+    const report = (0, test_types_js_1.present)(CL.cacheLifetimeReport().find(r => r.provider === 'google-antigravity' && r.model === 'gemini-4-neon'));
+    assert.equal(report.api, 'acp');
+    assert.equal(report.source, 'learned');
+    assert.equal(report.probes.misses, 18, 'compaction drop did not record a bogus miss');
+    // Legacy empty-api google-antigravity keys in persisted cache-lifetime.json are dropped on reload.
+    CL.flushCacheLifetime();
+    const clFile = path.join(dishDir, 'cache-lifetime.json');
+    const persisted = JSON.parse(fs.readFileSync(clFile, 'utf8'));
+    persisted.identities[`${SEP}google-antigravity${SEP}gemini-4-neon-xhigh`] = { obs: [[Date.now() - MIN, MIN, 1, 'legacy01']] };
+    fs.writeFileSync(clFile, JSON.stringify(persisted));
+    CL.resetCacheLifetimeForTests();
+    assert.equal(CL.cacheLifetimeReport().some(r => r.provider === 'google-antigravity' && r.api === ''), false, 'legacy empty-api agy identity is purged on load');
+    // scanSessions prefers per-step agy brain transcript probes over cumulative mirror usage.
+    const native = '99999999-9999-9999-9999-999999999999';
+    const mirrorDir = path.join(dishDir, 'agy', 'sessions');
+    const brainLogs = path.join(tmpHome, '.gemini', 'antigravity-cli', 'brain', native, '.system_generated', 'logs');
+    fs.mkdirSync(mirrorDir, { recursive: true });
+    fs.mkdirSync(brainLogs, { recursive: true });
+    const tBase = Date.now() - 30 * MIN;
+    fs.writeFileSync(path.join(brainLogs, 'transcript.jsonl'), [
+        { step_index: 1, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: new Date(tBase).toISOString(), model: 'gemini-4-carbon-high', input_tokens: 180_000, cache_read_tokens: 0, output_tokens: 100 },
+        { step_index: 2, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: new Date(tBase + 20 * MIN).toISOString(), model: 'gemini-4-carbon-high', input_tokens: 182_000, cache_read_tokens: 0, output_tokens: 100 },
+        { step_index: 3, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: new Date(tBase + 20 * MIN + 5_000).toISOString(), model: 'gemini-4-carbon-high', input_tokens: 2_000, cache_read_tokens: 182_000, output_tokens: 100 },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    const mirrorFile = path.join(mirrorDir, `${native}.jsonl`);
+    fs.writeFileSync(mirrorFile, [
+        { type: 'session', version: 3, id: native, cwd: '/proj', timestamp: new Date(tBase).toISOString() },
+        { type: 'message', timestamp: new Date(tBase + 20 * MIN + 6_000).toISOString(), message: {
+                role: 'assistant', api: 'acp', provider: 'google-antigravity', model: 'gemini-4-carbon', timestamp: tBase + 20 * MIN + 5_000,
+                content: [], usage: { input: 184_000, cacheRead: 182_000, cacheWrite: 0, totalTokens: 366_000 },
+            } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    index.scanSessions([sourceForIdentity('agy', (0, test_types_js_1.nativeId)(native), mirrorFile)]);
+    const carbon = (0, test_types_js_1.present)(CL.cacheLifetimeReport().find(r => r.provider === 'google-antigravity' && r.model === 'gemini-4-carbon'));
+    assert.equal(carbon.probes.misses, 1, 'step 2 cold miss at 20m was mined from brain steps instead of masked by step 3');
+    assert.equal(carbon.probes.hits, 1, 'step 3 warm hit at 5s was mined from brain steps');
+});

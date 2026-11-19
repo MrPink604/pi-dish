@@ -50,7 +50,7 @@ import {
   type AcpToolCall,
   type NormalizedPlanEntry,
 } from './acp-transcript';
-import { findLatestToolStepOutput, readRunningTaskLogTail } from './agy-brain';
+import { findLatestToolStepOutput, readLatestAgyBrainStepUsage, readRunningTaskLogTail } from './agy-brain';
 
 /** Versions the fake agent and the captures were verified against. */
 export const AGY_VERIFIED_VERSIONS: readonly string[] = Object.freeze(['1.5.10', '1.5.13']);
@@ -676,6 +676,7 @@ export class AcpSession extends TransportSession {
       role: 'assistant',
       content: [],
       timestamp: startedAt,
+      api: 'acp',
       provider: AGY_PROVIDER,
     };
     const model = this._currentModelId();
@@ -879,7 +880,12 @@ export class AcpSession extends TransportSession {
       this._armAutonomousTimer();
       return;
     }
-    this._closeSegment('stop', this._takeHandoverUsage(), null, true);
+    let usage = this._takeHandoverUsage();
+    if (!usage && this.segment) {
+      const segStart = finite(this.segment.timestamp) ? this.segment.timestamp - 5000 : undefined;
+      usage = readLatestAgyBrainStepUsage(this.nativeSessionId, segStart);
+    }
+    this._closeSegment('stop', usage, null, true);
     this._endTurn();
   }
 

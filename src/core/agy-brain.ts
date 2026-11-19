@@ -690,6 +690,7 @@ export function parseAgyBrainEntries(
           role: 'assistant',
           content: blocks,
           timestamp: msgTimestamp,
+          api: 'acp',
           provider: AGY_PROVIDER,
           ...(model ? { model } : {}),
           stopReason: rawCalls.length ? 'toolUse' : 'stop',
@@ -804,6 +805,78 @@ export function readRunningTaskLogTail(nativeSessionId: string, commandHint?: st
   if (!freshOrphan) return null;
   const log = readAgyTaskLog(nativeSessionId, freshOrphan.id, 8192);
   return log?.content.trim() ? log.content : null;
+}
+
+/**
+ * Per-step LLM cache probes from Antigravity's brain `transcript.jsonl`.
+ * Mirrors only carry cumulative per-turn `PromptResponse.usage` (where a
+ * multi-step turn's warm step 2 masks a cold step 1); brain steps report
+ * exact per-call `input_tokens` and `cache_read_tokens` for the learner.
+ */
+export function readAgyBrainCacheProbeEntries(nativeSessionId: string): { file: string; entries: SessionEntries } | null {
+  const file = agyBrainTranscriptPath(nativeSessionId);
+  if (!file) return null;
+  let content: string;
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size === 0 || stat.size > 32 * 1024 * 1024) return null;
+    content = fs.readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+  const steps = parseJsonLines(content);
+  const entries: unknown[] = [];
+  let currentModel: string | null = null;
+  for (const step of steps) {
+    if (text(step.type) !== 'PLANNER_RESPONSE') continue;
+    const model: string | null = text(step.model) || currentModel;
+    if (model) currentModel = model;
+    if (!model) continue;
+    const createdAt = text(step.created_at);
+    const ts = createdAt ? Date.parse(createdAt) : NaN;
+    if (!Number.isFinite(ts)) continue;
+    const input = finite(step.input_tokens) && step.input_tokens > 0 ? step.input_tokens : 0;
+    const cacheRead = finite(step.cache_read_tokens) && step.cache_read_tokens > 0 ? step.cache_read_tokens : 0;
+    if (input + cacheRead <= 0) continue;
+    entries.push({
+      type: 'message',
+      timestamp: createdAt,
+      message: {
+        role: 'assistant',
+        api: 'acp',
+        provider: AGY_PROVIDER,
+        model,
+        timestamp: ts,
+        content: [],
+        usage: { input, cacheRead, cacheWrite: 0 },
+      },
+    });
+  }
+  return entries.length ? { file, entries } : null;
+}
+
+/**
+ * Latest per-step usage from brain `transcript.jsonl`, used as a fallback for
+ * autonomous ACP turns that finish without a `PromptResponse.usage` frame.
+ */
+export function readLatestAgyBrainStepUsage(nativeSessionId: string, minTimestampMs?: number): ProtocolRecord | null {
+  const file = agyBrainTranscriptPath(nativeSessionId);
+  if (!file) return null;
+  const steps = readTranscriptTailSteps(file);
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const step = steps[i];
+    if (text(step.type) !== 'PLANNER_RESPONSE') continue;
+    const createdAt = text(step.created_at);
+    const ts = createdAt ? Date.parse(createdAt) : NaN;
+    if (minTimestampMs !== undefined && Number.isFinite(ts) && ts < minTimestampMs) return null;
+    const input = finite(step.input_tokens) && step.input_tokens >= 0 ? step.input_tokens : 0;
+    const cacheRead = finite(step.cache_read_tokens) && step.cache_read_tokens >= 0 ? step.cache_read_tokens : 0;
+    const output = finite(step.output_tokens) && step.output_tokens >= 0 ? step.output_tokens : 0;
+    const totalTokens = input + cacheRead + output;
+    if (totalTokens <= 0) return null;
+    return { input, output, cacheRead, cacheWrite: 0, totalTokens };
+  }
+  return null;
 }
 
 // ---- Background tasks, schedules & plan -------------------------------------
