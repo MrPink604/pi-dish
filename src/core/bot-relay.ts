@@ -189,6 +189,16 @@ async function main(): Promise<void> {
           writeClaim();
           return respond(sock, cmd, true, { queued });
         }
+        case 'deliver': {
+          // From pi-dish: a room post, a question from another family, or an answer to this bot's question.
+          const { kind, requestId, text, data } = cmd;
+          if ((kind !== 'room' && kind !== 'ask' && kind !== 'answer') || typeof requestId !== 'string' || typeof text !== 'string' || !isRecord(data)) {
+            return respond(sock, cmd, false, undefined, 'deliver needs kind, requestId, text and data');
+          }
+          await bot.deliver({ kind, requestId, text, data: data as Record<string, string | number> });
+          writeClaim();
+          return respond(sock, cmd, true);
+        }
         case 'abort':
           await bot.abort();
           writeClaim();
@@ -276,6 +286,7 @@ async function main(): Promise<void> {
   runtime = await openBotRuntime({
     bot,
     storageFile: path.join(dishDir(), 'bots', bot.id, 'durable.sqlite'),
+    botsDir: path.join(dishDir(), 'bots'),
     mirror,
     models: models.models,
     sessions: sessionsPort(routeId),

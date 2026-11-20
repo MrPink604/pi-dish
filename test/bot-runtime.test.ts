@@ -5,11 +5,15 @@ import assert = require('node:assert');
 import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
-import type { BotRow } from '../lib/bot-registry';
+import type { BotRegistry, BotRow } from '../lib/bot-registry';
+import type { BotControl, BotHandlers } from '../lib/bot-handlers';
+import type { RouteHandler } from '../lib/http-boundary';
 import type { BotRuntime, HubApi, SessionsPort } from '../lib/bot-runtime';
 const { BotMirror }: typeof import('../lib/bot-mirror') = require('../lib/bot-mirror');
 const runtimeModule: typeof import('../lib/bot-runtime') = require('../lib/bot-runtime');
 const { openBotRuntime, settledWorker, newContextRefusal, composeHandoff } = runtimeModule;
+const { openBotRegistry }: typeof import('../lib/bot-registry') = require('../lib/bot-registry');
+const { createBotHandlers, ROOM_HOP_CAP }: typeof import('../lib/bot-handlers') = require('../lib/bot-handlers');
 
 type Faux = typeof import('@earendil-works/pi-ai/providers/faux');
 type Step = import('@earendil-works/pi-ai/providers/faux').FauxResponseStep;
@@ -40,7 +44,19 @@ async function until(predicate: () => boolean, message: string, timeout = 10_000
   }
 }
 
-async function openTestBot(t: test.TestContext, sessions: SessionsPort, { contextWindow = 200_000, api = noApi } = {}): Promise<Harness> {
+interface TestBotOptions {
+  contextWindow?: number;
+  api?: HubApi;
+  /** A bots directory shared with other bots, as a parent and its sub-bot share one; the caller removes it. */
+  botsDir?: string;
+  /** The bot's registry row, read again whenever the runtime asks; Fleet by default. */
+  row?: () => BotRow;
+  /** Responses queued before the bot opens, for a bot that starts a run as it opens. */
+  responses?: (faux: Faux) => Step[];
+}
+
+async function openTestBot(t: test.TestContext, sessions: SessionsPort,
+  { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses }: TestBotOptions = {}): Promise<Harness> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-'));
   const faux: Faux = await import('@earendil-works/pi-ai/providers/faux');
   const { createModels } = await import('@earendil-works/pi-ai/models');
@@ -49,20 +65,25 @@ async function openTestBot(t: test.TestContext, sessions: SessionsPort, { contex
   models.setProvider(provider.provider);
   const requests: Message[][] = [];
   const events: Harness['events'] = [];
-  const mirrorFile = path.join(dir, 'sessions', `${BOT.id}.jsonl`);
+  const bot = row();
+  const mirrorFile = path.join(dir, 'sessions', `${bot.id}.jsonl`);
   const open = () => openBotRuntime({
-    bot: BOT, storageFile: path.join(dir, 'durable.sqlite'),
-    mirror: new BotMirror(mirrorFile, { id: BOT.id, cwd: dir, name: BOT.name }),
-    models, sessions, api, loadBot: () => BOT,
+    bot: row(), storageFile: botsDir ? path.join(botsDir, bot.id, 'durable.sqlite') : path.join(dir, 'durable.sqlite'),
+    botsDir: botsDir ?? path.join(dir, 'bots'),
+    mirror: new BotMirror(mirrorFile, { id: bot.id, cwd: dir, name: bot.name }),
+    models, sessions, api, loadBot: row,
     emit: (event, data) => events.push({ event, data }),
     changed: () => {}, log: () => {}, pollMs: { first: 20, max: 40 },
   });
+  const recorded = (step: Step): Step => (context, ...rest) => {
+    requests.push([...context.messages]);
+    return typeof step === 'function' ? step(context, ...rest) : step;
+  };
+  if (responses) provider.appendResponses(responses(faux).map(recorded));
   const harness: Harness = {
     runtime: await open(), events, requests, faux,
     mirrorLines: () => fs.readFileSync(mirrorFile, 'utf8').trim().split('\n').map(line => JSON.parse(line) as Record<string, unknown>),
-    respond: (...steps) => provider.appendResponses(steps.map(step => typeof step === 'function'
-      ? ((context, ...rest) => { requests.push([...context.messages]); return step(context, ...rest); }) as Step
-      : ((context) => { requests.push([...context.messages]); return step; }) as Step)),
+    respond: (...steps) => provider.appendResponses(steps.map(recorded)),
     async reopen(between) { await harness.runtime.close(); between?.(); harness.runtime = await open(); },
   };
   t.after(async () => { await harness.runtime.close(); fs.rmSync(dir, { recursive: true, force: true }); });
@@ -497,4 +518,209 @@ test('bot_update records the change against the turn, shows it with what an undo
     lines: ['name: "Fleet" → "Armada"', 'identity: 41 characters → 15 characters'],
   });
   assert.ok(bot.events.some(event => event.event === 'message_end' && (event.data.message as Record<string, unknown>).customType === 'bot-change'));
+});
+
+function tempRegistry(t: test.TestContext): BotRegistry {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bots-'));
+  const registry = openBotRegistry(path.join(dir, 'bots.sqlite'));
+  t.after(() => { registry.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  return registry;
+}
+
+const newBot = (registry: BotRegistry, name: string, parentId: string | null = null): BotRow =>
+  registry.create({ name, identity: `You are ${name}.`, model: 'faux/faux-1', parentId }, { actor: 'user' });
+
+async function callRoute(handler: RouteHandler, params: Record<string, string>, body: unknown, query: Record<string, string>) {
+  let status = 200;
+  let sent: unknown;
+  const res = { status(code: number) { status = code; return res; }, json(value: unknown) { sent = value; return res; } };
+  await handler({ params, body, query } as never, res as never, () => {});
+  return { status, body: sent as Record<string, unknown> };
+}
+
+/** pi-dish's bot routes as a relay reaches them: an error answer throws its message, as the relay's fetch does. */
+function hubOf(handlers: BotHandlers, calls: [string, unknown][] = []): HubApi {
+  return async (pathname, body) => {
+    calls.push([pathname, body]);
+    const url = new URL(pathname, 'http://hub');
+    const [api, bots, id, action] = url.pathname.split('/').filter(Boolean);
+    const handler = api !== 'api' || bots !== 'bots' ? undefined
+      : !id ? (body ? handlers.create : handlers.list)
+        : action === 'room' ? (body ? handlers.roomPost : handlers.roomRead)
+          : action === 'ask' ? handlers.ask : action === 'answer' ? handlers.answer : undefined;
+    if (!handler) throw new Error(`unexpected API call: ${pathname}`);
+    const answer = await callRoute(handler, id ? { id: decodeURIComponent(id) } : {}, body ?? {}, Object.fromEntries(url.searchParams));
+    if (answer.status >= 400) throw new Error(String(answer.body.error));
+    return answer.body;
+  };
+}
+
+type Delivery = { to: string; kind: string; hop: number };
+
+/** Hands deliveries to the bots running in this process, as pi-dish hands them to their relays. */
+function botControl(running: Map<string, Harness>, deliveries: Delivery[], start: (bot: BotRow) => Promise<void> = async () => {}): BotControl {
+  return {
+    start, stop: async () => {}, route: id => id,
+    async deliver(bot, delivery) {
+      deliveries.push({ to: bot.name, kind: delivery.kind, hop: delivery.data.hop });
+      const harness = running.get(bot.id);
+      if (!harness) return false;
+      await harness.runtime.deliver(delivery);
+      return true;
+    },
+  };
+}
+
+const toolCall = (bot: Harness, name: string, args: Record<string, string | string[]>) =>
+  bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall(name, args)], { stopReason: 'toolUse' });
+const said = (bot: Harness, text: string) => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message) === text);
+const toolResults = (bot: Harness) => bot.mirrorLines()
+  .filter(line => line.type === 'message' && (line.message as Record<string, unknown>).role === 'toolResult')
+  .map(line => line.message as Record<string, unknown>);
+const customs = (bot: Harness, type: string) => bot.mirrorLines().filter(line => line.customType === type).map(line => textOf(line));
+
+test('a sub-bot starts from its parent\u2019s last request plus its purpose, leaves the parent\u2019s worker to it, and takes its own identity and notebook at its first rollover', async t => {
+  const registry = tempRegistry(t);
+  const botsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bots-dir-'));
+  t.after(() => fs.rmSync(botsDir, { recursive: true, force: true }));
+  const personal = registry.create({ name: 'Personal', identity: 'You are Personal, the contact for personal matters.', model: 'faux/faux-1' }, { actor: 'user' });
+  const worker = scriptedWorker();
+  const childCalls: string[][] = [];
+  let child: Harness | undefined;
+  const hub: HubApi = (pathname, body) => routes(pathname, body);
+  const routes = hubOf(createBotHandlers(() => registry, botControl(new Map(), [], async row => {
+    child = await openTestBot(t, async args => { childCalls.push(args); throw new Error('a sub-bot has no workers of its own here'); }, {
+      botsDir, row: () => registry.get(row.id)!, api: hub,
+      responses: faux => [
+        faux.fauxAssistantMessage([faux.fauxToolCall('context_notes', { action: 'read' })], { stopReason: 'toolUse' }),
+        faux.fauxAssistantMessage('On it.'),
+      ],
+    });
+  })));
+  const parent = await openTestBot(t, worker.port, { botsDir, row: () => registry.get(personal.id)!, api: hub });
+  parent.respond(
+    // The parent forks from its second window, so the copy starts at a rollover.
+    toolCall(parent, 'context_notes', { action: 'write', text: 'The dentist is on Friday.' }),
+    toolCall(parent, 'new_context', { summary: 'Noted the dentist' }),
+    toolCall(parent, 'spawn_worker', { name: 'clock', brief: 'sleep 75; date' }),
+    parent.faux.fauxAssistantMessage('Started clock.'),
+    toolCall(parent, 'bot_create', { name: 'Medical', purpose: 'Keep track of appointments.', identity: 'You are Medical, the contact for appointments.' }),
+    parent.faux.fauxAssistantMessage('Created Medical.'),
+    relay(parent),
+  );
+  await parent.runtime.prompt('Note the dentist and time a sleep', 'followUp');
+  await until(() => said(parent, 'Started clock.') && worker.polls() >= 1, 'the parent watches its worker');
+  await parent.runtime.prompt('Make a sub-bot for medical things', 'followUp');
+  await until(() => !!child && said(child, 'On it.') && said(parent, 'Created Medical.'), 'the sub-bot answers its purpose');
+  const sub = child!;
+
+  // Its first request is the parent's last one, message for message, with the purpose after it.
+  const first = sub.requests[0];
+  // Its system messages carry the instructions and the tools, so those are the parent's too.
+  assert.deepStrictEqual(first.slice(0, -1), parent.requests[4]);
+  assert.match(systemText(first), /The dentist is on Friday\./, 'the parent\u2019s notebook, in the parent\u2019s instructions');
+  assert.equal(first.at(-1)?.role, 'user');
+  assert.match(textOf(first.at(-1)), /^\[pi-dish: you are "Medical", a new bot that Personal created just now/);
+  assert.match(textOf(first.at(-1)), /Your purpose, from Personal:\nKeep track of appointments\.$/);
+  const medical = registry.list().find(row => row.name === 'Medical')!;
+  assert.equal(medical.parentId, personal.id);
+  assert.equal(medical.model, personal.model);
+  assert.ok(!fs.existsSync(path.join(botsDir, medical.id, 'fork.json')), 'the start is read once');
+  assert.match(textOf(toolResults(parent).at(-1)), /^Created sub-bot "Medical"/);
+  // Its chat starts at a marker, not with the parent's conversation; its notebook is its own and empty.
+  assert.deepEqual(sub.mirrorLines().filter(line => line.customType).map(line => line.customType), ['bot-forked', 'bot-purpose']);
+  assert.ok(!sub.mirrorLines().some(line => line.type === 'message' && (line.message as Record<string, unknown>).role === 'user'));
+  assert.equal(textOf(toolResults(sub)[0]), '(the notebook is empty)');
+
+  // The parent's worker reports once, to the parent only.
+  worker.answer('Fri Nov 20 12:01:15 UTC 2026');
+  await until(() => reportsOf(parent).length === 1 && parent.mirrorLines().some(line => line.type === 'message' && textOf(line.message).startsWith('Relayed:')), 'the parent hears its worker');
+  await severalPolls();
+  assert.equal(reportsOf(parent).length, 1);
+  assert.deepEqual(reportsOf(sub), []);
+  assert.deepEqual(childCalls, [], 'the sub-bot never watches the parent\u2019s worker');
+
+  // Its first rollover brings its own identity and notebook.
+  sub.respond(
+    toolCall(sub, 'context_notes', { action: 'write', text: 'Appointments: none yet.' }),
+    toolCall(sub, 'new_context', { summary: 'Started from Personal' }),
+    sub.faux.fauxAssistantMessage('Fresh window.'),
+  );
+  await sub.runtime.prompt('Open your own window now', 'followUp');
+  await until(() => said(sub, 'Fresh window.'), 'the sub-bot rolls over');
+  const fresh = systemText(sub.requests.at(-1)!);
+  assert.match(fresh, /You are Medical, the contact for appointments\./);
+  assert.match(fresh, /Appointments: none yet\./);
+  assert.doesNotMatch(fresh, /You are Personal|The dentist is on Friday/);
+});
+
+test('a room post wakes only the bots it names, and a chain of replies is refused past the hop cap', async t => {
+  const registry = tempRegistry(t);
+  const top = newBot(registry, 'Personal');
+  const medical = newBot(registry, 'Medical', top.id);
+  const dental = newBot(registry, 'Dental', top.id);
+  const running = new Map<string, Harness>();
+  const deliveries: Delivery[] = [];
+  const hub = hubOf(createBotHandlers(() => registry, botControl(running, deliveries)));
+  const parent = await openTestBot(t, noSessions, { row: () => registry.get(top.id)!, api: hub });
+  const child = await openTestBot(t, noSessions, { row: () => registry.get(medical.id)!, api: hub });
+  running.set(top.id, parent);
+  running.set(medical.id, child);
+  const post = (bot: Harness, to: string, message: string) => toolCall(bot, 'room_post', { to: [to], message });
+  parent.respond(
+    post(parent, 'Medical', 'hop one'), parent.faux.fauxAssistantMessage('Posted.'),
+    post(parent, 'medical', 'hop three'), parent.faux.fauxAssistantMessage('Posted again.'),
+    post(parent, 'Medical', 'hop five'), parent.faux.fauxAssistantMessage('Stopped at the cap.'),
+  );
+  child.respond(
+    post(child, 'Personal', 'hop two'), child.faux.fauxAssistantMessage('Replied.'),
+    post(child, 'Personal', 'hop four'), child.faux.fauxAssistantMessage('Replied again.'),
+  );
+  await parent.runtime.prompt('Check in with Medical', 'followUp');
+  await until(() => said(parent, 'Stopped at the cap.') && said(child, 'Replied again.'), 'the chain ends at the cap');
+
+  const messages = registry.room(top.id, 10);
+  assert.deepEqual(messages.map(message => [message.text, message.hop]), [['hop one', 1], ['hop two', 2], ['hop three', 3], ['hop four', 4]]);
+  assert.equal(new Set(messages.map(message => message.chain)).size, 1, 'one chain, started by the user\u2019s turn');
+  assert.match(messages[0].chain, new RegExp(`^${top.id}/\\d+$`));
+  assert.deepEqual(deliveries.map(delivery => delivery.to), ['Medical', 'Personal', 'Medical', 'Personal'], 'Dental is never woken');
+  const refused = toolResults(parent).at(-1)!;
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), new RegExp(`has reached ${ROOM_HOP_CAP} hops, the cap`));
+  assert.deepEqual(customs(child, 'bot-room').map(text => text.split('\n')[0]), ['[room] Personal to Medical: hop one', '[room] Personal to Medical: hop three']);
+  assert.equal(customs(parent, 'bot-room').length, 2);
+  // Any bot in the family reads the room, also one that was not named.
+  const read = await hub(`/api/bots/${dental.id}/room?limit=10`) as { messages: { fromName: string; toNames: string[] }[] };
+  assert.deepEqual(read.messages.map(message => `${message.fromName}>${message.toNames.join(',')}`),
+    ['Personal>Medical', 'Medical>Personal', 'Personal>Medical', 'Medical>Personal']);
+});
+
+test('ask_bot puts a question to a bot in another family and brings its answer back once', async t => {
+  const registry = tempRegistry(t);
+  const fleet = newBot(registry, 'Fleet');
+  const osbg = newBot(registry, 'OSBG');
+  const running = new Map<string, Harness>();
+  const deliveries: Delivery[] = [];
+  const calls: [string, unknown][] = [];
+  const hub = hubOf(createBotHandlers(() => registry, botControl(running, deliveries)), calls);
+  const asker = await openTestBot(t, noSessions, { row: () => registry.get(osbg.id)!, api: hub });
+  const asked = await openTestBot(t, noSessions, { row: () => registry.get(fleet.id)!, api: hub });
+  running.set(osbg.id, asker);
+  running.set(fleet.id, asked);
+  asker.respond(toolCall(asker, 'ask_bot', { bot: 'Fleet', question: 'Which host has the GPU?' }), asker.faux.fauxAssistantMessage('Asked Fleet.'), relay(asker));
+  asked.respond(asked.faux.fauxAssistantMessage('tycho has the GPU.'), asked.faux.fauxAssistantMessage('Nothing else.'));
+  await asker.runtime.prompt('Ask Fleet where the GPU is', 'followUp');
+  await until(() => asker.mirrorLines().some(line => line.type === 'message' && textOf(line.message).startsWith('Relayed:')), 'the answer arrives');
+  assert.match(textOf(toolResults(asker)[0]), /^Asked Fleet\./);
+  assert.deepEqual(customs(asked, 'bot-question').map(text => text.split('\n')[0]), ['[question from OSBG, a bot in another family] Which host has the GPU?']);
+  assert.deepEqual(customs(asker, 'bot-answer'), ['[answer from Fleet] to your question "Which host has the GPU?": tycho has the GPU.']);
+  assert.deepEqual(deliveries.map(delivery => [delivery.to, delivery.kind, delivery.hop]), [['Fleet', 'ask', 1], ['OSBG', 'answer', 2]]);
+
+  // Later runs of the bot asked, also after a restart, send nothing again.
+  await asked.reopen();
+  await asked.runtime.prompt('Anything else?', 'followUp');
+  await until(() => said(asked, 'Nothing else.'), 'the next run ends');
+  await severalPolls();
+  assert.equal(customs(asker, 'bot-answer').length, 1);
+  assert.equal(calls.filter(([pathname]) => pathname.endsWith('/answer')).length, 1);
 });

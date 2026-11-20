@@ -206,6 +206,41 @@ export function composeHandoff({ windowNumber, closed, tail, request, workers, f
   return lines.join('\n');
 }
 
+/** A sub-bot's start, written by its parent into the sub-bot's directory and read once by its first relay. */
+export const FORK_SEED = 'fork.json';
+
+export interface ForkSeed {
+  parentId: string;
+  parentName: string;
+  /** The parent's instructions for its current window, which the sub-bot keeps until its first rollover. */
+  instructions: string;
+  /** The parent's thinking level for its current window: a request at another level would not reuse its cache. */
+  thinkingLevel: string;
+  /** The sub-bot's first message. */
+  purpose: string;
+  /** The parent's current window up to its last request, entry for entry. */
+  entries: { kind: string; model?: Message[]; data?: Durable.EntryRecord['data']; head?: 'self' }[];
+}
+
+/** What another bot hands this one: a room post, a question from another family, or the answer to one. */
+export interface BotInput {
+  kind: 'room' | 'ask' | 'answer';
+  requestId: string;
+  text: string;
+  data: Record<string, string | number>;
+}
+
+/** A sub-bot's first message: its purpose, and that the conversation above it is its parent's. */
+export function composePurpose(parent: string, child: string, purpose: string): string {
+  return [
+    `[pi-dish: you are "${child}", a new bot that ${parent} created just now as its sub-bot. Everything above is ${parent}'s conversation up to that moment. Its requests, its workers and its tool calls are ${parent}'s, not yours: do not continue or repeat any of them. You have no workers; reports from ${parent}'s workers go to ${parent} only.`,
+    `You keep ${parent}'s identity until your first new context window, which brings your own identity and an empty notebook of your own. Open it soon: until you do, every request carries ${parent}'s whole conversation. Within your first few turns, write what you need to keep into your notebook with context_notes and call new_context.]`,
+    '',
+    `Your purpose, from ${parent}:`,
+    purpose.trim(),
+  ].join('\n');
+}
+
 const PREAMBLE = [
   'You are a pi-dish bot: a long-lived agent that is the standing contact for one area of work. You talk with the',
   'user, start pi-dish sessions (workers) to do the work, and keep what you learn. You have no shell and do not edit',
@@ -229,6 +264,12 @@ const PREAMBLE = [
   'the window is filling up, or a topic is done, save the notebook and call new_context with a one-line summary of',
   'the window. history reads and searches your earlier windows. Your instructions are fixed for a window; notebook',
   'edits show in them from the next window on.',
+  '',
+  'Bots: bot_update changes your own entry or a sub-bot\'s (name, identity, places, thinking); the user sees each change',
+  'and can undo it, and only the user changes your own model. bot_create makes a sub-bot for a narrower area. Your',
+  'family (your parent, your sub-bots and theirs) shares a room: room_post wakes only the bots you name, room_read shows',
+  'the recent messages. ask_bot puts one question to a bot in another family; its answer arrives once as a message. A',
+  'chain of bot messages is capped at a few hops, so post only what needs an answer and never just to acknowledge.',
 ].join('\n');
 
 // ---------------------------------------------------------------------------
@@ -311,6 +352,8 @@ export interface BotRuntimeOptions {
   log(line: string): void;
   /** Initial and longest delay between polls of a worker. */
   pollMs?: { first: number; max: number };
+  /** Where every bot's directory lives: a sub-bot's start is written into its own. */
+  botsDir: string;
 }
 
 export interface BotRuntime {
@@ -319,6 +362,8 @@ export interface BotRuntime {
   contextUsage(): { tokens: number; contextWindow: number; percent: number } | null;
   /** `followUp` queues behind a busy run; `steer` joins it. */
   prompt(message: string, mode: 'followUp' | 'steer'): Promise<void>;
+  /** A room message, a question from another family or the answer to one, posted once per request id. */
+  deliver(input: BotInput): Promise<void>;
   abort(): Promise<void>;
   close(): Promise<void>;
 }
@@ -377,7 +422,22 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   });
   const ReportEntry = 'bot.report';
   /** Entries that start a run: what a change made in the run is attributed to. */
-  const INPUT_KINDS: Readonly<Record<string, true>> = { 'pi.user': true, [ReportEntry]: true };
+  const INPUT_KINDS: Readonly<Record<string, true>> = {
+    'pi.user': true, [ReportEntry]: true, 'bot.room': true, 'bot.ask': true, 'bot.answer': true, 'bot.purpose': true,
+  };
+  /** Inputs from other bots: a turn they wake continues their chain one hop on. */
+  const CHAINED_KINDS: Readonly<Record<string, true>> = { 'bot.room': true, 'bot.ask': true, 'bot.answer': true };
+  /** Entries the transcript shows as notices rather than as the user's words. */
+  const CUSTOM_TYPES: Readonly<Record<string, string>> = {
+    [ReportEntry]: 'bot-worker-report', 'pi.reset': 'bot-context-window', 'bot.room': 'bot-room', 'bot.ask': 'bot-question',
+    'bot.answer': 'bot-answer', 'bot.purpose': 'bot-purpose',
+  };
+  const roleOf = (kind: string) => kind === 'pi.assistant' ? 'assistant' : kind === 'pi.user' ? 'user' : kind === 'pi.reset' ? 'handoff' : kind.replace(/^bot\./, '');
+  /** Questions from other families this bot has answered, so each answer goes back once. */
+  const AsksDoc = durable.defineDoc<{ answered: Record<string, string> }>({
+    kind: 'bot.asks', version: 1, scope: 'conversation', history: 'latest', fork: 'initial',
+    initial: () => ({ answered: {} }), checkpointWhen: () => true,
+  });
   let root: Durable.Conversation | null = null;
   const conversation = (): Durable.Conversation => {
     if (!root) throw new Error('the bot conversation is not open yet');
@@ -432,13 +492,13 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       thinkingLevel: current.thinking ? current.thinking as Durable.AgentChange['thinkingLevel'] : null,
     });
     const tail = window
-      .filter(entry => entry.kind === 'pi.user' || entry.kind === ReportEntry || entry.kind === 'pi.assistant')
-      .map(entry => ({ role: entry.kind === 'pi.assistant' ? 'assistant' : entry.kind === ReportEntry ? 'report' : 'user', text: messageText(entryMessage(entry)).trim() }))
+      .filter(entry => Object.hasOwn(INPUT_KINDS, entry.kind) || entry.kind === 'pi.assistant')
+      .map(entry => ({ role: roleOf(entry.kind), text: messageText(entryMessage(entry)).trim() }))
       .filter(message => message.text)
       .slice(0, TAIL_MESSAGES)
       .reverse()
       .map(message => ({ ...message, text: message.text.length > TAIL_MESSAGE_CHARS ? `${message.text.slice(0, TAIL_MESSAGE_CHARS)}…` : message.text }));
-    const request = window.find(entry => entry.kind === 'pi.user' || entry.kind === ReportEntry);
+    const request = window.find(entry => Object.hasOwn(INPUT_KINDS, entry.kind));
     return composeHandoff({
       windowNumber: memory.windows.length + 1,
       closed: memory.windows,
@@ -728,7 +788,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         const message = entryMessage(entry);
         const body = messageText(message).trim();
         if (!body || entry.kind === 'pi.system') return [];
-        const role = entry.kind === ReportEntry ? 'report' : entry.kind === 'pi.reset' ? 'handoff' : String(message?.role ?? entry.kind);
+        const role = entry.kind.startsWith('bot.') || entry.kind === 'pi.reset' ? roleOf(entry.kind) : String(message?.role ?? entry.kind);
         return [`[${role}] ${body}`];
       });
       if (args.action === 'windows') {
@@ -808,16 +868,194 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     },
   });
 
-  /** The input that started the current run, as `<bot>/<entry>`: the turn a change is recorded against. */
-  async function currentTurn(): Promise<string> {
+  /** The input that started the current run: the newest input entry. */
+  async function currentInput(): Promise<Durable.EntryRecord | null> {
     let cursor: Durable.Cursor | undefined;
     do {
       const page = await conversation().entries({ order: 'descending' }, 200, cursor, ctx);
       const input = page.items.find(entry => Object.hasOwn(INPUT_KINDS, entry.kind));
-      if (input) return `${bot.id}/${input.id}`;
+      if (input) return input;
       cursor = page.next;
     } while (cursor);
-    return `${bot.id}/0`;
+    return null;
+  }
+
+  /**
+   * The current turn as `<bot>/<entry>`, and the chain a post or question made in it belongs to: a turn another
+   * bot's message woke continues that chain one hop on; any other turn starts a chain of its own at hop 1.
+   */
+  async function currentChain(): Promise<{ turn: string; chain: string; hop: number }> {
+    const input = await currentInput();
+    const turn = `${bot.id}/${input?.id ?? 0}`;
+    const data = input && Object.hasOwn(CHAINED_KINDS, input.kind) && isRecord(input.data) ? input.data : null;
+    if (data && typeof data.chain === 'string' && typeof data.hop === 'number') return { turn, chain: data.chain, hop: data.hop + 1 };
+    return { turn, chain: turn, hop: 1 };
+  }
+
+  /** A bot by name or id, from the registry; retired bots are not found. */
+  async function findBot(wanted: string): Promise<BotRow | null> {
+    const { bots } = await hub('/api/bots') as { bots: BotRow[] };
+    const name = wanted.trim().toLowerCase();
+    return bots.find(row => row.status !== 'retired' && (row.id === wanted || row.name.toLowerCase() === name)) ?? null;
+  }
+
+  /**
+   * The current window as a sub-bot starts from it: from its handoff up to the newest model response, which holds
+   * the call creating the sub-bot and any call beside it. What is copied is exactly what this bot's last request
+   * sent, so the sub-bot's first request repeats it and reads it from the prompt cache, and it holds no unfinished
+   * tool call to continue.
+   */
+  async function forkEntries(): Promise<ForkSeed['entries']> {
+    const newestFirst: Durable.EntryRecord[] = [];
+    let cursor: Durable.Cursor | undefined;
+    let reset = false;
+    do {
+      const page = await conversation().entries({ order: 'descending' }, 200, cursor, ctx);
+      for (const entry of page.items) {
+        newestFirst.push(entry);
+        if (entry.kind === 'pi.reset') { reset = true; break; }
+      }
+      cursor = page.next;
+    } while (cursor && !reset);
+    const cut = newestFirst.findIndex(entry => entry.kind === 'pi.assistant');
+    return newestFirst.slice(cut + 1).reverse().map(entry => ({
+      kind: entry.kind,
+      ...(entry.model ? { model: [...entry.model] } : {}),
+      ...(entry.data !== undefined ? { data: entry.data } : {}),
+      ...(entry.head === entry.id ? { head: 'self' as const } : {}),
+    }));
+  }
+
+  const placesParameter = opt(arr(obj({
+    host: opt(str({ description: 'Fleet host; omitted: this host' })), cwd: str(), label: str({ description: 'What the bot calls the place' }),
+  }), { description: 'Where the bot works; replaces the whole list' }));
+
+  const botCreate = durable.defineTool({
+    name: 'bot_create',
+    description: 'Create a sub-bot under you: a long-lived bot that is the standing contact for a narrower area. It starts from this conversation as it stood before this call, so it knows what you know, and its purpose arrives as its first message. It keeps your identity until its first new context window, where it takes the identity you give here and a notebook of its own. It runs on your model. Bots nest at most three levels deep.',
+    parameters: obj({
+      name: str({ description: 'Its name' }),
+      purpose: str({ description: 'What it is for and what to do first; its first message' }),
+      identity: str({ description: 'Its standing identity from its first new window on: who it is, what it is the contact for, how it works' }),
+      places: placesParameter,
+    }),
+    // A rerun finds its own child id: the registry creates a bot once per id.
+    replay: 'safe',
+    execute: async (args, api, callContext) => {
+      const childId = await api.memo('child', crypto.randomUUID(), callContext);
+      const self = options.loadBot();
+      const childDir = path.join(options.botsDir, childId);
+      if (!await api.memo<boolean>('seeded', callContext)) {
+        const agent = await api.agent(callContext);
+        const seed: ForkSeed = {
+          parentId: bot.id, parentName: self.name, instructions: agent.instructions ?? '', thinkingLevel: agent.thinkingLevel,
+          purpose: composePurpose(self.name, args.name, args.purpose), entries: await forkEntries(),
+        };
+        fs.mkdirSync(childDir, { recursive: true, mode: 0o700 });
+        const file = path.join(childDir, FORK_SEED);
+        fs.writeFileSync(`${file}.tmp`, JSON.stringify(seed), { mode: 0o600 });
+        fs.renameSync(`${file}.tmp`, file);
+        await api.memo('seeded', true, callContext);
+      }
+      let created: { bot: BotRow };
+      try {
+        created = await hub('/api/bots', {
+          id: childId, parentId: bot.id, name: args.name, identity: args.identity, model: self.model,
+          ...(self.thinking ? { thinking: self.thinking } : {}), places: args.places ?? [], by: bot.id, turn: (await currentChain()).turn,
+        } as ProtocolRecord) as { bot: BotRow };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // A refusal leaves no bot behind; a bot that was created but did not start keeps its start for a retry.
+        if (!message.startsWith('Created ')) fs.rmSync(childDir, { recursive: true, force: true });
+        return refusal(message);
+      }
+      return text(`Created sub-bot "${created.bot.name}". It starts from this conversation and is reading its purpose now; it reports to the user in its own chat. Reach it with room_post.`);
+    },
+  });
+
+  const roomPost = durable.defineTool({
+    name: 'room_post',
+    description: 'Post a message to your family\'s room: your parent, your sub-bots and theirs. Only the bots you name are woken; it arrives in their conversation. A chain of replies is capped, so post only what needs their attention, and do not reply just to acknowledge.',
+    parameters: obj({
+      to: arr(str(), { description: 'Names of the bots the message is for' }),
+      message: str(),
+    }),
+    // A rerun would post twice.
+    replay: 'unsafe',
+    execute: async (args) => {
+      const { chain, hop } = await currentChain();
+      let posted: { message: { id: number }; delivered: string[]; notRunning: string[] };
+      try {
+        posted = await hub(`/api/bots/${bot.id}/room`, { to: args.to, text: args.message, chain, hop } as ProtocolRecord) as typeof posted;
+      } catch (error) {
+        return refusal(error instanceof Error ? error.message : String(error));
+      }
+      const parts = [`Posted room message ${posted.message.id}${posted.delivered.length ? ` to ${posted.delivered.join(', ')}` : ''}.`];
+      if (posted.notRunning.length) parts.push(`Not running, so not woken: ${posted.notRunning.join(', ')}; they can read it in the room later.`);
+      return text(parts.join(' '));
+    },
+  });
+
+  const roomRead = durable.defineTool({
+    name: 'room_read',
+    description: 'Read the newest messages in your family\'s room, including those not addressed to you.',
+    parameters: obj({ limit: opt(num({ description: 'How many; default 20' })) }),
+    replay: 'safe',
+    execute: async (args) => {
+      const limit = Math.max(1, Math.floor(args.limit ?? 20));
+      const { messages } = await hub(`/api/bots/${bot.id}/room?limit=${limit}`) as {
+        messages: { id: number; fromName: string; toNames: string[]; text: string; hop: number; createdAt: string }[];
+      };
+      if (!messages.length) return text('The room is empty.');
+      return text(messages.map(message => `#${message.id} ${message.createdAt} ${message.fromName} → ${message.toNames.join(', ')} (hop ${message.hop}): ${message.text}`).join('\n'));
+    },
+  });
+
+  const askBot = durable.defineTool({
+    name: 'ask_bot',
+    description: 'Put one question to a bot in another family, such as asking Fleet about a host. Returns at once; its answer arrives once, as a message starting "[answer from". Do not poll for it.',
+    parameters: obj({ bot: str({ description: 'Name of the bot to ask' }), question: str({ description: 'The whole question; it knows nothing of this conversation' }) }),
+    // A rerun finds its own question id, and the bot asked takes each question once.
+    replay: 'safe',
+    execute: async (args, api, callContext) => {
+      const askId = await api.memo('ask', crypto.randomUUID(), callContext);
+      const target = await findBot(args.bot);
+      if (!target) return refusal(`There is no bot named "${args.bot}".`);
+      const { chain, hop } = await currentChain();
+      try {
+        await hub(`/api/bots/${target.id}/ask`, { by: bot.id, question: args.question, askId, chain, hop } as ProtocolRecord);
+      } catch (error) {
+        return refusal(error instanceof Error ? error.message : String(error));
+      }
+      return text(`Asked ${target.name}. Its answer arrives once, as a message starting "[answer from ${target.name}]".`);
+    },
+  });
+
+  /**
+   * Sends back the answer to each question from another family whose run has ended; each goes once. `through` is the
+   * newest entry of a view in which the bot was idle: every question up to it has had its run, and one that arrived
+   * later waits for the end of its own. The answer is the last model text of that run, before the next input; it is
+   * one more hop of the question's chain and is never refused, since the question was taken.
+   */
+  async function answerAsks(through: number): Promise<void> {
+    const recent = (await conversation().entries({ order: 'descending', maxEntryId: through as Durable.EntryId }, 200, undefined, ctx)).items;
+    const asks = recent.filter(entry => entry.kind === 'bot.ask');
+    if (!asks.length) return;
+    const answered = (await harness.snapshot(AsksDoc, conversation().id, ctx))?.answered ?? {};
+    for (const ask of asks) {
+      const data = isRecord(ask.data) ? ask.data : {};
+      const askId = typeof data.askId === 'string' ? data.askId : '';
+      if (!askId || answered[askId]) continue;
+      const next = recent.filter(entry => entry.id > ask.id && Object.hasOwn(INPUT_KINDS, entry.kind)).at(-1)?.id ?? Infinity;
+      const reply = recent.find(entry => entry.id > ask.id && entry.id < next && entry.kind === 'pi.assistant' && messageText(entryMessage(entry)).trim());
+      await hub(`/api/bots/${encodeURIComponent(String(data.from))}/answer`, {
+        by: bot.id, askId, text: reply ? messageText(entryMessage(reply)).trim() : '(it ended its turn without a reply)',
+        question: String(data.question ?? ''), chain: String(data.chain), hop: Number(data.hop) + 1,
+      });
+      await conversation().commit(async (tx) => {
+        (await tx.doc(AsksDoc, conversation().id)).answered[askId] = new Date().toISOString();
+      }, ctx);
+    }
   }
 
   type Change = { bot: BotRow; revision: number; fields: string[]; before: BotRow };
@@ -853,7 +1091,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       }
       let change: Change;
       try {
-        change = await hub(`/api/bots/${encodeURIComponent(target)}/edit`, { by: bot.id, turn: await currentTurn(), changes } as ProtocolRecord) as Change;
+        change = await hub(`/api/bots/${encodeURIComponent(target)}/edit`, { by: bot.id, turn: (await currentChain()).turn, changes } as ProtocolRecord) as Change;
       } catch (error) {
         return refusal(error instanceof Error ? error.message : String(error));
       }
@@ -896,7 +1134,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   const BotExtension = durable.defineExtension({
     name: 'bot',
     sections: [durable.section('bot-rules', () => PREAMBLE, { tag: false })],
-    tools: [spawnWorker, sessionsTool, contextNotes, newContext, history, kbSearch, kbRead, kbWrite, botUpdate],
+    tools: [spawnWorker, sessionsTool, contextNotes, newContext, history, kbSearch, kbRead, kbWrite, botUpdate, botCreate, roomPost, roomRead, askBot],
     tasks: [WorkerWatch],
     hooks: [reminder],
   });
@@ -911,19 +1149,54 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     settings: { compaction: { enabled: false } },
     onReport: (report) => log(`durable ${report.kind}: ${report.error instanceof Error ? report.error.message : String(report.error)}`),
   }, ctx);
+  // A sub-bot's first start: its parent wrote where it starts from into its directory.
+  const seedFile = path.join(path.dirname(options.storageFile), FORK_SEED);
+  const seed = fs.existsSync(seedFile) ? JSON.parse(fs.readFileSync(seedFile, 'utf8')) as ForkSeed : null;
   root = await harness.root(ctx, {
-    agent: {
-      model: modelRef,
-      ...(bot.thinking ? { thinkingLevel: bot.thinking as Durable.AgentChange['thinkingLevel'] } : {}),
-      instructions: composeInstructions(bot.identity, '', bot.places),
-    },
+    // A sub-bot keeps its parent's instructions and thinking level until its first rollover, so its first request
+    // repeats the parent's last one.
+    agent: seed
+      ? { model: modelRef, thinkingLevel: seed.thinkingLevel as Durable.AgentChange['thinkingLevel'], instructions: seed.instructions }
+      : {
+          model: modelRef,
+          ...(bot.thinking ? { thinkingLevel: bot.thinking as Durable.AgentChange['thinkingLevel'] } : {}),
+          instructions: composeInstructions(bot.identity, '', bot.places),
+        },
   });
+  if (seed) {
+    const started = (await root.entries({ order: 'ascending' }, 1, undefined, ctx)).items.length > 0;
+    if (!started) {
+      await root.commit(async (tx) => {
+        for (const entry of seed.entries) await tx.appendEntry(root!.id, entry as Durable.EntryDraft);
+        // Questions the parent took are the parent's to answer.
+        const asks = await tx.doc(AsksDoc, root!.id);
+        for (const entry of seed.entries) {
+          const askId = entry.kind === 'bot.ask' && isRecord(entry.data) ? entry.data.askId : undefined;
+          if (typeof askId === 'string') asks.answered[askId] = `by ${seed.parentName}`;
+        }
+      }, ctx);
+    }
+    // The parent's conversation is not this bot's to show: the transcript starts at a marker after it.
+    const copied = (await root.entries({ order: 'ascending' }, seed.entries.length, undefined, ctx)).items.at(-1);
+    if (copied && copied.id > mirror.lastEntryId) {
+      mirror.appendCustom(copied.id, 'bot-forked', `Started from ${seed.parentName}'s conversation; its purpose follows.`,
+        { parentId: seed.parentId, parentName: seed.parentName });
+    }
+  }
   // The model is the user's choice in the registry; the instructions stay those of the open window.
   const agent = await root.agent(ctx);
   if (agent.model?.provider !== modelRef.provider || agent.model?.modelId !== modelRef.modelId) {
     await root.configure({ model: modelRef }, ctx);
   }
   harness.resume();
+  if (seed) {
+    // The request id makes the purpose arrive once, also when a crash comes before the start file is gone.
+    await root.submit({
+      type: 'input', content: seed.purpose, whenBusy: 'followUp', requestId: 'bot-purpose',
+      entry: { kind: 'bot.purpose', data: { from: seed.parentId, fromName: seed.parentName } },
+    }, ctx);
+    fs.rmSync(seedFile, { force: true });
+  }
 
   // Event mapping --------------------------------------------------------------
 
@@ -954,8 +1227,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       mirror.appendMessage(entry.id, message);
       emit('message_start', { message });
       emit('message_end', { message });
-    } else if (entry.kind === ReportEntry || entry.kind === 'pi.reset') {
-      const customType = entry.kind === ReportEntry ? 'bot-worker-report' : 'bot-context-window';
+    } else if (Object.hasOwn(CUSTOM_TYPES, entry.kind)) {
+      const customType = CUSTOM_TYPES[entry.kind];
       const details = isRecord(entry.data) ? entry.data : undefined;
       mirror.appendCustom(entry.id, customType, messageText(message), details);
       emit('message_end', { message: { role: 'custom', customType, content: [{ type: 'text', text: messageText(message) }], display: true, timestamp: Date.now() } });
@@ -1058,7 +1331,9 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       }
       emit('turn_end', {});
       emit('agent_end', {});
+      const through = processed;
       try { await forceRolloverIfFull(); } catch (error) { log(`forced rollover failed: ${error instanceof Error ? error.message : String(error)}`); }
+      try { await answerAsks(through); } catch (error) { log(`answer to another bot failed: ${error instanceof Error ? error.message : String(error)}`); }
     }
     options.changed();
   }
@@ -1081,6 +1356,12 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     async prompt(message, mode) {
       if (!busy) await forceRolloverIfFull();
       await conversation().submit({ type: 'input', content: message, whenBusy: mode }, ctx);
+    },
+    async deliver(input) {
+      await conversation().submit({
+        type: 'input', content: input.text, whenBusy: 'followUp', requestId: input.requestId,
+        entry: { kind: `bot.${input.kind}`, data: input.data },
+      }, ctx);
     },
     abort: () => conversation().abort(ctx),
     async close() {

@@ -1,5 +1,6 @@
 // Generated from src/core/bot-runtime.ts; edit that source and run npm run build:core.
-import type { Models, AssistantMessage } from '@earendil-works/pi-ai' with { 'resolution-mode': 'import' };
+import type * as Durable from '@earendil-works/pi-durable' with { 'resolution-mode': 'import' };
+import type { Message, Models, AssistantMessage } from '@earendil-works/pi-ai' with { 'resolution-mode': 'import' };
 import type { BotPlace, BotRow } from './bot-registry';
 import type { BotMirror } from './bot-mirror';
 import type { ProtocolRecord } from './wire-protocol';
@@ -83,6 +84,34 @@ export interface HandoffInput {
  * to roll over again.
  */
 export declare function composeHandoff({ windowNumber, closed, tail, request, workers, forced }: HandoffInput): string;
+/** A sub-bot's start, written by its parent into the sub-bot's directory and read once by its first relay. */
+export declare const FORK_SEED = "fork.json";
+export interface ForkSeed {
+    parentId: string;
+    parentName: string;
+    /** The parent's instructions for its current window, which the sub-bot keeps until its first rollover. */
+    instructions: string;
+    /** The parent's thinking level for its current window: a request at another level would not reuse its cache. */
+    thinkingLevel: string;
+    /** The sub-bot's first message. */
+    purpose: string;
+    /** The parent's current window up to its last request, entry for entry. */
+    entries: {
+        kind: string;
+        model?: Message[];
+        data?: Durable.EntryRecord['data'];
+        head?: 'self';
+    }[];
+}
+/** What another bot hands this one: a room post, a question from another family, or the answer to one. */
+export interface BotInput {
+    kind: 'room' | 'ask' | 'answer';
+    requestId: string;
+    text: string;
+    data: Record<string, string | number>;
+}
+/** A sub-bot's first message: its purpose, and that the conversation above it is its parent's. */
+export declare function composePurpose(parent: string, child: string, purpose: string): string;
 export interface BotModels {
     models: Models;
     close(): Promise<void>;
@@ -112,6 +141,8 @@ export interface BotRuntimeOptions {
         first: number;
         max: number;
     };
+    /** Where every bot's directory lives: a sub-bot's start is written into its own. */
+    botsDir: string;
 }
 export interface BotRuntime {
     readonly busy: boolean;
@@ -123,6 +154,8 @@ export interface BotRuntime {
     } | null;
     /** `followUp` queues behind a busy run; `steer` joins it. */
     prompt(message: string, mode: 'followUp' | 'steer'): Promise<void>;
+    /** A room message, a question from another family or the answer to one, posted once per request id. */
+    deliver(input: BotInput): Promise<void>;
     abort(): Promise<void>;
     close(): Promise<void>;
 }
