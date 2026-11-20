@@ -26,7 +26,7 @@ const listenServer = (server: http.Server): Promise<string> => new Promise((reso
 const execFileAsync = promisify(execFile);
 const cli = path.join(__dirname, '..', 'skills', 'pi-dish-sessions', 'scripts', 'pi-dish-sessions.js');
 
-function mockServer() {
+function mockServer({ renameError }: { renameError?: string } = {}) {
   const requests: CapturedRequest[] = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -59,6 +59,9 @@ function mockServer() {
         res.end(JSON.stringify({ messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }] })); return;
       }
       const url = req.url ?? '';
+      if (renameError && req.method === 'POST' && url === '/api/sessions/peer-1/rename') {
+        res.statusCode = 409; res.end(JSON.stringify({ error: renameError })); return;
+      }
       if (req.method === 'POST' && /^\/api\/sessions\/peer-1\/(rename|prompt|steer|follow-up|abort|resume|close)$/.test(url)) {
         res.end(JSON.stringify({ success: true })); return;
       }
@@ -178,6 +181,25 @@ test('peer-session CLI spawns the caller\'s own harness and honours --harness', 
   });
   assert.equal(requests.filter(r => r.url === '/api/sessions/new').length, 2,
     'rejected harnesses never reach the spawn route');
+});
+
+// An agy session titles itself and refuses a rename. It is already running by
+// then, so the spawn must still deliver its prompt and report success: a
+// failure here leaves an orphan and invites the caller to spawn a second one.
+test('peer-session CLI spawn outlives a refused rename and passes a thinking level', async t => {
+  const { server, requests } = mockServer({ renameError: 'This session does not support renaming.' });
+  const base = await listenServer(server);
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+
+  const spawned = await run(
+    ['spawn', '--cwd', '/work', '--name', 'Peer', '--thinking-level', 'high', '--prompt', 'Investigate', '--json'], base);
+  const result = record(JSON.parse(spawned.stdout));
+  assert.equal(result.sessionId, 'peer-1');
+  assert.match(String(result.nameError), /does not support renaming/);
+  assert.match(spawned.stderr, /session started but not named \(.*does not support renaming/);
+  assert.ok(requests.some(request => request.url === '/api/sessions/peer-1/prompt' && request.body?.message === 'Investigate'),
+    'the prompt is still delivered');
+  assert.equal(present(present(requests.find(request => request.url === '/api/sessions/new')).body).thinking, 'high');
 });
 
 test('peer-session CLI reports the canonical route for an alternative registry entry', async t => {

@@ -44,7 +44,7 @@ interface ValueArgs {
   url?: string; session?: string; cwd?: string; harness?: string;
   model?: string; name?: string; prompt?: string; limit?: string;
   host?: string; before?: string; max_chars?: string; fields?: string;
-  days?: string; sort?: string;
+  days?: string; sort?: string; thinking_level?: string;
 }
 interface BooleanArgs {
   json?: boolean; active?: boolean; no_wait?: boolean; private?: boolean;
@@ -62,6 +62,7 @@ interface SpawnBody {
   harness: string;
   cwd?: string;
   model?: string;
+  thinking?: string;
   name?: string;
   private?: boolean;
 }
@@ -179,13 +180,14 @@ const COMMANDS: CommandSpec[] = [
   },
   {
     name: 'spawn',
-    usage: 'spawn [--cwd DIR] [--name NAME] [--harness ID] [--model REF] [--prompt TEXT] [--private] [--no-wait] [--host NAME] [--json]',
+    usage: 'spawn [--cwd DIR] [--name NAME] [--harness ID] [--model REF] [--thinking-level LEVEL] [--prompt TEXT] [--private] [--no-wait] [--host NAME] [--json]',
     summary: 'Start an ordinary, durable session (not a subagent) and optionally give it its first prompt.',
     flags: [
       ['--cwd DIR', 'working directory for the new session'],
-      ['--name NAME', 'rename the session once it is live'],
+      ['--name NAME', 'rename the session once it is live; a harness that cannot rename keeps its own title, and the spawn still succeeds'],
       ['--harness ID', 'coding agent to run (default: the harness this session itself runs on)'],
       ['--model REF', 'canonical provider/id model ref (default: the host default)'],
+      ['--thinking-level LEVEL', 'reasoning level for the model, such as low, high or max (default: the harness default)'],
       ['--prompt TEXT', 'first prompt, sent once the session is ready'],
       ['--private', 'hidden until the PIN is entered in pi-dish; transcript outside the fleet session backup (pi/omp only; no --prompt)'],
       ['--no-wait', 'return the spawn id immediately instead of waiting for readiness'],
@@ -425,7 +427,7 @@ const VALUE_FLAGS = new Map<string, keyof ValueArgs>([
   ['--url', 'url'], ['--session', 'session'], ['--cwd', 'cwd'], ['--harness', 'harness'],
   ['--model', 'model'], ['--name', 'name'], ['--prompt', 'prompt'], ['--limit', 'limit'],
   ['--host', 'host'], ['--before', 'before'], ['--max-chars', 'max_chars'], ['--fields', 'fields'],
-  ['--days', 'days'], ['--sort', 'sort'],
+  ['--days', 'days'], ['--sort', 'sort'], ['--thinking-level', 'thinking_level'],
 ]);
 const BOOL_FLAGS = new Map<string, keyof BooleanArgs>([
   ['--json', 'json'], ['--active', 'active'], ['--no-wait', 'no_wait'], ['--private', 'private'],
@@ -1203,6 +1205,7 @@ async function main() {
       const body: SpawnBody = { async: true, requestedBySessionId: callerId, harness };
       if (args.cwd) body.cwd = args.cwd;
       if (args.model) body.model = args.model;
+      if (args.thinking_level) body.thinking = args.thinking_level;
       // A private session is invisible to this CLI once spawned: name it in the
       // spawn request, and it cannot take a first prompt.
       if (args.private) {
@@ -1218,9 +1221,22 @@ async function main() {
       if (operation.status === 'error') throw new Error(String(operation.error || 'session spawn failed'));
       const id = operation.sessionId;
       if (typeof id !== 'string') throw new TypeError('spawn response did not report a sessionId');
-      if (args.name && !args.private) await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/rename`, jsonInit({ name: args.name }));
+      // A name is cosmetic. A harness that cannot rename must not leave a
+      // launched session without its prompt, or report the spawn as failed.
+      let nameError: string | undefined;
+      if (args.name && !args.private) {
+        try {
+          await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/rename`, jsonInit({ name: args.name }));
+        } catch (error) {
+          nameError = core.errorMessage(error);
+          process.stderr.write(`pi-dish-sessions: session started but not named (${nameError})\n`);
+        }
+      }
       if (args.prompt) await api(base, hostFlag, `/api/sessions/${encodeURIComponent(id)}/prompt`, jsonInit({ message: args.prompt }));
-      return print({ ...operation, spawnId, sessionId: id, harness, ...(hostFlag ? { host: hostFlag } : {}) }, args.json);
+      return print({
+        ...operation, spawnId, sessionId: id, harness,
+        ...(hostFlag ? { host: hostFlag } : {}), ...(nameError ? { nameError } : {}),
+      }, args.json);
     }
 
     if (spec.name === 'search') {

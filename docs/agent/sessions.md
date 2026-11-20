@@ -109,11 +109,15 @@ Each takes `--host NAME` and `--json` (the route's own payload).
 ## Lifecycle
 
 - `spawn --cwd DIR [--name N] [--harness ID] [--model provider/id]
-  [--prompt "..."] [--private]` — spawns an ordinary, durable agent process
-  (not a subagent). The harness defaults to the one the calling session runs
-  on, so an OMP session spawns OMP and a Pi session spawns Pi; `--harness`
-  crosses over, and the target host is checked for that harness before
-  launching. `--private` keeps the transcript outside the fleet session backup
+  [--thinking-level LEVEL] [--prompt "..."] [--private]` — spawns an ordinary,
+  durable agent process (not a subagent). The harness defaults to the one the
+  calling session runs on, so an OMP session spawns OMP and a Pi session spawns
+  Pi; `--harness` crosses over, and the target host is checked for that harness
+  before launching. `--thinking-level` sets the model's reasoning level; the
+  host rejects a level the model does not offer. A harness that cannot rename
+  a session (agy titles its own) ignores `--name`: the spawn still succeeds,
+  the prompt is still sent, and `--json` reports the reason as `nameError`.
+  `--private` keeps the transcript outside the fleet session backup
   and hides the session from every list, search and per-session command until
   the user enters the PIN in pi-dish (Pi/OMP only; incompatible with
   `--prompt`). `--no-wait` returns the spawn id immediately. Launch
