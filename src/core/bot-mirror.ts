@@ -47,9 +47,12 @@ export class BotMirror {
   private parentId: string | null = null;
   /** Newest durable entry the mirror shows; 0 for none. */
   lastEntryId = 0;
+  /** The name the mirror shows now: its newest name entry, or the header's. */
+  name: string;
 
   constructor(file: string, header: BotMirrorHeader) {
     this.file = file;
+    this.name = header.name;
     fs.mkdirSync(path.dirname(file), { recursive: true });
     let exists = false;
     try { exists = fs.statSync(file).size > 0; } catch (error) {
@@ -65,13 +68,16 @@ export class BotMirror {
       return;
     }
     const lines = tail(file).split('\n');
+    let named = false;
     for (let index = lines.length - 1; index >= 0; index--) {
       let entry: unknown;
       try { entry = JSON.parse(lines[index]); } catch { continue; }
       if (!isRecord(entry) || entry.type === 'session' || typeof entry.id !== 'string') continue;
+      if (!named && entry.type === 'session_info' && typeof entry.name === 'string') { this.name = entry.name; named = true; }
       this.parentId ??= entry.id;
       const match = ENTRY_ID.exec(entry.id);
-      if (match) { this.lastEntryId = Number(match[1]); break; }
+      if (match && !this.lastEntryId) this.lastEntryId = Number(match[1]);
+      if (this.lastEntryId && named) break;
     }
   }
 
@@ -96,8 +102,8 @@ export class BotMirror {
    * A message the model sees as user input but the transcript shows as itself:
    * a worker's report, or the start of a new context window.
    */
-  appendCustom(entryId: number, customType: string, text: string, details?: ProtocolRecord): void {
-    this.append('custom_message', `bot-${entryId}`, {
+  appendCustom(entryId: number, customType: string, text: string, details?: ProtocolRecord, suffix?: string): void {
+    this.append('custom_message', suffix ? `bot-${entryId}-${suffix}` : `bot-${entryId}`, {
       customType, content: [{ type: 'text', text }], display: true, ...(details ? { details } : {}),
     });
     this.advance(entryId);
@@ -117,7 +123,9 @@ export class BotMirror {
     this.append('model_change', `bot-${entryId}-model`, { provider, modelId });
   }
 
+  /** A rename; the id is unique, as a bot may be renamed twice between two entries. */
   appendName(entryId: number, name: string): void {
-    this.append('session_info', `bot-${entryId}-name`, { name });
+    this.append('session_info', `bot-${entryId}-name-${Date.now().toString(36)}`, { name });
+    this.name = name;
   }
 }

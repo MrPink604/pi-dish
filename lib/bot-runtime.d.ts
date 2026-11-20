@@ -1,6 +1,6 @@
 // Generated from src/core/bot-runtime.ts; edit that source and run npm run build:core.
 import type { Models, AssistantMessage } from '@earendil-works/pi-ai' with { 'resolution-mode': 'import' };
-import type { BotRow } from './bot-registry';
+import type { BotPlace, BotRow } from './bot-registry';
 import type { BotMirror } from './bot-mirror';
 import type { ProtocolRecord } from './wire-protocol';
 /** The notebook's cap, in UTF-8 bytes. */
@@ -64,7 +64,7 @@ export interface BotMemory {
 /** Why `new_context` is refused, or null when it may run. */
 export declare function newContextRefusal(memory: BotMemory, workSinceRollover: boolean): string | null;
 /** The instructions of a window: fixed when it opens, never rewritten inside it. */
-export declare function composeInstructions(identity: string, notebook: string): string;
+export declare function composeInstructions(identity: string, notebook: string, places?: readonly BotPlace[]): string;
 export interface HandoffInput {
     windowNumber: number;
     closed: readonly ClosedWindow[];

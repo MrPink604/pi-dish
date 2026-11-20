@@ -22,7 +22,7 @@ import esbuild = require('esbuild');
 import type * as Durable from '@earendil-works/pi-durable' with { 'resolution-mode': 'import' };
 import type { Context } from '@earendil-works/chord/context' with { 'resolution-mode': 'import' };
 import type { Message, Models, Provider, AssistantMessage } from '@earendil-works/pi-ai' with { 'resolution-mode': 'import' };
-import type { BotRow } from './bot-registry';
+import type { BotPlace, BotRow } from './bot-registry';
 import type { BotMirror } from './bot-mirror';
 import { record as isRecord } from './helper-values';
 import type { KnowledgeSearch, KnowledgeWriteResult } from './knowledge';
@@ -161,9 +161,10 @@ export function newContextRefusal(memory: BotMemory, workSinceRollover: boolean)
 }
 
 /** The instructions of a window: fixed when it opens, never rewritten inside it. */
-export function composeInstructions(identity: string, notebook: string): string {
+export function composeInstructions(identity: string, notebook: string, places: readonly BotPlace[] = []): string {
   return [
     '<identity>', identity.trim(), '</identity>',
+    ...(places.length ? ['', '<places>', ...places.map(place => `- ${place.label}: ${place.host ? `${place.host}:` : ''}${place.cwd}`), '</places>'] : []),
     '',
     '<notebook>', notebook.trim() || '(empty: nothing written down yet)', '</notebook>',
   ].join('\n');
@@ -355,7 +356,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   const { openNodeSqliteStorage } = await import('@earendil-works/pi-durable/storage/sqlite/node');
   const { BACKGROUND_CONTEXT } = await import('@earendil-works/chord/context');
   const schema = await import('@earendil-works/pi-schema');
-  const { obj, opt, str, num, oneOf } = schema;
+  const { obj, opt, str, num, oneOf, arr } = schema;
   const { bot, mirror, sessions, api: hub, emit, log } = options;
   const ctx: Context = BACKGROUND_CONTEXT;
   const pollMs = options.pollMs ?? { first: WATCH_FIRST_POLL_MS, max: WATCH_MAX_POLL_MS };
@@ -375,6 +376,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     checkpointWhen: () => true,
   });
   const ReportEntry = 'bot.report';
+  /** Entries that start a run: what a change made in the run is attributed to. */
+  const INPUT_KINDS: Readonly<Record<string, true>> = { 'pi.user': true, [ReportEntry]: true };
   let root: Durable.Conversation | null = null;
   const conversation = (): Durable.Conversation => {
     if (!root) throw new Error('the bot conversation is not open yet');
@@ -413,7 +416,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   }
 
   function isWork(entry: Durable.EntryRecord): boolean {
-    if (entry.kind === 'pi.user' || entry.kind === ReportEntry) return true;
+    if (Object.hasOwn(INPUT_KINDS, entry.kind)) return true;
     const message = entryMessage(entry);
     return entry.kind === 'pi.tool-result' && !!message && !Object.hasOwn(MEMORY_TOOLS, String(message.toolName));
   }
@@ -424,7 +427,10 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     const memory = await tx.doc(MemoryDoc, conversationId);
     memory.windows.push({ line: line.trim().slice(0, 300) || '(no summary)', closedAt: new Date().toISOString(), forced });
     const current = options.loadBot();
-    await durable.configure(tx, conversationId, { instructions: composeInstructions(current.identity, memory.notebook) });
+    await durable.configure(tx, conversationId, {
+      instructions: composeInstructions(current.identity, memory.notebook, current.places),
+      thinkingLevel: current.thinking ? current.thinking as Durable.AgentChange['thinkingLevel'] : null,
+    });
     const tail = window
       .filter(entry => entry.kind === 'pi.user' || entry.kind === ReportEntry || entry.kind === 'pi.assistant')
       .map(entry => ({ role: entry.kind === 'pi.assistant' ? 'assistant' : entry.kind === ReportEntry ? 'report' : 'user', text: messageText(entryMessage(entry)).trim() }))
@@ -802,6 +808,75 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     },
   });
 
+  /** The input that started the current run, as `<bot>/<entry>`: the turn a change is recorded against. */
+  async function currentTurn(): Promise<string> {
+    let cursor: Durable.Cursor | undefined;
+    do {
+      const page = await conversation().entries({ order: 'descending' }, 200, cursor, ctx);
+      const input = page.items.find(entry => Object.hasOwn(INPUT_KINDS, entry.kind));
+      if (input) return `${bot.id}/${input.id}`;
+      cursor = page.next;
+    } while (cursor);
+    return `${bot.id}/0`;
+  }
+
+  type Change = { bot: BotRow; revision: number; fields: string[]; before: BotRow };
+  const botUpdate = durable.defineTool({
+    name: 'bot_update',
+    description: 'Change your own entry or a descendant bot\'s: its name, identity, places or thinking level, or a descendant\'s model. You cannot change your own model; only the user can. Every change is recorded, shown to the user with an undo, and a changed identity, places or thinking level takes effect at that bot\'s next context window.',
+    parameters: obj({
+      bot: opt(str({ description: 'Name or id of a descendant bot; omitted: yourself' })),
+      name: opt(str()),
+      identity: opt(str({ description: 'The whole new identity; it replaces the old one' })),
+      places: opt(arr(obj({
+        host: opt(str({ description: 'Fleet host; omitted: this host' })), cwd: str(), label: str({ description: 'What you call the place' }),
+      }), { description: 'Where the bot works; replaces the whole list' })),
+      thinking: opt(str({ description: 'Thinking level: off, minimal, low, medium, high or xhigh' })),
+      model: opt(str({ description: 'provider/model-id; only for a descendant' })),
+    }),
+    // A rerun would write a second revision.
+    replay: 'unsafe',
+    execute: async (args) => {
+      let target = bot.id;
+      if (args.bot) {
+        const { bots } = await hub('/api/bots') as { bots: BotRow[] };
+        const wanted = args.bot.trim().toLowerCase();
+        const found = bots.find(row => row.status !== 'retired' && (row.id === args.bot || row.name.toLowerCase() === wanted));
+        if (!found) return refusal(`There is no bot named "${args.bot}".`);
+        target = found.id;
+      }
+      const changes: Record<string, unknown> = {};
+      for (const field of ['name', 'identity', 'places', 'thinking', 'model'] as const) if (args[field] !== undefined) changes[field] = args[field];
+      if (!Object.keys(changes).length) return refusal('Name at least one field to change.');
+      if (target === bot.id && changes.model !== undefined) {
+        return refusal('Refused: you cannot change your own model. Tell the user: only they can change it, on your entry in pi-dish.');
+      }
+      let change: Change;
+      try {
+        change = await hub(`/api/bots/${encodeURIComponent(target)}/edit`, { by: bot.id, turn: await currentTurn(), changes } as ProtocolRecord) as Change;
+      } catch (error) {
+        return refusal(error instanceof Error ? error.message : String(error));
+      }
+      const own = target === bot.id;
+      const who = own ? 'your' : `${change.before.name}'s`;
+      if (!change.fields.length) return text(`Nothing changed: ${who} entry already says that.`);
+      const lines = change.fields.map(field => {
+        const show = (row: BotRow) => field === 'identity' ? `${row.identity.length} characters` : JSON.stringify(row[field as keyof BotRow]);
+        return `${field}: ${show(change.before)} → ${show(change.bot)}`;
+      });
+      const later = change.fields.filter(field => field === 'identity' || field === 'places' || field === 'thinking');
+      const notes = [
+        later.length ? `The new ${later.join(', ')} take${later.length === 1 ? 's' : ''} effect at ${own ? 'your' : 'its'} next context window, not in this one.` : '',
+        change.fields.includes('model') ? `${change.bot.name} restarts on the new model.` : '',
+        'The user sees the change and can undo it.',
+      ].filter(Boolean);
+      return {
+        ...text(`Changed ${who} entry (revision ${change.revision}):\n${lines.join('\n')}\n${notes.join(' ')}`),
+        details: { botChange: { botId: change.bot.id, botName: change.bot.name, revision: change.revision, fields: change.fields, lines } },
+      };
+    },
+  });
+
   const reminder = durable.hook(durable.GenerationTask, {
     beforeRequest: (request) => {
       const last = [...request.messages].reverse().find(message => message.role === 'assistant');
@@ -821,7 +896,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   const BotExtension = durable.defineExtension({
     name: 'bot',
     sections: [durable.section('bot-rules', () => PREAMBLE, { tag: false })],
-    tools: [spawnWorker, sessionsTool, contextNotes, newContext, history, kbSearch, kbRead, kbWrite],
+    tools: [spawnWorker, sessionsTool, contextNotes, newContext, history, kbSearch, kbRead, kbWrite, botUpdate],
     tasks: [WorkerWatch],
     hooks: [reminder],
   });
@@ -840,7 +915,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     agent: {
       model: modelRef,
       ...(bot.thinking ? { thinkingLevel: bot.thinking as Durable.AgentChange['thinkingLevel'] } : {}),
-      instructions: composeInstructions(bot.identity, ''),
+      instructions: composeInstructions(bot.identity, '', bot.places),
     },
   });
   // The model is the user's choice in the registry; the instructions stay those of the open window.
@@ -911,6 +986,13 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         isError: message.isError === true, result: { content: message.content },
       });
       calls.delete(callId);
+      // A change to a bot's entry is shown as itself, with what the user needs to undo it.
+      const change = isRecord(message.details) && isRecord(message.details.botChange) ? message.details.botChange : null;
+      if (name === 'bot_update' && change) {
+        const summary = `${String(change.botName)}: ${Array.isArray(change.lines) ? change.lines.join('; ') : ''}`;
+        mirror.appendCustom(entry.id, 'bot-change', summary, change, 'change');
+        emit('message_end', { message: { role: 'custom', customType: 'bot-change', content: [{ type: 'text', text: summary }], details: change, display: true, timestamp: Date.now() } });
+      }
     }
   }
 

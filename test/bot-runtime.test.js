@@ -373,3 +373,34 @@ test('a full window carries a reminder and is rolled over when the run ends', as
     await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message) === 'Fresh window.'), 'the next run answers');
     assert.match(systemText(bot.requests[2]), /Keep me\./);
 });
+test('bot_update records the change against the turn, shows it with what an undo needs, and refuses the bot its own model', async (t) => {
+    const calls = [];
+    const api = async (path, body) => {
+        calls.push([path, body]);
+        const changes = body.changes;
+        const after = { ...BOT, ...changes, revision: 2 };
+        return { bot: after, revision: 2, fields: Object.keys(changes), before: BOT };
+    };
+    const bot = await openTestBot(t, noSessions, { api });
+    const call = (args) => bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('bot_update', args)], { stopReason: 'toolUse' });
+    bot.respond(call({ name: 'Armada', identity: 'You are Armada.' }), call({ model: 'faux/faux-2' }), bot.faux.fauxAssistantMessage('Renamed; the model is yours to change.'));
+    await bot.runtime.prompt('Call yourself Armada, and switch to faux-2', 'followUp');
+    await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message).startsWith('Renamed')), 'the run answers');
+    assert.equal(calls.length, 1, 'the model change never reaches the hub');
+    const [path, body] = calls[0];
+    assert.equal(path, `/api/bots/${BOT.id}/edit`);
+    assert.equal(body.by, BOT.id);
+    const prompt = bot.mirrorLines().find(line => line.type === 'message' && line.message.role === 'user');
+    assert.equal(body.turn, `${BOT.id}/${String(prompt?.id).replace(/^bot-/, '')}`, 'the turn is the input that started the run');
+    const results = bot.mirrorLines().filter(line => line.type === 'message' && line.message.role === 'toolResult')
+        .map(line => line.message);
+    assert.match(textOf(results[0]), /^Changed your entry \(revision 2\):\nname: "Fleet" → "Armada"\nidentity: 41 characters → 15 characters\nThe new identity takes effect at your next context window/);
+    assert.equal(results[1].isError, true);
+    assert.match(textOf(results[1]), /you cannot change your own model.*only they can/);
+    const change = bot.mirrorLines().find(line => line.customType === 'bot-change');
+    assert.deepEqual(change?.details, {
+        botId: BOT.id, botName: 'Armada', revision: 2, fields: ['name', 'identity'],
+        lines: ['name: "Fleet" → "Armada"', 'identity: 41 characters → 15 characters'],
+    });
+    assert.ok(bot.events.some(event => event.event === 'message_end' && event.data.message.customType === 'bot-change'));
+});

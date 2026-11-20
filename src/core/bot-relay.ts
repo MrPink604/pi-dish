@@ -93,7 +93,7 @@ async function main(): Promise<void> {
   if (!validSessionId(bot.id)) throw new Error(`invalid bot id ${bot.id}`);
   const routeId = encodeSessionKey('bot', bot.id);
   const mirror = new BotMirror(mirrorFile, { id: bot.id, cwd: header.cwd, name: bot.name });
-  if (header.name !== bot.name) mirror.appendName(mirror.lastEntryId, bot.name);
+  if (mirror.name !== bot.name) mirror.appendName(mirror.lastEntryId, bot.name);
 
   const clients = new Set<net.Socket>();
   let server: net.Server | null = null;
@@ -122,7 +122,7 @@ async function main(): Promise<void> {
       pid: process.pid,
       startTime: relayProcess!.startTime,
       socketPath,
-      name: bot.name,
+      name: mirror.name,
       model: bot.model,
       thinkingLevel: bot.thinking,
       contextUsage: runtime?.contextUsage() ?? null,
@@ -302,6 +302,14 @@ async function main(): Promise<void> {
   socketReady = true;
   writeClaim();
   log(`bot ${bot.name} (${bot.id}) on ${bot.model}, relay listening on ${socketPath}`);
+  // A rename by the user, by a bot or by an undo shows in the session list and the transcript.
+  setInterval(() => {
+    let name: string;
+    try { name = loadBot().name; } catch { return; }
+    if (name === mirror.name) return;
+    mirror.appendName(mirror.lastEntryId, name);
+    writeClaim();
+  }, 3_000).unref();
 }
 
 void main().catch((error: unknown) => {
