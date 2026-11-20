@@ -26,8 +26,8 @@ function isolatedAgentDirs(t) {
         agy: path.join(temp, 'agy-agent'),
     };
 }
-function runInstall(dirs) {
-    return (0, node_child_process_1.spawnSync)(INSTALL, ['--links-only'], {
+function runInstall(dirs, extraEnv = {}, installArgs = ['--links-only']) {
+    return (0, node_child_process_1.spawnSync)(INSTALL, installArgs, {
         cwd: ROOT,
         env: {
             ...process.env,
@@ -38,10 +38,36 @@ function runInstall(dirs) {
             // Keep the uv bootstrap out of the test: it must not touch the network
             // or the developer's real prime installation.
             PI_DISH_PRIME_COMMAND: '/nonexistent/prime-agent',
+            ...extraEnv,
         },
         encoding: 'utf8',
     });
 }
+test('installer allows only root URL dependencies when installing', t => {
+    const dirs = isolatedAgentDirs(t);
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-npm-'));
+    t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+    const argsFile = path.join(temp, 'args.json');
+    const fakeNpm = path.join(temp, '.local', 'bin', 'npm');
+    fs.mkdirSync(path.dirname(fakeNpm), { recursive: true });
+    fs.writeFileSync(fakeNpm, [
+        '#!/usr/bin/env node',
+        "const fs = require('node:fs');",
+        "fs.writeFileSync(process.env.PI_DISH_NPM_ARGS, JSON.stringify(process.argv.slice(2)));",
+    ].join('\n'), { mode: 0o755 });
+    const result = runInstall(dirs, {
+        HOME: temp,
+        PATH: `${path.dirname(fakeNpm)}${path.delimiter}${process.env.PATH ?? ''}`,
+        PI_DISH_NPM_ARGS: argsFile,
+    }, []);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(argsFile, 'utf8')), [
+        'ci',
+        '--allow-remote=root',
+        '--no-audit',
+        '--no-fund',
+    ]);
+});
 test('installer links the correct bridge and every skill into Pi, OMP, Prime and Antigravity', t => {
     const dirs = isolatedAgentDirs(t);
     const result = runInstall(dirs);

@@ -64,7 +64,9 @@ if ((install_dependencies)); then
     exit 127
   fi
   echo "Installing npm dependencies..."
-  (cd -- "$root" && npm ci --no-audit --no-fund)
+  # npm 12 disables URL dependencies by default. This direct, integrity-pinned
+  # GitHub tarball is declared by package.json, so permit only root URLs.
+  (cd -- "$root" && npm ci --allow-remote=root --no-audit --no-fund)
 fi
 
 link_path "$root/extensions/pi-dish-bridge" \
