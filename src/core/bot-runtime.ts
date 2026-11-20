@@ -694,17 +694,30 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     }, callContext);
     // Marked first, so its watch, seeing the session stop, ends without reporting the close back.
     await mark(true);
+    let alreadyClosed = false;
     try {
       await sessions(['close', worker.ref]);
     } catch (error) {
-      await mark(false);
-      throw error;
+      // A worker closed from outside whose watch is gone, such as one carried over from before workers were watched
+      // until closed, is refused as not active: the bot's record of it is closed instead.
+      let active = true;
+      try {
+        const resolved: unknown = JSON.parse(await sessions(['resolve', worker.ref, '--json', '--fields', 'all']));
+        active = !(isRecord(resolved) && isRecord(resolved.session) && resolved.session.isActive === false);
+      } catch {}
+      if (active) {
+        await mark(false);
+        throw error;
+      }
+      alreadyClosed = true;
     }
     await api.commit(async (tx) => {
       const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
       draft.closedAt ??= new Date().toISOString();
     }, callContext);
-    return text(`Closed worker "${worker.name}" (${worker.ref}).`);
+    return text(alreadyClosed
+      ? `Worker "${worker.name}" (${worker.ref}) had already been closed; it is now marked closed in your records.`
+      : `Closed worker "${worker.name}" (${worker.ref}).`);
   }
 
   const sessionsTool = durable.defineTool({

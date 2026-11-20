@@ -26,7 +26,7 @@ async function until(predicate, message, timeout = 10_000) {
         await new Promise(resolve => setTimeout(resolve, 10));
     }
 }
-async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses } = {}) {
+async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses, pollMs = { first: 20, max: 40 } } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-'));
     const faux = await import('@earendil-works/pi-ai/providers/faux');
     const { createModels } = await import('@earendil-works/pi-ai/models');
@@ -43,7 +43,7 @@ async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, 
         mirror: new BotMirror(mirrorFile, { id: bot.id, cwd: dir, name: bot.name }),
         models, sessions, api, loadBot: row,
         emit: (event, data) => events.push({ event, data }),
-        changed: () => { }, log: () => { }, pollMs: { first: 20, max: 40 },
+        changed: () => { }, log: () => { }, pollMs,
     });
     const recorded = (step) => (context, ...rest) => {
         requests.push([...context.messages]);
@@ -298,6 +298,35 @@ test('a bot closes a worker it started and is refused for any other ref', async 
     await severalPolls();
     assert.equal(worker.polls(), polls, 'the watch has ended');
     assert.equal(reportsOf(bot).length, 1, 'its own close is not reported back');
+});
+test('closing an own worker that was already closed from outside marks it closed, and a close that fails otherwise does not', async (t) => {
+    const state = { active: true };
+    const port = async (args) => {
+        if (args[0] === 'spawn')
+            return JSON.stringify({ sessionId: WORKER_ID, harness: 'pi' });
+        if (args[0] === 'resolve')
+            return JSON.stringify({ session: { id: WORKER_ID, isActive: state.active, turnInProgress: true } });
+        if (args[0] === 'close')
+            throw new Error(state.active ? 'pi-dish is restarting' : 'Session not active');
+        throw new Error(`unexpected ${args[0]}`);
+    };
+    // No watch looks at this worker while the test runs, as for one carried over from before workers were watched until closed.
+    const bot = await openTestBot(t, port, { pollMs: { first: 600_000, max: 600_000 } });
+    const close = (ref) => toolCall(bot, 'sessions', { action: 'close', ref });
+    bot.respond(toolCall(bot, 'spawn_worker', { name: 'check', brief: 'Check it.' }), bot.faux.fauxAssistantMessage('Started check.'), close('01a1f86c'), bot.faux.fauxAssistantMessage('The close failed.'), close('01a1f86c'), close('deadbeef'), bot.faux.fauxAssistantMessage('It was closed already.'));
+    await bot.runtime.prompt('Check it', 'followUp');
+    await until(() => said(bot, 'Started check.'), 'the worker starts');
+    await bot.runtime.prompt('Close it', 'followUp');
+    await until(() => said(bot, 'The close failed.'), 'the first close fails');
+    state.active = false;
+    await bot.runtime.prompt('I closed it myself; close it on your side', 'followUp');
+    await until(() => said(bot, 'It was closed already.'), 'the second close');
+    const results = toolResults(bot);
+    assert.equal(results[1].isError, true);
+    assert.match(textOf(results[1]), /pi-dish is restarting/, 'a worker still running stays open');
+    assert.notEqual(results[2].isError, true);
+    assert.equal(textOf(results[2]), 'Worker "check" (01a1f86c) had already been closed; it is now marked closed in your records.');
+    assert.match(textOf(results[3]), /Open workers: none\.$/, 'it is no longer among the open workers');
 });
 test('the settle rule waits for the turn to end and for new messages', () => {
     const finished = { totalMessages: 4, messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }] };
