@@ -7,7 +7,7 @@ import fs = require('fs');
 import os = require('os');
 import path = require('path');
 import { BotMirror } from './bot-mirror';
-import type { BotRegistry } from './bot-registry';
+import type { BotRegistry, BotRow } from './bot-registry';
 import { getHarness } from './harnesses';
 import { encodeSessionKey, validSessionId } from './session-key';
 import { errorMessage } from './http-boundary';
@@ -65,19 +65,33 @@ export function liveBotRelay(botDir: string): number | null {
  * never thrown. A bot whose relay is still running (a pi-dish restart leaves
  * its pane alone) is not started again.
  */
-export async function startBots({
-  registry, resume, log, sessionsDir = getHarness('bot')!.rootPath(), botsDir = path.join(dishDir(), 'bots'),
-}: BotStartPorts): Promise<void> {
-  for (const bot of registry.list()) {
+export async function startBots(ports: BotStartPorts): Promise<void> {
+  for (const bot of ports.registry.list()) {
     if (bot.status !== 'active') continue;
-    if (!validSessionId(bot.id)) { log(`bot ${bot.name}: invalid id ${bot.id}`); continue; }
-    const running = liveBotRelay(path.join(botsDir, bot.id));
-    if (running !== null) { log(`bot ${bot.name}: relay ${running} is already running`); continue; }
     try {
-      new BotMirror(path.join(sessionsDir, `${bot.id}.jsonl`), { id: bot.id, cwd: os.homedir(), name: bot.name });
-      await resume(encodeSessionKey('bot', bot.id));
+      await startBot(bot, ports);
     } catch (error) {
-      log(`bot ${bot.name} did not start: ${errorMessage(error)}`);
+      ports.log(`bot ${bot.name} did not start: ${errorMessage(error)}`);
     }
   }
+}
+
+/** The session route of a bot, as pi-dish's session operations take it. */
+export function botRoute(id: string): string {
+  if (!validSessionId(id)) throw new Error(`invalid bot id ${id}`);
+  return encodeSessionKey('bot', id);
+}
+
+/**
+ * Starts one bot: writes its mirror's header when it has never run, then
+ * resumes its route. A bot whose relay is running already is left alone.
+ */
+export async function startBot(bot: BotRow, {
+  resume, log, sessionsDir = getHarness('bot')!.rootPath(), botsDir = path.join(dishDir(), 'bots'),
+}: Omit<BotStartPorts, 'registry'>): Promise<void> {
+  const route = botRoute(bot.id);
+  const running = liveBotRelay(path.join(botsDir, bot.id));
+  if (running !== null) { log(`bot ${bot.name}: relay ${running} is already running`); return; }
+  new BotMirror(path.join(sessionsDir, `${bot.id}.jsonl`), { id: bot.id, cwd: os.homedir(), name: bot.name });
+  await resume(route);
 }

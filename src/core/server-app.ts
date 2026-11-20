@@ -54,12 +54,13 @@ import { expandSessionRefs } from './session-refs';
 import { getPrimeDaemon } from './prime-daemon';
 import { createAgyImportRuntime } from './agy-import';
 import { createAgySessionHandlers } from './agy-session-handlers';
-import { createBotHandlers } from './bot-handlers';
+import { createBotHandlers, type BotControl } from './bot-handlers';
 import { botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
-import { startBots } from './bot-supervisor';
+import { botRoute, startBot, startBots } from './bot-supervisor';
 import { createKnowledgeHandlers } from './knowledge-handlers';
 import { KNOWLEDGE_SETTING, openKnowledgeBase, type KnowledgeBase } from './knowledge';
 import { canonicalSessionId } from './session-key';
+import { record as isRecord } from './helper-values';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
 import { createPrivateAccess } from './private-access';
 import { createPrivateSessionHandlers } from './private-session-handlers';
@@ -645,9 +646,25 @@ export function startServer(rootDirectory: string): Server {
     }
     return botRegistry;
   }
-  const botHandlers = createBotHandlers(bots);
+  // `PI_DISH_BOTS=off` keeps every bot stopped (tests): rows are still created and retired.
+  const botsRun = process.env.PI_DISH_BOTS !== 'off';
+  const botControl: BotControl = {
+    start: async bot => {
+      if (botsRun) await startBot(bot, { resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line) });
+    },
+    stop: async bot => {
+      if (!botsRun) return;
+      const { status, body } = await sessionOperations.closeSessionById(botRoute(bot.id));
+      // 404: it was not running.
+      if (status >= 400 && status !== 404) throw new Error(isRecord(body) && typeof body.error === 'string' ? body.error : `close answered ${status}`);
+    },
+  };
+  const botHandlers = createBotHandlers(bots, botControl);
   app.get('/api/bots', botHandlers.list);
+  app.post('/api/bots', botHandlers.create);
   app.patch('/api/bots/:id', botHandlers.update);
+  app.post('/api/bots/:id/edit', botHandlers.edit);
+  app.post('/api/bots/:id/retire', botHandlers.retire);
   app.get('/api/bots/:id/revisions', botHandlers.revisions);
   app.post('/api/bots/:id/restore', botHandlers.restore);
 
@@ -720,7 +737,7 @@ export function startServer(rootDirectory: string): Server {
       pushNotifier.start();
       agyImport.start();
       // Each active bot runs without anyone asking; `PI_DISH_BOTS=off` keeps them stopped (tests).
-      const registry = process.env.PI_DISH_BOTS === 'off' ? null : bots();
+      const registry = botsRun ? bots() : null;
       if (registry) {
         void startBots({ registry, resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line) });
       }

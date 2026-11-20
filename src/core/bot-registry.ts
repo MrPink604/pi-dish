@@ -59,16 +59,37 @@ export interface ChangeSource {
   turn?: string | null;
 }
 
+/** What a new bot is made from; the model defaults to Opus, the id to a fresh one. */
+export interface NewBot {
+  /** Given by a caller that may retry, so a retry finds the bot it made. */
+  id?: string;
+  parentId?: string | null;
+  name: string;
+  identity: string;
+  model?: string;
+  thinking?: string | null;
+  places?: BotPlace[];
+}
+
+/** A top-level bot is at depth 1; a bot below this depth is refused. */
+export const MAX_BOT_DEPTH = 3;
+
 export interface BotRegistry {
   readonly file: string;
   list(): BotRow[];
   get(id: string): BotRow | null;
   /** Creates Fleet unless a bot of that name exists; returns it either way. */
   seedFleet(): BotRow;
+  /** Creates an active bot with its first revision; an id that exists returns that bot unchanged. */
+  create(input: NewBot, source: ChangeSource): BotRow;
   update(id: string, patch: BotPatch, source: ChangeSource): BotRow;
+  /** Archives a bot and moves its children up to its parent, each move a revision of the child. */
+  retire(id: string, source: ChangeSource): { bot: BotRow; moved: BotRow[] };
+  /** The ids from a bot up to its top-level ancestor, the bot first; its length is the bot's depth. */
+  lineage(id: string): string[];
   revisions(id: string): BotRevision[];
-  /** Puts an old revision's row back as a new revision. */
-  restore(id: string, revision: number, source: ChangeSource): BotRow;
+  /** Puts an old revision's row back as a new revision: every editable field, or only `fields`. */
+  restore(id: string, revision: number, source: ChangeSource, fields?: readonly string[]): BotRow;
   close(): void;
 }
 
@@ -237,18 +258,30 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
     }
   }
 
+  function lineage(id: string): string[] {
+    const ids: string[] = [];
+    for (let current = get(id); current; current = current.parentId ? get(current.parentId) : null) {
+      if (ids.includes(current.id)) throw new Error(`bot ${id} has a cycle in its parents`);
+      ids.push(current.id);
+    }
+    return ids;
+  }
+
+  /** One change inside an open transaction; an unchanged row writes nothing. */
+  function applyIn(id: string, change: (current: BotRow) => BotRow, source: ChangeSource): BotRow {
+    const before = get(id);
+    if (!before) throw new Error(`no bot ${id}`);
+    const proposed = change(before);
+    const fields = PATCH_FIELDS.filter(field => JSON.stringify(proposed[field]) !== JSON.stringify(before[field]));
+    if (!fields.length) return before;
+    const after: BotRow = { ...proposed, id, createdAt: before.createdAt, revision: before.revision + 1, updatedAt: new Date().toISOString() };
+    store(after);
+    writeRevision(before, after, fields, source);
+    return after;
+  }
+
   function apply(id: string, change: (current: BotRow) => BotRow, source: ChangeSource): BotRow {
-    return transaction(() => {
-      const before = get(id);
-      if (!before) throw new Error(`no bot ${id}`);
-      const proposed = change(before);
-      const fields = PATCH_FIELDS.filter(field => JSON.stringify(proposed[field]) !== JSON.stringify(before[field]));
-      if (!fields.length) return before;
-      const after: BotRow = { ...proposed, id, createdAt: before.createdAt, revision: before.revision + 1, updatedAt: new Date().toISOString() };
-      store(after);
-      writeRevision(before, after, fields, source);
-      return after;
-    });
+    return transaction(() => applyIn(id, change, source));
   }
 
   return {
@@ -269,10 +302,50 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
         return row;
       });
     },
+    create(input, source) {
+      const valid = validateBotPatch({
+        name: input.name, identity: input.identity, model: input.model ?? DEFAULT_BOT_MODEL,
+        thinking: input.thinking ?? null, places: input.places ?? [],
+      });
+      const id = input.id ?? crypto.randomUUID();
+      if (!/^[0-9a-f-]{36}$/.test(id)) throw new TypeError('id must be a UUID');
+      return transaction(() => {
+        const existing = get(id);
+        if (existing) return existing;
+        const parentId = input.parentId ?? null;
+        if (parentId !== null) {
+          const parent = get(parentId);
+          if (!parent || parent.status === 'retired') throw new Error(`no active bot ${parentId} to be the parent`);
+          const depth = lineage(parentId).length + 1;
+          if (depth > MAX_BOT_DEPTH) {
+            throw new Error(`Refused: ${parent.name} is already ${depth - 1} levels deep, and bots nest at most ${MAX_BOT_DEPTH} levels. Give this work to ${parent.name} or one of its ancestors instead.`);
+          }
+        }
+        const now = new Date().toISOString();
+        const row: BotRow = {
+          id, parentId, name: valid.name!, status: 'active', model: valid.model!, thinking: valid.thinking ?? null,
+          identity: valid.identity!, places: valid.places ?? [], revision: 1, createdAt: now, updatedAt: now,
+        };
+        store(row);
+        writeRevision(null, row, [...PATCH_FIELDS], source);
+        return row;
+      });
+    },
     update(id, patch, source) {
       const valid = validateBotPatch(patch);
       return apply(id, current => ({ ...current, ...valid }), source);
     },
+    retire(id, source) {
+      return transaction(() => {
+        const current = get(id);
+        if (!current) throw new Error(`no bot ${id}`);
+        const children = db.prepare("SELECT * FROM bots WHERE parent_id = ? AND status != 'retired' ORDER BY created_at, id").all(id).map(rowOf);
+        const moved = children.map(child => applyIn(child.id, row => ({ ...row, parentId: current.parentId }), source));
+        const bot = applyIn(id, row => ({ ...row, status: 'retired' }), source);
+        return { bot, moved };
+      });
+    },
+    lineage,
     revisions(id) {
       return db.prepare('SELECT * FROM bot_revisions WHERE bot_id = ? ORDER BY revision').all(id).map((raw) => {
         const value = raw as Record<string, string | number | null>;
@@ -288,12 +361,12 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
         };
       });
     },
-    restore(id, revision, source) {
+    restore(id, revision, source, fields) {
       const raw = db.prepare('SELECT after FROM bot_revisions WHERE bot_id = ? AND revision = ?').get(id, revision);
       if (!raw) throw new Error(`bot ${id} has no revision ${revision}`);
       const old = JSON.parse(String(raw.after)) as BotRow;
       const patch: BotPatch = {};
-      for (const field of PATCH_FIELDS) Object.assign(patch, { [field]: old[field] });
+      for (const field of PATCH_FIELDS) if (!fields || fields.includes(field)) Object.assign(patch, { [field]: old[field] });
       return apply(id, current => ({ ...current, ...patch }), source);
     },
     close: () => db.close(),

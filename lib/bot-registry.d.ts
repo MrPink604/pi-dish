@@ -38,16 +38,38 @@ export interface ChangeSource {
     actor: string;
     turn?: string | null;
 }
+/** What a new bot is made from; the model defaults to Opus, the id to a fresh one. */
+export interface NewBot {
+    /** Given by a caller that may retry, so a retry finds the bot it made. */
+    id?: string;
+    parentId?: string | null;
+    name: string;
+    identity: string;
+    model?: string;
+    thinking?: string | null;
+    places?: BotPlace[];
+}
+/** A top-level bot is at depth 1; a bot below this depth is refused. */
+export declare const MAX_BOT_DEPTH = 3;
 export interface BotRegistry {
     readonly file: string;
     list(): BotRow[];
     get(id: string): BotRow | null;
     /** Creates Fleet unless a bot of that name exists; returns it either way. */
     seedFleet(): BotRow;
+    /** Creates an active bot with its first revision; an id that exists returns that bot unchanged. */
+    create(input: NewBot, source: ChangeSource): BotRow;
     update(id: string, patch: BotPatch, source: ChangeSource): BotRow;
+    /** Archives a bot and moves its children up to its parent, each move a revision of the child. */
+    retire(id: string, source: ChangeSource): {
+        bot: BotRow;
+        moved: BotRow[];
+    };
+    /** The ids from a bot up to its top-level ancestor, the bot first; its length is the bot's depth. */
+    lineage(id: string): string[];
     revisions(id: string): BotRevision[];
-    /** Puts an old revision's row back as a new revision. */
-    restore(id: string, revision: number, source: ChangeSource): BotRow;
+    /** Puts an old revision's row back as a new revision: every editable field, or only `fields`. */
+    restore(id: string, revision: number, source: ChangeSource, fields?: readonly string[]): BotRow;
     close(): void;
 }
 export declare const DEFAULT_BOT_MODEL = "claude-code/claude-opus-5-5";

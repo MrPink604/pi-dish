@@ -1,5 +1,5 @@
 // Generated from src/core/bot-supervisor.ts; edit that source and run npm run build:core.
-import type { BotRegistry } from './bot-registry';
+import type { BotRegistry, BotRow } from './bot-registry';
 /**
  * Makes this process the bot's only relay: two relays on one durable store
  * would both run its work. The lock file names the holder's pid and start time;
@@ -30,4 +30,11 @@ export declare function liveBotRelay(botDir: string): number | null;
  * never thrown. A bot whose relay is still running (a pi-dish restart leaves
  * its pane alone) is not started again.
  */
-export declare function startBots({ registry, resume, log, sessionsDir, botsDir, }: BotStartPorts): Promise<void>;
+export declare function startBots(ports: BotStartPorts): Promise<void>;
+/** The session route of a bot, as pi-dish's session operations take it. */
+export declare function botRoute(id: string): string;
+/**
+ * Starts one bot: writes its mirror's header when it has never run, then
+ * resumes its route. A bot whose relay is running already is left alone.
+ */
+export declare function startBot(bot: BotRow, { resume, log, sessionsDir, botsDir, }: Omit<BotStartPorts, 'registry'>): Promise<void>;
