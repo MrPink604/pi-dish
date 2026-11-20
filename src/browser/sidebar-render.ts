@@ -307,12 +307,13 @@ function renderBotsSegment(tree: readonly { bot: SidebarBot; depth: number }[], 
     const armed = options.botRetireArmed === bot.id;
     const retire = `<button class="bot-retire-btn${armed ? ' confirm' : ''}" data-bot-id="${escapeHtml(bot.id)}" title="${armed ? 'Tap again: ' : ''}Retire ${escapeHtml(bot.name)}: archive it, stop it, and move its sub-bots up">${armed ? 'retire?' : 'retire'}</button>`;
     const row = session ? renderSessionItem(session, { familyDepth: depth, botRetire: retire })
-      : `<div class="session-item inactive bot-stopped"><div class="session-item-header">${depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : ''}<span class="session-item-name">${escapeHtml(bot.name)}</span><span class="session-item-time">not running</span>${retire}</div></div>`;
+      : `<div class="bot-item bot-stopped">${depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : ''}<span class="bot-item-name">${escapeHtml(bot.name)}</span><span class="bot-item-state">not running</span>${retire}</div>`;
     return `<div class="bot-node" data-bot-id="${escapeHtml(bot.id)}" style="padding-left:${depth * 14}px">${row}</div>`;
   });
-  return `<div class="session-segment bots-segment">
-    <div class="workspace-group-header bots-header">
-      <span class="workspace-group-label">Bots</span><span class="workspace-group-count">${tree.length}</span>
+  // Its own classes: the workspace tree's headers collapse and count as path groups.
+  return `<div class="bots-segment">
+    <div class="bots-header">
+      <span class="bots-label">Bots</span><span class="bots-count">${tree.length}</span>
       <button class="bot-new-btn" title="Create a bot">+ New bot</button>
     </div>
     ${nodes.join('')}

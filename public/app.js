@@ -55,9 +55,9 @@ ${L.id}`;H.add(x),!A.has(x)&&!(v&&v.id===L.id&&(v.host||null)===k)&&e.askBlocked
         <span>${c.target?"tmux":"headless"}</span>
       </div>
     </div>
-  `}function A(h,c){let y=new Map(c.filter(v=>v.harnessId==="bot").map(v=>[v.id,v])),H=h.map(({bot:v,depth:f})=>{let k=y.get(v.sessionId)||y.get(v.id),L=e.botRetireArmed===v.id,x=`<button class="bot-retire-btn${L?" confirm":""}" data-bot-id="${w(v.id)}" title="${L?"Tap again: ":""}Retire ${w(v.name)}: archive it, stop it, and move its sub-bots up">${L?"retire?":"retire"}</button>`,S=k?b(k,{familyDepth:f,botRetire:x}):`<div class="session-item inactive bot-stopped"><div class="session-item-header">${f?'<span class="session-family-leaf" aria-hidden="true">\u21B3</span>':""}<span class="session-item-name">${w(v.name)}</span><span class="session-item-time">not running</span>${x}</div></div>`;return`<div class="bot-node" data-bot-id="${w(v.id)}" style="padding-left:${f*14}px">${S}</div>`});return`<div class="session-segment bots-segment">
-    <div class="workspace-group-header bots-header">
-      <span class="workspace-group-label">Bots</span><span class="workspace-group-count">${h.length}</span>
+  `}function A(h,c){let y=new Map(c.filter(v=>v.harnessId==="bot").map(v=>[v.id,v])),H=h.map(({bot:v,depth:f})=>{let k=y.get(v.sessionId)||y.get(v.id),L=e.botRetireArmed===v.id,x=`<button class="bot-retire-btn${L?" confirm":""}" data-bot-id="${w(v.id)}" title="${L?"Tap again: ":""}Retire ${w(v.name)}: archive it, stop it, and move its sub-bots up">${L?"retire?":"retire"}</button>`,S=k?b(k,{familyDepth:f,botRetire:x}):`<div class="bot-item bot-stopped">${f?'<span class="session-family-leaf" aria-hidden="true">\u21B3</span>':""}<span class="bot-item-name">${w(v.name)}</span><span class="bot-item-state">not running</span>${x}</div>`;return`<div class="bot-node" data-bot-id="${w(v.id)}" style="padding-left:${f*14}px">${S}</div>`});return`<div class="bots-segment">
+    <div class="bots-header">
+      <span class="bots-label">Bots</span><span class="bots-count">${h.length}</span>
       <button class="bot-new-btn" title="Create a bot">+ New bot</button>
     </div>
     ${H.join("")}

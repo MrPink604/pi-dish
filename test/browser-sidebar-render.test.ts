@@ -41,7 +41,7 @@ test('bots have their own group, each under its parent, and their sessions leave
   assert.match(group, /\+ New bot/);
   assert.deepEqual([...group.matchAll(/data-bot-id="(\w+)" style="padding-left:(\d+)px"/g)].map(match => [match[1], match[2]]),
     [['fleet', '0'], ['hosts', '14'], ['disks', '28']], 'nested under their parents; a retired bot is not listed');
-  assert.match(group, /Disks<\/span><span class="session-item-time">not running<\/span><button class="bot-retire-btn confirm"[^>]*>retire\?</);
+  assert.match(group, /Disks<\/span><span class="bot-item-state">not running<\/span><button class="bot-retire-btn confirm"[^>]*>retire\?</);
   assert.equal(html.split('data-id="route-fleet"').length, 2, 'a bot\u2019s session row appears once, in the group');
 });
 
