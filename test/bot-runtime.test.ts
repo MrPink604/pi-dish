@@ -341,6 +341,8 @@ test('a bot closes a worker it started and is refused for any other ref', async 
   assert.equal(results[2].isError, false);
   assert.equal(textOf(results[2]), 'Closed worker "check" (01a1f86c).');
   assert.deepEqual(worker.calls.filter(args => args[0] === 'close'), [['close', '01a1f86c']], 'only its own worker is closed');
+  // The watch ends on the first poll that sees the closed session, and that poll may still be due.
+  await severalPolls();
   const polls = worker.polls();
   await severalPolls();
   assert.equal(worker.polls(), polls, 'the watch has ended');
