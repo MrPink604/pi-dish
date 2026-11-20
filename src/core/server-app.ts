@@ -92,7 +92,12 @@ export function startServer(rootDirectory: string): Server {
   app.use(accessHandlers.compression);
   app.use(accessHandlers.jsonBody);
   app.use(accessHandlers.cors);
-  app.use(express.static(path.join(rootDirectory, 'public')));
+  app.use(express.static(path.join(rootDirectory, 'public'), {
+    setHeaders(res, filePath) {
+      // Revalidate shell assets on reload so updated HTML never pairs with stale cached CSS/JS.
+      if (/\.(?:html|css|js)$/i.test(filePath)) res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
 
   // The vault's loopback bridge carries its own token and must answer before
   // the bearer gate; the browser routes are ordinary gated /api routes.

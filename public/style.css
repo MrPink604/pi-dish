@@ -6331,29 +6331,40 @@ body.standalone-file-page {
   .subagents-trace { padding: 12px 12px; }
 }
 
-/* --- Tasks view (main-pane takeover, .main.tasks-open) ---------------------
-   Session-scoped Antigravity task inspector: plan checklist, background
-   commands / cron schedules with live-tailing log viewer, and subagent links. */
-.tasks-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
-.main.tasks-open .tasks-view { display: flex; }
-.main.tasks-open .empty-state,
-.main.tasks-open .session-view { display: none !important; }
-
-.tasks-body { flex: 1; display: flex; min-height: 0; min-width: 0; }
-
-.tasks-list {
-  width: 340px;
-  flex-shrink: 0;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  border-right: 1px solid var(--border);
-  padding: 10px 8px;
+/* --- Antigravity sections inside the unified Subagents view ----------------
+   Tasks, plan progress, and live Swarm board/overview live inside #subagentsView
+   (never as separate top-level takeovers) so non-agy sessions stay untouched. */
+.subagents-tree-section {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 2px;
+}
+.subagents-tree-section-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 2px 8px 4px;
+}
+.subagents-aux-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.subagents-aux-panel > .swarm-overview-body {
+  width: 100%;
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
-.tasks-section { display: flex; flex-direction: column; gap: 4px; }
 .tasks-section-title {
   font-size: 11px;
   font-weight: 600;
@@ -6521,93 +6532,7 @@ body.standalone-file-page {
 }
 .tasks-stdin-bar input:focus { border-color: var(--accent); }
 
-/* --- Swarm view (main-pane takeover, .main.swarm-open) ---------------------
-   Live shared board feed, member roster + trace peek, narrator/plan overview,
-   and coordinator prompt/steer bar for Antigravity native swarms. */
-.swarm-view { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
-.main.swarm-open .swarm-view { display: flex; }
-.main.swarm-open .empty-state,
-.main.swarm-open .session-view { display: none !important; }
-
-.swarm-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg-darker);
-  margin-left: auto;
-}
-.swarm-tab {
-  padding: 4px 10px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.swarm-tab:hover { color: var(--text-bright); }
-.swarm-tab.active { background: var(--bg-card); color: var(--text-bright); font-weight: 500; }
-
-.swarm-body { flex: 1; display: flex; min-height: 0; min-width: 0; }
-.swarm-pane { flex: 1; display: flex; min-height: 0; min-width: 0; }
-.swarm-pane-overview { display: block; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-
-.swarm-roster {
-  width: 270px;
-  flex-shrink: 0;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  border-right: 1px solid var(--border);
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.swarm-member-row {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 8px 9px;
-  border: 1px solid transparent;
-  border-radius: 7px;
-  cursor: pointer;
-}
-.swarm-member-row:hover,
-.swarm-member-row:focus-visible { background: var(--bg-card); outline: none; }
-.swarm-member-row.selected { background: var(--bg-hover); border-color: var(--border); }
-.swarm-member-row.filtered { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--bg-card)); }
-.swarm-member-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.swarm-member-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 12.5px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.swarm-member-meta {
-  font-size: 11px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.swarm-member-action {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* --- Swarm components inside #subagentsView -------------------------------- */
 .swarm-state-dot {
   width: 7px;
   height: 7px;
@@ -6984,13 +6909,7 @@ body.standalone-file-page {
 .swarm-narrator-feedback input:focus { border-color: var(--accent); }
 
 @media (max-width: 768px) {
-  .tasks-body { flex-direction: column; }
-  .tasks-list { width: 100%; max-height: 44%; border-right: none; border-bottom: 1px solid var(--border); }
-  .swarm-board-roster { display: none; }
-  .swarm-pane-members { flex-direction: column; }
-  .swarm-members-list { width: 100%; max-height: 38%; border-right: none; border-bottom: 1px solid var(--border); }
   .swarm-board-feed { padding: 10px 12px; }
-  .swarm-tabs { margin-left: 0; }
 }
 
 /* --- New session (main-pane takeover, .main.new-session-open) --------------

@@ -902,8 +902,8 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   relay from outliving its pane: a killed pane once raised an async `EPIPE`
   that looped through logging at 100% CPU.
 - **Brain tasks, subagents, and swarms (`src/core/agy-brain.ts`,
-  `src/core/agy-session-handlers.ts`, `src/browser/tasks-view.ts`,
-  `src/browser/swarm-view.ts`):** read-only inspection of Antigravity's
+  `src/core/agy-session-handlers.ts`, `src/browser/subagents-view.ts`):**
+  read-only inspection of Antigravity's
   documented `~/.gemini/antigravity-cli/brain/<id>/.system_generated/` files
   (never touching tokens or SQLite `conversations/*.db`; lstat regular
   non-symlink checks throughout, overridable via `PI_DISH_AGY_BRAIN_DIR`).
@@ -917,13 +917,12 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   `backgroundWork` while brain subagents or non-daemon tasks are running so
   hibernation does not interrupt an active swarm. `GET /api/sessions/:id/tasks`,
   `/tasks/:taskId/log`, `/swarm` (`?since=`, coordinator or worker route), and
-  `/artifacts` back the header chips, the interactive Tasks and Swarm main-pane
-  takeovers (start swarm, `@member`/`@#channel` mentions & autocomplete, reply
-  `↩`, `+ Add worker`, member model switch / ping / kill, coordinator stop,
-  narrator feedback, task kill / stdin / log controls — keeping `brain/`
-  strictly read-only and routing mutations through coordinator `prompt`/`steer`
-  or direct ACP `abort`/`set_model`), `/tasks`, `/agents`, `/swarm board`, and
-  clickable inline `/swarm board` links.
+  `/artifacts` extend the existing `#subagentsView` takeover for `agy` sessions
+  only (leaving non-`agy` sessions untouched) with interactive Swarm board /
+  overview / start-swarm / `+ Add worker` / member model switch / ping / kill /
+  coordinator stop / narrator feedback and background task kill / stdin / log
+  controls — keeping `brain/` strictly read-only and routing mutations through
+  coordinator `prompt`/`steer` or direct ACP `abort`/`set_model`.
 - **Brain artifacts, `#fileView`, HTML export/share, `/btw`, media, & ask:**
   Top-level user-facing brain `.md`/`.html`/image artifacts + optional
   `*.metadata.json` sidecars surface in `#artifactsModal` and open in
