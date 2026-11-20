@@ -18,6 +18,8 @@ export interface AccessPorts {
     usageLimitsAvailable(): boolean;
     /** True where the bot registry opens (this Node has node:sqlite). */
     botsAvailable(): boolean;
+    /** True where `knowledgeRemote` is set: this host serves the knowledge base. */
+    knowledgeAvailable(): boolean;
 }
 export interface AccessHandlers {
     compression: TransportHandler;

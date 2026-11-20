@@ -29,6 +29,8 @@ export interface AccessPorts {
   usageLimitsAvailable(): boolean;
   /** True where the bot registry opens (this Node has node:sqlite). */
   botsAvailable(): boolean;
+  /** True where `knowledgeRemote` is set: this host serves the knowledge base. */
+  knowledgeAvailable(): boolean;
 }
 
 export interface AccessHandlers {
@@ -129,6 +131,7 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (ports.sttAvailable()) capabilities.stt = true;
     if (ports.usageLimitsAvailable()) capabilities.usageLimits = true;
     if (ports.botsAvailable()) capabilities.bots = true;
+    if (ports.knowledgeAvailable()) capabilities.knowledge = true;
     return {
       hostId,
       label,

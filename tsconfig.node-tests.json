@@ -72,6 +72,7 @@
     "test/fixtures/service-marker-server.ts",
     "test/host-health.test.ts",
     "test/bot-registry.test.ts",
-    "test/bot-runtime.test.ts"
+    "test/bot-runtime.test.ts",
+    "test/knowledge.test.ts"
   ]
 }

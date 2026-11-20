@@ -17,7 +17,7 @@ import * as piSDK from './pi-sdk';
 import { readSessionMessages, readSessionCwd, readSessionTailEntry } from './session-files';
 import { knownWorkspaceCwds } from './skill-feature-handlers';
 import { getHarness, listHarnesses } from './harnesses';
-import { readDishSettings } from './dish-store';
+import { dishDir, readDishSettings } from './dish-store';
 import { createAccessHandlers } from './access-handlers';
 import { createRelayHandlers } from './relay-handlers';
 import { createTerminalHandlers } from './terminal-handlers';
@@ -57,6 +57,8 @@ import { createAgySessionHandlers } from './agy-session-handlers';
 import { createBotHandlers } from './bot-handlers';
 import { botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
 import { startBots } from './bot-supervisor';
+import { createKnowledgeHandlers } from './knowledge-handlers';
+import { KNOWLEDGE_SETTING, openKnowledgeBase, type KnowledgeBase } from './knowledge';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
 import { createPrivateAccess } from './private-access';
@@ -92,6 +94,7 @@ export function startServer(rootDirectory: string): Server {
     sttAvailable: () => !!stt.resolveSttConfig(readDishSettings()),
     usageLimitsAvailable: () => listHarnesses().some(d => d.argv?.usage && harnessCommandAvailable(d)),
     botsAvailable: () => bots() !== null,
+    knowledgeAvailable: () => knowledge() !== null,
   });
   app.use(accessHandlers.compression);
   app.use(accessHandlers.jsonBody);
@@ -647,6 +650,20 @@ export function startServer(rootDirectory: string): Server {
   app.patch('/api/bots/:id', botHandlers.update);
   app.get('/api/bots/:id/revisions', botHandlers.revisions);
   app.post('/api/bots/:id/restore', botHandlers.restore);
+
+  // Follows the setting: a changed `knowledgeRemote` applies from the next request.
+  let knowledgeBase: KnowledgeBase | null = null;
+  function knowledge(): KnowledgeBase | null {
+    const setting = readDishSettings()[KNOWLEDGE_SETTING];
+    const remote = typeof setting === 'string' ? setting.trim() : '';
+    if (!remote) return null;
+    if (knowledgeBase?.remote !== remote) knowledgeBase = openKnowledgeBase({ remote, dir: path.join(dishDir(), 'knowledge') });
+    return knowledgeBase;
+  }
+  const knowledgeHandlers = createKnowledgeHandlers(knowledge);
+  app.get('/api/knowledge/search', knowledgeHandlers.search);
+  app.get('/api/knowledge/page', knowledgeHandlers.read);
+  app.post('/api/knowledge/pages', knowledgeHandlers.write);
 
   app.get('/api/sessions/:id/stream', createSessionStreamHandler({ getLiveSession, viewers: streamViewers }));
 
