@@ -916,9 +916,30 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   (clearing the widget on empty updates), and `agy-relay.ts` reports
   `backgroundWork` while brain subagents or non-daemon tasks are running so
   hibernation does not interrupt an active swarm. `GET /api/sessions/:id/tasks`,
-  `/tasks/:taskId/log`, and `/swarm` (`?since=`, coordinator or worker route)
-  back the header chips, the Tasks and Swarm main-pane takeovers, `/tasks`,
-  `/agents`, `/swarm board`, and clickable inline `/swarm board` links.
+  `/tasks/:taskId/log`, `/swarm` (`?since=`, coordinator or worker route), and
+  `/artifacts` back the header chips, the interactive Tasks and Swarm main-pane
+  takeovers (start swarm, `@member`/`@#channel` mentions & autocomplete, reply
+  `↩`, `+ Add worker`, member model switch / ping / kill, coordinator stop,
+  narrator feedback, task kill / stdin / log controls — keeping `brain/`
+  strictly read-only and routing mutations through coordinator `prompt`/`steer`
+  or direct ACP `abort`/`set_model`), `/tasks`, `/agents`, `/swarm board`, and
+  clickable inline `/swarm board` links.
+- **Brain artifacts, `#fileView`, HTML export/share, `/btw`, media, & ask:**
+  Top-level user-facing brain `.md`/`.html`/image artifacts + optional
+  `*.metadata.json` sidecars surface in `#artifactsModal` and open in
+  `#fileView` (with `extraRoots` realpath containment rejecting `.system_generated/`
+  and symlink escapes, local markdown `<img>` rewriting, `file://` URI linkifying,
+  Anchored Comments, and a `Proceed` button when `RequestFeedback: true`).
+  `install.sh` symlinks `skills/pi-dish-*` into `AGY_AGENT_DIR`
+  (`~/.gemini/antigravity-cli/skills`). HTML export and `/share` links work for
+  both root `agy-v1` mirrors and `agy-brain-v1` subagent transcripts (projected
+  to a temp Pi-v3 file during export). `/btw` Side Chat (`sideChat: true`) runs
+  on a concurrent sibling ACP `session/new` inside the same `agy acp` process
+  and records its ID in `~/.pi/dish/agy/side-chats.json` so `agy-import.ts`
+  never imports it. Inbound ACP `image`, image `resource`, and contained
+  `resource_link`/`read_file` images persist and render in both tool results and
+  assistant messages, and `askFromElicitation` supports multi-select
+  `type: 'array'` questions (`items.anyOf`/`oneOf`/`enum`).
 - **Cache warmth:** Gemini (`google-antigravity`/`google*` `gemini-*`) carries a
   built-in `~5m` `estimate` retention and refreshes on implicit-cache turns
   (`input >= 1024`, including `cacheRead: 0`) and mid-turn `toolUse` steps.

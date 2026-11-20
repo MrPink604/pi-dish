@@ -133,7 +133,10 @@ export function messageHasVisibleText(msg: unknown) {
   if (!record(msg)) return false;
   if (msg.errorMessage) return true;
   if (typeof msg.content === 'string') return !!msg.content;
-  return Array.isArray(msg.content) && msg.content.some((b: unknown) => record(b) && b.type === 'text' && typeof b.text === 'string' && !!b.text);
+  return Array.isArray(msg.content) && msg.content.some((b: unknown) => record(b) && (
+    (b.type === 'text' && typeof b.text === 'string' && !!b.text)
+    || (b.type === 'image' && ((typeof b.url === 'string' && !!b.url) || (typeof b.data === 'string' && !!b.data)))
+  ));
 }
 
 export function getToolOutputText(partialResult: unknown) {

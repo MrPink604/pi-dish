@@ -972,6 +972,7 @@ function finalizeRender(container: HTMLElement, { stripLive = true, inserted }: 
 
 const streamingRenderer: ReturnType<typeof createStreamingRenderer> = createStreamingRenderer({
   document, sessionState, markdown: text => richText.format(text), ...chromeScroll,
+  images: (content, alt) => messageRenderer.images(content, alt),
   stream: (previous, text) => richText.stream(previous, text),
 });
 

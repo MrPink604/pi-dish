@@ -35,6 +35,7 @@ import {
   askElicitationResult,
   askFromElicitation,
   backupAcpMirror,
+  extractAcpImageBlock,
   extractAcpPlanTier,
   normalizeAcpPlan,
   normalizeAcpTool,
@@ -45,12 +46,13 @@ import {
   readAcpMirrorLastTimestamp,
   restoreAcpMirror,
   type AcpAskQuestionSpec,
+  type AcpImageBlock,
   type AcpMirrorBackup,
   type AcpPermissionOption,
   type AcpToolCall,
   type NormalizedPlanEntry,
 } from './acp-transcript';
-import { findLatestToolStepOutput, readLatestAgyBrainStepUsage, readRunningTaskLogTail } from './agy-brain';
+import { agyBrainDir, findLatestToolStepOutput, readLatestAgyBrainStepUsage, readRunningTaskLogTail } from './agy-brain';
 
 /** Versions the fake agent and the captures were verified against. */
 export const AGY_VERIFIED_VERSIONS: readonly string[] = Object.freeze(['1.5.10', '1.5.13']);
@@ -609,6 +611,10 @@ export class AcpSession extends TransportSession {
       case 'agent_message_chunk': {
         const content = asRecord(update.content);
         if (content.type === 'text') this._pushChunk('text', text(content.text));
+        else {
+          const img = extractAcpImageBlock(content, this._allowedImageRoots());
+          if (img) this._pushImage(img);
+        }
         return;
       }
       case 'agent_thought_chunk': {
@@ -692,6 +698,24 @@ export class AcpSession extends TransportSession {
     if (typeof value !== 'string') return;
     option.currentValue = value;
     this._refreshStateFromConfig();
+  }
+
+  private _allowedImageRoots(): string[] {
+    const roots: string[] = [];
+    if (this.cwd) roots.push(this.cwd);
+    const brain = agyBrainDir(this.nativeSessionId);
+    if (brain) roots.push(brain);
+    return roots;
+  }
+
+  private _pushImage(img: AcpImageBlock): void {
+    this.sawStepSignal = true;
+    this._ensureSegment();
+    this.segmentFirstOutputAt ??= Date.now();
+    const message = this.segment!;
+    (message.content as ProtocolRecord[]).push({ type: 'image', data: img.data, mimeType: img.mimeType });
+    this.lastActivityAt = new Date();
+    this.emitEvent('message_update', { type: 'message_update', message: structuredClone(message) });
   }
 
   private _pushChunk(type: 'text' | 'thinking', chunk: string): void {
@@ -828,7 +852,7 @@ export class AcpSession extends TransportSession {
       if (!tracked) return;
     }
     const status = text(update.status);
-    const result = acpToolResult(update, tracked.call);
+    const result = acpToolResult(update, tracked.call, { allowedRoots: this._allowedImageRoots() });
     if (status === 'completed' || status === 'failed') {
       // If the agent spoke while a background tool ran, close that interim
       // segment before recording the toolResult so transcript order stays chronological.
@@ -842,10 +866,16 @@ export class AcpSession extends TransportSession {
       // agy ACP omits output on non-filesystem tools (`swarm`, `read_board`,
       // `invoke_subagent`, `manage_task`, ...); enrich from brain step output when empty.
       const resultText = result.text || findLatestToolStepOutput(this.nativeSessionId, tracked.call.nativeName) || '';
+      const resultContent: ProtocolRecord[] = [];
+      if (resultText || !result.images?.length) resultContent.push({ type: 'text', text: resultText });
+      for (const img of result.images ?? []) {
+        resultContent.push({ type: 'image', data: img.data, mimeType: img.mimeType });
+      }
       this.transcript?.appendToolResult({
         toolCallId,
         toolName: tracked.call.toolName,
         content: resultText,
+        ...(result.images?.length ? { images: result.images } : {}),
         isError,
         ...(result.details ? { details: result.details } : {}),
       });
@@ -855,7 +885,7 @@ export class AcpSession extends TransportSession {
         args: tracked.call.args,
         startedAt: tracked.startedAt,
         isError,
-        result: { content: [{ type: 'text', text: resultText }], ...(result.details ? { details: result.details } : {}) },
+        result: { content: resultContent, ...(result.details ? { details: result.details } : {}) },
       });
       return;
     }
@@ -865,12 +895,16 @@ export class AcpSession extends TransportSession {
       this.nextStepStartedAt = tracked.waitMsBeforeAsync !== null ? Date.now() + tracked.waitMsBeforeAsync : null;
     }
     const progress = result.text || (status === 'pending' ? 'Waiting for approval' : 'Running…');
+    const partialContent: ProtocolRecord[] = [{ type: 'text', text: progress }];
+    for (const img of result.images ?? []) {
+      partialContent.push({ type: 'image', data: img.data, mimeType: img.mimeType });
+    }
     this._emitTool('tool_execution_update', {
       toolCallId,
       toolName: tracked.call.toolName,
       args: tracked.call.args,
       startedAt: tracked.startedAt,
-      partialResult: { content: [{ type: 'text', text: progress }] },
+      partialResult: { content: partialContent },
     });
   }
 

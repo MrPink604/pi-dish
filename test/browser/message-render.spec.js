@@ -184,3 +184,40 @@ const fixtures_js_1 = require("./fixtures.js");
     (0, fixtures_js_1.expect)(rendered.geminiModel).toEqual({ gemini: true, spark: true, text: '' });
     (0, fixtures_js_1.expect)(rendered.streaming).toEqual({ gemini: true, spark: true });
 });
+(0, fixtures_js_1.test)('assistant messages render image blocks statically and while streaming without hiding in focus mode', async ({ page, fleet }) => {
+    await fleet.select(fleet.self);
+    const pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const result = await page.evaluate((data) => {
+        const html = fixtureApp.features.messageRenderer.message({
+            role: 'assistant',
+            content: [{ type: 'image', data, mimeType: 'image/png' }],
+            timestamp: Date.now(),
+        });
+        const tpl = document.createElement('template');
+        tpl.innerHTML = html.trim();
+        const staticMsg = fixtureElement(tpl.content.firstElementChild, 'static assistant msg');
+        const staticImg = staticMsg.querySelector('img.msg-image');
+        const root = fixtureElement(document.getElementById('messages'), '#messages');
+        root.innerHTML = '';
+        fixtureApp.features.streamingRenderer.render({
+            role: 'assistant',
+            content: [{ type: 'image', data, mimeType: 'image/png' }],
+        });
+        const streamMsg = fixtureElement(root.querySelector('.message.assistant.streaming'), 'streaming msg');
+        const streamImg = streamMsg.querySelector('img.msg-image');
+        const out = {
+            staticHasImg: !!staticImg,
+            staticNoText: staticMsg.classList.contains('no-text'),
+            streamHasImg: !!streamImg,
+            streamNoText: streamMsg.classList.contains('no-text'),
+        };
+        fixtureApp.features.streamingRenderer.cancel();
+        return out;
+    }, pngB64);
+    (0, fixtures_js_1.expect)(result).toEqual({
+        staticHasImg: true,
+        staticNoText: false,
+        streamHasImg: true,
+        streamNoText: false,
+    });
+});

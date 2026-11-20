@@ -559,6 +559,107 @@ test('formats multi-region diffs, caps giant writes, and fills read_file placeho
   );
 });
 
+test('acpToolResult and extractAcpImageBlock preserve inline, resource, and contained local images', () => {
+  const pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const imgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-acp-img-'));
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-acp-out-'));
+  try {
+    const localPng = path.join(imgDir, 'chart.png');
+    fs.writeFileSync(localPng, Buffer.from(pngB64, 'base64'));
+    const sysPng = path.join(imgDir, '.system_generated', 'internal.png');
+    fs.mkdirSync(path.dirname(sysPng), { recursive: true });
+    fs.writeFileSync(sysPng, Buffer.from(pngB64, 'base64'));
+    const outsidePng = path.join(outsideDir, 'secret.png');
+    fs.writeFileSync(outsidePng, Buffer.from(pngB64, 'base64'));
+    const symPng = path.join(imgDir, 'escape.png');
+    fs.symlinkSync(outsidePng, symPng);
+
+    const call = acpTranscript.normalizeAcpTool({ name: 'image-generator', args: {} });
+    const res = acpTranscript.acpToolResult({
+      status: 'completed',
+      content: [
+        { type: 'content', content: { type: 'text', text: 'Generated chart' } },
+        { type: 'image', data: `data:image/png;base64,${pngB64}`, mimeType: 'image/png' },
+        { type: 'resource', resource: { mimeType: 'image/webp', blob: pngB64 } },
+        { type: 'resource_link', uri: `file://${localPng}`, mimeType: 'image/png' },
+        { type: 'resource_link', uri: `file://${sysPng}`, mimeType: 'image/png' },
+        { type: 'resource_link', uri: `file://${symPng}`, mimeType: 'image/png' },
+        { type: 'resource_link', uri: `file://${outsidePng}`, mimeType: 'image/png' },
+      ],
+    }, call, { allowedRoots: [imgDir] });
+    assert.equal(res.text, 'Generated chart');
+    assert.equal(res.images?.length, 3, 'keeps inline image, resource blob, and contained local file; drops internal/symlink/outside');
+    assert.equal(res.images?.[0].data, pngB64);
+    assert.equal(res.images?.[1].mimeType, 'image/webp');
+    assert.equal(res.images?.[2].data, pngB64);
+
+    // read_file on a contained image surfaces the image block too.
+    const readImgCall = acpTranscript.normalizeAcpTool({ name: 'read_file', args: { Path: localPng } });
+    const readRes = acpTranscript.acpToolResult({ status: 'completed' }, readImgCall, { allowedRoots: [imgDir] });
+    assert.equal(readRes.images?.length, 1);
+    assert.equal(readRes.images?.[0].mimeType, 'image/png');
+  } finally {
+    fs.rmSync(imgDir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('askFromElicitation and askElicitationResult support multi-select array items (anyOf and enum)', () => {
+  const ask = acpTranscript.askFromElicitation('elicit-1', {
+    message: 'The agent has a question.',
+    requestedSchema: {
+      type: 'object',
+      required: ['q2'],
+      properties: {
+        q1: {
+          type: 'array',
+          title: 'Pick colors',
+          items: {
+            anyOf: [
+              { const: '1', title: '(Recommended) Red' },
+              { const: '2', title: 'Blue' },
+              { const: '3', title: 'Green' },
+            ],
+          },
+        },
+        q1_other: { type: 'string', title: 'Other' },
+        q2: {
+          type: 'array',
+          title: 'Targets',
+          items: {
+            type: 'string',
+            enum: ['web', 'cli'],
+            enumNames: ['Web UI', 'CLI'],
+          },
+        },
+      },
+    },
+  }, []);
+  assert.ok(ask, 'multi-select ask');
+
+  const reqQuestions = ask.request.questions as { multi: boolean; recommended: number | null; options: { label: string }[] }[];
+  assert.equal(reqQuestions.length, 2);
+  assert.equal(reqQuestions[0].multi, true);
+  assert.equal(reqQuestions[0].recommended, 0, 'detects (Recommended) directly from schema title');
+  assert.deepEqual(reqQuestions[0].options.map(o => o.label), ['Red', 'Blue', 'Green']);
+  assert.equal(reqQuestions[1].multi, true);
+  assert.deepEqual(reqQuestions[1].options.map(o => o.label), ['Web UI', 'CLI']);
+
+  const submitted = acpTranscript.askElicitationResult({
+    value: {
+      kind: 'submit',
+      results: [
+        { id: 'q1', selectedOptions: ['Red', 'Green'], customInput: 'Yellow' },
+        { id: 'q2', selectedOptions: [], customInput: '' },
+      ],
+    },
+  }, ask.questions);
+  assert.deepEqual(submitted, {
+    action: 'accept',
+    content: { q1: ['1', '3'], q1_other: 'Yellow', q2: [] },
+  });
+});
+
 test('normalises agy /usage JSON to Gemini-only windows and rejects error envelopes', () => {
   const reports = acpTranscript.normalizeAgyUsageReports({
     status: 'SUCCESS',

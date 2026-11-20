@@ -43,12 +43,22 @@ export interface AcpToolCall {
 }
 /** agy sends its native call in non-ACP `name`/`args` next to ACP's `title`/`kind`. */
 export declare function normalizeAcpTool(update: unknown): AcpToolCall;
+export interface AcpImageBlock {
+    type: 'image';
+    data: string;
+    mimeType: string;
+}
 export interface AcpToolResult {
     text: string;
+    images?: AcpImageBlock[];
     details?: ProtocolRecord;
 }
+/** Extract an image block from an ACP content item (`image`, image `resource` blob, or contained `resource_link`). */
+export declare function extractAcpImageBlock(raw: unknown, allowedRoots?: readonly string[]): AcpImageBlock | null;
 /** Completion content plus agy's `rawOutput`; bash keeps the exit status as Pi details. */
-export declare function acpToolResult(update: unknown, call: AcpToolCall): AcpToolResult;
+export declare function acpToolResult(update: unknown, call: AcpToolCall, options?: {
+    allowedRoots?: readonly string[];
+}): AcpToolResult;
 export interface NormalizedPlanEntry {
     content: string;
     status: 'pending' | 'in_progress' | 'completed';
@@ -66,6 +76,7 @@ export interface AcpAskOption {
 export interface AcpAskQuestionSpec {
     key: string;
     multi: boolean;
+    required?: boolean;
     options: AcpAskOption[];
 }
 export interface AcpAsk {
@@ -74,8 +85,8 @@ export interface AcpAsk {
 }
 /**
  * One `elicitation/create` form → the browser's `ask` dialog. Each non-`_other`
- * property is a question; the recommended mark comes from the pending
- * `ask_question` call, which is the only place agy states it.
+ * property is a question; supports single-select (`oneOf`/`enum`) and
+ * multi-select (`type: 'array'` with `items.anyOf`/`items.oneOf`/`items.enum`).
  */
 export declare function askFromElicitation(id: string, params: unknown, pendingQuestions: unknown): AcpAsk | null;
 /** The browser's ask response → the elicitation result (`accept` / `decline` / `cancel`). */
@@ -138,6 +149,7 @@ export declare class AcpTranscript {
         toolCallId: string;
         toolName: string;
         content: string;
+        images?: readonly AcpImageBlock[];
         isError?: boolean;
         details?: ProtocolRecord;
         timestamp?: number;

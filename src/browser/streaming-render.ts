@@ -24,6 +24,7 @@ function tailMarker(body: HTMLElement) {
 /** Coalesce cumulative frames while retaining block DOM and the frame's selection owner. */
 export function createStreamingRenderer(options: {
   document: Document; sessionState: SessionState; markdown: (text: string) => string;
+  images?: (content: readonly (MessageBlock | string)[], alt: string) => string;
   stream?: (previous: StreamingBlockState | null, text: string) => StreamingFrame | null;
   pinned: (root: HTMLElement) => boolean; scroll: (root: HTMLElement) => void; jump: (root: HTMLElement) => void;
 }) {
@@ -162,6 +163,20 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
         blockEl.querySelector('.tool-call-summary')!.textContent = getToolSummary(block.name || '', args);
         const content = blockEl.querySelector<HTMLElement>('.tool-call-content')!, body = toolCallBodyHtml(block.name, args);
         content.innerHTML = body; content.hidden = !body;
+      }
+    } else if (block.type === 'image') {
+      const html = options.images ? options.images([block], 'assistant image') : '';
+      if (!html) return;
+      if (!blockEl) {
+        el.insertAdjacentHTML('beforeend',
+          `<div class="message-content" data-block-index="${i}" data-block-type="image"></div>`);
+        blockEl = el.querySelector<HTMLElement>(`[data-block-index="${i}"]`);
+      }
+      if (!blockEl) return;
+      const signature = `${block.url || ''}:${block.mimeType || ''}:${(block.data || '').length}`;
+      if (sources.get(blockEl) !== signature) {
+        sources.set(blockEl, signature);
+        blockEl.innerHTML = html;
       }
     }
   });

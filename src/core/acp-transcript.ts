@@ -313,19 +313,112 @@ function diffText(block: ProtocolRecord): string {
   return `${head}${body.join('\n')}`;
 }
 
+export interface AcpImageBlock {
+  type: 'image';
+  data: string;
+  mimeType: string;
+}
+
 export interface AcpToolResult {
   text: string;
+  images?: AcpImageBlock[];
   details?: ProtocolRecord;
 }
 
+const MAX_INBOUND_IMAGE_BYTES = 10 * 1024 * 1024;
+const ACP_IMAGE_MIME_BY_EXT: Readonly<Record<string, string>> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+};
+
+function stripDataUrlPrefix(raw: string): { data: string; mimeType: string | null } {
+  const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/is.exec(raw.trim());
+  return m ? { data: m[2], mimeType: m[1].toLowerCase() } : { data: raw.trim(), mimeType: null };
+}
+
+function readSafeLocalImage(rawUriOrPath: string, explicitMime: string | null, allowedRoots?: readonly string[]): AcpImageBlock | null {
+  if (!allowedRoots?.length || !rawUriOrPath) return null;
+  let localPath = rawUriOrPath;
+  if (/^file:\/\//i.test(localPath)) {
+    try { localPath = decodeURIComponent(new URL(localPath).pathname); } catch { return null; }
+  }
+  if (!path.isAbsolute(localPath)) return null;
+  const normFile = path.resolve(localPath);
+  const extMime = ACP_IMAGE_MIME_BY_EXT[path.extname(normFile).toLowerCase()] ?? null;
+  const mimeType = explicitMime && explicitMime.startsWith('image/') ? explicitMime : extMime;
+  if (!mimeType) return null;
+  let permitted = false;
+  for (const root of allowedRoots) {
+    if (!root) continue;
+    const normRoot = path.resolve(root);
+    if (!normFile.startsWith(normRoot + path.sep)) continue;
+    const rel = normFile.slice(normRoot.length + 1);
+    if (rel.split(path.sep).includes('.system_generated')) continue;
+    try {
+      const realRoot = fs.realpathSync(normRoot);
+      const lstat = fs.lstatSync(normFile);
+      if (!lstat.isFile() || lstat.isSymbolicLink() || lstat.size <= 0 || lstat.size > MAX_INBOUND_IMAGE_BYTES) continue;
+      const realFile = fs.realpathSync(normFile);
+      if (!realFile.startsWith(realRoot + path.sep)) continue;
+      permitted = true;
+      break;
+    } catch { continue; }
+  }
+  if (!permitted) return null;
+  try {
+    return { type: 'image', data: fs.readFileSync(normFile).toString('base64'), mimeType };
+  } catch {
+    return null;
+  }
+}
+
+/** Extract an image block from an ACP content item (`image`, image `resource` blob, or contained `resource_link`). */
+export function extractAcpImageBlock(raw: unknown, allowedRoots?: readonly string[]): AcpImageBlock | null {
+  if (!isRecord(raw)) return null;
+  const block = isRecord(raw.content) ? raw.content : raw;
+  if (block.type === 'image' && typeof block.data === 'string' && block.data.trim()) {
+    const stripped = stripDataUrlPrefix(block.data);
+    const mime = text(block.mimeType).toLowerCase();
+    const mimeType = mime.startsWith('image/') ? mime : (stripped.mimeType || 'image/png');
+    return stripped.data ? { type: 'image', data: stripped.data, mimeType } : null;
+  }
+  if (block.type === 'resource' && isRecord(block.resource)) {
+    const res = block.resource;
+    const mime = text(res.mimeType).toLowerCase();
+    if (typeof res.blob === 'string' && res.blob.trim() && mime.startsWith('image/')) {
+      const stripped = stripDataUrlPrefix(res.blob);
+      return stripped.data ? { type: 'image', data: stripped.data, mimeType: mime } : null;
+    }
+    if (typeof res.uri === 'string' && res.uri) {
+      return readSafeLocalImage(res.uri, mime.startsWith('image/') ? mime : null, allowedRoots);
+    }
+  }
+  if (block.type === 'resource_link' && typeof block.uri === 'string' && block.uri) {
+    const mime = text(block.mimeType).toLowerCase();
+    return readSafeLocalImage(block.uri, mime.startsWith('image/') ? mime : null, allowedRoots);
+  }
+  return null;
+}
+
 /** Completion content plus agy's `rawOutput`; bash keeps the exit status as Pi details. */
-export function acpToolResult(update: unknown, call: AcpToolCall): AcpToolResult {
+export function acpToolResult(
+  update: unknown,
+  call: AcpToolCall,
+  options?: { allowedRoots?: readonly string[] },
+): AcpToolResult {
   const value = isRecord(update) ? update : {};
   const chunks = Array.isArray(value.content) ? value.content : [];
   const parts: string[] = [];
+  const images: AcpImageBlock[] = [];
   for (const item of chunks) {
     if (!isRecord(item)) continue;
     if (item.type === 'diff') { parts.push(diffText(item)); continue; }
+    const img = extractAcpImageBlock(item, options?.allowedRoots);
+    if (img) { images.push(img); continue; }
     const block = isRecord(item.content) ? item.content : item;
     if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
   }
@@ -338,6 +431,7 @@ export function acpToolResult(update: unknown, call: AcpToolCall): AcpToolResult
     const exitCode = raw.exit_code;
     return {
       text: body,
+      ...(images.length ? { images } : {}),
       details: {
         kind: 'bash',
         timedOut: raw.timed_out === true || raw.timedOut === true,
@@ -346,11 +440,17 @@ export function acpToolResult(update: unknown, call: AcpToolCall): AcpToolResult
       },
     };
   }
-  if (!body && call.nativeName === 'read_file' && value.status === 'completed') {
+  if (call.nativeName === 'read_file' && value.status === 'completed') {
     const readPath = text(call.args.path);
-    return { text: readPath ? `${readPath}\n(content not reported by agy)` : '(content not reported by agy)' };
+    if (!images.length && readPath) {
+      const localImg = readSafeLocalImage(readPath, null, options?.allowedRoots);
+      if (localImg) images.push(localImg);
+    }
+    if (!body && !images.length) {
+      return { text: readPath ? `${readPath}\n(content not reported by agy)` : '(content not reported by agy)' };
+    }
   }
-  return { text: body };
+  return { text: body, ...(images.length ? { images } : {}) };
 }
 
 export interface NormalizedPlanEntry {
@@ -391,6 +491,7 @@ export interface AcpAskOption {
 export interface AcpAskQuestionSpec {
   key: string;
   multi: boolean;
+  required?: boolean;
   options: AcpAskOption[];
 }
 export interface AcpAsk {
@@ -403,44 +504,70 @@ function stripRecommended(label: string): { label: string; recommended: boolean 
   return match ? { label: label.slice(match[0].length), recommended: true } : { label, recommended: false };
 }
 
+function schemaOptionEntries(raw: ProtocolRecord): ProtocolRecord[] {
+  const items = isRecord(raw.items) ? raw.items as ProtocolRecord : null;
+  const fromBranch = (candidate: unknown): ProtocolRecord[] | null => {
+    if (!Array.isArray(candidate)) return null;
+    const rows = candidate.filter(isRecord) as ProtocolRecord[];
+    return rows.length ? rows : null;
+  };
+  const direct = fromBranch(raw.oneOf) ?? fromBranch(raw.anyOf)
+    ?? (items ? (fromBranch(items.anyOf) ?? fromBranch(items.oneOf)) : null);
+  if (direct) return direct;
+  const fromEnum = (holder: ProtocolRecord | null): ProtocolRecord[] | null => {
+    if (!holder || !Array.isArray(holder.enum) || !holder.enum.length) return null;
+    const names = Array.isArray(holder.enumNames) ? holder.enumNames : [];
+    return holder.enum.map((val, idx): ProtocolRecord => ({
+      const: val,
+      title: typeof names[idx] === 'string' && names[idx] ? names[idx] : String(val),
+    }));
+  };
+  return fromEnum(raw) ?? fromEnum(items) ?? [];
+}
+
 /**
  * One `elicitation/create` form → the browser's `ask` dialog. Each non-`_other`
- * property is a question; the recommended mark comes from the pending
- * `ask_question` call, which is the only place agy states it.
+ * property is a question; supports single-select (`oneOf`/`enum`) and
+ * multi-select (`type: 'array'` with `items.anyOf`/`items.oneOf`/`items.enum`).
  */
 export function askFromElicitation(id: string, params: unknown, pendingQuestions: unknown): AcpAsk | null {
   const record = isRecord(params) ? params : {};
   const schema = isRecord(record.requestedSchema) ? record.requestedSchema : {};
   const properties = isRecord(schema.properties) ? schema.properties : {};
+  const requiredKeys = new Set(Array.isArray(schema.required) ? schema.required.filter((k): k is string => typeof k === 'string') : []);
   const pending = Array.isArray(pendingQuestions) ? pendingQuestions : [];
   const questions: AcpAskQuestionSpec[] = [];
   const display: ProtocolRecord[] = [];
   let questionIndex = 0;
   for (const [key, raw] of Object.entries(properties)) {
     if (key.endsWith('_other') || !isRecord(raw)) continue;
-    const multi = raw.type === 'array';
     const pendingQuestion = isRecord(pending[questionIndex]) ? pending[questionIndex] as ProtocolRecord : {};
+    const multi = raw.type === 'array' || pendingQuestion.is_multi_select === true;
+    const required = requiredKeys.has(key);
     const pendingOptions = Array.isArray(pendingQuestion.options) ? pendingQuestion.options : [];
-    const oneOf = Array.isArray(raw.oneOf) ? raw.oneOf.filter(isRecord) : [];
+    const entries = schemaOptionEntries(raw as ProtocolRecord);
     const options: AcpAskOption[] = [];
     let recommended: number | null = null;
-    const count = Math.max(oneOf.length, pendingOptions.length);
+    const count = Math.max(entries.length, pendingOptions.length);
     for (let i = 0; i < count; i++) {
-      const entry = oneOf[i];
+      const entry = entries[i];
       const pendingOption = pendingOptions[i];
       const pendingLabel = typeof pendingOption === 'string' ? pendingOption
         : isRecord(pendingOption) ? text(pendingOption.label) || text(pendingOption.title) : '';
       const strippedPending = stripRecommended(pendingLabel);
       const rawLabel = entry ? text(entry.title) || text(entry.label) : '';
-      const label = rawLabel ? stripRecommended(rawLabel).label : strippedPending.label;
+      const strippedRaw = stripRecommended(rawLabel);
+      const label = strippedRaw.label || strippedPending.label;
       if (!label) continue;
       const value = entry && entry.const !== undefined ? String(entry.const)
         : isRecord(pendingOption) && pendingOption.value !== undefined ? String(pendingOption.value) : label;
-      if (strippedPending.recommended && recommended === null) recommended = options.length;
+      if ((strippedPending.recommended || strippedRaw.recommended) && recommended === null) {
+        recommended = options.length;
+      }
       options.push({ label, value });
     }
     const question = text(raw.title) || text(pendingQuestion.question) || `Question ${key}`;
-    questions.push({ key, multi, options });
+    questions.push({ key, multi, ...(required ? { required: true } : {}), options });
     display.push({
       id: key,
       question,
@@ -484,6 +611,7 @@ export function askElicitationResult(response: ProtocolRecord, questions: readon
       return match ? [match.value] : [];
     });
     if (values.length) content[question.key] = question.multi ? values : values[0];
+    else if (question.multi && question.required) content[question.key] = [];
     const custom = typeof row.customInput === 'string' ? row.customInput.trim() : '';
     if (custom) content[`${question.key}_other`] = custom;
   }
@@ -723,16 +851,22 @@ export class AcpTranscript {
     toolCallId: string;
     toolName: string;
     content: string;
+    images?: readonly AcpImageBlock[];
     isError?: boolean;
     details?: ProtocolRecord;
     timestamp?: number;
   }): void {
+    const blocks: ProtocolRecord[] = [];
+    if (data.content || !data.images?.length) blocks.push({ type: 'text', text: data.content });
+    for (const img of data.images ?? []) {
+      blocks.push({ type: 'image', data: img.data, mimeType: img.mimeType });
+    }
     this.entry('message', {
       message: {
         role: 'toolResult',
         toolCallId: data.toolCallId,
         toolName: data.toolName,
-        content: [{ type: 'text', text: data.content }],
+        content: blocks,
         isError: data.isError === true,
         timestamp: data.timestamp ?? Date.now(),
         ...(data.details ? { details: data.details } : {}),
@@ -770,6 +904,14 @@ export class AcpTranscript {
     }
     if (kind === 'agent_message_chunk' || kind === 'agent_thought_chunk') {
       const content = asRecord(update.content);
+      if (kind === 'agent_message_chunk' && content.type !== 'text') {
+        const img = extractAcpImageBlock(content);
+        if (!img) return;
+        this.flushReplayUser();
+        this.ensureReplayAssistant();
+        (this.replayAssistant!.content as ProtocolRecord[]).push({ type: 'image', data: img.data, mimeType: img.mimeType });
+        return;
+      }
       if (content.type !== 'text') return;
       this.flushReplayUser();
       this.ensureReplayAssistant();
@@ -803,6 +945,7 @@ export class AcpTranscript {
       toolCallId,
       toolName: call.toolName,
       content: result.text,
+      ...(result.images?.length ? { images: result.images } : {}),
       isError: status === 'failed',
       ...(result.details ? { details: result.details } : {}),
     });

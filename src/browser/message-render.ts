@@ -232,6 +232,7 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
     textHtml = options.markdown(msg.content);
   }
   
+  const imagesHtml = imageBlocksHtml(msg.content, 'assistant image');
   let errorHtml = '';
   if (msg.errorMessage) {
     errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
@@ -256,7 +257,7 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
       ${messageActionsHtml(msg, 'assistant')}
     </div>
     ${thinkingHtml}${toolCallsHtml}
-    ${textHtml ? `<div class="message-content"><div class="markdown-body">${linkifySwarmBoard(textHtml)}</div></div>` : ''}
+    ${textHtml || imagesHtml ? `<div class="message-content">${textHtml ? `<div class="markdown-body">${linkifySwarmBoard(textHtml)}</div>` : ''}${imagesHtml}</div>` : ''}
     ${errorHtml}
   </div>`;
 }
