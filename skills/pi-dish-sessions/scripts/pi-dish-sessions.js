@@ -284,6 +284,19 @@ const COMMANDS = [
         notes: ['Docs come from the host that serves them, so a mixed-version fleet still reads the truth.'],
     },
     {
+        name: 'kb',
+        usage: 'kb search <terms…> | kb read [page] [--host NAME] [--json]',
+        summary: 'Search or read the knowledge base: shared topic pages that bots keep, with sources.',
+        flags: [MAX_CHARS_FLAG, FULL_FLAG],
+        example: 'kb search backups aeor',
+        notes: [
+            '`search` lists the pages holding every term (case-insensitive) with their matching lines; `read` prints a',
+            'page (`beelink`, `topics/beelink.md`), or the index with no page. Writing is for bots; the CLI only reads.',
+            'The knowledge base lives on the hub. Without --host this host answers when it serves it, else the first',
+            'fleet host that does, through this host\'s proxy; a host whose fleet lacks the hub cannot reach it.',
+        ],
+    },
+    {
         name: 'session',
         aliases: ['self'],
         usage: 'session [--session ID]',
@@ -658,6 +671,62 @@ async function waitForSettled(base, host, id, since, timeoutMs) {
         await new Promise(resolve => setTimeout(resolve, Math.min(delayMs, remaining)));
         delayMs = Math.min(delayMs * 1.5, 5000);
     }
+}
+const KB_UNSUPPORTED = "this host's pi-dish has no knowledge base routes; update it, or pass --host <hub>";
+/**
+ * The host to ask: --host, else this host when it serves the knowledge base,
+ * else the first fleet host that does (reached through this host's proxy).
+ * With none advertising it, this host answers, saying why it cannot.
+ */
+async function knowledgeHost(base, hostFlag) {
+    if (hostFlag)
+        return hostFlag;
+    const serving = ((await fleetHosts(base)) ?? []).filter(entry => hostSupports(entry, 'knowledge'));
+    if (serving.some(entry => core.fleetHost(entry).self))
+        return null;
+    const remote = serving.find(entry => core.fleetHost(entry).reachable) ?? serving[0];
+    return remote ? String(core.fleetHost(remote).name) : null;
+}
+async function runKnowledge(base, hostFlag, args) {
+    const [action, ...rest] = args.positional;
+    if (action !== 'search' && action !== 'read')
+        throw new Error("kb needs 'search <terms…>' or 'read [page]' (run 'help kb')");
+    const terms = rest.join(' ').trim();
+    if (action === 'search' && !terms)
+        throw new Error('kb search needs at least one term');
+    const host = await knowledgeHost(base, hostFlag);
+    const pathname = action === 'search'
+        ? `/api/knowledge/search?q=${encodeURIComponent(terms)}`
+        : `/api/knowledge/page${rest[0] ? `?page=${encodeURIComponent(rest[0])}` : ''}`;
+    let data;
+    try {
+        ({ data } = await api(base, host, pathname));
+    }
+    catch (e) {
+        if (core.errorStatus(e) === 404 && !core.errorBody(e).error)
+            throw new Error(KB_UNSUPPORTED);
+        throw e;
+    }
+    if (args.json)
+        return print({ ...(host ? { host } : {}), ...core.record(data ?? {}) }, true);
+    const chars = outputBounds(args, null).chars;
+    if (host)
+        process.stdout.write(`# from ${host}\n`);
+    const answer = core.record(data ?? {});
+    if (action === 'read') {
+        const text = String(answer.text ?? '');
+        return writeCapped(text.endsWith('\n') ? text : `${text}\n`, chars, '--max-chars N or --full for more.');
+    }
+    const results = wireArray(answer.results).map(hit => core.record(hit));
+    if (!results.length)
+        return void process.stdout.write('No matches.\n');
+    writeCapped(results.map(hit => `${hit.path}\n${wireArray(hit.lines).map(value => {
+        const line = core.record(value);
+        return `  ${line.line}: ${line.text}\n`;
+    }).join('')}`).join(''), chars, '--max-chars N or --full for more, or add a term.');
+    if (Number(answer.total) > results.length)
+        cutNotice(false, `${Number(answer.total) - results.length} more pages match; add a term to narrow it.`);
+    process.stdout.write('# Read a page with: kb read <path>\n');
 }
 const DOCS_UNSUPPORTED = "this host's pi-dish does not serve agent docs; try without --host or upgrade it";
 async function listDocs(base, host, json) {
@@ -1197,6 +1266,8 @@ async function main() {
                 return await listDocs(base, hostFlag, args.json);
             return await showDoc(base, hostFlag, topic, args.json);
         }
+        if (spec.name === 'kb')
+            return await runKnowledge(base, hostFlag, args);
         if (spec.name === 'list') {
             const bounds = outputBounds(args, SESSION_FIELDS);
             const limit = args.full ? Infinity : intArg(args.limit, DEFAULT_LIST_ROWS, Infinity);

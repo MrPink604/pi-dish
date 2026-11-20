@@ -1023,6 +1023,29 @@ There is no scripting, chaining, or outbound notification: the event source
 lives outside pi-dish and polls the invocation it started. Agents read the
 contract from `/api/agent-docs/routines`.
 
+### Knowledge base
+
+Bots keep what they learn in a knowledge base: Markdown topic pages under
+`topics/` in a Git repository, with one line per page in `index.md`. Set the
+repository's remote on the hub in `~/.pi/dish/settings.json`:
+
+```json
+{
+  "knowledgeRemote": "aeor-git:jyarwood/knowledge.git"
+}
+```
+
+pi-dish keeps a working clone at `~/.pi/dish/knowledge` and is its only
+committer. Without the setting the feature is off and `/api/knowledge` says so.
+A bot's `kb_write` appends an entry, stamped with its source, the date and the
+bot's name, or rewrites a page it is tidying; each write pulls, commits with
+the bot's name in the message, and pushes. A push that fails (the remote is
+down) leaves the commit in the clone, and the next write pushes it. Search is
+plain text search over the clone: every term must appear in a page. Any session
+reads it with `pi-dish-sessions kb search <terms…>` and `kb read [page]`; on
+another host the CLI reaches the hub through that host's proxy when the hub is
+in its fleet (`pi-dish-sessions hosts`), and otherwise cannot.
+
 ### Vault approvals (Bitwarden)
 
 Agents can use single Bitwarden items without the vault ever being unlocked

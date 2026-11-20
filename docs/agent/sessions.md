@@ -75,6 +75,21 @@ transcript window.
   returns `state` (`finished` or `waiting`), `totalMessages` and the raw
   `message`.
 
+## The knowledge base
+
+`kb search <terms…>` lists the knowledge base pages that hold every term
+(case-insensitive) with their matching lines; `kb read [page]` prints a page
+(`beelink`, `topics/beelink.md`), or the index with no page. Bots write the
+pages, one per topic, and every entry ends with its source and the date it was
+added; look there before working something out again. There is no `kb write`:
+bots write with their own `kb_write` tool.
+
+The knowledge base lives on the hub (`knowledgeRemote` in its
+`~/.pi/dish/settings.json`), which advertises the `knowledge` capability.
+Without `--host`, this host answers when it serves it, else the first fleet
+host that does, through this host's proxy. A host whose fleet does not include
+the hub cannot reach it, and the command says the knowledge base is off.
+
 ## Reading a session (memory recall)
 
 `read <ref>` renders the transcript as markdown: turn headers, prose in

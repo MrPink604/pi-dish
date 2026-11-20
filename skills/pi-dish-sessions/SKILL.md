@@ -19,6 +19,7 @@ node "$CLI" follow-up <ref> "Then summarize here"          # queue for after the
 node "$CLI" spawn --cwd "$PWD" --name "investigation" \
   --prompt "Investigate the cache issue and report" --json # durable peer process
 node "$CLI" wait <ref> --since 0 --timeout 1800            # block for its final answer
+node "$CLI" kb search "backups aeor"                       # what bots have written down
 node "$CLI" resume <ref>                                   # revive an inactive session
 ```
 
@@ -66,6 +67,9 @@ a citation: `read` the session before reasoning about what it did, and
   more than `--since` messages. Pass `--since 0` after a spawn, and after
   `send` the `totalMessages` that `show <ref> --limit 1 --json` reported
   before it; without it an idle session returns its previous answer.
+- **Knowledge base.** `kb search <terms…>` and `kb read [page]` read the
+  topic pages bots keep on the hub, each fact with its source and date. Look
+  there before re-deriving how a host is set up. The CLI only reads.
 - **Harness.** A spawned peer runs the same harness as you; pass
   `--harness pi|omp|prime` to cross over.
 - **Private spawn.** `spawn --private` keeps the transcript out of the fleet

@@ -465,3 +465,47 @@ test('peer-session CLI wait exits non-zero when nothing new arrives in time', as
         return true;
     });
 });
+test('peer-session CLI kb searches and reads the knowledge base on whichever host serves it', async (t) => {
+    let hubServes = true;
+    const server = http.createServer((req, res) => {
+        const url = req.url ?? '';
+        res.setHeader('Content-Type', 'application/json');
+        if (url === '/api/hosts') {
+            res.end(JSON.stringify({ hosts: [
+                    { self: true, label: 'self', reachable: true, capabilities: { sessions: true } },
+                    { name: 'hub', label: 'hub', reachable: true, capabilities: { sessions: true, knowledge: hubServes } },
+                ] }));
+            return;
+        }
+        if (url === '/hosts/hub/api/knowledge/search?q=backups%20aeor') {
+            res.end(JSON.stringify({ total: 1, results: [{ path: 'topics/beelink.md', lines: [{ line: 3, text: 'Backups go to aeor.' }] }] }));
+            return;
+        }
+        if (url === '/hosts/hub/api/knowledge/page?page=beelink') {
+            res.end(JSON.stringify({ path: 'topics/beelink.md', text: '# Beelink\n\nBackups go to aeor.\n' }));
+            return;
+        }
+        if (url === '/api/knowledge/page') {
+            res.statusCode = 503;
+            res.end(JSON.stringify({ error: 'The knowledge base is off on this host', off: true }));
+            return;
+        }
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: 'not found' }));
+    });
+    const base = await listenServer(server);
+    t.after(() => new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+    const searched = await run(['kb', 'search', 'backups', 'aeor'], base);
+    assert.equal(searched.stdout, '# from hub\ntopics/beelink.md\n  3: Backups go to aeor.\n# Read a page with: kb read <path>\n');
+    const read = await run(['kb', 'read', 'beelink'], base);
+    assert.equal(read.stdout, '# from hub\n# Beelink\n\nBackups go to aeor.\n');
+    hubServes = false;
+    await assert.rejects(run(['kb', 'read'], base), (error) => {
+        assert.match(String((0, test_types_js_1.record)(error).stderr ?? ''), /knowledge base is off/);
+        return true;
+    });
+    await assert.rejects(run(['kb', 'write', 'x'], base), (error) => {
+        assert.match(String((0, test_types_js_1.record)(error).stderr ?? ''), /kb needs 'search <terms…>' or 'read \[page\]'/);
+        return true;
+    });
+});
