@@ -6,7 +6,7 @@ import { requestBody } from './http-boundary';
 import { getHarness } from './harnesses';
 import * as routinesStore from './routines';
 import type { Routine, RoutineInvocation } from './routines';
-import type { RoutineRunner } from './routine-runner';
+import type { RoutineBots, RoutineRunner } from './routine-runner';
 import type { SessionLaunch } from './session-launch';
 import { expandSessionRefs, type SessionRefDependencies } from './session-refs';
 
@@ -16,6 +16,8 @@ type RoutineResponse = Response<unknown, Record<string, unknown>>;
 export interface RoutineHandlerPorts {
   runner: RoutineRunner;
   validateHarnessPilotSelection: SessionLaunch['validateHarnessPilotSelection'];
+  /** Bots a routine can name as its destination; absent where bots do not run. */
+  bots?: Pick<RoutineBots, 'find'> | null;
 }
 
 export interface RoutineHandlers {
@@ -27,7 +29,14 @@ export interface RoutineHandlers {
   invoke: RoutineHandler;
   listInvocations: RoutineHandler;
   getInvocation: RoutineHandler;
+  /** `/api/bots/:id/routines`: a bot's own routines, the only ones it can see or change. */
+  botList: RoutineHandler;
+  botCreate: RoutineHandler;
+  /** `/api/bots/:id/routines/:routine/remove`: refused for a routine that is not the bot's own. */
+  botRemove: BotRoutineHandler;
 }
+
+export type BotRoutineHandler = RequestHandler<{ id: string; routine: string }, unknown, unknown, ParsedQs, Record<string, unknown>>;
 
 interface RoutineError extends Error {
   status?: number;
@@ -67,7 +76,23 @@ function routineErrorResponse(res: RoutineResponse, error: unknown): RoutineResp
 const ROUTINE_INVOCATION_PAGE_MAX = 200;
 
 export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandlers {
-  const { runner, validateHarnessPilotSelection } = ports;
+  const { runner, validateHarnessPilotSelection, bots = null } = ports;
+
+  /** A bot routine names its bot as the screen and the bot read it: by name, and whether it is retired. */
+  function withBot<T extends Routine | Omit<Routine, 'versions'>>(routine: T): T & { botName?: string | null; botRetired?: boolean } {
+    if (!routine.bot) return routine;
+    const bot = bots?.find(routine.bot) ?? null;
+    return { ...routine, botName: bot?.name ?? null, botRetired: !bot || bot.retired };
+  }
+
+  /** The bot a new routine names, or why it cannot be its destination. */
+  function destinationRefusal(botId: unknown): string | null {
+    if (typeof botId !== 'string' || !botId) return 'bot must name a bot by id';
+    if (!bots) return 'Bots do not run on this host.';
+    const bot = bots.find(botId);
+    if (!bot) return `No bot ${botId}`;
+    return bot.retired ? `${bot.name} is retired.` : null;
+  }
 
   // Same pilot validation and precedence as POST /api/sessions/new, before the
   // definition store validates its fields. Pi ignores pilot-only selections.
@@ -83,7 +108,7 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
     const { versions, ...rest } = routine;
     const mine = invocations.filter((entry) => entry.routineId === routine.id);
     return {
-      ...rest,
+      ...withBot(rest),
       stats: {
         invocations: mine.length,
         running: mine.filter((entry) => entry.status === 'starting' || entry.status === 'running').length,
@@ -101,8 +126,13 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
   const create: RoutineHandler = async (req, res) => {
     const input = requestBody(req);
     try {
-      await validateRoutinePilot(input.harness, input.model, input.thinking, input.cwd);
-      res.status(201).json({ routine: routinesStore.createRoutine(input) });
+      if (input.bot !== undefined && input.bot !== null && input.bot !== '') {
+        const refused = destinationRefusal(input.bot);
+        if (refused) return res.status(400).json({ error: refused });
+      } else {
+        await validateRoutinePilot(input.harness, input.model, input.thinking, input.cwd);
+      }
+      res.status(201).json({ routine: withBot(routinesStore.createRoutine(input)) });
     } catch (error) {
       routineErrorResponse(res, error);
     }
@@ -111,7 +141,7 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
   const get: RoutineHandler = (req, res) => {
     const routine = routinesStore.getRoutine(req.params.id);
     if (!routine) return res.status(404).json({ error: 'Routine not found' });
-    res.json({ routine });
+    res.json({ routine: withBot(routine) });
   };
 
   const update: RoutineHandler = async (req, res) => {
@@ -119,13 +149,15 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
     if (!existing) return res.status(404).json({ error: 'Routine not found' });
     const patch = requestBody(req);
     try {
-      await validateRoutinePilot(
-        patch.harness ?? existing.harness,
-        patch.model === undefined ? existing.model : patch.model,
-        patch.thinking === undefined ? existing.thinking : patch.thinking,
-        patch.cwd ?? existing.cwd,
-      );
-      res.json({ routine: routinesStore.updateRoutine(existing.id, patch) });
+      if (!existing.bot) {
+        await validateRoutinePilot(
+          patch.harness ?? existing.harness,
+          patch.model === undefined ? existing.model : patch.model,
+          patch.thinking === undefined ? existing.thinking : patch.thinking,
+          patch.cwd ?? existing.cwd,
+        );
+      }
+      res.json({ routine: withBot(routinesStore.updateRoutine(existing.id, patch)!) });
     } catch (error) {
       routineErrorResponse(res, error);
     }
@@ -197,5 +229,42 @@ export function createRoutineHandlers(ports: RoutineHandlerPorts): RoutineHandle
     res.json({ invocation });
   };
 
-  return { list, create, get, update, remove, invoke, listInvocations, getInvocation };
+  const botList: RoutineHandler = (req, res) => {
+    if (!bots?.find(req.params.id)) return res.status(404).json({ error: 'Bot not found' });
+    const invocations = routinesStore.readInvocations();
+    res.json({
+      routines: routinesStore.listRoutines().filter((routine) => routine.bot === req.params.id)
+        .map((routine) => routineSummary(routine, invocations)),
+    });
+  };
+
+  /** The bot is always the destination: a bot cannot make a routine for anyone else or start a session with one. */
+  const botCreate: RoutineHandler = (req, res) => {
+    const refused = destinationRefusal(req.params.id);
+    if (refused) return res.status(bots?.find(req.params.id) ? 409 : 404).json({ error: refused });
+    const body = requestBody(req);
+    if (!body.schedule) return res.status(400).json({ error: 'A schedule needs a cron expression' });
+    try {
+      const routine = routinesStore.createRoutine({
+        name: body.name, description: body.description, prompt: body.prompt, schedule: body.schedule, bot: req.params.id,
+      });
+      res.status(201).json({ routine: { ...withBot(routine), nextRunAt: runner.nextRunAt(routine) } });
+    } catch (error) {
+      routineErrorResponse(res, error);
+    }
+  };
+
+  const botRemove: BotRoutineHandler = (req, res) => {
+    if (!bots?.find(req.params.id)) return res.status(404).json({ error: 'Bot not found' });
+    const routine = routinesStore.getRoutine(req.params.routine);
+    if (!routine) return res.status(404).json({ error: `There is no routine named "${req.params.routine}".` });
+    if (routine.bot !== req.params.id) {
+      const owner = routine.bot ? 'another bot\u2019s schedule' : 'one of the user\u2019s routines';
+      return res.status(403).json({ error: `Refused: "${routine.name}" is ${owner}, not yours. You can remove only the schedules you made for yourself.` });
+    }
+    routinesStore.deleteRoutine(routine.id);
+    res.json({ removed: routine.name, invocations: routinesStore.countInvocations(routine.id) });
+  };
+
+  return { list, create, get, update, remove, invoke, listInvocations, getInvocation, botList, botCreate, botRemove };
 }

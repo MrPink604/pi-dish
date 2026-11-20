@@ -81,11 +81,13 @@ for the next page. Statuses:
 - `starting` — spawn or resume in flight (a run stuck here for two minutes
   becomes `errored`)
 - `running` — the prompt was delivered
-- `completed` — the observed turn ended
+- `completed` — the observed turn ended; for a bot routine, the bot took the
+  message
 - `interrupted` — the turn ended without completing, the session went away, or
   pi-dish restarted mid-run
 - `errored` — the spawn, resume or delivery failed; see `error`
-- `skipped` — never started; see `skipReason` (`busy` or `disabled`)
+- `skipped` — never started; see `skipReason` (`busy`, `disabled`, or why a
+  bot routine's bot cannot take it)
 
 `summary` is the last assistant text of the observed turn, trimmed to 500
 characters. It is a receipt, not a verdict: pi-dish does not classify
@@ -122,8 +124,38 @@ Standard five fields with lists, ranges, steps (`*/15`, `1-5/2`), three-letter
 month/day names, `7` for Sunday, and the `@hourly` / `@daily` / `@weekly` /
 `@monthly` aliases. A bad expression is a 400 with the parse error.
 
-`enabled: false` arms only the schedule off — invoke still works. Minutes
-missed while pi-dish was down are **not** caught up.
+`enabled: false` arms only the schedule off — invoke still works.
+
+A run missed while pi-dish was down (or the process stalled past a whole
+minute) fires **once** when it is back, however many slots it missed: the
+next tick runs the routine if any slot since it last fired, or was last
+edited, never ran. That run's `source` says how many it stands for
+(`after 3 missed runs`). Slots before a routine was created or edited are
+not owed.
+
+## Bots as destinations
+
+A routine can name a bot (`"bot": "<bot id>"`) instead of a harness and
+working directory. A run then starts no session: the prompt goes into that
+bot's conversation, headed `[routine "<name>", scheduled for <time>. …]` so
+the bot can tell a schedule from the user, and the bot answers in its own
+chat. A busy bot gets it as a follow-up. The invocation is `completed` once
+the bot has taken the message, with `delivery` `prompt` or `followUp` and
+the bot's session route as `sessionId`; a bot that is not running is
+started first. A bot routine takes no `harness`, `cwd`, `model`,
+`thinking`, `mode` or `onBusy`, and its bot cannot be changed.
+
+Bots make these themselves with their `schedule` tool, which reaches only
+the bot's own routines:
+
+```
+GET  /api/bots/<bot id>/routines
+POST /api/bots/<bot id>/routines                  { name, prompt, schedule: { cron }, description }
+POST /api/bots/<bot id>/routines/<name>/remove    403 for another bot's routine or an ordinary one
+```
+
+A routine whose bot is retired stops: its next run is `skipped` with the
+reason, and its schedule is switched off.
 
 ## Finding a routine's sessions
 

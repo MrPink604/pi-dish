@@ -14,9 +14,15 @@ export interface Routine {
     id: string;
     name: string;
     description: string;
+    /** `bot` for a routine whose destination is a bot. */
     harness: string;
-    /** Stored as written; session launch rejects a non-string. */
+    /** Stored as written; session launch rejects a non-string. A bot routine has none. */
     cwd: unknown;
+    /**
+     * The bot a run is delivered to, by id: the prompt goes into that bot's conversation and no session is started.
+     * Null for an ordinary routine. Fixed when the routine is created.
+     */
+    bot: string | null;
     model?: string;
     thinking?: RoutineThinking;
     prompt: string;

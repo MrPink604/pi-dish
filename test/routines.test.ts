@@ -730,3 +730,216 @@ test('input larger than the cap is refused before anything is recorded', () => {
   assert.equal(error.status, 413);
   assert.equal(store.countInvocations(routine.id), 0);
 });
+
+// ---------------------------------------------------------------------------
+// Bots as destinations
+// ---------------------------------------------------------------------------
+
+const FLEET = '0b0c5a1e-0000-4000-8000-000000000001';
+const OTHER = '0b0c5a1e-0000-4000-8000-000000000002';
+
+/** The bots a routine can reach: rows by id, and every message handed to one. */
+function fakeBots(rows: Record<string, { name: string; retired?: boolean }>, { queued = false } = {}) {
+  const delivered: Array<{ id: string; message: Runner.RoutineBotMessage }> = [];
+  const port: Runner.RoutineBots = {
+    find: id => rows[id] ? { name: rows[id].name, retired: !!rows[id].retired, route: `bot-route-${id}` } : null,
+    deliver: async (id, message) => { delivered.push({ id, message }); return { queued }; },
+  };
+  return { port, delivered, rows };
+}
+
+const botRoutine = (over: Record<string, unknown> = {}) => store.createRoutine({
+  name: 'backup-check', prompt: 'Check last night\u2019s backups.', bot: FLEET, schedule: { cron: '*/2 * * * *' }, ...over,
+});
+
+/** A minute two days from now, on one day for the whole file, so a routine created in a test was edited before it. */
+const FUTURE_DAY = new Date(Date.now() + 2 * 86_400_000);
+const future = (hours: number, minutes: number) =>
+  new Date(FUTURE_DAY.getFullYear(), FUTURE_DAY.getMonth(), FUTURE_DAY.getDate(), hours, minutes, 0, 0).getTime();
+
+test('a bot routine takes no session fields and keeps its bot', () => {
+  const routine = botRoutine();
+  assert.equal(routine.bot, FLEET);
+  assert.equal(routine.harness, 'bot');
+  assert.equal(routine.cwd, null);
+  for (const field of ['cwd', 'model', 'mode']) {
+    const error = catchError(() => store.createRoutine({ name: `x-${field}`, prompt: 'p', bot: FLEET, [field]: field === 'mode' ? 'continue' : '/tmp' }));
+    assert.equal(error.status, 400);
+    assert.match(error.message, new RegExp(`takes no ${field}`));
+  }
+  assert.equal(catchError(() => updateRoutine(routine.id, { cwd: '/tmp' })).status, 400);
+  assert.equal(catchError(() => updateRoutine(routine.id, { bot: OTHER })).status, 400);
+  assert.equal(updateRoutine(routine.id, { prompt: 'Check the backups.' }).promptVersion, 2);
+  assert.equal(store.getRoutine(routine.id)?.bot, FLEET);
+});
+
+test('a bot routine\u2019s run is delivered into the bot\u2019s conversation, headed with its name, and starts no session', async () => {
+  const routine = botRoutine();
+  const bots = fakeBots({ [FLEET]: { name: 'Fleet' } });
+  const { runner, created } = harness({ bots: bots.port });
+  const at = future(9, 4);
+  store.markScheduled(routine.id, future(9, 2));
+  runner.tick(at);
+  await settleTwice();
+
+  assert.deepEqual(created, []);
+  assert.equal(bots.delivered.length, 1);
+  const { id, message } = bots.delivered[0];
+  assert.equal(id, FLEET);
+  const [run] = store.listInvocations({ routineId: routine.id });
+  assert.equal(message.requestId, `routine:${run.id}`);
+  assert.match(message.text, /^\[routine "backup-check", scheduled for \d{4}-\d\d-\d\d 09:04\. This message comes from the routine, not from the user/);
+  assert.ok(message.text.endsWith('\n\nCheck last night\u2019s backups.'));
+  assert.deepEqual(message.data, { routineId: routine.id, routineName: 'backup-check', invocationId: run.id, trigger: 'schedule', scheduledFor: at, late: 0 });
+  assert.equal(run.status, 'completed');
+  assert.equal(run.delivery, 'prompt');
+  assert.equal(run.sessionId, `bot-route-${FLEET}`);
+  assert.equal(run.summary, 'Delivered to Fleet; it answers in its chat.');
+
+  // On demand it says so, and who asked.
+  runner.invoke(routine, { trigger: 'invoke', source: 'cli' });
+  await settleTwice();
+  assert.match(bots.delivered[1].message.text, /^\[routine "backup-check", run on demand by cli\./);
+});
+
+test('a bot that is busy gets the run as a follow-up, and an invoke while one is delivered is not refused', async () => {
+  const routine = botRoutine({ onBusy: undefined });
+  const bots = fakeBots({ [FLEET]: { name: 'Fleet' } }, { queued: true });
+  let release: () => void = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const port: Runner.RoutineBots = { ...bots.port, deliver: async (id, message) => { await held; return bots.port.deliver(id, message); } };
+  const { runner } = harness({ bots: port });
+  const first = runner.invoke(routine, { trigger: 'invoke' });
+  const second = runner.invoke(routine, { trigger: 'invoke' });
+  // A scheduled run does not pile up behind one still being delivered.
+  const scheduled = runner.invoke(routine, { trigger: 'schedule' });
+  assert.equal(scheduled.status, 'skipped');
+  assert.equal(scheduled.skipReason, 'busy');
+  release();
+  await settleTwice();
+  for (const invocation of [first, second]) {
+    const run = existingInvocation(invocation.id);
+    assert.equal(run.status, 'completed');
+    assert.equal(run.delivery, 'followUp');
+    assert.equal(run.summary, 'Queued for Fleet behind its current run; it answers in its chat.');
+  }
+  assert.deepEqual(bots.delivered.map(entry => entry.message.requestId), [`routine:${first.id}`, `routine:${second.id}`]);
+});
+
+test('runs missed while pi-dish was down fire once when it is back, for bot and ordinary routines alike', async () => {
+  const bot = botRoutine();
+  const ordinary = store.createRoutine(definition({ name: 'ordinary', schedule: { cron: '*/2 * * * *' } }));
+  const bots = fakeBots({ [FLEET]: { name: 'Fleet' } });
+  const { runner, created, sessions } = harness({ bots: bots.port });
+  // Both last fired at 08:58, while pi-dish was up.
+  for (const routine of [bot, ordinary]) store.markScheduled(routine.id, future(8, 58));
+  runner.tick(future(9, 0));
+  await settleTwice();
+  assert.equal(store.countInvocations(bot.id), 1);
+  assert.equal(store.countInvocations(ordinary.id), 1);
+  assert.equal(store.listInvocations({ routineId: bot.id })[0].source, null, 'on time');
+  existingSession(sessions, 'sess-1').endTurn();
+
+  // Down from 09:01 to 09:07: the slots at 09:02, 09:04 and 09:06 were missed. 09:07 matches nothing.
+  const back = future(9, 7) + 15_000;
+  runner.tick(back);
+  runner.tick(back + 30_000);
+  await settleTwice();
+  for (const routine of [bot, ordinary]) {
+    const runs = store.listInvocations({ routineId: routine.id });
+    assert.equal(runs.length, 2, `${routine.name} fired once on recovery`);
+    assert.equal(runs[0].trigger, 'schedule');
+    assert.equal(runs[0].source, 'after 3 missed runs');
+  }
+  assert.equal(created.length, 2, 'the ordinary routine started one session per run');
+  assert.match(bots.delivered[1].message.text,
+    /^\[routine "backup-check", scheduled for \d{4}-\d\d-\d\d 09:06\. pi-dish was down and missed 3 runs of it from \d{4}-\d\d-\d\d 09:02; this one run stands for them all\./);
+  assert.equal(bots.delivered[1].message.data.late, 3);
+
+  // The next slot is on time again.
+  runner.tick(future(9, 8));
+  await settleTwice();
+  assert.equal(store.countInvocations(bot.id), 3);
+  assert.equal(store.listInvocations({ routineId: bot.id })[0].source, null);
+  assert.match(bots.delivered[2].message.text, /scheduled for \d{4}-\d\d-\d\d 09:08\. This message/);
+});
+
+test('a routine whose bot is retired stops, and its run table says why', async () => {
+  const routine = botRoutine();
+  const bots = fakeBots({ [FLEET]: { name: 'Fleet', retired: true } });
+  const { runner } = harness({ bots: bots.port });
+  runner.tick(future(9, 4));
+  await settleTwice();
+  const [run] = store.listInvocations({ routineId: routine.id });
+  assert.equal(run.status, 'skipped');
+  assert.equal(run.skipReason, 'its bot Fleet is retired; its schedule is switched off');
+  assert.equal(store.getRoutine(routine.id)?.enabled, false);
+  assert.deepEqual(bots.delivered, []);
+  runner.tick(future(9, 6));
+  await settleTwice();
+  assert.equal(store.countInvocations(routine.id), 1, 'it fires no more');
+  // Run by hand, it is skipped with the same reason.
+  assert.equal(runner.invoke(store.getRoutine(routine.id)!, { trigger: 'invoke' }).skipReason, 'its bot Fleet is retired');
+});
+
+test('a delivery the bot never takes errors the run', async () => {
+  const routine = botRoutine();
+  const { runner } = harness({
+    bots: { find: () => ({ name: 'Fleet', retired: false, route: 'r' }), deliver: async () => { throw new Error('the relay did not take it'); } },
+  });
+  const invocation = runner.invoke(routine, { trigger: 'invoke' });
+  await settleTwice();
+  const run = existingInvocation(invocation.id);
+  assert.equal(run.status, 'errored');
+  assert.equal(run.error, 'the relay did not take it');
+});
+
+// ---------------------------------------------------------------------------
+// A bot's own routines
+// ---------------------------------------------------------------------------
+
+async function callRoute(handler: unknown, params: Record<string, string>, body: unknown = {}) {
+  let status = 200;
+  let sent: unknown;
+  const res = { status(code: number) { status = code; return res; }, json(value: unknown) { sent = value; return res; } };
+  await (handler as (req: unknown, res: unknown, next: () => void) => unknown)({ params, body, query: {} }, res, () => {});
+  return { status, body: sent as Record<string, unknown> };
+}
+
+test('a bot creates, lists and removes only its own routines', async () => {
+  const { createRoutineHandlers }: typeof import('../lib/routine-handlers') = require('../lib/routine-handlers');
+  const bots = fakeBots({ [FLEET]: { name: 'Fleet' }, [OTHER]: { name: 'Backups' } });
+  const { runner } = harness({ bots: bots.port });
+  const handlers = createRoutineHandlers({ runner, validateHarnessPilotSelection: async () => {}, bots: bots.port });
+  const user = store.createRoutine(definition({ name: 'users-own' }));
+  const theirs = botRoutine({ name: 'backups-own', bot: OTHER });
+
+  const created = await callRoute(handlers.botCreate, { id: FLEET }, {
+    name: 'fleet-check', prompt: 'Check the hosts.', schedule: { cron: '*/2 * * * *' }, cwd: '/tmp', harness: 'pi',
+  });
+  assert.equal(created.status, 201);
+  const routine = created.body.routine as Record<string, unknown>;
+  assert.equal(routine.bot, FLEET, 'the bot is always its own destination');
+  assert.equal(routine.botName, 'Fleet');
+  assert.equal(routine.cwd, null);
+  assert.equal(typeof routine.nextRunAt, 'number');
+
+  const listed = await callRoute(handlers.botList, { id: FLEET });
+  assert.deepEqual((listed.body.routines as { name: string }[]).map(row => row.name), ['fleet-check']);
+
+  for (const [other, owner] of [[theirs.name, 'another bot\u2019s schedule'], [user.name, 'one of the user\u2019s routines']]) {
+    const refused = await callRoute(handlers.botRemove, { id: FLEET, routine: other });
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body.error, `Refused: "${other}" is ${owner}, not yours. You can remove only the schedules you made for yourself.`);
+    assert.ok(store.getRoutine(other), `${other} is still there`);
+  }
+  const removed = await callRoute(handlers.botRemove, { id: FLEET, routine: 'fleet-check' });
+  assert.equal(removed.status, 200);
+  assert.equal(store.getRoutine('fleet-check'), null);
+
+  // A retired bot makes no new routines, and the Routines screen names a routine's bot.
+  bots.rows[OTHER].retired = true;
+  assert.equal((await callRoute(handlers.botCreate, { id: OTHER }, { name: 'late', prompt: 'p', schedule: { cron: '@daily' } })).status, 409);
+  const shown = await callRoute(handlers.get, { id: theirs.id });
+  assert.deepEqual([(shown.body.routine as Record<string, unknown>).botName, (shown.body.routine as Record<string, unknown>).botRetired], ['Backups', true]);
+});

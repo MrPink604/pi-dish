@@ -8,7 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { createBotHandlers } = require('../lib/bot-handlers');
 const { openBotRegistry, validateBotPatch, DEFAULT_BOT_MODEL } = require('../lib/bot-registry');
-const { startBots, claimBotRelay } = require('../lib/bot-supervisor');
+const { startBots, claimBotRelay, deliverStartingBot } = require('../lib/bot-supervisor');
 const { encodeSessionKey } = require('../lib/session-key');
 function tempRegistry(t) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bots-'));
@@ -117,6 +117,18 @@ test('a bot has one relay: a live holder keeps the lock and pi-dish does not sta
     if (next.claimed)
         next.release();
     assert.equal(fs.existsSync(path.join(botDir, 'relay.lock')), false);
+});
+test('a routine\u2019s run to a bot that is not running starts it and is delivered once its relay takes it', async () => {
+    const tries = [];
+    let started = 0;
+    // The relay takes the fourth try: the first finds no relay, the next two find one still starting.
+    const deliver = async (id) => { tries.push(id); return tries.length === 4 ? { queued: false } : null; };
+    const taken = await deliverStartingBot('fleet', { kind: 'routine' }, async () => { started += 1; }, { everyMs: 1, deliver });
+    assert.deepEqual(taken, { queued: false });
+    assert.equal(started, 1, 'started once, however many tries it took');
+    assert.equal(tries.length, 4);
+    // A relay that never comes up fails the delivery.
+    await assert.rejects(deliverStartingBot('fleet', {}, async () => { }, { waitMs: 5, everyMs: 1, deliver: async () => null }), /did not take the message within 0s/);
 });
 test('bots nest at most three levels, and a retry with the same id finds the bot it made', t => {
     const { registry } = tempRegistry(t);

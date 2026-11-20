@@ -583,3 +583,57 @@ test('ask_bot puts a question to a bot in another family and brings its answer b
     assert.equal(customs(asker, 'bot-answer').length, 1);
     assert.equal(calls.filter(([pathname]) => pathname.endsWith('/answer')).length, 1);
 });
+test('a routine\u2019s run arrives once as its own notice, and waits as a follow-up behind a run in progress', async (t) => {
+    const bot = await openTestBot(t, noSessions);
+    let open = () => { };
+    const gate = new Promise(resolve => { open = resolve; });
+    bot.respond(async () => { await gate; return bot.faux.fauxAssistantMessage('Hello to you.'); }, bot.faux.fauxAssistantMessage('The backups are fine.'));
+    await bot.runtime.prompt('Hello', 'followUp');
+    await until(() => bot.runtime.busy, 'the user\u2019s run starts');
+    const run = {
+        kind: 'routine', requestId: 'routine:inv-1',
+        text: '[routine "backup-check", scheduled for 2026-11-20 09:04. This message comes from the routine, not from the user: do what it asks and answer here, in your chat.]\n\nCheck the backups.',
+        data: { routineId: 'r-1', routineName: 'backup-check', invocationId: 'inv-1', trigger: 'schedule' },
+    };
+    await bot.runtime.deliver(run);
+    await bot.runtime.deliver(run);
+    open();
+    await until(() => said(bot, 'The backups are fine.'), 'the routine\u2019s run is answered');
+    await severalPolls();
+    assert.deepEqual(customs(bot, 'bot-routine'), [run.text], 'one notice, however often it is sent');
+    const order = bot.mirrorLines().flatMap(line => line.customType === 'bot-routine' ? ['routine'] : line.type === 'message' ? [textOf(line.message)] : []);
+    assert.deepEqual(order, ['Hello', 'Hello to you.', 'routine', 'The backups are fine.'], 'it waited for the user\u2019s run to end');
+    assert.equal(bot.requests.length, 2);
+    assert.equal(textOf(bot.requests[1].at(-1)), run.text);
+});
+test('the schedule tool creates, lists and removes the bot\u2019s own routines, and passes on a refusal', async (t) => {
+    const calls = [];
+    const api = async (pathname, body) => {
+        calls.push([pathname, body]);
+        if (pathname.endsWith('/routines/backups-nightly/remove')) {
+            throw new Error('Refused: "backups-nightly" is another bot\u2019s schedule, not yours. You can remove only the schedules you made for yourself.');
+        }
+        if (pathname.endsWith('/remove'))
+            return { removed: 'host-check' };
+        if (body)
+            return { routine: { ...body, nextRunAt: null } };
+        return { routines: [{ name: 'host-check', description: '', prompt: 'Check the hosts.', enabled: true, schedule: { cron: '*/2 * * * *' }, stats: { nextRunAt: null, lastInvocation: null } }] };
+    };
+    const bot = await openTestBot(t, noSessions, { api });
+    bot.respond(toolCall(bot, 'schedule', { action: 'create', name: 'host-check', cron: '*/2 * * * *', prompt: 'Check the hosts.' }), toolCall(bot, 'schedule', { action: 'list' }), toolCall(bot, 'schedule', { action: 'remove', name: 'backups-nightly' }), toolCall(bot, 'schedule', { action: 'remove', name: 'host-check' }), bot.faux.fauxAssistantMessage('Done.'));
+    await bot.runtime.prompt('Check the hosts every two minutes', 'followUp');
+    await until(() => said(bot, 'Done.'), 'the run ends');
+    const base = `/api/bots/${BOT.id}/routines`;
+    assert.deepEqual(calls, [
+        [base, { name: 'host-check', prompt: 'Check the hosts.', schedule: { cron: '*/2 * * * *' } }],
+        [base, undefined],
+        [`${base}/backups-nightly/remove`, {}],
+        [`${base}/host-check/remove`, {}],
+    ]);
+    const results = toolResults(bot);
+    assert.match(textOf(results[0]), /^Created the schedule "host-check" \(\*\/2 \* \* \* \*\)\. Each run arrives here/);
+    assert.equal(textOf(results[1]), 'host-check: */2 * * * *\n  Prompt: Check the hosts.');
+    assert.equal(results[2].isError, true);
+    assert.match(textOf(results[2]), /^Refused: "backups-nightly" is another bot\u2019s schedule/);
+    assert.equal(textOf(results[3]), 'Removed the schedule "host-check". Its runs so far stay in its record.');
+});

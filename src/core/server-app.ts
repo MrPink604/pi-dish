@@ -44,7 +44,7 @@ import { createSessionCreateHandlers } from './session-create-handler';
 import { createAgentDocHandlers, themesHandler } from './content-handlers';
 import { observeServerStartup, startListeners } from './server-startup';
 import { createVaultApprovals, createVaultHandlers, vaultPushPayload } from './vault-approvals';
-import { createRoutineRunner } from './routine-runner';
+import { createRoutineRunner, type RoutineBots } from './routine-runner';
 import { createRoutineHandlers, composeRoutinePrompt } from './routine-handlers';
 import { createRecoveryRuntime } from './recovery-runner';
 import { createSessionBounceRuntime, createSessionLifecycleActions } from './session-bounces';
@@ -56,7 +56,7 @@ import { createAgyImportRuntime } from './agy-import';
 import { createAgySessionHandlers } from './agy-session-handlers';
 import { createBotHandlers, type BotControl } from './bot-handlers';
 import { botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
-import { botRoute, deliverToBot, startBot, startBots } from './bot-supervisor';
+import { botRoute, deliverStartingBot, deliverToBot, startBot, startBots } from './bot-supervisor';
 import { createKnowledgeHandlers } from './knowledge-handlers';
 import { KNOWLEDGE_SETTING, openKnowledgeBase, type KnowledgeBase } from './knowledge';
 import { canonicalSessionId } from './session-key';
@@ -606,7 +606,19 @@ export function startServer(rootDirectory: string): Server {
     res.json({ operation });
   });
 
-  // Each routine run stamps its session with routine provenance.
+  // Each routine run stamps its session with routine provenance. A bot routine's run goes to its bot's relay.
+  const routineBots: RoutineBots = {
+    find: (id) => {
+      const bot = bots()?.get(id);
+      return bot ? { name: bot.name, retired: bot.status === 'retired', route: botRoute(bot.id) } : null;
+    },
+    deliver: async (id, message) => {
+      const bot = bots()?.get(id);
+      if (!bot) throw new Error(`No bot ${id}`);
+      if (!botsRun) throw new Error('Bots are switched off on this host (PI_DISH_BOTS=off).');
+      return deliverStartingBot(bot.id, { kind: 'routine', ...message }, () => botControl.start(bot));
+    },
+  };
   const routineRunner = createRoutineRunner({
     createSession: sessionOperations.createSession,
     resumeSession: sessionOperations.resumeSessionById,
@@ -616,10 +628,12 @@ export function startServer(rootDirectory: string): Server {
     isTurnInProgress: (sess) => !!sess?.turnInProgress,
     supports: liveSessionSupports,
     recoveryOutcome: recoveryRunner.outcome,
+    bots: routineBots,
   });
   const routineHandlers = createRoutineHandlers({
     runner: routineRunner,
     validateHarnessPilotSelection: sessionLaunch.validateHarnessPilotSelection,
+    bots: routineBots,
   });
 
   app.get('/api/routines', routineHandlers.list);
@@ -653,7 +667,7 @@ export function startServer(rootDirectory: string): Server {
       if (botsRun) await startBot(bot, { resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line) });
     },
     route: botRoute,
-    deliver: async (bot, delivery) => botsRun && deliverToBot(bot.id, { ...delivery }),
+    deliver: async (bot, delivery) => botsRun && !!await deliverToBot(bot.id, { ...delivery }),
     stop: async bot => {
       if (!botsRun) return;
       const { status, body } = await sessionOperations.closeSessionById(botRoute(bot.id));
@@ -673,6 +687,9 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/bots/:id/room', botHandlers.roomRead);
   app.post('/api/bots/:id/ask', botHandlers.ask);
   app.post('/api/bots/:id/answer', botHandlers.answer);
+  app.get('/api/bots/:id/routines', routineHandlers.botList);
+  app.post('/api/bots/:id/routines', routineHandlers.botCreate);
+  app.post('/api/bots/:id/routines/:routine/remove', routineHandlers.botRemove);
 
   // Follows the setting: a changed `knowledgeRemote` applies from the next request.
   let knowledgeBase: KnowledgeBase | null = null;

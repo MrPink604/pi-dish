@@ -28,9 +28,15 @@ export interface Routine {
   id: string;
   name: string;
   description: string;
+  /** `bot` for a routine whose destination is a bot. */
   harness: string;
-  /** Stored as written; session launch rejects a non-string. */
+  /** Stored as written; session launch rejects a non-string. A bot routine has none. */
   cwd: unknown;
+  /**
+   * The bot a run is delivered to, by id: the prompt goes into that bot's conversation and no session is started.
+   * Null for an ordinary routine. Fixed when the routine is created.
+   */
+  bot: string | null;
   model?: string;
   thinking?: RoutineThinking;
   prompt: string;
@@ -140,12 +146,14 @@ function parseRoutine(id: string, value: unknown): Routine | null {
   if (row.id !== id || typeof row.name !== 'string' || typeof row.prompt !== 'string') return null;
   const promptVersion = numberOr(row.promptVersion, 1);
   const cron = asRecord(row.schedule).cron;
+  const bot = typeof row.bot === 'string' && row.bot ? row.bot : null;
   return {
     id,
     name: row.name,
     description: stringOr(row.description, ''),
-    harness: stringOr(row.harness, 'pi'),
-    cwd: row.cwd,
+    harness: bot ? 'bot' : stringOr(row.harness, 'pi'),
+    cwd: bot ? null : row.cwd,
+    bot,
     model: typeof row.model === 'string' && row.model.trim() ? row.model.trim() : undefined,
     thinking: includes(THINKING_LEVELS, row.thinking) ? row.thinking : undefined,
     prompt: row.prompt,
@@ -279,6 +287,21 @@ function validateHarness(harness: unknown): string {
   return id;
 }
 
+/** A bot routine's run goes into its bot's conversation, so the session fields do not apply. */
+const SESSION_FIELDS = ['harness', 'cwd', 'model', 'thinking', 'mode', 'onBusy'] as const;
+
+function validateBot(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !value.trim() || value.length > 100) throw fail('bot must be a bot id');
+  return value.trim();
+}
+
+function refuseSessionFields(body: Record<string, unknown>): void {
+  const set = SESSION_FIELDS.filter(field => body[field] !== undefined && body[field] !== null && body[field] !== ''
+    && !(field === 'harness' && body[field] === 'bot'));
+  if (set.length) throw fail(`A bot routine runs in its bot's conversation, so it takes no ${set.join(', ')}`);
+}
+
 export function createRoutine(input: unknown = {}): Routine {
   const body = asRecord(input);
   const stored = storedRoutines();
@@ -286,13 +309,16 @@ export function createRoutine(input: unknown = {}): Routine {
   const id = crypto.randomUUID();
   const name = validateName(body.name, routines, id);
   const prompt = validatePrompt(body.prompt);
+  const bot = validateBot(body.bot);
+  if (bot) refuseSessionFields(body);
   const now = Date.now();
   const routine: Routine = {
     id,
     name,
     description: validateOptionalString(body.description, 'description', MAX_DESCRIPTION),
-    harness: validateHarness(body.harness),
-    cwd: validateCwd(body.cwd),
+    harness: bot ? 'bot' : validateHarness(body.harness),
+    cwd: bot ? null : validateCwd(body.cwd),
+    bot,
     model: typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined,
     thinking: validateEnum(body.thinking, 'thinking', THINKING_LEVELS, undefined),
     prompt,
@@ -301,7 +327,8 @@ export function createRoutine(input: unknown = {}): Routine {
     schedule: validateSchedule(body.schedule),
     enabled: body.enabled === undefined ? true : Boolean(body.enabled),
     mode: validateEnum(body.mode, 'mode', MODES, 'oneShot'),
-    onBusy: validateEnum(body.onBusy, 'onBusy', ON_BUSY, 'skip'),
+    // A run that finds its bot busy waits for it, as a follow-up.
+    onBusy: bot ? 'followUp' : validateEnum(body.onBusy, 'onBusy', ON_BUSY, 'skip'),
     minIntervalSec: validateMinInterval(body.minIntervalSec),
     lastScheduledMinute: null,
     createdAt: now,
@@ -319,6 +346,8 @@ export function updateRoutine(ref: string, patch: unknown = {}): Routine | null 
   if (!existing) return null;
   const body = asRecord(patch);
   const routine: Routine = { ...existing };
+  if (body.bot !== undefined && validateBot(body.bot) !== existing.bot) throw fail('A routine\'s bot is fixed when it is created');
+  if (existing.bot) refuseSessionFields(body);
 
   if (body.name !== undefined) routine.name = validateName(body.name, routines, routine.id);
   if (body.description !== undefined) {

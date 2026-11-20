@@ -7,7 +7,7 @@ import type { BotRegistry, BotRow } from '../lib/bot-registry';
 import type { RouteHandler } from '../lib/http-boundary';
 const { createBotHandlers }: typeof import('../lib/bot-handlers') = require('../lib/bot-handlers');
 const { openBotRegistry, validateBotPatch, DEFAULT_BOT_MODEL }: typeof import('../lib/bot-registry') = require('../lib/bot-registry');
-const { startBots, claimBotRelay }: typeof import('../lib/bot-supervisor') = require('../lib/bot-supervisor');
+const { startBots, claimBotRelay, deliverStartingBot }: typeof import('../lib/bot-supervisor') = require('../lib/bot-supervisor');
 const { encodeSessionKey }: typeof import('../lib/session-key') = require('../lib/session-key');
 
 function tempRegistry(t: test.TestContext): { registry: BotRegistry; file: string } {
@@ -129,6 +129,21 @@ test('a bot has one relay: a live holder keeps the lock and pi-dish does not sta
   assert.equal(next.claimed, true);
   if (next.claimed) next.release();
   assert.equal(fs.existsSync(path.join(botDir, 'relay.lock')), false);
+});
+
+test('a routine\u2019s run to a bot that is not running starts it and is delivered once its relay takes it', async () => {
+  const tries: string[] = [];
+  let started = 0;
+  // The relay takes the fourth try: the first finds no relay, the next two find one still starting.
+  const deliver = async (id: string) => { tries.push(id); return tries.length === 4 ? { queued: false } : null; };
+  const taken = await deliverStartingBot('fleet', { kind: 'routine' }, async () => { started += 1; }, { everyMs: 1, deliver });
+  assert.deepEqual(taken, { queued: false });
+  assert.equal(started, 1, 'started once, however many tries it took');
+  assert.equal(tries.length, 4);
+
+  // A relay that never comes up fails the delivery.
+  await assert.rejects(deliverStartingBot('fleet', {}, async () => {}, { waitMs: 5, everyMs: 1, deliver: async () => null }),
+    /did not take the message within 0s/);
 });
 
 test('bots nest at most three levels, and a retry with the same id finds the bot it made', t => {

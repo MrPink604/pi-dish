@@ -8,6 +8,36 @@ export interface RoutineInvokeOptions {
     trigger?: RoutineTrigger;
     source?: string | null;
     input?: unknown;
+    /** A scheduled run: the minute it stands for, and the earlier runs that were missed. */
+    slot?: ScheduledSlot;
+}
+/** `late`: runs of the schedule since `since` that did not happen (pi-dish was down), which this one run stands for. */
+export interface ScheduledSlot {
+    at: number;
+    late: number;
+    since: number | null;
+}
+/** A message for a bot: delivered once per request id. */
+export interface RoutineBotMessage {
+    requestId: string;
+    text: string;
+    data: Record<string, string | number>;
+}
+/** What a routine whose destination is a bot reaches. */
+export interface RoutineBots {
+    /** The bot: its name, whether it is retired, and its session route; null when there is no such bot. */
+    find(id: string): {
+        name: string;
+        retired: boolean;
+        route: string;
+    } | null;
+    /**
+     * Hands the message to the bot's relay, starting the bot when it is not running; resolves whether the bot was
+     * busy, so the message waits as a follow-up. Throws when it could not be delivered.
+     */
+    deliver(id: string, message: RoutineBotMessage): Promise<{
+        queued: boolean;
+    }>;
 }
 export interface RoutineRunner {
     invoke(routine: Routine, options?: RoutineInvokeOptions): RoutineInvocation;
@@ -28,6 +58,8 @@ export interface RoutineRunnerPorts {
     isTurnInProgress?(session: LiveSession): boolean;
     supports?(session: LiveSession, capability: BridgeCapability): boolean;
     recoveryOutcome?(sessionId: string): Pick<RecoveryOutcome, 'status' | 'reason'> | null;
+    /** Where routines whose destination is a bot are delivered; absent where bots do not run. */
+    bots?: RoutineBots | null;
     now?(): number;
     log?: {
         error?(message: string): void;

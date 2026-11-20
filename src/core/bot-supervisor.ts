@@ -5,6 +5,7 @@
  */
 import crypto = require('crypto');
 import fs = require('fs');
+import { setTimeout as delay } from 'node:timers/promises';
 import net = require('net');
 import os = require('os');
 import path = require('path');
@@ -19,25 +20,26 @@ import { relaySocketPath } from './relay-socket';
 import { record as isRecord } from './helper-values';
 
 /**
- * Hands one `deliver` command to a bot's relay over its bridge socket. Resolves true once the relay has taken it, and
- * false when no relay listens or it refuses; the delivery carries a request id, so sending it again is harmless.
+ * Hands one `deliver` command to a bot's relay over its bridge socket. Resolves once the relay has taken it, saying
+ * whether it queued behind a run, and null when no relay listens or it refuses; the delivery carries a request id,
+ * so sending it again is harmless.
  */
-export function deliverToBot(botId: string, delivery: Record<string, unknown>, timeoutMs = 15_000): Promise<boolean> {
+export function deliverToBot(botId: string, delivery: Record<string, unknown>, timeoutMs = 15_000): Promise<{ queued: boolean } | null> {
   return new Promise((resolve) => {
     const id = crypto.randomUUID();
     let buffer = '';
     let settled = false;
     const sock = net.connect(relaySocketPath(botId));
-    const done = (ok: boolean) => {
+    const done = (taken: { queued: boolean } | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       sock.destroy();
-      resolve(ok);
+      resolve(taken);
     };
-    const timer = setTimeout(() => done(false), timeoutMs);
-    sock.on('error', () => done(false));
-    sock.on('close', () => done(false));
+    const timer = setTimeout(() => done(null), timeoutMs);
+    sock.on('error', () => done(null));
+    sock.on('close', () => done(null));
     sock.on('connect', () => sock.write(JSON.stringify({ ...delivery, id, command: 'deliver' }) + '\n'));
     sock.on('data', (chunk) => {
       buffer += chunk.toString('utf8');
@@ -46,10 +48,30 @@ export function deliverToBot(botId: string, delivery: Record<string, unknown>, t
         buffer = buffer.slice(newline + 1);
         let frame: unknown;
         try { frame = JSON.parse(line); } catch { continue; }
-        if (isRecord(frame) && frame.type === 'response' && frame.id === id) done(frame.success === true);
+        if (!isRecord(frame) || frame.type !== 'response' || frame.id !== id) continue;
+        done(frame.success === true ? { queued: isRecord(frame.data) && frame.data.queued === true } : null);
       }
     });
   });
+}
+
+/**
+ * Delivers to a bot that may not be running, such as a routine's run just after the hub came back: when no relay
+ * takes it, the bot is started and the delivery tried again until a relay takes it or `waitMs` passes.
+ */
+export async function deliverStartingBot(
+  botId: string, delivery: Record<string, unknown>, start: () => Promise<void>,
+  { waitMs = 60_000, everyMs = 1000, deliver = deliverToBot }: { waitMs?: number; everyMs?: number; deliver?: typeof deliverToBot } = {},
+): Promise<{ queued: boolean }> {
+  const deadline = Date.now() + waitMs;
+  let started = false;
+  for (;;) {
+    const taken = await deliver(botId, delivery);
+    if (taken) return taken;
+    if (!started) { started = true; await start(); }
+    if (Date.now() >= deadline) throw new Error(`the bot's relay did not take the message within ${Math.round(waitMs / 1000)}s`);
+    await delay(everyMs);
+  }
 }
 
 /**

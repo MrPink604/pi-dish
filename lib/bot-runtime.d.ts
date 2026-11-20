@@ -103,9 +103,9 @@ export interface ForkSeed {
         head?: 'self';
     }[];
 }
-/** What another bot hands this one: a room post, a question from another family, or the answer to one. */
+/** What pi-dish hands this bot: a room post, a question from another family, the answer to one, or a routine's run. */
 export interface BotInput {
-    kind: 'room' | 'ask' | 'answer';
+    kind: 'room' | 'ask' | 'answer' | 'routine';
     requestId: string;
     text: string;
     data: Record<string, string | number>;

@@ -190,14 +190,15 @@ async function main(): Promise<void> {
           return respond(sock, cmd, true, { queued });
         }
         case 'deliver': {
-          // From pi-dish: a room post, a question from another family, or an answer to this bot's question.
+          // From pi-dish: a room post, a question from another family, an answer to this bot's question, or a routine's run.
           const { kind, requestId, text, data } = cmd;
-          if ((kind !== 'room' && kind !== 'ask' && kind !== 'answer') || typeof requestId !== 'string' || typeof text !== 'string' || !isRecord(data)) {
+          if ((kind !== 'room' && kind !== 'ask' && kind !== 'answer' && kind !== 'routine') || typeof requestId !== 'string' || typeof text !== 'string' || !isRecord(data)) {
             return respond(sock, cmd, false, undefined, 'deliver needs kind, requestId, text and data');
           }
+          const queued = bot.busy;
           await bot.deliver({ kind, requestId, text, data: data as Record<string, string | number> });
           writeClaim();
-          return respond(sock, cmd, true);
+          return respond(sock, cmd, true, { queued });
         }
         case 'abort':
           await bot.abort();

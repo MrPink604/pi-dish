@@ -1019,6 +1019,17 @@ run (trigger, prompt version, status, session). One-shot routines close
 their session when the turn ends; "continue" routines keep reusing one
 session. An invoke that arrives while a run is in progress is skipped,
 steered into the running session, or queued as a follow-up, per routine.
+A scheduled run missed while pi-dish was down fires once when it is back,
+however many slots it missed.
+
+A routine can name a bot as its destination instead of an agent and a
+working directory: each run is then a message in that bot's chat, marked
+with the routine's name, and the bot answers there. Bots set these up
+themselves when asked in chat ("check the backups every morning") with their
+`schedule` tool, which sees and removes only the bot's own routines; the
+Routines screen shows the bot as the destination. A retired bot's routines
+stop and say why in their run table.
+
 There is no scripting, chaining, or outbound notification: the event source
 lives outside pi-dish and polls the invocation it started. Agents read the
 contract from `/api/agent-docs/routines`.
