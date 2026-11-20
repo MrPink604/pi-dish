@@ -34,9 +34,9 @@ import { record as isRecord } from './helper-values';
 import { createSessionObserver } from './session-recovery';
 import type { RecoverySnapshot } from './session-recovery';
 import { errorMessage } from './http-boundary';
+import { relaySocketPath, relayWrapperVersion } from './relay-socket';
 
 const REGISTRY_DIR = path.join(dishDir(), 'sessions');
-const MAX_SOCKET_PATH_BYTES = 103;
 /** AcpSession events fanned out to every connected pi-dish socket. */
 const BRIDGE_EVENTS = [
   'agent_start', 'turn_start', 'message_start', 'message_update', 'message_end',
@@ -96,24 +96,6 @@ function parseRelayArgs(argv: readonly string[]): RelayOptions {
   }
   if (options.mode === 'new' && !options.cwd) options.cwd = process.cwd();
   return options;
-}
-
-function socketPathFor(sessionId: string): string {
-  const dir = process.env.PI_DISH_SOCKET_DIR || path.join(dishDir(), 'sockets');
-  const file = path.join(dir, `${crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 24)}.sock`);
-  const bytes = Buffer.byteLength(file);
-  if (bytes > MAX_SOCKET_PATH_BYTES) {
-    throw new Error(`Unix socket path is ${bytes} bytes (maximum ${MAX_SOCKET_PATH_BYTES}): ${file}`);
-  }
-  return file;
-}
-
-function wrapperVersion(): string {
-  try {
-    const raw: unknown = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-    const version = isRecord(raw) ? raw.version : undefined;
-    return typeof version === 'string' && version ? version : '0';
-  } catch { return '0'; }
 }
 
 /** `PI_DISH_AGY_COMMAND` is a command line; AcpSession appends the ACP argv. */
@@ -288,7 +270,7 @@ async function main(): Promise<void> {
     broadcastSideChat();
   }
   const wrapper = Object.freeze({
-    harnessId: 'agy', name: 'pi-dish-agy-relay', wrapperVersion: wrapperVersion(),
+    harnessId: 'agy', name: 'pi-dish-agy-relay', wrapperVersion: relayWrapperVersion(),
     eventProfile: 'agy-v1',
   });
 
@@ -692,7 +674,7 @@ async function main(): Promise<void> {
     });
   }
 
-  socketPath = socketPathFor(session.id);
+  socketPath = relaySocketPath(session.id);
   fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
   try { fs.unlinkSync(socketPath); } catch {}
   server = net.createServer(handleClient);

@@ -278,7 +278,8 @@ export const harnesses: Handler = (_req, res) => {
     harnesses: listHarnesses()
       // Antigravity is optional tooling, so an unresolved `agy` hides it from the
       // picker entirely rather than presenting a row that can never launch.
-      .filter(descriptor => descriptor.id !== 'agy' || harnessCommandAvailable(descriptor))
+      // Bots are started by pi-dish from its registry, never from the picker.
+      .filter(descriptor => !descriptor.managed && (descriptor.id !== 'agy' || harnessCommandAvailable(descriptor)))
       .map(descriptor => ({
         id: descriptor.id,
         label: descriptor.label,

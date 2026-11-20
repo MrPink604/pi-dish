@@ -10,7 +10,7 @@ buildProgram('tsconfig.core.json', 'pi-dish-core-', (files, read) => {
   }
   const outputs: OutputMap = new Map(files.map(file => [
     `lib/${file}`,
-    { source: `src/core/${file.replace(/\.js$|\.d\.ts$/, '.ts')}`, executable: file === 'agy-relay.js' },
+    { source: `src/core/${file.replace(/\.js$|\.d\.ts$/, '.ts')}`, executable: file === 'agy-relay.js' || file === 'bot-relay.js' },
   ]));
   const orphaned = orphanedOutputs(['lib'], BANNER, outputs, false);
   if (orphaned.length) throw new Error(`Remove obsolete core output before building:\n${orphaned.join('\n')}`);

@@ -3,7 +3,7 @@ declare const identityKind: unique symbol;
 export type NativeSessionId = string & { readonly [identityKind]: 'native-session' };
 export type SessionId = string & { readonly [identityKind]: 'session-route' };
 export type HostId = string & { readonly [identityKind]: 'host' };
-export type HarnessId = 'pi' | 'omp' | 'prime' | 'agy';
+export type HarnessId = 'pi' | 'omp' | 'prime' | 'agy' | 'bot';
 
 export type BridgeCapability = 'prompt' | 'steer' | 'followUp' | 'abort' | 'compact'
   | 'models' | 'setModel' | 'setThinking' | 'rename' | 'commands' | 'reload'
@@ -178,6 +178,11 @@ export interface HarnessDescriptor {
    * child spawning; the relay reads `commandEnv` for its own child.
    */
   launchCommand?: () => string[];
+  /**
+   * pi-dish starts these sessions itself (bots, from the bot registry): the
+   * new-session picker and route never offer the harness.
+   */
+  managed?: true;
   spawnEnv?: Record<string, string>;
   /** Ambient process env vars stripped before running this harness unless set in `commandEnv`. */
   unsetEnv?: readonly string[];

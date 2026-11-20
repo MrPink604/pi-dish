@@ -12,5 +12,6 @@ declare const _default: {
     sessionCapabilities: typeof sessionCapabilities;
     PRIME_DAEMON_CAPABILITIES: Partial<Record<BridgeCapability, unknown>>;
     AGY_ACP_CAPABILITIES: Partial<Record<BridgeCapability, unknown>>;
+    BOT_CAPABILITIES: Partial<Record<BridgeCapability, unknown>>;
 };
 export = _default;

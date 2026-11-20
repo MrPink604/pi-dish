@@ -35,6 +35,12 @@ function agyResume({ file, model }: ResumeOptions = {}): (string | undefined)[] 
   return ['resume', file, ...(model ? ['--model', model] : [])];
 }
 
+function botResume(options: ResumeFileOptions): string[];
+function botResume(options?: ResumeOptions): (string | undefined)[];
+function botResume({ file }: ResumeOptions = {}): (string | undefined)[] {
+  return ['resume', file];
+}
+
 const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
   pi: {
     id: 'pi', label: 'Pi', wrapperEntrypoint: null, eventProfile: 'pi-v3', profileId: 'pi-v3', profileVersion: 1,
@@ -221,6 +227,22 @@ const registry: Readonly<Record<HarnessId, HarnessDescriptor>> = {
       models: ['models'],
       // Answered directly by the agy CLI (`num_turns: 0`, no conversation or token file read).
       usage: ['-p', '/usage', '--output-format', 'json'],
+    },
+  },
+  bot: {
+    id: 'bot', label: 'Bot', wrapperEntrypoint: null, eventProfile: 'bot-v1', profileId: 'bot-v1', profileVersion: 1,
+    // Pi-format mirrors written by each bot's relay; the bot's state is its durable store.
+    rootPath: () => path.join(dishStore.dishDir(), 'bots', 'sessions'),
+    layout: 'flat', commandEnv: 'PI_DISH_BOT_COMMAND', command: process.execPath,
+    rpcFallback: false, modelCatalog: null, closeMode: 'owned-pane', managed: true,
+    // One relay per bot in a pane pi-dish owns; it runs the bot's durable
+    // conversation and speaks the bridge protocol, as agy's relay does.
+    launchCommand: () => [process.execPath, path.join(repo, 'lib', 'bot-relay.js')],
+    argv: {
+      // A bot is created in the registry, never by a new-session launch.
+      new: () => [],
+      resume: botResume,
+      models: [],
     },
   },
 };

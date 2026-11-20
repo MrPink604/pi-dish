@@ -189,6 +189,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
   async function createSession({ harness = 'pi', name, model, thinking, cwd, target, private: privateSession = false }: CreateSessionOptions): Promise<string> {
     const descriptor = getHarness(harness);
     if (!descriptor) throw new SessionOperationError(400, `Unknown harness: ${harness}`);
+    if (descriptor.managed) throw new SessionOperationError(400, `${descriptor.label} sessions are started by pi-dish, not as new sessions.`);
     if (privateSession && !descriptor.privateRootPath) {
       throw new SessionOperationError(400, `${descriptor.label} does not support private sessions.`);
     }

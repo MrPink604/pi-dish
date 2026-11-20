@@ -27,6 +27,18 @@ const AGY_ACP_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
 });
 
 /**
+ * What a bot relay advertises. A bot runs one durable conversation: input
+ * starts a run, joins it as a steer, or queues behind it as a follow-up, and
+ * Esc aborts it. Absent: models and setModel (the model is the bot's registry
+ * entry), setThinking, compact (a bot rolls its window over instead), rename
+ * (the name is the registry's), commands, reload, queue*, tree*, extensionUI,
+ * sideChat, fastMode, login, shareSnapshot, guardedReload.
+ */
+const BOT_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
+  prompt: true, steer: true, followUp: true, abort: true,
+});
+
+/**
  * Pi permits missing flags; alternative wrappers (known or not) must
  * explicitly opt in. Policy only, not harness-id validation.
  */
@@ -78,4 +90,4 @@ function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities: Advertise
   };
 }
 
-export = { bridgeSupports, sessionCapabilities, PRIME_DAEMON_CAPABILITIES, AGY_ACP_CAPABILITIES };
+export = { bridgeSupports, sessionCapabilities, PRIME_DAEMON_CAPABILITIES, AGY_ACP_CAPABILITIES, BOT_CAPABILITIES };
