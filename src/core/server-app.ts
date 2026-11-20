@@ -54,6 +54,8 @@ import { expandSessionRefs } from './session-refs';
 import { getPrimeDaemon } from './prime-daemon';
 import { createAgyImportRuntime } from './agy-import';
 import { createAgySessionHandlers } from './agy-session-handlers';
+import { createBotHandlers } from './bot-handlers';
+import { botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
 import { createPrivateAccess } from './private-access';
@@ -623,6 +625,27 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/routines/:id/invocations', routineHandlers.listInvocations);
   app.get('/api/routine-invocations/:id', routineHandlers.getInvocation);
 
+  // Opened on first use: a Node build without node:sqlite never loads it.
+  let botRegistry: BotRegistry | null | undefined;
+  function bots(): BotRegistry | null {
+    if (botRegistry !== undefined) return botRegistry;
+    botRegistry = null;
+    if (!botRegistryAvailable()) return null;
+    try {
+      const opened = openBotRegistry();
+      opened.seedFleet();
+      botRegistry = opened;
+    } catch (error) {
+      console.error(`Bot registry unavailable: ${errorMessage(error)}`);
+    }
+    return botRegistry;
+  }
+  const botHandlers = createBotHandlers(bots);
+  app.get('/api/bots', botHandlers.list);
+  app.patch('/api/bots/:id', botHandlers.update);
+  app.get('/api/bots/:id/revisions', botHandlers.revisions);
+  app.post('/api/bots/:id/restore', botHandlers.restore);
+
   app.get('/api/sessions/:id/stream', createSessionStreamHandler({ getLiveSession, viewers: streamViewers }));
 
   const terminalHandlers = terminal.isTerminalEnabled() ? createTerminalHandlers({
@@ -651,6 +674,8 @@ export function startServer(rootDirectory: string): Server {
     hibernation.stop();
     pushNotifier.stop();
     agyImport.stop();
+    botRegistry?.close();
+    botRegistry = null;
   }
 
   // Fleet relay takes precedence even when the terminal is disabled; unclaimed sockets are destroyed.
