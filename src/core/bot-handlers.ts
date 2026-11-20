@@ -141,7 +141,7 @@ export function createBotHandlers(registry: () => BotRegistry | null, control: B
       const refused = Object.keys(changes).filter(field => !BOT_EDITABLE.includes(field));
       if (refused.length) return res.status(400).json({ error: `A bot cannot change ${refused.join(', ')}; it may change ${BOT_EDITABLE.join(', ')}.` });
       if (by === before.id && changes.model !== undefined) {
-        return res.status(403).json({ error: 'Refused: you cannot change your own model. Tell the user: they can change it on your entry.' });
+        return res.status(403).json({ error: 'Refused: you cannot change your own model. Tell the user: they can change it with "edit" on your row in the Bots list.' });
       }
       let bot: BotRow;
       try {

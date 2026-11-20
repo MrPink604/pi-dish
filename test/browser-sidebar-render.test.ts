@@ -27,7 +27,9 @@ function withClock<T>(start: number, body: (advance: (ms: number) => void) => T)
   }
 }
 test('bots have their own group, each under its parent, and their sessions leave the ordinary list', () => {
-  const bot = (id: string, name: string, parentId: string | null, status = 'active') => ({ id, name, parentId, status, model: 'claude-code/claude-opus-5-5', sessionId: `route-${id}` });
+  const bot = (id: string, name: string, parentId: string | null, status = 'active') => ({
+    id, name, parentId, status, model: 'claude-code/claude-opus-5-5', thinking: null, identity: `You are ${name}.`, places: [], sessionId: `route-${id}`,
+  });
   const html = render({
     active: [
       { id: 'route-fleet', name: 'Fleet', harnessId: 'bot', cwd: '/home', isActive: true },
@@ -41,7 +43,8 @@ test('bots have their own group, each under its parent, and their sessions leave
   assert.match(group, /\+ New bot/);
   assert.deepEqual([...group.matchAll(/data-bot-id="(\w+)" style="padding-left:(\d+)px"/g)].map(match => [match[1], match[2]]),
     [['fleet', '0'], ['hosts', '14'], ['disks', '28']], 'nested under their parents; a retired bot is not listed');
-  assert.match(group, /Disks<\/span><span class="bot-item-state">not running<\/span><button class="bot-retire-btn confirm"[^>]*>retire\?</);
+  assert.match(group, /Disks<\/span><span class="bot-item-state">not running<\/span><button class="bot-edit-btn" data-bot-id="disks"[^>]*>edit<\/button><button class="bot-retire-btn confirm"[^>]*>retire\?</);
+  assert.match(group, /<button class="bot-edit-btn" data-bot-id="fleet"[^>]*>edit<\/button><button class="bot-retire-btn"/, 'a running bot\u2019s row has both');
   assert.equal(html.split('data-id="route-fleet"').length, 2, 'a bot\u2019s session row appears once, in the group');
 });
 

@@ -27,7 +27,7 @@ export interface SidebarProjection {
   readonly count: number;
   readonly html: string;
 }
-interface RowOptions { familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean; pinnedRow?: boolean; showCwd?: boolean; botRetire?: string }
+interface RowOptions { familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean; pinnedRow?: boolean; showCwd?: boolean; botActions?: string }
 interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean }
 export function harnessBadgeInnerHtml(info: ReturnType<typeof harnessBadgeInfo>) {
   const icon = info.icon
@@ -239,7 +239,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
       <div class="session-item-header">
         ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
-        ${opts.botRetire || ''}${pinBtn}${closeBtn}
+        ${opts.botActions || ''}${pinBtn}${closeBtn}
       </div>
       <div class="session-item-meta">
         <span class="session-item-model" title="${escapeHtml(session.model || '')}">${escapeHtml(shortModelName(session.model))}</span>
@@ -299,15 +299,16 @@ function renderPendingSessionItem(spawnId: string, spawn: PendingSessionSpawn) {
   `;
 }
 
-/** The Bots group: each bot under its parent, its session row when it has one, and a retire button that asks twice. */
+/** The Bots group: each bot under its parent, its session row when it has one, an edit button, and a retire button that asks twice. */
 function renderBotsSegment(tree: readonly { bot: SidebarBot; depth: number }[], sessions: readonly SessionEntry[]) {
   const byRoute = new Map(sessions.filter(session => session.harnessId === 'bot').map(session => [session.id, session]));
   const nodes = tree.map(({ bot, depth }) => {
     const session = byRoute.get(bot.sessionId) || byRoute.get(bot.id);
     const armed = options.botRetireArmed === bot.id;
-    const retire = `<button class="bot-retire-btn${armed ? ' confirm' : ''}" data-bot-id="${escapeHtml(bot.id)}" title="${armed ? 'Tap again: ' : ''}Retire ${escapeHtml(bot.name)}: archive it, stop it, and move its sub-bots up">${armed ? 'retire?' : 'retire'}</button>`;
-    const row = session ? renderSessionItem(session, { familyDepth: depth, botRetire: retire })
-      : `<div class="bot-item bot-stopped">${depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : ''}<span class="bot-item-name">${escapeHtml(bot.name)}</span><span class="bot-item-state">not running</span>${retire}</div>`;
+    const actions = `<button class="bot-edit-btn" data-bot-id="${escapeHtml(bot.id)}" title="Edit ${escapeHtml(bot.name)}: name, identity, model, thinking and places">edit</button>`
+      + `<button class="bot-retire-btn${armed ? ' confirm' : ''}" data-bot-id="${escapeHtml(bot.id)}" title="${armed ? 'Tap again: ' : ''}Retire ${escapeHtml(bot.name)}: archive it, stop it, and move its sub-bots up">${armed ? 'retire?' : 'retire'}</button>`;
+    const row = session ? renderSessionItem(session, { familyDepth: depth, botActions: actions })
+      : `<div class="bot-item bot-stopped">${depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : ''}<span class="bot-item-name">${escapeHtml(bot.name)}</span><span class="bot-item-state">not running</span>${actions}</div>`;
     return `<div class="bot-node" data-bot-id="${escapeHtml(bot.id)}" style="padding-left:${depth * 14}px">${row}</div>`;
   });
   // Its own classes: the workspace tree's headers collapse and count as path groups.

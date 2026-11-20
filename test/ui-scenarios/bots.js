@@ -21,6 +21,18 @@ const bots = async ({ desktop, check, base, emit, SESSION_ID }) => {
     const node = `.bot-node[data-bot-id="${smoke.id}"]`;
     await desktop.waitForSelector(node, { timeout: 10000 });
     check(await desktop.locator(node).getAttribute('style') === 'padding-left:14px', 'the new bot is nested under Fleet');
+    // Edit opens the same form filled in with the bot's entry and saves the user's change.
+    await desktop.hover(node);
+    await desktop.click(`${node} .bot-edit-btn`);
+    await desktop.waitForSelector('#botNewForm', { timeout: 5000 });
+    check(await desktop.inputValue('#botName') === 'Smoke' && await desktop.inputValue('#botPlaces') === 'notes: ~/notes'
+        && await desktop.locator('#botParent').count() === 0, 'the edit form shows the bot\u2019s entry, without a parent');
+    await desktop.fill('#botIdentity', 'You are Smoke, edited.');
+    await desktop.selectOption('#botThinking', 'high');
+    await desktop.click('#botCreateBtn');
+    await desktop.waitForSelector('#botNewModal', { state: 'detached', timeout: 10000 });
+    const edited = (await list()).find(bot => bot.id === smoke.id);
+    check(edited?.identity === 'You are Smoke, edited.' && edited.thinking === 'high' && edited.places[0]?.cwd === '~/notes', 'the edit saves the change');
     // Retire asks twice, then archives the bot and drops it from the group.
     await desktop.hover(node);
     await desktop.click(`${node} .bot-retire-btn`);

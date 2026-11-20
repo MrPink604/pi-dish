@@ -1087,7 +1087,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       for (const field of ['name', 'identity', 'places', 'thinking', 'model'] as const) if (args[field] !== undefined) changes[field] = args[field];
       if (!Object.keys(changes).length) return refusal('Name at least one field to change.');
       if (target === bot.id && changes.model !== undefined) {
-        return refusal('Refused: you cannot change your own model. Tell the user: only they can change it, on your entry in pi-dish.');
+        return refusal('Refused: you cannot change your own model. Tell the user: only they can change it, with "edit" on your row in pi-dish\'s Bots list.');
       }
       let change: Change;
       try {

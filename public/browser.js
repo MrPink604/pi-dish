@@ -670,7 +670,7 @@ ${t}`}var Ff="pi-dish-history-",sd=50;function jf(e){try{let t=JSON.parse(e||"[]
       <div class="session-item-header">
         ${X}${Q}${E}<span class="session-item-name" title="${b(y.id)}">${b(P)}</span>
         <span class="session-item-time">${j}</span>
-        ${c.botRetire||""}${F}${Ae}
+        ${c.botActions||""}${F}${Ae}
       </div>
       <div class="session-item-meta">
         <span class="session-item-model" title="${b(y.model||"")}">${b(zt(y.model))}</span>
@@ -694,7 +694,7 @@ ${t}`}var Ff="pi-dish-history-",sd=50;function jf(e){try{let t=JSON.parse(e||"[]
         <span>${c.target?"tmux":"headless"}</span>
       </div>
     </div>
-  `}function B(y,c){let p=new Map(c.filter(w=>w.harnessId==="bot").map(w=>[w.id,w])),$=y.map(({bot:w,depth:d})=>{let k=p.get(w.sessionId)||p.get(w.id),C=e.botRetireArmed===w.id,x=`<button class="bot-retire-btn${C?" confirm":""}" data-bot-id="${b(w.id)}" title="${C?"Tap again: ":""}Retire ${b(w.name)}: archive it, stop it, and move its sub-bots up">${C?"retire?":"retire"}</button>`,v=k?S(k,{familyDepth:d,botRetire:x}):`<div class="bot-item bot-stopped">${d?'<span class="session-family-leaf" aria-hidden="true">\u21B3</span>':""}<span class="bot-item-name">${b(w.name)}</span><span class="bot-item-state">not running</span>${x}</div>`;return`<div class="bot-node" data-bot-id="${b(w.id)}" style="padding-left:${d*14}px">${v}</div>`});return`<div class="bots-segment">
+  `}function B(y,c){let p=new Map(c.filter(w=>w.harnessId==="bot").map(w=>[w.id,w])),$=y.map(({bot:w,depth:d})=>{let k=p.get(w.sessionId)||p.get(w.id),C=e.botRetireArmed===w.id,x=`<button class="bot-edit-btn" data-bot-id="${b(w.id)}" title="Edit ${b(w.name)}: name, identity, model, thinking and places">edit</button><button class="bot-retire-btn${C?" confirm":""}" data-bot-id="${b(w.id)}" title="${C?"Tap again: ":""}Retire ${b(w.name)}: archive it, stop it, and move its sub-bots up">${C?"retire?":"retire"}</button>`,v=k?S(k,{familyDepth:d,botActions:x}):`<div class="bot-item bot-stopped">${d?'<span class="session-family-leaf" aria-hidden="true">\u21B3</span>':""}<span class="bot-item-name">${b(w.name)}</span><span class="bot-item-state">not running</span>${x}</div>`;return`<div class="bot-node" data-bot-id="${b(w.id)}" style="padding-left:${d*14}px">${v}</div>`});return`<div class="bots-segment">
     <div class="bots-header">
       <span class="bots-label">Bots</span><span class="bots-count">${y.length}</span>
       <button class="bot-new-btn" title="Create a bot">+ New bot</button>

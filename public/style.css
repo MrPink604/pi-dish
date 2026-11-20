@@ -713,11 +713,12 @@ body.sidebar-open {
   color: var(--text-muted); font-size: 11px; padding: 1px 6px; cursor: pointer;
 }
 .bots-header .bot-new-btn:hover { color: var(--text); }
-.bot-retire-btn {
+.bot-edit-btn, .bot-retire-btn {
   background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 11px;
   padding: 0 2px; flex-shrink: 0; opacity: 0; transition: opacity 0.15s;
 }
-.session-item:hover .bot-retire-btn, .bot-item:hover .bot-retire-btn, .bot-retire-btn:focus { opacity: 0.7; }
+.session-item:hover :is(.bot-edit-btn, .bot-retire-btn), .bot-item:hover :is(.bot-edit-btn, .bot-retire-btn),
+.bot-edit-btn:focus, .bot-retire-btn:focus { opacity: 0.7; }
 .bot-retire-btn.confirm { opacity: 1; color: var(--error); font-weight: 600; }
 /* A bot that is not running has no session row; this stands in for it. */
 .bot-item { display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 13px; color: var(--text-muted); }
@@ -730,6 +731,7 @@ body.sidebar-open {
   background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font: inherit;
 }
 .bot-form-error { color: var(--error); font-size: 12px; min-height: 1em; }
+.bot-form-note { margin: 0; font-size: 12px; color: var(--text-muted); }
 
 .session-close-btn.confirm,
 .session-item:hover .session-close-btn.confirm {
