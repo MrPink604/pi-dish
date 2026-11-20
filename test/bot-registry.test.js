@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { openBotRegistry, validateBotPatch, DEFAULT_BOT_MODEL } = require('../lib/bot-registry');
-const { startBots } = require('../lib/bot-supervisor');
+const { startBots, claimBotRelay } = require('../lib/bot-supervisor');
 const { encodeSessionKey } = require('../lib/session-key');
 function tempRegistry(t) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bots-'));
@@ -92,4 +92,28 @@ test('pi-dish starts each active bot: writes a missing mirror, then resumes its 
     registry.update(fleet.id, { status: 'paused' }, { actor: 'user' });
     await startBots({ registry, sessionsDir, resume: async (id) => { resumed.push(id); }, log: line => logged.push(line) });
     assert.equal(resumed.length, 1);
+});
+test('a bot has one relay: a live holder keeps the lock and pi-dish does not start a second', async (t) => {
+    const { registry, file } = tempRegistry(t);
+    const fleet = registry.seedFleet();
+    const botsDir = path.join(path.dirname(file), 'bots');
+    const botDir = path.join(botsDir, fleet.id);
+    const first = claimBotRelay(botDir);
+    assert.equal(first.claimed, true);
+    assert.deepEqual(claimBotRelay(botDir), { claimed: false, holder: process.pid }, 'a second relay is refused');
+    const resumed = [];
+    const logged = [];
+    await startBots({ registry, botsDir, sessionsDir: path.join(path.dirname(file), 'sessions'),
+        resume: async (id) => { resumed.push(id); }, log: line => logged.push(line) });
+    assert.deepEqual(resumed, [], 'a server restarted under a running relay leaves it alone');
+    assert.deepEqual(logged, [`bot Fleet: relay ${process.pid} is already running`]);
+    if (first.claimed)
+        first.release();
+    // A lock left by a relay that died is taken over.
+    fs.writeFileSync(path.join(botDir, 'relay.lock'), JSON.stringify({ pid: 2 ** 22 + 1, startTime: '0' }));
+    const next = claimBotRelay(botDir);
+    assert.equal(next.claimed, true);
+    if (next.claimed)
+        next.release();
+    assert.equal(fs.existsSync(path.join(botDir, 'relay.lock')), false);
 });

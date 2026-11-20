@@ -21,6 +21,7 @@ import { once } from 'events';
 import { openBotRegistry, type BotRow } from './bot-registry';
 import { BotMirror, readBotMirrorHeader } from './bot-mirror';
 import { openBotModels, openBotRuntime, type BotRuntime, type SessionsPort } from './bot-runtime';
+import { claimBotRelay } from './bot-supervisor';
 import { BOT_CAPABILITIES } from './session-capabilities';
 import { dishDir } from './dish-store';
 import { processIdentity } from './process-identity';
@@ -70,6 +71,10 @@ async function main(): Promise<void> {
   };
   const bot = loadBot();
   const relayInstanceId = crypto.randomUUID();
+  // One relay per bot: a second would run the same durable work twice.
+  const lock = claimBotRelay(path.join(dishDir(), 'bots', bot.id));
+  if (!lock.claimed) throw new Error(`bot ${bot.name} already has a relay (pid ${lock.holder})`);
+  process.on('exit', () => lock.release());
   const relayProcess = processIdentity(process.pid);
   if (!relayProcess) throw new Error('Cannot read this process birth identity; refusing to publish a stale claim');
   if (!validSessionId(bot.id)) throw new Error(`invalid bot id ${bot.id}`);
