@@ -17,6 +17,7 @@
     "test/ui-scenarios/skills.ts",
     "test/ui-scenarios/usage.ts",
     "test/ui-scenarios/routines.ts",
-    "test/ui-scenarios/mobile.ts"
+    "test/ui-scenarios/mobile.ts",
+    "test/ui-scenarios/bots.ts"
   ]
 }

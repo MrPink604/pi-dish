@@ -117,7 +117,7 @@ test('sidebar updates retain keyboard focus and keep same-id peer cards independ
     const project = () => PiDishBrowser.renderSidebar({ ...state.sessions, selected: state.currentSession, tab: 'all', view: 'recent',
       query: 'work', queriedFor: 'work', scope: '', indexing: false, contextMetric: 'percent', pending: [], selectedSpawn: null,
       expanded: controls.expanded, collapsed: controls.collapsed, pinned: controls.pinned, roots: controls.familyRoots(),
-      closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], unread: () => false, hostChip: () => '' });
+      closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], bots: [], botRetireArmed: null, unread: () => false, hostChip: () => '' });
     controls.mount(); controls.updateList(project());
     const selfPin = fixtureElement(document.querySelector<HTMLButtonElement>('[data-host="self"] .session-pin-btn'), 'self pin');
     selfPin.focus();
@@ -146,7 +146,7 @@ test('ranked sidebar updates reorder and remove rows without retiring an unaffec
       controls.updateList(PiDishBrowser.renderSidebar({ ...state.sessions, selected: null, tab: 'all', view: 'recent', query: 'work',
         queriedFor: 'work', scope: '', indexing: false, contextMetric: 'percent', pending: [], selectedSpawn: null,
         expanded: controls.expanded, collapsed: controls.collapsed, pinned: controls.pinned, roots: controls.familyRoots(),
-        closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], unread: () => false, hostChip: () => '' }));
+        closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], bots: [], botRetireArmed: null, unread: () => false, hostChip: () => '' }));
     };
     controls.mount(); update();
     const pin = fixtureElement(document.querySelector<HTMLButtonElement>('[data-id="b"] .session-pin-btn'), 'B pin');

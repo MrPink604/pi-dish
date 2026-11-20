@@ -704,6 +704,27 @@ body.sidebar-open {
 .session-item:hover .session-close-btn { opacity: 0.6; }
 .session-close-btn:hover { opacity: 1; }
 
+/* Bots: their own group, each bot under its parent. */
+.bots-header .bot-new-btn {
+  margin-left: auto; background: none; border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text-muted); font-size: 11px; padding: 1px 6px; cursor: pointer;
+}
+.bots-header .bot-new-btn:hover { color: var(--text); }
+.bot-retire-btn {
+  background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 11px;
+  padding: 0 2px; flex-shrink: 0; opacity: 0; transition: opacity 0.15s;
+}
+.session-item:hover .bot-retire-btn, .bot-retire-btn:focus { opacity: 0.7; }
+.bot-retire-btn.confirm { opacity: 1; color: var(--error); font-weight: 600; }
+.bot-stopped .session-item-time { font-style: italic; }
+.bot-form { max-width: 520px; }
+.bot-form-body { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px; overflow-y: auto; }
+.bot-form-body label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); }
+.bot-form-body input, .bot-form-body textarea, .bot-form-body select {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font: inherit;
+}
+.bot-form-error { color: var(--error); font-size: 12px; min-height: 1em; }
+
 .session-close-btn.confirm,
 .session-item:hover .session-close-btn.confirm {
   color: var(--error);
@@ -2245,6 +2266,16 @@ button.swarm-board-link:focus-visible {
 }
 .message.custom-message .message-time { margin-left: auto; }
 .message.custom-message.generic { opacity: 0.75; }
+
+/* A change a bot made to a bot's entry, with its undo. */
+.message.custom-message.bot-change { flex-direction: column; align-items: stretch; }
+.bot-change-header { display: flex; align-items: center; gap: 8px; }
+.bot-change-lines { margin: 4px 0 0 22px; padding: 0; font-size: 12px; opacity: 0.85; }
+.bot-change-undo {
+  background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--text);
+  font-size: 11px; padding: 1px 8px; cursor: pointer;
+}
+.bot-change-undo:disabled { opacity: 0.5; cursor: default; }
 
 /* Background job delivery: a collapsible card whose rows reuse the wait
    job layout (status, run time, command, output). */

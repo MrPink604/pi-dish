@@ -286,7 +286,8 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
 
   return {
     file,
-    list: () => db.prepare('SELECT * FROM bots ORDER BY created_at, id').all().map(rowOf),
+    // rowid keeps creation order where two bots share a millisecond.
+    list: () => db.prepare('SELECT * FROM bots ORDER BY rowid').all().map(rowOf),
     get,
     seedFleet() {
       return transaction(() => {
@@ -339,7 +340,7 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
       return transaction(() => {
         const current = get(id);
         if (!current) throw new Error(`no bot ${id}`);
-        const children = db.prepare("SELECT * FROM bots WHERE parent_id = ? AND status != 'retired' ORDER BY created_at, id").all(id).map(rowOf);
+        const children = db.prepare("SELECT * FROM bots WHERE parent_id = ? AND status != 'retired' ORDER BY rowid").all(id).map(rowOf);
         const moved = children.map(child => applyIn(child.id, row => ({ ...row, parentId: current.parentId }), source));
         const bot = applyIn(id, row => ({ ...row, status: 'retired' }), source);
         return { bot, moved };

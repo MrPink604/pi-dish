@@ -9,6 +9,7 @@ const routines = require("./routines.js");
 const bounce = require("./bounce.js");
 const fleet = require("./fleet.js");
 const mobile = require("./mobile.js");
+const bots = require("./bots.js");
 const scenarios = {
     models,
     drafts,
@@ -19,5 +20,6 @@ const scenarios = {
     bounce,
     fleet,
     mobile,
+    bots,
 };
 module.exports = scenarios;

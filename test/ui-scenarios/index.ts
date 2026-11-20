@@ -7,6 +7,7 @@ import routines = require('./routines.js');
 import bounce = require('./bounce.js');
 import fleet = require('./fleet.js');
 import mobile = require('./mobile.js');
+import bots = require('./bots.js');
 import type { UiScenario } from './contracts.js';
 
 const scenarios = {
@@ -19,6 +20,7 @@ const scenarios = {
   bounce,
   fleet,
   mobile,
+  bots,
 } satisfies Record<string, UiScenario>;
 
 export = scenarios;

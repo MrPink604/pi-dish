@@ -3236,6 +3236,8 @@ let remoteHost: { child: ChildProcess; base: string } | null = null;
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
     await desktop.waitForSelector('#messages .message.assistant', { timeout: 5000 });
 
+    await scenarios.bots(scenarioContext());
+
     await scenarios.usage(scenarioContext());
 
     await scenarios.skills(scenarioContext());

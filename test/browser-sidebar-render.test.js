@@ -9,7 +9,7 @@ const { renderSidebar } = context.PiDishBrowser;
 function options(overrides = {}) {
     return { active: [], previous: [], selected: null, tab: 'all', view: 'workspace', query: '', queriedFor: '', scope: '', indexing: false,
         contextMetric: 'percent', pending: [], selectedSpawn: null, expanded: new Set(), collapsed: new Set(), pinned: [], roots: new Map(),
-        closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], unread: () => false, hostChip: () => '', ...overrides };
+        closeConfirm: null, closeBusy: null, multiHost: false, hosts: [], bots: [], botRetireArmed: null, unread: () => false, hostChip: () => '', ...overrides };
 }
 function render(overrides = {}) {
     return renderSidebar(options(overrides));
@@ -32,6 +32,23 @@ function withClock(start, body) {
             Reflect.set(context, 'Date', previous);
     }
 }
+test('bots have their own group, each under its parent, and their sessions leave the ordinary list', () => {
+    const bot = (id, name, parentId, status = 'active') => ({ id, name, parentId, status, model: 'claude-code/claude-opus-5-5', sessionId: `route-${id}` });
+    const html = render({
+        active: [
+            { id: 'route-fleet', name: 'Fleet', harnessId: 'bot', cwd: '/home', isActive: true },
+            { id: 'route-hosts', name: 'Hosts', harnessId: 'bot', cwd: '/home', isActive: true },
+            { id: 'work', name: 'Ordinary work', cwd: '/repo', isActive: true },
+        ],
+        bots: [bot('fleet', 'Fleet', null), bot('hosts', 'Hosts', 'fleet'), bot('disks', 'Disks', 'hosts'), bot('old', 'Old', null, 'retired')],
+        botRetireArmed: 'disks',
+    }).html;
+    const group = html.slice(html.indexOf('bots-segment'), html.indexOf('Ordinary work'));
+    assert.match(group, /\+ New bot/);
+    assert.deepEqual([...group.matchAll(/data-bot-id="(\w+)" style="padding-left:(\d+)px"/g)].map(match => [match[1], match[2]]), [['fleet', '0'], ['hosts', '14'], ['disks', '28']], 'nested under their parents; a retired bot is not listed');
+    assert.match(group, /Disks<\/span><span class="session-item-time">not running<\/span><button class="bot-retire-btn confirm"[^>]*>retire\?</);
+    assert.equal(html.split('data-id="route-fleet"').length, 2, 'a bot\u2019s session row appears once, in the group');
+});
 test('sidebar presents decoded optional fields and retains explicit null family boundaries', () => {
     const parent = { id: 'parent', name: '<parent>', cwd: '/repo' };
     const implicitChild = { id: 'child', parentId: 'parent', cwd: '/repo', name: 'implicit child' };

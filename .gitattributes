@@ -598,6 +598,7 @@ test/tool-event-stream.test.d.ts linguist-generated=true
 test/tool-event-stream.test.js linguist-generated=true
 test/transport-frames.test.d.ts linguist-generated=true
 test/transport-frames.test.js linguist-generated=true
+test/ui-scenarios/bots.js linguist-generated=true
 test/ui-scenarios/bounce.js linguist-generated=true
 test/ui-scenarios/contracts.js linguist-generated=true
 test/ui-scenarios/drafts.js linguist-generated=true

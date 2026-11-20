@@ -173,6 +173,7 @@ test('the routes create and start a bot, refuse a bot its own model, and retire 
     const started = [];
     const stopped = [];
     const handlers = createBotHandlers(() => registry, {
+        route: id => `bot:${id}`,
         start: async (bot) => { started.push(bot.name); },
         stop: async (bot) => { stopped.push(bot.name); },
     });

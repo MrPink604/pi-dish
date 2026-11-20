@@ -652,6 +652,7 @@ export function startServer(rootDirectory: string): Server {
     start: async bot => {
       if (botsRun) await startBot(bot, { resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line) });
     },
+    route: botRoute,
     stop: async bot => {
       if (!botsRun) return;
       const { status, body } = await sessionOperations.closeSessionById(botRoute(bot.id));

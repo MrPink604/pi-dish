@@ -17,6 +17,7 @@ import { createSidebarActivity } from './sidebar-activity';
 import { createSidebarQuery } from './sidebar-query';
 import { createSidebarLists } from './sidebar-lists';
 import { createSidebarControls } from './sidebar-controls';
+import { createBots } from './bots';
 import { renderSidebar, type SidebarProjectionMemo } from './sidebar-render';
 import { createSessionView } from './session-view';
 import { createMainPane } from './main-pane';
@@ -405,6 +406,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
   sidebarControls.mount();
+  bots.mount();
   appChrome.mount();
 
   // Inline refs carry the identity resolved at render time; chips use the
@@ -529,7 +531,7 @@ sidebarQuery.mount();
 const sidebarLists: ReturnType<typeof createSidebarLists> = createSidebarLists({
   document, request, sessionState, activity: sidebarActivity,
   hosts: effectiveHosts, pollable: pollableHosts, selfId: () => hostDirectory.self.hostId,
-  query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: () => hostDiscovery.refreshSoon(),
+  query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: () => { hostDiscovery.refreshSoon(); void bots.load(); },
   connection: noteHost,
   askBlocked: (session, host) => extensionUI.toast(`${session.name || 'Unnamed'} is waiting for an answer`, 'warning', () => { void revealSession(session.id, host); }),
 });
@@ -542,6 +544,11 @@ const sidebarControls: ReturnType<typeof createSidebarControls> = createSidebarC
   select: (id, host) => sessionView.select(id, { host }), pending: id => sessionView.pending(id), create: (cwd, host) => newSessionController.create(cwd, host),
   finishClose: (id, host, owner) => sessionInfo.finishClose(id, host, owner), refresh: loadPrevious,
   ref: session => sessionRefFor(session), copy: copyTextToClipboard, status: setStatus,
+});
+
+const bots = createBots({
+  document, request, render: () => renderSessions(), refresh: () => sidebarLists.refresh(),
+  select: id => { void sessionView.select(id, { host: hostDirectory.self.hostId }); }, status: setStatus,
 });
 
 function keyForSessionId(id: string) { return sessionKey(sessionState.sessionHostId(id), id); }
@@ -564,6 +571,7 @@ function renderSessions() {
       contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: sessionView.spawnId,
       expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
       closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
+      bots: bots.list, botRetireArmed: bots.armed,
       unread: sidebarActivity.unread, hostChip,
       hosts: effectiveHosts().map(host => {
         const cache = hostSessionLoader.getCache(host);

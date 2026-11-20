@@ -478,6 +478,16 @@ function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
 
   if (customType === 'advisor') return renderAdvisorMessage(msg, time, attrs, timestamp);
 
+  // A bot changed its own or a descendant's entry: what changed, and an undo that restores the revision before.
+  const change = customType === 'bot-change' ? msg.details?.botChange : undefined;
+  if (change) {
+    return `<div${attrs} class="message custom-message bot-change" data-timestamp="${escapeHtml(String(timestamp))}">
+      <div class="bot-change-header"><span class="custom-message-icon">✎</span><span class="custom-message-label">Changed ${escapeHtml(change.botName)}</span>
+        <button class="bot-change-undo" data-bot-id="${escapeHtml(change.botId)}" data-revision="${change.revision}" data-fields="${escapeHtml(change.fields.join(','))}" title="Restore ${escapeHtml(change.fields.join(', '))} from before this change">Undo</button>${time ? `<span class="message-time">${time}</span>` : ''}</div>
+      <ul class="bot-change-lines">${change.lines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+    </div>`;
+  }
+
   const text = extractTextContent(msg.content);
   const label = customType.replace(/[-_]+/g, ' ');
   return `<div${attrs} class="message custom-message generic" data-timestamp="${escapeHtml(String(timestamp))}">

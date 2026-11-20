@@ -9,6 +9,7 @@ import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDispl
 import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
 import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, evaluateSessionQuery, scoreSessionMatch } from '../core/helper-query';
 import { hibernationSummary } from './hibernation';
+import { botTree, type SidebarBot } from './bots';
 export interface SidebarHost extends HelperHost { state: string; key: string; color: string; dot: string; hasCache: boolean }
 export interface SidebarRenderOptions {
   active: readonly SessionEntry[]; previous: readonly SessionEntry[]; selected: SessionEntry | null;
@@ -16,6 +17,8 @@ export interface SidebarRenderOptions {
   contextMetric: string; pending: readonly (readonly [string, PendingSessionSpawn])[]; selectedSpawn: string | null;
   expanded: ReadonlySet<string>; collapsed: ReadonlySet<string>; pinned: readonly string[]; roots: ReadonlyMap<string, string>;
   closeConfirm: string | null; closeBusy: string | null; multiHost: boolean; hosts: readonly SidebarHost[];
+  /** The registry's bots, and the one whose retire button waits for its second tap. */
+  bots: readonly SidebarBot[]; botRetireArmed: string | null;
   unread: (row: SessionEntry) => boolean; hostChip: (id?: string | null) => string;
 }
 export interface SidebarProjection {
@@ -24,7 +27,7 @@ export interface SidebarProjection {
   readonly count: number;
   readonly html: string;
 }
-interface RowOptions { familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean; pinnedRow?: boolean; showCwd?: boolean }
+interface RowOptions { familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean; pinnedRow?: boolean; showCwd?: boolean; botRetire?: string }
 interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean }
 export function harnessBadgeInnerHtml(info: ReturnType<typeof harnessBadgeInfo>) {
   const icon = info.icon
@@ -63,7 +66,8 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
     options.tab, options.view, options.query, options.queriedFor, options.scope,
     options.indexing ? 1 : 0, options.contextMetric, options.multiHost ? 1 : 0,
     options.selected ? sessionRefKey(options.selected) : null,
-    options.selectedSpawn, options.closeConfirm, options.closeBusy,
+    options.selectedSpawn, options.closeConfirm, options.closeBusy, options.botRetireArmed,
+    JSON.stringify(options.bots),
     new Date(now).setHours(0, 0, 0, 0),
   ];
   parts.push(options.pending.length);
@@ -235,7 +239,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
       <div class="session-item-header">
         ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
-        ${pinBtn}${closeBtn}
+        ${opts.botRetire || ''}${pinBtn}${closeBtn}
       </div>
       <div class="session-item-meta">
         <span class="session-item-model" title="${escapeHtml(session.model || '')}">${escapeHtml(shortModelName(session.model))}</span>
@@ -295,6 +299,26 @@ function renderPendingSessionItem(spawnId: string, spawn: PendingSessionSpawn) {
   `;
 }
 
+/** The Bots group: each bot under its parent, its session row when it has one, and a retire button that asks twice. */
+function renderBotsSegment(tree: readonly { bot: SidebarBot; depth: number }[], sessions: readonly SessionEntry[]) {
+  const byRoute = new Map(sessions.filter(session => session.harnessId === 'bot').map(session => [session.id, session]));
+  const nodes = tree.map(({ bot, depth }) => {
+    const session = byRoute.get(bot.sessionId) || byRoute.get(bot.id);
+    const armed = options.botRetireArmed === bot.id;
+    const retire = `<button class="bot-retire-btn${armed ? ' confirm' : ''}" data-bot-id="${escapeHtml(bot.id)}" title="${armed ? 'Tap again: ' : ''}Retire ${escapeHtml(bot.name)}: archive it, stop it, and move its sub-bots up">${armed ? 'retire?' : 'retire'}</button>`;
+    const row = session ? renderSessionItem(session, { familyDepth: depth, botRetire: retire })
+      : `<div class="session-item inactive bot-stopped"><div class="session-item-header">${depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : ''}<span class="session-item-name">${escapeHtml(bot.name)}</span><span class="session-item-time">not running</span>${retire}</div></div>`;
+    return `<div class="bot-node" data-bot-id="${escapeHtml(bot.id)}" style="padding-left:${depth * 14}px">${row}</div>`;
+  });
+  return `<div class="session-segment bots-segment">
+    <div class="workspace-group-header bots-header">
+      <span class="workspace-group-label">Bots</span><span class="workspace-group-count">${tree.length}</span>
+      <button class="bot-new-btn" title="Create a bot">+ New bot</button>
+    </div>
+    ${nodes.join('')}
+  </div>`;
+}
+
 function renderSessions() {
   hostSectionsShown = null; // only the workspace view builds host sections
   const { active, previous } = options;
@@ -341,7 +365,12 @@ function renderSessions() {
       ${pending.map(([id, spawn]) => renderPendingSessionItem(id, spawn)).join('')}
     </div>`;
   }
-  if (filtered.length === 0 && pending.length === 0) {
+  // Bots have their own group, nested under their parents, ahead of the sessions; a search ranks them with the rest.
+  const liveBots = options.query ? [] : botTree(options.bots.filter(bot => bot.status !== 'retired'));
+  const botRoutes = new Set(liveBots.flatMap(({ bot }) => [bot.id, bot.sessionId]));
+  const sessionsShown = liveBots.length ? filtered.filter(session => !(session.harnessId === 'bot' && botRoutes.has(session.id))) : filtered;
+  if (liveBots.length) html += renderBotsSegment(liveBots, filtered);
+  if (sessionsShown.length === 0 && pending.length === 0) {
     // With a query, `active` is server-filtered: empty means "no matches".
     const msg = options.tab === 'active'
       ? (active.length === 0 && !options.query ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
@@ -362,7 +391,7 @@ function renderSessions() {
       ${ranked.map(({ session }) => renderSessionItem(session, { showCwd: true })).join('')}
     </div>`;
   } else {
-    const families = buildSessionFamilies(filtered);
+    const families = buildSessionFamilies(sessionsShown);
     const [pinnedFamilies, restFamilies] = partitionPinnedFamilies(families, options.pinned);
     if (pinnedFamilies.length > 0) {
       html += `<div class="session-segment pinned-segment">

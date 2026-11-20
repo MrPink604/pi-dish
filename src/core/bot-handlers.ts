@@ -13,6 +13,8 @@ import { record as isRecord } from './helper-values';
 export interface BotControl {
   start(bot: BotRow): Promise<void>;
   stop(bot: BotRow): Promise<void>;
+  /** The bot's session route, which the session list and the browser name it by. */
+  route(id: string): string;
 }
 
 export interface BotHandlers {
@@ -45,7 +47,7 @@ export function createBotHandlers(registry: () => BotRegistry | null, control: B
     list(_req, res) {
       const bots = registry();
       if (!bots) return res.status(501).json({ error: UNAVAILABLE });
-      res.json({ bots: bots.list() });
+      res.json({ bots: bots.list().map(bot => ({ ...bot, sessionId: control.route(bot.id) })) });
     },
     async create(req, res) {
       const bots = registry();

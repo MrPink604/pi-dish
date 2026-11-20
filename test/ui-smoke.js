@@ -2817,6 +2817,7 @@ let remoteHost = null;
             await desktop.waitForSelector(`.session-item[data-id="${registryState.sessionId}"]`, { timeout: 5000 });
             await desktop.click(`.session-item[data-id="${registryState.sessionId}"]`);
             await desktop.waitForSelector('#messages .message.assistant', { timeout: 5000 });
+            await scenarios.bots(scenarioContext());
             await scenarios.usage(scenarioContext());
             await scenarios.skills(scenarioContext());
             await scenarios.routines(scenarioContext());

@@ -11,6 +11,8 @@ import { type BotRegistry, type BotRow } from './bot-registry';
 export interface BotControl {
     start(bot: BotRow): Promise<void>;
     stop(bot: BotRow): Promise<void>;
+    /** The bot's session route, which the session list and the browser name it by. */
+    route(id: string): string;
 }
 export interface BotHandlers {
     list: RouteHandler;
