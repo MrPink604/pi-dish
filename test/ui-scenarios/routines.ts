@@ -109,7 +109,8 @@ const routines: UiScenario = async ({ desktop, check, CWD, base }) => {
   });
   const { routine: botRoutine } = await made.json() as { routine: { id: string } };
   check(made.status === 201, `a bot makes its own schedule (got ${made.status})`);
-  await desktop.evaluate(() => fixtureApp.features.routinesController.open());
+  // The takeover may still be open from above, where opening it again would not reload the list.
+  await desktop.evaluate(() => { fixtureApp.features.routinesController.open(); fixtureApp.features.routinesController.refresh(); });
   const botRow = `.rt-row[data-routine="${botRoutine.id}"]`;
   await desktop.waitForSelector(botRow, { timeout: 10000 });
   check((await desktop.locator(`${botRow} .rt-row-meta`).textContent())?.trim() === `to bot ${bot.name}`,
