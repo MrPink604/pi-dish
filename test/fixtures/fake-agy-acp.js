@@ -205,8 +205,31 @@ function titles(title) {
 }
 // Prompt bookkeeping shared by the scenarios.
 const openPrompts = [];
+const sideSessions = new Set();
+const sideOpenPrompts = new Map();
+let mainSessionCreated = false;
 const pendingClientRequests = new Map();
 let lastPromptId = null;
+function handleSidePrompt(id, targetSid, params) {
+    const promptArr = Array.isArray(params.prompt) ? params.prompt : [];
+    const firstText = promptArr.find((p) => !!p && typeof p === 'object' && p.type === 'text');
+    const q = typeof firstText?.text === 'string' ? firstText.text : '';
+    const slowSide = /\bslow\b/i.test(q);
+    const sendChunk = (chunk) => {
+        notify('session/update', { sessionId: targetSid, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: chunk } } });
+    };
+    sendChunk('Side: ');
+    if (slowSide) {
+        sideOpenPrompts.set(targetSid, { id, timer: null });
+        return;
+    }
+    const timer = setTimeout(() => {
+        sideOpenPrompts.delete(targetSid);
+        sendChunk(`answered "${q}"`);
+        respond(id, { stopReason: 'end_turn', usage: USAGE });
+    }, 25);
+    sideOpenPrompts.set(targetSid, { id, timer });
+}
 function finishPrompt(id, stopReason, withUsage = true) {
     const index = openPrompts.indexOf(id);
     if (index >= 0)
@@ -649,10 +672,18 @@ function handleRequest(id, method, params) {
             }
             if (typeof params.cwd === 'string')
                 cwd = params.cwd;
-            sessionId = crypto.randomUUID();
-            respond(id, sessionState(sessionId));
-            announceCommands();
-            usageUpdate(0);
+            const freshId = crypto.randomUUID();
+            if (!mainSessionCreated) {
+                mainSessionCreated = true;
+                sessionId = freshId;
+                respond(id, sessionState(sessionId));
+                announceCommands();
+                usageUpdate(0);
+            }
+            else {
+                sideSessions.add(freshId);
+                respond(id, sessionState(freshId));
+            }
             return;
         }
         case 'session/list': {
@@ -660,6 +691,7 @@ function handleRequest(id, method, params) {
             return;
         }
         case 'session/load': {
+            mainSessionCreated = true;
             if (typeof params.sessionId === 'string' && params.sessionId)
                 sessionId = params.sessionId;
             if (typeof params.cwd === 'string' && params.cwd)
@@ -670,6 +702,7 @@ function handleRequest(id, method, params) {
             return;
         }
         case 'session/resume': {
+            mainSessionCreated = true;
             resumed = true;
             if (typeof params.sessionId === 'string' && params.sessionId)
                 sessionId = params.sessionId;
@@ -679,14 +712,17 @@ function handleRequest(id, method, params) {
             return;
         }
         case 'session/set_config_option': {
+            const targetSid = typeof params.sessionId === 'string' ? params.sessionId : sessionId;
             const configId = String(params.configId ?? '');
             const value = String(params.value ?? '');
-            if (configId === 'model')
-                model = value;
-            else if (configId === 'thought_level')
-                thinking = value;
-            else if (configId === 'mode')
-                mode = value;
+            if (!sideSessions.has(targetSid)) {
+                if (configId === 'model')
+                    model = value;
+                else if (configId === 'thought_level')
+                    thinking = value;
+                else if (configId === 'mode')
+                    mode = value;
+            }
             // Like agy 1.5.10: the refreshed options (Hydrogen adds xhigh) arrive only in
             // the result, never as a config_option_update notification.
             respond(id, { configOptions: configOptions() });
@@ -698,17 +734,43 @@ function handleRequest(id, method, params) {
             return;
         }
         case 'session/close': {
+            const targetSid = typeof params.sessionId === 'string' ? params.sessionId : '';
+            if (targetSid && sideSessions.has(targetSid)) {
+                const openSide = sideOpenPrompts.get(targetSid);
+                if (openSide?.timer)
+                    clearTimeout(openSide.timer);
+                sideOpenPrompts.delete(targetSid);
+                sideSessions.delete(targetSid);
+                respond(id, {});
+                return;
+            }
             respond(id, {});
             setTimeout(() => process.exit(0), 10);
             return;
         }
         case 'session/cancel': {
+            const targetSid = typeof params.sessionId === 'string' ? params.sessionId : '';
+            if (targetSid && sideSessions.has(targetSid)) {
+                const openSide = sideOpenPrompts.get(targetSid);
+                if (openSide) {
+                    if (openSide.timer)
+                        clearTimeout(openSide.timer);
+                    sideOpenPrompts.delete(targetSid);
+                    respond(openSide.id, { stopReason: 'cancelled' });
+                }
+                return;
+            }
             const newest = openPrompts.length ? openPrompts[openPrompts.length - 1] : null;
             if (newest !== null)
                 finishPrompt(newest, 'cancelled');
             return;
         }
         case 'session/prompt': {
+            const targetSid = typeof params.sessionId === 'string' ? params.sessionId : sessionId;
+            if (sideSessions.has(targetSid)) {
+                handleSidePrompt(Number(id), targetSid, params);
+                return;
+            }
             handlePrompt(Number(id), params);
             return;
         }

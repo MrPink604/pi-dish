@@ -33,6 +33,9 @@ export interface AgyConversation {
 /** Defensive read of `session/list`; unknown rows drop instead of breaking an import run. */
 export declare function parseAgyConversationList(value: unknown): AgyConversation[];
 export declare function agyMirrorRoot(): string;
+/** Record an ephemeral side-chat ACP session id so `agy-import` never imports it into the sidebar. */
+export declare function recordAgySideChatId(sessionId: string): void;
+export declare function readAgySideChatIds(): Set<string>;
 /** Persist the tier name (`Google AI Ultra`, `Google AI Pro`) observed on ACP session open. */
 export declare function recordAgyPlanTier(planType: string | null): void;
 export declare function readAgyPlanTier(): string | null;
@@ -94,6 +97,9 @@ export declare class AcpSession extends TransportSession {
     private planEntries;
     /** Polls live task-*.log tails onto long-running `run_command` tool cards. */
     private taskLogTimer;
+    /** Sibling ACP session ids opened for ephemeral `/btw` side chats. */
+    private sideSessionIds;
+    private sideListeners;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
     /** True while a non-daemon tool call has started and not yet completed or failed. */
@@ -150,6 +156,16 @@ export declare class AcpSession extends TransportSession {
     private _setConfigOption;
     /** New session: spawn → initialize → `session/new` → mirror header → initial options. */
     _start(opts: AcpLaunchOptions): Promise<void>;
+    /**
+     * Open an ephemeral sibling ACP session on the same `agy acp` process for
+     * pi-dish's `/btw` Side Chat. Never creates a mirror or touches main session state.
+     */
+    openSideSession(): Promise<string>;
+    promptSideSession(sideId: string, question: string, opts: {
+        signal: AbortSignal;
+        onTextDelta: (delta: string) => void;
+    }): Promise<string>;
+    closeSideSession(sideId: string): Promise<void>;
     /**
      * Rebuild a conversation's mirror from `session/load` replay. The previous
      * mirror and sidecar are kept as `.bak`; a failed replay restores them.

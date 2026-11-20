@@ -731,3 +731,81 @@ test('agy brain subagents, background tasks, task logs, swarm board, and slash c
     await post(sessionPath(sessionId, '/close'), {});
   }
 });
+
+test('agy relay supports /btw Side Chat (ask, stream, follow-up, cancel, close) without touching main history', { timeout: 90000 }, async () => {
+  const created = await post('/api/sessions/new', { harness: 'agy', cwd: projDir });
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  const sessionId = String(present(created.body.id));
+  try {
+    await until(() => fs.existsSync(claimFile(sessionId)));
+
+    // Commands catalog advertises /btw.
+    const cmdsResp = await fetch(`${base}/api/commands?sessionId=${encodeURIComponent(sessionId)}`);
+    assert.equal(cmdsResp.status, 200);
+    const cmdNames = records(await cmdsResp.json()).map(c => String(c.name));
+    assert.ok(cmdNames.includes('btw'), `expected /btw in agy commands, got ${JSON.stringify(cmdNames)}`);
+
+    // Start via /btw command.
+    const started = await post(sessionPath(sessionId, '/command'), { message: '/btw quick question' });
+    assert.equal(started.status, 200, JSON.stringify(started.body));
+    const initialChat = record(present(started.body.sideChat));
+    const chatId = String(present(initialChat.id));
+
+    // Poll /side-chat until turn 1 settles with the streamed answer.
+    const pollUntil = async (fn: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (await fn()) return;
+        await new Promise(r => setTimeout(r, 25));
+      }
+      throw new Error('Timed out waiting for side chat state');
+    };
+
+    let settledChat: Record<string, unknown> = {};
+    await pollUntil(async () => {
+      const res = await get(sessionPath(sessionId, '/side-chat'));
+      if (res.status !== 200 || !res.body.sideChat) return false;
+      const sc = record(res.body.sideChat);
+      const turns = records(sc.turns);
+      if (turns.length === 1 && turns[0].status === 'complete') {
+        settledChat = sc;
+        return true;
+      }
+      return false;
+    });
+    assert.equal(records(settledChat.turns)[0].answer, 'Side: answered "quick question"');
+
+    // Follow-up in the same side chat reuses the sibling ACP session.
+    const follow = await post(sessionPath(sessionId, '/side-chat'), { question: 'follow up', chatId });
+    assert.equal(follow.status, 200, JSON.stringify(follow.body));
+    await pollUntil(async () => {
+      const res = await get(sessionPath(sessionId, '/side-chat'));
+      const turns = records(record(res.body.sideChat).turns);
+      return turns.length === 2 && turns[1].status === 'complete' && turns[1].answer === 'Side: answered "follow up"';
+    });
+
+    // Cancel a slow side-chat turn cleanly.
+    const slow = await post(sessionPath(sessionId, '/side-chat'), { question: 'slow check', chatId });
+    assert.equal(slow.status, 200, JSON.stringify(slow.body));
+    const cancelled = await post(sessionPath(sessionId, '/side-chat/cancel'), { chatId });
+    assert.equal(cancelled.status, 200, JSON.stringify(cancelled.body));
+    const afterCancelTurns = records(record(cancelled.body.sideChat).turns);
+    assert.equal(afterCancelTurns[2]?.status, 'cancelled');
+
+    // Close clears the side chat.
+    const closed = await post(sessionPath(sessionId, '/side-chat/close'), { chatId });
+    assert.equal(closed.status, 200, JSON.stringify(closed.body));
+    assert.equal(closed.body.sideChat, null);
+
+    // Main session mirror has zero messages from the side chat.
+    const mainMsgs = await get(sessionPath(sessionId, '/messages'));
+    assert.equal(mainMsgs.status, 200, JSON.stringify(mainMsgs.body));
+    assert.equal(records(mainMsgs.body.messages).length, 0, 'side chat must never pollute the main transcript');
+
+    // Side-chat session id was recorded for agy-import exclusion.
+    const { readAgySideChatIds } = require('../lib/acp-session.js') as typeof import('../lib/acp-session.js');
+    assert.ok(readAgySideChatIds().size >= 1, 'ephemeral side-chat session id should be recorded for import filtering');
+  } finally {
+    await post(sessionPath(sessionId, '/close'), {});
+  }
+});

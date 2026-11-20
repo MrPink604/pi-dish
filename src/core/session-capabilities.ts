@@ -23,7 +23,7 @@ const PRIME_DAEMON_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
  */
 const AGY_ACP_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
   prompt: true, steer: true, abort: true, models: true, setModel: true,
-  setThinking: true, commands: true, extensionUI: true,
+  setThinking: true, commands: true, extensionUI: true, sideChat: true,
 });
 
 /**

@@ -152,6 +152,141 @@ async function main(): Promise<void> {
   let socketIno: number | null = null;
   let socketReady = false;
   let shuttingDown = false;
+
+  interface SideChatTurn {
+    id: string;
+    question: string;
+    answer: string;
+    status: 'running' | 'complete' | 'error' | 'cancelled';
+    error?: string;
+    startedAt: number;
+    updatedAt: number;
+  }
+  interface SideChat {
+    id: string;
+    createdAt: number;
+    turns: SideChatTurn[];
+  }
+  let sideChat: SideChat | null = null;
+  let sideChatAcpId: string | null = null;
+  let sideChatAcpOwner: string | null = null;
+  let sideTurn: { chatId: string; turnId: string; controller: AbortController } | null = null;
+
+  function broadcastSideChat(): void {
+    broadcast({ type: 'event', event: 'side_chat', data: { sideChat } });
+  }
+  function currentSideChat(chatId: unknown): SideChat | null {
+    return typeof chatId === 'string' && sideChat && sideChat.id === chatId ? sideChat : null;
+  }
+  function sideChatTurnOf(chat: SideChat | null, turnId: string): SideChatTurn | undefined {
+    return chat?.turns.find(turn => turn.id === turnId);
+  }
+  function abortSideTurn(): void {
+    if (!sideTurn) return;
+    const { controller } = sideTurn;
+    sideTurn = null;
+    try { controller.abort(); } catch {}
+  }
+  function releaseSideAcpSession(): void {
+    const oldId = sideChatAcpId;
+    sideChatAcpId = null;
+    sideChatAcpOwner = null;
+    if (oldId) void session.closeSideSession(oldId);
+  }
+  async function runSideChatTurn(chatId: string, turnId: string, question: string): Promise<void> {
+    const chat = currentSideChat(chatId);
+    if (!chat) return;
+    const turn = sideChatTurnOf(chat, turnId);
+    if (!turn || turn.status !== 'running') return;
+    const controller = new AbortController();
+    sideTurn = { chatId, turnId, controller };
+    const isCurrent = () => sideTurn?.chatId === chatId && sideTurn.turnId === turnId;
+    try {
+      let acpId = sideChatAcpOwner === chatId ? sideChatAcpId : null;
+      if (!acpId) {
+        acpId = await session.openSideSession();
+        if (!isCurrent()) {
+          void session.closeSideSession(acpId);
+          return;
+        }
+        sideChatAcpId = acpId;
+        sideChatAcpOwner = chatId;
+      }
+      const answer = await session.promptSideSession(acpId, question, {
+        signal: controller.signal,
+        onTextDelta: (delta: string) => {
+          if (!isCurrent() || !delta) return;
+          const live = sideChatTurnOf(currentSideChat(chatId), turnId);
+          if (!live || live.status !== 'running') return;
+          live.answer += delta;
+          live.updatedAt = Date.now();
+          broadcast({ type: 'event', event: 'side_chat_delta', data: { chatId, turnId, delta } });
+        },
+      });
+      if (!isCurrent()) return;
+      sideTurn = null;
+      const settled = sideChatTurnOf(currentSideChat(chatId), turnId);
+      if (!settled) return;
+      if (answer) settled.answer = answer;
+      settled.status = 'complete';
+      settled.updatedAt = Date.now();
+      broadcastSideChat();
+    } catch (error) {
+      if (!isCurrent()) return;
+      sideTurn = null;
+      const failed = sideChatTurnOf(currentSideChat(chatId), turnId);
+      if (!failed) return;
+      failed.status = 'error';
+      failed.error = errorMessage(error);
+      failed.updatedAt = Date.now();
+      broadcastSideChat();
+    }
+  }
+  function askSideChat(question: unknown, chatId?: unknown): { ok: true } | { ok: false; error: string } {
+    const q = typeof question === 'string' ? question.trim() : '';
+    if (!q) return { ok: false, error: 'usage: /btw <question>' };
+    let chat: SideChat;
+    if (chatId === undefined || chatId === null || chatId === '') {
+      abortSideTurn();
+      releaseSideAcpSession();
+      chat = { id: crypto.randomUUID(), createdAt: Date.now(), turns: [] };
+      sideChat = chat;
+    } else {
+      const existing = currentSideChat(chatId);
+      if (!existing) return { ok: false, error: 'That side chat was closed.' };
+      if (existing.turns.some(turn => turn.status === 'running')) {
+        return { ok: false, error: 'The side chat is still answering; stop it or wait.' };
+      }
+      chat = existing;
+    }
+    const now = Date.now();
+    const turn: SideChatTurn = {
+      id: crypto.randomUUID(), question: q, answer: '', status: 'running', startedAt: now, updatedAt: now,
+    };
+    chat.turns.push(turn);
+    broadcastSideChat();
+    queueMicrotask(() => { void runSideChatTurn(chat.id, turn.id, q); });
+    return { ok: true };
+  }
+  function cancelSideChat(chatId: unknown): void {
+    const chat = currentSideChat(chatId);
+    if (!chat || !sideTurn || sideTurn.chatId !== chat.id) return;
+    const turn = sideChatTurnOf(chat, sideTurn.turnId);
+    abortSideTurn();
+    if (turn && turn.status === 'running') {
+      turn.status = 'cancelled';
+      turn.updatedAt = Date.now();
+    }
+    broadcastSideChat();
+  }
+  function closeSideChat(chatId: unknown): void {
+    const chat = currentSideChat(chatId);
+    if (!chat) return;
+    abortSideTurn();
+    releaseSideAcpSession();
+    sideChat = null;
+    broadcastSideChat();
+  }
   const wrapper = Object.freeze({
     harnessId: 'agy', name: 'pi-dish-agy-relay', wrapperVersion: wrapperVersion(),
     eventProfile: 'agy-v1',
@@ -307,6 +442,11 @@ async function main(): Promise<void> {
       await session.abort();
       return { info: 'Aborted' };
     }
+    if (name === 'btw') {
+      const asked = askSideChat(args);
+      if (!asked.ok) throw new Error(asked.error);
+      return { sideChat };
+    }
     if (name === 'tasks') return { info: 'Open the Tasks view in pi-dish to inspect background tasks and plans.' };
     if (name === 'agents') return { info: 'Open the Subagents view in pi-dish to inspect subagents.' };
     if (name === 'swarm' && /^board(?:\s|$)/i.test(args)) {
@@ -345,7 +485,22 @@ async function main(): Promise<void> {
             lifecycle: lifecycleSnapshot(),
             plan: session.getPlan(),
             runningTools: runningToolsSnapshot(),
+            sideChat,
           });
+          return;
+        case 'side_chat_ask': {
+          const asked = askSideChat(cmd.question, cmd.chatId);
+          if (!asked.ok) return respond(sock, cmd, false, undefined, asked.error);
+          respond(sock, cmd, true, { sideChat });
+          return;
+        }
+        case 'side_chat_cancel':
+          cancelSideChat(cmd.chatId);
+          respond(sock, cmd, true, { sideChat });
+          return;
+        case 'side_chat_close':
+          closeSideChat(cmd.chatId);
+          respond(sock, cmd, true, { sideChat });
           return;
         case 'prompt':
         case 'steer': {
@@ -448,7 +603,7 @@ async function main(): Promise<void> {
         void handleCommand(cmd, sock);
       }
     });
-    send(sock, { type: 'hello', ...claim(), lifecycle: lifecycleSnapshot() });
+    send(sock, { type: 'hello', ...claim(), lifecycle: lifecycleSnapshot(), sideChat });
     replayExtensionUI(sock);
     replayRunningTools(sock);
   }
@@ -473,6 +628,8 @@ async function main(): Promise<void> {
   async function shutdown(reason: string, code: number, agentExited = false): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
+    abortSideTurn();
+    releaseSideAcpSession();
     // A stuck ACP close must not keep a dead pane's relay alive forever.
     setTimeout(() => { process.exit(code); }, 5000).unref();
     log(`stopping: ${reason}`);

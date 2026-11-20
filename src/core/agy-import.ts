@@ -21,6 +21,7 @@ import {
   agyMirrorRoot,
   createAcpImportAgent,
   getAllAcpSessions,
+  readAgySideChatIds,
   type AcpSession,
   type AgyConversation,
 } from './acp-session';
@@ -149,11 +150,15 @@ export function createAgyImportRuntime(ports: AgyImportPorts = {}): AgyImportRun
     try {
       agent = await createAcpImportAgent({ cwd: process.cwd() });
       const conversations = await agent.listConversations();
+      const sideChatIds = readAgySideChatIds();
       const deadline = startedAt + RUN_BUDGET_MS;
       for (const conversation of conversations) {
         if (Date.now() >= deadline) {
           outcome.errors.push({ sessionId: null, error: 'Import run exceeded its time budget.' });
           break;
+        }
+        if (sideChatIds.has(conversation.sessionId)) {
+          continue;
         }
         if (isLive(conversation.sessionId)) {
           outcome.live.push(conversation.sessionId);

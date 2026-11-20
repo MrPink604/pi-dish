@@ -137,6 +137,33 @@ function agyTierFile(): string {
   return path.join(dishDir(), 'agy', 'tier.json');
 }
 
+function agySideChatsFile(): string {
+  return path.join(dishDir(), 'agy', 'side-chats.json');
+}
+
+const MAX_RECORDED_SIDE_CHATS = 500;
+
+/** Record an ephemeral side-chat ACP session id so `agy-import` never imports it into the sidebar. */
+export function recordAgySideChatId(sessionId: string): void {
+  if (!validSessionId(sessionId)) return;
+  try {
+    const existing = [...readAgySideChatIds()].filter(id => id !== sessionId);
+    existing.push(sessionId);
+    const trimmed = existing.slice(-MAX_RECORDED_SIDE_CHATS);
+    replaceFile(agySideChatsFile(), JSON.stringify({ ids: trimmed, updatedAt: Date.now() }) + '\n', 0o600);
+  } catch { /* Advisory filter only; never fail a side chat. */ }
+}
+
+export function readAgySideChatIds(): Set<string> {
+  try {
+    const raw: unknown = JSON.parse(fs.readFileSync(agySideChatsFile(), 'utf8'));
+    const ids = isRecord(raw) && Array.isArray(raw.ids) ? raw.ids : [];
+    return new Set(ids.filter((id): id is string => typeof id === 'string' && validSessionId(id)));
+  } catch {
+    return new Set();
+  }
+}
+
 /** Persist the tier name (`Google AI Ultra`, `Google AI Pro`) observed on ACP session open. */
 export function recordAgyPlanTier(planType: string | null): void {
   if (!planType) return;
@@ -310,6 +337,9 @@ export class AcpSession extends TransportSession {
   declare private planEntries: NormalizedPlanEntry[];
   /** Polls live task-*.log tails onto long-running `run_command` tool cards. */
   declare private taskLogTimer: NodeJS.Timeout | null;
+  /** Sibling ACP session ids opened for ephemeral `/btw` side chats. */
+  declare private sideSessionIds: Set<string>;
+  declare private sideListeners: Map<string, (update: ProtocolRecord) => void>;
 
   constructor(proc: ChildProcessWithoutNullStreams, cwd: string) {
     super();
@@ -349,6 +379,8 @@ export class AcpSession extends TransportSession {
     this.turnTtftSumMs = 0;
     this.planEntries = [];
     this.taskLogTimer = null;
+    this.sideSessionIds = new Set();
+    this.sideListeners = new Map();
 
     // A failed spawn (ENOENT) emits only 'error': settle startup and drop timers.
     this.spawnFailure = new Promise<never>((_, reject) => {
@@ -512,13 +544,27 @@ export class AcpSession extends TransportSession {
 
   private _handleNotification(method: string, params: unknown): void {
     if (method !== 'session/update') return;
-    this._sessionUpdate(asRecord(params).update);
+    const payload = asRecord(params);
+    const sid = text(payload.sessionId);
+    if (sid && this.sideSessionIds.has(sid)) {
+      const listener = this.sideListeners.get(sid);
+      if (listener) listener(asRecord(payload.update));
+      return;
+    }
+    this._sessionUpdate(payload.update);
   }
 
   private _handleRequest(frame: ProtocolRecord): void {
     const id = frame.id as string | number;
     const method = text(frame.method);
     const params = asRecord(frame.params);
+    const sid = text(params.sessionId);
+    if (sid && this.sideSessionIds.has(sid)) {
+      if (method === 'elicitation/create') this._respond(id, { action: 'cancel' });
+      else if (method === 'session/request_permission') this._respond(id, { outcome: { outcome: 'cancelled' } });
+      else this._respondError(id, -32601, `Unsupported side-session ACP method: ${method}`);
+      return;
+    }
     const key = String(id);
     if (method === 'session/request_permission' || method === 'elicitation/create') {
       this._noteActivity();
@@ -1111,6 +1157,76 @@ export class AcpSession extends TransportSession {
       const level = this._configValue('thought_level');
       if (level) this.transcript?.appendThinkingLevel(level);
     }
+  }
+
+  /**
+   * Open an ephemeral sibling ACP session on the same `agy acp` process for
+   * pi-dish's `/btw` Side Chat. Never creates a mirror or touches main session state.
+   */
+  async openSideSession(): Promise<string> {
+    if (!this.alive) throw new Error('Antigravity session is not running');
+    const result = asRecord(await this._request('session/new', { cwd: this.cwd, mcpServers: [] }, { timeout: 30000 }));
+    const sideId = text(result.sessionId);
+    if (!sideId) throw new Error('Antigravity did not return a side-chat session id');
+    this.sideSessionIds.add(sideId);
+    recordAgySideChatId(sideId);
+    const model = this._currentModelId();
+    const level = this._configValue('thought_level');
+    if (model) {
+      await this._request('session/set_config_option', { sessionId: sideId, configId: 'model', value: model }, { timeout: 10000 }).catch(() => {});
+    }
+    if (level) {
+      await this._request('session/set_config_option', { sessionId: sideId, configId: 'thought_level', value: level }, { timeout: 10000 }).catch(() => {});
+    }
+    return sideId;
+  }
+
+  async promptSideSession(
+    sideId: string,
+    question: string,
+    opts: { signal: AbortSignal; onTextDelta: (delta: string) => void },
+  ): Promise<string> {
+    if (!this.alive) throw new Error('Antigravity session is not running');
+    if (opts.signal.aborted) throw new Error('Cancelled');
+    this.sideSessionIds.add(sideId);
+    let answer = '';
+    this.sideListeners.set(sideId, (update) => {
+      if (text(update.sessionUpdate) !== 'agent_message_chunk') return;
+      const content = asRecord(update.content);
+      if (content.type !== 'text') return;
+      const chunk = text(content.text);
+      if (!chunk) return;
+      answer += chunk;
+      opts.onTextDelta(chunk);
+    });
+    const onAbort = () => {
+      try { this._notify('session/cancel', { sessionId: sideId }); } catch {}
+    };
+    opts.signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      const result = asRecord(await this._request(
+        'session/prompt',
+        { sessionId: sideId, prompt: [{ type: 'text', text: question }] },
+        { timeout: 600_000 },
+      ));
+      if (opts.signal.aborted || text(result.stopReason) === 'cancelled') {
+        throw new Error('Cancelled');
+      }
+      if (text(result.stopReason) === 'refusal') {
+        throw new Error('Antigravity refused this request.');
+      }
+      return answer;
+    } finally {
+      opts.signal.removeEventListener('abort', onAbort);
+      this.sideListeners.delete(sideId);
+    }
+  }
+
+  async closeSideSession(sideId: string): Promise<void> {
+    this.sideListeners.delete(sideId);
+    this.sideSessionIds.delete(sideId);
+    if (!this.alive) return;
+    await this._request('session/close', { sessionId: sideId }, { timeout: 5000 }).catch(() => {});
   }
 
   /**
