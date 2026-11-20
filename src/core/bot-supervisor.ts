@@ -3,7 +3,9 @@
  * its mirror, and pi-dish writes the mirror's header first for a bot that has
  * never run. A bot already running is left alone (the resume reports it live).
  */
+import crypto = require('crypto');
 import fs = require('fs');
+import net = require('net');
 import os = require('os');
 import path = require('path');
 import { BotMirror } from './bot-mirror';
@@ -13,6 +15,42 @@ import { encodeSessionKey, validSessionId } from './session-key';
 import { errorMessage } from './http-boundary';
 import { processIdentity, processIdentityAlive } from './process-identity';
 import { dishDir } from './dish-store';
+import { relaySocketPath } from './relay-socket';
+import { record as isRecord } from './helper-values';
+
+/**
+ * Hands one `deliver` command to a bot's relay over its bridge socket. Resolves true once the relay has taken it, and
+ * false when no relay listens or it refuses; the delivery carries a request id, so sending it again is harmless.
+ */
+export function deliverToBot(botId: string, delivery: Record<string, unknown>, timeoutMs = 15_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const id = crypto.randomUUID();
+    let buffer = '';
+    let settled = false;
+    const sock = net.connect(relaySocketPath(botId));
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    sock.on('error', () => done(false));
+    sock.on('close', () => done(false));
+    sock.on('connect', () => sock.write(JSON.stringify({ ...delivery, id, command: 'deliver' }) + '\n'));
+    sock.on('data', (chunk) => {
+      buffer += chunk.toString('utf8');
+      for (let newline = buffer.indexOf('\n'); newline >= 0; newline = buffer.indexOf('\n')) {
+        const line = buffer.slice(0, newline);
+        buffer = buffer.slice(newline + 1);
+        let frame: unknown;
+        try { frame = JSON.parse(line); } catch { continue; }
+        if (isRecord(frame) && frame.type === 'response' && frame.id === id) done(frame.success === true);
+      }
+    });
+  });
+}
 
 /**
  * Makes this process the bot's only relay: two relays on one durable store

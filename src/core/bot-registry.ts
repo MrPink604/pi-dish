@@ -74,6 +74,21 @@ export interface NewBot {
 /** A top-level bot is at depth 1; a bot below this depth is refused. */
 export const MAX_BOT_DEPTH = 3;
 
+/** A post to a family's room: who sent it, the bots it wakes, and the chain of replies it belongs to. */
+export interface RoomMessage {
+  id: number;
+  /** The family's top-level bot. */
+  family: string;
+  from: string;
+  to: string[];
+  text: string;
+  /** The turn that started the chain, `<bot>/<entry>`. */
+  chain: string;
+  /** 1 for a post from a turn nothing in the room woke; one more for each reply after it. */
+  hop: number;
+  createdAt: string;
+}
+
 export interface BotRegistry {
   readonly file: string;
   list(): BotRow[];
@@ -87,6 +102,11 @@ export interface BotRegistry {
   retire(id: string, source: ChangeSource): { bot: BotRow; moved: BotRow[] };
   /** The ids from a bot up to its top-level ancestor, the bot first; its length is the bot's depth. */
   lineage(id: string): string[];
+  /** Every bot that is not retired in the family of the top-level bot `family`. */
+  family(family: string): BotRow[];
+  post(message: Omit<RoomMessage, 'id' | 'createdAt'>): RoomMessage;
+  /** A family's newest room messages, oldest first. */
+  room(family: string, limit: number): RoomMessage[];
   revisions(id: string): BotRevision[];
   /** Puts an old revision's row back as a new revision: every editable field, or only `fields`. */
   restore(id: string, revision: number, source: ChangeSource, fields?: readonly string[]): BotRow;
@@ -211,6 +231,17 @@ CREATE TABLE IF NOT EXISTS bot_revisions (
   created_at TEXT NOT NULL,
   PRIMARY KEY (bot_id, revision)
 );
+CREATE TABLE IF NOT EXISTS room_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  family TEXT NOT NULL,
+  sender TEXT NOT NULL,
+  recipients TEXT NOT NULL,
+  text TEXT NOT NULL,
+  chain TEXT NOT NULL,
+  hop INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS room_messages_family ON room_messages (family, id);
 `;
 
 /** Opens (and creates) the registry. `readOnly` opens never create or write. */
@@ -347,6 +378,25 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
       });
     },
     lineage,
+    family(family) {
+      return db.prepare("SELECT * FROM bots WHERE status != 'retired' ORDER BY rowid").all().map(rowOf)
+        .filter(row => lineage(row.id).at(-1) === family);
+    },
+    post(message) {
+      const createdAt = new Date().toISOString();
+      const result = db.prepare('INSERT INTO room_messages (family, sender, recipients, text, chain, hop, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(message.family, message.from, JSON.stringify(message.to), message.text, message.chain, message.hop, createdAt);
+      return { ...message, id: Number(result.lastInsertRowid), createdAt };
+    },
+    room(family, limit) {
+      return db.prepare('SELECT * FROM room_messages WHERE family = ? ORDER BY id DESC LIMIT ?').all(family, limit).reverse().map((raw) => {
+        const value = raw as Record<string, string | number>;
+        return {
+          id: Number(value.id), family: String(value.family), from: String(value.sender), to: JSON.parse(String(value.recipients)) as string[],
+          text: String(value.text), chain: String(value.chain), hop: Number(value.hop), createdAt: String(value.created_at),
+        };
+      });
+    },
     revisions(id) {
       return db.prepare('SELECT * FROM bot_revisions WHERE bot_id = ? ORDER BY revision').all(id).map((raw) => {
         const value = raw as Record<string, string | number | null>;

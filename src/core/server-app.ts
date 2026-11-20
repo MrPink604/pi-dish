@@ -56,7 +56,7 @@ import { createAgyImportRuntime } from './agy-import';
 import { createAgySessionHandlers } from './agy-session-handlers';
 import { createBotHandlers, type BotControl } from './bot-handlers';
 import { botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
-import { botRoute, startBot, startBots } from './bot-supervisor';
+import { botRoute, deliverToBot, startBot, startBots } from './bot-supervisor';
 import { createKnowledgeHandlers } from './knowledge-handlers';
 import { KNOWLEDGE_SETTING, openKnowledgeBase, type KnowledgeBase } from './knowledge';
 import { canonicalSessionId } from './session-key';
@@ -653,6 +653,7 @@ export function startServer(rootDirectory: string): Server {
       if (botsRun) await startBot(bot, { resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line) });
     },
     route: botRoute,
+    deliver: async (bot, delivery) => botsRun && deliverToBot(bot.id, { ...delivery }),
     stop: async bot => {
       if (!botsRun) return;
       const { status, body } = await sessionOperations.closeSessionById(botRoute(bot.id));
@@ -668,6 +669,10 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/bots/:id/retire', botHandlers.retire);
   app.get('/api/bots/:id/revisions', botHandlers.revisions);
   app.post('/api/bots/:id/restore', botHandlers.restore);
+  app.post('/api/bots/:id/room', botHandlers.roomPost);
+  app.get('/api/bots/:id/room', botHandlers.roomRead);
+  app.post('/api/bots/:id/ask', botHandlers.ask);
+  app.post('/api/bots/:id/answer', botHandlers.answer);
 
   // Follows the setting: a changed `knowledgeRemote` applies from the next request.
   let knowledgeBase: KnowledgeBase | null = null;

@@ -51,6 +51,20 @@ export interface NewBot {
 }
 /** A top-level bot is at depth 1; a bot below this depth is refused. */
 export declare const MAX_BOT_DEPTH = 3;
+/** A post to a family's room: who sent it, the bots it wakes, and the chain of replies it belongs to. */
+export interface RoomMessage {
+    id: number;
+    /** The family's top-level bot. */
+    family: string;
+    from: string;
+    to: string[];
+    text: string;
+    /** The turn that started the chain, `<bot>/<entry>`. */
+    chain: string;
+    /** 1 for a post from a turn nothing in the room woke; one more for each reply after it. */
+    hop: number;
+    createdAt: string;
+}
 export interface BotRegistry {
     readonly file: string;
     list(): BotRow[];
@@ -67,6 +81,11 @@ export interface BotRegistry {
     };
     /** The ids from a bot up to its top-level ancestor, the bot first; its length is the bot's depth. */
     lineage(id: string): string[];
+    /** Every bot that is not retired in the family of the top-level bot `family`. */
+    family(family: string): BotRow[];
+    post(message: Omit<RoomMessage, 'id' | 'createdAt'>): RoomMessage;
+    /** A family's newest room messages, oldest first. */
+    room(family: string, limit: number): RoomMessage[];
     revisions(id: string): BotRevision[];
     /** Puts an old revision's row back as a new revision: every editable field, or only `fields`. */
     restore(id: string, revision: number, source: ChangeSource, fields?: readonly string[]): BotRow;

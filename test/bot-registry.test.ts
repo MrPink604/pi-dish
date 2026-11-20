@@ -195,6 +195,7 @@ test('the routes create and start a bot, refuse a bot its own model, and retire 
     route: id => `bot:${id}`,
     start: async bot => { started.push(bot.name); },
     stop: async bot => { stopped.push(bot.name); },
+    deliver: async () => false,
   });
   const created = await call(handlers.create, {}, { name: 'Personal', identity: 'You are Personal.', places: [{ cwd: '~/notes', label: 'notes' }] });
   assert.equal(created.status, 201);

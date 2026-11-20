@@ -1,6 +1,11 @@
 // Generated from src/core/bot-supervisor.ts; edit that source and run npm run build:core.
 import type { BotRegistry, BotRow } from './bot-registry';
 /**
+ * Hands one `deliver` command to a bot's relay over its bridge socket. Resolves true once the relay has taken it, and
+ * false when no relay listens or it refuses; the delivery carries a request id, so sending it again is harmless.
+ */
+export declare function deliverToBot(botId: string, delivery: Record<string, unknown>, timeoutMs?: number): Promise<boolean>;
+/**
  * Makes this process the bot's only relay: two relays on one durable store
  * would both run its work. The lock file names the holder's pid and start time;
  * a holder that is gone (killed, crashed, or a reused pid) is replaced. Returns
