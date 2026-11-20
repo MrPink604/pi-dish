@@ -24,7 +24,7 @@ async function until(predicate, message, timeout = 10_000) {
         await new Promise(resolve => setTimeout(resolve, 10));
     }
 }
-async function openTestBot(t, sessions, { contextWindow = 200_000 } = {}) {
+async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-'));
     const faux = await import('@earendil-works/pi-ai/providers/faux');
     const { createModels } = await import('@earendil-works/pi-ai/models');
@@ -37,7 +37,7 @@ async function openTestBot(t, sessions, { contextWindow = 200_000 } = {}) {
     const open = () => openBotRuntime({
         bot: BOT, storageFile: path.join(dir, 'durable.sqlite'),
         mirror: new BotMirror(mirrorFile, { id: BOT.id, cwd: dir, name: BOT.name }),
-        models, sessions, loadBot: () => BOT,
+        models, sessions, api, loadBot: () => BOT,
         emit: (event, data) => events.push({ event, data }),
         changed: () => { }, log: () => { }, pollMs: { first: 20, max: 40 },
     });
@@ -53,6 +53,34 @@ async function openTestBot(t, sessions, { contextWindow = 200_000 } = {}) {
     return harness;
 }
 const noSessions = async (args) => { throw new Error(`unexpected sessions call: ${args.join(' ')}`); };
+const noApi = async (path) => { throw new Error(`unexpected API call: ${path}`); };
+test('kb_search, kb_read and kb_write reach the knowledge routes, and a write carries the bot\u2019s name', async (t) => {
+    const calls = [];
+    const api = async (path, body) => {
+        calls.push([path, body]);
+        if (path.startsWith('/api/knowledge/search')) {
+            return { total: 1, results: [{ path: 'topics/backups.md', lines: [{ line: 3, text: 'Backups go to aeor nightly.' }] }] };
+        }
+        if (path === '/api/knowledge/page')
+            return { path: 'index.md', text: '# Knowledge\n\n- [Backups](topics/backups.md)\n' };
+        return { path: 'topics/tycho.md', created: true, commit: 'abc', pushed: false, pushError: 'git push: unreachable' };
+    };
+    const bot = await openTestBot(t, noSessions, { api });
+    const call = (name, args) => bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall(name, args)], { stopReason: 'toolUse' });
+    bot.respond(call('kb_search', { query: 'backups aeor' }), call('kb_read', {}), call('kb_write', { page: 'tycho', text: 'tycho has the GPU.', source: 'nvidia-smi on tycho' }), bot.faux.fauxAssistantMessage('Noted.'));
+    await bot.runtime.prompt('Where do backups go, and remember tycho has the GPU', 'followUp');
+    await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message) === 'Noted.'), 'the run answers');
+    assert.deepEqual(calls, [
+        ['/api/knowledge/search?q=backups%20aeor', undefined],
+        ['/api/knowledge/page', undefined],
+        ['/api/knowledge/pages', { page: 'tycho', mode: 'append', text: 'tycho has the GPU.', author: 'Fleet', source: 'nvidia-smi on tycho' }],
+    ]);
+    const results = bot.mirrorLines().filter(line => line.type === 'message' && line.message.role === 'toolResult')
+        .map(line => textOf(line.message));
+    assert.equal(results[0], 'topics/backups.md\n  3: Backups go to aeor nightly.');
+    assert.equal(results[1], 'index.md:\n\n# Knowledge\n\n- [Backups](topics/backups.md)\n');
+    assert.equal(results[2], 'Saved: topics/tycho.md (a new page, added to the index). It is not on the remote yet (git push: unreachable); the next write pushes it.');
+});
 function textOf(message) {
     return runtimeModule.messageText(message);
 }

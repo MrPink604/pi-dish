@@ -20,7 +20,7 @@ import { execFile } from 'child_process';
 import { once } from 'events';
 import { openBotRegistry, type BotRow } from './bot-registry';
 import { BotMirror, readBotMirrorHeader } from './bot-mirror';
-import { openBotModels, openBotRuntime, type BotRuntime, type SessionsPort } from './bot-runtime';
+import { openBotModels, openBotRuntime, type BotRuntime, type HubApi, type SessionsPort } from './bot-runtime';
 import { claimBotRelay } from './bot-supervisor';
 import { BOT_CAPABILITIES } from './session-capabilities';
 import { dishDir } from './dish-store';
@@ -58,6 +58,19 @@ function sessionsPort(routeId: string): SessionsPort {
     });
   });
 }
+
+/** pi-dish's own HTTP API, for routes the sessions CLI does not cover: GET, or POST with a body. */
+const hubApi: HubApi = async (pathname, body) => {
+  const base = process.env.PI_DISH_URL || 'http://127.0.0.1:3333';
+  const headers: Record<string, string> = body ? { 'Content-Type': 'application/json' } : {};
+  if (process.env.PI_DISH_TOKEN) headers.Authorization = `Bearer ${process.env.PI_DISH_TOKEN}`;
+  const response = await fetch(new URL(pathname, base), {
+    method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(120_000),
+  });
+  const data: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(isRecord(data) && typeof data.error === 'string' ? data.error : `HTTP ${response.status} from ${pathname}`);
+  return data;
+};
 
 async function main(): Promise<void> {
   const [mode, mirrorFile] = process.argv.slice(2);
@@ -266,6 +279,7 @@ async function main(): Promise<void> {
     mirror,
     models: models.models,
     sessions: sessionsPort(routeId),
+    api: hubApi,
     loadBot,
     emit: broadcast,
     changed: writeClaim,

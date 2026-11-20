@@ -13,6 +13,8 @@ export declare const REMINDER_RATIO = 0.75;
 export declare const FORCED_RATIO = 0.9;
 /** Runs the pi-dish-sessions CLI as the bot; resolves with its stdout. */
 export type SessionsPort = (args: string[]) => Promise<string>;
+/** pi-dish's HTTP API on the hub: GET `path`, or POST it `body`; resolves with the JSON answer. */
+export type HubApi = (path: string, body?: ProtocolRecord) => Promise<unknown>;
 export type BridgeEmit = (event: string, data: ProtocolRecord) => void;
 export interface SettledWorker {
     state: 'finished' | 'waiting' | 'inactive';
@@ -91,6 +93,8 @@ export interface BotRuntimeOptions {
     mirror: BotMirror;
     models: Models;
     sessions: SessionsPort;
+    /** The knowledge routes are reached through this. */
+    api: HubApi;
     /** The bot's current registry row, read when a window opens. */
     loadBot(): BotRow;
     emit: BridgeEmit;
