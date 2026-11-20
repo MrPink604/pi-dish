@@ -199,7 +199,11 @@ export function openKnowledgeBase({ remote, dir, today = () => new Date().toISOS
       const rel = knowledgePagePath(page);
       await ensureClone();
       const file = path.join(dir, rel);
-      if (!fs.existsSync(file)) throw new KnowledgeError(rel === INDEX ? 'The knowledge base has no index yet.' : `There is no page ${rel}.`, 404);
+      if (!fs.existsSync(file)) {
+        // A repository nobody has written to yet is empty, not missing.
+        if (rel === INDEX) return { path: INDEX, text: 'The knowledge base has no pages yet.\n' };
+        throw new KnowledgeError(`There is no page ${rel}.`, 404);
+      }
       return { path: rel, text: fs.readFileSync(file, 'utf8') };
     }),
     write: entry => serial(async () => {

@@ -15,14 +15,14 @@ function git(cwd, ...args) {
     return (0, node_child_process_1.execFileSync)('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
 }
 /** A bare remote holding one commit with an index, and a knowledge base whose clone does not exist yet. */
-function setup(t) {
+function setup(t, { index = true } = {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-knowledge-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const remote = path.join(root, 'knowledge.git');
     git(root, 'init', '-q', '--bare', '-b', 'main', remote);
     const seed = path.join(root, 'seed');
     git(root, 'clone', '-q', remote, seed);
-    fs.writeFileSync(path.join(seed, 'index.md'), '# Knowledge\n\nOne line per topic page.\n');
+    fs.writeFileSync(path.join(seed, index ? 'index.md' : 'README.md'), '# Knowledge\n\nOne line per topic page.\n');
     git(seed, 'add', '-A');
     git(seed, ...IDENTITY, 'commit', '-q', '-m', 'Initial commit');
     git(seed, 'push', '-q', 'origin', 'HEAD:main');
@@ -85,6 +85,12 @@ test('a write with the remote unreachable lands in the clone and is pushed by th
     const online = await base.write({ page: 'beelink', mode: 'append', text: 'Written online.', source: 'test', author: 'Fleet' });
     assert.equal(online.pushed, true);
     assert.deepEqual(remoteLog(), ['Fleet|Fleet: add to topics/beelink.md', 'Fleet|Fleet: start topics/beelink.md', 'seed|Initial commit']);
+});
+test('a repository without an index reads as empty, and its first page creates one', async (t) => {
+    const { base } = setup(t, { index: false });
+    assert.deepEqual(await base.read(), { path: 'index.md', text: 'The knowledge base has no pages yet.\n' });
+    await base.write({ page: 'beelink', mode: 'append', text: 'The hub.', source: 'hosts', author: 'Fleet' });
+    assert.equal((await base.read()).text, '# Knowledge\n\nOne line per topic page.\n\n- [Beelink](topics/beelink.md)\n');
 });
 test('writes are refused without a source, a page name or with the index as their page', async (t) => {
     const { base, remoteLog } = setup(t);
