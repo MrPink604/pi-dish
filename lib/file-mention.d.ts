@@ -1,8 +1,13 @@
 // Generated from src/core/file-mention.ts; edit that source and run npm run build:core.
+export interface ExtraFileRoot {
+    root: string;
+    denySubdirs?: readonly string[];
+}
 export interface FileMentionContext {
     cwd?: string | null;
     messages?: readonly unknown[] | null;
     home?: string;
+    extraRoots?: readonly ExtraFileRoot[] | null;
 }
 export interface NormalizedMention {
     mention: string;
@@ -45,6 +50,6 @@ export interface FileViewerOptions {
 export declare function normalizeMention(raw: unknown, home: string): NormalizedMention;
 /** Includes each file arg's dirname so siblings resolve. Values are last message index, for recency. */
 export declare function extractSessionPaths(messages: readonly unknown[], cwd: string | null | undefined, home?: string): Map<string, number>;
-export declare function resolveFileMention(rawMention: unknown, { cwd, messages, home }: FileMentionContext): Promise<ResolvedFileMention | null>;
+export declare function resolveFileMention(rawMention: unknown, { cwd, messages, home, extraRoots }: FileMentionContext): Promise<ResolvedFileMention | null>;
 /** Base64 is the default for library callers; HTTP routes opt into no bytes or a Buffer. */
 export declare function readFileForViewer(absPath: string, { imageData }?: FileViewerOptions): FileViewerResult;

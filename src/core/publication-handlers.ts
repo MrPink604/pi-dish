@@ -111,7 +111,7 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       return res.sendFile(htmlPath);
     }
     const session = typeof share.sessionId === 'string' ? findSessionSource(share.sessionId) : null;
-    if (!session || (session.harnessId !== 'pi' && session.harnessId !== 'omp')) {
+    if (!session || (session.harnessId !== 'pi' && session.harnessId !== 'omp' && session.harnessId !== 'agy')) {
       return res.status(404).type('text/plain').send('Not found');
     }
     const sessionFile = session.file;
@@ -168,8 +168,8 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       }
       return res.status(404).json({ error: 'Session not found' });
     }
-    if (session.harnessId !== 'pi' && session.harnessId !== 'omp') {
-      return res.status(409).json({ error: 'Public HTML sharing is only supported for Pi and OMP sessions.' });
+    if (session.harnessId !== 'pi' && session.harnessId !== 'omp' && session.harnessId !== 'agy') {
+      return res.status(409).json({ error: 'Public HTML sharing is only supported for Pi, OMP, and Antigravity sessions.' });
     }
     const token = shares.createShare(req.params.id);
     res.json(sharePayload(token));

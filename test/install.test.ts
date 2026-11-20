@@ -13,6 +13,7 @@ interface AgentDirectories {
   pi: string;
   omp: string;
   prime: string;
+  agy: string;
 }
 
 const ROOT = path.resolve(__dirname, '..');
@@ -32,6 +33,7 @@ function isolatedAgentDirs(t: TestContext): AgentDirectories {
     pi: path.join(temp, 'pi-agent'),
     omp: path.join(temp, 'omp-agent'),
     prime: path.join(temp, 'prime-agent'),
+    agy: path.join(temp, 'agy-agent'),
   };
 }
 
@@ -43,6 +45,7 @@ function runInstall(dirs: AgentDirectories): SpawnSyncReturns<string> {
       PI_AGENT_DIR: dirs.pi,
       OMP_AGENT_DIR: dirs.omp,
       PRIME_AGENT_DIR: dirs.prime,
+      AGY_AGENT_DIR: dirs.agy,
       // Keep the uv bootstrap out of the test: it must not touch the network
       // or the developer's real prime installation.
       PI_DISH_PRIME_COMMAND: '/nonexistent/prime-agent',
@@ -51,7 +54,7 @@ function runInstall(dirs: AgentDirectories): SpawnSyncReturns<string> {
   });
 }
 
-test('installer links the correct bridge and every skill into Pi, OMP and Prime', t => {
+test('installer links the correct bridge and every skill into Pi, OMP, Prime and Antigravity', t => {
   const dirs = isolatedAgentDirs(t);
   const result = runInstall(dirs);
   assert.equal(result.status, 0, result.stderr);
@@ -69,7 +72,7 @@ test('installer links the correct bridge and every skill into Pi, OMP and Prime'
   assert.ok(!fs.existsSync(path.join(dirs.prime, 'extensions', 'pi-dish-bridge-prime')));
   assert.ok(!fs.existsSync(path.join(dirs.prime, 'extensions', 'pi-dish-bridge')));
 
-  for (const agentDir of [dirs.pi, dirs.omp, dirs.prime]) {
+  for (const agentDir of [dirs.pi, dirs.omp, dirs.prime, dirs.agy]) {
     for (const skill of SKILLS) {
       assert.equal(
         fs.readlinkSync(path.join(agentDir, 'skills', skill)),

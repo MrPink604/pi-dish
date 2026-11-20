@@ -1547,3 +1547,113 @@ export function readAgySessionTasks(
     swarm,
   };
 }
+
+// ---- Brain artifacts (top-level .md / .html / images + optional metadata) ---
+
+export interface AgyBrainArtifact {
+  name: string;
+  path: string;
+  kind: 'markdown' | 'html' | 'image';
+  size: number;
+  updatedAt: string;
+  summary: string;
+  userFacing: boolean;
+  requestFeedback: boolean;
+  artifactType: string;
+}
+
+export interface AgyBrainArtifactMeta {
+  summary: string;
+  userFacing: boolean;
+  requestFeedback: boolean;
+  artifactType: string;
+  updatedAt: string | null;
+}
+
+const ARTIFACT_EXT_KIND: Readonly<Record<string, AgyBrainArtifact['kind']>> = {
+  '.md': 'markdown',
+  '.markdown': 'markdown',
+  '.html': 'html',
+  '.htm': 'html',
+  '.png': 'image',
+  '.jpg': 'image',
+  '.jpeg': 'image',
+  '.webp': 'image',
+  '.gif': 'image',
+  '.svg': 'image',
+};
+
+const SKIPPED_BRAIN_ENTRIES = new Set(['.system_generated', 'scratch', '.user_uploaded']);
+
+function parseArtifactSidecar(filePath: string): AgyBrainArtifactMeta | null {
+  const raw = readJsonFile(`${filePath}.metadata.json`, 256 * 1024);
+  if (!raw) return null;
+  const userFacing = raw.UserFacing !== undefined ? raw.UserFacing === true
+    : raw.userFacing !== undefined ? raw.userFacing === true : true;
+  const requestFeedback = raw.RequestFeedback === true || raw.requestFeedback === true;
+  return {
+    summary: text(raw.Summary) || text(raw.summary),
+    userFacing,
+    requestFeedback,
+    artifactType: text(raw.ArtifactType) || text(raw.artifactType),
+    updatedAt: text(raw.updatedAt) || text(raw.UpdatedAt) || null,
+  };
+}
+
+/** Read optional `<file>.metadata.json` sidecar if `filePath` is a direct artifact inside this conversation's brain dir. */
+export function readAgyBrainArtifactMeta(nativeSessionId: string, filePath: string): AgyBrainArtifactMeta | null {
+  const dir = agyBrainDir(nativeSessionId);
+  if (!dir) return null;
+  const normDir = path.resolve(dir);
+  const normFile = path.resolve(filePath);
+  if (!normFile.startsWith(normDir + path.sep)) return null;
+  const rel = normFile.slice(normDir.length + 1);
+  if (!rel || rel.split(path.sep).includes('.system_generated')) return null;
+  return parseArtifactSidecar(normFile);
+}
+
+/** List user-facing Antigravity brain artifacts (`.md`/`.html`/images) for one conversation. */
+export function readAgyBrainArtifacts(nativeSessionId: string): AgyBrainArtifact[] {
+  const dir = agyBrainDir(nativeSessionId);
+  if (!dir) return [];
+  let entries: fs.Dirent[];
+  try {
+    const dirStat = fs.lstatSync(dir);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return [];
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out: AgyBrainArtifact[] = [];
+  for (const entry of entries) {
+    if (SKIPPED_BRAIN_ENTRIES.has(entry.name) || entry.name.startsWith('.')) continue;
+    if (!entry.isFile() || entry.isSymbolicLink()) continue;
+    if (entry.name.endsWith('.metadata.json')) continue;
+    const ext = path.extname(entry.name).toLowerCase();
+    const kind = ARTIFACT_EXT_KIND[ext];
+    if (!kind) continue;
+    const absPath = path.join(dir, entry.name);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(absPath);
+      if (!stat.isFile() || stat.isSymbolicLink()) continue;
+    } catch {
+      continue;
+    }
+    const meta = parseArtifactSidecar(absPath);
+    if (meta && !meta.userFacing) continue;
+    out.push({
+      name: entry.name,
+      path: absPath,
+      kind,
+      size: stat.size,
+      updatedAt: meta?.updatedAt || stat.mtime.toISOString(),
+      summary: meta?.summary || '',
+      userFacing: meta ? meta.userFacing : true,
+      requestFeedback: meta ? meta.requestFeedback : false,
+      artifactType: meta?.artifactType || '',
+    });
+  }
+  out.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.name.localeCompare(b.name));
+  return out;
+}

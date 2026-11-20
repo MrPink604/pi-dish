@@ -5844,6 +5844,21 @@ img.msg-image {
   white-space: nowrap;
 }
 
+.artifact-brain-row { align-items: flex-start; }
+.artifact-brain-main { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.artifact-brain-open { padding: 0; border: 0; background: none; font: inherit; cursor: pointer; text-align: left; }
+.artifact-brain-summary { width: 100%; font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+.artifact-feedback-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 500;
+}
+.file-view-proceed { white-space: nowrap; }
+
 .file-view-page {
   display: flex;
   flex-wrap: wrap;

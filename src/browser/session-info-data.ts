@@ -13,6 +13,11 @@ export interface SessionStats {
 }
 export interface PublishedPage { readonly token: string; readonly path: string; readonly url: string; readonly title: string; readonly root: string; readonly missing: boolean; readonly createdAt: number }
 export interface SessionShare { readonly path: string; readonly url: string }
+export interface BrainArtifact {
+  readonly name: string; readonly path: string; readonly kind: 'markdown' | 'html' | 'image';
+  readonly size: number; readonly updatedAt: string; readonly summary: string;
+  readonly requestFeedback: boolean; readonly artifactType: string;
+}
 const nullable = (value: unknown) => finite(value) ? value : null;
 const object = (value: unknown) => record(value) ? value : {};
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
@@ -38,4 +43,21 @@ export function decodeSessionShare(value: unknown): SessionShare | null {
 export function decodePublishedPages(value: unknown): PublishedPage[] {
   return Array.isArray(value) ? value.flatMap((page: unknown) => record(page) && typeof page.token === 'string' && typeof page.root === 'string' && (typeof page.path === 'string' || typeof page.url === 'string')
     ? [{ token: page.token, root: page.root, path: text(page.path), url: text(page.url), title: text(page.title), missing: page.missing === true, createdAt: count(page.createdAt) }] : []) : [];
+}
+export function decodeBrainArtifacts(value: unknown): BrainArtifact[] {
+  const list = record(value) && Array.isArray(value.artifacts) ? value.artifacts : Array.isArray(value) ? value : [];
+  return list.flatMap((item: unknown): BrainArtifact[] => {
+    if (!record(item) || typeof item.path !== 'string' || !item.path) return [];
+    const kind = item.kind === 'html' || item.kind === 'image' ? item.kind : 'markdown';
+    return [{
+      name: text(item.name) || item.path.split('/').pop() || 'artifact',
+      path: item.path,
+      kind,
+      size: count(item.size),
+      updatedAt: text(item.updatedAt),
+      summary: text(item.summary),
+      requestFeedback: item.requestFeedback === true,
+      artifactType: text(item.artifactType),
+    }];
+  });
 }

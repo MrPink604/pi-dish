@@ -16,4 +16,5 @@ export declare function createAgySessionHandlers({ ownership, findSessionSource 
     tasks: RouteHandler;
     taskLog: RouteHandler;
     swarm: RouteHandler;
+    artifacts: RouteHandler;
 };

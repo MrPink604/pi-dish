@@ -11,10 +11,16 @@ import { searchFiles } from './file-search';
 import { record } from './helper-values';
 import { matchCommandPaths } from './command-paths';
 
+export interface ExtraFileRoot {
+  root: string;
+  denySubdirs?: readonly string[];
+}
+
 export interface FileMentionContext {
   cwd?: string | null;
   messages?: readonly unknown[] | null;
   home?: string;
+  extraRoots?: readonly ExtraFileRoot[] | null;
 }
 
 export interface NormalizedMention {
@@ -124,17 +130,45 @@ export function extractSessionPaths(messages: readonly unknown[], cwd: string | 
   return paths;
 }
 
-export async function resolveFileMention(rawMention: unknown, { cwd, messages, home = os.homedir() }: FileMentionContext): Promise<ResolvedFileMention | null> {
+export async function resolveFileMention(rawMention: unknown, { cwd, messages, home = os.homedir(), extraRoots }: FileMentionContext): Promise<ResolvedFileMention | null> {
   const { mention, line } = normalizeMention(rawMention, home);
   if (!mention || /[\n\0]/.test(mention)) return null;
 
   const paths = extractSessionPaths(messages || [], cwd, home);
   const byRecency = [...paths.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
   const normCwd = cwd ? path.normalize(cwd) : null;
+  const normExtraRoots = (extraRoots || [])
+    .filter(r => typeof r.root === 'string' && r.root.length > 0)
+    .map(r => {
+      const normRoot = path.resolve(r.root);
+      let realRoot: string | null = null;
+      try { realRoot = fs.realpathSync(normRoot); } catch {}
+      return { root: normRoot, realRoot, denySubdirs: new Set(r.denySubdirs || []) };
+    });
+
+  const underExtraRoot = (p: string): boolean => {
+    for (const extra of normExtraRoots) {
+      if (!p.startsWith(extra.root + path.sep)) continue;
+      const rel = p.slice(extra.root.length + 1);
+      const parts = rel.split(path.sep);
+      if (parts.some(seg => extra.denySubdirs.has(seg))) return false;
+      try {
+        const lstat = fs.lstatSync(p);
+        if (!lstat.isFile() || lstat.isSymbolicLink()) return false;
+        if (!extra.realRoot) return false;
+        const realPath = fs.realpathSync(p);
+        if (!realPath.startsWith(extra.realRoot + path.sep)) return false;
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  };
 
   const underCwd = (p: string) => normCwd && (p === normCwd || p.startsWith(normCwd + path.sep));
   const allowed = (p: string) =>
-    underCwd(p) || paths.has(p) || byRecency.some(b => p.startsWith(b + path.sep));
+    underCwd(p) || underExtraRoot(p) || paths.has(p) || byRecency.some(b => p.startsWith(b + path.sep));
   const isFile = (p: string): boolean => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 
   const candidates: string[] = [];
@@ -144,8 +178,9 @@ export async function resolveFileMention(rawMention: unknown, { cwd, messages, h
     const qualified = mention.includes('/');
     const suffixMatches = byRecency.filter(p => p.endsWith('/' + mention));
     const cwdJoin = normCwd ? [path.resolve(normCwd, mention)] : [];
+    const extraJoins = normExtraRoots.map(r => path.resolve(r.root, mention));
     // Qualified mentions name a location; bare basenames mean "the one the agent last touched".
-    candidates.push(...(qualified ? [...cwdJoin, ...suffixMatches] : [...suffixMatches, ...cwdJoin]));
+    candidates.push(...(qualified ? [...cwdJoin, ...extraJoins, ...suffixMatches] : [...suffixMatches, ...cwdJoin, ...extraJoins]));
     for (const base of byRecency.slice(0, MAX_JOIN_BASES)) {
       candidates.push(path.resolve(base, mention), path.resolve(path.dirname(base), mention));
     }

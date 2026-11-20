@@ -2,6 +2,7 @@ import { record, text, count } from '../core/helper-values';
 export interface FilePreview {
   readonly path: string; readonly relPath: string; readonly content: string; readonly size: number; readonly mtime: number; readonly truncated: boolean;
   readonly image: { readonly url: string; readonly mimeType: string; readonly data: string } | null;
+  readonly artifact: { readonly requestFeedback: boolean; readonly summary: string; readonly artifactType: string } | null;
 }
 export interface DiffFile { readonly path: string; readonly oldPath: string; readonly status: string; readonly additions: number; readonly deletions: number; readonly binary: boolean; readonly truncated: boolean; readonly patch: string; readonly patchDeferred: boolean }
 export interface DiffRepo { readonly path: string; readonly branch: string; readonly ahead: number; readonly behind: number; readonly additions: number; readonly deletions: number; readonly error: string; readonly moreUntracked: number; readonly files: readonly DiffFile[] }
@@ -9,7 +10,8 @@ export interface DiffView { readonly root: string; readonly gitAvailable: boolea
 export function decodeFilePreview(v: unknown): FilePreview {
   if (!record(v) || typeof v.path !== 'string' || !v.path) throw new Error('Invalid file preview');
   return { path: v.path, relPath: text(v.relPath), content: text(v.content), size: count(v.size), mtime: count(v.mtime), truncated: v.truncated === true,
-    image: record(v.image) ? { url: text(v.image.url), mimeType: text(v.image.mimeType), data: text(v.image.data) } : null };
+    image: record(v.image) ? { url: text(v.image.url), mimeType: text(v.image.mimeType), data: text(v.image.data) } : null,
+    artifact: record(v.artifact) ? { requestFeedback: v.artifact.requestFeedback === true, summary: text(v.artifact.summary), artifactType: text(v.artifact.artifactType) } : null };
 }
 export function decodeDiffView(v: unknown): DiffView {
   if (!record(v) || !Array.isArray(v.repos)) throw new Error('Invalid diff response');

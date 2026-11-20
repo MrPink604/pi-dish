@@ -530,3 +530,98 @@ const lineagePayload = {
     await fixtures_js_1.expect.poll(() => prompts.length).toBe(8);
     (0, fixtures_js_1.expect)(prompts[7].message).toContain('@narrator user feedback: Mark builder work as high priority');
 });
+(0, fixtures_js_1.test)('Antigravity brain artifacts open in #fileView with local image rewrite, file:// links, and Proceed approval', async ({ page, fleet }) => {
+    const brainDir = '/home/tester/.gemini/antigravity-cli/brain/coord-native';
+    const planPath = `${brainDir}/implementation_plan.md`;
+    const prompts = [];
+    await page.route('**/api/sessions', async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        for (const list of [body.active, body.previous]) {
+            if (!Array.isArray(list))
+                continue;
+            for (const item of list) {
+                if (item && item.id === fixtures_js_1.ROOT)
+                    item.harnessId = 'agy';
+            }
+        }
+        await route.fulfill({ response, json: body });
+    });
+    await page.route('**/api/sessions?*', async (route) => {
+        const response = await route.fetch();
+        const body = await response.json();
+        for (const list of [body.active, body.previous]) {
+            if (!Array.isArray(list))
+                continue;
+            for (const item of list) {
+                if (item && item.id === fixtures_js_1.ROOT)
+                    item.harnessId = 'agy';
+            }
+        }
+        await route.fulfill({ response, json: body });
+    });
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/artifacts`, route => route.fulfill({
+        json: {
+            supported: true,
+            artifacts: [
+                {
+                    name: 'implementation_plan.md',
+                    path: planPath,
+                    kind: 'markdown',
+                    size: 420,
+                    updatedAt: '2026-11-19T15:00:00Z',
+                    summary: 'Refactor auth session flow',
+                    userFacing: true,
+                    requestFeedback: true,
+                    artifactType: 'ARTIFACT_TYPE_IMPLEMENTATION_PLAN',
+                },
+            ],
+        },
+    }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/file?*`, route => route.fulfill({
+        json: {
+            path: planPath,
+            relPath: null,
+            line: null,
+            content: '# Auth Plan\n\n![Arch](arch.png)\n\nSee [auth.ts](file:///repo/auth.ts#L12-L20).\n',
+            truncated: false,
+            size: 72,
+            mtime: 1700000000000,
+            artifact: { requestFeedback: true, summary: 'Refactor auth session flow', artifactType: 'ARTIFACT_TYPE_IMPLEMENTATION_PLAN' },
+        },
+    }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/file/content*`, route => route.fulfill({
+        status: 200,
+        contentType: 'image/png',
+        body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'),
+    }));
+    await page.route(`**/api/sessions/${fixtures_js_1.ROOT}/prompt`, route => {
+        prompts.push(route.request().postDataJSON());
+        return route.fulfill({ json: { ok: true } });
+    });
+    await fleet.select(fleet.self, fixtures_js_1.ROOT);
+    await page.evaluate((id) => {
+        window.fixtureSessionListPatch(id, { harnessId: 'agy', isActive: true });
+        return fixtureApp.features.sessionInfo.refreshArtifacts(fixtureApp.features.sessionState.captureSelection());
+    }, fixtures_js_1.ROOT);
+    // Artifacts badge lights up with count 1 and modal lists the brain artifact.
+    await (0, fixtures_js_1.expect)(page.locator('#btnArtifacts')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('#artifactCount')).toHaveText('1');
+    await page.locator('#btnArtifacts').click();
+    await (0, fixtures_js_1.expect)(page.locator('#artifactsBody')).toContainText('implementation_plan.md');
+    await (0, fixtures_js_1.expect)(page.locator('#artifactsBody')).toContainText('Review');
+    // Clicking brain artifact opens #fileView, rewrites relative local img src, linkifies file:// URI, and shows Proceed.
+    await page.locator('#artifactsBody .artifact-brain-open').click();
+    await (0, fixtures_js_1.expect)(page.locator('#sessionView')).toHaveClass(/\bfile-open\b/);
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewTitle')).toHaveText('implementation_plan.md');
+    await (0, fixtures_js_1.expect)(page.locator('#fileViewProceed')).toBeVisible();
+    const imgSrc = await page.locator('#fileViewBody img').getAttribute('src');
+    (0, fixtures_js_1.expect)(imgSrc).toContain(`/api/sessions/${fixtures_js_1.ROOT}/file/content?path=${encodeURIComponent(`${brainDir}/arch.png`)}`);
+    const fileLink = page.locator('#fileViewBody .file-link');
+    await (0, fixtures_js_1.expect)(fileLink).toHaveAttribute('data-file-path', '/repo/auth.ts:12');
+    // Clicking Proceed sends prompt and closes #fileView.
+    await page.locator('#fileViewProceed').click();
+    await fixtures_js_1.expect.poll(() => prompts.length).toBe(1);
+    (0, fixtures_js_1.expect)(prompts[0]).toEqual({ message: 'Proceed with the plan.' });
+    await (0, fixtures_js_1.expect)(page.locator('#sessionView')).not.toHaveClass(/\bfile-open\b/);
+});

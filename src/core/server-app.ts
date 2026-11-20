@@ -251,6 +251,7 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/sessions/:id/tasks', agySessionHandlers.tasks);
   app.get('/api/sessions/:id/tasks/:taskId/log', agySessionHandlers.taskLog);
   app.get('/api/sessions/:id/swarm', agySessionHandlers.swarm);
+  app.get('/api/sessions/:id/artifacts', agySessionHandlers.artifacts);
   app.get('/api/search', browseHandlers.search);
 
   app.get('/api/usage-summary', featureHandlers.usageSummary);

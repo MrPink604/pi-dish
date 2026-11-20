@@ -69,7 +69,7 @@ function sessionCapabilities(harnessId: HarnessId, bridgeCapabilities: Advertise
       : harnessId === 'omp' && active
         ? advertised('treeRead') && advertised('treeNavigation')
         : harnessId === 'prime' ? advertised('treeNavigation') : false,
-    export: pi || harnessId === 'omp',
+    export: pi || harnessId === 'omp' || harnessId === 'agy',
     // Managed harnesses may only close/detach the exact client pi-dish owns.
     close: active && (closeMode === 'logical'
       || ((closeMode === 'owned-pane' || closeMode === 'owned-agent') && closeAllowed)),

@@ -770,11 +770,11 @@ const usageController: ReturnType<typeof createUsageView> = createUsageView({
 const sessionInfo: ReturnType<typeof createSessionInfo> = createSessionInfo({
   document, request, sessionState, host: hostEntryFor,
   reference: session => sessionRefFor(session), copy: copyTextToClipboard, status: setStatus, confirm: text => confirm(text),
-  loadPrevious, refreshSessions, selectSession,
+  loadPrevious, refreshSessions, selectSession, openFile: path => { void fileViews.openFile(path); },
 });
 
 const fileViews: ReturnType<typeof createFileViews> = createFileViews({
-  document, sessionState, request, host: hostEntryFor,
+  document, sessionState, request, host: hostEntryFor, assetUrl: hostAssetUrl,
   markdown: text => richText.format(text), highlight: root => richText.highlight(root), copy: copyTextToClipboard,
   status: setStatus, refreshArtifacts: owner => sessionInfo.refreshArtifacts(owner),
   closeComments: () => anchoredCommentController.close(), clearComments: () => anchoredCommentController.set([]),

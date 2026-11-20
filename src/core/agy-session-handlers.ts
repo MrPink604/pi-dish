@@ -8,6 +8,7 @@ import { BridgeSession } from './bridge-session';
 import {
   agyRouteId,
   findAgySwarmCoordinator,
+  readAgyBrainArtifacts,
   readAgySessionTasks,
   readAgySwarmState,
   readAgyTaskLog,
@@ -193,5 +194,19 @@ export function createAgySessionHandlers({ ownership, findSessionSource }: AgySe
     }
   };
 
-  return { tasks, taskLog, swarm };
+  const artifacts: RouteHandler = (req, res) => {
+    try {
+      const target = resolveAgyTarget(req.params.id);
+      if (!target) { res.status(404).json({ error: 'Session not found' }); return; }
+      if (target.harnessId !== 'agy') {
+        res.json({ supported: false, artifacts: [] });
+        return;
+      }
+      res.json({ supported: true, artifacts: readAgyBrainArtifacts(target.nativeSessionId) });
+    } catch (error) {
+      res.status(INVALID_SESSION_RE.test(errorMessage(error)) ? 400 : 500).json({ error: errorMessage(error) });
+    }
+  };
+
+  return { tasks, taskLog, swarm, artifacts };
 }

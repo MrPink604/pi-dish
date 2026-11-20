@@ -8,8 +8,21 @@ import { renderDiffViewHtml } from './file-view-render';
 import { renderDiffHtml } from './helper-markdown';
 import { escapeHtml } from '../core/helper-format';
 import { shortCwd } from './helper-format';
+function resolveRelativePosixPath(baseFilePath: string, rel: string): string {
+  const dir = baseFilePath.includes('/') ? baseFilePath.slice(0, baseFilePath.lastIndexOf('/')) : '';
+  const combined = rel.startsWith('/') ? rel : `${dir}/${rel}`;
+  const out: string[] = [];
+  for (const part of combined.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') out.pop();
+    else out.push(part);
+  }
+  return '/' + out.join('/');
+}
+
 export function createFileViews(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
+  assetUrl?: (host: string | null | undefined, path: string) => string;
   markdown: (text: string) => string; highlight: (root: HTMLElement) => void; copy: (text: string) => Promise<unknown>;
   status: (message: string, type?: string) => void; refreshArtifacts: (owner: SelectionOwner) => void;
   closeComments: () => void; clearComments: () => void; refreshComments: () => void; markComments: () => void;
@@ -50,6 +63,8 @@ export function createFileViews(options: {
     element('sessionView').classList.remove('file-open'); element('fileViewBody').innerHTML = '';
     const raw = element<HTMLAnchorElement>('fileViewRaw'); raw.style.display = 'none'; raw.removeAttribute('href');
     const publish = element<HTMLButtonElement>('fileViewPublish'); publish.disabled = false; publish.style.display = 'none';
+    const proceed = document.getElementById('fileViewProceed') as HTMLButtonElement | null;
+    if (proceed) { proceed.disabled = false; proceed.style.display = 'none'; }
     element('fileViewCopy').textContent = '⧉';
     clearPage(); options.closeComments(); options.clearComments();
   }
@@ -126,13 +141,56 @@ export function createFileViews(options: {
       }).catch(() => {});
       const size = data.size >= 10240 ? `${Math.round(data.size / 1024)} KB` : `${data.size} B`;
       path.textContent = `${shortCwd(data.path)} · ${size}${data.truncated ? ' · truncated preview' : ''}`; path.title = data.path;
+      const proceedBtn = document.getElementById('fileViewProceed') as HTMLButtonElement | null;
+      if (proceedBtn && data.artifact?.requestFeedback && sessionState.currentSession?.isActive) {
+        proceedBtn.style.display = '';
+        proceedBtn.disabled = false;
+        proceedBtn.addEventListener('click', async () => {
+          if (!ownsFile(id, generation) || proceedBtn.disabled) return;
+          proceedBtn.disabled = true;
+          try {
+            await jsonResponse(await request(owner, endpoint, `/api/sessions/${encodeURIComponent(id)}/prompt`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: 'Proceed with the plan.' }),
+            }));
+            if (!ownsFile(id, generation)) return;
+            options.status('Proceed sent');
+            closeFile();
+          } catch (e) {
+            if (ownsFile(id, generation)) {
+              proceedBtn.disabled = false;
+              options.status('Proceed failed: ' + errorMessage(e), 'error');
+            }
+          }
+        }, { signal: fileEvents.signal });
+      }
       if (data.image) {
-        const src = data.image.url ? endpoint.base + data.image.url : `data:${data.image.mimeType};base64,${data.image.data}`;
+        const src = data.image.url
+          ? (options.assetUrl ? options.assetUrl(owner.host, data.image.url) : endpoint.base + data.image.url)
+          : `data:${data.image.mimeType};base64,${data.image.data}`;
         body.innerHTML = `<img class="file-view-img" src="${escapeHtml(src)}" decoding="async" alt="">`; return;
       }
       file.raw = data.content;
       const ext = data.path.match(/\.([A-Za-z0-9]+)$/)?.[1]?.toLowerCase();
-      if (ext === 'md' || ext === 'markdown') body.innerHTML = `<div class="markdown-body">${options.markdown(data.content)}</div>`;
+      if (ext === 'md' || ext === 'markdown') {
+        body.innerHTML = `<div class="markdown-body">${options.markdown(data.content)}</div>`;
+        // Rewrite local markdown image paths (absolute, file://, or relative to the
+        // opened file) to the session-scoped file content endpoint so brain images load.
+        body.querySelectorAll<HTMLImageElement>('img[src]').forEach(img => {
+          const rawSrc = (img.getAttribute('src') || '').trim();
+          if (!rawSrc || /^(?:https?:|data:|blob:|\/\/|\/api\/)/i.test(rawSrc)) return;
+          let localPath = rawSrc;
+          if (/^file:\/\//i.test(localPath)) {
+            localPath = localPath.replace(/^file:\/\//i, '');
+            try { localPath = decodeURIComponent(localPath); } catch {}
+          }
+          const absImg = resolveRelativePosixPath(data.path, localPath.split(/[?#]/)[0]);
+          const contentPath = `/api/sessions/${encodeURIComponent(id)}/file/content?path=${encodeURIComponent(absImg)}`;
+          img.src = options.assetUrl ? options.assetUrl(owner.host, contentPath) : endpoint.base + contentPath;
+          img.decoding = 'async';
+        });
+      }
       else body.innerHTML = `<div class="markdown-body"><pre><code${ext ? ` class="language-${escapeHtml(ext)}"` : ''}${data.content.length > 80000 ? ' data-highlighted="skip"' : ''}>${escapeHtml(data.content)}</code></pre></div>`;
       options.highlight(body); options.refreshComments();
     } catch (e) { if (ownsFile(id, generation)) body.innerHTML = `<div class="error">${escapeHtml(errorMessage(e))}</div>`; }

@@ -1,8 +1,8 @@
 import { errorMessage, jsonResponse, responseError, type ApiRequest, type HostEndpoint, type RequestOptions } from './api-client';
 import { requiredElement } from './dom';
 import type { SessionState, SelectionOwner, SessionEntry } from './session-state';
-import type { SessionShare, PublishedPage } from './session-info-data';
-import { decodeSessionStats, decodeSessionShare, decodePublishedPages } from './session-info-data';
+import type { SessionShare, PublishedPage, BrainArtifact } from './session-info-data';
+import { decodeSessionStats, decodeSessionShare, decodePublishedPages, decodeBrainArtifacts } from './session-info-data';
 import { escapeHtml } from '../core/helper-format';
 import { countLabel, formatTokSpeed, formatTokens, formatDuration, formatLatency, formatUsageCost, formatCacheStat, formatRuntime, formatRelativeTime } from './helper-format';
 
@@ -11,6 +11,7 @@ export function createSessionInfo(options: {
   document: Document; request: ApiRequest; sessionState: SessionState; host: (id: string | null) => HostEndpoint | null;
   reference: (session: SessionEntry) => string; copy: (text: string) => Promise<unknown>; status: (message: string, type?: string) => void; confirm: (message: string) => boolean;
   loadPrevious: () => Promise<unknown>; refreshSessions: () => Promise<unknown>; selectSession: (id: string, options: { host: string | null }) => Promise<unknown>;
+  openFile?: (path: string) => void;
 }) {
   const { document, sessionState } = options, location = document.defaultView!.location;
   const copyTextToClipboard = options.copy, setStatus = options.status, confirm = options.confirm, sessionRefFor = options.reference;
@@ -364,25 +365,28 @@ export function createSessionInfo(options: {
     } catch { if (current()) holder.innerHTML = ''; }
   }
 
-  // The badge count keeps published pages discoverable; refreshed on select, turn end
-  // (agents publish mid-turn) and after any publish/revoke.
-  let sessionArtifacts: { pages: readonly PublishedPage[]; share: SessionShare | null } = { pages: [], share: null };
+  // The badge count keeps published pages, share links, and Antigravity brain
+  // artifacts discoverable; refreshed on select, turn end, and publish/revoke.
+  let sessionArtifacts: { pages: readonly PublishedPage[]; share: SessionShare | null; brain: readonly BrainArtifact[] } = { pages: [], share: null, brain: [] };
   let artifactsSeq = 0; // drops stale responses on fast session switches
 
   async function refreshArtifacts(owner = sessionState.captureSelection()) {
     if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
     const sessionId = owner.id;
     const host = endpoint(owner); if (!host) return;
+    const isAgy = sessionState.findSession(sessionId, owner.host)?.harnessId === 'agy';
     const seq = ++artifactsSeq;
     try {
-      const [pagesRes, shareRes] = await Promise.all([
+      const [pagesRes, shareRes, brainRes] = await Promise.all([
         apiFetch(host, `/api/pages?sessionId=${encodeURIComponent(sessionId)}`),
         apiFetch(host, `/api/sessions/${encodeURIComponent(sessionId)}/share`),
+        isAgy ? apiFetch(host, `/api/sessions/${encodeURIComponent(sessionId)}/artifacts`) : Promise.resolve(null),
       ]);
       const pages: unknown = pagesRes.ok ? await pagesRes.json() : [];
       const share: unknown = (shareRes.ok && shareRes.status !== 404) ? await shareRes.json() : null;
+      const brain: unknown = (brainRes && brainRes.ok) ? await brainRes.json() : [];
       if (seq !== artifactsSeq || !owns(owner, host)) return;
-      sessionArtifacts = { pages: decodePublishedPages(pages), share: decodeSessionShare(share) };
+      sessionArtifacts = { pages: decodePublishedPages(pages), share: decodeSessionShare(share), brain: decodeBrainArtifacts(brain) };
       artifactOwner = owner; artifactEndpoint = host;
       updateArtifactsBadge();
       if (element('artifactsModal').style.display !== 'none') renderArtifactsModal();
@@ -391,7 +395,7 @@ export function createSessionInfo(options: {
 
   function updateArtifactsBadge() {
     if (disposed) return;
-    const n = sessionArtifacts.pages.length + (sessionArtifacts.share ? 1 : 0);
+    const n = sessionArtifacts.brain.length + sessionArtifacts.pages.length + (sessionArtifacts.share ? 1 : 0);
     const btn = document.getElementById('btnArtifacts');
     const row = document.getElementById('cpArtifactsRow');
     if (btn) {
@@ -424,12 +428,26 @@ export function createSessionInfo(options: {
     const current = () => generation === artifactGeneration && owns(owner, host) && element('artifactsModal').style.display !== 'none';
     const body = document.getElementById('artifactsBody');
     if (!body) return;
-    const { pages, share } = owns(owner, host) ? sessionArtifacts : { pages: [], share: null };
-    if (!pages.length && !share) {
-      body.innerHTML = '<div class="stats-share-hint">Nothing shared from this session yet — published pages and share links show up here.</div>';
+    const { pages, share, brain } = owns(owner, host) ? sessionArtifacts : { pages: [], share: null, brain: [] };
+    if (!brain.length && !pages.length && !share) {
+      body.innerHTML = '<div class="stats-share-hint">Nothing shared from this session yet — brain artifacts, published pages, and share links show up here.</div>';
       return;
     }
     let html = '';
+    if (brain.length) {
+      html += '<div class="stats-share-title">Session artifacts</div>' + brain.map((art) => {
+        const metaTime = art.updatedAt ? formatRelativeTime(art.updatedAt) : '';
+        const feedbackBadge = art.requestFeedback ? '<span class="artifact-feedback-badge">Review</span>' : '';
+        return `<div class="artifact-row artifact-brain-row">
+          <div class="artifact-brain-main">
+            <button type="button" class="artifact-link artifact-brain-open" data-path="${escapeHtml(art.path)}" title="${escapeHtml(art.path)}">${escapeHtml(art.name)}</button>
+            ${feedbackBadge}
+            ${art.summary ? `<div class="artifact-brain-summary">${escapeHtml(art.summary)}</div>` : ''}
+          </div>
+          <span class="artifact-meta">${escapeHtml(metaTime)}</span>
+        </div>`;
+      }).join('');
+    }
     if (pages.length) {
       html += '<div class="stats-share-title">Published pages</div>' + pages.map((p) => {
         const link = p.url || (location.origin + p.path);
@@ -453,6 +471,15 @@ export function createSessionInfo(options: {
         </div>`;
     }
     body.innerHTML = html;
+    body.querySelectorAll<HTMLButtonElement>('.artifact-brain-open').forEach(button => {
+      const filePath = button.dataset.path;
+      if (!filePath || !options.openFile) return;
+      button.addEventListener('click', () => {
+        if (!current()) return;
+        closeArtifactsModal();
+        options.openFile!(filePath);
+      }, { signal: artifactEvents.signal });
+    });
     body.querySelectorAll<HTMLElement>('.artifact-copy').forEach(button => {
       const text = button.dataset.copy || '';
       button.addEventListener('click', () => {
@@ -473,7 +500,7 @@ export function createSessionInfo(options: {
   return { openStats: openStatsModal, closeStats: closeStatsModal, copyMessage: copyMessageShareLink, finishClose: finishSessionClose,
     openArtifacts: openArtifactsModal, closeArtifacts: closeArtifactsModal, refreshArtifacts, updateBadge: updateArtifactsBadge,
     get statsOwner() { return statsModalOwner; },
-    resetArtifacts() { if (disposed) return; sessionArtifacts = { pages: [], share: null }; artifactOwner = null; artifactEndpoint = null; artifactsSeq++; artifactEvents.abort(); messageCopies = new WeakMap(); clearTimers(messageTimers); updateArtifactsBadge(); },
+    resetArtifacts() { if (disposed) return; sessionArtifacts = { pages: [], share: null, brain: [] }; artifactOwner = null; artifactEndpoint = null; artifactsSeq++; artifactEvents.abort(); messageCopies = new WeakMap(); clearTimers(messageTimers); updateArtifactsBadge(); },
     dispose() { closeStatsModal(); closeArtifactsModal(); clearTimers(messageTimers); messageCopies = new WeakMap(); artifactsSeq++; disposed = true; },
   };
 }

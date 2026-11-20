@@ -327,3 +327,37 @@ test('getToolSummary formats Antigravity task, subagent, and swarm tools cleanly
   assert.equal(helperContent.getToolSummary('swarm_wait', { since: 4 }), 'wait since #4');
   assert.equal(helperContent.getToolSummary('search_web', { query: 'ACP protocol' }), 'ACP protocol');
 });
+
+test('readAgyBrainArtifacts lists user-facing brain artifacts with sidecar metadata and ignores internals/symlinks', () => {
+  const convId = '66666666-6666-6666-6666-666666666666';
+  const dir = present(agyBrain.agyBrainDir(convId), 'brain dir');
+  writeText(path.join(dir, 'implementation_plan.md'), '# Plan\n![diagram](arch.png)\n');
+  writeJson(path.join(dir, 'implementation_plan.md.metadata.json'), {
+    Summary: 'Step-by-step refactor plan',
+    UserFacing: true,
+    RequestFeedback: true,
+    ArtifactType: 'ARTIFACT_TYPE_IMPLEMENTATION_PLAN',
+    updatedAt: '2026-11-19T15:00:00Z',
+  });
+  writeText(path.join(dir, 'arch.png'), 'pngbytes');
+  writeText(path.join(dir, 'hidden.md'), 'internal');
+  writeJson(path.join(dir, 'hidden.md.metadata.json'), { UserFacing: false, Summary: 'Hidden' });
+  writeText(path.join(dir, '.system_generated', 'secret.md'), 'never expose');
+  writeText(path.join(dir, 'scratch', 'tmp.md'), 'scratch file');
+  const outside = path.join(tmpHome, 'outside.md');
+  writeText(outside, 'outside');
+  fs.symlinkSync(outside, path.join(dir, 'escape.md'));
+
+  const artifacts = agyBrain.readAgyBrainArtifacts(convId);
+  assert.deepEqual(artifacts.map(a => a.name).sort(), ['arch.png', 'implementation_plan.md']);
+  const plan = artifacts.find(a => a.name === 'implementation_plan.md');
+  assert.ok(plan);
+  assert.equal(plan.kind, 'markdown');
+  assert.equal(plan.summary, 'Step-by-step refactor plan');
+  assert.equal(plan.requestFeedback, true);
+  assert.equal(plan.artifactType, 'ARTIFACT_TYPE_IMPLEMENTATION_PLAN');
+
+  const meta = agyBrain.readAgyBrainArtifactMeta(convId, path.join(dir, 'implementation_plan.md'));
+  assert.equal(meta?.requestFeedback, true);
+  assert.equal(agyBrain.readAgyBrainArtifactMeta(convId, path.join(dir, '.system_generated', 'secret.md')), null);
+});

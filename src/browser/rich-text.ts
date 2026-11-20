@@ -263,8 +263,8 @@ function linkifyFilePaths(root: ParentNode) {
     }
   });
 
-  // Bare-file-path hrefs would navigate to a 404: strip the href and let the
-  // delegated click open the file viewer (data-file-path).
+  // Bare-file-path and file:// hrefs would navigate to a 404 or be blocked:
+  // strip the href and let the delegated click open the file viewer (data-file-path).
   root.querySelectorAll<HTMLAnchorElement>('.markdown-body a[href]').forEach(link => {
     if (link.classList.contains('file-link') || link.classList.contains('published-link')) return;
     const href = (link.getAttribute('href') || '').trim();
@@ -274,10 +274,19 @@ function linkifyFilePaths(root: ParentNode) {
       link.rel = 'noopener';
       return;
     }
-    if (!looksLikeFilePath(href)) return;
+    const fileUriMatch = /^file:\/\/(\/[^#?]+)(?:#L(\d+)(?:-L?\d+)?)?$/i.exec(href);
+    let targetPath: string | null = null;
+    if (fileUriMatch) {
+      let decoded = fileUriMatch[1];
+      try { decoded = decodeURIComponent(decoded); } catch {}
+      targetPath = fileUriMatch[2] ? `${decoded}:${fileUriMatch[2]}` : decoded;
+    } else if (looksLikeFilePath(href)) {
+      targetPath = href;
+    }
+    if (!targetPath) return;
     link.classList.add('file-link');
     link.title = 'Open file';
-    link.dataset.filePath = href;
+    link.dataset.filePath = targetPath;
     link.removeAttribute('href');
   });
 

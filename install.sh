@@ -6,9 +6,9 @@ usage() {
 Usage: ./install.sh [--links-only]
 
 Install pi-dish dependencies, link the Pi/OMP bridges and every skill into the
-default Pi, OMP, and Prime agent directories, and remove retired Prime
-extension links. Set PI_AGENT_DIR, OMP_AGENT_DIR, or PRIME_AGENT_DIR to
-override a destination (useful for isolated installs).
+default Pi, OMP, Prime, and Antigravity agent directories, and remove retired
+Prime extension links. Set PI_AGENT_DIR, OMP_AGENT_DIR, PRIME_AGENT_DIR, or
+AGY_AGENT_DIR to override a destination (useful for isolated installs).
 
   --links-only  Skip npm ci and only reconcile bridge and skill links
 EOF
@@ -37,6 +37,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 pi_agent_dir=${PI_AGENT_DIR:-"$HOME/.pi/agent"}
 omp_agent_dir=${OMP_AGENT_DIR:-"$HOME/.omp/agent"}
 prime_agent_dir=${PRIME_AGENT_DIR:-"$HOME/.prime/agent"}
+agy_agent_dir=${AGY_AGENT_DIR:-"$HOME/.gemini/antigravity-cli"}
 
 link_path() {
   local source=$1
@@ -97,8 +98,9 @@ for skill in "$root"/skills/*; do
   [[ -f $skill/SKILL.md ]] || continue
   name=${skill##*/}
   # Prime 0.10 discovers user skills under <agent dir>/skills (verified with
-  # `get_commands` over `--mode rpc` in an isolated HOME).
-  for agent_dir in "$pi_agent_dir" "$omp_agent_dir" "$prime_agent_dir"; do
+  # `get_commands` over `--mode rpc` in an isolated HOME); Antigravity discovers
+  # user skills under ~/.gemini/antigravity-cli/skills.
+  for agent_dir in "$pi_agent_dir" "$omp_agent_dir" "$prime_agent_dir" "$agy_agent_dir"; do
     link_path "$skill" "$agent_dir/skills/$name"
   done
 done

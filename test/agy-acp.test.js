@@ -447,8 +447,15 @@ test('agy sessions refuse capabilities the relay does not carry', async () => {
         const followUp = await post(sessionPath(sessionId, '/follow-up'), { message: 'later' });
         assert.equal(followUp.status, 409);
         assert.match(String(followUp.body.error), /follow-ups/);
-        const exported = await get(sessionPath(sessionId, '/export'));
-        assert.equal(exported.status, 409);
+        const exported = await fetch(`${base}${sessionPath(sessionId, '/export')}`);
+        assert.equal(exported.status, 200);
+        assert.match(await exported.text(), /<html/i);
+        const shared = await post(sessionPath(sessionId, '/share'), {});
+        assert.equal(shared.status, 200, JSON.stringify(shared.body));
+        const sharePath = String((0, test_types_js_1.present)(shared.body.path));
+        const sharedHtml = await fetch(`${base}${sharePath}`);
+        assert.equal(sharedHtml.status, 200);
+        assert.match(await sharedHtml.text(), /<html/i);
         const named = await post('/api/sessions/new', { harness: 'agy', cwd: projDir, name: 'named' });
         assert.equal(named.status, 400);
         assert.match(String(named.body.error), /does not support naming/);
@@ -625,6 +632,42 @@ test('agy brain subagents, background tasks, task logs, swarm board, and slash c
             const ran = await post(sessionPath(sessionId, '/command'), { message: cmd });
             assert.equal(ran.status, 200, `${cmd}: ${JSON.stringify(ran.body)}`);
         }
+        // 5. Brain artifacts endpoint, file containment (allows brain .md, blocks .system_generated & symlinks),
+        //    and HTML export + share on agy-brain-v1 subagent transcripts.
+        const brainDir = path.dirname(coordSys);
+        const planFile = path.join(brainDir, 'plan.md');
+        fs.writeFileSync(planFile, '# Rollout Plan\n\nStep 1: ship it.\n');
+        fs.writeFileSync(`${planFile}.metadata.json`, JSON.stringify({
+            Summary: 'Rollout plan for tasks UI',
+            UserFacing: true,
+            RequestFeedback: true,
+        }));
+        const escapedTarget = path.join(tmpHome, 'secret-outside.md');
+        fs.writeFileSync(escapedTarget, 'secret\n');
+        fs.symlinkSync(escapedTarget, path.join(brainDir, 'escape.md'));
+        const artsRes = await get(sessionPath(sessionId, '/artifacts'));
+        assert.equal(artsRes.status, 200, JSON.stringify(artsRes.body));
+        const arts = (0, test_types_js_1.records)(artsRes.body.artifacts);
+        assert.equal(arts.length, 1);
+        assert.equal(arts[0].name, 'plan.md');
+        assert.equal(arts[0].requestFeedback, true);
+        const previewRes = await get(sessionPath(sessionId, `/file?path=${encodeURIComponent(planFile)}`));
+        assert.equal(previewRes.status, 200, JSON.stringify(previewRes.body));
+        assert.match(String(previewRes.body.content), /Rollout Plan/);
+        assert.equal((0, test_types_js_1.record)(previewRes.body.artifact).requestFeedback, true);
+        const sysBlocked = await get(sessionPath(sessionId, `/file?path=${encodeURIComponent(path.join(coordSys, 'logs', 'transcript.jsonl'))}`));
+        assert.equal(sysBlocked.status, 404, 'must not expose .system_generated files via brain root');
+        const symBlocked = await get(sessionPath(sessionId, `/file?path=${encodeURIComponent(path.join(brainDir, 'escape.md'))}`));
+        assert.equal(symBlocked.status, 404, 'must reject symlink escapes out of brain dir');
+        const subExport = await fetch(`${base}${sessionPath(subRouteId, '/export')}`);
+        const subExportHtml = await subExport.text();
+        assert.equal(subExport.status, 200, subExportHtml);
+        assert.match(subExportHtml, /<html/i);
+        const subShare = await post(sessionPath(subRouteId, '/share'), {});
+        assert.equal(subShare.status, 200, JSON.stringify(subShare.body));
+        const subShareHtml = await fetch(`${base}${String((0, test_types_js_1.present)(subShare.body.path))}`);
+        assert.equal(subShareHtml.status, 200);
+        assert.match(await subShareHtml.text(), /<html/i);
     }
     finally {
         await post(sessionPath(sessionId, '/close'), {});

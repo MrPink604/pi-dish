@@ -3,6 +3,7 @@ import type { SessionSource } from './session-source';
 import { record } from './helper-values';
 import { searchHomeDirs, getDirChildren, isPathCompletionToken, completePath, searchFiles } from './file-search';
 import { resolveFileMention, readFileForViewer } from './file-mention';
+import { agyBrainDir, readAgyBrainArtifactMeta } from './agy-brain';
 import { readSessionMessages } from './session-files';
 import { createDiffView } from './git-diff';
 
@@ -77,7 +78,9 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     if (!cwd && !session) return { status: 404, body: { error: 'Unknown session' } } as const;
     let messages: readonly unknown[] = [];
     if (session) { try { messages = readSessionMessages(session); } catch {} }
-    const resolved = await resolveFileMention(mention, { cwd, messages });
+    const brainRoot = session?.harnessId === 'agy' ? agyBrainDir(session.nativeSessionId) : null;
+    const extraRoots = brainRoot ? [{ root: brainRoot, denySubdirs: ['.system_generated'] }] : undefined;
+    const resolved = await resolveFileMention(mention, { cwd, messages, extraRoots });
     if (!resolved) {
       return { status: 404, body: { error: `Couldn't find "${mention}" among this session's files` } } as const;
     }
@@ -85,7 +88,10 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     if ('error' in file) {
       return { status: file.status || 415, body: { error: file.error, path: resolved.absPath } } as const;
     }
-    return { cwd, resolved, mention, file };
+    const artifact = session?.harnessId === 'agy'
+      ? readAgyBrainArtifactMeta(session.nativeSessionId, resolved.absPath)
+      : null;
+    return { cwd, resolved, mention, file, artifact };
   }
 
   // Both preview and raw bytes use the same session-aware reach rules.
@@ -108,7 +114,7 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
     try {
       const prepared = await prepareViewerFile(req);
       if (prepared.status !== undefined) return res.status(prepared.status).json(prepared.body);
-      const { cwd, resolved, mention, file } = prepared;
+      const { cwd, resolved, mention, file, artifact } = prepared;
       if (file.image) {
         file.image.url = `/api/sessions/${encodeURIComponent(req.params.id)}/file/content?path=${encodeURIComponent(mention)}&v=${file.mtime}-${file.size}`;
       }
@@ -117,6 +123,7 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
         relPath: cwd && resolved.absPath.startsWith(cwd + '/')
           ? resolved.absPath.slice(cwd.length + 1) : null,
         line: resolved.line ?? null,
+        ...(artifact ? { artifact: { requestFeedback: artifact.requestFeedback, summary: artifact.summary, artifactType: artifact.artifactType } } : {}),
         ...file,
       });
     } catch (error) {

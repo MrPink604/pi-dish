@@ -427,12 +427,15 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
         }
         res.status(404).json({ error: 'Session not found' }); return;
       }
-      if (source.harnessId !== 'pi' && source.harnessId !== 'omp') {
-        res.status(409).json({ error: 'HTML export is only supported for Pi and OMP sessions.' }); return;
+      if (source.harnessId !== 'pi' && source.harnessId !== 'omp' && source.harnessId !== 'agy') {
+        res.status(409).json({ error: 'HTML export is only supported for Pi, OMP, and Antigravity sessions.' }); return;
       }
       const outPath = path.join(os.tmpdir(), `pi-dish-export-${req.params.id.slice(-12)}.html`);
       const htmlPath = await exportSessionHtml(source, outPath);
-      res.download(htmlPath, path.basename(source.file, '.jsonl') + '.html');
+      const downloadName = source.profileId === 'agy-brain-v1'
+        ? `${source.nativeSessionId}.html`
+        : path.basename(source.file, '.jsonl') + '.html';
+      res.download(htmlPath, downloadName);
     } catch (error) { res.status(500).json({ error: errorMessage(error) }); }
   };
 

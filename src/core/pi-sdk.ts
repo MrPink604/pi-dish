@@ -1,8 +1,12 @@
+import * as crypto from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import type * as PiSDK from '@earendil-works/pi-coding-agent' with { 'resolution-mode': 'import' };
 import type * as PiHtmlExport from '../../node_modules/@earendil-works/pi-coding-agent/dist/core/export-html/index.js' with { 'resolution-mode': 'import' };
+import { AGY_BRAIN_PROFILE_ID, parseAgyBrainEntries } from './agy-brain';
 import { extractTextContent, getToolSummary } from './helper-content';
 import { collectActivePath, walkBranchTree } from './helper-tree';
 import { exportOmpSessionHtml } from './omp-export';
@@ -389,6 +393,20 @@ export async function exportSessionHtml(sessionPath: string, outputPath: string,
   const mod = await import(
     pathToFileURL(path.join(PKG_ROOT, 'dist', 'core', 'export-html', 'index.js')).href
   ) as typeof PiHtmlExport;
+  if (profileId === AGY_BRAIN_PROFILE_ID) {
+    // Antigravity subagent/worker logs are brain step JSONL, not Pi-v3 JSONL on
+    // disk; project them to a temporary Pi-v3 file so Pi's exporter can render them.
+    const raw = fs.readFileSync(sessionPath, 'utf8');
+    const projected = parseAgyBrainEntries(raw, sessionPath);
+    const tempPath = path.join(os.tmpdir(), `pi-dish-agy-export-${crypto.randomUUID()}.jsonl`);
+    fs.writeFileSync(tempPath, projected.map(entry => JSON.stringify(entry)).join('\n') + '\n', { mode: 0o600 });
+    try {
+      const sm = sdk.SessionManager.open(tempPath);
+      return await mod.exportSessionToHtml(sm, undefined, { outputPath });
+    } finally {
+      try { fs.unlinkSync(tempPath); } catch {}
+    }
+  }
   const sm = sdk.SessionManager.open(sessionPath);
   return mod.exportSessionToHtml(sm, undefined, { outputPath });
 }

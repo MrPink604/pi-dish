@@ -256,3 +256,25 @@ export declare function readAgySessionTasks(nativeSessionId: string, options?: {
         startedAt: number;
     }[];
 }): AgySessionTasksPayload;
+export interface AgyBrainArtifact {
+    name: string;
+    path: string;
+    kind: 'markdown' | 'html' | 'image';
+    size: number;
+    updatedAt: string;
+    summary: string;
+    userFacing: boolean;
+    requestFeedback: boolean;
+    artifactType: string;
+}
+export interface AgyBrainArtifactMeta {
+    summary: string;
+    userFacing: boolean;
+    requestFeedback: boolean;
+    artifactType: string;
+    updatedAt: string | null;
+}
+/** Read optional `<file>.metadata.json` sidecar if `filePath` is a direct artifact inside this conversation's brain dir. */
+export declare function readAgyBrainArtifactMeta(nativeSessionId: string, filePath: string): AgyBrainArtifactMeta | null;
+/** List user-facing Antigravity brain artifacts (`.md`/`.html`/images) for one conversation. */
+export declare function readAgyBrainArtifacts(nativeSessionId: string): AgyBrainArtifact[];
