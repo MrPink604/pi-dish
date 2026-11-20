@@ -27,7 +27,7 @@ process.env.PI_DISH_ROUTINE_CLOSE_GRACE_MS = '0';
 const store = require('../lib/routines.js');
 const { createRoutineRunner, STARTING_WATCHDOG_MS } = require('../lib/routine-runner.js');
 const { BridgeSession } = require('../lib/bridge-session.js');
-const { validSessionId } = require('../lib/session-key.js');
+const { validSessionId, encodeSessionKey } = require('../lib/session-key.js');
 const runners = new Set();
 test.after(() => {
     for (const runner of runners)
@@ -662,11 +662,16 @@ test('input larger than the cap is refused before anything is recorded', () => {
 // ---------------------------------------------------------------------------
 const FLEET = '0b0c5a1e-0000-4000-8000-000000000001';
 const OTHER = '0b0c5a1e-0000-4000-8000-000000000002';
+/** A bot's session route, as pi-dish names its chat. */
+function botRoute(id) {
+    assert.ok(validSessionId(id));
+    return encodeSessionKey('bot', id);
+}
 /** The bots a routine can reach: rows by id, and every message handed to one. */
 function fakeBots(rows, { queued = false } = {}) {
     const delivered = [];
     const port = {
-        find: id => rows[id] ? { name: rows[id].name, retired: !!rows[id].retired, route: `bot-route-${id}` } : null,
+        find: id => rows[id] ? { name: rows[id].name, retired: !!rows[id].retired, route: botRoute(id) } : null,
         deliver: async (id, message) => { delivered.push({ id, message }); return { queued }; },
     };
     return { port, delivered, rows };
@@ -711,8 +716,9 @@ test('a bot routine\u2019s run is delivered into the bot\u2019s conversation, he
     assert.deepEqual(message.data, { routineId: routine.id, routineName: 'backup-check', invocationId: run.id, trigger: 'schedule', scheduledFor: at, late: 0 });
     assert.equal(run.status, 'completed');
     assert.equal(run.delivery, 'prompt');
-    assert.equal(run.sessionId, `bot-route-${FLEET}`);
+    assert.equal(run.sessionId, botRoute(FLEET));
     assert.equal(run.summary, 'Delivered to Fleet; it answers in its chat.');
+    assert.equal(store.invocationsBySessionId().has(botRoute(FLEET)), false, 'the bot\u2019s chat is not stamped as the routine\u2019s session');
     // On demand it says so, and who asked.
     runner.invoke(routine, { trigger: 'invoke', source: 'cli' });
     await settleTwice();

@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from 'util';
 import { readStore, writeStore } from './dish-store';
 import { asRecord } from './wire-protocol';
 import { getHarness } from './harnesses';
+import { decodeSessionKey } from './session-key';
 import { parseCron } from './cron';
 import { errorMessage } from './http-boundary';
 
@@ -542,11 +543,17 @@ export function activeInvocations(): RoutineInvocation[] {
   return readInvocations().filter((entry) => includes(ACTIVE_STATUSES, entry.status));
 }
 
-/** Latest invocation per session id; presentation-only provenance, never authority. */
+/**
+ * Latest invocation per session id; presentation-only provenance, never authority. A bot routine's runs name the
+ * bot's chat, which the routine did not produce, so a bot is never stamped (or hidden) as a routine's session.
+ */
 export function invocationsBySessionId(): Map<string, RoutineInvocation> {
   const bySession = new Map<string, RoutineInvocation>();
   for (const entry of readInvocations()) { // newest first, so the first wins
-    if (entry.sessionId && !bySession.has(entry.sessionId)) bySession.set(entry.sessionId, entry);
+    if (!entry.sessionId || bySession.has(entry.sessionId)) continue;
+    let harness: string | null = null;
+    try { harness = decodeSessionKey(entry.sessionId).harnessId; } catch {}
+    if (harness !== 'bot') bySession.set(entry.sessionId, entry);
   }
   return bySession;
 }

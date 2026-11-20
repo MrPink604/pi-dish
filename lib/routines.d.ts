@@ -105,5 +105,8 @@ export declare function lastInvocation(routineId: string, predicate?: ((entry: R
 /** The invocation currently occupying the routine, if any (busy := this). */
 export declare function activeInvocation(routineId: string): RoutineInvocation | null;
 export declare function activeInvocations(): RoutineInvocation[];
-/** Latest invocation per session id; presentation-only provenance, never authority. */
+/**
+ * Latest invocation per session id; presentation-only provenance, never authority. A bot routine's runs name the
+ * bot's chat, which the routine did not produce, so a bot is never stamped (or hidden) as a routine's session.
+ */
 export declare function invocationsBySessionId(): Map<string, RoutineInvocation>;
