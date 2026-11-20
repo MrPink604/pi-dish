@@ -151,11 +151,11 @@ export function newContextRefusal(memory: BotMemory, workSinceRollover: boolean)
   if (!memory.notebook.trim()) {
     return 'Refused: your notebook is empty. Write what you need to keep with context_notes first; the new window starts from the notebook, not from this conversation.';
   }
+  if (!workSinceRollover) {
+    return 'Refused: nothing has happened since the last new window, so this is already the new window: a rollover you were asked for is done. Carry on with the work, or tell the user the new window is open; roll over again once this window has filled.';
+  }
   if (memory.notebookSavedIn !== memory.windows.length) {
     return 'Refused: you have not saved your notebook in this window. Save it with context_notes (write the whole notebook, even if little changed), then call new_context again.';
-  }
-  if (!workSinceRollover) {
-    return 'Refused: nothing has happened since the last new window. Carry on with the work; roll over again once this window has filled.';
   }
   return null;
 }
@@ -175,10 +175,16 @@ export interface HandoffInput {
   tail: readonly { role: string; text: string }[];
   request: string | null;
   workers: readonly WorkerRecord[];
+  /** True when the window was closed at the context limit after a run; false when the bot's own new_context closed it. */
+  forced: boolean;
 }
 
-/** The first message of a new window: what the bot needs that its notebook does not hold. */
-export function composeHandoff({ windowNumber, closed, tail, request, workers }: HandoffInput): string {
+/**
+ * The first message of a new window: what the bot needs that its notebook does not hold. The latest request is
+ * shown with what became of it: a rollover the bot made while handling it is done, and must not be read as a request
+ * to roll over again.
+ */
+export function composeHandoff({ windowNumber, closed, tail, request, workers, forced }: HandoffInput): string {
   const lines = [`[Context window ${windowNumber}. Your identity and notebook are in your instructions; earlier windows are readable with the history tool.]`];
   if (closed.length) {
     lines.push('', 'Earlier windows:');
@@ -189,6 +195,11 @@ export function composeHandoff({ windowNumber, closed, tail, request, workers }:
     for (const message of tail) lines.push(`${message.role}: ${message.text}`);
   }
   lines.push('', `Latest request: ${request ?? '(none)'}`);
+  if (request !== null) {
+    lines.push(forced
+      ? 'It was answered in the last window, which was then closed at the context limit.'
+      : 'You opened this window with new_context while handling it, and that call is done: this is the new window. Do not call new_context again for it; carry on with whatever else it asks, or tell the user the new window is open.');
+  }
   lines.push('', workers.length ? 'Workers you started that are still open (each new answer arrives as a report):' : 'No workers are open.');
   for (const worker of workers) lines.push(`- ${worker.name}: ${worker.ref} (${worker.harness}${worker.host ? ` on ${worker.host}` : ''}, started ${worker.startedAt}${worker.watchEndedAt ? ', no longer watched' : ''})`);
   return lines.join('\n');
@@ -428,6 +439,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       tail,
       request: request ? messageText(entryMessage(request)) : null,
       workers: Object.values(memory.workers).filter(worker => !worker.closedAt),
+      forced,
     });
   }
 

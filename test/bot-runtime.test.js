@@ -309,10 +309,25 @@ test('new_context is refused without a saved notebook or new work', () => {
     assert.match(String(newContextRefusal({ ...memory, notebook: 'x', notebookSavedIn: 0 }, false)), /nothing has happened since/);
     assert.equal(newContextRefusal({ ...memory, notebook: 'x', notebookSavedIn: 0 }, true), null);
     const handoff = composeHandoff({ windowNumber: 2, closed: [{ line: 'Set up tycho', closedAt: '', forced: false }],
-        tail: [{ role: 'user', text: 'and the backups?' }], request: 'and the backups?', workers: [] });
+        tail: [{ role: 'user', text: 'and the backups?' }], request: 'and the backups?', workers: [], forced: true });
     assert.match(handoff, /Context window 2/);
     assert.match(handoff, /1\. Set up tycho/);
     assert.match(handoff, /Latest request: and the backups\?/);
+    assert.match(handoff, /answered in the last window/);
+});
+test('a rollover the user asked for is handed over as done, not as a request to roll over again', async (t) => {
+    const bot = await openTestBot(t, noSessions);
+    const call = (name, args) => bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall(name, args)], { stopReason: 'toolUse' });
+    bot.respond(call('context_notes', { action: 'write', text: 'Nothing pending.' }), call('new_context', { summary: 'Rolled over on request' }), 
+    // The model reads the handoff wrongly and tries again; the refusal says the rollover is done.
+    call('new_context', { summary: 'again' }), bot.faux.fauxAssistantMessage('The new window is open.'));
+    await bot.runtime.prompt('Start a new context window', 'followUp');
+    await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message) === 'The new window is open.'), 'the run answers');
+    const handoff = textOf(bot.requests[2].find(message => message.role === 'user'));
+    assert.match(handoff, /Latest request: Start a new context window\nYou opened this window with new_context while handling it, and that call is done/);
+    const results = bot.mirrorLines().filter(line => line.type === 'message' && line.message.role === 'toolResult')
+        .map(line => textOf(line.message));
+    assert.match(results[2], /^Refused: nothing has happened since the last new window, so this is already the new window/);
 });
 function systemText(messages) {
     return JSON.stringify(messages.filter(message => message.role === 'system'));
@@ -328,7 +343,7 @@ test('new_context opens a window holding the identity, the notebook and the rece
     assert.match(results[0], /notebook is empty/);
     assert.match(results[1], /^Saved/);
     assert.match(results[2], /new context window starts/);
-    assert.match(results[3], /not saved your notebook in this window/, 'the new window needs its own save');
+    assert.match(results[3], /nothing has happened since/, 'right after a rollover, the rollover is done');
     assert.match(results[4], /^Saved/);
     assert.match(results[5], /nothing has happened since/, 'a second rollover right away is refused');
     // The request after the rollover: the new instructions and the handoff, nothing of the old window.

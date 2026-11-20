@@ -74,9 +74,15 @@ export interface HandoffInput {
     }[];
     request: string | null;
     workers: readonly WorkerRecord[];
+    /** True when the window was closed at the context limit after a run; false when the bot's own new_context closed it. */
+    forced: boolean;
 }
-/** The first message of a new window: what the bot needs that its notebook does not hold. */
-export declare function composeHandoff({ windowNumber, closed, tail, request, workers }: HandoffInput): string;
+/**
+ * The first message of a new window: what the bot needs that its notebook does not hold. The latest request is
+ * shown with what became of it: a rollover the bot made while handling it is done, and must not be read as a request
+ * to roll over again.
+ */
+export declare function composeHandoff({ windowNumber, closed, tail, request, workers, forced }: HandoffInput): string;
 export interface BotModels {
     models: Models;
     close(): Promise<void>;
