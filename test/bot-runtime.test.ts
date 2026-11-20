@@ -196,6 +196,123 @@ test('a relay restarted while a worker runs delivers the report once', async t =
   assert.equal(worker.calls.filter(args => args[0] === 'spawn').length, 0, 'the worker is not launched again');
 });
 
+const WORKER_ID = '2026-11-20T10-07-13-963Z_01a1f86c-1111-4222-8333-444455556666';
+
+/** A sessions port for one worker the test drives: it works until `answer`, and `close` stops it. */
+function scriptedWorker() {
+  const calls: string[][] = [];
+  const state = { active: true, busy: true, messages: [{ role: 'user', content: 'brief' }] as Record<string, unknown>[] };
+  const port: SessionsPort = async args => {
+    calls.push(args);
+    if (args[0] === 'spawn') return JSON.stringify({ sessionId: WORKER_ID, harness: 'pi' });
+    if (args[0] === 'resolve') return JSON.stringify({ session: { id: WORKER_ID, isActive: state.active, turnInProgress: state.busy } });
+    if (args[0] === 'show') return JSON.stringify({ totalMessages: state.messages.length, messages: state.messages.slice(-1) });
+    if (args[0] === 'close') {
+      state.active = false;
+      state.busy = false;
+      return '{"ok":true}';
+    }
+    throw new Error(`unexpected ${args[0]}`);
+  };
+  return {
+    port, calls, state,
+    polls: () => calls.filter(args => args[0] === 'resolve').length,
+    answer(text: string) {
+      state.messages.push({ role: 'assistant', content: [{ type: 'text', text }] });
+      state.busy = false;
+    },
+  };
+}
+
+const reportsOf = (bot: Harness) => bot.mirrorLines().filter(line => line.customType === 'bot-worker-report').map(line => textOf(line));
+const relay = (bot: Harness): Step => context => bot.faux.fauxAssistantMessage(`Relayed: ${textOf(context.messages.at(-1))}`);
+// Nothing signals a report or poll that never comes: give one the time of several polls to show up.
+const severalPolls = () => new Promise(resolve => setTimeout(resolve, 200));
+
+test('a worker that settles again with new messages reports again, each report once, also across a restart', async t => {
+  const worker = scriptedWorker();
+  const bot = await openTestBot(t, worker.port);
+  bot.respond(
+    bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('spawn_worker', { name: 'clock', brief: 'sleep 75; date' })], { stopReason: 'toolUse' }),
+    bot.faux.fauxAssistantMessage('Started clock.'),
+    relay(bot),
+  );
+  await bot.runtime.prompt('What time is it after a sleep?', 'followUp');
+  await until(() => worker.polls() >= 1, 'the watcher polls');
+  const started = bot.mirrorLines().find(line => line.type === 'message' && (line.message as Record<string, unknown>).role === 'toolResult');
+  assert.match(textOf(started?.message), /Ref: 01a1f86c\./, 'the short ref, not the session id');
+  worker.answer('⏳ running in the background');
+  await until(() => reportsOf(bot).length === 1, 'the interim note is reported');
+  assert.equal(reportsOf(bot)[0], '[worker report] "clock" (01a1f86c) finished.\n\n⏳ running in the background');
+  // The watch goes on after a report.
+  const after = worker.polls();
+  await until(() => worker.polls() > after + 1, 'the watcher keeps polling');
+
+  await bot.reopen(() => {
+    worker.state.busy = true;
+    worker.state.messages.push({ role: 'user', content: 'background job finished' });
+    worker.answer('Fri Nov 20 12:01:15 UTC 2026');
+  });
+  bot.respond(relay(bot));
+  await until(() => reportsOf(bot).length === 2, 'the real result is reported', 15_000);
+  assert.equal(reportsOf(bot)[1], '[worker report] "clock" (01a1f86c) finished another turn.\n\nFri Nov 20 12:01:15 UTC 2026');
+  await until(() => bot.mirrorLines().filter(line => line.type === 'message' && textOf(line.message).startsWith('Relayed:')).length === 2, 'both are answered');
+  await severalPolls();
+  assert.equal(reportsOf(bot).length, 2, 'each report once');
+  assert.equal(worker.calls.filter(args => args[0] === 'spawn').length, 1);
+});
+
+test('a worker whose session closes ends the watch with a last report that says so', async t => {
+  const worker = scriptedWorker();
+  const bot = await openTestBot(t, worker.port);
+  bot.respond(
+    bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('spawn_worker', { name: 'check', brief: 'Check it.' })], { stopReason: 'toolUse' }),
+    bot.faux.fauxAssistantMessage('Started check.'),
+    relay(bot),
+    relay(bot),
+  );
+  await bot.runtime.prompt('Check it', 'followUp');
+  await until(() => worker.polls() >= 1, 'the watcher polls');
+  worker.answer('All good.');
+  await until(() => reportsOf(bot).length === 1, 'the answer is reported');
+  worker.state.active = false;
+  await until(() => reportsOf(bot).length === 2, 'the close is reported');
+  assert.equal(reportsOf(bot)[1], '[worker report] "check" (01a1f86c) has stopped.\n\nThe session is closed; it is no longer watched.');
+  const polls = worker.polls();
+  await severalPolls();
+  assert.equal(worker.polls(), polls, 'no polls after the watch ends');
+  assert.equal(reportsOf(bot).length, 2);
+});
+
+test('a bot closes a worker it started and is refused for any other ref', async t => {
+  const worker = scriptedWorker();
+  const bot = await openTestBot(t, worker.port);
+  const call = (name: string, args: Record<string, string>) =>
+    bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall(name, args)], { stopReason: 'toolUse' });
+  bot.respond(
+    call('spawn_worker', { name: 'check', brief: 'Check it.' }),
+    bot.faux.fauxAssistantMessage('Started check.'),
+    call('sessions', { action: 'close', ref: 'deadbeef' }),
+    call('sessions', { action: 'close', ref: '01a1f86c' }),
+    bot.faux.fauxAssistantMessage('Closed it.'),
+  );
+  await bot.runtime.prompt('Check it', 'followUp');
+  await until(() => worker.polls() >= 1, 'the watcher polls');
+  worker.answer('All good.');
+  await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message) === 'Closed it.'), 'the bot closes its worker');
+  const results = bot.mirrorLines().filter(line => line.type === 'message' && (line.message as Record<string, unknown>).role === 'toolResult')
+    .map(line => line.message as Record<string, unknown>);
+  assert.equal(results[1].isError, true);
+  assert.match(textOf(results[1]), /^Refused: deadbeef is not a worker you started.*Open workers: 01a1f86c\.$/);
+  assert.equal(results[2].isError, false);
+  assert.equal(textOf(results[2]), 'Closed worker "check" (01a1f86c).');
+  assert.deepEqual(worker.calls.filter(args => args[0] === 'close'), [['close', '01a1f86c']], 'only its own worker is closed');
+  const polls = worker.polls();
+  await severalPolls();
+  assert.equal(worker.polls(), polls, 'the watch has ended');
+  assert.equal(reportsOf(bot).length, 1, 'its own close is not reported back');
+});
+
 test('the settle rule waits for the turn to end and for new messages', () => {
   const finished = { totalMessages: 4, messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }] };
   assert.equal(settledWorker({ isActive: true, turnInProgress: true }, finished, 0), null, 'still working');

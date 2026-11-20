@@ -31,11 +31,21 @@ export declare function messageText(message: unknown): string;
 export declare function settledWorker(session: unknown, window: unknown, since: number): SettledWorker | null;
 export interface WorkerRecord {
     name: string;
+    /** The short ref `list` shows, host-qualified for a remote worker. */
     ref: string;
+    /** The full session id the routes speak. */
+    sessionId: string;
     harness: string;
     host: string | null;
     startedAt: string;
-    reportedAt?: string;
+    /** Reports delivered so far; the watch posts one per settle with new messages. */
+    reports: number;
+    /** Set by the bot's own close: once the session stops, the watch ends without a report. */
+    closing?: true;
+    /** When the session was seen to stop or was closed. */
+    closedAt?: string;
+    /** When the watch ended: the session stopped, or 24 hours passed. */
+    watchEndedAt?: string;
 }
 export interface ClosedWindow {
     line: string;

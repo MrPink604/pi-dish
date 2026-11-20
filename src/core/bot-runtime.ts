@@ -25,6 +25,7 @@ import type { Message, Models, Provider, AssistantMessage } from '@earendil-work
 import type { BotRow } from './bot-registry';
 import type { BotMirror } from './bot-mirror';
 import { record as isRecord } from './helper-values';
+import { stableSessionRef } from './helper-refs';
 import type { ProtocolRecord } from './wire-protocol';
 
 /** The notebook's cap, in UTF-8 bytes. */
@@ -92,11 +93,39 @@ export function settledWorker(session: unknown, window: unknown, since: number):
 
 export interface WorkerRecord {
   name: string;
+  /** The short ref `list` shows, host-qualified for a remote worker. */
   ref: string;
+  /** The full session id the routes speak. */
+  sessionId: string;
   harness: string;
   host: string | null;
   startedAt: string;
-  reportedAt?: string;
+  /** Reports delivered so far; the watch posts one per settle with new messages. */
+  reports: number;
+  /** Set by the bot's own close: once the session stops, the watch ends without a report. */
+  closing?: true;
+  /** When the session was seen to stop or was closed. */
+  closedAt?: string;
+  /** When the watch ended: the session stopped, or 24 hours passed. */
+  watchEndedAt?: string;
+}
+
+/**
+ * Version 1 workers kept the long ref and a `reportedAt`: their watch ended at
+ * the one report, though the session may still be open.
+ */
+function migrateWorkers(value: unknown): Record<string, WorkerRecord> {
+  const workers: Record<string, WorkerRecord> = {};
+  for (const [dispatchId, raw] of Object.entries(isRecord(value) ? value : {})) {
+    const old = raw as { name: string; ref: string; harness: string; host: string | null; startedAt: string; reportedAt?: string };
+    const prefix = old.host ? `${old.host}/` : '';
+    const sessionId = prefix && old.ref.startsWith(prefix) ? old.ref.slice(prefix.length) : old.ref;
+    workers[dispatchId] = {
+      name: old.name, ref: `${prefix}${stableSessionRef(sessionId)}`, sessionId, harness: old.harness, host: old.host,
+      startedAt: old.startedAt, reports: old.reportedAt ? 1 : 0, ...(old.reportedAt ? { watchEndedAt: old.reportedAt } : {}),
+    };
+  }
+  return workers;
 }
 
 export interface ClosedWindow {
@@ -156,8 +185,8 @@ export function composeHandoff({ windowNumber, closed, tail, request, workers }:
     for (const message of tail) lines.push(`${message.role}: ${message.text}`);
   }
   lines.push('', `Latest request: ${request ?? '(none)'}`);
-  lines.push('', workers.length ? 'Workers still running (their reports will arrive as messages):' : 'No workers are running.');
-  for (const worker of workers) lines.push(`- ${worker.name}: ${worker.ref} (${worker.harness}${worker.host ? ` on ${worker.host}` : ''}, started ${worker.startedAt})`);
+  lines.push('', workers.length ? 'Workers you started that are still open (each new answer arrives as a report):' : 'No workers are open.');
+  for (const worker of workers) lines.push(`- ${worker.name}: ${worker.ref} (${worker.harness}${worker.host ? ` on ${worker.host}` : ''}, started ${worker.startedAt}${worker.watchEndedAt ? ', no longer watched' : ''})`);
   return lines.join('\n');
 }
 
@@ -166,11 +195,14 @@ const PREAMBLE = [
   'user, start pi-dish sessions (workers) to do the work, and keep what you learn. You have no shell and do not edit',
   'files; anything that needs doing on a machine goes to a worker.',
   '',
-  'Workers: spawn_worker starts a session with a complete brief and returns its ref at once. Its final answer is',
-  'delivered to you once, as a message starting "[worker report]"; do not poll for it. Tell the user the ref when you',
-  'start one and the outcome when it reports. A spawn whose outcome is unknown is never retried for you: look for the',
-  'session with the sessions tool before starting another. The sessions tool lists, reads, searches and messages',
-  'sessions and reports the fleet\'s hosts and their load.',
+  'Workers: spawn_worker starts a session with a complete brief and returns its ref at once. Each time the worker',
+  'ends a turn with something new, that answer is delivered to you once, as a message starting "[worker report]";',
+  'do not poll for it. A worker may end a turn while background work runs and report again when it finishes. It is',
+  'watched until it is closed or 24 hours pass, and the last report says so. Tell the user the ref when you start one',
+  'and the outcome when it reports. Once you have what you need from a worker, close it with the sessions tool',
+  '(action close); you can close only workers you started. A spawn whose outcome is unknown is never retried for you:',
+  'look for the session with the sessions tool before starting another. The sessions tool lists, reads, searches,',
+  'messages and closes sessions and reports the fleet\'s hosts and their load.',
   '',
   'Memory: your notebook (context_notes, at most 16 KiB) is the only thing that carries over to a new context window,',
   'with the end of the conversation and your running workers. Write durable facts there, not chat. When the window is',
@@ -313,11 +345,12 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
 
   const MemoryDoc = durable.defineDoc<BotMemory & Durable.JsonObject>({
     kind: 'bot.memory',
-    version: 1,
+    version: 2,
     scope: 'conversation',
     history: 'latest',
     fork: 'current',
     initial: () => ({ notebook: '', notebookSavedIn: -1, windows: [], workers: {} }),
+    migrate: (value) => ({ ...value, workers: migrateWorkers(value.workers) }) as BotMemory & Durable.JsonObject,
     checkpointWhen: () => true,
   });
   const ReportEntry = 'bot.report';
@@ -384,58 +417,111 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       closed: memory.windows,
       tail,
       request: request ? messageText(entryMessage(request)) : null,
-      workers: Object.values(memory.workers).filter(worker => !worker.reportedAt),
+      workers: Object.values(memory.workers).filter(worker => !worker.closedAt),
     });
   }
 
   // Workers -----------------------------------------------------------------
 
   type WatchInput = { dispatchId: string; ref: string; name: string; since: number; startedAt: number };
-  type WatchState = { phase: 'poll'; delayMs: number } | { phase: 'report'; report: string; state: string };
+  /** `since`: the transcript length the last report saw; `reports`: how many were delivered. */
+  type PollState = { phase: 'poll'; delayMs: number; since: number; reports: number };
+  type ReportState = {
+    phase: 'report'; report: string; state: string; requestId: string; since: number; reports: number;
+    /** The last report: the session stopped, or 24 hours passed. */
+    final: boolean;
+    stopped: boolean;
+  };
+  type WatchState = PollState | ReportState;
   const WorkerWatch = durable.defineTask<WatchInput, WatchState, null>({
     name: 'bot.worker-watch',
-    version: 1,
-    initial: () => ({ phase: 'poll', delayMs: pollMs.first }),
+    version: 2,
+    initial: (input) => ({ phase: 'poll', delayMs: pollMs.first, since: input.since, reports: 0 }),
+    // Version 1 ended the watch at its one report, posted as `worker-report:<dispatch>`.
+    migrate: (rawInput, rawCheckpoint) => {
+      const input = rawInput as WatchInput;
+      const old = rawCheckpoint as { phase: string; delayMs?: number; report?: string; state?: string };
+      const checkpoint: WatchState = old.phase === 'report'
+        ? { phase: 'report', report: String(old.report), state: String(old.state), requestId: `worker-report:${input.dispatchId}`,
+            since: input.since, reports: 1, final: true, stopped: old.state === 'inactive' }
+        : { phase: 'poll', delayMs: old.delayMs ?? pollMs.first, since: input.since, reports: 0 };
+      return { input, checkpoint };
+    },
     phases: {
       poll: async (task, runtime, taskContext) => {
-        const { ref, name, since, startedAt } = task.input;
-        const { delayMs } = task.state.checkpoint as Extract<WatchState, { phase: 'poll' }>;
+        const { dispatchId, ref, name, startedAt } = task.input;
+        const { delayMs, since, reports } = task.state.checkpoint as PollState;
         let settled: SettledWorker | null = null;
+        let active: boolean | null = null;
         try {
           const resolved: unknown = JSON.parse(await sessions(['resolve', ref, '--json', '--fields', 'all']));
           const window: unknown = JSON.parse(await sessions(['show', ref, '--limit', '1', '--json']));
-          settled = settledWorker(isRecord(resolved) ? resolved.session : null, window, since);
+          const row = isRecord(resolved) ? resolved.session : null;
+          settled = settledWorker(row, window, since);
+          active = isRecord(row) && row.isActive === true;
         } catch (error) {
           // The hub may be restarting; a failed poll is retried, never reported.
           log(`watch ${name} (${ref}): ${error instanceof Error ? error.message : String(error)}`);
         }
-        if (!settled && runtime.now() - startedAt > WATCH_GIVE_UP_MS) {
-          settled = { state: 'inactive', totalMessages: 0, text: 'Still working after 24 hours; no longer watched.' };
-        }
-        if (!settled) {
-          const next = { phase: 'poll', delayMs: Math.min(Math.round(delayMs * 1.5), pollMs.max) } as const;
+        const expired = runtime.now() - startedAt > WATCH_GIVE_UP_MS;
+        if (!settled && !expired) {
+          const next = { phase: 'poll', delayMs: Math.min(Math.round(delayMs * 1.5), pollMs.max), since, reports } as const;
           return runtime.sleepUntil(runtime.now() + delayMs, next, taskContext);
         }
-        const heading = settled.state === 'finished' ? 'finished'
-          : settled.state === 'waiting' ? 'is waiting for an answer' : 'stopped without a final answer';
-        const body = settled.text.length > REPORT_CHARS ? `${settled.text.slice(0, REPORT_CHARS)}\n[cut at ${REPORT_CHARS} characters; read the rest with sessions read ${ref}]` : settled.text;
-        const report = `[worker report] "${name}" (${ref}) ${heading}.\n\n${body || '(no text)'}`;
-        await runtime.commit(() => ({ status: 'running', checkpoint: { phase: 'report', report, state: settled.state } }), taskContext);
+        const stopped = active === false;
+        const number = reports + 1;
+        const answered = settled && settled.state !== 'inactive' ? settled : null;
+        const heading = answered?.state === 'waiting' ? 'is waiting for an answer'
+          : answered ? (number === 1 ? 'finished' : 'finished another turn')
+            : stopped ? (number === 1 ? 'stopped without a final answer' : 'has stopped')
+              : 'is still working after 24 hours';
+        const parts = [`[worker report] "${name}" (${ref}) ${heading}.`];
+        if (answered) {
+          parts.push(answered.text.length > REPORT_CHARS
+            ? `${answered.text.slice(0, REPORT_CHARS)}\n[cut at ${REPORT_CHARS} characters; read the rest with sessions read ${ref}]`
+            : answered.text || '(no text)');
+        }
+        if (stopped) parts.push('The session is closed; it is no longer watched.');
+        else if (expired) parts.push('It has been watched for 24 hours and is no longer watched.');
+        await runtime.commit(async (tx) => {
+          const worker = (await tx.doc(MemoryDoc, runtime.conversationId)).workers[dispatchId];
+          // The bot closed this worker itself, so it already has what it needs.
+          if (stopped && worker?.closing) {
+            const now = new Date().toISOString();
+            worker.closedAt ??= now;
+            worker.watchEndedAt = now;
+            return { status: 'terminal', outcome: { status: 'completed', result: null } };
+          }
+          return {
+            status: 'running',
+            checkpoint: {
+              phase: 'report', report: parts.join('\n\n'), state: settled?.state ?? 'working',
+              requestId: `worker-report:${dispatchId}:${number}`, since: settled?.totalMessages ?? since, reports: number,
+              final: stopped || expired, stopped,
+            },
+          };
+        }, taskContext);
       },
       report: async (task, runtime, taskContext) => {
         const { dispatchId, ref, name } = task.input;
-        const { report, state } = task.state.checkpoint as Extract<WatchState, { phase: 'report' }>;
+        const { report, state, requestId, since, reports, final, stopped } = task.state.checkpoint as ReportState;
         const handle = (await runtime.conversation(runtime.conversationId, taskContext))!;
-        // The request id makes this post happen once, also when a crash reruns the phase.
+        // The request id makes each report post once, also when a crash reruns the phase.
         await handle.submit({
-          type: 'input', content: report, whenBusy: 'followUp', requestId: `worker-report:${dispatchId}`,
-          entry: { kind: ReportEntry, data: { dispatchId, ref, name, state } },
+          type: 'input', content: report, whenBusy: 'followUp', requestId,
+          entry: { kind: ReportEntry, data: { dispatchId, ref, name, state, report: reports } },
         }, taskContext);
         await runtime.commit(async (tx) => {
-          const memory = await tx.doc(MemoryDoc, runtime.conversationId);
-          const worker = memory.workers[dispatchId];
-          if (worker) worker.reportedAt = new Date().toISOString();
-          return { status: 'terminal', outcome: { status: 'completed', result: null } };
+          const worker = (await tx.doc(MemoryDoc, runtime.conversationId)).workers[dispatchId];
+          const now = new Date().toISOString();
+          if (worker) {
+            worker.reports = reports;
+            if (stopped) worker.closedAt ??= now;
+            if (final) worker.watchEndedAt = now;
+          }
+          if (final) return { status: 'terminal', outcome: { status: 'completed', result: null } };
+          // Back to watching: a later turn that adds messages is the next report.
+          return { status: 'sleeping', until: runtime.now() + pollMs.first, checkpoint: { phase: 'poll', delayMs: pollMs.first, since, reports } };
         }, taskContext);
       },
     },
@@ -448,7 +534,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
 
   const spawnWorker = durable.defineTool({
     name: 'spawn_worker',
-    description: 'Start a pi-dish session that carries out one task on its own. Returns its ref at once; its final answer arrives later as a "[worker report]" message. Give it a complete brief: it knows nothing of this conversation.',
+    description: 'Start a pi-dish session that carries out one task on its own. Returns its ref at once; each answer it gives arrives later as a "[worker report]" message. Give it a complete brief: it knows nothing of this conversation.',
     parameters: obj({
       name: str({ description: 'Short name for the worker session' }),
       brief: str({ description: 'The complete task: goal, context, constraints, and what to report back' }),
@@ -462,7 +548,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     replay: 'safe',
     execute: async (args, api, callContext) => {
       const dispatchId = await api.memo('dispatch', crypto.randomUUID(), callContext);
-      type Spawned = { ref: string; harness: string };
+      type Spawned = { sessionId: string; harness: string };
       let spawned = await api.memo<Spawned>('spawned', callContext);
       if (!spawned) {
         if (await api.memo<boolean>('attempted', callContext)) {
@@ -477,41 +563,77 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         const result: unknown = JSON.parse(await sessions(argv));
         if (!isRecord(result) || typeof result.sessionId !== 'string') throw new Error('spawn returned no session id');
         spawned = await api.memo<Spawned>('spawned', {
-          ref: `${args.host ? `${args.host}/` : ''}${result.sessionId}`, harness: String(result.harness ?? args.harness ?? 'pi'),
+          sessionId: result.sessionId, harness: String(result.harness ?? args.harness ?? 'pi'),
         }, callContext);
       }
-      const { ref, harness } = spawned;
+      const { sessionId, harness } = spawned;
+      // The short ref `list` shows: what the bot repeats to the user and watches by.
+      const ref = `${args.host ? `${args.host}/` : ''}${stableSessionRef(sessionId)}`;
       await api.commit(async (tx) => {
         const memory = await tx.doc(MemoryDoc, api.conversationId);
         if (memory.workers[dispatchId]) return;
-        memory.workers[dispatchId] = { name: args.name, ref, harness, host: args.host ?? null, startedAt: new Date().toISOString() };
+        memory.workers[dispatchId] = {
+          name: args.name, ref, sessionId, harness, host: args.host ?? null, startedAt: new Date().toISOString(), reports: 0,
+        };
         // A fresh spawn's transcript is empty, so any answer is its own.
         await tx.createTask(WorkerWatch, { dispatchId, ref, name: args.name, since: 0, startedAt: api.now() },
           { ownership: { kind: 'conversation' }, background: true });
       }, callContext);
-      return text(`Started worker "${args.name}" (${harness}${args.host ? ` on ${args.host}` : ''}). Ref: ${ref}. Its report will arrive as a message.`);
+      return text(`Started worker "${args.name}" (${harness}${args.host ? ` on ${args.host}` : ''}). Ref: ${ref}. Each answer it gives arrives as a "[worker report]" message.`);
     },
   });
 
+  /** Closes a session this bot started; any other ref is refused. */
+  async function closeWorker(wanted: string, api: Durable.ToolExecutionApi, callContext: Context): Promise<Durable.ToolExecutionResult> {
+    const memory = await api.snapshot(MemoryDoc, api.conversationId, callContext);
+    const workers = Object.entries(memory?.workers ?? {});
+    const found = workers.find(([, worker]) => wanted === worker.ref || wanted === worker.sessionId
+      || (worker.host !== null && wanted === `${worker.host}/${worker.sessionId}`));
+    if (!found) {
+      const open = workers.filter(([, worker]) => !worker.closedAt).map(([, worker]) => worker.ref);
+      return refusal(`Refused: ${wanted} is not a worker you started, and you can close only your own workers. Open workers: ${open.join(', ') || 'none'}.`);
+    }
+    const [dispatchId, worker] = found;
+    const mark = (closing: boolean) => api.commit(async (tx) => {
+      const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
+      if (closing) draft.closing = true;
+      else delete draft.closing;
+    }, callContext);
+    // Marked first, so its watch, seeing the session stop, ends without reporting the close back.
+    await mark(true);
+    try {
+      await sessions(['close', worker.ref]);
+    } catch (error) {
+      await mark(false);
+      throw error;
+    }
+    await api.commit(async (tx) => {
+      const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
+      draft.closedAt ??= new Date().toISOString();
+    }, callContext);
+    return text(`Closed worker "${worker.name}" (${worker.ref}).`);
+  }
+
   const sessionsTool = durable.defineTool({
     name: 'sessions',
-    description: 'pi-dish sessions and hosts: list live sessions, read a transcript, search every transcript, send a message to a session, list the fleet\'s hosts, or show how busy each host is.',
+    description: 'pi-dish sessions and hosts: list live sessions, read a transcript, search every transcript, send a message to a session, close a worker you started, list the fleet\'s hosts, or show how busy each host is.',
     parameters: obj({
-      action: oneOf(['list', 'read', 'search', 'send', 'hosts', 'load'] as const),
-      ref: opt(str({ description: 'Session ref, for read and send' })),
+      action: oneOf(['list', 'read', 'search', 'send', 'close', 'hosts', 'load'] as const),
+      ref: opt(str({ description: 'Session ref, for read, send and close' })),
       query: opt(str({ description: 'Search terms, for search' })),
       message: opt(str({ description: 'Text to send, for send' })),
       host: opt(str({ description: 'Limit list or search to one host' })),
       limit: opt(num({ description: 'Rows or messages to show' })),
     }),
     replay: 'unsafe',
-    execute: async (args) => {
+    execute: async (args, api, callContext) => {
       const host = args.host ? ['--host', args.host] : [];
       const limit = args.limit ? ['--limit', String(Math.max(1, Math.floor(args.limit)))] : [];
       const need = (value: string | undefined, field: string): string => {
         if (!value) throw new Error(`${args.action} needs ${field}`);
         return value;
       };
+      if (args.action === 'close') return closeWorker(need(args.ref, 'ref'), api, callContext);
       const argv = args.action === 'list' ? ['list', '--active', ...host, ...limit]
         : args.action === 'read' ? ['read', need(args.ref, 'ref'), ...limit]
           : args.action === 'search' ? ['search', need(args.query, 'query'), ...(args.host ? host : ['--all-hosts']), ...limit]
