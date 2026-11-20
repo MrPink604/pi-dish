@@ -33,7 +33,12 @@
     "email": "pi-dish@localhost"
   },
   "dependencies": {
+    "@earendil-works/chord": "1.5.2",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@earendil-works/pi-claude-code": "https://codeload.github.com/earendil-works/pi-claude-code/tar.gz/d5b5e04c314d3452d357174d16d10dda34daa2d2",
     "@earendil-works/pi-coding-agent": "1.5.2",
+    "@earendil-works/pi-durable": "1.5.2",
+    "@earendil-works/pi-schema": "1.5.2",
     "@earendil-works/pi-server": "^1.1.0",
     "@ff-labs/fff-node": "^0.9.6",
     "compression": "^1.8.2",
@@ -69,5 +74,10 @@
   },
   "allowScripts": {
     "node-pty@1.1.0": true
+  },
+  "overrides": {
+    "@earendil-works/chord": {
+      "ws": "$ws"
+    }
   }
 }
