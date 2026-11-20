@@ -54,6 +54,27 @@ The setting is also exposed through the owning host's `GET /api/settings` and
 `PUT /api/settings` (partial update); valid values are integers from `0` through
 `86400000` milliseconds.
 
+## Waiting for an answer
+
+`wait <ref>` blocks until the session's turn is over, then prints its newest
+message: the final answer, or the question it is waiting on. A session has
+settled when it is not working or compacting, its transcript holds more than
+`--since` messages, and its newest message is not the user's. The live state
+comes from the resolve route; the newest message and the count come from the
+transcript window.
+
+- `--since COUNT` is the transcript length from before the work was sent. A
+  fresh spawn starts empty, so `spawn --prompt ...` is followed by
+  `wait <ref> --since 0`. After `send`, take the count first
+  (`show <ref> --limit 1 --json` reports `totalMessages`): a held or queued
+  prompt has not reached the transcript yet, and without `--since` an idle
+  session settles at once on the answer it already had.
+- `--timeout SECS` (default 600) bounds the wait. A timeout exits non-zero,
+  as does a session that is not running and has nothing new.
+- The header line reads `finished` or `waiting for an answer`; `--json`
+  returns `state` (`finished` or `waiting`), `totalMessages` and the raw
+  `message`.
+
 ## Reading a session (memory recall)
 
 `read <ref>` renders the transcript as markdown: turn headers, prose in

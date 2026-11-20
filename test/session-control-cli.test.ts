@@ -426,4 +426,61 @@ test('peer-session CLI models lists GET /api/models as lines and as the route JS
   assert.equal(text.stdout, 'acme/big\tAcme Big\tctx 200.0k\treasoning\nacme/tiny\ttiny\tctx ?\tfree,disabled\n');
 });
 
+// `wait` takes the live state from the resolve route and the newest message
+// and its count from the transcript window: a resolve row's messageCount is
+// stale for an agy session, so it must not decide anything.
+function waitServer() {
+  let resolves = 0;
+  const urls: string[] = [];
+  const server = http.createServer((req, res) => {
+    const url = req.url ?? '';
+    urls.push(url);
+    res.setHeader('Content-Type', 'application/json');
+    if (url === '/api/hosts') {
+      res.end(JSON.stringify({ hosts: [{ self: true, name: null, label: 'self', reachable: true,
+        capabilities: { sessions: true, resolve: true } }] }));
+      return;
+    }
+    if (url.startsWith('/api/sessions/resolve?')) {
+      // The first resolve is the ref lookup; the first poll is the second.
+      resolves++;
+      res.end(JSON.stringify({ session: { id: 'w-1', isActive: true, name: 'Worker', messageCount: 1,
+        turnInProgress: resolves < 3 } }));
+      return;
+    }
+    if (url === '/api/sessions/w-1/messages?limit=1') {
+      // The first poll sees only the prompt; by the second the answer is in.
+      const done = resolves >= 3;
+      res.end(JSON.stringify({ totalMessages: done ? 2 : 1, messages: [done
+        ? { role: 'assistant', content: [{ type: 'thinking', thinking: 'hm' }, { type: 'text', text: 'All green.' }] }
+        : { role: 'user', content: 'Run the suite' }] }));
+      return;
+    }
+    res.statusCode = 404; res.end(JSON.stringify({ error: 'not found' }));
+  });
+  return { server, urls, polls: () => resolves };
+}
+
+test('peer-session CLI wait prints the answer once the turn ends', async t => {
+  const { server, urls, polls } = waitServer();
+  const base = await listenServer(server);
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+
+  const waited = await run(['wait', 'w-1', '--since', '0', '--timeout', '20'], base);
+  assert.equal(polls(), 3, 'one resolve for the ref, then a working poll and a finished one');
+  assert.match(waited.stdout, /^# finished: w-1 · 2 messages\nAll green\.\n$/);
+  assert.ok(urls.includes('/api/sessions/w-1/messages?limit=1'));
+});
+
+test('peer-session CLI wait exits non-zero when nothing new arrives in time', async t => {
+  const { server } = waitServer();
+  const base = await listenServer(server);
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+
+  await assert.rejects(() => run(['wait', 'w-1', '--since', '2', '--timeout', '1'], base), (error: unknown) => {
+    assert.match(String(record(error).stderr ?? ''), /w-1 was still working after 1s/);
+    return true;
+  });
+});
+
 export {};

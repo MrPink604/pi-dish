@@ -44,7 +44,7 @@ interface ValueArgs {
   url?: string; session?: string; cwd?: string; harness?: string;
   model?: string; name?: string; prompt?: string; limit?: string;
   host?: string; before?: string; max_chars?: string; fields?: string;
-  days?: string; sort?: string; thinking_level?: string;
+  days?: string; sort?: string; thinking_level?: string; since?: string; timeout?: string;
 }
 interface BooleanArgs {
   json?: boolean; active?: boolean; no_wait?: boolean; private?: boolean;
@@ -221,6 +221,23 @@ const COMMANDS: CommandSpec[] = [
     flags: [],
     example: 'follow-up 8f3ab2c1 "Then run the full suite and report the tail"',
     notes: ['Held like `send` when the target host holds peer messages; the answer reports `held` and `until`.'],
+  },
+  {
+    name: 'wait',
+    usage: 'wait <ref> [--since COUNT] [--timeout SECS] [--max-chars N] [--host NAME] [--json]',
+    summary: "Block until a session's turn ends or it asks a question, then print its final answer.",
+    flags: [
+      ['--since COUNT', 'settle only once the transcript holds more than COUNT messages (0 for a fresh spawn)'],
+      ['--timeout SECS', 'give up after this long (default 600)'],
+      MAX_CHARS_FLAG, FULL_FLAG,
+    ],
+    example: 'wait 8f3ab2c1 --since 0 --timeout 1800',
+    notes: [
+      'Without --since, an idle session settles at once on the answer it already has. After `send`, pass the',
+      'count from before the send (`show <ref> --limit 1 --json` reports `totalMessages`), since a held or queued',
+      'prompt has not reached the transcript yet.',
+      'Exits non-zero on a timeout, or when the session is not running and has nothing new.',
+    ],
   },
   {
     name: 'interrupt',
@@ -428,6 +445,7 @@ const VALUE_FLAGS = new Map<string, keyof ValueArgs>([
   ['--model', 'model'], ['--name', 'name'], ['--prompt', 'prompt'], ['--limit', 'limit'],
   ['--host', 'host'], ['--before', 'before'], ['--max-chars', 'max_chars'], ['--fields', 'fields'],
   ['--days', 'days'], ['--sort', 'sort'], ['--thinking-level', 'thinking_level'],
+  ['--since', 'since'], ['--timeout', 'timeout'],
 ]);
 const BOOL_FLAGS = new Map<string, keyof BooleanArgs>([
   ['--json', 'json'], ['--active', 'active'], ['--no-wait', 'no_wait'], ['--private', 'private'],
@@ -664,6 +682,41 @@ async function pollSpawn(base: string, host: string | null, spawnId: string, tim
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   throw new Error(`spawn ${spawnId} did not finish within ${Math.round(timeoutMs / 1000)}s`);
+}
+
+interface SettledTurn {
+  state: 'finished' | 'waiting' | 'inactive' | 'timeout';
+  totalMessages: number;
+  message: Record<string, unknown> | null;
+}
+
+/**
+ * Poll a session until its turn is over. `since` is a transcript length from
+ * before the work was sent: without it, a prompt the host is still holding
+ * would settle on the previous answer.
+ */
+async function waitForSettled(base: string, host: string | null, id: string, since: number | null, timeoutMs: number): Promise<SettledTurn> {
+  const deadline = Date.now() + timeoutMs;
+  let delayMs = 1000;
+  for (;;) {
+    const { session } = await resolveSessionRef(base, id, host);
+    const { data } = await api(base, host, `/api/sessions/${encodeURIComponent(id)}/messages?limit=1`);
+    const window = core.record(data);
+    const totalMessages = Number(window.totalMessages) || 0;
+    const last = wireArray(window.messages).at(-1);
+    const message = last === undefined ? null : core.record(last);
+    const busy = session.turnInProgress === true || session.compacting === true;
+    if (!busy && (since === null || totalMessages > since)) {
+      if (session.askPending === true) return { state: 'waiting', totalMessages, message };
+      // A user message on top means the prompt has not been picked up yet.
+      if (message && message.role !== 'user') return { state: 'finished', totalMessages, message };
+    }
+    if (!session.isActive) return { state: 'inactive', totalMessages, message };
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { state: 'timeout', totalMessages, message };
+    await new Promise(resolve => setTimeout(resolve, Math.min(delayMs, remaining)));
+    delayMs = Math.min(delayMs * 1.5, 5000);
+  }
 }
 
 const DOCS_UNSUPPORTED = "this host's pi-dish does not serve agent docs; try without --host or upgrade it";
@@ -1044,7 +1097,7 @@ async function runAttach(args: SessionArgs) {
   attachToTmux(selected.socket, selected.pane);
 }
 
-const REF_COMMANDS = new Set(['resolve', 'read', 'show', 'related', 'send', 'steer', 'follow-up', 'interrupt', 'resume', 'close', 'share']);
+const REF_COMMANDS = new Set(['resolve', 'read', 'show', 'wait', 'related', 'send', 'steer', 'follow-up', 'interrupt', 'resume', 'close', 'share']);
 
 async function main() {
   let args;
@@ -1292,6 +1345,23 @@ async function main() {
       process.stdout.write(`cwd: ${session.cwd || ''}\n`);
       process.stdout.write(`state: ${session.isActive ? 'active' : 'inactive'}\n`);
       if (session.lastActivity) process.stdout.write(`last activity: ${session.lastActivity}\n`);
+      return;
+    }
+
+    if (spec.name === 'wait') {
+      if (args.since !== undefined && !/^\d+$/.test(args.since)) throw new Error('--since needs a message count');
+      const timeoutSecs = intArg(args.timeout, 600, 86400);
+      const settled = await waitForSettled(base, typeof host === 'string' ? host : null, id,
+        args.since === undefined ? null : Number(args.since), timeoutSecs * 1000);
+      const shownRef = `${host ? `${host}/` : ''}${target.ref || id}`;
+      if (settled.state === 'timeout') throw new Error(`${shownRef} was still working after ${timeoutSecs}s`);
+      if (settled.state === 'inactive') throw new Error(`${shownRef} is not running and has no new answer; resume it first`);
+      if (args.json) return print({ host, id, ref: target.ref || null, ...settled }, true);
+      const content = settled.message?.content;
+      const text = typeof content === 'string' ? content
+        : wireArray(content).flatMap(part => core.record(part).type === 'text' ? [String(core.record(part).text ?? '')] : []).join('\n');
+      process.stdout.write(`# ${settled.state === 'waiting' ? 'waiting for an answer' : 'finished'}: ${shownRef} · ${settled.totalMessages} messages\n`);
+      writeCapped(`${text}\n`, outputBounds(args, null).chars, '--max-chars N or --full for more.');
       return;
     }
 

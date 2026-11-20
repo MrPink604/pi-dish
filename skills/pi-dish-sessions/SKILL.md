@@ -18,6 +18,7 @@ node "$CLI" steer <ref> "Check the nested case first"      # redirect current tu
 node "$CLI" follow-up <ref> "Then summarize here"          # queue for after the turn
 node "$CLI" spawn --cwd "$PWD" --name "investigation" \
   --prompt "Investigate the cache issue and report" --json # durable peer process
+node "$CLI" wait <ref> --since 0 --timeout 1800            # block for its final answer
 node "$CLI" resume <ref>                                   # revive an inactive session
 ```
 
@@ -61,6 +62,10 @@ a citation: `read` the session before reasoning about what it did, and
   `resume`. `steer` is always immediate.
 - **Hibernation.** A host under memory pressure may hibernate a long-idle
   peer. `send` and `follow-up` resume it first; `steer` does not.
+- **Waiting.** `wait` settles when the turn is over and the transcript holds
+  more than `--since` messages. Pass `--since 0` after a spawn, and after
+  `send` the `totalMessages` that `show <ref> --limit 1 --json` reported
+  before it; without it an idle session returns its previous answer.
 - **Harness.** A spawned peer runs the same harness as you; pass
   `--harness pi|omp|prime` to cross over.
 - **Private spawn.** `spawn --private` keeps the transcript out of the fleet

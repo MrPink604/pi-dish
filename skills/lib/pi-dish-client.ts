@@ -22,6 +22,7 @@ export interface SessionFields {
   isActive?: unknown;
   turnInProgress?: unknown;
   compacting?: unknown;
+  askPending?: unknown;
   subagentLive?: unknown;
   lastActivity?: unknown;
   searchScore?: unknown;
