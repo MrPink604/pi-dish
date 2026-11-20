@@ -889,6 +889,7 @@ export interface AgyPlanItem {
 
 export interface AgyBackgroundTask {
   id: string;
+  fullTaskId?: string;
   kind: 'shell' | 'schedule' | 'workflow' | 'tool';
   status: 'running' | 'completed' | 'failed' | 'killed' | 'scheduled';
   title: string;
@@ -937,13 +938,14 @@ export interface AgySessionTasksPayload {
   sessionId: string;
   nativeSessionId: string;
   isActive: boolean;
+  canControl: boolean;
   plan: AgyPlanItem[];
   tasks: AgyBackgroundTask[];
   subagents: AgySubagentTaskSummary[];
   swarm: AgySwarmSummary | null;
 }
 
-const BG_TASK_ID_RE = /task id:\s*(?:[a-zA-Z0-9_-]+\/)?(task-\d+)/i;
+const BG_TASK_ID_RE = /task id:\s*((?:[a-zA-Z0-9_-]+\/)?(task-\d+))/i;
 const BG_TASK_DESC_RE = /Task Description:\s*([^\n]+)/i;
 const EXIT_CODE_RE = /Command exited with code (-?\d+)/;
 
@@ -1071,8 +1073,9 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     if (call.name === 'run_command') {
       const idMatch = BG_TASK_ID_RE.exec(content);
       const stepIdx = finite(step.step_index) ? step.step_index : null;
-      const inferredId = idMatch ? idMatch[1] : (stepIdx !== null && logStats.has(`task-${stepIdx}`) ? `task-${stepIdx}` : null);
+      const inferredId = idMatch ? idMatch[2] : (stepIdx !== null && logStats.has(`task-${stepIdx}`) ? `task-${stepIdx}` : null);
       if (!inferredId) continue;
+      const fullTaskId = idMatch ? idMatch[1] : `${nativeSessionId}/${inferredId}`;
       const cmd = text(call.args.CommandLine);
       const summary = text(call.args.toolSummary);
       const descMatch = BG_TASK_DESC_RE.exec(content);
@@ -1091,6 +1094,7 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
           : (backgrounded && parentLive) ? 'running' : 'completed';
       tasksById.set(inferredId, {
         id: inferredId,
+        fullTaskId,
         kind: 'shell',
         status: resolvedStatus,
         title: summary || (descMatch ? descMatch[1].trim() : '') || cmd.split('\n')[0].slice(0, 80) || inferredId,
@@ -1106,9 +1110,11 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     }
 
     if (call.name === 'schedule') {
-      const idMatch = BG_TASK_ID_RE.exec(content) ?? /(task-\d+)/i.exec(content);
+      const idMatch = BG_TASK_ID_RE.exec(content);
+      const bareMatch = !idMatch ? /(task-\d+)/i.exec(content) : null;
       const stepIdx = finite(step.step_index) ? step.step_index : null;
-      const id = idMatch ? idMatch[1] : `schedule-${stepIdx ?? tasksById.size + 1}`;
+      const id = idMatch ? idMatch[2] : bareMatch ? bareMatch[1] : `schedule-${stepIdx ?? tasksById.size + 1}`;
+      const fullTaskId = idMatch ? idMatch[1] : TASK_ID_RE.test(id) ? `${nativeSessionId}/${id}` : undefined;
       const cron = text(call.args.CronExpression) || undefined;
       const durationSeconds = finite(call.args.DurationSeconds) ? call.args.DurationSeconds : undefined;
       const prompt = text(call.args.Prompt);
@@ -1121,6 +1127,7 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
         : parentLive ? 'scheduled' : 'completed';
       tasksById.set(id, {
         id,
+        ...(fullTaskId ? { fullTaskId } : {}),
         kind: 'schedule',
         status: resolvedStatus,
         title: prompt.slice(0, 100) || (cron ? `Cron ${cron}` : `Timer ${durationSeconds ?? 0}s`),
@@ -1138,19 +1145,22 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     }
 
     if (call.name === 'run_workflow') {
-      const idMatch = BG_TASK_ID_RE.exec(content) ?? /(task-\d+)/i.exec(content);
+      const idMatch = BG_TASK_ID_RE.exec(content);
+      const bareMatch = !idMatch ? /(task-\d+)/i.exec(content) : null;
       const stepIdx = finite(step.step_index) ? step.step_index : null;
-      const id = idMatch ? idMatch[1] : `workflow-${stepIdx ?? tasksById.size + 1}`;
+      const id = idMatch ? idMatch[2] : bareMatch ? bareMatch[1] : `workflow-${stepIdx ?? tasksById.size + 1}`;
+      const fullTaskId = idMatch ? idMatch[1] : TASK_ID_RE.test(id) ? `${nativeSessionId}/${id}` : undefined;
       const desc = text(call.args.Description) || text(call.args.ScriptPath) || 'Workflow';
       const comp = completions.get(id);
       const killed = killedIds.has(id);
-      const backgrounded = !!idMatch || status === 'RUNNING';
+      const backgrounded = !!(idMatch || bareMatch) || status === 'RUNNING';
       const resolvedStatus: AgyBackgroundTask['status'] = killed
         ? 'killed'
         : comp ? (comp.failed ? 'failed' : 'completed')
         : (backgrounded && parentLive) ? 'running' : (status === 'ERROR' ? 'failed' : 'completed');
       tasksById.set(id, {
         id,
+        ...(fullTaskId ? { fullTaskId } : {}),
         kind: 'workflow',
         status: resolvedStatus,
         title: desc.slice(0, 100),
@@ -1176,6 +1186,7 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     const killed = killedIds.has(id);
     tasksById.set(id, {
       id,
+      fullTaskId: `${nativeSessionId}/${id}`,
       kind: 'shell',
       status: killed ? 'killed' : comp ? (comp.failed ? 'failed' : 'completed') : 'completed',
       title: id,
@@ -1249,6 +1260,7 @@ export interface AgySwarmStatePayload {
   title: string;
   createdAt: string | null;
   isActive: boolean;
+  coordinatorTurnInProgress: boolean;
   head: number;
   members: AgySwarmMemberView[];
   channels: AgySwarmChannelView[];
@@ -1305,6 +1317,7 @@ export function readAgySwarmState(
       title: '',
       createdAt: null,
       isActive: options.isActive === true,
+      coordinatorTurnInProgress: options.coordinatorTurnInProgress === true,
       head: 0,
       members: [],
       channels: [],
@@ -1390,6 +1403,7 @@ export function readAgySwarmState(
     title: membersFile?.title || 'Swarm',
     createdAt: text(swarmMeta?.created_at) || null,
     isActive: coordActive,
+    coordinatorTurnInProgress: coordTurn,
     head: allBoard.head,
     members,
     channels: [...channelMap.values()],
@@ -1403,6 +1417,7 @@ export function readAgySessionTasks(
   nativeSessionId: string,
   options: {
     isActive?: boolean;
+    canControl?: boolean;
     coordinatorTurnInProgress?: boolean;
     livePlan?: readonly AgyPlanItem[];
     liveRunningTools?: readonly { toolCallId: string; toolName: string; args: unknown; startedAt: number }[];
@@ -1410,6 +1425,7 @@ export function readAgySessionTasks(
 ): AgySessionTasksPayload {
   const sessionId = agyRouteId(nativeSessionId);
   const isActive = options.isActive === true;
+  const canControl = options.canControl ?? isActive;
   const tasks = readAgyBackgroundTasks(nativeSessionId, isActive);
 
   // Surface any live in-flight non-daemon tool calls (e.g. a running bash command
@@ -1524,6 +1540,7 @@ export function readAgySessionTasks(
     sessionId,
     nativeSessionId,
     isActive,
+    canControl,
     plan,
     tasks,
     subagents,

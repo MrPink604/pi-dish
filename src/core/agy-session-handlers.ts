@@ -106,6 +106,7 @@ export function createAgySessionHandlers({ ownership, findSessionSource }: AgySe
           sessionId: target.routeId,
           nativeSessionId: target.nativeSessionId,
           isActive: !!ownership.getRegisteredSession(target.routeId),
+          canControl: false,
           plan: [],
           tasks: [],
           subagents: [],
@@ -130,6 +131,7 @@ export function createAgySessionHandlers({ ownership, findSessionSource }: AgySe
       }
       res.json(readAgySessionTasks(target.nativeSessionId, {
         isActive: effectiveActive,
+        canControl: overlay.isActive,
         coordinatorTurnInProgress: coordTurn,
         livePlan: overlay.plan,
         liveRunningTools: overlay.runningTools,
@@ -167,6 +169,7 @@ export function createAgySessionHandlers({ ownership, findSessionSource }: AgySe
           title: '',
           createdAt: null,
           isActive: false,
+          coordinatorTurnInProgress: false,
           head: 0,
           members: [],
           channels: [],

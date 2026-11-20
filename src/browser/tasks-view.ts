@@ -1,4 +1,4 @@
-import { errorMessage, responseError, sameEndpoint, type ApiRequest, type HostEndpoint } from './api-client';
+import { errorMessage, responseError, sameEndpoint, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import { requiredElement } from './dom';
 import type { SelectionOwner, SessionState } from './session-state';
 import { formatRelativeTime } from './helper-format';
@@ -10,6 +10,9 @@ import {
   type SessionTasksPayload,
   type TaskLogPayload,
 } from './agy-views-data';
+
+const DEFAULT_LOG_TAIL = 65_536;
+const MAX_LOG_TAIL = 262_144;
 
 function formatByteSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -25,6 +28,9 @@ export function createTasksView(options: {
   closeOtherViews: () => void;
   openSubagent: (owner: SelectionOwner, endpoint: HostEndpoint, subagentId?: string) => void;
   openSwarm: (owner: SelectionOwner, endpoint: HostEndpoint, focusMember?: string) => void;
+  status: (message: string, kind?: string) => void;
+  copy: (text: string) => Promise<void>;
+  confirm: (message: string) => boolean;
 }) {
   const document = options.root.ownerDocument;
   const sessionState = options.sessionState;
@@ -35,16 +41,37 @@ export function createTasksView(options: {
   let viewEndpoint: HostEndpoint | null = null;
   let data: SessionTasksPayload = EMPTY_TASKS;
   let selectedTaskId: string | null = null;
+  let followLog = true;
+  let logTailBytes = DEFAULT_LOG_TAIL;
+  let lastLogText = '';
+  let lastLogTruncated = false;
   let loadSeq = 0;
   let logSeq = 0;
   let loadInFlight = false;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let logTimer: ReturnType<typeof setInterval> | undefined;
+  const rapidTimers = new Set<ReturnType<typeof setTimeout>>();
   let listEvents = new AbortController();
+  const staticEvents = new AbortController();
 
   const owns = () => !disposed && !!viewOwner && sessionState.ownsSelection(viewOwner)
     && sameEndpoint(options.endpoint(viewOwner.host), viewEndpoint);
   const isOpen = () => !disposed && options.root.classList.contains('tasks-open');
+
+  function clearRapidTimers() {
+    for (const timer of rapidTimers) clearTimeout(timer);
+    rapidTimers.clear();
+  }
+
+  function scheduleRapidReload() {
+    for (const delay of [800, 2200]) {
+      const timer = setTimeout(() => {
+        rapidTimers.delete(timer);
+        if (owns() && !loadInFlight) void load();
+      }, delay);
+      rapidTimers.add(timer);
+    }
+  }
 
   function selectedTask(): BackgroundTaskItem | null {
     if (!selectedTaskId) return null;
@@ -59,6 +86,10 @@ export function createTasksView(options: {
     viewEndpoint = Object.freeze({ ...endpoint });
     data = initial?.supported ? initial : EMPTY_TASKS;
     selectedTaskId = data.tasks[0]?.id ?? null;
+    followLog = true;
+    logTailBytes = DEFAULT_LOG_TAIL;
+    lastLogText = '';
+    lastLogTruncated = false;
     options.root.classList.add('tasks-open');
     render();
     if (selectedTaskId) void loadTaskLog(selectedTaskId, true);
@@ -76,10 +107,13 @@ export function createTasksView(options: {
     logSeq++;
     clearInterval(pollTimer); pollTimer = undefined;
     clearInterval(logTimer); logTimer = undefined;
+    clearRapidTimers();
     listEvents.abort();
     viewOwner = null;
     viewEndpoint = null;
     selectedTaskId = null;
+    lastLogText = '';
+    lastLogTruncated = false;
     options.root.classList.remove('tasks-open');
   }
 
@@ -96,6 +130,7 @@ export function createTasksView(options: {
       data = decodeSessionTasks(payload);
       if (!selectedTaskId || !data.tasks.some(t => t.id === selectedTaskId)) {
         selectedTaskId = data.tasks[0]?.id ?? null;
+        logTailBytes = DEFAULT_LOG_TAIL;
       }
       render();
       syncLogTimer();
@@ -116,14 +151,25 @@ export function createTasksView(options: {
     }, 2000);
   }
 
+  function updateLogControls() {
+    const followBtn = element('tasksLogFollowBtn');
+    followBtn.classList.toggle('active', followLog);
+    followBtn.textContent = followLog ? '● Follow' : '○ Follow';
+    const moreBtn = element('tasksLogMoreBtn');
+    moreBtn.style.display = lastLogTruncated && logTailBytes < MAX_LOG_TAIL ? '' : 'none';
+  }
+
   async function loadTaskLog(taskId: string, reset: boolean) {
     if (!owns() || !viewOwner || !viewEndpoint) return;
     const task = data.tasks.find(t => t.id === taskId);
     const logEl = element('tasksDetailLog');
     const logMeta = element('tasksDetailLogMeta');
     if (!task || !task.hasLog) {
-      logEl.textContent = task?.preview || (task?.status === 'running' ? 'Waiting for background task log…' : 'No log file recorded for this task.');
+      lastLogText = task?.preview || '';
+      lastLogTruncated = false;
+      logEl.textContent = lastLogText || (task?.status === 'running' ? 'Waiting for background task log…' : 'No log file recorded for this task.');
       logMeta.textContent = '';
+      updateLogControls();
       return;
     }
     const owner = viewOwner, endpoint = viewEndpoint, seq = ++logSeq;
@@ -132,30 +178,112 @@ export function createTasksView(options: {
       logMeta.textContent = '';
     }
     const stale = () => seq !== logSeq || !owns() || viewOwner !== owner || selectedTaskId !== taskId;
+    const query = logTailBytes > DEFAULT_LOG_TAIL ? `?tail=${logTailBytes}` : '';
     try {
       const res = await options.request(endpoint,
-        `/api/sessions/${encodeURIComponent(owner.id)}/tasks/${encodeURIComponent(taskId)}/log`);
+        `/api/sessions/${encodeURIComponent(owner.id)}/tasks/${encodeURIComponent(taskId)}/log${query}`);
       const payload: unknown = await res.json();
       if (stale()) return;
       if (!res.ok) throw new Error(responseError(res, payload));
       const log: TaskLogPayload | null = decodeTaskLog(payload);
       if (!log) return;
-      const stickToTail = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 60;
+      const stickToTail = followLog && logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 60;
+      lastLogText = log.content;
+      lastLogTruncated = log.truncated;
       logEl.textContent = log.content || '(empty log)';
       logMeta.textContent = `${formatByteSize(log.totalBytes)}${log.truncated ? ' (tail)' : ''} · updated ${formatRelativeTime(log.updatedAt)}`;
+      updateLogControls();
       if (reset || stickToTail) logEl.scrollTop = logEl.scrollHeight;
     } catch (error) {
       if (stale()) return;
-      if (reset) logEl.textContent = `Log unavailable: ${errorMessage(error)}`;
+      if (reset) {
+        lastLogText = '';
+        lastLogTruncated = false;
+        logEl.textContent = `Log unavailable: ${errorMessage(error)}`;
+        updateLogControls();
+      }
     }
   }
 
   function selectTask(taskId: string) {
     if (!owns()) return;
     selectedTaskId = taskId;
+    followLog = true;
+    logTailBytes = DEFAULT_LOG_TAIL;
+    lastLogText = '';
+    lastLogTruncated = false;
     render();
     syncLogTimer();
     void loadTaskLog(taskId, true);
+  }
+
+  async function sendTaskControlPrompt(message: string, successText: string): Promise<boolean> {
+    if (!owns() || !viewOwner || !viewEndpoint || !data.canControl) return false;
+    const endpoint = viewEndpoint, sessionId = viewOwner.id;
+    const kind = sessionState.currentSession?.turnInProgress ? 'steer' : 'prompt';
+    try {
+      await sendJson(options.request, endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/${kind}`, { message });
+      if (!owns()) return false;
+      options.status(successText, 'success');
+      scheduleRapidReload();
+      return true;
+    } catch (error) {
+      if (owns()) options.status(errorMessage(error), 'error');
+      return false;
+    }
+  }
+
+  async function killSelectedTask() {
+    const task = selectedTask();
+    if (!owns() || !task || !data.canControl || task.kind === 'tool') return;
+    if (task.status !== 'running' && task.status !== 'scheduled') return;
+    const actionLabel = task.kind === 'schedule' ? 'Cancel schedule' : 'Kill background task';
+    if (!options.confirm(`${actionLabel} "${task.title}" (${task.id})?`)) return;
+    const targetId = task.fullTaskId || task.id;
+    await sendTaskControlPrompt(
+      `Kill background task "${targetId}" using manage_task with Action="kill" and TaskId=${JSON.stringify(targetId)}.`,
+      task.kind === 'schedule' ? `Cancelling ${task.id}…` : `Killing ${task.id}…`,
+    );
+  }
+
+  async function abortActiveTurn() {
+    if (!owns() || !viewOwner || !viewEndpoint || !data.canControl) return;
+    const endpoint = viewEndpoint, sessionId = viewOwner.id;
+    try {
+      const res = await options.request(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST' });
+      const payload: unknown = await res.json().catch(() => ({}));
+      if (!owns()) return;
+      if (!res.ok) throw new Error(responseError(res, payload));
+      options.status('Turn abort requested', 'success');
+      scheduleRapidReload();
+    } catch (error) {
+      if (owns()) options.status(errorMessage(error), 'error');
+    }
+  }
+
+  async function sendStdinToTask() {
+    const task = selectedTask();
+    if (!owns() || !task || !data.canControl || task.kind !== 'shell' || task.status !== 'running') return;
+    const input = element<HTMLInputElement>('tasksStdinInput');
+    const line = input.value;
+    if (!line.trim()) return;
+    const targetId = task.fullTaskId || task.id;
+    const ok = await sendTaskControlPrompt(
+      `Send stdin to running task "${targetId}" using manage_task with Action="send_input", TaskId=${JSON.stringify(targetId)}, and Input=${JSON.stringify(line + '\n')}.`,
+      `Sent input to ${task.id}`,
+    );
+    if (ok && owns()) input.value = '';
+  }
+
+  async function copyTaskLog() {
+    const textToCopy = lastLogText || element('tasksDetailLog').textContent || '';
+    if (!textToCopy) return;
+    try {
+      await options.copy(textToCopy);
+      if (owns()) options.status('Copied task log', 'success');
+    } catch (error) {
+      if (owns()) options.status(`Copy failed: ${errorMessage(error)}`, 'error');
+    }
   }
 
   function render() {
@@ -331,13 +459,53 @@ export function createTasksView(options: {
     const cmdText = task.command || (task.cron ? `${task.cron} — ${task.preview}` : task.preview);
     cmdEl.style.display = cmdText ? '' : 'none';
     cmdEl.textContent = cmdText;
+
+    // Action buttons
+    const canKill = data.canControl && task.kind !== 'tool' && (task.status === 'running' || task.status === 'scheduled');
+    const killBtn = element<HTMLButtonElement>('tasksKillBtn');
+    killBtn.style.display = canKill ? '' : 'none';
+    if (canKill) {
+      killBtn.textContent = task.kind === 'schedule' ? 'Cancel' : 'Kill';
+      killBtn.title = task.kind === 'schedule' ? `Cancel scheduled task ${task.id}` : `Kill background task ${task.id}`;
+    }
+    const abortBtn = element<HTMLButtonElement>('tasksAbortTurnBtn');
+    abortBtn.style.display = data.canControl && task.kind === 'tool' && task.status === 'running' ? '' : 'none';
+
+    const stdinBar = element('tasksStdinBar');
+    stdinBar.style.display = data.canControl && task.kind === 'shell' && task.status === 'running' ? 'flex' : 'none';
+
+    updateLogControls();
   }
+
+  // Static listeners
+  element('tasksKillBtn').addEventListener('click', () => { void killSelectedTask(); }, { signal: staticEvents.signal });
+  element('tasksAbortTurnBtn').addEventListener('click', () => { void abortActiveTurn(); }, { signal: staticEvents.signal });
+  element('tasksLogFollowBtn').addEventListener('click', () => {
+    followLog = !followLog;
+    updateLogControls();
+    if (followLog) {
+      const logEl = element('tasksDetailLog');
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }, { signal: staticEvents.signal });
+  element('tasksLogMoreBtn').addEventListener('click', () => {
+    if (!owns() || !selectedTaskId) return;
+    logTailBytes = MAX_LOG_TAIL;
+    void loadTaskLog(selectedTaskId, false);
+  }, { signal: staticEvents.signal });
+  element('tasksLogCopyBtn').addEventListener('click', () => { void copyTaskLog(); }, { signal: staticEvents.signal });
+  element('tasksStdinSendBtn').addEventListener('click', () => { void sendStdinToTask(); }, { signal: staticEvents.signal });
+  element<HTMLInputElement>('tasksStdinInput').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    void sendStdinToTask();
+  }, { signal: staticEvents.signal });
 
   return {
     open,
     close,
     isOpen,
     reload: () => { if (owns()) void load(); },
-    dispose() { close(); disposed = true; },
+    dispose() { close(); staticEvents.abort(); disposed = true; },
   };
 }

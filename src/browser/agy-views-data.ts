@@ -8,6 +8,7 @@ export interface PlanItem {
 
 export interface BackgroundTaskItem {
   readonly id: string;
+  readonly fullTaskId: string;
   readonly kind: 'shell' | 'schedule' | 'workflow' | 'tool';
   readonly status: 'running' | 'completed' | 'failed' | 'killed' | 'scheduled';
   readonly title: string;
@@ -56,6 +57,7 @@ export interface SessionTasksPayload {
   readonly sessionId: string;
   readonly nativeSessionId: string;
   readonly isActive: boolean;
+  readonly canControl: boolean;
   readonly plan: readonly PlanItem[];
   readonly tasks: readonly BackgroundTaskItem[];
   readonly subagents: readonly SubagentTaskItem[];
@@ -116,6 +118,7 @@ export interface SessionSwarmPayload {
   readonly title: string;
   readonly createdAt: string | null;
   readonly isActive: boolean;
+  readonly coordinatorTurnInProgress: boolean;
   readonly head: number;
   readonly members: readonly SwarmMember[];
   readonly channels: readonly SwarmChannel[];
@@ -125,13 +128,13 @@ export interface SessionSwarmPayload {
 }
 
 export const EMPTY_TASKS: SessionTasksPayload = {
-  supported: false, sessionId: '', nativeSessionId: '', isActive: false,
+  supported: false, sessionId: '', nativeSessionId: '', isActive: false, canControl: false,
   plan: [], tasks: [], subagents: [], swarm: null,
 };
 
 export const EMPTY_SWARM: SessionSwarmPayload = {
   supported: false, hasSwarm: false, sessionId: '', coordinatorId: '', coordinatorNativeId: '',
-  title: '', createdAt: null, isActive: false, head: 0,
+  title: '', createdAt: null, isActive: false, coordinatorTurnInProgress: false, head: 0,
   members: [], channels: [], posts: [], plan: null, narratorView: null,
 };
 
@@ -161,7 +164,9 @@ export function decodeSessionTasks(value: unknown): SessionTasksPayload {
     const status = row.status === 'running' || row.status === 'completed' || row.status === 'failed' || row.status === 'killed' || row.status === 'scheduled'
       ? row.status : 'completed';
     return [{
-      id, kind, status,
+      id,
+      fullTaskId: text(row.fullTaskId) || id,
+      kind, status,
       title: text(row.title) || id,
       command: text(row.command),
       cron: text(row.cron),
@@ -217,6 +222,7 @@ export function decodeSessionTasks(value: unknown): SessionTasksPayload {
     sessionId: text(value.sessionId),
     nativeSessionId: text(value.nativeSessionId),
     isActive: value.isActive === true,
+    canControl: value.canControl === true,
     plan, tasks, subagents, swarm,
   };
 }
@@ -292,6 +298,7 @@ export function decodeSessionSwarm(value: unknown): SessionSwarmPayload {
     title: text(value.title) || 'Swarm',
     createdAt: nullableString(value.createdAt),
     isActive: value.isActive === true,
+    coordinatorTurnInProgress: value.coordinatorTurnInProgress === true,
     head: finite(value.head) ? value.head : 0,
     members, channels, posts,
     plan: record(value.plan) ? value.plan : null,

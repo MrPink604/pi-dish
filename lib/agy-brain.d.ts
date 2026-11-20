@@ -135,6 +135,7 @@ export interface AgyPlanItem {
 }
 export interface AgyBackgroundTask {
     id: string;
+    fullTaskId?: string;
     kind: 'shell' | 'schedule' | 'workflow' | 'tool';
     status: 'running' | 'completed' | 'failed' | 'killed' | 'scheduled';
     title: string;
@@ -180,6 +181,7 @@ export interface AgySessionTasksPayload {
     sessionId: string;
     nativeSessionId: string;
     isActive: boolean;
+    canControl: boolean;
     plan: AgyPlanItem[];
     tasks: AgyBackgroundTask[];
     subagents: AgySubagentTaskSummary[];
@@ -227,6 +229,7 @@ export interface AgySwarmStatePayload {
     title: string;
     createdAt: string | null;
     isActive: boolean;
+    coordinatorTurnInProgress: boolean;
     head: number;
     members: AgySwarmMemberView[];
     channels: AgySwarmChannelView[];
@@ -243,6 +246,7 @@ export declare function readAgySwarmState(nativeSessionId: string, options?: {
 }): AgySwarmStatePayload;
 export declare function readAgySessionTasks(nativeSessionId: string, options?: {
     isActive?: boolean;
+    canControl?: boolean;
     coordinatorTurnInProgress?: boolean;
     livePlan?: readonly AgyPlanItem[];
     liveRunningTools?: readonly {

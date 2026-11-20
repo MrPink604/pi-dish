@@ -813,13 +813,14 @@ const tasksController: ReturnType<typeof createTasksView> = createTasksView({
   closeOtherViews: () => mainPane.beforeTakeover('tasks'),
   openSubagent: (owner, endpoint, subagentId) => subagentsController.open(owner, endpoint, sessionRelationsController.data, subagentId),
   openSwarm: (owner, endpoint, focusMember) => swarmController.open(owner, endpoint, focusMember),
+  status: setStatus, copy: copyTextToClipboard, confirm: text => confirm(text),
 });
 
 const swarmController: ReturnType<typeof createSwarmView> = createSwarmView({
   root: document.querySelector<HTMLElement>('.main')!, request, sessionState, endpoint: hostEntryFor,
   closeOtherViews: () => mainPane.beforeTakeover('swarm'),
   loadPrevious,
-  selectSession, status: setStatus,
+  selectSession, status: setStatus, confirm: text => confirm(text),
   markdown: text => richText.format(text), assetUrl: hostAssetUrl, matchRef: ref => sessionReferences.match(ref), details: responseDetailsController,
 });
 
@@ -1038,7 +1039,8 @@ document.addEventListener('keydown', function(e) {
   } else if ((document.getElementById('settingsModal') as HTMLElement).style.display !== 'none') {
     e.preventDefault(); closeSettingsModal();
   } else if (swarmController.isOpen()) {
-    e.preventDefault(); swarmController.close();
+    e.preventDefault();
+    if (!swarmController.dismissOverlay()) swarmController.close();
   } else if (tasksController.isOpen()) {
     e.preventDefault(); tasksController.close();
   } else if (subagentsController.isOpen()) {

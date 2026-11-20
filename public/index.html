@@ -562,15 +562,30 @@
             <div class="subagents-state tasks-detail-empty" id="tasksDetailEmpty">Select a background task to inspect its command and live log.</div>
             <div class="tasks-detail-content" id="tasksDetailContent" style="display:none">
               <div class="tasks-detail-header">
-                <div class="tasks-detail-title" id="tasksDetailTitle"></div>
-                <div class="tasks-detail-meta" id="tasksDetailMeta"></div>
+                <div class="tasks-detail-heading">
+                  <div class="tasks-detail-title" id="tasksDetailTitle"></div>
+                  <div class="tasks-detail-meta" id="tasksDetailMeta"></div>
+                </div>
+                <div class="tasks-detail-actions">
+                  <button type="button" class="btn btn-small swarm-btn-danger" id="tasksAbortTurnBtn" style="display:none" title="Abort the current turn">Stop turn</button>
+                  <button type="button" class="btn btn-small swarm-btn-danger" id="tasksKillBtn" style="display:none" title="Kill or cancel this background task">Kill</button>
+                </div>
               </div>
               <pre class="tasks-detail-command" id="tasksDetailCommand" style="display:none"></pre>
               <div class="tasks-detail-log-bar">
                 <span class="tasks-detail-log-label">Output log</span>
                 <span class="tasks-detail-log-meta" id="tasksDetailLogMeta"></span>
+                <div class="tasks-detail-log-actions">
+                  <button type="button" class="swarm-filter-chip active" id="tasksLogFollowBtn" title="Auto-scroll to latest log output">● Follow</button>
+                  <button type="button" class="swarm-filter-chip" id="tasksLogMoreBtn" style="display:none" title="Load more log output">Load more</button>
+                  <button type="button" class="swarm-filter-chip" id="tasksLogCopyBtn" title="Copy log to clipboard">Copy</button>
+                </div>
               </div>
               <pre class="tasks-detail-log" id="tasksDetailLog"></pre>
+              <div class="tasks-stdin-bar" id="tasksStdinBar" style="display:none">
+                <input type="text" id="tasksStdinInput" placeholder="Send stdin line to running task…" autocomplete="off">
+                <button type="button" class="btn btn-small" id="tasksStdinSendBtn">Send</button>
+              </div>
             </div>
           </div>
         </div>
@@ -594,6 +609,7 @@
             <button type="button" class="swarm-tab" id="swarmTabMembers" role="tab" aria-selected="false">Members<span id="swarmTabMembersCount"></span></button>
             <button type="button" class="swarm-tab" id="swarmTabOverview" role="tab" aria-selected="false">Overview</button>
           </div>
+          <button type="button" class="btn btn-small swarm-add-worker-btn" id="swarmAddWorkerBtn" style="display:none" title="Spawn a new swarm worker">+ Add worker</button>
           <button class="btn-icon" data-app-click="reloadSwarmView" title="Refresh">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 12a9 9 0 11-2.636-6.364"/>
@@ -601,6 +617,39 @@
             </svg>
           </button>
           <button class="btn-icon" data-app-click="closeSwarmView" title="Close (Esc)">✕</button>
+        </div>
+        <div class="swarm-add-drawer" id="swarmAddDrawer" style="display:none">
+          <div class="swarm-add-grid">
+            <label class="swarm-add-field">
+              <span>Worker name</span>
+              <input type="text" id="swarmAddName" placeholder="e.g. tester" maxlength="24" autocomplete="off">
+            </label>
+            <label class="swarm-add-field">
+              <span>Model</span>
+              <select id="swarmAddModel"><option value="">Coordinator default</option></select>
+            </label>
+            <label class="swarm-add-field">
+              <span>Workspace</span>
+              <select id="swarmAddWorkspace">
+                <option value="inherit">inherit (shared dir)</option>
+                <option value="share">share (own worktree)</option>
+                <option value="branch">branch (isolated clone)</option>
+              </select>
+            </label>
+            <label class="swarm-add-field">
+              <span>Fork history</span>
+              <select id="swarmAddFork"><option value="">Fresh conversation</option></select>
+            </label>
+          </div>
+          <label class="swarm-add-field swarm-add-brief-field">
+            <span>Brief</span>
+            <textarea id="swarmAddBrief" rows="2" placeholder="What this worker owns and what done looks like…"></textarea>
+          </label>
+          <div class="swarm-add-actions">
+            <span class="swarm-add-error" id="swarmAddError"></span>
+            <button type="button" class="btn btn-small" id="swarmAddCancelBtn">Cancel</button>
+            <button type="button" class="btn btn-small btn-primary" id="swarmAddSubmitBtn">Spawn worker</button>
+          </div>
         </div>
         <div class="swarm-body">
           <div class="swarm-pane swarm-pane-board" id="swarmPaneBoard">
@@ -618,10 +667,17 @@
                 <div class="subagents-detail-header">
                   <span class="subagents-detail-name" id="swarmMemberDetailName"></span>
                   <span class="subagents-detail-meta" id="swarmMemberDetailMeta"></span>
+                  <select class="swarm-member-model-select" id="swarmMemberModelSelect" aria-label="Switch member model" style="display:none"></select>
+                  <button class="btn btn-small" type="button" id="swarmMemberPingBtn" style="display:none">Ping</button>
+                  <button class="btn btn-small swarm-btn-danger" type="button" id="swarmMemberKillBtn" style="display:none">Kill</button>
                   <button class="btn btn-small" type="button" id="swarmMemberFilterBtn" title="Filter board posts for this member">Board</button>
                   <button class="btn btn-small" type="button" id="swarmMemberOpenBtn" title="Switch the main view to this member session">Open ↗</button>
                 </div>
                 <div class="subagents-trace" id="swarmMemberTrace"></div>
+                <div class="swarm-member-composer" id="swarmMemberComposer" style="display:none">
+                  <input type="text" id="swarmMemberInput" placeholder="Message @worker via board…" autocomplete="off">
+                  <button type="button" class="btn btn-small btn-primary" id="swarmMemberSendBtn">Send</button>
+                </div>
               </div>
             </div>
           </div>
@@ -630,9 +686,14 @@
           </div>
         </div>
         <div class="swarm-composer" id="swarmComposer" style="display:none">
-          <textarea id="swarmPromptInput" rows="2" placeholder="Message coordinator… (Enter to send, Shift+Enter for newline)"></textarea>
+          <div class="swarm-mention-pills" id="swarmMentionPills"></div>
+          <div class="swarm-composer-input-wrap">
+            <div class="swarm-mention-menu" id="swarmMentionMenu" role="listbox" style="display:none"></div>
+            <textarea id="swarmPromptInput" rows="2" placeholder="Message coordinator… (@ to mention, Enter to send, Shift+Enter for newline)"></textarea>
+          </div>
           <div class="subagents-signal-actions">
             <span class="subagents-signal-status" id="swarmPromptStatus"></span>
+            <button type="button" class="btn btn-small swarm-btn-danger" id="swarmCoordinatorStopBtn" style="display:none" title="Cancel the coordinator's active turn">Stop</button>
             <button type="button" class="btn btn-small" id="swarmPromptSteerBtn" title="Steer the coordinator mid-turn">Steer</button>
             <button type="button" class="btn btn-small btn-primary" id="swarmPromptSendBtn">Send</button>
           </div>

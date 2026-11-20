@@ -263,16 +263,27 @@ test('subagents, transcript activity, background tasks, task logs, and swarm sta
   const tasks = agyBrain.readAgyBackgroundTasks(coordId, true);
   const byId = new Map(tasks.map(t => [t.id, t]));
   assert.equal(byId.get('task-10')?.status, 'running');
+  assert.equal(byId.get('task-10')?.fullTaskId, `${coordId}/task-10`);
   assert.equal(byId.get('task-10')?.title, 'Watch build');
   assert.equal(byId.get('task-10')?.hasLog, true);
   assert.equal(byId.get('task-11')?.kind, 'schedule');
+  assert.equal(byId.get('task-11')?.fullTaskId, `${coordId}/task-11`);
   assert.equal(byId.get('task-11')?.status, 'scheduled');
   assert.equal(byId.get('task-11')?.cron, '*/5 * * * *');
   assert.equal(byId.get('task-11')?.isDaemon, true);
   assert.equal(byId.get('task-12')?.kind, 'workflow');
+  assert.equal(byId.get('task-12')?.fullTaskId, `${coordId}/task-12`);
   assert.equal(byId.get('task-12')?.status, 'completed');
   assert.equal(byId.get('task-12')?.exitCode, 0);
   assert.equal(byId.get('task-99')?.hasLog, true);
+  assert.equal(byId.get('task-99')?.fullTaskId, `${coordId}/task-99`);
+
+  // canControl distinguishes direct live sessions from child views observing a live coordinator.
+  const workerTasks = agyBrain.readAgySessionTasks(workerId, { isActive: true, canControl: false });
+  assert.equal(workerTasks.isActive, true);
+  assert.equal(workerTasks.canControl, false);
+  const coordTasks = agyBrain.readAgySessionTasks(coordId, { isActive: true, canControl: true });
+  assert.equal(coordTasks.canControl, true);
 
   const log = agyBrain.readAgyTaskLog(coordId, 'task-10', 1024);
   assert.ok(log);
@@ -283,8 +294,9 @@ test('subagents, transcript activity, background tasks, task logs, and swarm sta
 
   // Swarm state works from both coordinator and worker conversation IDs!
   assert.equal(agyBrain.findAgySwarmCoordinator(workerId), coordId);
-  const sw = agyBrain.readAgySwarmState(workerId, { isActive: true });
+  const sw = agyBrain.readAgySwarmState(workerId, { isActive: true, coordinatorTurnInProgress: true });
   assert.equal(sw.hasSwarm, true);
+  assert.equal(sw.coordinatorTurnInProgress, true);
   assert.equal(sw.title, 'Auth refactor');
   assert.equal(sw.coordinatorNativeId, coordId);
   assert.equal(sw.head, 2);
