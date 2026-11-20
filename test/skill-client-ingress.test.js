@@ -50,6 +50,15 @@ test('cwd discovery still exposes the native path error when malformed cwd is co
     const { stdout } = await run(process.execPath, [cwdDriver, client], { env });
     assert.deepEqual(JSON.parse(stdout), { name: 'TypeError', code: 'ERR_INVALID_ARG_TYPE' });
 });
+test('a caller that only shares a working directory with a bot is not taken for the bot', async (t) => {
+    const { home, env } = fixture(t);
+    const entry = path.join(home, '.pi', 'dish', 'sessions', 'entry.json');
+    fs.writeFileSync(entry, JSON.stringify({ sessionId: 'fleet', harnessId: 'bot', cwd: home }));
+    await assert.rejects(run(process.execPath, [cli, 'session', '--json'], { env, cwd: home }), /could not identify this session/);
+    fs.writeFileSync(entry, JSON.stringify({ sessionId: 'worker', harnessId: 'pi', cwd: home }));
+    const { stdout } = await run(process.execPath, [cli, 'session', '--json'], { env, cwd: home });
+    assert.equal(JSON.parse(stdout), 'worker');
+});
 test('attach JSON retains metadata that only interactive name matching needs to interpret', async (t) => {
     const { home, env } = fixture(t);
     const entry = {

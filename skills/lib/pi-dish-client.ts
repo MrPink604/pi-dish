@@ -282,7 +282,8 @@ function discoverSession(explicit?: string, options: { noneMessage?: string } = 
   }
   const cwd = path.resolve(process.cwd());
   const byCwd = entries.filter((entry) => {
-    if (!entry.cwd) return false;
+    // A bot runs nothing in a directory, so sharing one with it identifies nobody.
+    if (!entry.cwd || entry.harnessId === 'bot') return false;
     // Let Node reject malformed cwd at this operation, preserving its native
     // error code/message without making cwd a registry-admission condition.
     const resolved: unknown = typeof entry.cwd === 'string'

@@ -326,7 +326,7 @@ function discoverSession(explicit, options = {}) {
   }
   const cwd = path.resolve(process.cwd());
   const byCwd = entries.filter((entry) => {
-    if (!entry.cwd) return false;
+    if (!entry.cwd || entry.harnessId === "bot") return false;
     const resolved = typeof entry.cwd === "string" ? path.resolve(entry.cwd) : Reflect.apply(path.resolve, path, [entry.cwd]);
     return resolved === cwd;
   });
