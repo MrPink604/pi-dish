@@ -288,7 +288,9 @@ export function createRoutinesView(options: {
           ${hostChipHtml(r.host)}
         </div>
         <div class="rt-row-sched">${routineScheduleLine(r)}</div>
-        <div class="rt-row-meta">${escapeHtml(r.mode === 'continue' ? 'continue' : 'one-shot')} · on busy ${escapeHtml(r.onBusy)}</div>
+        <div class="rt-row-meta">${r.bot
+          ? `to bot ${escapeHtml(r.botName || r.bot)}${r.botRetired ? ' (retired)' : ''}`
+          : `${escapeHtml(r.mode === 'continue' ? 'continue' : 'one-shot')} · on busy ${escapeHtml(r.onBusy)}`}</div>
         <div class="rt-row-last">${lastLine}<span class="rt-count">${countLabel(count, 'run')}</span></div>
       </div>`;
     }).join('');
@@ -438,17 +440,19 @@ export function createRoutinesView(options: {
     if (!detail || !detail.querySelector('#rtName')) return null;
     const val = (id: string) => (field<HTMLInputElement>(id)?.value ?? '').trim();
     const minInterval = parseInt(field<HTMLInputElement>('rtMinInterval')?.value || '', 10);
+    // A bot routine has no session fields on screen: they stay what the routine holds.
+    const bot = routineCreating ? null : routineSelected?.bot ? routineSelected : null;
     return {
       name: val('rtName'),
       description: val('rtDescription'),
-      harness: val('rtHarness') || 'pi',
-      cwd: val('rtCwd'),
-      model: val('rtModel'),
-      thinking: val('rtThinking'),
+      harness: bot ? bot.harness : val('rtHarness') || 'pi',
+      cwd: bot ? bot.cwd : val('rtCwd'),
+      model: bot ? bot.model : val('rtModel'),
+      thinking: bot ? bot.thinking : val('rtThinking'),
       cron: val('rtCron'),
       enabled: !!field<HTMLInputElement>('rtEnabled')?.checked,
-      mode: detail.querySelector<HTMLInputElement>('input[name="rtMode"]:checked')?.value === 'continue' ? 'continue' : 'oneShot',
-      onBusy: val('rtOnBusy') === 'steer' ? 'steer' : val('rtOnBusy') === 'followUp' ? 'followUp' : 'skip',
+      mode: bot ? bot.mode : detail.querySelector<HTMLInputElement>('input[name="rtMode"]:checked')?.value === 'continue' ? 'continue' : 'oneShot',
+      onBusy: bot ? bot.onBusy : val('rtOnBusy') === 'steer' ? 'steer' : val('rtOnBusy') === 'followUp' ? 'followUp' : 'skip',
       minIntervalSec: Number.isFinite(minInterval) && minInterval > 0 ? minInterval : 0,
       prompt: field<HTMLTextAreaElement>('rtPrompt')?.value ?? '',
     };
@@ -504,35 +508,19 @@ export function createRoutinesView(options: {
       `<option value="${escapeHtml(value)}"${value === v.onBusy ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('');
     const thinking = ['<option value="">(default)</option>'].concat(ROUTINE_THINKING_LEVELS.map(level =>
       `<option value="${level}"${level === v.thinking ? ' selected' : ''}>${escapeHtml(NS_THINKING_LABELS[level] || level)}</option>`)).join('');
-
-    el.innerHTML = `
-      <div class="rt-detail-head">
-        <button class="rt-back" data-rt-action="back">‹ Routines</button>
-        <h2 class="rt-detail-title">${escapeHtml(routineCreating ? 'New routine' : (routineSelected?.name || routineSelected?.id || ''))}</h2>
-        ${routineCreating ? '' : hostChipHtml(routineSelected?.host || null)}
-        ${routineCreating ? '' : `<span class="rt-version-badge">v${routineSelected?.promptVersion || 1}</span>`}
-      </div>
-
-      <div class="rt-form">
-        ${hostRow}
-        <div class="rt-field-row">
-          <label class="rt-field">
-            <span class="ns-label">Name</span>
-            <input type="text" class="cwd-input" id="rtName" value="${escapeHtml(v.name)}"
-              placeholder="nightly-review" spellcheck="false" autocomplete="off">
-          </label>
-          <label class="rt-field">
+    // A bot routine's run goes into its bot's chat: it has a destination instead of a session to start.
+    const bot = routineCreating ? null : routineSelected?.bot ? routineSelected : null;
+    const destination = bot
+      ? `<label class="rt-field">
+           <span class="ns-label">Destination</span>
+           <span class="rt-destination" id="rtDestination">Bot ${escapeHtml(bot.botName || bot.bot)}${bot.botRetired ? ' (retired: the routine no longer runs)' : ''}</span>
+           <span class="ns-hidden-note">Each run is a message in the bot\u2019s chat, marked with this routine\u2019s name; it answers there.</span>
+         </label>`
+      : `<label class="rt-field">
             <span class="ns-label">Agent</span>
             <select class="ns-select" id="rtHarness"><option value="${escapeHtml(v.harness)}">${escapeHtml(v.harness)}</option></select>
-          </label>
-        </div>
-
-        <label class="rt-field">
-          <span class="ns-label">Description <span class="ns-label-optional">(optional)</span></span>
-          <input type="text" class="cwd-input" id="rtDescription" value="${escapeHtml(v.description)}"
-            placeholder="What this routine is for" autocomplete="off">
-        </label>
-
+          </label>`;
+    const sessionFields = bot ? '' : `
         <label class="rt-field">
           <span class="ns-label">Working directory</span>
           <div class="cwd-input-wrap">
@@ -551,7 +539,33 @@ export function createRoutinesView(options: {
             <span class="ns-label">Thinking level</span>
             <select class="ns-select" id="rtThinking">${thinking}</select>
           </label>
+        </div>`;
+
+    el.innerHTML = `
+      <div class="rt-detail-head">
+        <button class="rt-back" data-rt-action="back">‹ Routines</button>
+        <h2 class="rt-detail-title">${escapeHtml(routineCreating ? 'New routine' : (routineSelected?.name || routineSelected?.id || ''))}</h2>
+        ${routineCreating ? '' : hostChipHtml(routineSelected?.host || null)}
+        ${routineCreating ? '' : `<span class="rt-version-badge">v${routineSelected?.promptVersion || 1}</span>`}
+      </div>
+
+      <div class="rt-form">
+        ${hostRow}
+        <div class="rt-field-row">
+          <label class="rt-field">
+            <span class="ns-label">Name</span>
+            <input type="text" class="cwd-input" id="rtName" value="${escapeHtml(v.name)}"
+              placeholder="nightly-review" spellcheck="false" autocomplete="off">
+          </label>
+          ${destination}
         </div>
+
+        <label class="rt-field">
+          <span class="ns-label">Description <span class="ns-label-optional">(optional)</span></span>
+          <input type="text" class="cwd-input" id="rtDescription" value="${escapeHtml(v.description)}"
+            placeholder="What this routine is for" autocomplete="off">
+        </label>
+${sessionFields}
 
         <div class="rt-field-row">
           <label class="rt-field">
@@ -569,20 +583,20 @@ export function createRoutinesView(options: {
           <span>Schedule armed <small>— unchecking pauses the cadence; Run now and the invoke route keep working</small></span>
         </label>
 
-        <div class="rt-field">
+        ${bot ? '' : `<div class="rt-field">
           <span class="ns-label">Mode</span>
           <label class="rt-radio"><input type="radio" name="rtMode" value="oneShot"${v.mode === 'oneShot' ? ' checked' : ''}>
             <span>One-shot <small>— every run spawns a fresh session and closes it when the turn ends</small></span></label>
           <label class="rt-radio"><input type="radio" name="rtMode" value="continue"${v.mode === 'continue' ? ' checked' : ''}>
             <span>Continue <small>— reuse this routine's last session (resuming it if needed); never auto-closed</small></span></label>
-        </div>
+        </div>`}
 
         <div class="rt-field-row">
-          <label class="rt-field">
+          ${bot ? '' : `<label class="rt-field">
             <span class="ns-label">When the routine is busy</span>
             <select class="ns-select" id="rtOnBusy">${onBusy}</select>
             <span class="ns-hidden-note">Scheduled ticks always skip; this applies to invokes.</span>
-          </label>
+          </label>`}
           <label class="rt-field">
             <span class="ns-label">Minimum interval (seconds)</span>
             <input type="number" class="cwd-input" id="rtMinInterval" min="0" step="1" value="${escapeHtml(String(v.minIntervalSec))}">
@@ -962,21 +976,26 @@ export function createRoutinesView(options: {
     await options.selectSession(sessionId, { host });
   }
 
-  function routineFormBody(values: RoutineForm) {
-    return {
+  /** A bot routine sends only what it has: its session fields are refused by the server. */
+  function routineFormBody(values: RoutineForm, bot: boolean) {
+    const common = {
       name: values.name,
       description: values.description,
+      prompt: values.prompt,
+      schedule: values.cron ? { cron: values.cron } : null,
+      enabled: values.enabled,
+      minIntervalSec: values.minIntervalSec,
+    };
+    if (bot) return common;
+    return {
+      ...common,
       harness: values.harness,
       cwd: values.cwd,
       // Null clears the field on a partial PUT; undefined would be dropped by JSON.stringify.
       model: values.model || null,
       thinking: values.thinking || null,
-      prompt: values.prompt,
-      schedule: values.cron ? { cron: values.cron } : null,
-      enabled: values.enabled,
       mode: values.mode,
       onBusy: values.onBusy,
-      minIntervalSec: values.minIntervalSec,
     };
   }
 
@@ -1026,7 +1045,7 @@ export function createRoutinesView(options: {
       const res = await apiFetch(owner.endpoint, path, {
         method: creating ? 'POST' : 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(routineFormBody(values)),
+        body: JSON.stringify(routineFormBody(values, !creating && !!selected?.bot)),
       });
       const data = await jsonResponse(res);
       if (!ownsForm(owner) || mutationToken !== token) return;

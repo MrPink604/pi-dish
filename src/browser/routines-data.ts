@@ -7,6 +7,8 @@ export interface RoutineInvocation {
 export interface RoutineVersion { readonly version: number; readonly savedAt: number; readonly prompt: string }
 export interface Routine {
   readonly id: string; readonly name: string; readonly description: string; readonly harness: string; readonly cwd: string; readonly model: string; readonly thinking: string;
+  /** A bot routine's destination: the bot's id and name, and whether it is retired; empty for an ordinary routine. */
+  readonly bot: string; readonly botName: string; readonly botRetired: boolean;
   readonly schedule: { readonly cron: string } | null; readonly enabled: boolean; readonly mode: 'oneShot' | 'continue'; readonly onBusy: 'skip' | 'steer' | 'followUp';
   readonly minIntervalSec: number; readonly prompt: string; readonly promptVersion: number; readonly versions: readonly RoutineVersion[];
   readonly stats: { readonly invocations: number; readonly nextRunAt: number | null; lastInvocation: RoutineInvocation | null };
@@ -35,6 +37,7 @@ export function decodeRoutine(value: unknown, host: { hostId: string | null; lab
   const versions = Array.isArray(row.versions) ? row.versions.flatMap((version: unknown) => record(version) && finite(version.version) && typeof version.prompt === 'string'
     ? [{ version: version.version, savedAt: count(version.savedAt), prompt: version.prompt }] : []) : [];
   return { id: row.id, name: text(row.name), description: text(row.description), harness: text(row.harness) || 'pi', cwd: text(row.cwd), model: text(row.model), thinking: text(row.thinking),
+    bot: text(row.bot), botName: text(row.botName), botRetired: row.botRetired === true,
     schedule: record(row.schedule) && typeof row.schedule.cron === 'string' ? { cron: row.schedule.cron } : null, enabled: row.enabled !== false,
     mode: row.mode === 'continue' ? 'continue' : 'oneShot', onBusy: row.onBusy === 'steer' || row.onBusy === 'followUp' ? row.onBusy : 'skip', minIntervalSec: count(row.minIntervalSec),
     prompt: text(row.prompt), promptVersion: count(row.promptVersion) || 1, versions,

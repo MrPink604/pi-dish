@@ -1,6 +1,6 @@
 import type { UiScenario } from './contracts.js';
 
-const routines: UiScenario = async ({ desktop, check, CWD }) => {
+const routines: UiScenario = async ({ desktop, check, CWD, base }) => {
   // Routines takeover: create/edit, a real Run now through the fake RPC pi,
   // and the provenance chip on the resulting session's sidebar row.
   console.log('routines:');
@@ -99,6 +99,32 @@ const routines: UiScenario = async ({ desktop, check, CWD }) => {
     fixtureApp.features.sidebarQuery.onInput();
   });
   await desktop.evaluate(() => fixtureApp.features.sidebarQuery.switchTab('active'));
+
+  // A bot's own schedule names the bot as its destination, with no session fields to edit.
+  const { bots } = await (await fetch(`${base}/api/bots`)).json() as { bots: { id: string; name: string; status: string }[] };
+  const bot = bots.find(row => row.status === 'active')!;
+  const made = await fetch(`${base}/api/bots/${bot.id}/routines`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'smoke-bot-check', prompt: 'Check the smoke hosts.', schedule: { cron: '0 7 * * *' } }),
+  });
+  const { routine: botRoutine } = await made.json() as { routine: { id: string } };
+  check(made.status === 201, `a bot makes its own schedule (got ${made.status})`);
+  await desktop.evaluate(() => fixtureApp.features.routinesController.open());
+  const botRow = `.rt-row[data-routine="${botRoutine.id}"]`;
+  await desktop.waitForSelector(botRow, { timeout: 10000 });
+  check((await desktop.locator(`${botRow} .rt-row-meta`).textContent())?.trim() === `to bot ${bot.name}`,
+    'the list row names the bot as the destination');
+  await desktop.click(botRow);
+  await desktop.waitForSelector('#rtDestination', { timeout: 5000 });
+  check((await desktop.locator('#rtDestination').textContent()) === `Bot ${bot.name}`, 'the routine shows its bot as the destination');
+  check(await desktop.locator('#rtCwd, #rtHarness, #rtModel, input[name="rtMode"], #rtOnBusy').count() === 0,
+    'a bot routine has no session fields');
+  await desktop.fill('#rtPrompt', 'Check the smoke hosts and say which answered.');
+  await desktop.click('#rtSaveBtn');
+  await desktop.waitForFunction(() => document.querySelector('.rt-version-badge')?.textContent === 'v2', null, { timeout: 10000 });
+  check(await desktop.locator('#rtError').textContent() === '', 'a bot routine saves without its session fields');
+  await fetch(`${base}/api/routines/${botRoutine.id}`, { method: 'DELETE' });
+  await desktop.evaluate(() => fixtureApp.features.routinesController.close());
 
   // Takeovers are mutually exclusive, and Escape closes this one.
   await desktop.evaluate(() => fixtureApp.features.routinesController.open());
