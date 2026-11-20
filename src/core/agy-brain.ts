@@ -434,6 +434,10 @@ export interface AgyTranscriptActivity {
   currentAction: string | null;
 }
 
+const SERVER_RESTART_NOTICE_RE = /background tasks have been stopped due to server restart/i;
+/** A DONE non-running tail step older than this is no longer awaiting an immediate LLM response. */
+const STALE_PENDING_STEP_MS = 5 * 60 * 1000;
+
 /**
  * Fast tail inspection of a brain `transcript.jsonl` to decide whether the
  * subagent/worker is actively executing a turn vs parked/done.
@@ -460,6 +464,8 @@ export function inspectAgyTranscriptActivity(conversationId: string): AgyTranscr
   let genericsAfterPlanner = 0;
   let lastPlannerHadTextOnly = false;
   let parkedOnBoard = false;
+  let parkedOnTimer = false;
+  let stoppedByRestart = false;
 
   for (const step of steps) {
     const idx = finite(step.step_index) ? step.step_index : 0;
@@ -474,17 +480,24 @@ export function inspectAgyTranscriptActivity(conversationId: string): AgyTranscr
       genericsAfterPlanner = 0;
       lastPlannerHadTextOnly = calls.length === 0;
       parkedOnBoard = false;
+      parkedOnTimer = false;
+      stoppedByRestart = false;
     } else if (type === 'GENERIC') {
       genericsAfterPlanner++;
       const matchedCall = lastPlannerCalls[genericsAfterPlanner - 1];
-      if (matchedCall?.name === 'swarm_wait' && text(step.status) !== 'ERROR' && text(step.status) !== 'FAILED') {
+      const stepStatus = text(step.status);
+      if (matchedCall?.name === 'swarm_wait' && stepStatus !== 'ERROR' && stepStatus !== 'FAILED') {
         parkedOnBoard = true;
+      } else if (matchedCall?.name === 'schedule' && stepStatus !== 'ERROR' && stepStatus !== 'FAILED') {
+        parkedOnTimer = true;
       }
     } else if (type === 'USER_INPUT' || type === 'SYSTEM_MESSAGE') {
       lastPlannerCalls = [];
       genericsAfterPlanner = 0;
       lastPlannerHadTextOnly = false;
       parkedOnBoard = false;
+      parkedOnTimer = false;
+      stoppedByRestart = type === 'SYSTEM_MESSAGE' && SERVER_RESTART_NOTICE_RE.test(text(step.content));
     }
   }
 
@@ -495,20 +508,30 @@ export function inspectAgyTranscriptActivity(conversationId: string): AgyTranscr
 
   // If the last step is still RUNNING, or is a fresh USER_INPUT/SYSTEM_MESSAGE
   // awaiting model response, or a PLANNER_RESPONSE with unfinished tool calls: working!
-  // Exception: blocking on `swarm_wait` means the worker is parked waiting on the board.
+  // Exceptions: `swarm_wait` (parked on board), `schedule` (sleeping on timer),
+  // server-restart notices, and stale DONE steps that never produced a follow-up.
   const unfinishedTools = lastPlannerCalls.length > 0 && genericsAfterPlanner < lastPlannerCalls.length;
   const activeCall = unfinishedTools ? (lastPlannerCalls[genericsAfterPlanner] ?? lastPlannerCalls[lastPlannerCalls.length - 1]) : null;
   if (activeCall?.name === 'swarm_wait') parkedOnBoard = true;
-  const freshMessage = (lastType === 'USER_INPUT' || lastType === 'SYSTEM_MESSAGE') && lastStatus === 'DONE';
-  const runningStep = lastStatus === 'RUNNING' || lastStatus === 'PENDING' || lastStatus === 'IN_PROGRESS';
-  const waitingForNextPlanner = lastPlannerCalls.length > 0 && genericsAfterPlanner >= lastPlannerCalls.length && !parkedOnBoard;
+  if (activeCall?.name === 'schedule') parkedOnTimer = true;
+  const transcriptStale = Date.now() - stat.mtimeMs > STALE_PENDING_STEP_MS;
+  const freshMessage = !stoppedByRestart && !transcriptStale
+    && (lastType === 'USER_INPUT' || lastType === 'SYSTEM_MESSAGE') && lastStatus === 'DONE';
+  const runningStep = !parkedOnTimer
+    && (lastStatus === 'RUNNING' || lastStatus === 'PENDING' || lastStatus === 'IN_PROGRESS');
+  const waitingForNextPlanner = !transcriptStale
+    && lastPlannerCalls.length > 0 && genericsAfterPlanner >= lastPlannerCalls.length
+    && !parkedOnBoard && !parkedOnTimer;
 
   // Guard against stale/crashed turns from long-dead conversations: callers also check parent liveness.
-  const working = !parkedOnBoard && !lastPlannerHadTextOnly && (runningStep || unfinishedTools || freshMessage || waitingForNextPlanner);
+  const working = !parkedOnBoard && !parkedOnTimer && !stoppedByRestart && !lastPlannerHadTextOnly
+    && (runningStep || unfinishedTools || freshMessage || waitingForNextPlanner);
 
   let currentAction: string | null = null;
   if (parkedOnBoard) {
     currentAction = 'Waiting on board';
+  } else if (parkedOnTimer) {
+    currentAction = 'Waiting on schedule';
   } else if (unfinishedTools) {
     currentAction = activeCall ? summarizeStepTool(activeCall.name, activeCall.args) : 'Running tool';
   } else if (runningStep && lastType === 'GENERIC') {
@@ -531,9 +554,15 @@ export function inspectAgyTranscriptActivity(conversationId: string): AgyTranscr
 
 /** True when any subagent, swarm worker, or non-daemon task of `sessionId` is actively running. */
 export function hasActiveAgyBrainWork(nativeSessionId: string): boolean {
+  const restartMs = readLastServerRestartMs(nativeSessionId);
   const subs = readAgySubagentDescriptors(nativeSessionId);
   for (const sub of subs) {
     if (sub.swarmKilled || /KILLED|ERROR|FAILED|STOPPED|DEAD/i.test(sub.rawState)) continue;
+    if (restartMs > 0) {
+      try {
+        if (fs.statSync(sub.transcriptFile).mtimeMs < restartMs) continue;
+      } catch { continue; }
+    }
     const act = inspectAgyTranscriptActivity(sub.conversationId);
     if (act.working) return true;
   }
@@ -945,40 +974,84 @@ export interface AgySessionTasksPayload {
   swarm: AgySwarmSummary | null;
 }
 
+const BG_SHELL_BANNER_RE = /^Tool is running as a background task with task id:\s*((?:[a-zA-Z0-9_-]+\/)?(task-\d+))/im;
 const BG_TASK_ID_RE = /task id:\s*((?:[a-zA-Z0-9_-]+\/)?(task-\d+))/i;
 const BG_TASK_DESC_RE = /Task Description:\s*([^\n]+)/i;
 const EXIT_CODE_RE = /Command exited with code (-?\d+)/;
+const TASK_CANCELED_RE = /\b(?:was cance(?:l|ll)ed|Tool execution was cance(?:l|ll)ed)\b/i;
 
-function readTaskCompletionMessages(nativeSessionId: string): Map<string, { finishedAt: string | null; content: string; exitCode: number | null; failed: boolean }> {
+function taskIdBelongsToSession(fullTaskId: string | undefined, nativeSessionId: string): boolean {
+  if (!fullTaskId) return true;
+  const slash = fullTaskId.indexOf('/');
+  return slash < 0 || fullTaskId.slice(0, slash) === nativeSessionId;
+}
+
+interface TaskCompletionRecord {
+  finishedAt: string | null;
+  content: string;
+  exitCode: number | null;
+  failed: boolean;
+  canceled: boolean;
+}
+
+function readTaskCompletionMessages(nativeSessionId: string): {
+  completions: Map<string, TaskCompletionRecord>;
+  lastServerRestartMs: number;
+} {
   const dir = agyBrainDir(nativeSessionId);
-  const out = new Map<string, { finishedAt: string | null; content: string; exitCode: number | null; failed: boolean }>();
-  if (!dir) return out;
+  const completions = new Map<string, TaskCompletionRecord>();
+  let lastServerRestartMs = 0;
+  if (!dir) return { completions, lastServerRestartMs };
   const msgDir = path.join(dir, '.system_generated', 'messages');
   let entries: fs.Dirent[];
   try {
-    if (!fs.lstatSync(msgDir).isDirectory()) return out;
+    if (!fs.lstatSync(msgDir).isDirectory()) return { completions, lastServerRestartMs };
     entries = fs.readdirSync(msgDir, { withFileTypes: true });
-  } catch { return out; }
+  } catch { return { completions, lastServerRestartMs }; }
   for (const entry of entries) {
     if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json') || entry.name === 'read.json') continue;
     const raw = readJsonFile(path.join(msgDir, entry.name));
     if (!raw) continue;
     const sender = text(raw.sender);
+    const content = text(raw.content);
+    const tsText = text(raw.timestamp) || null;
+    if (sender === 'system' && SERVER_RESTART_NOTICE_RE.test(content)) {
+      const ms = tsText ? Date.parse(tsText) : NaN;
+      if (Number.isFinite(ms) && ms > lastServerRestartMs) lastServerRestartMs = ms;
+      continue;
+    }
     const slash = sender.lastIndexOf('/');
+    if (slash > 0 && sender.slice(0, slash) !== nativeSessionId) continue;
     const shortSender = slash >= 0 ? sender.slice(slash + 1) : sender;
     if (!TASK_ID_RE.test(shortSender)) continue;
-    const content = text(raw.content);
     const exitMatch = EXIT_CODE_RE.exec(content);
     const exitCode = exitMatch ? Number(exitMatch[1]) : null;
-    const failed = (exitCode !== null && exitCode !== 0) || /failed|error/i.test(text(asRecord(raw.renderDetails).messageTitle));
-    out.set(shortSender, {
-      finishedAt: text(raw.timestamp) || null,
+    const title = text(asRecord(raw.renderDetails).messageTitle);
+    const canceled = TASK_CANCELED_RE.test(content) || TASK_CANCELED_RE.test(title);
+    const failed = !canceled && ((exitCode !== null && exitCode !== 0) || /failed|error/i.test(title));
+    completions.set(shortSender, {
+      finishedAt: tsText,
       content,
       exitCode,
       failed,
+      canceled,
     });
   }
-  return out;
+  return { completions, lastServerRestartMs };
+}
+
+/** Epoch ms of the latest `server restart` notice recorded for `nativeSessionId`, or 0. */
+export function readLastServerRestartMs(nativeSessionId: string): number {
+  let latest = readTaskCompletionMessages(nativeSessionId).lastServerRestartMs;
+  const transcriptFile = agyBrainTranscriptPath(nativeSessionId);
+  if (!transcriptFile) return latest;
+  for (const step of readTranscriptTailSteps(transcriptFile)) {
+    if (text(step.type) !== 'SYSTEM_MESSAGE') continue;
+    if (!SERVER_RESTART_NOTICE_RE.test(text(step.content))) continue;
+    const ms = Date.parse(text(step.created_at));
+    if (Number.isFinite(ms) && ms > latest) latest = ms;
+  }
+  return latest;
 }
 
 export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: boolean): AgyBackgroundTask[] {
@@ -1000,9 +1073,13 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     }
   } catch {}
 
-  const completions = readTaskCompletionMessages(nativeSessionId);
+  const msgInfo = readTaskCompletionMessages(nativeSessionId);
+  const completions = msgInfo.completions;
+  let lastServerRestartMs = msgInfo.lastServerRestartMs;
+  let lastServerRestartStep = -1;
   const killedIds = new Set<string>();
   const tasksById = new Map<string, AgyBackgroundTask>();
+  const systemMessageSteps: { pos: number; sender: string; createdAt: string | null }[] = [];
 
   const transcriptFile = agyBrainTranscriptPath(nativeSessionId);
   let steps: ProtocolRecord[] = [];
@@ -1015,9 +1092,10 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     } catch {}
   }
 
-  // Pre-pass: gather completion SYSTEM_MESSAGEs and manage_task kill calls so
-  // earlier GENERIC start steps know their final status immediately.
-  for (const step of steps) {
+  // Pre-pass: gather completion/cancellation/restart SYSTEM_MESSAGEs and
+  // manage_task kill calls so earlier GENERIC start steps know their final status immediately.
+  for (let stepPos = 0; stepPos < steps.length; stepPos++) {
+    const step = steps[stepPos];
     const type = text(step.type);
     const createdAt = text(step.created_at) || null;
     if (type === 'PLANNER_RESPONSE') {
@@ -1027,6 +1105,7 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
         const args = parseStepToolArgs(c.args);
         if (text(args.Action) === 'kill') {
           const tid = text(args.TaskId);
+          if (!taskIdBelongsToSession(tid, nativeSessionId)) continue;
           const shortId = tid.includes('/') ? tid.slice(tid.lastIndexOf('/') + 1) : tid;
           if (shortId) killedIds.add(shortId);
         }
@@ -1035,27 +1114,54 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     }
     if (type === 'SYSTEM_MESSAGE') {
       const content = text(step.content);
-      const idMatch = /sender=(?:[a-zA-Z0-9_-]+\/)?(task-\d+)/.exec(content)
-        ?? /Task id "(?:[a-zA-Z0-9_-]+\/)?(task-\d+)" finished/i.exec(content);
-      if (idMatch && !completions.has(idMatch[1])) {
-        const exitMatch = EXIT_CODE_RE.exec(content);
-        const exitCode = exitMatch ? Number(exitMatch[1]) : null;
-        completions.set(idMatch[1], {
-          finishedAt: createdAt,
-          content,
-          exitCode,
-          failed: exitCode !== null && exitCode !== 0,
-        });
+      const parsedSys = parseSystemMessage(content);
+      if (parsedSys && !parsedSys.noisy) {
+        systemMessageSteps.push({ pos: stepPos, sender: parsedSys.sender, createdAt });
+      }
+      if (SERVER_RESTART_NOTICE_RE.test(content)) {
+        lastServerRestartStep = stepPos;
+        const ms = createdAt ? Date.parse(createdAt) : NaN;
+        if (Number.isFinite(ms) && ms > lastServerRestartMs) lastServerRestartMs = ms;
+        continue;
+      }
+      const idMatch = /sender=((?:[a-zA-Z0-9_-]+\/)?(task-\d+))/.exec(content)
+        ?? /Task id "((?:[a-zA-Z0-9_-]+\/)?(task-\d+))"\s+(?:finished|was cance(?:l|ll)ed|cance(?:l|ll)ed|killed|stopped)/i.exec(content);
+      if (idMatch && taskIdBelongsToSession(idMatch[1], nativeSessionId)) {
+        const shortId = idMatch[2];
+        const canceled = TASK_CANCELED_RE.test(content);
+        if (canceled) killedIds.add(shortId);
+        if (!completions.has(shortId)) {
+          const exitMatch = EXIT_CODE_RE.exec(content);
+          const exitCode = exitMatch ? Number(exitMatch[1]) : null;
+          completions.set(shortId, {
+            finishedAt: createdAt,
+            content,
+            exitCode,
+            failed: !canceled && exitCode !== null && exitCode !== 0,
+            canceled,
+          });
+        }
       }
     }
   }
 
   interface CallRecord { name: string; args: ProtocolRecord; createdAt: string | null }
   const pendingCalls: CallRecord[] = [];
+  const wasStoppedByRestart = (stepPos: number, startedAt: string | null): boolean => {
+    if (stepPos < lastServerRestartStep) return true;
+    const ms = startedAt ? Date.parse(startedAt) : NaN;
+    return Number.isFinite(ms) && lastServerRestartMs > 0 && ms < lastServerRestartMs;
+  };
 
-  for (const step of steps) {
+  for (let stepPos = 0; stepPos < steps.length; stepPos++) {
+    const step = steps[stepPos];
     const type = text(step.type);
     const createdAt = text(step.created_at) || null;
+    if (type === 'USER_INPUT') {
+      // A new user prompt starts a fresh turn; clear any unreturned calls from an aborted turn.
+      pendingCalls.length = 0;
+      continue;
+    }
     if (type === 'PLANNER_RESPONSE') {
       const calls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
       for (const c of calls) {
@@ -1068,25 +1174,32 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     const call = pendingCalls.shift();
     if (!call) continue;
     const content = text(step.content);
+    const cleaned = stripToolTimestamps(content);
     const status = text(step.status);
 
     if (call.name === 'run_command') {
-      const idMatch = BG_TASK_ID_RE.exec(content);
+      // Only treat `run_command` as backgrounded when it carries agy's actual
+      // background-task banner for THIS conversation (never a quoted `task id:`
+      // printed in synchronous command stdout) or when the step itself is RUNNING.
+      const bannerMatch = BG_SHELL_BANNER_RE.exec(cleaned);
+      const validBanner = bannerMatch && taskIdBelongsToSession(bannerMatch[1], nativeSessionId) ? bannerMatch : null;
       const stepIdx = finite(step.step_index) ? step.step_index : null;
-      const inferredId = idMatch ? idMatch[2] : (stepIdx !== null && logStats.has(`task-${stepIdx}`) ? `task-${stepIdx}` : null);
+      const inferredId = validBanner ? validBanner[2] : (stepIdx !== null && logStats.has(`task-${stepIdx}`) ? `task-${stepIdx}` : null);
       if (!inferredId) continue;
-      const fullTaskId = idMatch ? idMatch[1] : `${nativeSessionId}/${inferredId}`;
+      const fullTaskId = validBanner ? validBanner[1] : `${nativeSessionId}/${inferredId}`;
       const cmd = text(call.args.CommandLine);
       const summary = text(call.args.toolSummary);
-      const descMatch = BG_TASK_DESC_RE.exec(content);
+      const descMatch = BG_TASK_DESC_RE.exec(cleaned);
       const log = logStats.get(inferredId);
       const comp = completions.get(inferredId);
-      const isDaemon = call.args.IsDaemon === true;
-      const killed = killedIds.has(inferredId);
-      // When run_command backgrounds itself, the GENERIC step returns DONE with
-      // `background task with task id: ...`; the task itself stays running until
-      // a completion message arrives, manage_task kills it, or the parent exits.
-      const backgrounded = !!idMatch || status === 'RUNNING';
+      const isDaemon = call.args.IsDaemon === true || call.args.IsDaemon === 'true';
+      const startedAt = call.createdAt ?? createdAt;
+      const killed = killedIds.has(inferredId) || comp?.canceled === true || (!comp && wasStoppedByRestart(stepPos, startedAt));
+      // When run_command backgrounds itself, the GENERIC step starts with the
+      // background-task banner (usually status RUNNING); the task stays running
+      // until a completion/cancel message arrives, manage_task kills it, server restarts,
+      // or the parent exits.
+      const backgrounded = !!validBanner || status === 'RUNNING';
       const resolvedStatus: AgyBackgroundTask['status'] = killed
         ? 'killed'
         : comp
@@ -1100,7 +1213,7 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
         title: summary || (descMatch ? descMatch[1].trim() : '') || cmd.split('\n')[0].slice(0, 80) || inferredId,
         command: cmd || undefined,
         isDaemon,
-        startedAt: call.createdAt ?? createdAt,
+        startedAt,
         finishedAt: comp?.finishedAt ?? (resolvedStatus !== 'running' ? (log?.mtime ?? null) : null),
         exitCode: comp?.exitCode ?? null,
         hasLog: !!log,
@@ -1110,20 +1223,28 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     }
 
     if (call.name === 'schedule') {
-      const idMatch = BG_TASK_ID_RE.exec(content);
-      const bareMatch = !idMatch ? /(task-\d+)/i.exec(content) : null;
+      const rawIdMatch = BG_TASK_ID_RE.exec(cleaned);
+      const idMatch = rawIdMatch && taskIdBelongsToSession(rawIdMatch[1], nativeSessionId) ? rawIdMatch : null;
+      const bareMatch = !idMatch ? /(task-\d+)/i.exec(cleaned) : null;
       const stepIdx = finite(step.step_index) ? step.step_index : null;
       const id = idMatch ? idMatch[2] : bareMatch ? bareMatch[1] : `schedule-${stepIdx ?? tasksById.size + 1}`;
       const fullTaskId = idMatch ? idMatch[1] : TASK_ID_RE.test(id) ? `${nativeSessionId}/${id}` : undefined;
       const cron = text(call.args.CronExpression) || undefined;
       const durationSeconds = finite(call.args.DurationSeconds) ? call.args.DurationSeconds : undefined;
+      const timerCondition = text(call.args.TimerCondition);
       const prompt = text(call.args.Prompt);
-      const isDaemon = call.args.IsDaemon === true;
-      const killed = killedIds.has(id);
+      const isDaemon = call.args.IsDaemon === true || call.args.IsDaemon === 'true';
+      const startedAt = call.createdAt ?? createdAt;
       const comp = completions.get(id);
+      const killed = killedIds.has(id) || comp?.canceled === true || (!comp && wasStoppedByRestart(stepPos, startedAt));
+      // A one-shot timer with `TimerCondition` ('any' or a sender id) is silently
+      // cancelled early by agy when a matching SYSTEM_MESSAGE arrives.
+      const earlyWake = !cron && timerCondition && timerCondition !== 'never'
+        ? systemMessageSteps.find(msg => msg.pos > stepPos && (timerCondition === 'any' || msg.sender === timerCondition || msg.sender.endsWith(`/${timerCondition}`)))
+        : undefined;
       const resolvedStatus: AgyBackgroundTask['status'] = killed
         ? 'killed'
-        : comp && !cron ? 'completed'
+        : (comp || earlyWake) && !cron ? 'completed'
         : parentLive ? 'scheduled' : 'completed';
       tasksById.set(id, {
         id,
@@ -1134,8 +1255,8 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
         cron,
         durationSeconds,
         isDaemon,
-        startedAt: call.createdAt ?? createdAt,
-        finishedAt: comp?.finishedAt ?? null,
+        startedAt,
+        finishedAt: comp?.finishedAt ?? earlyWake?.createdAt ?? null,
         exitCode: null,
         hasLog: logStats.has(id),
         ...(logStats.has(id) ? { logBytes: logStats.get(id)!.size } : {}),
@@ -1145,14 +1266,16 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
     }
 
     if (call.name === 'run_workflow') {
-      const idMatch = BG_TASK_ID_RE.exec(content);
-      const bareMatch = !idMatch ? /(task-\d+)/i.exec(content) : null;
+      const rawIdMatch = BG_TASK_ID_RE.exec(cleaned);
+      const idMatch = rawIdMatch && taskIdBelongsToSession(rawIdMatch[1], nativeSessionId) ? rawIdMatch : null;
+      const bareMatch = !idMatch ? /(task-\d+)/i.exec(cleaned) : null;
       const stepIdx = finite(step.step_index) ? step.step_index : null;
       const id = idMatch ? idMatch[2] : bareMatch ? bareMatch[1] : `workflow-${stepIdx ?? tasksById.size + 1}`;
       const fullTaskId = idMatch ? idMatch[1] : TASK_ID_RE.test(id) ? `${nativeSessionId}/${id}` : undefined;
       const desc = text(call.args.Description) || text(call.args.ScriptPath) || 'Workflow';
+      const startedAt = call.createdAt ?? createdAt;
       const comp = completions.get(id);
-      const killed = killedIds.has(id);
+      const killed = killedIds.has(id) || comp?.canceled === true || (!comp && wasStoppedByRestart(stepPos, startedAt));
       const backgrounded = !!(idMatch || bareMatch) || status === 'RUNNING';
       const resolvedStatus: AgyBackgroundTask['status'] = killed
         ? 'killed'
@@ -1164,7 +1287,7 @@ export function readAgyBackgroundTasks(nativeSessionId: string, parentLive: bool
         kind: 'workflow',
         status: resolvedStatus,
         title: desc.slice(0, 100),
-        startedAt: call.createdAt ?? createdAt,
+        startedAt,
         finishedAt: comp?.finishedAt ?? null,
         exitCode: comp?.exitCode ?? null,
         hasLog: logStats.has(id),

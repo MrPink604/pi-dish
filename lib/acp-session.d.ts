@@ -102,7 +102,7 @@ export declare class AcpSession extends TransportSession {
     private sideListeners;
     constructor(proc: ChildProcessWithoutNullStreams, cwd: string);
     get pid(): number | null;
-    /** True while a non-daemon tool call has started and not yet completed or failed. */
+    /** True while a blocking (non-daemon, non-schedule) tool call has started and not yet terminated. */
     get hasActiveToolWork(): boolean;
     private _writeFrame;
     /** The sidecar is named by the agy session id, which startup frames precede; flush on adopt. */
@@ -115,6 +115,7 @@ export declare class AcpSession extends TransportSession {
     private _handleResponse;
     private _handleNotification;
     private _handleRequest;
+    private _isPassiveToolCompletion;
     private _sessionUpdate;
     private _emitUI;
     private _applyTitle;
@@ -136,6 +137,13 @@ export declare class AcpSession extends TransportSession {
      */
     private _noteActivity;
     private _armAutonomousTimer;
+    /**
+     * Reconcile open background shell/workflow tool calls against brain
+     * transcripts when ACP misses a terminal `tool_call_update` (e.g. task
+     * cancellation or internal server restart). Only acts when a brain
+     * transcript explicitly records the matching task as finished/killed.
+     */
+    private _reconcileFinishedBrainTools;
     private _autonomousIdle;
     private _clearAutonomousTimer;
     private _hasRunningShellTools;

@@ -187,6 +187,8 @@ export interface AgySessionTasksPayload {
     subagents: AgySubagentTaskSummary[];
     swarm: AgySwarmSummary | null;
 }
+/** Epoch ms of the latest `server restart` notice recorded for `nativeSessionId`, or 0. */
+export declare function readLastServerRestartMs(nativeSessionId: string): number;
 export declare function readAgyBackgroundTasks(nativeSessionId: string, parentLive: boolean): AgyBackgroundTask[];
 export interface AgyTaskLogPayload {
     taskId: string;

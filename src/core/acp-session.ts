@@ -52,7 +52,14 @@ import {
   type AcpToolCall,
   type NormalizedPlanEntry,
 } from './acp-transcript';
-import { agyBrainDir, findLatestToolStepOutput, readLatestAgyBrainStepUsage, readRunningTaskLogTail } from './agy-brain';
+import {
+  agyBrainDir,
+  agyBrainTranscriptPath,
+  findLatestToolStepOutput,
+  readAgyBackgroundTasks,
+  readLatestAgyBrainStepUsage,
+  readRunningTaskLogTail,
+} from './agy-brain';
 
 /** Versions the fake agent and the captures were verified against. */
 export const AGY_VERIFIED_VERSIONS: readonly string[] = Object.freeze(['1.5.10', '1.5.13']);
@@ -130,6 +137,20 @@ function sumUsage(a: ProtocolRecord | null, b: ProtocolRecord | null): ProtocolR
 const ACTIVITY_UPDATES: Readonly<Record<string, true>> = {
   agent_message_chunk: true, agent_thought_chunk: true, tool_call: true, tool_call_update: true, plan: true,
 };
+
+/**
+ * Tools that intentionally remain `in_progress` in ACP while the agent sleeps
+ * after `end_turn` (e.g. timers/crons): holding `turnInProgress = true` for
+ * them makes an idle sleeping session appear permanently stuck working.
+ */
+const NON_BLOCKING_TURN_TOOLS: Readonly<Record<string, true>> = {
+  schedule: true,
+};
+
+function isTerminalToolStatus(status: string): boolean {
+  return status === 'completed' || status === 'failed' || status === 'cancelled'
+    || status === 'canceled' || status === 'aborted' || status === 'error';
+}
 
 export function agyMirrorRoot(): string {
   return path.join(dishDir(), 'agy', 'sessions');
@@ -281,6 +302,8 @@ interface TrackedTool {
   startedAt: number;
   waitMsBeforeAsync: number | null;
   isDaemon: boolean;
+  /** True for daemons and sleeping timers/crons that must not hold `turnInProgress` open past `end_turn`. */
+  nonBlocking: boolean;
   lastStreamedLog: string;
 }
 
@@ -444,10 +467,10 @@ export class AcpSession extends TransportSession {
     return this.proc.pid ?? null;
   }
 
-  /** True while a non-daemon tool call has started and not yet completed or failed. */
+  /** True while a blocking (non-daemon, non-schedule) tool call has started and not yet terminated. */
   get hasActiveToolWork(): boolean {
     for (const tracked of this.toolCalls.values()) {
-      if (!tracked.isDaemon) return true;
+      if (!tracked.nonBlocking) return true;
     }
     return false;
   }
@@ -599,6 +622,13 @@ export class AcpSession extends TransportSession {
 
   // ---- ACP → Pi events -----------------------------------------------------
 
+  private _isPassiveToolCompletion(kind: string, update: ProtocolRecord): boolean {
+    if (this.turnInProgress || kind !== 'tool_call_update') return false;
+    if (!isTerminalToolStatus(text(update.status))) return false;
+    const tracked = this.toolCalls.get(text(update.toolCallId));
+    return tracked?.nonBlocking === true;
+  }
+
   private _sessionUpdate(raw: unknown): void {
     const update = isRecord(raw) ? raw : {};
     const kind = text(update.sessionUpdate);
@@ -606,7 +636,7 @@ export class AcpSession extends TransportSession {
       this.transcript?.applyReplayUpdate(update);
       return;
     }
-    if (Object.hasOwn(ACTIVITY_UPDATES, kind)) this._noteActivity();
+    if (Object.hasOwn(ACTIVITY_UPDATES, kind) && !this._isPassiveToolCompletion(kind, update)) this._noteActivity();
     switch (kind) {
       case 'agent_message_chunk': {
         const content = asRecord(update.content);
@@ -825,20 +855,27 @@ export class AcpSession extends TransportSession {
       this._closeSegment('toolUse', null, null);
     }
     const startedAt = Date.now();
-    const rawArgs = isRecord(update.args) ? update.args : (isRecord(update.rawInput) ? update.rawInput : {});
+    const rawArgs: ProtocolRecord = {
+      ...(isRecord(update.rawInput) ? update.rawInput : {}),
+      ...(isRecord(update.args) ? update.args : {}),
+    };
     const waitMs = finite(rawArgs.WaitMsBeforeAsync) && rawArgs.WaitMsBeforeAsync > 0 ? rawArgs.WaitMsBeforeAsync : null;
-    const isDaemon = rawArgs.IsDaemon === true;
+    const isDaemon = rawArgs.IsDaemon === true || rawArgs.isDaemon === true || rawArgs.IsDaemon === 'true' || rawArgs.isDaemon === 'true';
+    const nonBlocking = isDaemon || Object.hasOwn(NON_BLOCKING_TURN_TOOLS, call.nativeName);
     const status = text(update.status);
+    const terminal = isTerminalToolStatus(status);
     this.nextStepStartedAt = status === 'pending' ? null : (waitMs !== null ? startedAt + waitMs : null);
-    if (status !== 'completed' && status !== 'failed') {
-      this.toolCalls.set(toolCallId, { call, startedAt, waitMsBeforeAsync: waitMs, isDaemon, lastStreamedLog: '' });
+    if (!terminal) {
+      this.toolCalls.set(toolCallId, { call, startedAt, waitMsBeforeAsync: waitMs, isDaemon, nonBlocking, lastStreamedLog: '' });
       this._syncTaskLogTimer();
     }
-    if (call.nativeName === 'ask_question') {
+    if (call.nativeName === 'ask_question' && !terminal) {
       const args = isRecord(update.args) ? update.args : {};
       this.askQuestions.set(toolCallId, Array.isArray(args.questions) ? args.questions : []);
     }
-    this._emitTool('tool_execution_start', { toolCallId, toolName: call.toolName, args: call.args, startedAt });
+    if (!terminal) {
+      this._emitTool('tool_execution_start', { toolCallId, toolName: call.toolName, args: call.args, startedAt });
+    }
   }
 
   private _toolUpdate(update: ProtocolRecord): void {
@@ -853,11 +890,11 @@ export class AcpSession extends TransportSession {
     }
     const status = text(update.status);
     const result = acpToolResult(update, tracked.call, { allowedRoots: this._allowedImageRoots() });
-    if (status === 'completed' || status === 'failed') {
+    if (isTerminalToolStatus(status)) {
       // If the agent spoke while a background tool ran, close that interim
       // segment before recording the toolResult so transcript order stays chronological.
       if (this.segment) this._closeSegment('stop', null, null);
-      const isError = status === 'failed';
+      const isError = status !== 'completed';
       this.toolCalls.delete(toolCallId);
       this.askQuestions.delete(toolCallId);
       this._syncTaskLogTimer();
@@ -950,9 +987,60 @@ export class AcpSession extends TransportSession {
     this.autonomousTimer.unref();
   }
 
+  /**
+   * Reconcile open background shell/workflow tool calls against brain
+   * transcripts when ACP misses a terminal `tool_call_update` (e.g. task
+   * cancellation or internal server restart). Only acts when a brain
+   * transcript explicitly records the matching task as finished/killed.
+   */
+  private _reconcileFinishedBrainTools(): void {
+    if (!this.hasActiveToolWork) return;
+    const transcriptFile = agyBrainTranscriptPath(this.nativeSessionId);
+    if (!transcriptFile || !fs.existsSync(transcriptFile)) return;
+    const tasks = readAgyBackgroundTasks(this.nativeSessionId, true);
+    if (!tasks.length) return;
+    for (const [toolCallId, tracked] of [...this.toolCalls]) {
+      if (tracked.nonBlocking) continue;
+      if (tracked.call.nativeName !== 'run_command' && tracked.call.nativeName !== 'run_workflow') continue;
+      const expectedKind = tracked.call.nativeName === 'run_command' ? 'shell' : 'workflow';
+      const expectedCmd = expectedKind === 'shell' ? text(tracked.call.args.command).trim() : '';
+      const matched = tasks.find((task) => {
+        if (task.kind !== expectedKind) return false;
+        if (expectedKind === 'shell') {
+          if (!expectedCmd || !task.command || task.command.trim() !== expectedCmd) return false;
+        }
+        const startedMs = task.startedAt ? Date.parse(task.startedAt) : NaN;
+        return !Number.isFinite(startedMs) || Math.abs(startedMs - tracked.startedAt) <= 60_000;
+      });
+      if (!matched || (matched.status !== 'completed' && matched.status !== 'failed' && matched.status !== 'killed')) continue;
+      this.toolCalls.delete(toolCallId);
+      this.askQuestions.delete(toolCallId);
+      const isError = matched.status !== 'completed';
+      const summaryText = matched.status === 'killed'
+        ? 'Background task stopped.'
+        : matched.exitCode !== null ? `Command exited with code ${matched.exitCode}.` : 'Background task finished.';
+      this.transcript?.appendToolResult({
+        toolCallId,
+        toolName: tracked.call.toolName,
+        content: summaryText,
+        isError,
+      });
+      this._emitTool('tool_execution_end', {
+        toolCallId,
+        toolName: tracked.call.toolName,
+        args: tracked.call.args,
+        startedAt: tracked.startedAt,
+        isError,
+        result: { content: [{ type: 'text', text: summaryText }] },
+      });
+    }
+    this._syncTaskLogTimer();
+  }
+
   private _autonomousIdle(): void {
     this.autonomousTimer = null;
     if (!this.alive || this.newestPromptId !== null || !this.turnInProgress) return;
+    if (this.hasActiveToolWork) this._reconcileFinishedBrainTools();
     if (this.inbound.size > 0 || this.hasActiveToolWork) {
       // Flush any interim assistant status text while waiting on a long
       // background tool so reconnects see it and post-tool output starts fresh.

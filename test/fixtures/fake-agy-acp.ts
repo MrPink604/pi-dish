@@ -401,6 +401,34 @@ function handlePrompt(id: number, params: Frame): void {
       }, 5);
       return;
     }
+    case 'background-schedule': {
+      // Observed live: `schedule` stays `in_progress` over ACP until the timer fires
+      // (or forever for a cron), even though the agent yielded with `end_turn`.
+      setTimeout(() => {
+        toolCall('call-sched-1', 'schedule', { DurationSeconds: 180, Prompt: 'Check status later', TimerCondition: 'any' }, 'Run schedule', 'other');
+        textChunk('Timer scheduled for 3m.');
+        usageUpdate(700);
+        finishPrompt(id, 'end_turn');
+      }, 5);
+      return;
+    }
+    case 'background-cancelled': {
+      // A background command terminated with `cancelled` status (e.g. kill/cancel).
+      setTimeout(() => {
+        toolCall('call-bg-cancel', 'run_command', { CommandLine: 'sleep 60', WaitMsBeforeAsync: 5000 }, 'sleep 60', 'execute');
+        textChunk('Waiting on background sleep.');
+        usageUpdate(700);
+        finishPrompt(id, 'end_turn');
+        setTimeout(() => {
+          toolUpdate('call-bg-cancel', 'run_command', 'cancelled', {
+            title: 'sleep 60',
+            kind: 'execute',
+            content: [{ type: 'content', content: { type: 'text', text: 'Tool execution was canceled\n' } }],
+          });
+        }, 40);
+      }, 5);
+      return;
+    }
     case 'background-abort': {
       // Background command stays running after end_turn until the client aborts.
       setTimeout(() => {

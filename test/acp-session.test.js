@@ -241,6 +241,93 @@ test('daemon tool calls (IsDaemon: true) do not hold a turn open after end_turn'
     assert.equal(session.hasActiveToolWork, false);
     assert.match(assistantText(messages(events, 'assistant')), /Dev server started\./);
 });
+test('schedule timers do not hold a turn open after end_turn', async (t) => {
+    const session = await launch('background-schedule');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('schedule a check');
+    await until(() => events.some(event => event.event === 'turn_end'), 5000);
+    assert.equal(session.turnInProgress, false, 'sleeping on a schedule timer ends the turn cleanly');
+    assert.equal(session.hasActiveToolWork, false);
+    assert.equal(session.runningToolCalls.size, 0);
+    assert.match(assistantText(messages(events, 'assistant')), /Timer scheduled for 3m\./);
+});
+test('cancelled background tool calls release active tool work and end the turn', async (t) => {
+    const saved = process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+    process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = '80';
+    t.after(() => {
+        if (saved === undefined)
+            delete process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+        else
+            process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = saved;
+    });
+    const session = await launch('background-cancelled');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('run cancellable sleep');
+    await until(() => events.some(event => event.event === 'turn_end'), 5000);
+    assert.equal(session.turnInProgress, false);
+    assert.equal(session.hasActiveToolWork, false);
+    const endEv = events.find(event => event.event === 'tool_execution_end');
+    assert.ok(endEv, 'cancelled status still emits tool_execution_end');
+    assert.equal(asRecord(endEv.data).isError, true);
+});
+test('autonomous idle reconciles a stale background tool once brain records completion/cancellation', async (t) => {
+    const savedIdle = process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+    const savedBrain = process.env.PI_DISH_AGY_BRAIN_DIR;
+    const brainDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-acp-reconcile-'));
+    process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = '80';
+    process.env.PI_DISH_AGY_BRAIN_DIR = brainDir;
+    t.after(() => {
+        if (savedIdle === undefined)
+            delete process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS;
+        else
+            process.env.PI_DISH_AGY_AUTONOMOUS_IDLE_MS = savedIdle;
+        if (savedBrain === undefined)
+            delete process.env.PI_DISH_AGY_BRAIN_DIR;
+        else
+            process.env.PI_DISH_AGY_BRAIN_DIR = savedBrain;
+        fs.rmSync(brainDir, { recursive: true, force: true });
+    });
+    const session = await launch('background-abort');
+    cleanup(t, session);
+    const events = capture(session);
+    await session.prompt('run forever');
+    await until(() => assistantText(messages(events, 'assistant')).includes('Running long background task.'));
+    assert.equal(session.turnInProgress, true);
+    assert.equal(session.hasActiveToolWork, true);
+    // Simulate brain recording that the background `npm test` task was canceled
+    // while ACP never delivered a matching tool_call_update.
+    const nowIso = new Date().toISOString();
+    const transcriptFile = path.join(brainDir, session.nativeSessionId, '.system_generated', 'logs', 'transcript.jsonl');
+    fs.mkdirSync(path.dirname(transcriptFile), { recursive: true });
+    fs.writeFileSync(transcriptFile, [
+        {
+            step_index: 1,
+            type: 'PLANNER_RESPONSE',
+            status: 'DONE',
+            created_at: nowIso,
+            tool_calls: [{ name: 'run_command', args: { CommandLine: JSON.stringify('npm test'), WaitMsBeforeAsync: '5000' } }],
+        },
+        {
+            step_index: 2,
+            type: 'GENERIC',
+            status: 'RUNNING',
+            created_at: nowIso,
+            content: `Tool is running as a background task with task id: ${session.nativeSessionId}/task-2`,
+        },
+        {
+            step_index: 3,
+            type: 'SYSTEM_MESSAGE',
+            status: 'DONE',
+            created_at: nowIso,
+            content: `<SYSTEM_MESSAGE>\n[Message] timestamp=${nowIso} sender=${session.nativeSessionId}/task-2 priority=MESSAGE_PRIORITY_LOW content=Task id "${session.nativeSessionId}/task-2" was canceled with result:\nTool execution was canceled\n</SYSTEM_MESSAGE>`,
+        },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    await until(() => events.some(event => event.event === 'turn_end'), 5000);
+    assert.equal(session.turnInProgress, false, 'brain reconciliation clears the stale tool and ends the turn');
+    assert.equal(session.hasActiveToolWork, false);
+});
 test('abort ends a turn that is waiting on a background tool after end_turn', async (t) => {
     const session = await launch('background-abort');
     cleanup(t, session);

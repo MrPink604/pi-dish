@@ -361,3 +361,135 @@ test('readAgyBrainArtifacts lists user-facing brain artifacts with sidecar metad
   assert.equal(meta?.requestFeedback, true);
   assert.equal(agyBrain.readAgyBrainArtifactMeta(convId, path.join(dir, '.system_generated', 'secret.md')), null);
 });
+
+test('background task lifecycle ignores quoted foreign task ids, honors cancellations, server restarts, and early timer wakes', () => {
+  const convId = '77777777-7777-7777-7777-777777777777';
+  const otherId = '88888888-8888-8888-8888-888888888888';
+  const subId = '99999999-9999-9999-9999-999999999999';
+  const sysDir = path.join(brainRoot, convId, '.system_generated');
+
+  writeJsonl(present(agyBrain.agyBrainTranscriptPath(convId), 'conv transcript'), [
+    {
+      step_index: 1,
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-20T10:00:00Z',
+      tool_calls: [
+        { name: 'run_command', args: { CommandLine: JSON.stringify('cat other.log'), toolSummary: JSON.stringify('Inspect other log'), WaitMsBeforeAsync: '5000' } },
+        { name: 'run_command', args: { CommandLine: JSON.stringify('sleep 300'), toolSummary: JSON.stringify('Long task before restart'), WaitMsBeforeAsync: '500' } },
+      ],
+    },
+    {
+      // Synchronous command whose stdout quotes ANOTHER session's `task id: ...`
+      step_index: 2,
+      type: 'GENERIC',
+      status: 'DONE',
+      created_at: '2026-11-20T10:00:01Z',
+      content: `Created At: 2026-11-20T10:00:00Z\nCompleted At: 2026-11-20T10:00:01Z\nCommand exited with code 0.\n\nCommand output:\nquoted task id: ${otherId}/task-161`,
+    },
+    {
+      // Real background command that will be stopped by server restart notice
+      step_index: 3,
+      type: 'GENERIC',
+      status: 'RUNNING',
+      created_at: '2026-11-20T10:00:02Z',
+      content: `Created At: 2026-11-20T10:00:02Z\nTool is running as a background task with task id: ${convId}/task-3\nTask Description: Long task before restart`,
+    },
+    {
+      step_index: 4,
+      type: 'SYSTEM_MESSAGE',
+      status: 'DONE',
+      created_at: '2026-11-20T10:05:00Z',
+      content: `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:05:00Z sender=system priority=MESSAGE_PRIORITY_LOW content=[Notice] All your subagents and background tasks have been stopped due to server restart.\n</SYSTEM_MESSAGE>`,
+    },
+    {
+      step_index: 5,
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-20T10:06:00Z',
+      tool_calls: [
+        { name: 'run_command', args: { CommandLine: JSON.stringify('sleep 99'), toolSummary: JSON.stringify('Canceled task'), WaitMsBeforeAsync: '500' } },
+        { name: 'schedule', args: { DurationSeconds: '180', Prompt: JSON.stringify('Wake on timer'), TimerCondition: JSON.stringify('any') } },
+      ],
+    },
+    {
+      step_index: 6,
+      type: 'GENERIC',
+      status: 'RUNNING',
+      created_at: '2026-11-20T10:06:01Z',
+      content: `Created At: 2026-11-20T10:06:01Z\nTool is running as a background task with task id: ${convId}/task-6\nTask Description: Canceled task`,
+    },
+    {
+      step_index: 7,
+      type: 'GENERIC',
+      status: 'RUNNING',
+      created_at: '2026-11-20T10:06:02Z',
+      content: `Created At: 2026-11-20T10:06:02Z\nTool is running as a background task with task id: ${convId}/task-7\nTask Description: Timer: 3m`,
+    },
+    {
+      step_index: 8,
+      type: 'SYSTEM_MESSAGE',
+      status: 'DONE',
+      created_at: '2026-11-20T10:06:30Z',
+      content: `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-20T10:06:30Z sender=${convId}/task-6 priority=MESSAGE_PRIORITY_LOW content=Task id "${convId}/task-6" was canceled with result:\nTool execution was canceled\n</SYSTEM_MESSAGE>`,
+    },
+  ]);
+
+  // Subagent whose last step was a DONE tool result older than 5m (stale) or parked on schedule.
+  writeJson(path.join(sysDir, 'subagents', `${subId}.json`), {
+    conversationId: subId,
+    subagentDescriptor: { typeName: 'research', role: 'Stale Researcher' },
+    state: 'SUBAGENT_STATE_ALIVE',
+    spawnStepIndex: 1,
+    workspaceUris: ['file:///repo/app'],
+  });
+  const subTranscript = present(agyBrain.agyBrainTranscriptPath(subId), 'sub transcript');
+  writeJsonl(subTranscript, [
+    {
+      step_index: 0,
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-20T10:00:00Z',
+      tool_calls: [{ name: 'send_message', args: { Message: JSON.stringify('done') } }],
+    },
+    {
+      step_index: 1,
+      type: 'GENERIC',
+      status: 'DONE',
+      created_at: '2026-11-20T10:00:01Z',
+      content: 'Message sent.',
+    },
+  ]);
+  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000);
+  fs.utimesSync(subTranscript, tenMinAgo, tenMinAgo);
+
+  const tasks = agyBrain.readAgyBackgroundTasks(convId, true);
+  const byId = new Map(tasks.map(t => [t.id, t]));
+  assert.equal(byId.has('task-161'), false, 'stdout quoting a foreign task id is never tracked as a running task');
+  assert.equal(byId.get('task-3')?.status, 'killed', 'server restart notice terminates earlier running tasks');
+  assert.equal(byId.get('task-6')?.status, 'killed', 'was canceled SYSTEM_MESSAGE marks task killed');
+  assert.equal(byId.get('task-7')?.status, 'completed', 'subsequent SYSTEM_MESSAGE cancels TimerCondition=any one-shot timer');
+  assert.equal(agyBrain.inspectAgyTranscriptActivity(subId).working, false, 'stale DONE tail step does not appear stuck working');
+  assert.equal(agyBrain.hasActiveAgyBrainWork(convId), false, 'no false active brain work remains');
+
+  // A subagent sleeping on `schedule` is not actively working either.
+  writeJsonl(subTranscript, [
+    {
+      step_index: 0,
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-20T10:10:00Z',
+      tool_calls: [{ name: 'schedule', args: { DurationSeconds: '120', Prompt: JSON.stringify('poll later') } }],
+    },
+    {
+      step_index: 1,
+      type: 'GENERIC',
+      status: 'RUNNING',
+      created_at: '2026-11-20T10:10:01Z',
+      content: `Tool is running as a background task with task id: ${subId}/task-1`,
+    },
+  ]);
+  const schedAct = agyBrain.inspectAgyTranscriptActivity(subId);
+  assert.equal(schedAct.working, false, 'subagent sleeping on a schedule timer is not reported as working');
+  assert.equal(schedAct.currentAction, 'Waiting on schedule');
+});

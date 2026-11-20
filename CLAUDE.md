@@ -915,7 +915,11 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   `tasks/task-<N>.log` tails onto live `bash` cards, tracks `plan` entries
   (clearing the widget on empty updates), and `agy-relay.ts` reports
   `backgroundWork` while brain subagents or non-daemon tasks are running so
-  hibernation does not interrupt an active swarm. `GET /api/sessions/:id/tasks`,
+  hibernation does not interrupt an active swarm. `schedule` timers/crons are
+  non-blocking past `end_turn` (and terminal `cancelled`/`aborted`/`error`
+  updates plus brain completion/cancellation/server-restart notices reconcile
+  stale background tools) so idle or restarted sessions do not appear stuck
+  working. `GET /api/sessions/:id/tasks`,
   `/tasks/:taskId/log`, `/swarm` (`?since=`, coordinator or worker route), and
   `/artifacts` extend the existing `#subagentsView` takeover for `agy` sessions
   only (leaving non-`agy` sessions untouched) with interactive Swarm board /
