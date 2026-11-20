@@ -946,6 +946,15 @@ The design and real frames are in `TASKS/antigravity-acp.md` and
   `PLANNER_RESPONSE` entries (`readAgyBrainCacheProbeEntries`) when available
   so multi-step turns do not mask step-1 cold misses, and `cache-lifetime.ts`
   records implicit-cache cold misses while skipping sharp compaction drops.
+- **API-equivalent usage pricing:** `agy` is a priced harness in
+  `src/core/harness-pricing.ts` backed by a built-in public Gemini API rate
+  card (`AGY_API_RATE_CARD`) plus optional user overrides in
+  `~/.pi/dish/pricing/agy.json` (stat-revalidated). Brain transcript
+  thinking-level suffixes (`-minimal`…`-max`) fall back to their base model's
+  rate when no exact suffixed override exists, unknown zero-cost
+  `google-antigravity` rows remain unpriced rather than `$0` free, and
+  `pricingRevision('agy')` invalidates pre-existing `pr: 'native'` entries in
+  `session-index.ts` so historical sessions backfill automatically.
 
 ## tmux spawning (lib/tmux.js)
 

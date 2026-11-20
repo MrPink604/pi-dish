@@ -389,3 +389,101 @@ test('operation estimators preserve rate precedence and reprice cached transcrip
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('agy uses API-equivalent rate card, strips brain thinking-level suffixes, and honors agy.json overrides', async () => {
+  const agyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-pricing-agy-'));
+  process.env.HOME = agyHome;
+  pricing.resetForTests();
+  sessionFiles.resetCaches();
+  try {
+    const baseRevision = pricing.pricingRevision('agy');
+    assert.notEqual(baseRevision, 'native', 'agy pricing revision shifts off legacy native');
+    assert.notEqual(baseRevision, 'missing');
+
+    const neon = pricing.estimateUsageCost('agy', 'google-antigravity', 'gemini-4-neon', {
+      input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 0,
+    });
+    assert.deepEqual(neon, { input: 3, output: 7.5, cacheRead: 0.3, cacheWrite: 0, total: 10.8 });
+
+    const carbonBrain = pricing.estimateUsageCost('agy', 'google-antigravity', 'gemini-4-carbon-high', {
+      input: 1_000_000, output: 500_000, cacheRead: 1_000_000,
+    });
+    assert.deepEqual(carbonBrain, { input: 2, output: 5, cacheRead: 0.1, cacheWrite: 0, total: 7.1 },
+      'brain transcript thinking-level suffixes fall back to their base Gemini API rates');
+
+    const flashBrain = pricing.estimateUsageCost('agy', 'google-antigravity', 'gemini-3.8-flash-low', {
+      input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000,
+    });
+    assert.deepEqual(flashBrain, { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0, total: 4.575 });
+
+    assert.equal(pricing.estimateUsageCost('agy', 'google-antigravity', 'gemini-unknown-future', { input: 100 }), undefined,
+      'unknown agy models remain unpriced rather than free');
+
+    const snapshot = await pricing.refreshHarnessPricing('agy', { now: 1234 });
+    assert.ok(snapshot);
+    assert.equal(snapshot.revision, baseRevision);
+    assert.equal(fs.existsSync(path.join(agyHome, '.pi', 'dish', 'pricing', 'agy.json')), false,
+      'refreshHarnessPricing("agy") does not create or overwrite a user agy.json override file');
+
+    // End-to-end session usage/messages/stats estimation on agy-v1 transcripts
+    // (including zero-usage intermediate toolUse steps and unknown models).
+    const candidate: SessionFiles.SessionFileProfile = { harnessId: 'agy', profileId: 'agy-v1', profileVersion: 1 };
+    const content = [
+      { type: 'model_change', provider: 'google-antigravity', modelId: 'gemini-4-carbon' },
+      { type: 'message', message: { role: 'assistant', provider: 'google-antigravity', model: 'gemini-4-carbon', content: [], stopReason: 'toolUse' } },
+      { type: 'message', message: { role: 'assistant', provider: 'google-antigravity', model: 'gemini-4-carbon', content: [],
+        usage: { input: 1_000_000, output: 200_000, cacheRead: 10_000_000, cacheWrite: 0, reasoning: 50_000, totalTokens: 11_200_000 } } },
+      { type: 'message', message: { role: 'assistant', provider: 'google-antigravity', model: 'gemini-4-neon-xhigh', content: [],
+        usage: { input: 1_000_000, output: 100_000, cacheRead: 0, cacheWrite: 0, totalTokens: 1_100_000 } } },
+      { type: 'message', message: { role: 'assistant', provider: 'google-antigravity', model: 'gemini-unknown', content: [],
+        usage: { input: 100, output: 10, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } } },
+    ].map(value => JSON.stringify(value)).join('\n') + '\n';
+    const indexed: IndexedUsage = sessionFiles.buildIndexedUsageFromContent(content, candidate);
+    assert.equal(indexed.models['google-antigravity/gemini-4-carbon'].costs?.total, 5);
+    assert.equal(indexed.models['google-antigravity/gemini-4-carbon'].costUnavailable?.total, 0);
+    assert.equal(indexed.models['google-antigravity/gemini-4-neon-xhigh'].costs?.total, 4.5);
+    assert.equal(indexed.models['google-antigravity/gemini-4-neon-xhigh'].costUnavailable?.total, 0);
+    assert.equal(indexed.models['google-antigravity/gemini-unknown'].costs?.total, 0);
+    assert.equal(indexed.models['google-antigravity/gemini-unknown'].costUnavailable?.total, 1,
+      'unknown zero-cost google-antigravity rows stay unpriced, not $0 free');
+    assert.equal(indexed.total.costs.total, 9.5);
+    assert.equal(indexed.total.costUnavailable.total, 1);
+
+    const file = path.join(agyHome, 'agy-usage.jsonl');
+    fs.writeFileSync(file, content);
+    const source = { ...candidate, file };
+    assert.equal(sessionFiles.getSessionStats(source).cost, 9.5);
+    const msgs = sessionFiles.readSessionMessages(source).filter(m => m.role === 'assistant');
+    assert.equal(msgs[1]?.usage?.cost?.total, 5);
+    assert.equal(msgs[2]?.usage?.cost?.total, 4.5);
+    assert.equal(msgs[3]?.usage?.cost, undefined);
+
+    // Optional user override file `~/.pi/dish/pricing/agy.json` beats built-in
+    // rates (including for suffixed brain ids) and busts pricingRevision('agy').
+    const agyOverrideFile = path.join(agyHome, '.pi', 'dish', 'pricing', 'agy.json');
+    fs.mkdirSync(path.dirname(agyOverrideFile), { recursive: true });
+    fs.writeFileSync(agyOverrideFile, JSON.stringify({
+      models: [
+        { provider: 'google-antigravity', id: 'gemini-4-carbon', cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 } },
+        { provider: 'google-antigravity', id: 'gemini-4-neon-xhigh', cost: { input: 6, output: 30, cacheRead: 0.3, cacheWrite: 0 } },
+      ],
+    }) + '\n');
+    const overrideRevision = pricing.pricingRevision('agy');
+    assert.notEqual(overrideRevision, baseRevision);
+    assert.equal(pricing.estimateUsageCost('agy', 'google-antigravity', 'gemini-4-carbon-medium', { input: 1_000_000 })?.total, 4,
+      'base override beats built-in rate for suffixed brain ids too');
+    assert.equal(pricing.estimateUsageCost('agy', 'google-antigravity', 'gemini-4-neon-xhigh', { input: 1_000_000 })?.total, 6,
+      'exact suffixed override beats base rate');
+    assert.equal(sessionFiles.getSessionStats(source).cost, 19);
+
+    // Malformed agy.json degrades cleanly to the built-in API rate card.
+    fs.writeFileSync(agyOverrideFile, '{broken');
+    assert.equal(pricing.pricingRevision('agy'), baseRevision);
+    assert.equal(sessionFiles.getSessionStats(source).cost, 9.5);
+  } finally {
+    process.env.HOME = tmp;
+    pricing.resetForTests();
+    sessionFiles.resetCaches();
+    fs.rmSync(agyHome, { recursive: true, force: true });
+  }
+});

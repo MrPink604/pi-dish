@@ -41,7 +41,7 @@ interface PricingState {
 }
 interface OverridesCacheEntry { stats: fs.Stats; entries: CatalogModel[] }
 type HarnessInput = string | null | undefined;
-const PRICED_HARNESSES: Readonly<Record<string, true>> = { pi: true, omp: true };
+const PRICED_HARNESSES: Readonly<Record<string, true>> = { pi: true, omp: true, agy: true };
 // Subscription providers whose catalogs carry zero rates because there is no
 // per-request price: a zero rate there is unpriced, not free (unlike genuinely
 // free tiers, which keep their authoritative $0).
@@ -49,10 +49,52 @@ const ZAI_PLAN_PROVIDERS: Readonly<Record<string, true>> = { zai: true, 'zai-cod
 const PLAN_PROVIDERS: Readonly<Record<string, Readonly<Record<string, true>> | undefined>> = {
   pi: ZAI_PLAN_PROVIDERS,
   omp: { ...ZAI_PLAN_PROVIDERS, 'kimi-code': true, 'google-antigravity': true, 'openai-codex': true },
-  // An Antigravity subscription bills nothing per request, so its zero rates
-  // mean "plan", not "free".
+  // An Antigravity subscription bills nothing per request: known models use the
+  // API-equivalent rate card below, while unknown zero-rated rows remain unpriced.
   agy: { 'google-antigravity': true },
 };
+// API-equivalent list prices (USD per million tokens) for Antigravity models.
+// `agy models` publishes no dollar rates because Antigravity is a subscription;
+// these match public Google Gemini (and account) API rate cards so usage
+// dashboards and session stats reflect API-equivalent value. Optional user
+// overrides in `~/.pi/dish/pricing/agy.json` win over this built-in card.
+const AGY_API_RATE_CARD: readonly CatalogModel[] = [
+  // Gemini 4 family
+  { provider: 'google-antigravity', id: 'gemini-4-neon', cost: { input: 3, output: 15, cacheRead: 0.15, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-4-carbon', cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-4-argon', cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-4-hydrogen', cost: { input: 1.5, output: 7.5, cacheRead: 0.075, cacheWrite: 0 } },
+  // Gemini Pro Orchestrator variants
+  { provider: 'google-antigravity', id: 'gemini-pro-orchestrator-neon', cost: { input: 3, output: 15, cacheRead: 0.15, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-pro-orchestrator', cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-pro-orchestrator-argon', cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 } },
+  // Gemini 3.x family
+  { provider: 'google-antigravity', id: 'gemini-3.8-flash', cost: { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3.7-flash', cost: { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3.7-flash-tiered', cost: { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3.6-flash', cost: { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3.5-flash', cost: { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3.5-flash-lite', cost: { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3.1-pro-preview', cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3.1-flash-lite', cost: { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3.1-flash-lite-preview', cost: { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3.1-flash-image', cost: { input: 0.5, output: 60, cacheRead: 0.05, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3-flash', cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-3-flash-preview', cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 } },
+  // Gemini 2.5 family
+  { provider: 'google-antigravity', id: 'gemini-2.5-pro', cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-2.5-flash', cost: { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 } },
+  { provider: 'google-antigravity', id: 'gemini-2.5-flash-lite', cost: { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 } },
+  // Non-Gemini account models listed by `agy models`
+  { provider: 'google-antigravity', id: 'claude-opus-5-5', cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 } },
+  { provider: 'google-antigravity', id: 'claude-sonnet-5-5', cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 } },
+  { provider: 'google-antigravity', id: 'gpt-oss-120b', cost: { input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 } },
+];
+const AGY_API_RATE_CARD_LIST: CatalogModel[] = [...AGY_API_RATE_CARD];
+const AGY_API_RATE_CARD_REVISION = crypto.createHash('sha256').update(JSON.stringify(AGY_API_RATE_CARD_LIST)).digest('hex').slice(0, 16);
+// Antigravity brain transcripts append `-<level>` to the base model id
+// (e.g. `gemini-4-neon-xhigh`, `gemini-3.8-flash-low`).
+const AGY_LEVEL_SUFFIX_RE = /-(?:minimal|low|medium|high|xhigh|max)$/;
 const states = new Map<string, PricingState>();
 
 // OMP's models.yml modelOverrides are the user's rate card. OMP drops
@@ -174,8 +216,28 @@ function loadCatalogModels(harnessId: string, force: boolean): Promise<CatalogMo
   return runCatalogCommand(harnessId, force);
 }
 
+function loadAgyOverrides(): CatalogModel[] {
+  const file = catalogFile('agy');
+  let stats: fs.Stats;
+  try { stats = fs.statSync(file); } catch { return []; }
+  const cached = overridesCache.get(file);
+  if (cached && cached.stats.mtimeMs === stats.mtimeMs && cached.stats.size === stats.size &&
+      cached.stats.ctimeMs === stats.ctimeMs && cached.stats.dev === stats.dev && cached.stats.ino === stats.ino) return cached.entries;
+  let entries: CatalogModel[] = [];
+  try {
+    entries = normalizeCatalog(JSON.parse(fs.readFileSync(file, 'utf8'))) || [];
+  } catch { entries = []; } // a broken override file falls back to the built-in rate card
+  overridesCache.set(file, { stats, entries });
+  return entries;
+}
+
 export async function refreshHarnessPricing(harnessId = 'omp', { force = false, now = Date.now() }: PricingRefreshOptions = {}): Promise<PricingSnapshot | null> {
   if (!Object.hasOwn(PRICED_HARNESSES, harnessId)) return null;
+  if (harnessId === 'agy') {
+    const overrides = loadAgyOverrides();
+    const models = overrides.length ? [...overrides, ...AGY_API_RATE_CARD_LIST] : AGY_API_RATE_CARD_LIST;
+    return { updatedAt: now, models, revision: pricingRevision('agy') };
+  }
   const state = loadState(harnessId);
   if (!force && state.snapshot && now - state.snapshot.updatedAt < CATALOG_MAX_AGE_MS) return state.snapshot;
   if (!force && now - state.lastAttemptAt < FAILED_REFRESH_RETRY_MS) return state.snapshot;
@@ -193,6 +255,10 @@ export async function refreshHarnessPricing(harnessId = 'omp', { force = false, 
 
 export function pricingRevision(harnessId?: HarnessInput): string {
   if (typeof harnessId !== 'string' || !Object.hasOwn(PRICED_HARNESSES, harnessId)) return 'native';
+  if (harnessId === 'agy') {
+    const overrides = loadAgyOverrides();
+    return overrides.length ? `${AGY_API_RATE_CARD_REVISION}+${revisionFor(overrides)}` : AGY_API_RATE_CARD_REVISION;
+  }
   const base = loadState(harnessId).snapshot?.revision || 'missing';
   // Override edits must re-price the index through the normal revision
   // mismatch, even while the harness snapshot itself is unchanged.
@@ -207,6 +273,17 @@ export function pricingRevision(harnessId?: HarnessInput): string {
  */
 export function createUsageCostEstimator(harnessId: HarnessInput): UsageCostEstimator {
   if (typeof harnessId !== 'string' || !Object.hasOwn(PRICED_HARNESSES, harnessId)) return () => undefined;
+  if (harnessId === 'agy') {
+    const overrides = indexRates(loadAgyOverrides());
+    const catalog = indexRates(AGY_API_RATE_CARD_LIST);
+    return (provider, model, usage) => {
+      const selector = typeof model === 'string' && model.includes('/') ? model : `${provider}/${model}`;
+      const baseSelector = AGY_LEVEL_SUFFIX_RE.test(selector) ? selector.replace(AGY_LEVEL_SUFFIX_RE, '') : null;
+      const rates = overrides?.get(selector) || catalog?.get(selector)
+        || (baseSelector ? (overrides?.get(baseSelector) || catalog?.get(baseSelector)) : undefined);
+      return rates ? costAtRates(harnessId, provider, model, usage, rates) : undefined;
+    };
+  }
   const overrides = indexRates(loadModelOverrides(harnessId));
   const catalog = indexRates(loadState(harnessId).snapshot?.models);
   return (provider, model, usage) => {

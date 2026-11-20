@@ -783,4 +783,55 @@ for (const harnessId of indexedHarnesses) {
   });
 }
 
+test('existing agy sessions cached under legacy native pricingRevision backfill with API rate card', async () => {
+  const file = writeSession([
+    { type: 'session', version: 3, id: 'agy-backfill-1', cwd: '/tmp/agy-backfill', timestamp: '2026-11-18T10:00:00.000Z' },
+    { type: 'model_change', provider: 'google-antigravity', modelId: 'gemini-4-neon', timestamp: '2026-11-18T10:00:01.000Z' },
+    userMsg('backfill agy usage'),
+    { type: 'message', timestamp: '2026-11-18T10:00:05.000Z', message: {
+      role: 'assistant', provider: 'google-antigravity', model: 'gemini-4-neon', content: [],
+      usage: { input: 1_000_000, output: 500_000, cacheRead: 2_000_000, cacheWrite: 0, totalTokens: 3_500_000 },
+    } },
+  ]);
+  const source = sourceForIdentity('agy', nativeId('agy-backfill-1'), file);
+  const first = index.scanSessions([source]);
+  assert.equal(first.indexing, false);
+  const initial = present(first.infos.get(file));
+  assert.equal(initial.usage.total.costs.total, 10.8);
+  assert.equal(initial.usage.total.costUnavailable.total, 0);
+
+  // Rewrite the persisted meta row to simulate a pre-rate-card index entry
+  // (`pr: 'native'`, zeroed costs, unavailable count = 1).
+  index.resetForTests();
+  const metaPath = path.join(indexDir, 'meta.ndjson');
+  const existing = lastLiveRecord(readRecords(metaPath), file);
+  const existingInfo = record(existing.v);
+  const staleUsage = record(existingInfo.usage);
+  const staleTotal = record(staleUsage.total);
+  fs.appendFileSync(metaPath, JSON.stringify({
+    ...existing,
+    pr: 'native',
+    v: {
+      ...existingInfo,
+      usage: {
+        ...staleUsage,
+        total: {
+          ...staleTotal,
+          costs: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          costUnavailable: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1, total: 1 },
+        },
+      },
+    },
+  }) + '\n');
+
+  const stale = withBudget(0, () => index.scanSessions([source]));
+  assert.equal(stale.infos.has(file), false, 'stale native-revision agy metadata is not served with $0');
+  assert.equal(stale.indexing, true, 'backfill queues through the bounded background indexer');
+  await waitFor(() => !withBudget(0, () => index.scanSessions([source])).indexing, 'agy API pricing backfill');
+  const backfilled = present(withBudget(0, () => index.scanSessions([source])).infos.get(file));
+  assert.equal(backfilled.usage.total.costs.total, 10.8);
+  assert.equal(backfilled.usage.total.costUnavailable.total, 0);
+  assert.equal(backfilled.usage.models['google-antigravity/gemini-4-neon']?.costs?.total, 10.8);
+});
+
 export {};
