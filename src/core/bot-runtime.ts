@@ -289,9 +289,11 @@ function usageTokens(message: unknown): number {
     .reduce((sum, key) => sum + (typeof usage[key] === 'number' ? usage[key] : 0), 0);
 }
 
+/** The entry's message; string content becomes a text block, as Pi transcripts hold it. */
 function entryMessage(entry: Durable.EntryRecord): ProtocolRecord | null {
   const message: unknown = entry.model?.[0];
-  return isRecord(message) ? message : null;
+  if (!isRecord(message)) return null;
+  return typeof message.content === 'string' ? { ...message, content: [{ type: 'text', text: message.content }] } : message;
 }
 
 export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRuntime> {

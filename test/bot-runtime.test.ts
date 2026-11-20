@@ -97,6 +97,7 @@ test('a prompt streams as bridge events and lands in the mirror before message_e
   assert.deepEqual(messages.map(message => message.role), ['user', 'assistant']);
   assert.equal(textOf(messages[1]), 'Hello from Fleet.');
   assert.ok(lines.some(line => line.type === 'model_change' && line.provider === 'faux'));
+  assert.deepEqual(messages[0].content, [{ type: 'text', text: 'Hi' }], 'user text is a block, as Pi transcripts hold it');
   assert.equal(ends.length, 2);
   assert.ok(ends[1] >= lines.length, 'the assistant entry is on disk when message_end is emitted');
   for (let index = 2; index < lines.length; index++) assert.equal(lines[index].parentId, lines[index - 1].id, 'one linear chain');

@@ -56,6 +56,7 @@ import { createAgyImportRuntime } from './agy-import';
 import { createAgySessionHandlers } from './agy-session-handlers';
 import { createBotHandlers } from './bot-handlers';
 import { botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
+import { startBots } from './bot-supervisor';
 import { canonicalSessionId } from './session-key';
 import { listRegisteredSessions, invalidateRegistryCache, BridgeSession } from './bridge-session';
 import { createPrivateAccess } from './private-access';
@@ -90,6 +91,7 @@ export function startServer(rootDirectory: string): Server {
     readDishSettings,
     sttAvailable: () => !!stt.resolveSttConfig(readDishSettings()),
     usageLimitsAvailable: () => listHarnesses().some(d => d.argv?.usage && harnessCommandAvailable(d)),
+    botsAvailable: () => bots() !== null,
   });
   app.use(accessHandlers.compression);
   app.use(accessHandlers.jsonBody);
@@ -700,6 +702,11 @@ export function startServer(rootDirectory: string): Server {
       hibernation.start();
       pushNotifier.start();
       agyImport.start();
+      // Each active bot runs without anyone asking; `PI_DISH_BOTS=off` keeps them stopped (tests).
+      const registry = process.env.PI_DISH_BOTS === 'off' ? null : bots();
+      if (registry) {
+        void startBots({ registry, resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line) });
+      }
       // Prime roots live in the daemon roster, not the bridge registry, so poll it.
       getPrimeDaemon().start();
       // A restored idle session is interrupted work, not a completed oneShot.

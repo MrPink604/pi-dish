@@ -5,6 +5,8 @@ import os = require('node:os');
 import path = require('node:path');
 import type { BotRegistry } from '../lib/bot-registry';
 const { openBotRegistry, validateBotPatch, DEFAULT_BOT_MODEL }: typeof import('../lib/bot-registry') = require('../lib/bot-registry');
+const { startBots }: typeof import('../lib/bot-supervisor') = require('../lib/bot-supervisor');
+const { encodeSessionKey }: typeof import('../lib/session-key') = require('../lib/session-key');
 
 function tempRegistry(t: test.TestContext): { registry: BotRegistry; file: string } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bots-'));
@@ -75,4 +77,28 @@ test('edits are validated: unknown fields, bad models and bad places are refused
   assert.throws(() => validateBotPatch({ places: [{ cwd: '/x' }] }), /place.label/);
   assert.deepEqual(validateBotPatch({ places: [{ host: '', cwd: '/x', label: 'x' }], thinking: null }),
     { places: [{ host: null, cwd: '/x', label: 'x' }], thinking: null });
+});
+
+test('pi-dish starts each active bot: writes a missing mirror, then resumes its route', async t => {
+  const { registry, file } = tempRegistry(t);
+  const fleet = registry.seedFleet();
+  const sessionsDir = path.join(path.dirname(file), 'sessions');
+  const resumed: string[] = [];
+  const logged: string[] = [];
+  await startBots({ registry, sessionsDir, resume: async id => { resumed.push(id); }, log: line => logged.push(line) });
+  const route = encodeSessionKey('bot', fleet.id as Parameters<typeof encodeSessionKey>[1]);
+  assert.deepEqual(resumed, [route]);
+  const mirror = path.join(sessionsDir, `${fleet.id}.jsonl`);
+  const header = JSON.parse(fs.readFileSync(mirror, 'utf8').split('\n')[0]) as Record<string, unknown>;
+  assert.equal(header.id, fleet.id);
+  assert.deepEqual(header.bot, { name: 'Fleet' });
+  const before = fs.readFileSync(mirror, 'utf8');
+
+  // A second start leaves the mirror alone; a failed resume is logged, not thrown; a paused bot is skipped.
+  await startBots({ registry, sessionsDir, resume: async () => { throw new Error('tmux is not available'); }, log: line => logged.push(line) });
+  assert.equal(fs.readFileSync(mirror, 'utf8'), before);
+  assert.deepEqual(logged, ['bot Fleet did not start: tmux is not available']);
+  registry.update(fleet.id, { status: 'paused' }, { actor: 'user' });
+  await startBots({ registry, sessionsDir, resume: async id => { resumed.push(id); }, log: line => logged.push(line) });
+  assert.equal(resumed.length, 1);
 });

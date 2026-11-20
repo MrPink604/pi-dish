@@ -27,6 +27,8 @@ export interface AccessPorts {
   readDishSettings(): Record<string, unknown>;
   sttAvailable(): boolean;
   usageLimitsAvailable(): boolean;
+  /** True where the bot registry opens (this Node has node:sqlite). */
+  botsAvailable(): boolean;
 }
 
 export interface AccessHandlers {
@@ -126,6 +128,7 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (tmux.isTmuxAvailable()) capabilities.tmux = true;
     if (ports.sttAvailable()) capabilities.stt = true;
     if (ports.usageLimitsAvailable()) capabilities.usageLimits = true;
+    if (ports.botsAvailable()) capabilities.bots = true;
     return {
       hostId,
       label,

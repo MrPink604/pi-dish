@@ -62,6 +62,8 @@ function sanitizeTestEnv(env = process.env) {
     const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'dish-prime-daemon-'));
     next.PRIME_AGENT_DAEMON_SOCKET = path.join(isolated, 'daemon.sock');
     next.PI_DISH_AGY_COMMAND = path.join(isolated, 'no-agy');
+    // A server a suite boots never starts a bot relay (or its model).
+    next.PI_DISH_BOTS = 'off';
     next.HOST = '127.0.0.1';
     next.PORT = '0';
     return withBunOnPath(next);
