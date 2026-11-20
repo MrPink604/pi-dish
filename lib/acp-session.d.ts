@@ -119,6 +119,8 @@ export declare class AcpSession extends TransportSession {
     private _emitUI;
     private _applyTitle;
     private _applyConfigUpdate;
+    private _allowedImageRoots;
+    private _pushImage;
     private _pushChunk;
     private _ensureSegment;
     private _closeSegment;
