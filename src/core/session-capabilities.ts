@@ -32,7 +32,9 @@ const AGY_ACP_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
  * Esc aborts it. Absent: models and setModel (the model is the bot's registry
  * entry), setThinking, compact (a bot rolls its window over instead), rename
  * (the name is the registry's), commands, reload, queue*, tree*, extensionUI,
- * sideChat, fastMode, login, shareSnapshot, guardedReload.
+ * sideChat, fastMode, login, shareSnapshot, guardedReload. Restart is not a
+ * relay's to advertise: pi-dish owns the relay's pane, so a bot restarts like
+ * any owned pane, from Bounce agents or when its relay runs another build.
  */
 const BOT_CAPABILITIES: AdvertisedCapabilities = Object.freeze({
   prompt: true, steer: true, followUp: true, abort: true,

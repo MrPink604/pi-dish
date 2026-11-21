@@ -21,7 +21,8 @@ import { once } from 'events';
 import { openBotRegistry, type BotRow } from './bot-registry';
 import { BotMirror, readBotMirrorHeader } from './bot-mirror';
 import { openBotModels, openBotRuntime, type BotRuntime, type HubApi, type SessionsPort } from './bot-runtime';
-import { claimBotRelay } from './bot-supervisor';
+import { claimBotRelayWhenFree } from './bot-supervisor';
+import { codeBuild } from './code-build';
 import { BOT_CAPABILITIES } from './session-capabilities';
 import { dishDir } from './dish-store';
 import { processIdentity } from './process-identity';
@@ -74,6 +75,8 @@ const hubApi: HubApi = async (pathname, body) => {
 };
 
 async function main(): Promise<void> {
+  // The code this process loaded, read before a deploy can change it further.
+  const build = codeBuild();
   const [mode, mirrorFile] = process.argv.slice(2);
   if (mode !== 'resume' || !mirrorFile) throw new Error('usage: bot-relay resume <mirror.jsonl> (pi-dish starts bots itself)');
   const header = readBotMirrorHeader(mirrorFile);
@@ -85,8 +88,10 @@ async function main(): Promise<void> {
   };
   const bot = loadBot();
   const relayInstanceId = crypto.randomUUID();
-  // One relay per bot: a second would run the same durable work twice.
-  const lock = claimBotRelay(path.join(dishDir(), 'bots', bot.id));
+  const botDir = path.join(dishDir(), 'bots', bot.id);
+  // One relay per bot: a second would run the same durable work twice. A restart starts this relay while the one
+  // it replaces is still stopping.
+  const lock = await claimBotRelayWhenFree(botDir, build);
   if (!lock.claimed) throw new Error(`bot ${bot.name} already has a relay (pid ${lock.holder})`);
   process.on('exit', () => lock.release());
   const relayProcess = processIdentity(process.pid);
@@ -95,6 +100,16 @@ async function main(): Promise<void> {
   const routeId = encodeSessionKey('bot', bot.id);
   const mirror = new BotMirror(mirrorFile, { id: bot.id, cwd: header.cwd, name: bot.name });
   if (mirror.name !== bot.name) mirror.appendName(mirror.lastEntryId, bot.name);
+  // A bot back on other code than its last relay ran says so in its chat; the mirror is not the model's context.
+  const buildFile = path.join(botDir, 'relay-build');
+  let previousBuild: string | null = null;
+  try { previousBuild = fs.readFileSync(buildFile, 'utf8').trim() || null; } catch {}
+  if (previousBuild !== build && (previousBuild !== null || mirror.lastEntryId > 0)) {
+    mirror.appendCustom(mirror.lastEntryId, 'bot-restart',
+      `Restarted onto new pi-dish code (build ${previousBuild ? `${previousBuild} → ` : ''}${build}).`,
+      { from: previousBuild, to: build }, `restart-${Date.now().toString(36)}`);
+  }
+  fs.writeFileSync(buildFile, `${build}\n`);
 
   const clients = new Set<net.Socket>();
   let server: net.Server | null = null;
@@ -103,6 +118,8 @@ async function main(): Promise<void> {
   let socketReady = false;
   let shuttingDown = false;
   let runtime: BotRuntime | null = null;
+  /** Prompts and deliveries received and not yet stored: a restart now would lose them. */
+  let taking = 0;
 
   const wrapper = Object.freeze({
     harnessId: 'bot', name: 'pi-dish-bot-relay', wrapperVersion: relayWrapperVersion(), eventProfile: 'bot-v1',
@@ -134,9 +151,18 @@ async function main(): Promise<void> {
     };
   }
 
-  function lifecycle(): ProtocolRecord {
-    const busy = runtime?.busy === true;
-    return { idle: !busy, pendingMessages: false, pendingDialogs: 0, backgroundWork: false };
+  /** Snapshot for the hello frame; `get_state` reads the durable store. */
+  function lifecycleSnapshot(): ProtocolRecord {
+    return { idle: runtime?.busy !== true, pendingMessages: taking > 0, pendingDialogs: 0, backgroundWork: false };
+  }
+
+  /**
+   * What a restart waits for: a run in progress, input queued for the next run, or input this relay is still
+   * taking. A worker watch is not background work here: it resumes after a restart.
+   */
+  async function lifecycle(): Promise<ProtocolRecord> {
+    const activity = await runtime!.activity();
+    return { idle: !activity.running, pendingMessages: activity.queued || taking > 0, pendingDialogs: 0, backgroundWork: false };
   }
 
   function writeClaim(): void {
@@ -178,7 +204,7 @@ async function main(): Promise<void> {
         case 'ping':
           return respond(sock, cmd, true, { pong: true });
         case 'get_state':
-          return respond(sock, cmd, true, { ...claim(), lifecycle: lifecycle() });
+          return respond(sock, cmd, true, { ...claim(), lifecycle: await lifecycle() });
         case 'get_commands':
           return respond(sock, cmd, true, { commands: [] });
         case 'prompt':
@@ -186,7 +212,8 @@ async function main(): Promise<void> {
           const message = typeof cmd.message === 'string' ? cmd.message : '';
           if (!message) return respond(sock, cmd, false, undefined, 'message required');
           const queued = bot.busy;
-          await bot.prompt(message, cmd.command === 'steer' || cmd.deliverAs === 'steer' ? 'steer' : 'followUp');
+          taking++;
+          try { await bot.prompt(message, cmd.command === 'steer' || cmd.deliverAs === 'steer' ? 'steer' : 'followUp'); } finally { taking--; }
           writeClaim();
           return respond(sock, cmd, true, { queued });
         }
@@ -197,7 +224,8 @@ async function main(): Promise<void> {
             return respond(sock, cmd, false, undefined, 'deliver needs kind, requestId, text and data');
           }
           const queued = bot.busy;
-          await bot.deliver({ kind, requestId, text, data: data as Record<string, string | number> });
+          taking++;
+          try { await bot.deliver({ kind, requestId, text, data: data as Record<string, string | number> }); } finally { taking--; }
           writeClaim();
           return respond(sock, cmd, true, { queued });
         }
@@ -232,7 +260,7 @@ async function main(): Promise<void> {
         void handleCommand(cmd, sock);
       }
     });
-    send(sock, { type: 'hello', ...claim(), lifecycle: lifecycle() });
+    send(sock, { type: 'hello', ...claim(), lifecycle: lifecycleSnapshot() });
   }
 
   function unlinkOwnedClaim(): void {
@@ -314,7 +342,7 @@ async function main(): Promise<void> {
   socketIno = fs.statSync(socketPath).ino;
   socketReady = true;
   writeClaim();
-  log(`bot ${bot.name} (${bot.id}) on ${bot.model}, relay listening on ${socketPath}`);
+  log(`bot ${bot.name} (${bot.id}) on ${bot.model}, build ${build}, relay listening on ${socketPath}`);
   // A rename by the user, by a bot or by an undo shows in the session list and the transcript.
   setInterval(() => {
     let name: string;

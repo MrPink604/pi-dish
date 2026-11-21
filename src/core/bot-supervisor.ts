@@ -56,8 +56,9 @@ export function deliverToBot(botId: string, delivery: Record<string, unknown>, t
 }
 
 /**
- * Delivers to a bot that may not be running, such as a routine's run just after the hub came back: when no relay
- * takes it, the bot is started and the delivery tried again until a relay takes it or `waitMs` passes.
+ * Delivers to a bot that may not be running, such as a routine's run just after the hub came back or a message that
+ * arrives while its relay restarts: when no relay takes it, the bot is started and the delivery tried again until a
+ * relay takes it or `waitMs` passes. A start that fails (refused while a restart is under way) is tried again.
  */
 export async function deliverStartingBot(
   botId: string, delivery: Record<string, unknown>, start: () => Promise<void>,
@@ -65,40 +66,73 @@ export async function deliverStartingBot(
 ): Promise<{ queued: boolean }> {
   const deadline = Date.now() + waitMs;
   let started = false;
+  let failure = '';
   for (;;) {
     const taken = await deliver(botId, delivery);
     if (taken) return taken;
-    if (!started) { started = true; await start(); }
-    if (Date.now() >= deadline) throw new Error(`the bot's relay did not take the message within ${Math.round(waitMs / 1000)}s`);
+    if (!started) {
+      try { await start(); started = true; } catch (error) { failure = errorMessage(error); }
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`the bot's relay did not take the message within ${Math.round(waitMs / 1000)}s${failure && !started ? ` (start: ${failure})` : ''}`);
+    }
     await delay(everyMs);
   }
 }
 
+/** The live relay holding a bot's lock: its pid and the build of pi-dish it started from, null if it recorded none. */
+export interface BotRelayHolder {
+  pid: number;
+  build: string | null;
+}
+
+/** A claim of a bot's relay lock: held, with `release`, or refused while the live relay `holder` keeps it. */
+export type BotRelayLock = { claimed: false; holder: number } | { claimed: true; release(): void };
+
 /**
  * Makes this process the bot's only relay: two relays on one durable store
- * would both run its work. The lock file names the holder's pid and start time;
- * a holder that is gone (killed, crashed, or a reused pid) is replaced. Returns
- * false while another live relay holds it; `release` removes only our own lock.
+ * would both run its work. The lock file names the holder's pid, start time
+ * and build; a holder that is gone (killed, crashed, or a reused pid) is
+ * replaced. Returns false while another live relay holds it; `release` removes
+ * only our own lock.
  */
-export function claimBotRelay(botDir: string): { claimed: false; holder: number } | { claimed: true; release(): void } {
+export function claimBotRelay(botDir: string, build: string): BotRelayLock {
   const file = path.join(botDir, 'relay.lock');
   const self = processIdentity(process.pid);
   if (!self) throw new Error('Cannot read this process birth identity');
-  const mine = JSON.stringify({ pid: self.pid, startTime: self.startTime });
   fs.mkdirSync(botDir, { recursive: true, mode: 0o700 });
+  const release = () => {
+    try {
+      const held = JSON.parse(fs.readFileSync(file, 'utf8')) as { pid?: unknown; startTime?: unknown };
+      if (Number(held.pid) === self.pid && String(held.startTime) === String(self.startTime)) fs.unlinkSync(file);
+    } catch {}
+  };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      fs.writeFileSync(file, mine, { flag: 'wx', mode: 0o600 });
-      return { claimed: true, release: () => { try { if (fs.readFileSync(file, 'utf8') === mine) fs.unlinkSync(file); } catch {} } };
+      fs.writeFileSync(file, JSON.stringify({ pid: self.pid, startTime: self.startTime, build }), { flag: 'wx', mode: 0o600 });
+      return { claimed: true, release };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
     const holder = liveBotRelay(botDir);
-    if (holder !== null) return { claimed: false, holder };
+    if (holder !== null) return { claimed: false, holder: holder.pid };
     // A stale lock: take it over once; a racing relay that wins the retry keeps it.
     try { fs.unlinkSync(file); } catch {}
   }
   return { claimed: false, holder: 0 };
+}
+
+/**
+ * `claimBotRelay`, waiting up to `waitMs` for a holder to go: a restart starts the new relay in the pane while the
+ * old one is still stopping, which takes at most ten seconds.
+ */
+export async function claimBotRelayWhenFree(botDir: string, build: string, { waitMs = 15_000, everyMs = 100 } = {}): Promise<BotRelayLock> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const lock = claimBotRelay(botDir, build);
+    if (lock.claimed || Date.now() >= deadline) return lock;
+    await delay(everyMs);
+  }
 }
 
 export interface BotStartPorts {
@@ -110,25 +144,36 @@ export interface BotStartPorts {
   sessionsDir?: string;
   /** Where each bot's durable store and relay lock live; `~/.pi/dish/bots` by default. */
   botsDir?: string;
+  /** The build pi-dish runs; a running relay of another build is handed to `restartStale`. */
+  build?: string;
+  restartStale?(bot: BotRow, holder: BotRelayHolder): void;
 }
 
-/** The pid of the live relay holding a bot's lock, or null. */
-export function liveBotRelay(botDir: string): number | null {
+/** The live relay holding a bot's lock, or null. */
+export function liveBotRelay(botDir: string): BotRelayHolder | null {
   try {
-    const holder = JSON.parse(fs.readFileSync(path.join(botDir, 'relay.lock'), 'utf8')) as { pid?: number; startTime?: string };
-    return processIdentityAlive({ pid: Number(holder.pid), startTime: String(holder.startTime) }) ? Number(holder.pid) : null;
+    const holder = JSON.parse(fs.readFileSync(path.join(botDir, 'relay.lock'), 'utf8')) as { pid?: number; startTime?: string; build?: unknown };
+    if (!processIdentityAlive({ pid: Number(holder.pid), startTime: String(holder.startTime) })) return null;
+    return { pid: Number(holder.pid), build: typeof holder.build === 'string' && holder.build ? holder.build : null };
   } catch { return null; }
 }
 
 /**
  * Resolves once each active bot's start has been tried; a failure is logged,
  * never thrown. A bot whose relay is still running (a pi-dish restart leaves
- * its pane alone) is not started again.
+ * its pane alone) is not started again; one that runs another build, or
+ * recorded none, goes to `restartStale`.
  */
 export async function startBots(ports: BotStartPorts): Promise<void> {
+  const botsDir = ports.botsDir ?? path.join(dishDir(), 'bots');
   for (const bot of ports.registry.list()) {
     if (bot.status !== 'active') continue;
     try {
+      const holder = liveBotRelay(path.join(botsDir, bot.id));
+      if (holder && ports.build && ports.restartStale && holder.build !== ports.build) {
+        ports.restartStale(bot, holder);
+        continue;
+      }
       await startBot(bot, ports);
     } catch (error) {
       ports.log(`bot ${bot.name} did not start: ${errorMessage(error)}`);
@@ -151,7 +196,7 @@ export async function startBot(bot: BotRow, {
 }: Omit<BotStartPorts, 'registry'>): Promise<void> {
   const route = botRoute(bot.id);
   const running = liveBotRelay(path.join(botsDir, bot.id));
-  if (running !== null) { log(`bot ${bot.name}: relay ${running} is already running`); return; }
+  if (running !== null) { log(`bot ${bot.name}: relay ${running.pid} is already running`); return; }
   new BotMirror(path.join(sessionsDir, `${bot.id}.jsonl`), { id: bot.id, cwd: os.homedir(), name: bot.name });
   await resume(route);
 }

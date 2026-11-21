@@ -3,11 +3,14 @@ import assert = require('node:assert');
 import fs = require('node:fs');
 import os = require('node:os');
 import path = require('node:path');
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import type { BotRegistry, BotRow } from '../lib/bot-registry';
 import type { RouteHandler } from '../lib/http-boundary';
 const { createBotHandlers }: typeof import('../lib/bot-handlers') = require('../lib/bot-handlers');
 const { openBotRegistry, validateBotPatch, DEFAULT_BOT_MODEL }: typeof import('../lib/bot-registry') = require('../lib/bot-registry');
-const { startBots, claimBotRelay, deliverStartingBot }: typeof import('../lib/bot-supervisor') = require('../lib/bot-supervisor');
+const { startBots, claimBotRelay, claimBotRelayWhenFree, deliverStartingBot, liveBotRelay }: typeof import('../lib/bot-supervisor') = require('../lib/bot-supervisor');
+const { processIdentity }: typeof import('../lib/process-identity') = require('../lib/process-identity');
 const { encodeSessionKey }: typeof import('../lib/session-key') = require('../lib/session-key');
 
 function tempRegistry(t: test.TestContext): { registry: BotRegistry; file: string } {
@@ -111,24 +114,65 @@ test('a bot has one relay: a live holder keeps the lock and pi-dish does not sta
   const botsDir = path.join(path.dirname(file), 'bots');
   const botDir = path.join(botsDir, fleet.id);
 
-  const first = claimBotRelay(botDir);
+  const first = claimBotRelay(botDir, 'build-a');
   assert.equal(first.claimed, true);
-  assert.deepEqual(claimBotRelay(botDir), { claimed: false, holder: process.pid }, 'a second relay is refused');
+  assert.deepEqual(claimBotRelay(botDir, 'build-a'), { claimed: false, holder: process.pid }, 'a second relay is refused');
+  assert.deepEqual(liveBotRelay(botDir), { pid: process.pid, build: 'build-a' }, 'the lock records the build the relay started from');
 
   const resumed: string[] = [];
   const logged: string[] = [];
-  await startBots({ registry, botsDir, sessionsDir: path.join(path.dirname(file), 'sessions'),
-    resume: async id => { resumed.push(id); }, log: line => logged.push(line) });
+  const stale: [string, unknown][] = [];
+  const ports = {
+    registry, botsDir, sessionsDir: path.join(path.dirname(file), 'sessions'),
+    resume: async (id: string) => { resumed.push(id); }, log: (line: string) => logged.push(line),
+    restartStale: (bot: BotRow, holder: unknown) => { stale.push([bot.name, holder]); },
+  };
+  await startBots({ ...ports, build: 'build-a' });
   assert.deepEqual(resumed, [], 'a server restarted under a running relay leaves it alone');
+  assert.deepEqual(stale, [], 'a relay on the same build is not restarted');
   assert.deepEqual(logged, [`bot Fleet: relay ${process.pid} is already running`]);
 
+  // A relay from another build is handed over for a restart, and is not started a second time.
+  await startBots({ ...ports, build: 'build-b' });
+  assert.deepEqual(stale, [['Fleet', { pid: process.pid, build: 'build-a' }]]);
+  assert.deepEqual(resumed, []);
+
+  // So is one started before relays recorded their build.
+  const held = JSON.parse(fs.readFileSync(path.join(botDir, 'relay.lock'), 'utf8')) as Record<string, unknown>;
+  fs.writeFileSync(path.join(botDir, 'relay.lock'), JSON.stringify({ pid: held.pid, startTime: held.startTime }));
+  await startBots({ ...ports, build: 'build-a' });
+  assert.deepEqual(stale[1], ['Fleet', { pid: process.pid, build: null }]);
+
   if (first.claimed) first.release();
+  assert.equal(fs.existsSync(path.join(botDir, 'relay.lock')), false, 'release removes the lock it holds, however it was rewritten');
   // A lock left by a relay that died is taken over.
   fs.writeFileSync(path.join(botDir, 'relay.lock'), JSON.stringify({ pid: 2 ** 22 + 1, startTime: '0' }));
-  const next = claimBotRelay(botDir);
+  const next = claimBotRelay(botDir, 'build-a');
   assert.equal(next.claimed, true);
   if (next.claimed) next.release();
   assert.equal(fs.existsSync(path.join(botDir, 'relay.lock')), false);
+});
+
+test('a restarted relay waits for the one it replaces to stop', async t => {
+  const { file } = tempRegistry(t);
+  const botDir = path.join(path.dirname(file), 'bots', 'fleet');
+  const old = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+  t.after(() => { old.kill('SIGKILL'); });
+  await once(old, 'spawn');
+  const identity = processIdentity(old.pid!);
+  assert.ok(identity, 'the old relay stand-in runs');
+  fs.mkdirSync(botDir, { recursive: true });
+  fs.writeFileSync(path.join(botDir, 'relay.lock'), JSON.stringify({ pid: identity.pid, startTime: identity.startTime, build: 'old' }));
+
+  assert.deepEqual(await claimBotRelayWhenFree(botDir, 'new', { waitMs: 50, everyMs: 10 }), { claimed: false, holder: identity.pid },
+    'a holder that does not stop keeps the lock');
+  const claiming = claimBotRelayWhenFree(botDir, 'new', { waitMs: 10_000, everyMs: 10 });
+  old.kill('SIGTERM');
+  await once(old, 'exit');
+  const lock = await claiming;
+  assert.equal(lock.claimed, true, 'the new relay takes the lock once the old one is gone');
+  assert.equal(liveBotRelay(botDir)?.build, 'new');
+  if (lock.claimed) lock.release();
 });
 
 test('a routine\u2019s run to a bot that is not running starts it and is delivered once its relay takes it', async () => {
@@ -140,6 +184,14 @@ test('a routine\u2019s run to a bot that is not running starts it and is deliver
   assert.deepEqual(taken, { queued: false });
   assert.equal(started, 1, 'started once, however many tries it took');
   assert.equal(tries.length, 4);
+
+  // A start refused while the bot's relay restarts is tried again, and the delivery waits for the restarted relay.
+  let attempts = 0;
+  const refusedFirst = async () => { attempts += 1; if (attempts === 1) throw new Error('The session is being restarted.'); };
+  let polls = 0;
+  assert.deepEqual(await deliverStartingBot('fleet', {}, refusedFirst, { everyMs: 1, deliver: async () => ++polls === 5 ? { queued: true } : null }),
+    { queued: true });
+  assert.equal(attempts, 2);
 
   // A relay that never comes up fails the delivery.
   await assert.rejects(deliverStartingBot('fleet', {}, async () => {}, { waitMs: 5, everyMs: 1, deliver: async () => null }),

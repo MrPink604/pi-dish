@@ -347,6 +347,9 @@ export interface BotModels {
  * CLI; anything else goes through Pi's model runtime and its credentials.
  */
 export async function openBotModels(selector: string): Promise<BotModels> {
+  // Tests run a relay on a scripted model: the module the environment names stands in for this function.
+  const scripted = process.env.PI_DISH_BOT_MODELS;
+  if (scripted) return (await import(url.pathToFileURL(scripted).href) as { openBotModels(selector: string): Promise<BotModels> }).openBotModels(selector);
   const provider = selector.slice(0, selector.indexOf('/'));
   if (provider === 'claude-code') {
     const pcc = await loadClaudeCode();
@@ -385,9 +388,20 @@ export interface BotRuntimeOptions {
   botsDir: string;
 }
 
+export interface BotActivity {
+  running: boolean;
+  queued: boolean;
+}
+
 export interface BotRuntime {
   readonly busy: boolean;
   readonly model: string;
+  /**
+   * What keeps the bot from being restarted, read from its durable store: a run in progress (a code mode script is
+   * part of one), and input queued for the next one. A worker watch is background work and counts for neither: it
+   * resumes after a restart.
+   */
+  activity(): Promise<BotActivity>;
   contextUsage(): { tokens: number; contextWindow: number; percent: number } | null;
   /** `followUp` queues behind a busy run; `steer` joins it. */
   prompt(message: string, mode: 'followUp' | 'steer'): Promise<void>;
@@ -1689,6 +1703,17 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     contextUsage() {
       if (!lastUsage) return null;
       return { tokens: lastUsage, contextWindow: windowLimit, percent: Math.round(lastUsage / windowLimit * 1000) / 10 };
+    },
+    async activity() {
+      const { tasks, submissions } = await harness.inspect(ctx);
+      type Task = Durable.HarnessInspection['tasks'][number]['record'];
+      const byId = new Map<number, Task>(tasks.map(task => [task.record.id, task.record]));
+      // A task a background task owns is part of that background work.
+      const background = (task: Task | undefined): boolean => !!task && (task.background || (task.owner !== undefined && background(byId.get(task.owner))));
+      return {
+        running: busy || tasks.some(task => !background(task.record)),
+        queued: submissions.some(submission => submission.status === 'queued'),
+      };
     },
     async prompt(message, mode) {
       if (!busy) await forceRolloverIfFull();

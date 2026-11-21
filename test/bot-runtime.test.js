@@ -820,7 +820,7 @@ test('a worker whose answer a script waited for does not report it, and reports 
     await until(() => reportsOf(bot).length === 1, 'the next turn is reported');
     assert.equal(reportsOf(bot)[0], '[worker report] "quick" (01a1f86c) finished.\n\nLATER-ANSWER');
 });
-test('a bot stored before code mode opens with the tool and answers', async (t) => {
+test('a bot stored before code mode opens with the tool and the preamble of the code it runs now, and answers', async (t) => {
     const bot = await openTestBot(t, noSessions, { from: path.join(__dirname, 'fixtures', 'bot-before-codemode') });
     bot.respond(bot.faux.fauxAssistantMessage('Still here, and beelink is the hub.'));
     await bot.runtime.prompt('Do you remember the hub?', 'followUp');
@@ -828,7 +828,61 @@ test('a bot stored before code mode opens with the tool and answers', async (t) 
     const request = bot.requests[0];
     assert.ok(request.some(message => textOf(message) === 'Remember that beelink is the hub.'), 'its earlier conversation is in the request');
     assert.match(systemText(request), /<codemode>[^]*declare const tools: \{ sessions\(/, 'the code mode section lists its tools');
+    // The preamble is a section rendered for each request: a changed one is sent as a later system message at the
+    // first request after a restart, and is the one in effect from then on.
+    const rules = request.filter(message => message.role === 'system')
+        .map(message => message.sections?.['bot-rules'])
+        .filter(text => typeof text === 'string');
+    assert.equal(rules.length, 2, 'the stored preamble, then the current one');
+    assert.doesNotMatch(rules[0], /Code mode:/, 'stored before the preamble had its code mode rule');
+    assert.match(rules[1], /^You are a pi-dish bot[^]*Code mode: the codemode tool/);
     const texts = bot.mirrorLines().filter(line => line.type === 'message').map(line => textOf(line.message));
     assert.deepEqual(texts.filter(text => text), ['Remember that beelink is the hub.', 'Saved (19 of 16384 bytes). Your instructions show it from the next window on.',
         'Noted: beelink is the hub.', 'Do you remember the hub?', 'Still here, and beelink is the hub.']);
+});
+test('a run, a script in it and input queued behind it keep a bot from restarting; a watched worker does not, and reports once after the restart', async (t) => {
+    const worker = scriptedWorker();
+    let finishWait = () => { };
+    let waits = 0;
+    const port = async (args, signal) => {
+        if (args[0] !== 'wait')
+            return worker.port(args, signal);
+        waits++;
+        return new Promise(resolve => { finishWait = text => resolve(settledJson(text)); });
+    };
+    const bot = await openTestBot(t, port);
+    const idle = { running: false, queued: false };
+    // A worker being watched: background work, which resumes after a restart.
+    bot.respond(bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('spawn_worker', { name: 'clock', brief: 'sleep 75; date' })], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage('Started clock.'));
+    await bot.runtime.prompt('What time is it after a sleep?', 'followUp');
+    await until(() => said(bot, 'Started clock.') && !bot.runtime.busy && worker.polls() >= 1, 'the run ends and the watch polls');
+    assert.deepEqual(await bot.runtime.activity(), idle, 'a watched worker does not block a restart');
+    // A run in progress, and a message queued behind it.
+    let answer = () => { };
+    const answered = new Promise(resolve => { answer = resolve; });
+    bot.respond(async () => { await answered; return bot.faux.fauxAssistantMessage('Thinking done.'); }, bot.faux.fauxAssistantMessage('And the follow-up.'));
+    await bot.runtime.prompt('Think about it.', 'followUp');
+    await until(() => bot.runtime.busy, 'the run starts');
+    assert.deepEqual(await bot.runtime.activity(), { running: true, queued: false });
+    await bot.runtime.prompt('One more thing.', 'followUp');
+    assert.deepEqual(await bot.runtime.activity(), { running: true, queued: true });
+    answer();
+    await until(() => said(bot, 'And the follow-up.') && !bot.runtime.busy, 'both are answered');
+    assert.deepEqual(await bot.runtime.activity(), idle);
+    // A code mode script is part of its run.
+    bot.respond(script(bot, 'return (await tools.sessions({ action: "wait", ref: "ffff0000" })).text;'), bot.faux.fauxAssistantMessage('Waited.'));
+    await bot.runtime.prompt('Wait for ffff0000.', 'followUp');
+    await until(() => waits === 1, 'the script waits on its call');
+    assert.equal((await bot.runtime.activity()).running, true, 'a script waiting on a call blocks a restart');
+    finishWait('DONE');
+    await until(() => said(bot, 'Waited.') && !bot.runtime.busy, 'the script and its run end');
+    assert.deepEqual(await bot.runtime.activity(), idle);
+    // Restarted while the worker is watched: the watch goes on and reports its answer once.
+    await bot.reopen(() => worker.answer('Fri Nov 20 12:01:15 UTC 2026'));
+    bot.respond(relay(bot));
+    await until(() => reportsOf(bot).length === 1, 'the watch reports after the restart', 15_000);
+    assert.equal(reportsOf(bot)[0], '[worker report] "clock" (01a1f86c) finished.\n\nFri Nov 20 12:01:15 UTC 2026');
+    await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message).startsWith('Relayed:')), 'the report is answered');
+    await severalPolls();
+    assert.equal(reportsOf(bot).length, 1, 'once');
 });

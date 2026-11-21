@@ -152,9 +152,19 @@ export interface BotRuntimeOptions {
     /** Where every bot's directory lives: a sub-bot's start is written into its own. */
     botsDir: string;
 }
+export interface BotActivity {
+    running: boolean;
+    queued: boolean;
+}
 export interface BotRuntime {
     readonly busy: boolean;
     readonly model: string;
+    /**
+     * What keeps the bot from being restarted, read from its durable store: a run in progress (a code mode script is
+     * part of one), and input queued for the next one. A worker watch is background work and counts for neither: it
+     * resumes after a restart.
+     */
+    activity(): Promise<BotActivity>;
     contextUsage(): {
         tokens: number;
         contextWindow: number;
