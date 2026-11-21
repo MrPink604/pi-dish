@@ -12,8 +12,10 @@ export declare const WINDOW_TOKEN_CAP = 200000;
 export declare const REMINDER_RATIO = 0.75;
 /** At this share the relay rolls the window over itself once the run ends. */
 export declare const FORCED_RATIO = 0.9;
-/** Runs the pi-dish-sessions CLI as the bot; resolves with its stdout. */
-export type SessionsPort = (args: string[]) => Promise<string>;
+/** A code mode script ends with an error after this long, whatever its options line asks for: the bot is busy while it runs. */
+export declare const SCRIPT_TIME_CAP_MS: number;
+/** Runs the pi-dish-sessions CLI as the bot; resolves with its stdout. `signal` stops it. */
+export type SessionsPort = (args: string[], signal?: AbortSignal) => Promise<string>;
 /** pi-dish's HTTP API on the hub: GET `path`, or POST it `body`; resolves with the JSON answer. */
 export type HubApi = (path: string, body?: ProtocolRecord) => Promise<unknown>;
 export type BridgeEmit = (event: string, data: ProtocolRecord) => void;
@@ -45,6 +47,10 @@ export interface WorkerRecord {
     reports: number;
     /** Set by the bot's own close: once the session stops, the watch ends without a report. */
     closing?: true;
+    /** Messages a script already took with `sessions wait`: the watch does not report an answer within them. */
+    seen?: number;
+    /** Harness time until which a script waits for this worker's answer with `sessions wait`; the watch holds its report. */
+    waitingUntil?: number;
     /** When the session was seen to stop or was closed. */
     closedAt?: string;
     /** When the watch ended: the session stopped, or 24 hours passed. */
@@ -141,6 +147,8 @@ export interface BotRuntimeOptions {
         first: number;
         max: number;
     };
+    /** A code mode script's time cap; `SCRIPT_TIME_CAP_MS` by default. */
+    scriptTimeoutMs?: number;
     /** Where every bot's directory lives: a sub-bot's start is written into its own. */
     botsDir: string;
 }

@@ -26,7 +26,7 @@ async function until(predicate, message, timeout = 10_000) {
         await new Promise(resolve => setTimeout(resolve, 10));
     }
 }
-async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses, pollMs = { first: 20, max: 40 } } = {}) {
+async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, botsDir, row = () => BOT, responses, pollMs = { first: 20, max: 40 }, scriptTimeoutMs, from } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-'));
     const faux = await import('@earendil-works/pi-ai/providers/faux');
     const { createModels } = await import('@earendil-works/pi-ai/models');
@@ -37,13 +37,18 @@ async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, 
     const events = [];
     const bot = row();
     const mirrorFile = path.join(dir, 'sessions', `${bot.id}.jsonl`);
+    if (from) {
+        fs.mkdirSync(path.dirname(mirrorFile), { recursive: true });
+        fs.copyFileSync(path.join(from, 'durable.sqlite'), path.join(dir, 'durable.sqlite'));
+        fs.copyFileSync(path.join(from, 'mirror.jsonl'), mirrorFile);
+    }
     const open = () => openBotRuntime({
         bot: row(), storageFile: botsDir ? path.join(botsDir, bot.id, 'durable.sqlite') : path.join(dir, 'durable.sqlite'),
         botsDir: botsDir ?? path.join(dir, 'bots'),
         mirror: new BotMirror(mirrorFile, { id: bot.id, cwd: dir, name: bot.name }),
         models, sessions, api, loadBot: row,
         emit: (event, data) => events.push({ event, data }),
-        changed: () => { }, log: () => { }, pollMs,
+        changed: () => { }, log: () => { }, pollMs, scriptTimeoutMs,
     });
     const recorded = (step) => (context, ...rest) => {
         requests.push([...context.messages]);
@@ -130,11 +135,17 @@ test('a prompt streams as bridge events and lands in the mirror before message_e
 });
 test('a tool call maps to tool_execution events and its result to the mirror', async (t) => {
     const calls = [];
-    const bot = await openTestBot(t, async (args) => { calls.push(args); return 'beelink\treachable\tself\n'; });
+    const bot = await openTestBot(t, async (args) => {
+        calls.push(args);
+        return args.includes('--json') ? JSON.stringify({ hosts: [{ self: true, name: null, label: 'beelink', reachable: true, capabilities: {} }] }) : 'beelink\treachable\tself\n';
+    });
     bot.respond(bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('sessions', { action: 'hosts' })], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage('One host: beelink.'));
     await bot.runtime.prompt('Which hosts?', 'followUp');
     await until(() => bot.events.some(event => event.event === 'agent_end'), 'the run ends');
-    assert.deepEqual(calls, [['hosts']]);
+    // The model reads the CLI's text; the JSON is the value a script would get.
+    assert.deepEqual(calls.sort(), [['hosts'], ['hosts', '--json']]);
+    const result = bot.mirrorLines().find(line => line.type === 'message' && line.message.role === 'toolResult');
+    assert.equal(textOf(result?.message), 'beelink\treachable\tself');
     const start = bot.events.find(event => event.event === 'tool_execution_start');
     const end = bot.events.find(event => event.event === 'tool_execution_end');
     assert.equal(start?.data.toolName, 'sessions');
@@ -665,4 +676,159 @@ test('the schedule tool creates, lists and removes the bot\u2019s own routines, 
     assert.equal(results[2].isError, true);
     assert.match(textOf(results[2]), /^Refused: "backups-nightly" is another bot\u2019s schedule/);
     assert.equal(textOf(results[3]), 'Removed the schedule "host-check". Its runs so far stay in its record.');
+});
+// Code mode -------------------------------------------------------------------
+const script = (bot, code) => toolCall(bot, 'codemode', { code });
+/** The value a script returned, from the code mode result the model reads. */
+const returned = (result) => {
+    const shown = textOf(result);
+    return JSON.parse(shown.slice(shown.indexOf('{'), shown.lastIndexOf('}') + 1));
+};
+const LIST = {
+    active: [
+        { id: 'id-a', ref: 'aaaa1111', name: 'build', cwd: '/w', harnessId: 'pi', model: 'm1', isActive: true, turnInProgress: true, lastActivity: '2026-11-20T10:00:00.000Z', messageCount: 4 },
+        { id: 'id-b', ref: 'bbbb2222', name: 'NESTED-ONLY review', cwd: '/w', harnessId: 'omp', isActive: true, turnInProgress: false, lastActivity: '2026-11-19T10:00:00.000Z', messageCount: 9 },
+    ],
+    previous: [], children: [], total: 2,
+};
+const KB = { total: 1, results: [{ path: 'topics/idle.md', lines: [{ line: 2, text: 'KB-LINE-ONLY in the script' }] }] };
+test('a script chains two tools and only its output reaches the model', async (t) => {
+    const calls = [];
+    const bot = await openTestBot(t, async (args) => { calls.push(args); return JSON.stringify(LIST); }, { api: async () => KB });
+    bot.respond(script(bot, [
+        'const list = await tools.sessions({ action: "list" });',
+        'const kb = await tools.kb_search({ query: "idle" });',
+        'return { idle: list.sessions.filter(s => s.state === "active").map(s => s.ref), pages: kb.results.map(r => r.path) };',
+    ].join('\n')), bot.faux.fauxAssistantMessage('bbbb2222 is idle.'));
+    await bot.runtime.prompt('Which sessions are idle?', 'followUp');
+    await until(() => said(bot, 'bbbb2222 is idle.'), 'the run ends');
+    // A script's call runs only the JSON command: nobody reads the text.
+    assert.deepEqual(calls, [['list', '--active', '--full', '--json']]);
+    const result = toolResults(bot)[0];
+    assert.equal(result.toolName, 'codemode');
+    assert.equal(result.isError, false);
+    assert.deepEqual(returned(result), { idle: ['bbbb2222'], pages: ['topics/idle.md'] });
+    const next = JSON.stringify(bot.requests[1]);
+    assert.ok(next.includes('{\\"idle\\":[\\"bbbb2222\\"]'), 'the next request holds the script\u2019s output');
+    for (const nested of ['NESTED-ONLY', 'KB-LINE-ONLY', 'aaaa1111'])
+        assert.ok(!next.includes(nested), `${nested} stayed in the script`);
+});
+test('a script sees sessions list and kb_search as structured values', async (t) => {
+    const bot = await openTestBot(t, async () => JSON.stringify(LIST), { api: async () => KB });
+    bot.respond(script(bot, 'return { list: await tools.sessions({ action: "list", host: "tycho" }), kb: await tools.kb_search({ query: "idle" }) };'), bot.faux.fauxAssistantMessage('Seen.'));
+    await bot.runtime.prompt('Show me', 'followUp');
+    await until(() => said(bot, 'Seen.'), 'the run ends');
+    assert.deepEqual(returned(toolResults(bot)[0]), {
+        list: {
+            action: 'list', total: 2,
+            sessions: [
+                { ref: 'tycho/aaaa1111', name: 'build', cwd: '/w', harness: 'pi', model: 'm1', state: 'working', lastActivity: '2026-11-20T10:00:00.000Z', messages: 4, host: 'tycho' },
+                { ref: 'tycho/bbbb2222', name: 'NESTED-ONLY review', cwd: '/w', harness: 'omp', state: 'active', lastActivity: '2026-11-19T10:00:00.000Z', messages: 9, host: 'tycho' },
+            ],
+        },
+        kb: { total: 1, results: [{ path: 'topics/idle.md', lines: [{ line: 2, text: 'KB-LINE-ONLY in the script' }] }] },
+    });
+});
+const settledJson = (text, totalMessages = 2) => JSON.stringify({ state: 'finished', totalMessages, message: { role: 'assistant', content: [{ type: 'text', text }] } });
+test('a script waiting on its second call when the bot restarts finishes without repeating its first', async (t) => {
+    const kbCalls = [];
+    let waits = 0;
+    let settled = false;
+    const port = async (args, signal) => {
+        if (args[0] !== 'wait')
+            throw new Error(`unexpected ${args[0]}`);
+        waits++;
+        if (settled)
+            return settledJson('DONE');
+        // Still working when the relay goes down; its CLI is stopped with it.
+        return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('stopped')), { once: true }));
+    };
+    const bot = await openTestBot(t, port, { api: async (path) => { kbCalls.push(path); return KB; } });
+    bot.respond(script(bot, [
+        'const kb = await tools.kb_search({ query: "one" });',
+        'const done = await tools.sessions({ action: "wait", ref: "ffff0000" });',
+        'return { pages: kb.total, answer: done.text };',
+    ].join('\n')), bot.faux.fauxAssistantMessage('Finished.'));
+    await bot.runtime.prompt('Wait for ffff0000', 'followUp');
+    await until(() => waits === 1, 'the script waits on its second call');
+    await bot.reopen(() => { settled = true; });
+    await until(() => said(bot, 'Finished.'), 'the script finishes after the restart', 15_000);
+    assert.equal(kbCalls.length, 1, 'the first call is not made again');
+    assert.equal(waits, 2, 'the wait runs again');
+    assert.deepEqual(returned(toolResults(bot)[0]), { pages: 1, answer: 'DONE' });
+});
+test('a script cannot call new_context, bot_create or bot_update', async (t) => {
+    const bot = await openTestBot(t, noSessions);
+    bot.respond(script(bot, 'await tools.new_context({ summary: "from a script" });'), bot.faux.fauxAssistantMessage('It refused.'));
+    await bot.runtime.prompt('Roll over from a script', 'followUp');
+    await until(() => said(bot, 'It refused.'), 'the run ends');
+    const result = toolResults(bot)[0];
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /TypeError: tools\.new_context does not exist\. Available: ([\w, ]+)\./);
+    const available = /Available: ([\w, ]+)\./.exec(textOf(result))[1].split(', ');
+    assert.ok(available.includes('sessions') && available.includes('kb_search'));
+    for (const modelOnly of ['new_context', 'bot_create', 'bot_update', 'codemode'])
+        assert.ok(!available.includes(modelOnly), `${modelOnly} is not callable`);
+    assert.ok(!bot.mirrorLines().some(line => line.customType === 'bot-context-window'), 'no new window');
+});
+test('a script past the time cap ends with an error, whatever its options line asks, and the bot is free again', async (t) => {
+    let stopped = false;
+    const port = async (args, signal) => {
+        if (args[0] !== 'wait')
+            throw new Error(`unexpected ${args[0]}`);
+        return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => { stopped = true; reject(new Error('stopped')); }, { once: true }));
+    };
+    const bot = await openTestBot(t, port, { scriptTimeoutMs: 300 });
+    bot.respond(script(bot, '// @options: {"timeout_ms": 3600000}\nawait tools.sessions({ action: "wait", ref: "ffff0000", timeout: 600 });'), bot.faux.fauxAssistantMessage('It timed out.'), bot.faux.fauxAssistantMessage('Free again.'));
+    await bot.runtime.prompt('Wait a long time', 'followUp');
+    await until(() => said(bot, 'It timed out.'), 'the script ends');
+    const result = toolResults(bot)[0];
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /timed out/i);
+    await until(() => stopped, 'the call the script waited on is stopped');
+    await until(() => !bot.runtime.busy, 'the run ends');
+    await bot.runtime.prompt('Still there?', 'followUp');
+    await until(() => said(bot, 'Free again.'), 'the bot answers the next message');
+});
+test('a worker whose answer a script waited for does not report it, and reports its next turn', async (t) => {
+    const worker = scriptedWorker();
+    const port = async (args, signal) => {
+        if (args[0] !== 'wait')
+            return worker.port(args, signal);
+        worker.calls.push(args);
+        // The worker answers while the script waits; the watch polls meanwhile.
+        worker.answer('QUICK-ANSWER');
+        await severalPolls();
+        return settledJson('QUICK-ANSWER', worker.state.messages.length);
+    };
+    const bot = await openTestBot(t, port);
+    bot.respond(script(bot, [
+        'const w = await tools.spawn_worker({ name: "quick", brief: "Say hello." });',
+        'const done = await tools.sessions({ action: "wait", ref: w.ref, timeout: 60 });',
+        'return { ref: w.ref, answer: done.text };',
+    ].join('\n')), bot.faux.fauxAssistantMessage('It said hello.'), relay(bot));
+    await bot.runtime.prompt('Ask a worker to say hello', 'followUp');
+    await until(() => said(bot, 'It said hello.'), 'the script ends');
+    assert.deepEqual(returned(toolResults(bot)[0]), { ref: '01a1f86c', answer: 'QUICK-ANSWER' });
+    assert.deepEqual(worker.calls.find(args => args[0] === 'wait'), ['wait', '01a1f86c', '--timeout', '60', '--json']);
+    const polled = worker.polls();
+    await until(() => worker.polls() > polled + 2, 'the watch keeps polling');
+    assert.deepEqual(reportsOf(bot), [], 'the answer the script took is not reported');
+    worker.state.busy = true;
+    worker.state.messages.push({ role: 'user', content: 'more' });
+    worker.answer('LATER-ANSWER');
+    await until(() => reportsOf(bot).length === 1, 'the next turn is reported');
+    assert.equal(reportsOf(bot)[0], '[worker report] "quick" (01a1f86c) finished.\n\nLATER-ANSWER');
+});
+test('a bot stored before code mode opens with the tool and answers', async (t) => {
+    const bot = await openTestBot(t, noSessions, { from: path.join(__dirname, 'fixtures', 'bot-before-codemode') });
+    bot.respond(bot.faux.fauxAssistantMessage('Still here, and beelink is the hub.'));
+    await bot.runtime.prompt('Do you remember the hub?', 'followUp');
+    await until(() => said(bot, 'Still here, and beelink is the hub.'), 'the bot answers');
+    const request = bot.requests[0];
+    assert.ok(request.some(message => textOf(message) === 'Remember that beelink is the hub.'), 'its earlier conversation is in the request');
+    assert.match(systemText(request), /<codemode>[^]*declare const tools: \{ sessions\(/, 'the code mode section lists its tools');
+    const texts = bot.mirrorLines().filter(line => line.type === 'message').map(line => textOf(line.message));
+    assert.deepEqual(texts.filter(text => text), ['Remember that beelink is the hub.', 'Saved (19 of 16384 bytes). Your instructions show it from the next window on.',
+        'Noted: beelink is the hub.', 'Do you remember the hub?', 'Still here, and beelink is the hub.']);
 });

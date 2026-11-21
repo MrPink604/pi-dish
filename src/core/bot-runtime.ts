@@ -21,6 +21,8 @@ import url = require('url');
 import esbuild = require('esbuild');
 import type * as Durable from '@earendil-works/pi-durable' with { 'resolution-mode': 'import' };
 import type { Context } from '@earendil-works/chord/context' with { 'resolution-mode': 'import' };
+import type { JsonValue } from '@earendil-works/chord/json' with { 'resolution-mode': 'import' };
+import type { CodemodeRunOptions } from '@earendil-works/pi-codemode' with { 'resolution-mode': 'import' };
 import type { Message, Models, Provider, AssistantMessage } from '@earendil-works/pi-ai' with { 'resolution-mode': 'import' };
 import type { BotPlace, BotRow } from './bot-registry';
 import type { BotMirror } from './bot-mirror';
@@ -45,9 +47,16 @@ const WATCH_FIRST_POLL_MS = 5_000;
 const WATCH_MAX_POLL_MS = 60_000;
 /** A worker still running after this long is reported as such and no longer watched. */
 const WATCH_GIVE_UP_MS = 24 * 60 * 60_000;
+/** A code mode script ends with an error after this long, whatever its options line asks for: the bot is busy while it runs. */
+export const SCRIPT_TIME_CAP_MS = 10 * 60_000;
+/** The heap of one script's VM; the hub is short of memory. */
+const SCRIPT_MEMORY_BYTES = 64 * 1024 * 1024;
+/** `sessions wait`: how long it waits by default, and at most. */
+const WAIT_DEFAULT_SECS = 300;
+const WAIT_MAX_SECS = 600;
 
-/** Runs the pi-dish-sessions CLI as the bot; resolves with its stdout. */
-export type SessionsPort = (args: string[]) => Promise<string>;
+/** Runs the pi-dish-sessions CLI as the bot; resolves with its stdout. `signal` stops it. */
+export type SessionsPort = (args: string[], signal?: AbortSignal) => Promise<string>;
 
 /** pi-dish's HTTP API on the hub: GET `path`, or POST it `body`; resolves with the JSON answer. */
 export type HubApi = (path: string, body?: ProtocolRecord) => Promise<unknown>;
@@ -108,6 +117,10 @@ export interface WorkerRecord {
   reports: number;
   /** Set by the bot's own close: once the session stops, the watch ends without a report. */
   closing?: true;
+  /** Messages a script already took with `sessions wait`: the watch does not report an answer within them. */
+  seen?: number;
+  /** Harness time until which a script waits for this worker's answer with `sessions wait`; the watch holds its report. */
+  waitingUntil?: number;
   /** When the session was seen to stop or was closed. */
   closedAt?: string;
   /** When the watch ended: the session stopped, or 24 hours passed. */
@@ -275,6 +288,15 @@ const PREAMBLE = [
   'creates a routine that wakes you: at each time it sends you its prompt as a message starting "[routine". Write the',
   'prompt to your future self, complete on its own. Answer a routine\'s message in this chat as you would the user; it',
   'comes from the schedule, not from the user. A run missed while pi-dish was down arrives once when it is back.',
+  '',
+  'Code mode: the codemode tool runs a short JavaScript script that calls your tools as `await tools.<name>(args)`;',
+  'only what the script prints or returns enters this conversation. Use it when a request takes several calls whose',
+  'results you filter or combine, or the same call across hosts or sessions ("which sessions on any host have been',
+  'idle longest"): one script, not a call per host. Do not use it for a single call; call the tool. A script runs',
+  'for at most ten minutes and you are busy while it runs, so keep it short. In a script, sessions wait returns a',
+  'session\'s answer once it settles, so a script may start short work with spawn_worker and use the answer; a',
+  'worker\'s answer a script took is not reported to you again. Longer work still goes to a worker and comes back as',
+  'its report. Scripts cannot call new_context, bot_create or bot_update.',
 ].join('\n');
 
 // ---------------------------------------------------------------------------
@@ -357,6 +379,8 @@ export interface BotRuntimeOptions {
   log(line: string): void;
   /** Initial and longest delay between polls of a worker. */
   pollMs?: { first: number; max: number };
+  /** A code mode script's time cap; `SCRIPT_TIME_CAP_MS` by default. */
+  scriptTimeoutMs?: number;
   /** Where every bot's directory lives: a sub-bot's start is written into its own. */
   botsDir: string;
 }
@@ -405,8 +429,10 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   const durable = await import('@earendil-works/pi-durable');
   const { openNodeSqliteStorage } = await import('@earendil-works/pi-durable/storage/sqlite/node');
   const { BACKGROUND_CONTEXT } = await import('@earendil-works/chord/context');
+  const { createCodemodeExtension } = await import('@earendil-works/pi-durable/codemode');
+  const { CodemodeSandbox } = await import('@earendil-works/pi-codemode');
   const schema = await import('@earendil-works/pi-schema');
-  const { obj, opt, str, num, oneOf, arr } = schema;
+  const { obj, opt, str, num, oneOf, arr, bool, lit, union, unknown: anyValue, nullable } = schema;
   const { bot, mirror, sessions, api: hub, emit, log } = options;
   const ctx: Context = BACKGROUND_CONTEXT;
   const pollMs = options.pollMs ?? { first: WATCH_FIRST_POLL_MS, max: WATCH_MAX_POLL_MS };
@@ -563,28 +589,38 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         }
         const stopped = active === false;
         const number = reports + 1;
-        const answered = settled && settled.state !== 'inactive' ? settled : null;
-        const heading = answered?.state === 'waiting' ? 'is waiting for an answer'
-          : answered ? (number === 1 ? 'finished' : 'finished another turn')
-            : stopped ? (number === 1 ? 'stopped without a final answer' : 'has stopped')
-              : 'is still working after 24 hours';
-        const parts = [`[worker report] "${name}" (${ref}) ${heading}.`];
-        if (answered) {
-          parts.push(answered.text.length > REPORT_CHARS
-            ? `${answered.text.slice(0, REPORT_CHARS)}\n[cut at ${REPORT_CHARS} characters; read the rest with sessions read ${ref}]`
-            : answered.text || '(no text)');
-        }
-        if (stopped) parts.push('The session is closed; it is no longer watched.');
-        else if (expired) parts.push('It has been watched for 24 hours and is no longer watched.');
+        const now = new Date().toISOString();
         await runtime.commit(async (tx) => {
           const worker = (await tx.doc(MemoryDoc, runtime.conversationId)).workers[dispatchId];
           // The bot closed this worker itself, so it already has what it needs.
           if (stopped && worker?.closing) {
-            const now = new Date().toISOString();
             worker.closedAt ??= now;
             worker.watchEndedAt = now;
             return { status: 'terminal', outcome: { status: 'completed', result: null } };
           }
+          const later = (nextSince: number) => ({
+            status: 'sleeping' as const, until: runtime.now() + delayMs,
+            checkpoint: { phase: 'poll' as const, delayMs: Math.min(Math.round(delayMs * 1.5), pollMs.max), since: nextSince, reports },
+          });
+          // A script is waiting for this answer with sessions wait: it is the script's, unless the wait gives up.
+          if (!stopped && !expired && worker?.waitingUntil !== undefined && runtime.now() < worker.waitingUntil) return later(since);
+          const fresh = settled && settled.state !== 'inactive' ? settled : null;
+          // A script already took this answer, so the bot has it.
+          const taken = fresh !== null && (worker?.seen ?? -1) >= fresh.totalMessages;
+          if (taken && !stopped && !expired) return later(fresh.totalMessages);
+          const answered = taken ? null : fresh;
+          const heading = answered?.state === 'waiting' ? 'is waiting for an answer'
+            : answered ? (number === 1 ? 'finished' : 'finished another turn')
+              : stopped ? (number === 1 && !taken ? 'stopped without a final answer' : 'has stopped')
+                : 'is still working after 24 hours';
+          const parts = [`[worker report] "${name}" (${ref}) ${heading}.`];
+          if (answered) {
+            parts.push(answered.text.length > REPORT_CHARS
+              ? `${answered.text.slice(0, REPORT_CHARS)}\n[cut at ${REPORT_CHARS} characters; read the rest with sessions read ${ref}]`
+              : answered.text || '(no text)');
+          }
+          if (stopped) parts.push('The session is closed; it is no longer watched.');
+          else if (expired) parts.push('It has been watched for 24 hours and is no longer watched.');
           return {
             status: 'running',
             checkpoint: {
@@ -624,6 +660,13 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
 
   const text = (value: string) => ({ output: [{ type: 'text' as const, text: value }] });
   const refusal = (value: string) => ({ ...text(value), isError: true });
+  /** A result for both readers: `shown` for the model, `value` for a script. */
+  const both = (shown: string, value: JsonValue) => ({ ...text(shown), structuredOutput: value });
+  /**
+   * Whether a script, not the model, made this call: a nested call's id is its caller's id, a slash and its key. A
+   * script never reads the model's text, so a tool may skip the work of making it.
+   */
+  const fromScript = (api: Durable.ToolExecutionApi) => api.callId.includes('/');
 
   const spawnWorker = durable.defineTool({
     name: 'spawn_worker',
@@ -636,6 +679,11 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       harness: opt(str({ description: 'pi (default), omp or agy' })),
       model: opt(str({ description: 'provider/model-id; omitted: the harness default' })),
       thinking: opt(str({ description: 'Thinking level for the worker' })),
+    }),
+    structuredOutputSchema: obj({
+      ref: str({ description: 'The worker\'s ref, for sessions read, wait and close' }),
+      name: str(),
+      host: nullable(str({ description: 'Fleet host it runs on; null: this host' })),
     }),
     // A rerun finds its own dispatch id and never launches twice (below).
     replay: 'safe',
@@ -672,18 +720,23 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         await tx.createTask(WorkerWatch, { dispatchId, ref, name: args.name, since: 0, startedAt: api.now() },
           { ownership: { kind: 'conversation' }, background: true });
       }, callContext);
-      return text(`Started worker "${args.name}" (${harness}${args.host ? ` on ${args.host}` : ''}). Ref: ${ref}. Each answer it gives arrives as a "[worker report]" message.`);
+      return both(`Started worker "${args.name}" (${harness}${args.host ? ` on ${args.host}` : ''}). Ref: ${ref}. Each answer it gives arrives as a "[worker report]" message.`,
+        { ref, name: args.name, host: args.host ?? null });
     },
   });
+
+  /** A worker this bot started, by its ref or session id. */
+  function ownWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined {
+    return Object.entries(memory?.workers ?? {}).find(([, worker]) => wanted === worker.ref || wanted === worker.sessionId
+      || (worker.host !== null && wanted === `${worker.host}/${worker.sessionId}`));
+  }
 
   /** Closes a session this bot started; any other ref is refused. */
   async function closeWorker(wanted: string, api: Durable.ToolExecutionApi, callContext: Context): Promise<Durable.ToolExecutionResult> {
     const memory = await api.snapshot(MemoryDoc, api.conversationId, callContext);
-    const workers = Object.entries(memory?.workers ?? {});
-    const found = workers.find(([, worker]) => wanted === worker.ref || wanted === worker.sessionId
-      || (worker.host !== null && wanted === `${worker.host}/${worker.sessionId}`));
+    const found = ownWorker(memory, wanted);
     if (!found) {
-      const open = workers.filter(([, worker]) => !worker.closedAt).map(([, worker]) => worker.ref);
+      const open = Object.values(memory?.workers ?? {}).filter(worker => !worker.closedAt).map(worker => worker.ref);
       return refusal(`Refused: ${wanted} is not a worker you started, and you can close only your own workers. Open workers: ${open.join(', ') || 'none'}.`);
     }
     const [dispatchId, worker] = found;
@@ -715,24 +768,163 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       const draft = (await tx.doc(MemoryDoc, api.conversationId)).workers[dispatchId];
       draft.closedAt ??= new Date().toISOString();
     }, callContext);
-    return text(alreadyClosed
+    return both(alreadyClosed
       ? `Worker "${worker.name}" (${worker.ref}) had already been closed; it is now marked closed in your records.`
-      : `Closed worker "${worker.name}" (${worker.ref}).`);
+      : `Closed worker "${worker.name}" (${worker.ref}).`, { action: 'close', ref: worker.ref, alreadyClosed });
   }
 
+  /**
+   * Waits until a session settles or `timeout` seconds pass, with the CLI's settle rule, and returns its answer. While
+   * it waits for one of the bot's own workers, the worker's watch holds its report, and an answer it returns is never
+   * reported: the script that asked has it.
+   */
+  async function waitFor(ref: string, since: number | undefined, timeout: number | undefined, api: Durable.ToolExecutionApi,
+    callContext: Context): Promise<Durable.ToolExecutionResult> {
+    const secs = Math.min(Math.max(1, Math.floor(timeout ?? WAIT_DEFAULT_SECS)), WAIT_MAX_SECS);
+    const own = ownWorker(await api.snapshot(MemoryDoc, api.conversationId, callContext), ref)?.[0];
+    const mark = (change: (worker: WorkerRecord) => void) => own === undefined ? Promise.resolve() : api.commit(async (tx) => {
+      const worker = (await tx.doc(MemoryDoc, api.conversationId)).workers[own];
+      if (worker) change(worker);
+    }, callContext);
+    // Past the wait, plus time for the CLI to start and answer, the watch reports as usual.
+    await mark(worker => { worker.waitingUntil = api.now() + (secs + 30) * 1000; });
+    let settled: { state: 'finished' | 'waiting'; totalMessages: number; text: string };
+    try {
+      const argv = ['wait', ref, '--timeout', String(secs), '--json', ...(since === undefined ? [] : ['--since', String(Math.max(0, Math.floor(since)))])];
+      const data: unknown = JSON.parse(await sessions(argv, callContext.abortSignal));
+      const row = isRecord(data) ? data : {};
+      settled = { state: row.state === 'waiting' ? 'waiting' : 'finished', totalMessages: Number(row.totalMessages) || 0, text: messageText(row.message) };
+    } finally {
+      await mark(worker => { delete worker.waitingUntil; });
+    }
+    await mark(worker => { worker.seen = Math.max(worker.seen ?? 0, settled.totalMessages); });
+    return both(`# ${settled.state === 'waiting' ? 'waiting for an answer' : 'finished'}: ${ref} · ${settled.totalMessages} messages\n${settled.text}`,
+      { action: 'wait', ref, ...settled });
+  }
+
+  /** A session row of `list` or `search --json`, as a script sees it; `host` is the fleet host, absent for this one. */
+  function sessionRow(raw: unknown, host: string | undefined): Durable.JsonObject {
+    const row = isRecord(raw) ? raw : {};
+    const where = host && host !== '(self)' ? host : undefined;
+    const ref = String(row.ref || row.id || '');
+    const state = row.isActive === true ? (row.turnInProgress === true || row.compacting === true ? 'working' : 'active')
+      : row.subagentLive === true ? 'subagent' : 'inactive';
+    return {
+      ref: where ? `${where}/${ref}` : ref, name: String(row.name || 'Unnamed'), cwd: String(row.cwd ?? ''), harness: String(row.harnessId ?? ''),
+      ...(typeof row.model === 'string' ? { model: row.model } : {}), state,
+      ...(typeof row.lastActivity === 'string' ? { lastActivity: row.lastActivity } : {}),
+      ...(typeof row.messageCount === 'number' ? { messages: row.messageCount } : {}),
+      ...(where ? { host: where } : {}),
+    };
+  }
+
+  /** What a script gets from `list`, `read`, `search`, `hosts` or `load`, made from the CLI's JSON. */
+  function sessionsValue(action: 'list' | 'read' | 'search' | 'hosts' | 'load', data: unknown, args: { ref?: string; host?: string }): Durable.JsonObject {
+    const page = isRecord(data) ? data : {};
+    const list = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
+    const share = (value: unknown) => {
+      const bytes = isRecord(value) ? value : {};
+      const total = Number(bytes.totalBytes), available = Number(bytes.availableBytes);
+      return total > 0 && Number.isFinite(available) ? Math.round((total - available) / total * 100) : undefined;
+    };
+    if (action === 'list') {
+      const rows = [...list(page.active), ...list(page.children), ...list(page.previous)];
+      return { action, sessions: rows.map(row => sessionRow(row, args.host)), total: Number(page.total) || rows.length };
+    }
+    if (action === 'search') {
+      return {
+        action,
+        results: list(page.results).map(raw => {
+          const row = isRecord(raw) ? raw : {};
+          return { ...sessionRow(row, typeof row.host === 'string' ? row.host : args.host), matches: Number(row.matchCount) || 0, snippets: list(row.snippets).map(String) };
+        }),
+        ...(typeof page.total === 'number' ? { total: page.total } : {}),
+      };
+    }
+    if (action === 'read') {
+      return {
+        action, ref: args.ref ?? '', totalMessages: Number(page.totalMessages) || 0,
+        messages: list(page.messages).map(raw => {
+          const message = isRecord(raw) ? raw : {};
+          return { role: String(message.role ?? ''), text: messageText(message), ...(typeof message.toolName === 'string' ? { tool: message.toolName } : {}) };
+        }),
+      };
+    }
+    if (action === 'hosts') {
+      return {
+        action,
+        hosts: list(page.hosts).map(raw => {
+          const host = isRecord(raw) ? raw : {};
+          const capabilities = isRecord(host.capabilities) ? host.capabilities : {};
+          return {
+            ...(host.self === true || typeof host.name !== 'string' ? {} : { name: host.name }), self: host.self === true,
+            label: String(host.label ?? host.name ?? ''), reachable: host.self === true || host.reachable === true,
+            ...(typeof host.error === 'string' ? { error: host.error } : {}),
+            capabilities: Object.keys(capabilities).filter(key => capabilities[key] === true),
+          };
+        }),
+      };
+    }
+    const cpu = isRecord(page.cpu) ? page.cpu : {};
+    const live = isRecord(page.sessions) ? page.sessions : {};
+    const numbers: Record<string, number | undefined> = {
+      live: Number(live.live) || 0, working: Number(live.working) || 0,
+      cpuPercent: typeof cpu.utilization === 'number' ? Math.round(cpu.utilization * 100) : undefined,
+      load1: Array.isArray(cpu.load) && typeof cpu.load[0] === 'number' ? cpu.load[0] : undefined,
+      cores: typeof cpu.cores === 'number' ? cpu.cores : undefined,
+      memoryUsedPercent: share(page.memory), diskUsedPercent: share(page.disk),
+    };
+    const known = Object.fromEntries(Object.entries(numbers).filter((entry): entry is [string, number] => entry[1] !== undefined));
+    return { action, ...(args.host ? { host: args.host } : {}), ...known };
+  }
+
+  const sessionRowSchema = {
+    ref: str({ description: 'What to pass as ref; host/ref for another host' }),
+    name: str(), cwd: str(), harness: str(), model: opt(str()),
+    state: oneOf(['working', 'active', 'subagent', 'inactive'] as const),
+    lastActivity: opt(str({ description: 'ISO time of its last activity' })),
+    messages: opt(num({ description: 'Messages in its transcript' })),
+    host: opt(str({ description: 'Fleet host; absent: this host' })),
+  };
   const sessionsTool = durable.defineTool({
     name: 'sessions',
-    description: 'pi-dish sessions and hosts: list live sessions, read a transcript, search every transcript, send a message to a session, close a worker you started, list the fleet\'s hosts, or show how busy each host is.',
+    description: 'pi-dish sessions and hosts: list live sessions, read a transcript, search every transcript, send a message to a session, close a worker you started, list the fleet\'s hosts, or show how busy a host is. In a code mode script, wait blocks until a session settles and returns its answer.',
     parameters: obj({
-      action: oneOf(['list', 'read', 'search', 'send', 'close', 'hosts', 'load'] as const),
-      ref: opt(str({ description: 'Session ref, for read, send and close' })),
+      action: oneOf(['list', 'read', 'search', 'send', 'close', 'hosts', 'load', 'wait'] as const),
+      ref: opt(str({ description: 'Session ref, for read, send, close and wait' })),
       query: opt(str({ description: 'Search terms, for search' })),
       message: opt(str({ description: 'Text to send, for send' })),
-      host: opt(str({ description: 'Limit list or search to one host' })),
+      host: opt(str({ description: 'Limit list or search to one host; the host for load' })),
       limit: opt(num({ description: 'Rows or messages to show' })),
+      since: opt(num({ description: 'For wait: settle only once the transcript holds more than this many messages; omitted: a fresh worker\'s first answer, or an idle session\'s last' })),
+      timeout: opt(num({ description: `For wait: seconds to wait, at most ${WAIT_MAX_SECS}; default ${WAIT_DEFAULT_SECS}. Past it the call fails` })),
     }),
-    replay: 'unsafe',
+    structuredOutputSchema: union([
+      obj({ action: lit('list'), sessions: arr(obj(sessionRowSchema)), total: num() }),
+      obj({ action: lit('search'), results: arr(obj({ ...sessionRowSchema, matches: num(), snippets: arr(str()) })), total: opt(num()) }),
+      obj({
+        action: lit('read'), ref: str(), totalMessages: num(),
+        messages: arr(obj({ role: str(), text: str(), tool: opt(str({ description: 'The tool of a toolResult' })) }), { description: 'Oldest first' }),
+      }),
+      obj({
+        action: lit('hosts'),
+        hosts: arr(obj({
+          name: opt(str({ description: 'Pass as host; absent for this host' })), self: bool(), label: str(), reachable: bool(),
+          error: opt(str()), capabilities: arr(str()),
+        })),
+      }),
+      obj({
+        action: lit('load'), host: opt(str()), live: num(), working: num(), cpuPercent: opt(num()), load1: opt(num()), cores: opt(num()),
+        memoryUsedPercent: opt(num()), diskUsedPercent: opt(num()),
+      }),
+      obj({ action: lit('send'), ref: str(), response: anyValue({ description: 'The host\'s answer: held and until when it holds the message' }) }),
+      obj({ action: lit('close'), ref: str(), alreadyClosed: bool() }),
+      obj({ action: lit('wait'), ref: str(), state: oneOf(['finished', 'waiting'] as const), totalMessages: num(), text: str({ description: 'Its final answer' }) }),
+    ]),
+    // Reads rerun after a restart, so a script's wait carries on; send guards itself below, and close is idempotent.
+    replay: 'safe',
     execute: async (args, api, callContext) => {
+      const signal = callContext.abortSignal;
       const host = args.host ? ['--host', args.host] : [];
       const limit = args.limit ? ['--limit', String(Math.max(1, Math.floor(args.limit)))] : [];
       const need = (value: string | undefined, field: string): string => {
@@ -740,12 +932,28 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         return value;
       };
       if (args.action === 'close') return closeWorker(need(args.ref, 'ref'), api, callContext);
-      const argv = args.action === 'list' ? ['list', '--active', ...host, ...limit]
-        : args.action === 'read' ? ['read', need(args.ref, 'ref'), ...limit]
-          : args.action === 'search' ? ['search', need(args.query, 'query'), ...(args.host ? host : ['--all-hosts']), ...limit]
-            : args.action === 'send' ? ['send', need(args.ref, 'ref'), need(args.message, 'message')]
-              : [args.action];
-      return text((await sessions(argv)).trim() || '(no output)');
+      if (args.action === 'wait') return waitFor(need(args.ref, 'ref'), args.since, args.timeout, api, callContext);
+      if (args.action === 'send') {
+        const ref = need(args.ref, 'ref');
+        if (await api.memo<boolean>('sending', callContext)) {
+          return refusal(`The send to ${ref} was cut off by a restart and its outcome is unknown, so it was not sent again. Read the session before sending it again.`);
+        }
+        await api.memo('sending', true, callContext);
+        const shown = (await sessions(['send', ref, need(args.message, 'message'), '--json'], signal)).trim();
+        return both(shown || '(no output)', { action: 'send', ref, response: JSON.parse(shown || 'null') as JsonValue });
+      }
+      const action = args.action;
+      const [textArgv, jsonArgv] = action === 'list' ? [['list', '--active', ...host, ...limit], ['list', '--active', ...host, ...(limit.length ? limit : ['--full'])]]
+        : action === 'read' ? [['read', need(args.ref, 'ref'), ...limit], ['show', need(args.ref, 'ref'), ...(limit.length ? limit : ['--limit', '30']), '--max-chars', '0']]
+          : action === 'search' ? [['search', need(args.query, 'query'), ...(args.host ? host : ['--all-hosts']), ...limit], null]
+            : [[action, ...(action === 'load' ? host : [])], null];
+      // The model's text is the CLI's, as before; a script's value comes from the same command's JSON.
+      const [shown, data] = await Promise.all([
+        fromScript(api) ? null : sessions(textArgv, signal),
+        sessions([...(jsonArgv ?? textArgv), '--json'], signal),
+      ]);
+      const value = sessionsValue(action, JSON.parse(data), args);
+      return both(shown === null ? JSON.stringify(value) : shown.trim() || '(no output)', value);
     },
   });
 
@@ -775,6 +983,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     name: 'new_context',
     description: 'Close this context window and continue in a fresh one that holds your identity, your saved notebook, the end of this conversation, the latest request and your running workers. Nothing else carries over; earlier windows stay readable with history.',
     parameters: obj({ summary: str({ description: 'One line saying what this window covered' }) }),
+    // A script must not roll the window over under the model.
+    callers: ['model'],
     replay: 'safe',
     execute: async (args, api, callContext) => {
       const window = await currentWindow(Number.MAX_SAFE_INTEGER);
@@ -798,44 +1008,51 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       query: opt(str()),
       offset: opt(num({ description: 'For read: messages to skip' })),
     }),
+    structuredOutputSchema: union([
+      obj({ action: lit('windows'), windows: arr(obj({ number: num(), summary: nullable(str({ description: 'Its one-line summary; null for the current window' })), messages: num() })) }),
+      obj({ action: lit('read'), window: num(), offset: num(), total: num(), messages: arr(obj({ role: str(), text: str() }), { description: 'At most 40, from offset' }) }),
+      obj({ action: lit('search'), hits: arr(obj({ window: num(), text: str({ description: 'The match with some text around it' }) }), { description: 'At most 20' }) }),
+    ]),
     replay: 'safe',
     execute: async (args, api, callContext) => {
       const windows = await allWindows();
       const memory = await api.snapshot(MemoryDoc, api.conversationId, callContext);
-      const lines = (entries: readonly Durable.EntryRecord[]) => entries.flatMap(entry => {
+      const messagesOf = (entries: readonly Durable.EntryRecord[]) => entries.flatMap(entry => {
         const message = entryMessage(entry);
         const body = messageText(message).trim();
         if (!body || entry.kind === 'pi.system') return [];
         const role = entry.kind.startsWith('bot.') || entry.kind === 'pi.reset' ? roleOf(entry.kind) : String(message?.role ?? entry.kind);
-        return [`[${role}] ${body}`];
+        return [{ role, text: body }];
       });
+      const line = (message: { role: string; text: string }) => `[${message.role}] ${message.text}`;
       if (args.action === 'windows') {
-        return text(windows.map((entries, index) => {
-          const closed = memory?.windows[index];
-          return `${index + 1}. ${closed ? closed.line : '(current window)'} — ${lines(entries).length} messages`;
-        }).join('\n'));
+        const listed = windows.map((entries, index) => ({ number: index + 1, summary: memory?.windows[index]?.line ?? null, messages: messagesOf(entries).length }));
+        return both(listed.map(window => `${window.number}. ${window.summary ?? '(current window)'} — ${window.messages} messages`).join('\n'),
+          { action: 'windows', windows: listed });
       }
       if (args.action === 'read') {
         const number = Math.floor(args.window ?? windows.length);
         const entries = windows[number - 1];
         if (!entries) return refusal(`There is no window ${number}; there are ${windows.length}.`);
-        const all = lines(entries);
+        const all = messagesOf(entries);
         const offset = Math.max(0, Math.floor(args.offset ?? 0));
         const page = all.slice(offset, offset + 40);
         const more = offset + page.length < all.length ? `\n[${all.length - offset - page.length} more; read again with offset ${offset + page.length}]` : '';
-        return text(`Window ${number}, messages ${offset + 1}–${offset + page.length} of ${all.length}:\n\n${page.join('\n\n')}${more}`);
+        return both(`Window ${number}, messages ${offset + 1}–${offset + page.length} of ${all.length}:\n\n${page.map(line).join('\n\n')}${more}`,
+          { action: 'read', window: number, offset, total: all.length, messages: page });
       }
       const query = (args.query ?? '').trim().toLowerCase();
       if (!query) return refusal('search needs a query');
-      const hits: string[] = [];
+      const hits: { window: number; text: string }[] = [];
       windows.forEach((entries, index) => {
-        for (const line of lines(entries)) {
-          const at = line.toLowerCase().indexOf(query);
+        for (const message of messagesOf(entries)) {
+          const shown = line(message);
+          const at = shown.toLowerCase().indexOf(query);
           if (at < 0 || hits.length >= 20) continue;
-          hits.push(`window ${index + 1}: …${line.slice(Math.max(0, at - 120), at + query.length + 200).replace(/\s+/g, ' ')}…`);
+          hits.push({ window: index + 1, text: `…${shown.slice(Math.max(0, at - 120), at + query.length + 200).replace(/\s+/g, ' ')}…` });
         }
       });
-      return text(hits.length ? hits.join('\n') : `No match for "${args.query}".`);
+      return both(hits.length ? hits.map(hit => `window ${hit.window}: ${hit.text}`).join('\n') : `No match for "${args.query}".`, { action: 'search', hits });
     },
   });
 
@@ -843,13 +1060,21 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     name: 'kb_search',
     description: 'Search the shared knowledge base: pages holding every term (case-insensitive), with their matching lines.',
     parameters: obj({ query: str({ description: 'Search terms' }) }),
+    structuredOutputSchema: obj({
+      results: arr(obj({ path: str({ description: 'The page, for kb_read' }), lines: arr(obj({ line: num(), text: str() })) })),
+      total: num({ description: 'Pages that match; more than results when the list was cut' }),
+    }),
     replay: 'safe',
     execute: async (args) => {
       const found = await hub(`/api/knowledge/search?q=${encodeURIComponent(args.query)}`) as KnowledgeSearch;
-      if (!found.results.length) return text(`Nothing in the knowledge base matches "${args.query}".`);
+      const value = {
+        results: found.results.map(hit => ({ path: hit.path, lines: hit.lines.map(line => ({ line: line.line, text: line.text })) })),
+        total: found.total,
+      };
+      if (!found.results.length) return both(`Nothing in the knowledge base matches "${args.query}".`, value);
       const pages = found.results.map(hit => [hit.path, ...hit.lines.map(line => `  ${line.line}: ${line.text}`)].join('\n'));
       const more = found.total > found.results.length ? `\n\n[${found.total - found.results.length} more pages match; add a term to narrow it]` : '';
-      return text(`${pages.join('\n\n')}${more}`);
+      return both(`${pages.join('\n\n')}${more}`, value);
     },
   });
 
@@ -857,10 +1082,11 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     name: 'kb_read',
     description: 'Read a knowledge base page, or the index (one line per page) when no page is named.',
     parameters: obj({ page: opt(str({ description: 'Page name, such as "beelink" or "topics/beelink.md"; omitted: the index' })) }),
+    structuredOutputSchema: obj({ path: str(), text: str({ description: 'The page\'s markdown' }) }),
     replay: 'safe',
     execute: async (args) => {
       const page = await hub(`/api/knowledge/page${args.page ? `?page=${encodeURIComponent(args.page)}` : ''}`) as { path: string; text: string };
-      return text(`${page.path}:\n\n${page.text}`);
+      return both(`${page.path}:\n\n${page.text}`, { path: page.path, text: page.text });
     },
   });
 
@@ -951,6 +1177,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   const botCreate = durable.defineTool({
     name: 'bot_create',
     description: 'Create a sub-bot under you: a long-lived bot that is the standing contact for a narrower area. It starts from this conversation as it stood before this call, so it knows what you know, and its purpose arrives as its first message. It keeps your identity until its first new context window, where it takes the identity you give here and a notebook of its own. It runs on your model. Bots nest at most three levels deep.',
+    // Bot changes stay deliberate: the model's own, each shown to the user.
+    callers: ['model'],
     parameters: obj({
       name: str({ description: 'Its name' }),
       purpose: str({ description: 'What it is for and what to do first; its first message' }),
@@ -1018,14 +1246,18 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     name: 'room_read',
     description: 'Read the newest messages in your family\'s room, including those not addressed to you.',
     parameters: obj({ limit: opt(num({ description: 'How many; default 20' })) }),
+    structuredOutputSchema: obj({
+      messages: arr(obj({ id: num(), from: str(), to: arr(str()), text: str(), hop: num(), createdAt: str() }), { description: 'Oldest first' }),
+    }),
     replay: 'safe',
     execute: async (args) => {
       const limit = Math.max(1, Math.floor(args.limit ?? 20));
       const { messages } = await hub(`/api/bots/${bot.id}/room?limit=${limit}`) as {
         messages: { id: number; fromName: string; toNames: string[]; text: string; hop: number; createdAt: string }[];
       };
-      if (!messages.length) return text('The room is empty.');
-      return text(messages.map(message => `#${message.id} ${message.createdAt} ${message.fromName} → ${message.toNames.join(', ')} (hop ${message.hop}): ${message.text}`).join('\n'));
+      const value = { messages: messages.map(message => ({ id: message.id, from: message.fromName, to: message.toNames, text: message.text, hop: message.hop, createdAt: message.createdAt })) };
+      if (!messages.length) return both('The room is empty.', value);
+      return both(messages.map(message => `#${message.id} ${message.createdAt} ${message.fromName} → ${message.toNames.join(', ')} (hop ${message.hop}): ${message.text}`).join('\n'), value);
     },
   });
 
@@ -1044,14 +1276,36 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       prompt: opt(str({ description: 'For create: what the message asks you to do each time, written to your future self and complete on its own' })),
       description: opt(str({ description: 'For create: one line on what it is for' })),
     }),
+    structuredOutputSchema: union([
+      obj({
+        action: lit('list'),
+        routines: arr(obj({
+          name: str(), cron: nullable(str()), enabled: bool(), description: str(), prompt: str(),
+          nextRunAt: nullable(str({ description: 'ISO time' })), lastRun: nullable(obj({ at: str({ description: 'ISO time' }), status: str() })),
+        })),
+      }),
+      obj({ action: lit('create'), name: str(), nextRunAt: nullable(str({ description: 'ISO time of its first run' })) }),
+      obj({ action: lit('remove'), name: str() }),
+    ]),
     // A rerun could create the routine twice, or report a removed one as missing.
     replay: 'unsafe',
     execute: async (args) => {
+      const iso = (ms: number | null | undefined) => typeof ms === 'number' ? new Date(ms).toISOString() : null;
       try {
         if (args.action === 'list') {
           const { routines } = await hub(`/api/bots/${bot.id}/routines`) as { routines: OwnRoutine[] };
-          if (!routines.length) return text('You have no schedules.');
-          return text(routines.map(routine => {
+          const value = {
+            action: 'list',
+            routines: routines.map(routine => {
+              const last = routine.stats?.lastInvocation;
+              return {
+                name: routine.name, cron: routine.schedule?.cron ?? null, enabled: routine.enabled, description: routine.description ?? '', prompt: routine.prompt,
+                nextRunAt: routine.enabled ? iso(routine.stats?.nextRunAt) : null, lastRun: last ? { at: iso(last.startedAt)!, status: last.status } : null,
+              };
+            }),
+          };
+          if (!routines.length) return both('You have no schedules.', value);
+          return both(routines.map(routine => {
             const next = routine.stats?.nextRunAt;
             const last = routine.stats?.lastInvocation;
             return [
@@ -1059,18 +1313,19 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
               ...(routine.description ? [`  ${routine.description}`] : []),
               `  Prompt: ${routine.prompt}`,
             ].join('\n');
-          }).join('\n'));
+          }).join('\n'), value);
         }
         if (!args.name) return refusal(`${args.action} needs the routine's name.`);
         if (args.action === 'remove') {
           await hub(`/api/bots/${bot.id}/routines/${encodeURIComponent(args.name)}/remove`, {});
-          return text(`Removed the schedule "${args.name}". Its runs so far stay in its record.`);
+          return both(`Removed the schedule "${args.name}". Its runs so far stay in its record.`, { action: 'remove', name: args.name });
         }
         if (!args.cron || !args.prompt) return refusal('create needs a name, a cron schedule and a prompt.');
         const { routine } = await hub(`/api/bots/${bot.id}/routines`, {
           name: args.name, prompt: args.prompt, schedule: { cron: args.cron }, ...(args.description ? { description: args.description } : {}),
         } as ProtocolRecord) as { routine: OwnRoutine & { nextRunAt: number | null } };
-        return text(`Created the schedule "${routine.name}" (${args.cron})${routine.nextRunAt ? `; its first run is at ${when(routine.nextRunAt)}` : ''}. Each run arrives here as a message starting [routine "${routine.name}". The user sees it on pi-dish's Routines screen.`);
+        return both(`Created the schedule "${routine.name}" (${args.cron})${routine.nextRunAt ? `; its first run is at ${when(routine.nextRunAt)}` : ''}. Each run arrives here as a message starting [routine "${routine.name}". The user sees it on pi-dish's Routines screen.`,
+          { action: 'create', name: routine.name, nextRunAt: iso(routine.nextRunAt) });
       } catch (error) {
         return refusal(error instanceof Error ? error.message : String(error));
       }
@@ -1128,6 +1383,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   const botUpdate = durable.defineTool({
     name: 'bot_update',
     description: 'Change your own entry or a descendant bot\'s: its name, identity, places or thinking level, or a descendant\'s model. You cannot change your own model; only the user can. Every change is recorded, shown to the user with an undo, and a changed identity, places or thinking level takes effect at that bot\'s next context window.',
+    // Bot changes stay deliberate: the model's own, each with its undo.
+    callers: ['model'],
     parameters: obj({
       bot: opt(str({ description: 'Name or id of a descendant bot; omitted: yourself' })),
       name: opt(str()),
@@ -1206,6 +1463,20 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   });
   const registry = durable.createRegistry();
   registry.install(BotExtension);
+  const scriptCap = options.scriptTimeoutMs ?? SCRIPT_TIME_CAP_MS;
+  /**
+   * Every script ends by its start plus the cap: an options line may ask for less, never more, and a script resumed
+   * after a restart keeps the deadline it started with, since `startedAt` is the one its run recorded.
+   */
+  class CappedSandbox extends CodemodeSandbox {
+    override start(code: string, run: CodemodeRunOptions) {
+      const left = Math.max(1, run.startedAt + scriptCap - Date.now());
+      return super.start(code, { ...run, timeoutMs: Math.min(run.timeoutMs ?? left, left) });
+    }
+  }
+  const sandbox = new CappedSandbox({ memoryLimitBytes: SCRIPT_MEMORY_BYTES });
+  // Scripts reach only the bot's own tools, and start no model calls of their own.
+  registry.install(createCodemodeExtension({ sandbox, models: false }));
 
   fs.mkdirSync(path.dirname(options.storageFile), { recursive: true });
   const harness = await durable.Harness.open(await openNodeSqliteStorage(options.storageFile), {
@@ -1322,7 +1593,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       running.delete(callId);
       emit('tool_execution_end', {
         toolCallId: callId, toolName: name, args: calls.get(callId)?.args ?? {}, startedAt: slot.startedAt,
-        isError: message.isError === true, result: { content: message.content },
+        isError: message.isError === true, result: { content: message.content, ...(message.details !== undefined ? { details: message.details } : {}) },
       });
       calls.delete(callId);
       // A change to a bot's entry is shown as itself, with what the user needs to undo it.
@@ -1432,6 +1703,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     abort: () => conversation().abort(ctx),
     async close() {
       await watch.stop();
+      // The sandbox first: a script it stops is left unfinished, and resumes when the bot opens again.
+      await sandbox.close();
       await harness.close(ctx);
     },
   };

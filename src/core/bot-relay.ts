@@ -48,9 +48,10 @@ function log(line: string): void {
 
 /** The pi-dish-sessions CLI, run as the bot: its spawns are attributed to it. */
 function sessionsPort(routeId: string): SessionsPort {
-  return args => new Promise((resolve, reject) => {
+  return (args, signal) => new Promise((resolve, reject) => {
     execFile(process.execPath, [SESSIONS_CLI, ...args], {
-      env: { ...process.env, PI_DISH_SESSION_ID: routeId }, maxBuffer: 8 << 20, timeout: 120_000,
+      // `wait` has its own --timeout.
+      env: { ...process.env, PI_DISH_SESSION_ID: routeId }, maxBuffer: 8 << 20, timeout: args[0] === 'wait' ? 0 : 120_000, signal,
     }, (error, stdout, stderr) => {
       if (!error) return resolve(stdout);
       const detail = String(stderr).trim().replace(/^pi-dish-sessions: /, '');
