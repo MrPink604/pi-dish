@@ -8,7 +8,6 @@ const test_1 = require("@playwright/test");
 Object.defineProperty(exports, "expect", { enumerable: true, get: function () { return test_1.expect; } });
 const node_child_process_1 = require("node:child_process");
 const fs = require("node:fs");
-const os = require("node:os");
 const path = require("node:path");
 const test_env_js_1 = require("../test-env.js");
 const helper_values_js_1 = require("../../lib/helper-values.js");
@@ -29,7 +28,7 @@ function heldRoute() {
     return { received, hold: route => settle(route) };
 }
 async function startHost(label, logs, started, origin, liveSessions) {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-browser-'));
+    const home = (0, test_env_js_1.createTestTempDir)('pi-dish-browser-');
     const token = `browser-fixture-${label}`;
     const stopping = { home };
     started.push(stopping); // Register before setup so partial failures also clean up.

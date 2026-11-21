@@ -6,6 +6,7 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const process_identity_js_1 = require("../lib/process-identity.js");
 const test_env_js_1 = require("./test-env.js");
 // This is the harness defending itself: `npm test` runs from the operator's
 // own shell, where the wrapper has exported the live deployment. Every var
@@ -86,5 +87,42 @@ test('applyTestEnv sanitizes this process in place', () => {
             if (!(key in saved))
                 delete process.env[key];
         Object.assign(process.env, saved);
+    }
+});
+test('test temp startup reaps an old dead owner but not live, fresh, or unrelated directories', { skip: process.platform !== 'linux' }, () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-testenv-'));
+    const previousTmp = process.env.TMPDIR;
+    process.env.TMPDIR = temp;
+    try {
+        const owner = (0, process_identity_js_1.processIdentity)(process.pid);
+        assert.ok(owner);
+        const old = new Date(Date.now() - 61 * 60_000);
+        const names = [
+            ['pi-dish-ui-dead00', '0', old],
+            ['pi-dish-ui-live00', owner.startTime, old],
+            ['pi-dish-ui-fresh0', '0', new Date()],
+            ['pi-dish-unrelated-dead00', '0', old],
+        ];
+        for (const [name, startTime, mtime] of names) {
+            const dir = path.join(temp, name);
+            fs.mkdirSync(dir);
+            fs.writeFileSync(path.join(dir, '.pi-dish-test-owner'), `${owner.pid} ${startTime}\n`);
+            fs.utimesSync(dir, mtime, mtime);
+        }
+        const symlink = path.join(temp, 'pi-dish-ui-linked');
+        fs.symlinkSync(path.join(temp, names[1][0]), symlink);
+        fs.lutimesSync(symlink, old, old);
+        (0, test_env_js_1.createTestTempDir)('pi-dish-ui-');
+        assert.equal(fs.existsSync(path.join(temp, names[0][0])), false, 'a reused PID cannot protect a stale directory');
+        for (const [name] of names.slice(1))
+            assert.ok(fs.existsSync(path.join(temp, name)), `${name} survives`);
+        assert.ok(fs.lstatSync(symlink).isSymbolicLink(), 'janitor does not follow or remove symlinks');
+    }
+    finally {
+        if (previousTmp === undefined)
+            delete process.env.TMPDIR;
+        else
+            process.env.TMPDIR = previousTmp;
+        fs.rmSync(temp, { recursive: true, force: true });
     }
 });

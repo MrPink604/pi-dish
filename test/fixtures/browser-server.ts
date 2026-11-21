@@ -4,6 +4,8 @@ import net = require('node:net');
 import path = require('node:path');
 import { record as isRecord } from '../../lib/helper-values.js';
 
+process.once('disconnect', () => process.exit(0));
+
 (async () => {
   if (process.env.PI_DISH_TEST_LIVE_SESSION) {
     const id = process.env.PI_DISH_TEST_LIVE_SESSION;

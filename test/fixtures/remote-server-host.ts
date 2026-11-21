@@ -1,5 +1,6 @@
 import type { Server } from 'node:http';
 
+process.once('disconnect', () => process.exit(0));
 const server: Server = require(process.argv[2]!);
 function announce(): void {
   const address = server.address();

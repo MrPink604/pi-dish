@@ -2,9 +2,8 @@ import { test as base, expect, type Locator, type Route, type TestInfo } from '@
 import type { ChildProcess } from 'node:child_process';
 import { fork } from 'node:child_process';
 import fs = require('node:fs');
-import os = require('node:os');
 import path = require('node:path');
-import { sanitizeTestEnv } from '../test-env.js';
+import { createTestTempDir, sanitizeTestEnv } from '../test-env.js';
 import { record as isRecord } from '../../lib/helper-values.js';
 import type { SessionEntry } from '../../src/browser/session-state.js';
 import { installFixtureApp } from '../fixtures/browser-app.js';
@@ -50,7 +49,7 @@ function heldRoute(): { readonly received: Promise<Route>; hold(route: Route): v
 
 
 async function startHost(label: string, logs: string[], started: StoppingHost[], origin: string | null, liveSessions: boolean): Promise<BrowserHost> {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-browser-'));
+  const home = createTestTempDir('pi-dish-browser-');
   const token = `browser-fixture-${label}`;
   const stopping: StoppingHost = { home };
   started.push(stopping); // Register before setup so partial failures also clean up.

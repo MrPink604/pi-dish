@@ -3,4 +3,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 if (process.argv.includes('--ignore-sighup'))
     process.on('SIGHUP', () => { });
+if (process.connected)
+    process.once('disconnect', () => process.exit(0));
 setInterval(() => { }, 1 << 30);

@@ -8,12 +8,12 @@
 // Resolve the browser cache before the fixture replaces HOME.
 import { chromium } from 'playwright';
 import fs = require('node:fs');
-import os = require('node:os');
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import net = require('node:net');
 import path = require('node:path');
 import { record as isRecord } from '../lib/helper-values.js';
+import { applyTestEnv, createTestTempDir, exitOnTestSignals, fakeOmpModelsCommand } from '../test/test-env.js';
 
 type FixtureEntry = Record<string, unknown>;
 interface FixtureModel {
@@ -32,9 +32,12 @@ const OUT = process.argv[2] || path.join(REPO, 'docs', 'screenshots');
 fs.mkdirSync(OUT, { recursive: true });
 // The operator's deployment env would bind this server off-box and fight the
 // running share listener (see test/test-env.js).
-const testEnv: typeof import('../test/test-env.js') = require('../test/test-env.js');
-testEnv.applyTestEnv();
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-shots-'));
+const tmpHome = createTestTempDir('pi-dish-shots-');
+exitOnTestSignals();
+process.env.TMPDIR = path.join(tmpHome, 'tmp');
+fs.mkdirSync(process.env.TMPDIR);
+applyTestEnv();
+process.env.PI_DISH_OMP_COMMAND = fakeOmpModelsCommand;
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
 
@@ -283,7 +286,6 @@ const sleep = (ms: number): Promise<void> => delay(ms);
     server.close();
     main.server.close();
     api.server.close();
-    fs.rmSync(tmpHome, { recursive: true, force: true });
   }
   process.exit(0);
 })().catch((error: unknown) => { console.error(error); process.exit(1); });

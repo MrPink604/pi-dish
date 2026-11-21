@@ -1,8 +1,12 @@
 // Generated tool from test/test-env.ts; edit that source and run npm run build:tools.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.fakeOmpModelsCommand = void 0;
 exports.sanitizeTestEnv = sanitizeTestEnv;
 exports.applyTestEnv = applyTestEnv;
+exports.createTestTempDir = createTestTempDir;
+exports.exitOnTestSignals = exitOnTestSignals;
+exports.shareOmpTestNatives = shareOmpTestNatives;
 /**
  * The environment every test process starts from: the operator's deployment
  * variables (tailnet HOST, PORT, share port, token) must not reach a suite that
@@ -11,6 +15,182 @@ exports.applyTestEnv = applyTestEnv;
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const node_crypto_1 = require("node:crypto");
+const process_identity_js_1 = require("../lib/process-identity.js");
+const OWNER = '.pi-dish-test-owner';
+const STALE_MS = 60 * 60_000;
+const TEMP_DIRS = new Set();
+const SCANNED_TMP = new Set();
+// Exact mkdtemp prefixes from the test runners, including pre-owner-marker
+// releases. Do not match arbitrary pi-dish-* deployment or user directories.
+const TEST_PREFIXES = new Set(`
+acp-session agy-import dish-bounce dish-multi dish-omp dish-policy
+dish-policy-git dish-policy-js dish-policy-shell dish-prime-daemon dish-recovery
+dish-recovery-private dish-recovery-runner dish-skill-ingress dish-source dish-source-private
+pd-frames pd-home pd-int pd-lineage-real pd-native pd-native-boundary pd-pi-private
+pd-test pd-tmux pd-tt prime-daemon-test
+pi-dish-acp-img pi-dish-acp-out pi-dish-acp-reconcile pi-dish-agy pi-dish-agy-brain pi-dish-agy-life
+pi-dish-artifacts pi-dish-artifacts-tmux pi-dish-bot pi-dish-bot-restart pi-dish-bots pi-dish-bots-dir
+pi-dish-bridge-test pi-dish-browser pi-dish-browser-build pi-dish-cl pi-dish-cli-bounds
+pi-dish-cli-bounds-tmux pi-dish-comments-alt pi-dish-comments-cli pi-dish-comments-help
+pi-dish-core-build pi-dish-core-home pi-dish-discovery pi-dish-drm pi-dish-edge-build
+pi-dish-edge-client pi-dish-fake-tmux pi-dish-fleet pi-dish-fleet-bin pi-dish-fleet-tmux
+pi-dish-gd pi-dish-hibernation pi-dish-host pi-dish-host-tmux pi-dish-idx pi-dish-install
+pi-dish-knowledge pi-dish-listener pi-dish-login-omp pi-dish-login-pi pi-dish-mention
+pi-dish-message-hold pi-dish-npm pi-dish-omp-compact pi-dish-omp-export-fail pi-dish-omp-export-test
+pi-dish-omp-native pi-dish-omp-pilot pi-dish-omp-pilot-tmux pi-dish-omp-side-chat
+pi-dish-omp-tree-acquisition-timeout pi-dish-omp-tree-cancel-branch pi-dish-omp-tree-cancel-navigate
+pi-dish-omp-tree-invalid-node pi-dish-omp-tree-missing-command-api pi-dish-omp-tree-missing-tree-api
+pi-dish-omp-tree-no-shortcut pi-dish-omp-tree-normal pi-dish-omp-tree-operation-timeout
+pi-dish-omp-tree-parent-cycle pi-dish-omp-tree-projection pi-dish-path pi-dish-pricing
+pi-dish-pricing-agy pi-dish-pricing-card pi-dish-pricing-missing pi-dish-pricing-operation
+pi-dish-pricing-plan pi-dish-pricing-recorded pi-dish-pricing-timeout pi-dish-provenance
+pi-dish-push pi-dish-racy-prune pi-dish-routines-api pi-dish-routines-test pi-dish-rpc-test
+pi-dish-service pi-dish-session-attach pi-dish-session-cli pi-dish-sf pi-dish-shots
+pi-dish-skill-fleet pi-dish-skill-fleet-tmux pi-dish-skills-cli pi-dish-skills-cli-tmux
+pi-dish-switch-omp pi-dish-switch-pi pi-dish-term-test pi-dish-test pi-dish-test-tmux
+pi-dish-testenv pi-dish-ui pi-dish-ui-remote pi-dish-ui-remote-tmux pi-dish-ui-tmux
+pi-dish-vault pi-dish-vault-cli`.trim().split(/\s+/));
+function removeTempDir(dir) {
+    try {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 2 });
+    }
+    catch (error) {
+        console.warn(`Could not remove test temp directory ${dir}:`, error);
+    }
+}
+// An unreadable or malformed owner is not proof that a run is dead. For a
+// valid marker, compare Linux start ticks, not just the potentially reused PID.
+function readTempOwner(dir) {
+    try {
+        const file = path.join(dir, OWNER);
+        if (!fs.lstatSync(file).isFile())
+            return 'live';
+        const match = /^([1-9]\d*) (\d+)\n$/.exec(fs.readFileSync(file, 'utf8'));
+        if (!match)
+            return 'live';
+        const pid = Number(match[1]);
+        const identity = (0, process_identity_js_1.processIdentity)(pid);
+        if (identity)
+            return identity.startTime === match[2] ? 'live' : 'dead';
+        try {
+            process.kill(pid, 0);
+            return 'live';
+        }
+        catch (error) {
+            return error.code === 'ESRCH' ? 'dead' : 'live';
+        }
+    }
+    catch (error) {
+        return error.code === 'ENOENT' ? 'legacy' : 'live';
+    }
+}
+function reapTestTempDirs(base) {
+    // /proc supplies both exact owner identities and a conservative compatibility
+    // check for unmarked directories from older checkouts.
+    if (process.platform !== 'linux' || !process.getuid)
+        return;
+    const uid = process.getuid();
+    const cutoff = Date.now() - STALE_MS;
+    const candidates = new Map();
+    for (const name of fs.readdirSync(base)) {
+        const match = /^(.+)-[a-zA-Z0-9]{6}$/.exec(name);
+        if (!match || !TEST_PREFIXES.has(match[1]))
+            continue;
+        const dir = path.join(base, name);
+        const stat = fs.lstatSync(dir, { throwIfNoEntry: false });
+        if (!stat?.isDirectory() || stat.uid !== uid || stat.mtimeMs > cutoff)
+            continue;
+        const owner = readTempOwner(dir);
+        if (owner !== 'live')
+            candidates.set(dir, owner);
+    }
+    if (!candidates.size)
+        return;
+    let legacyBusy = false;
+    for (const pid of fs.readdirSync('/proc')) {
+        if (!/^\d+$/.test(pid) || Number(pid) === process.pid)
+            continue;
+        const proc = `/proc/${pid}`;
+        if (fs.statSync(proc, { throwIfNoEntry: false })?.uid !== uid)
+            continue;
+        try {
+            const argv = fs.readFileSync(`${proc}/cmdline`, 'utf8').split('\0');
+            // Legacy Node processes may change HOME in-process, which /proc/environ
+            // does not reflect. Defer unmarked cleanup while such a runner is alive.
+            if (argv.some(arg => arg === '--test' ||
+                /(?:^|\/)(?:[^/]+\.test|ui-smoke|remote-server-host|browser-server|run-tests|run-ui-scenarios|readme-shots|native-extensions\.smoke|test-real-lineage-harnesses|workerProcessEntry)\.js$|(?:^|\/)playwright$/.test(arg))) {
+                legacyBusy = true;
+            }
+            // A subprocess may have survived a killed runner. Don't remove a
+            // directory that another process inherited, even after the owner died.
+            const env = fs.readFileSync(`${proc}/environ`, 'utf8');
+            for (const ref of env.matchAll(/(?:^|\0)(?:HOME|TMPDIR|TMUX_TMPDIR)=([^\0]+)/g)) {
+                for (let dir = path.resolve(ref[1]); dir !== path.dirname(dir); dir = path.dirname(dir)) {
+                    candidates.delete(dir);
+                    if (dir === base)
+                        break;
+                }
+            }
+        }
+        catch (error) {
+            const code = error.code;
+            if (code !== 'ENOENT' && code !== 'ESRCH' && code !== 'EACCES')
+                throw error;
+        }
+    }
+    for (const [dir, owner] of candidates) {
+        if (owner === 'dead' || !legacyBusy)
+            removeTempDir(dir);
+    }
+}
+function createTestTempDir(prefix) {
+    const base = fs.realpathSync(os.tmpdir());
+    if (!SCANNED_TMP.has(base)) {
+        reapTestTempDirs(base);
+        SCANNED_TMP.add(base);
+    }
+    const dir = fs.mkdtempSync(path.join(base, prefix));
+    try {
+        const owner = (0, process_identity_js_1.processIdentity)(process.pid);
+        if (owner)
+            fs.writeFileSync(path.join(dir, OWNER), `${owner.pid} ${owner.startTime}\n`, { flag: 'wx' });
+    }
+    catch (error) {
+        removeTempDir(dir);
+        throw error;
+    }
+    if (!TEMP_DIRS.size)
+        process.once('exit', () => {
+            for (const dir of TEMP_DIRS)
+                removeTempDir(dir);
+        });
+    TEMP_DIRS.add(dir);
+    return dir;
+}
+function exitOnTestSignals() {
+    process.once('SIGINT', () => setImmediate(() => process.exit(130)));
+    process.once('SIGTERM', () => setImmediate(() => process.exit(143)));
+}
+function shareOmpTestNatives(executable, home) {
+    // The compiled OMP loader honors PI_NATIVES_DIR and manages versioned
+    // extraction there. Keep test builds separate from the operator's cache and
+    // from each other: OMP can prune older versions on successful load.
+    const binary = fs.statSync(executable);
+    const key = (0, node_crypto_1.createHash)('sha256')
+        .update(`${binary.dev}:${binary.ino}:${binary.size}:${binary.mtimeMs}`).digest('hex');
+    const cache = process.env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache');
+    const natives = path.resolve(cache, 'pi-dish', 'omp-test-natives', key);
+    fs.mkdirSync(natives, { recursive: true, mode: 0o700 });
+    // Older compiled builds don't honor PI_NATIVES_DIR.
+    const ompHome = path.join(home, '.omp');
+    fs.mkdirSync(ompHome, { recursive: true });
+    fs.symlinkSync(natives, path.join(ompHome, 'natives'), 'dir');
+    return natives;
+}
+const fakeOmpModelsCommand = `env OMP_FIXTURE=1 "${process.execPath}" "${path.join(__dirname, 'fixtures', 'fake-omp-models.js')}"`;
+exports.fakeOmpModelsCommand = fakeOmpModelsCommand;
+let isolatedHarnessPaths;
 // Each names a host binary or opts a suite out; none can retarget the server.
 const KEEP = {
     PI_DISH_SKIP_INTEGRATION: true,
@@ -59,7 +239,7 @@ function sanitizeTestEnv(env = process.env) {
     // Prime live rows come from a resident daemon socket outside HOME, and `agy`
     // `/usage` probes a host binary on PATH; pin nonexistent paths so no test
     // touches the operator's live daemon or Antigravity account unless opted in.
-    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'dish-prime-daemon-'));
+    const isolated = isolatedHarnessPaths ??= createTestTempDir('dish-prime-daemon-');
     next.PRIME_AGENT_DAEMON_SOCKET = path.join(isolated, 'daemon.sock');
     next.PI_DISH_AGY_COMMAND = path.join(isolated, 'no-agy');
     // A server a suite boots never starts a bot relay (or its model).

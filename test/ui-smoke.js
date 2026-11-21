@@ -29,21 +29,27 @@ if (args.length && selectedScenario === null) {
     throw new Error('Usage: npm run test:ui -- [--list | --scenario <name>]');
 }
 const fs = require("node:fs");
-const os = require("node:os");
 const net = require("node:net");
 const path = require("node:path");
 const { processIdentity } = require('../lib/process-identity.js');
 // Same first move as `npm test`: drop the operator's deployment (HOST, share
 // port) from the environment before setting our own.
+const tmpHome = (0, test_env_js_1.createTestTempDir)('pi-dish-ui-');
+(0, test_env_js_1.exitOnTestSignals)();
+process.env.TMPDIR = path.join(tmpHome, 'tmp');
+fs.mkdirSync(process.env.TMPDIR);
 (0, test_env_js_1.applyTestEnv)();
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-'));
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
 process.env.PI_DISH_TERMINAL = '1'; // exercise the terminal panel
 process.env.PI_DISH_INDEX_SYNC_BUDGET = '1000'; // deterministic >100-session search fixtures
 // Empty tmux tmpdir, or describeRuntime's pid-ancestry fallback finds the
 // enclosing tmux session instead of the dummy pi child.
-process.env.TMUX_TMPDIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-tmux-'));
+process.env.TMUX_TMPDIR = path.join(tmpHome, 'tmux');
+fs.mkdirSync(process.env.TMUX_TMPDIR);
+// Real OMP is not part of this smoke. Server-side pricing still probes its
+// catalog, so give that probe a fixture instead of extracting native addons.
+process.env.PI_DISH_OMP_COMMAND = test_env_js_1.fakeOmpModelsCommand;
 // The routines section runs for real, so pin the headless dispatch to an RPC
 // child speaking pi's --mode rpc protocol to the fake pi; every other section
 // stubs /api/sessions/new client-side.
@@ -447,7 +453,7 @@ let failures = 0;
 // origin A may call origin B's API, and it exercises the token/CORS paths.
 const REMOTE_TOKEN = 'ui-smoke-remote-token';
 const REMOTE_SESSION_ID = '2026-07-06T00-00-00-uiremote1';
-const remoteHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-remote-'));
+const remoteHome = path.join(tmpHome, 'peer');
 const REMOTE_SERVER_HOST = path.join(__dirname, 'fixtures', 'remote-server-host.js');
 const IDLE_CHILD = path.join(__dirname, 'fixtures', 'idle-child.js');
 function writeRemoteFixture(mainOrigin) {
@@ -467,16 +473,18 @@ function writeRemoteFixture(mainOrigin) {
 }
 async function startRemoteHost() {
     const serverPath = path.join(__dirname, '..', 'server.js');
-    const child = (0, node_child_process_1.spawn)(process.execPath, [REMOTE_SERVER_HOST, serverPath], {
+    const tmuxDir = path.join(remoteHome, 'tmux');
+    fs.mkdirSync(tmuxDir);
+    const child = (0, node_child_process_1.fork)(REMOTE_SERVER_HOST, [serverPath], {
         env: {
             ...process.env,
             HOME: remoteHome,
             PORT: '0',
             PI_DISH_TERMINAL: '',
             PI_DISH_INDEX_SYNC_BUDGET: '1000',
-            TMUX_TMPDIR: fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-ui-remote-tmux-')),
+            TMUX_TMPDIR: tmuxDir,
         },
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
     if (!child.stdout)
         throw new Error('Remote host stdout is unavailable');
@@ -535,9 +543,6 @@ let remoteHost = null;
     if (serverAddress === null || typeof serverAddress === 'string')
         throw new Error('Expected server TCP address');
     const base = `http://127.0.0.1:${serverAddress.port}`;
-    // Warm the harness pricing catalog now: the first /api/usage-summary blocks
-    // on `omp models --json`, which takes ~11s on a fresh HOME.
-    fetch(`${base}/api/usage-summary?days=30`).then((r) => r.arrayBuffer()).catch(() => { });
     const executablePath = process.env.CHROME_BIN || undefined;
     const browser = await playwright_1.chromium.launch({
         executablePath,
@@ -572,10 +577,6 @@ let remoteHost = null;
             await desktop.goto(base, { waitUntil: 'networkidle' });
             await desktop.click('#tabAll');
             await desktop.evaluate((id) => fixtureApp.features.sessionView.select(id), SESSION_ID);
-            // The usage catalog is an explicit prerequisite, not a timing side effect
-            // of running minutes of unrelated scenarios before opening the view.
-            if (selectedScenario === 'usage')
-                await fetch(base + '/api/usage-summary?days=30');
             // Mobile includes the routine detail layout; build that fixture with the
             // same routine scenario used by the complete end-to-end run.
             if (selectedScenario === 'mobile')
@@ -2881,8 +2882,7 @@ let remoteHost = null;
             // not launch remains closeable by exact process identity, but does not get
             // pane-replacement authority or a Restart button.
             console.log('restart and close session:');
-            const { spawn } = require('child_process');
-            const dummy = spawn(process.execPath, [IDLE_CHILD], { stdio: 'ignore' });
+            const dummy = (0, node_child_process_1.fork)(IDLE_CHILD, [], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
             let dummySignal = null;
             const dummyGone = new Promise(resolve => dummy.on('exit', (_code, sig) => { dummySignal = sig; resolve(); }));
             writeRegistry({ pid: dummy.pid, startTime: processIdentity(dummy.pid)?.startTime });
@@ -3491,8 +3491,6 @@ let remoteHost = null;
                 rpc.kill();
         }
         catch { }
-        fs.rmSync(tmpHome, { recursive: true, force: true });
-        fs.rmSync(remoteHome, { recursive: true, force: true });
     }
     console.log(failures ? `\n${failures} failure(s)` : '\nall good');
     process.exit(failures ? 1 : 0);

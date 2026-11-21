@@ -11,20 +11,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 // Resolve the browser cache before the fixture replaces HOME.
 const playwright_1 = require("playwright");
 const fs = require("node:fs");
-const os = require("node:os");
 const node_events_1 = require("node:events");
 const promises_1 = require("node:timers/promises");
 const net = require("node:net");
 const path = require("node:path");
 const helper_values_js_1 = require("../lib/helper-values.js");
+const test_env_js_1 = require("../test/test-env.js");
 const REPO = path.resolve(__dirname, '..');
 const OUT = process.argv[2] || path.join(REPO, 'docs', 'screenshots');
 fs.mkdirSync(OUT, { recursive: true });
 // The operator's deployment env would bind this server off-box and fight the
 // running share listener (see test/test-env.js).
-const testEnv = require('../test/test-env.js');
-testEnv.applyTestEnv();
-const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-shots-'));
+const tmpHome = (0, test_env_js_1.createTestTempDir)('pi-dish-shots-');
+(0, test_env_js_1.exitOnTestSignals)();
+process.env.TMPDIR = path.join(tmpHome, 'tmp');
+fs.mkdirSync(process.env.TMPDIR);
+(0, test_env_js_1.applyTestEnv)();
+process.env.PI_DISH_OMP_COMMAND = test_env_js_1.fakeOmpModelsCommand;
 process.env.HOME = tmpHome;
 process.env.PORT = '0';
 const sessionsRoot = path.join(tmpHome, '.pi', 'agent', 'sessions');
@@ -278,7 +281,6 @@ const sleep = (ms) => (0, promises_1.setTimeout)(ms);
         server.close();
         main.server.close();
         api.server.close();
-        fs.rmSync(tmpHome, { recursive: true, force: true });
     }
     process.exit(0);
 })().catch((error) => { console.error(error); process.exit(1); });

@@ -10,7 +10,6 @@ import assert = require('node:assert/strict');
 import fs = require('node:fs');
 import http = require('node:http');
 import net = require('node:net');
-import os = require('node:os');
 import path = require('node:path');
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -19,7 +18,7 @@ import pty = require('node-pty');
 import type { AddressInfo } from 'node:net';
 // Resolve only the generated .d.mts, not the edge-owned .mts implementation.
 import type * as ShareHook from '../extensions/pi-dish-share-omp.d.mjs' with { 'resolution-mode': 'import' };
-import { sanitizeTestEnv } from './test-env.js';
+import { createTestTempDir, exitOnTestSignals, shareOmpTestNatives, sanitizeTestEnv } from './test-env.js';
 
 // JSON and host-only values stay opaque until the existing assertion consumes them.
 function record(value: unknown): Record<string, unknown> {
@@ -37,7 +36,9 @@ if (process.argv.length !== 3 || !['mood', 'share', 'dialogs'].includes(selectio
   throw new Error('Usage: node test/native-extensions.smoke.js mood|share|dialogs');
 }
 const repo = path.resolve(__dirname, '..');
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-native-'));
+const root = createTestTempDir('pd-native-');
+exitOnTestSignals();
+process.env.TMPDIR = root;
 const home = path.join(root, 'home');
 const work = path.join(root, 'work');
 for (const directory of [home, work]) fs.mkdirSync(directory, { recursive: true });
@@ -205,6 +206,7 @@ async function shareSmoke(base: string) {
   const omp = process.env.PI_DISH_REAL_OMP_BIN;
   if (!omp || !path.isAbsolute(omp)) throw new Error('PI_DISH_REAL_OMP_BIN must name an absolute real OMP executable');
   fs.accessSync(omp, fs.constants.X_OK);
+  env.PI_NATIVES_DIR = shareOmpTestNatives(omp, home);
   const agent = path.join(home, '.omp', 'agent');
   fs.mkdirSync(agent, { recursive: true });
   execFileSync(omp, ['config', 'set', 'startup.setupWizard', 'false'], { env, cwd: work, stdio: 'pipe' });
@@ -266,6 +268,7 @@ async function dialogsSmoke() {
   const omp = process.env.PI_DISH_REAL_OMP_BIN;
   if (!omp || !path.isAbsolute(omp)) throw new Error('PI_DISH_REAL_OMP_BIN must name an absolute real OMP executable');
   fs.accessSync(omp, fs.constants.X_OK);
+  env.PI_NATIVES_DIR = shareOmpTestNatives(omp, home);
   const agent = path.join(home, '.omp', 'agent');
   fs.mkdirSync(agent, { recursive: true });
   execFileSync(omp, ['config', 'set', 'startup.setupWizard', 'false'], { env, cwd: work, stdio: 'pipe' });
@@ -387,7 +390,6 @@ async function dialogsSmoke() {
     }
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
-    fs.rmSync(root, { recursive: true, force: true });
   }
 })().catch((error: unknown) => {
   console.error(record(error).stack || error);

@@ -1,6 +1,7 @@
 // Generated test/tool from test/fixtures/remote-server-host.ts; edit that source and run npm run build:tests.
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+process.once('disconnect', () => process.exit(0));
 const server = require(process.argv[2]);
 function announce() {
     const address = server.address();

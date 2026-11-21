@@ -25,10 +25,10 @@ import crypto = require('node:crypto');
 import fs = require('node:fs');
 import http = require('node:http');
 import net = require('node:net');
-import os = require('node:os');
 import path = require('node:path');
 import { execFileSync } from 'node:child_process';
 import { nativeId, present, record, records, type TestRecord } from '../test/test-types.js';
+import { applyTestEnv, createTestTempDir, exitOnTestSignals, shareOmpTestNatives } from '../test/test-env.js';
 const idleChild = path.join(__dirname, '..', 'test', 'fixtures', 'idle-child.js');
 type Harness = 'omp' | 'prime';
 const text = (value: unknown): string => String(value ?? '');
@@ -58,8 +58,14 @@ if (selected.includes('omp')) {
   }
   fs.accessSync(path.join(bunBinDir, 'bun'), fs.constants.X_OK);
 }
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-lineage-real-'));
+const root = createTestTempDir('pd-lineage-real-');
+exitOnTestSignals();
+process.env.TMPDIR = root;
 const home = path.join(root, 'home');
+if (selected.includes('omp') && ompBin) {
+  process.env.PI_NATIVES_DIR = shareOmpTestNatives(ompBin, home);
+  process.env.XDG_DATA_HOME = path.join(home, '.local', 'share');
+}
 const tmuxDir = path.join(root, 'tmux');
 const tmuxSocket = path.join(tmuxDir, 's');
 const work = path.join(root, 'work');
@@ -72,8 +78,7 @@ fs.chmodSync(socketDir, 0o700);
 
 // Drop the operator's deployment env (HOST/PORT/share port) before pinning
 // this run's own — see test/test-env.js.
-const testEnv: typeof import('../test/test-env.js') = require('../test/test-env.js');
-testEnv.applyTestEnv();
+applyTestEnv();
 const originalPath = process.env.PATH || '';
 process.env.PATH = [selected.includes('omp') && bunBinDir, ...selected.map(name => path.dirname(String(binaries[name]))), originalPath]
   .filter((value): value is string => typeof value === 'string' && !!value).join(path.delimiter);
@@ -683,7 +688,6 @@ async function cleanup() {
   if (fakeOpenAi.listening) await new Promise<void>((resolve, reject) => fakeOpenAi.close(error => error ? reject(error) : resolve()));
   try { execFileSync('tmux', ['-S', tmuxSocket, 'kill-server'], { stdio: 'ignore' }); } catch {}
   await sleep(250);
-  fs.rmSync(root, { recursive: true, force: true });
 }
 
 (async () => {

@@ -6,6 +6,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const helper_values_js_1 = require("../../lib/helper-values.js");
+process.once('disconnect', () => process.exit(0));
 (async () => {
     if (process.env.PI_DISH_TEST_LIVE_SESSION) {
         const id = process.env.PI_DISH_TEST_LIVE_SESSION;

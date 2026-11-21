@@ -12,7 +12,6 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
-const os = require("node:os");
 const path = require("node:path");
 const node_url_1 = require("node:url");
 const node_child_process_1 = require("node:child_process");
@@ -34,7 +33,9 @@ if (process.argv.length !== 3 || !['mood', 'share', 'dialogs'].includes(selectio
     throw new Error('Usage: node test/native-extensions.smoke.js mood|share|dialogs');
 }
 const repo = path.resolve(__dirname, '..');
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-native-'));
+const root = (0, test_env_js_1.createTestTempDir)('pd-native-');
+(0, test_env_js_1.exitOnTestSignals)();
+process.env.TMPDIR = root;
 const home = path.join(root, 'home');
 const work = path.join(root, 'work');
 for (const directory of [home, work])
@@ -206,6 +207,7 @@ async function shareSmoke(base) {
     if (!omp || !path.isAbsolute(omp))
         throw new Error('PI_DISH_REAL_OMP_BIN must name an absolute real OMP executable');
     fs.accessSync(omp, fs.constants.X_OK);
+    env.PI_NATIVES_DIR = (0, test_env_js_1.shareOmpTestNatives)(omp, home);
     const agent = path.join(home, '.omp', 'agent');
     fs.mkdirSync(agent, { recursive: true });
     (0, node_child_process_1.execFileSync)(omp, ['config', 'set', 'startup.setupWizard', 'false'], { env, cwd: work, stdio: 'pipe' });
@@ -269,6 +271,7 @@ async function dialogsSmoke() {
     if (!omp || !path.isAbsolute(omp))
         throw new Error('PI_DISH_REAL_OMP_BIN must name an absolute real OMP executable');
     fs.accessSync(omp, fs.constants.X_OK);
+    env.PI_NATIVES_DIR = (0, test_env_js_1.shareOmpTestNatives)(omp, home);
     const agent = path.join(home, '.omp', 'agent');
     fs.mkdirSync(agent, { recursive: true });
     (0, node_child_process_1.execFileSync)(omp, ['config', 'set', 'startup.setupWizard', 'false'], { env, cwd: work, stdio: 'pipe' });
@@ -391,7 +394,6 @@ async function dialogsSmoke() {
         }
         server.closeAllConnections();
         await new Promise(resolve => server.close(() => resolve()));
-        fs.rmSync(root, { recursive: true, force: true });
     }
 })().catch((error) => {
     console.error(record(error).stack || error);

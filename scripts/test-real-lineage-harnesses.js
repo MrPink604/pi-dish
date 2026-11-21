@@ -26,10 +26,10 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const net = require("node:net");
-const os = require("node:os");
 const path = require("node:path");
 const node_child_process_1 = require("node:child_process");
 const test_types_js_1 = require("../test/test-types.js");
+const test_env_js_1 = require("../test/test-env.js");
 const idleChild = path.join(__dirname, '..', 'test', 'fixtures', 'idle-child.js');
 const text = (value) => String(value ?? '');
 const tmuxApi = () => {
@@ -60,8 +60,14 @@ if (selected.includes('omp')) {
     }
     fs.accessSync(path.join(bunBinDir, 'bun'), fs.constants.X_OK);
 }
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-lineage-real-'));
+const root = (0, test_env_js_1.createTestTempDir)('pd-lineage-real-');
+(0, test_env_js_1.exitOnTestSignals)();
+process.env.TMPDIR = root;
 const home = path.join(root, 'home');
+if (selected.includes('omp') && ompBin) {
+    process.env.PI_NATIVES_DIR = (0, test_env_js_1.shareOmpTestNatives)(ompBin, home);
+    process.env.XDG_DATA_HOME = path.join(home, '.local', 'share');
+}
 const tmuxDir = path.join(root, 'tmux');
 const tmuxSocket = path.join(tmuxDir, 's');
 const work = path.join(root, 'work');
@@ -73,8 +79,7 @@ fs.mkdirSync(socketDir, { recursive: true });
 fs.chmodSync(socketDir, 0o700);
 // Drop the operator's deployment env (HOST/PORT/share port) before pinning
 // this run's own — see test/test-env.js.
-const testEnv = require('../test/test-env.js');
-testEnv.applyTestEnv();
+(0, test_env_js_1.applyTestEnv)();
 const originalPath = process.env.PATH || '';
 process.env.PATH = [selected.includes('omp') && bunBinDir, ...selected.map(name => path.dirname(String(binaries[name]))), originalPath]
     .filter((value) => typeof value === 'string' && !!value).join(path.delimiter);
@@ -664,7 +669,6 @@ async function cleanup() {
     }
     catch { }
     await sleep(250);
-    fs.rmSync(root, { recursive: true, force: true });
 }
 (async () => {
     try {

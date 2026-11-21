@@ -23,12 +23,34 @@ if (!files.length) {
         .sort()
         .map((name) => path.join('test', name)));
 }
+// All test files and their children allocate inside this owned run directory,
+// including fixtures that don't otherwise import test-env.
+process.env.TMPDIR = (0, test_env_js_1.createTestTempDir)('pd-test-');
+const env = (0, test_env_js_1.sanitizeTestEnv)();
+env.PI_DISH_OMP_COMMAND ??= test_env_js_1.fakeOmpModelsCommand;
+const ownGroup = process.platform !== 'win32';
 const child = (0, child_process_1.spawn)(process.execPath, ['--test', ...flags, ...files], {
     cwd: repo,
-    env: (0, test_env_js_1.sanitizeTestEnv)(process.env),
+    env,
+    detached: ownGroup,
     stdio: 'inherit',
 });
-// Relay interrupts so Ctrl-C stops the run rather than orphaning it.
+// Node's test coordinator and its workers must stop together. Wait for the
+// coordinator's exit before removing their shared TMPDIR.
+let interrupted;
 for (const signal of ['SIGINT', 'SIGTERM'])
-    process.on(signal, () => child.kill(signal));
-child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 1));
+    process.on(signal, () => {
+        interrupted = signal === 'SIGINT' ? 130 : 143;
+        if (!ownGroup || !child.pid) {
+            child.kill(signal);
+            return;
+        }
+        try {
+            process.kill(-child.pid, signal);
+        }
+        catch (error) {
+            if (error.code !== 'ESRCH')
+                throw error;
+        }
+    });
+child.on('exit', (code, signal) => process.exit(interrupted ?? (signal ? 1 : code ?? 1)));

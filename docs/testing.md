@@ -45,6 +45,19 @@ npm run test:ui:scenarios
 npm run test:ui
 ```
 
+Use `npm test` rather than invoking `node --test` directly: the runner owns a
+single `TMPDIR` for all backend fixtures and removes it on exit, including
+SIGINT/SIGTERM. UI smoke, Playwright fixture hosts, and opt-in harness canaries
+own their scratch homes too. On Linux, startup reaps recognized scratch paths
+older than one hour only for the current user. Live owners (PID plus start
+time) and subprocesses still referencing a path protect it; unmarked paths
+from older checkouts are deferred while any older-style test run may need them.
+
+UI smoke uses a fake `omp models --json` catalog; it never starts the installed
+OMP. Opt-in real OMP tests share native addons per executable under
+`$XDG_CACHE_HOME/pi-dish/omp-test-natives` (default `~/.cache`), outside the
+isolated test homes. The cache can be removed when those tests are idle.
+
 On a fresh supported Linux image, `npx playwright install --with-deps chromium`
 also installs browser OS dependencies. `CHROME_BIN` overrides the managed browser
 for local debugging. The browser workflow retains focused-test traces and
