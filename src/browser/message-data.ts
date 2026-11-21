@@ -7,7 +7,13 @@ export interface MessageUsage { readonly input?: number; readonly output?: numbe
 export interface AdvisorNote { readonly note: string; readonly severity?: string; readonly advisor?: string }
 /** A change a bot made to its own or a descendant's entry; an undo restores `fields` from the revision before. */
 export interface BotChange { readonly botId: string; readonly botName: string; readonly revision: number; readonly fields: readonly string[]; readonly lines: readonly string[] }
-export interface MessageDetails { readonly notes?: readonly AdvisorNote[]; readonly jobs?: readonly { readonly label?: string; readonly jobId?: string; readonly type?: string; readonly status?: string; readonly agentId?: string; readonly durationMs?: number }[]; readonly from?: string; readonly message?: string; readonly botChange?: BotChange }
+/** Metadata attached to bot custom messages (worker report, room, answer, question, routine, purpose, restart). */
+export interface BotEventDetails {
+  readonly ref?: string; readonly name?: string; readonly state?: string; readonly report?: number;
+  readonly fromName?: string; readonly messageId?: number; readonly hop?: number; readonly question?: string;
+  readonly routineName?: string; readonly parentName?: string; readonly to?: string;
+}
+export interface MessageDetails { readonly notes?: readonly AdvisorNote[]; readonly jobs?: readonly { readonly label?: string; readonly jobId?: string; readonly type?: string; readonly status?: string; readonly agentId?: string; readonly durationMs?: number }[]; readonly from?: string; readonly message?: string; readonly botChange?: BotChange; readonly botEvent?: BotEventDetails }
 export interface RenderMessage {
   readonly role: string; readonly id?: string; readonly index?: number; readonly timestamp?: Timestamp; readonly content?: string | readonly (MessageBlock | string)[];
   readonly model?: string; readonly responseModel?: string; readonly provider?: string; readonly stopReason?: string; readonly errorMessage?: string;
@@ -49,10 +55,18 @@ export function decodeRenderMessage(value: unknown): RenderMessage {
     sessionRefs: Array.isArray(row.sessionRefs) ? row.sessionRefs.flatMap((entry: unknown): RefContextEntry[] => record(entry) && typeof entry.ref === 'string' ? [{ ref: entry.ref, name: string(entry.name), host: string(entry.host), cwd: string(entry.cwd), isActive: entry.isActive === true }] : []) : undefined,
     details: details ? { notes: Array.isArray(details.notes) ? details.notes.flatMap((note: unknown): AdvisorNote[] => typeof note === 'string' ? [{ note }] : record(note) && typeof note.note === 'string' ? [{ note: note.note, severity: string(note.severity), advisor: string(note.advisor) }] : []) : undefined,
       jobs: Array.isArray(details.jobs) ? details.jobs.flatMap((job: unknown) => record(job) ? [{ label: string(job.label), jobId: string(job.jobId), type: string(job.type), status: string(job.status), agentId: string(job.agentId), durationMs: number(job.durationMs) }] : []) : undefined,
-      from: string(details.from), message: string(details.message), botChange: decodeBotChange(details) } : undefined };
+      from: string(details.from), message: string(details.message), botChange: decodeBotChange(details), botEvent: decodeBotEvent(details) } : undefined };
 }
 const strings = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 function decodeBotChange(details: Record<string, unknown>): BotChange | undefined {
   if (typeof details.botId !== 'string' || !finite(details.revision)) return undefined;
   return { botId: details.botId, botName: string(details.botName) || '', revision: details.revision, fields: strings(details.fields), lines: strings(details.lines) };
+}
+function decodeBotEvent(details: Record<string, unknown>): BotEventDetails | undefined {
+  const event: BotEventDetails = {
+    ref: string(details.ref), name: string(details.name), state: string(details.state), report: number(details.report),
+    fromName: string(details.fromName), messageId: number(details.messageId), hop: number(details.hop),
+    question: string(details.question), routineName: string(details.routineName), parentName: string(details.parentName), to: string(details.to),
+  };
+  return Object.values(event).some(v => v !== undefined) ? event : undefined;
 }

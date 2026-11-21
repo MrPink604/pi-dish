@@ -1,5 +1,7 @@
 import { record, finite } from '../core/helper-values';
 import { escapeHtml, truncate } from '../core/helper-format';
+import { getToolSummary } from '../core/helper-content';
+import { botToolCallBodyHtml, type MatchRefFn, type ParsedCodemodeResult } from './bot-display';
 
 /** OMP bash result details: timing, exit status and the deadline of a backgrounded job. */
 export interface BashToolDetails {
@@ -65,11 +67,26 @@ export function decodeToolDetails(toolName: string | undefined, value: unknown):
     }] : []) };
   }
   if (toolName === 'codemode' && Array.isArray(value.calls)) {
-    return { kind: 'codemode', calls: value.calls.flatMap((call: unknown): EvalEvent[] => record(call) && string(call.name) ? [{
-      op: String(call.name), text: string(call.args) && truncate(String(call.args), 200),
-      facts: [...(call.status === 'ok' ? [] : [String(call.status)]), ...(finite(call.durationMs) ? [formatSpan(call.durationMs)] : [])],
-      error: string(call.error),
-    }] : []) };
+    return { kind: 'codemode', calls: value.calls.flatMap((call: unknown): EvalEvent[] => {
+      if (!record(call) || !string(call.name)) return [];
+      const name = String(call.name);
+      let summary: string | undefined;
+      if (typeof call.args === 'string' && call.args.trim()) {
+        try {
+          const parsed: unknown = JSON.parse(call.args);
+          summary = getToolSummary(name, parsed) || undefined;
+        } catch {}
+        summary ||= truncate(call.args, 160);
+      } else if (record(call.args)) {
+        summary = getToolSummary(name, call.args) || undefined;
+      }
+      const errRaw = string(call.error);
+      return [{
+        op: name, text: summary,
+        facts: [...(call.status === 'ok' ? [] : [String(call.status)]), ...(finite(call.durationMs) ? [formatSpan(call.durationMs)] : [])],
+        error: errRaw ? errRaw.split('\n')[0] : undefined,
+      }];
+    }) };
   }
   if (toolName === 'eval' && Array.isArray(value.cells)) {
     return { kind: 'eval', cells: value.cells.flatMap((cell: unknown, i: number): EvalCell[] => record(cell) ? [{
@@ -98,8 +115,12 @@ export function evalCodeHtml(code: string, language: string | undefined) {
   return `<pre class="tool-code"><code${grammar ? ` class="language-${grammar}"` : ''}>${escapeHtml(code)}</code></pre>`;
 }
 
-/** Bash/eval show their source as code plus execution options; others keep the argument dump. */
-export function toolCallBodyHtml(name: string | undefined, args: Readonly<Record<string, unknown>>) {
+/** Bash/eval show their source as code plus execution options; bot tools render structured metadata; others keep JSON. */
+export function toolCallBodyHtml(
+  name: string | undefined,
+  args: Readonly<Record<string, unknown>>,
+  opts?: { matchRef?: MatchRefFn; markdown?: (text: string) => string },
+) {
   if ((name === 'bash' || name === 'Bash') && typeof args.command === 'string') {
     const meta: string[] = [];
     if (typeof args.cwd === 'string' && args.cwd) meta.push(`cwd <code>${escapeHtml(args.cwd)}</code>`);
@@ -125,6 +146,8 @@ export function toolCallBodyHtml(name: string | undefined, args: Readonly<Record
   if (name === 'wait' && Object.keys(args).every(key => key === 'i')) {
     return typeof args.i === 'string' && args.i ? `<div class="tool-call-intent">${escapeHtml(args.i)}</div>` : '';
   }
+  const botBody = botToolCallBodyHtml(name, args, opts?.matchRef, opts?.markdown);
+  if (botBody !== null) return botBody;
   return `<pre><code>${escapeHtml(JSON.stringify(args, null, 2))}</code></pre>`;
 }
 
@@ -163,6 +186,20 @@ export function evalResultChipsHtml(details: EvalToolDetails, chip: (text: strin
   }
   const failed = details.cells.find(cell => cell.exitCode != null && cell.exitCode !== 0);
   if (failed) html += chip(`exit ${failed.exitCode}`, 'error-badge');
+  return html;
+}
+
+/** Header chips for a bot code mode result: tool-call count, wall time, failure status. */
+export function codemodeResultChipsHtml(
+  details: CodemodeToolDetails | undefined,
+  parsed: ParsedCodemodeResult | null,
+  chip: (text: string, cls?: string, title?: string) => string,
+) {
+  let html = '';
+  const count = details?.calls.length ?? 0;
+  if (count) html += chip(`${count} call${count === 1 ? '' : 's'}`, 'job', 'Tool calls made by the script');
+  if (parsed) html += chip(parsed.wallLabel, 'duration', 'Script wall time');
+  if (parsed && !parsed.ok) html += chip('failed', 'error-badge');
   return html;
 }
 

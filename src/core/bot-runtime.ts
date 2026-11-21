@@ -1765,7 +1765,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       const customType = CUSTOM_TYPES[entry.kind];
       const details = isRecord(entry.data) ? entry.data : undefined;
       mirror.appendCustom(entry.id, customType, messageText(message), details);
-      emit('message_end', { message: { role: 'custom', customType, content: [{ type: 'text', text: messageText(message) }], display: true, timestamp: Date.now() } });
+      emit('message_end', { message: { role: 'custom', customType, content: [{ type: 'text', text: messageText(message) }], ...(details ? { details } : {}), display: true, timestamp: Date.now() } });
     } else if (entry.kind === 'pi.assistant') {
       const selector = `${String(message.provider ?? '')}/${String(message.model ?? '')}`;
       if (message.provider && message.model && selector !== lastModel) {

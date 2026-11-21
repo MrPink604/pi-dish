@@ -5,8 +5,12 @@ import type { createResponseDetails } from './response-details';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { assistantRoleHtml, formatTime, formatThinkingPreview, isGeminiAssistant } from './helper-format';
 import { sessionSupports } from './helper-identity';
-import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, evalTitle, evalBodyHtml, evalActivityHtml, jobDeliveryOutputs, formatSpan } from './tool-format';
+import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, codemodeResultChipsHtml, evalTitle, evalBodyHtml, evalActivityHtml, jobDeliveryOutputs, formatSpan } from './tool-format';
 import type { WaitJob } from './tool-format';
+import {
+  parseUserSourceEntries, renderUserSourceHeaderHtml, parseInjectedBotMessage, renderBotNoticeHtml,
+  formatBotChangeLineHtml, parseCodemodeResult, formatCodemodeOutput, formatJsonToolOutput,
+} from './bot-display';
 import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
 import { splitSessionRefContext } from '../core/helper-refs';
 export function createMessageRenderer(options: {
@@ -206,12 +210,24 @@ function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
   const rawText = extractTextContent(msg.content);
   const irc = parseIrcInterrupt(rawText);
   if (irc) return renderIrcMessage(msg, time, attrs, msg.timestamp || Date.now(), irc);
+  const botNotice = parseInjectedBotMessage(undefined, rawText);
+  if (botNotice) {
+    return renderBotNoticeHtml(botNotice, {
+      attrs, timestamp: String(msg.timestamp || Date.now()), time, actionsHtml: messageActionsHtml(msg, null),
+      markdown: options.markdown, matchRef: options.matchRef,
+    });
+  }
   const { text, refs } = splitSessionRefContext(rawText);
   const imagesHtml = imageBlocksHtml(msg.content, 'attached image');
   const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
+  const sourceEntries = parseUserSourceEntries(text);
+  const bodyHtml = sourceEntries
+    ? sourceEntries.map(entry =>
+      `<div class="user-source-entry">${renderUserSourceHeaderHtml(entry, options.matchRef)}${entry.body ? `<div class="markdown-body">${displayModelMentions(options.markdown(entry.body))}</div>` : ''}</div>`).join('')
+    : (text ? `<div class="markdown-body">${displayModelMentions(options.markdown(text))}</div>` : '');
   return `<div${attrs} class="message user">
     <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}${messageActionsHtml(msg, 'user')}</div>
-    <div class="message-content user-content">${text ? `<div class="markdown-body">${displayModelMentions(options.markdown(text))}</div>` : ''}${imagesHtml}${chipsHtml}</div>
+    <div class="message-content user-content">${bodyHtml}${imagesHtml}${chipsHtml}</div>
   </div>`;
 }
 
@@ -272,11 +288,13 @@ function renderThinkingBlock(thinking: string) {
 function renderToolCall(block: MessageBlock) {
   const args = block.arguments || {};
   const summary = getToolSummary(block.name || '', args);
-  const bodyHtml = toolCallBodyHtml(block.name, args);
+  const bodyHtml = toolCallBodyHtml(block.name, args, { matchRef: options.matchRef, markdown: options.markdown });
+  const codeLines = block.name === 'codemode' && typeof args.code === 'string' ? args.code.split('\n').length : 0;
 
   return `<details class="tool-call">
     <summary class="tool-call-header">
       <span class="tool-call-icon">⚡</span><span class="tool-call-name">${escapeHtml(block.name)}</span>
+      ${codeLines > 1 ? `<span class="tool-call-meta">${codeLines} lines</span>` : ''}
       ${summary ? `<span class="tool-call-summary">${escapeHtml(summary)}</span>` : ''}
     </summary>
     ${bodyHtml ? `<div class="tool-call-content">${bodyHtml}</div>` : ''}
@@ -298,18 +316,30 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   const chip = (text: string, cls = '', title = '') =>
     `<span class="tool-result-meta${cls ? ' ' + cls : ''}"${title ? ` title="${escapeHtml(title)}"` : ''}>${escapeHtml(text)}</span>`;
   const details = msg.toolDetails;
+  const isCodemode = msg.toolName === 'codemode' || details?.kind === 'codemode';
+  const parsedCodemode = isCodemode ? parseCodemodeResult(content) : null;
+  const codemodeFailed = isError || (parsedCodemode !== null && !parsedCodemode.ok);
   const resultChips = details?.kind === 'bash' ? bashResultChipsHtml(details, chip)
-    : details?.kind === 'eval' ? evalResultChipsHtml(details, chip) : '';
+    : details?.kind === 'eval' ? evalResultChipsHtml(details, chip)
+    : isCodemode ? codemodeResultChipsHtml(details?.kind === 'codemode' ? details : undefined, parsedCodemode, chip) : '';
   const statusShown = !!exitBadge || (details?.kind === 'bash' && ((details.exitCode ?? 0) !== 0 || details.timedOut)) ||
-    (details?.kind === 'eval' && details.cells.some(cell => (cell.exitCode ?? 0) !== 0));
+    (details?.kind === 'eval' && details.cells.some(cell => (cell.exitCode ?? 0) !== 0)) ||
+    (parsedCodemode !== null && !parsedCodemode.ok);
   const waitJobs = details?.kind === 'wait' && details.jobs.length ? details.jobs : null;
   // An eval call often renders inside a prose message, away from its result;
   // the result carries its title and cell code so it reads on its own.
   const evalDetails = details?.kind === 'eval' && details.cells.length ? details : null;
   const title = evalDetails ? evalTitle(evalDetails) : '';
-  const lines = content.split('\n');
-  const lineCount = lines.length;
-  const preview = waitJobs ? waitStatusSummary(waitJobs) : truncate(lines[0], 80);
+
+  const formattedCodemode = isCodemode ? formatCodemodeOutput(parsedCodemode ? parsedCodemode.output : content, options.markdown) : null;
+  const formattedJson = !isCodemode && !waitJobs && !evalDetails ? formatJsonToolOutput(content) : null;
+  const formatted = formattedCodemode || formattedJson;
+  const rawLines = content.split('\n');
+  const lineCount = formatted ? formatted.lines : rawLines.length;
+  const charCount = formatted ? formatted.chars : content.length;
+  const codemodeCallCount = details?.kind === 'codemode' ? details.calls.length : 0;
+  const isLong = lineCount > 5 || charCount > 400 || codemodeCallCount > 3;
+  const preview = waitJobs ? waitStatusSummary(waitJobs) : (formatted ? formatted.preview : truncate(rawLines[0], 80));
   const showLines = lineCount > 5 && !waitJobs;
   // A tool result carrying an image opens by default regardless of line count
   // and flags it in the header meta.
@@ -318,23 +348,23 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   const imagesHtml = imageBlocksHtml(msg.content, 'tool result image');
   // A wait snapshot reads as job rows (status, run time, output) instead of
   // the model-facing markdown dump of the same data.
-  const outputHtml = `<pre>${escapeHtml(truncate(content, 2000))}</pre>`;
+  const outputHtml = formatted ? formatted.html : `<pre>${escapeHtml(truncate(content, 2000))}</pre>`;
   const bodyHtml = waitJobs ? waitJobsHtml(waitJobs)
     : evalDetails ? evalBodyHtml(evalDetails, outputHtml, true)
     : details?.kind === 'codemode' ? evalActivityHtml(details.calls) + outputHtml
     : outputHtml;
 
-  return `<div${attrs} class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}"${details?.kind === 'bash' ? bashJobAttrs(details) : ''}>
-    <details class="tool-result-details" ${((lineCount <= 5 && !waitJobs) || imageCount) ? 'open' : ''}>
+  return `<div${attrs} class="message tool-result ${codemodeFailed ? 'error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}"${details?.kind === 'bash' ? bashJobAttrs(details) : ''}>
+    <details class="tool-result-details" ${((!isLong && !waitJobs) || imageCount) ? 'open' : ''}>
       <summary class="tool-result-header">
-        <span class="tool-result-icon">${isError ? '✗' : '✓'}</span>
+        <span class="tool-result-icon">${codemodeFailed ? '✗' : '✓'}</span>
         <span class="tool-result-name">${escapeHtml(msg.toolName || 'result')}</span>
         ${title ? `<span class="tool-result-title">${escapeHtml(title)}</span>` : ''}
         ${showLines ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
         ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? 'image' : imageCount + ' images'}</span>` : ''}
         ${exitBadge}${resultChips}
-        ${isError && !statusShown ? '<span class="tool-result-meta error-badge">error</span>' : ''}
-        ${(showLines && !title) || waitJobs ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
+        ${codemodeFailed && !statusShown ? '<span class="tool-result-meta error-badge">error</span>' : ''}
+        ${(isLong && !title) || waitJobs ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
       </summary>
       <div class="tool-result-content">${bodyHtml}${imagesHtml}</div>
     </details>
@@ -485,11 +515,18 @@ function renderCustomMessage(msg: RenderMessage, time: string, attrs = '') {
     return `<div${attrs} class="message custom-message bot-change" data-timestamp="${escapeHtml(String(timestamp))}">
       <div class="bot-change-header"><span class="custom-message-icon">✎</span><span class="custom-message-label">Changed ${escapeHtml(change.botName)}</span>
         <button class="bot-change-undo" data-bot-id="${escapeHtml(change.botId)}" data-revision="${change.revision}" data-fields="${escapeHtml(change.fields.join(','))}" title="Restore ${escapeHtml(change.fields.join(', '))} from before this change">Undo</button>${time ? `<span class="message-time">${time}</span>` : ''}</div>
-      <ul class="bot-change-lines">${change.lines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+      <ul class="bot-change-lines">${change.lines.map(line => `<li>${formatBotChangeLineHtml(line)}</li>`).join('')}</ul>
     </div>`;
   }
 
   const text = extractTextContent(msg.content);
+  const botNotice = parseInjectedBotMessage(customType, text, msg.details);
+  if (botNotice) {
+    return renderBotNoticeHtml(botNotice, {
+      attrs, timestamp: String(timestamp), time, actionsHtml: messageActionsHtml(msg, null),
+      markdown: options.markdown, matchRef: options.matchRef,
+    });
+  }
   const label = customType.replace(/[-_]+/g, ' ');
   return `<div${attrs} class="message custom-message generic" data-timestamp="${escapeHtml(String(timestamp))}">
     <span class="custom-message-icon">◇</span><span class="custom-message-label">${escapeHtml(label)}</span>${text ? `<span class="custom-message-meta">${escapeHtml(truncate(text.replace(/\s+/g, ' '), 240))}</span>` : ''}${time ? `<span class="message-time">${time}</span>` : ''}

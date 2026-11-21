@@ -2,8 +2,9 @@ import type { SessionState, SelectionOwner } from './session-state';
 import { record, finite } from '../core/helper-values';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { parseIpythonResult, getToolSummary, getToolOutputText } from '../core/helper-content';
-import { decodeToolDetails, toolSourceText, bashResultChipsHtml, bashJobAttrs, jobTimeoutMs, waitJobsHtml, formatSpan, evalBodyHtml, evalActivityHtml, evalDurationMs, evalResultChipsHtml, WAIT_SAFETY_CAP_MS } from './tool-format';
+import { decodeToolDetails, toolSourceText, bashResultChipsHtml, bashJobAttrs, jobTimeoutMs, waitJobsHtml, formatSpan, evalBodyHtml, evalActivityHtml, evalDurationMs, evalResultChipsHtml, codemodeResultChipsHtml, WAIT_SAFETY_CAP_MS } from './tool-format';
 import type { ToolDetails, WaitJob } from './tool-format';
+import { parseCodemodeResult, formatJsonToolOutput } from './bot-display';
 interface ToolResultData { content?: unknown; details?: unknown }
 interface ToolEvent { toolCallId: string; toolName?: string; args?: unknown; intent?: string; startedAt?: string | number; partialResult?: ToolResultData; result?: ToolResultData; isError: boolean }
 function decode(value: unknown): ToolEvent | null {
@@ -122,33 +123,42 @@ function syncWait(entry: ToolPanel) {
 }
 
 function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown, output: string, isError: boolean, isComplete: boolean, durationMs: number | null = null, imagesHtml = '', intent?: string, details?: ToolDetails) {
-  const stateClass = isComplete ? (isError ? 'error' : 'complete') : 'running';
+  const isCodemode = toolName === 'codemode' || details?.kind === 'codemode';
+  const parsedCodemode = isCodemode && isComplete && output ? parseCodemodeResult(output) : null;
+  const effectiveError = isError || (parsedCodemode !== null && !parsedCodemode.ok);
+  const stateClass = isComplete ? (effectiveError ? 'error' : 'complete') : 'running';
   const summary = kernelSummary(toolName, args, intent);
   const source = toolSourceText(toolName, args, intent);
   const waitJobs = details?.kind === 'wait' && details.jobs.length ? details.jobs : null;
+  const shownOutput = parsedCodemode ? parsedCodemode.output.trim() : output;
+  const formattedJson = isComplete && shownOutput ? formatJsonToolOutput(shownOutput) : null;
   const openAttr = (output || imagesHtml || source || waitJobs) ? ' open' : '';
 
   let statusHtml = '';
   if (isComplete) {
     const chip = (text: string, cls = '', title = '') =>
       '<span class="live-tool-status' + (cls ? ' ' + cls : '') + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + escapeHtml(text) + '</span>';
-    statusHtml = isError ? chip('✗ error', 'error-label') : chip('✓', 'success-label');
-    // OMP's measured time (bash wall time, eval cell time) beats the client
+    statusHtml = effectiveError ? chip('✗ error', 'error-label') : chip('✓', 'success-label');
+    // OMP's measured time (bash wall time, eval cell time, codemode wall time) beats the client
     // clock, which also counts event delivery; without either, no duration is invented.
     const measured = (details?.kind === 'bash' && (details.wallTimeMs != null || details.jobId != null)) ||
-      (details?.kind === 'eval' && evalDurationMs(details) != null);
+      (details?.kind === 'eval' && evalDurationMs(details) != null) ||
+      parsedCodemode !== null;
     if (!measured && durationMs != null) statusHtml += chip(formatSpan(durationMs), 'duration');
     if (details?.kind === 'bash') statusHtml += bashResultChipsHtml(details, chip);
     else if (details?.kind === 'eval') statusHtml += evalResultChipsHtml(details, chip);
+    else if (isCodemode) statusHtml += codemodeResultChipsHtml(details?.kind === 'codemode' ? details : undefined, parsedCodemode, chip);
   } else {
     statusHtml = '<span class="live-tool-status running-label">running</span>';
   }
 
   const cursorHtml = isComplete ? '' : '<span class="live-tool-cursor"></span>';
   // A settled wait reads as job rows; its text content is the model-facing dump of them.
-  const textHtml = output
-    ? '<div class="live-tool-output">' + liveToolOutputHtml(output) + cursorHtml + '</div>'
-    : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
+  const textHtml = formattedJson
+    ? '<div class="live-tool-output">' + formattedJson.html + '</div>'
+    : shownOutput
+      ? '<div class="live-tool-output">' + liveToolOutputHtml(shownOutput) + cursorHtml + '</div>'
+      : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
   const outputHtml = waitJobs ? '<div class="live-wait-jobs">' + waitJobsHtml(waitJobs) + '</div>'
     : details?.kind === 'eval' && details.cells.length ? '<div class="live-eval">' + evalBodyHtml(details, '', false) + '</div>' + (details.cells.length > 1 ? '' : textHtml)
     : details?.kind === 'codemode' ? evalActivityHtml(details.calls) + textHtml

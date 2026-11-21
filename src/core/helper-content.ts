@@ -1,6 +1,27 @@
 import type { ImageBlock } from './helper-types';
 import { record } from './helper-values';
 import { truncate } from './helper-format';
+import { decodeRouteSessionId, SESSION_UUID_TAIL_RE } from './helper-refs';
+
+function compactToolRef(raw: unknown) {
+  if (typeof raw !== 'string') return '';
+  const ref = raw.trim();
+  if (!ref) return '';
+  const slash = ref.indexOf('/');
+  const host = slash > 0 ? ref.slice(0, slash + 1) : '';
+  const id = slash > 0 ? ref.slice(slash + 1) : ref;
+  const decoded = decodeRouteSessionId(id);
+  const native = decoded ? decoded.nativeSessionId : id;
+  const uuid = SESSION_UUID_TAIL_RE.exec(native);
+  if (uuid) return `${host}${uuid[1].slice(0, 8)}`;
+  if (native.length > 16) return `${host}${native.slice(0, 12)}…`;
+  return `${host}${native}`;
+}
+
+function firstArgLine(raw: unknown) {
+  if (typeof raw !== 'string') return '';
+  return raw.split('\n').map(line => line.trim()).find(Boolean) || '';
+}
 
 export function extractTextContent(content: unknown) {
   if (!content) return '';
@@ -70,7 +91,89 @@ export function getToolSummary(toolName: string, args: unknown) {
       : (typeof args.DurationSeconds === 'number' ? `${args.DurationSeconds}s` : '');
     const prompt = typeof args.Prompt === 'string' ? args.Prompt.split('\n')[0].trim() : '';
     if (when || prompt) return truncate([when, prompt].filter(Boolean).join(': '), 60);
+    // Bot schedule tool uses lowercase action/name/cron.
+    const action = typeof args.action === 'string' ? args.action : '';
+    const name = typeof args.name === 'string' ? args.name : '';
+    const cron = typeof args.cron === 'string' ? args.cron : '';
+    if (action || name) {
+      const head = [action, name].filter(Boolean).join(' ');
+      return truncate(cron ? `${head} (${cron})` : head, 60);
+    }
   }
+  if (toolName === 'spawn_worker') {
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+    const host = typeof args.host === 'string' && args.host.trim() ? args.host.trim() : '';
+    const harness = typeof args.harness === 'string' && args.harness.trim() && args.harness !== 'pi' ? args.harness.trim() : '';
+    const where = [harness, host].filter(Boolean).join(' · ');
+    if (name) return truncate(where ? `${name} (${where})` : name, 60);
+    if (where) return truncate(where, 60);
+  }
+  if (toolName === 'sessions') {
+    const action = typeof args.action === 'string' ? args.action : '';
+    const ref = compactToolRef(args.ref);
+    const host = typeof args.host === 'string' && args.host.trim() ? args.host.trim() : '';
+    if (action === 'send') {
+      const body = firstArgLine(args.message);
+      return truncate([`send ${ref || ''}`.trim(), body].filter(Boolean).join(': '), 60);
+    }
+    if (action === 'search') {
+      const q = typeof args.query === 'string' ? args.query.trim() : '';
+      return truncate(`search ${q ? `"${q}"` : ''}${host ? ` (${host})` : ''}`.trim(), 60);
+    }
+    if (action === 'read' || action === 'close' || action === 'wait') {
+      return truncate([action, ref].filter(Boolean).join(' '), 60);
+    }
+    if (action) return truncate(host ? `${action} (${host})` : action, 60);
+  }
+  if (toolName === 'kb_search' && typeof args.query === 'string') return truncate(`"${args.query.trim()}"`, 60);
+  if (toolName === 'kb_read') return truncate(typeof args.page === 'string' && args.page.trim() ? args.page.trim() : 'index', 60);
+  if (toolName === 'kb_write') {
+    const mode = typeof args.mode === 'string' && args.mode ? args.mode : 'append';
+    const page = typeof args.page === 'string' ? args.page.trim() : '';
+    if (page) return truncate(`${mode} ${page}`, 60);
+  }
+  if (toolName === 'context_notes') {
+    const action = typeof args.action === 'string' ? args.action : '';
+    if (action === 'write' && typeof args.text === 'string') {
+      return truncate(`write (${args.text.length.toLocaleString()} chars)`, 60);
+    }
+    if (action) return truncate(action, 40);
+  }
+  if (toolName === 'bot_update') {
+    const target = typeof args.bot === 'string' && args.bot.trim() ? `${args.bot.trim()}: ` : '';
+    const fields = Object.keys(args).filter(k => k !== 'bot' && args[k] !== undefined);
+    if (fields.length) return truncate(`${target}${fields.join(', ')}`, 60);
+    if (target) return truncate(target.slice(0, -2), 60);
+  }
+  if (toolName === 'bot_create') {
+    const name = typeof args.name === 'string' ? args.name.trim() : '';
+    const extras = [args.fresh === true ? 'fresh' : '', typeof args.model === 'string' ? args.model : ''].filter(Boolean).join(' · ');
+    if (name) return truncate(extras ? `${name} (${extras})` : name, 60);
+  }
+  if (toolName === 'bots') {
+    const action = typeof args.action === 'string' ? args.action : '';
+    const bot = typeof args.bot === 'string' ? args.bot.trim() : '';
+    if (action || bot) return truncate([action, bot].filter(Boolean).join(' '), 60);
+  }
+  if (toolName === 'room_post') {
+    const to = Array.isArray(args.to) ? args.to.filter((item): item is string => typeof item === 'string' && !!item).join(', ') : '';
+    const msg = firstArgLine(args.message);
+    if (to || msg) return truncate(to && msg ? `→ ${to}: ${msg}` : (to ? `→ ${to}` : msg), 60);
+  }
+  if (toolName === 'room_read') {
+    return typeof args.limit === 'number' ? `last ${args.limit}` : 'recent';
+  }
+  if (toolName === 'ask_bot') {
+    const bot = typeof args.bot === 'string' ? args.bot.trim() : '';
+    const q = firstArgLine(args.question);
+    if (bot || q) return truncate(bot && q ? `→ ${bot}: ${q}` : (bot ? `→ ${bot}` : q), 60);
+  }
+  if (toolName === 'history') {
+    const action = typeof args.action === 'string' ? args.action : '';
+    const extra = typeof args.window === 'number' ? `#${args.window}` : (typeof args.query === 'string' && args.query ? `"${args.query}"` : '');
+    if (action || extra) return truncate([action, extra].filter(Boolean).join(' '), 60);
+  }
+  if (toolName === 'new_context' && typeof args.summary === 'string') return truncate(args.summary.trim(), 60);
   if (toolName === 'run_workflow') {
     const desc = typeof args.Description === 'string' && args.Description.trim()
       ? args.Description.trim()
@@ -109,7 +212,11 @@ export function getToolSummary(toolName: string, args: unknown) {
   }
   if (toolName === 'search_web' && typeof args.query === 'string') return truncate(args.query, 60);
   const keys = Object.keys(args);
-  if (keys.length) return truncate(String(args[keys[0]]), 40);
+  if (keys.length) {
+    const first = args[keys[0]];
+    if (typeof first === 'string' || typeof first === 'number' || typeof first === 'boolean') return truncate(String(first), 40);
+    return truncate(keys.join(', '), 40);
+  }
   return '';
 }
 

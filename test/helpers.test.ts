@@ -239,6 +239,33 @@ test('getToolSummary shows a bot code mode script by its first line of code', ()
   assert.equal(H.getToolSummary('codemode', { code: '// only a comment' }), '');
 });
 
+test('getToolSummary formats bot tools cleanly without leaking [object Object]', () => {
+  assert.equal(H.getToolSummary('spawn_worker', { name: 'merge-to-main', host: 'desktop', harness: 'agy', brief: 'long brief' }), 'merge-to-main (agy · desktop)');
+  assert.equal(H.getToolSummary('spawn_worker', { name: 'audit', harness: 'pi' }), 'audit');
+  assert.equal(H.getToolSummary('sessions', { action: 'read', ref: 'desktop/2026-11-21T02-49-15-846Z_01a1fc02-0f45-76a5-a102-3240a8883b41', limit: 5 }), 'read desktop/01a1fc02');
+  assert.equal(H.getToolSummary('sessions', { action: 'close', ref: '2026-11-21T02-49-16-118Z_01a1fc02-1055-722e-84fc-ff1a34d00ade' }), 'close 01a1fc02');
+  assert.equal(H.getToolSummary('sessions', { action: 'send', ref: '01a1fc02', message: 'Check CI\nsecond line' }), 'send 01a1fc02: Check CI');
+  assert.equal(H.getToolSummary('sessions', { action: 'search', query: 'deploy', host: 'desktop' }), 'search "deploy" (desktop)');
+  assert.equal(H.getToolSummary('sessions', { action: 'list', host: 'framework' }), 'list (framework)');
+  assert.equal(H.getToolSummary('kb_search', { query: 'pi-dish deploy' }), '"pi-dish deploy"');
+  assert.equal(H.getToolSummary('kb_read', {}), 'index');
+  assert.equal(H.getToolSummary('kb_read', { page: 'pi-dish-deploy' }), 'pi-dish-deploy');
+  assert.equal(H.getToolSummary('kb_write', { page: 'pi-dish-deploy', mode: 'replace', text: '# heading' }), 'replace pi-dish-deploy');
+  assert.equal(H.getToolSummary('context_notes', { action: 'read' }), 'read');
+  assert.equal(H.getToolSummary('context_notes', { action: 'write', text: 'hello world' }), 'write (11 chars)');
+  assert.equal(H.getToolSummary('bot_update', { places: [{ cwd: '/tmp', label: 'tmp' }] }), 'places');
+  assert.equal(H.getToolSummary('bot_update', { bot: 'Fleet', model: 'm', thinking: 'high' }), 'Fleet: model, thinking');
+  assert.equal(H.getToolSummary('bot_create', { name: 'Docs', fresh: true }), 'Docs (fresh)');
+  assert.equal(H.getToolSummary('bots', { action: 'show', bot: 'Fleet' }), 'show Fleet');
+  assert.equal(H.getToolSummary('room_post', { to: ['Fleet', 'OSBG'], message: 'Updates resumed\nmore' }), '→ Fleet, OSBG: Updates resumed');
+  assert.equal(H.getToolSummary('room_read', { limit: 10 }), 'last 10');
+  assert.equal(H.getToolSummary('ask_bot', { bot: 'Fleet', question: 'Is framework up?' }), '→ Fleet: Is framework up?');
+  assert.equal(H.getToolSummary('schedule', { action: 'create', name: 'nightly', cron: '0 3 * * *' }), 'create nightly (0 3 * * *)');
+  assert.equal(H.getToolSummary('history', { action: 'read', window: 2 }), 'read #2');
+  assert.equal(H.getToolSummary('new_context', { summary: 'Cleaned up checkouts' }), 'Cleaned up checkouts');
+  assert.equal(H.getToolSummary('unknown_tool', { nested: { a: 1 }, other: 2 }), 'nested, other');
+});
+
 test('parseIpythonResult unwraps BashResult reprs only when complete', () => {
   assert.deepEqual(
     H.parseIpythonResult("BashResult(exit_code=0, output='hello\\n', duration=0.017216796055436134)"),

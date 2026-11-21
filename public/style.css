@@ -2328,18 +2328,250 @@ button.swarm-board-link:focus-visible {
   white-space: nowrap;
   opacity: 0.7;
 }
-.message.custom-message .message-time { margin-left: auto; }
+.message.custom-message .message-time { margin-left: auto; white-space: nowrap; flex-shrink: 0; }
 .message.custom-message.generic { opacity: 0.75; }
 
 /* A change a bot made to a bot's entry, with its undo. */
 .message.custom-message.bot-change { flex-direction: column; align-items: stretch; }
-.bot-change-header { display: flex; align-items: center; gap: 8px; }
-.bot-change-lines { margin: 4px 0 0 22px; padding: 0; font-size: 12px; opacity: 0.85; }
+.bot-change-header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bot-change-lines { margin: 4px 0 0 22px; padding: 0; font-size: 12px; opacity: 0.85; min-width: 0; }
+.bot-change-lines li { overflow-wrap: anywhere; word-break: break-word; }
 .bot-change-undo {
   background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--text);
   font-size: 11px; padding: 1px 8px; cursor: pointer;
 }
 .bot-change-undo:disabled { opacity: 0.5; cursor: default; }
+
+/* Quiet bot lifecycle notices (forked, restarted). */
+.message.custom-message.bot-notice {
+  opacity: 0.78;
+}
+
+/* Injected bot cards (worker report, family room, answer, question, routine,
+   nudge, context window, purpose): hairline left accent like irc/advisor cards,
+   collapsible when long, with clickable session-ref chips and markdown bodies. */
+.message.custom-message.bot-card {
+  --bot-accent: var(--accent);
+  display: block;
+  padding: 0;
+  color: var(--text);
+  margin: 6px 0;
+}
+.message.custom-message.bot-card.bot-worker-report { --bot-accent: var(--accent); }
+.message.custom-message.bot-card.bot-room { --bot-accent: var(--accent); }
+.message.custom-message.bot-card.bot-answer { --bot-accent: var(--success); }
+.message.custom-message.bot-card.bot-question { --bot-accent: var(--accent); }
+.message.custom-message.bot-card.bot-routine { --bot-accent: var(--warning); }
+.message.custom-message.bot-card.bot-nudge { --bot-accent: var(--warning); }
+.message.custom-message.bot-card.bot-context-window,
+.message.custom-message.bot-card.bot-purpose { --bot-accent: var(--text-muted); }
+
+.bot-card-details,
+.bot-card-static {
+  border-left: 2px solid color-mix(in srgb, var(--bot-accent) 48%, transparent);
+  background: color-mix(in srgb, var(--bot-accent) 4%, transparent);
+  border-radius: 0 6px 6px 0;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.bot-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 10px 6px 11px;
+  font-size: 12px;
+  color: var(--text-muted);
+  list-style: none;
+}
+
+.bot-card-details > .bot-card-header {
+  cursor: pointer;
+}
+.bot-card-header::-webkit-details-marker { display: none; }
+.bot-card-details > .bot-card-header::before {
+  content: '▶';
+  font-size: 9px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+.bot-card-details[open] > .bot-card-header::before {
+  transform: rotate(90deg);
+}
+
+.bot-card-icon {
+  color: var(--bot-accent);
+  flex-shrink: 0;
+}
+
+.bot-card-label {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bot-card-sender {
+  color: var(--text-bright, var(--text));
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 240px;
+}
+
+.bot-card-arrow { opacity: 0.6; }
+
+.bot-card-ref {
+  padding: 0 7px;
+  font-size: 10.5px;
+  line-height: 17px;
+  flex-shrink: 0;
+  max-width: 170px;
+}
+
+.bot-card-status {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--text-muted) 30%, transparent);
+  background: color-mix(in srgb, var(--text-muted) 10%, transparent);
+  color: var(--text-muted);
+}
+.bot-card-status.tone-ok {
+  border-color: color-mix(in srgb, var(--success) 32%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success);
+}
+.bot-card-status.tone-warn {
+  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+}
+
+.bot-card-meta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  opacity: 0.72;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bot-card-preview {
+  flex: 1 1 80px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.72;
+  font-size: 11.5px;
+}
+.bot-card-details[open] > .bot-card-header .bot-card-preview {
+  display: none;
+}
+
+.bot-card-body {
+  padding: 6px 12px 9px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--bot-accent) 16%, transparent);
+  font-size: 13.5px;
+  line-height: 1.55;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bot-card-body .markdown-body {
+  min-width: 0;
+}
+
+.bot-card-question {
+  margin-bottom: 6px;
+  padding: 4px 8px;
+  border-left: 2px solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.bot-card-question-label {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+.bot-card-footer {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+/* User message source header chip (forwarded/held messages from another session). */
+.user-source-entry + .user-source-entry {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.user-source-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.user-source-from {
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+
+.user-source-chip {
+  font-family: var(--font-sans, inherit);
+  font-size: 11px;
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.session-ref-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.user-source-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  opacity: 0.7;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+@media (max-width: 520px) {
+  .bot-card-header {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    padding: 6px 8px 6px 9px;
+  }
+  .bot-card-sender {
+    max-width: 165px;
+  }
+  .bot-card-preview {
+    flex-basis: 100%;
+    order: 10;
+  }
+  .bot-card-body {
+    padding: 6px 9px 8px 9px;
+    font-size: 13px;
+  }
+}
 
 /* Background job delivery: a collapsible card whose rows reuse the wait
    job layout (status, run time, command, output). */
@@ -2552,6 +2784,7 @@ button.swarm-board-link:focus-visible {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   cursor: pointer;
   list-style: none;
   color: var(--text-muted);
@@ -2565,6 +2798,7 @@ button.swarm-board-link:focus-visible {
   content: '▶';
   font-size: 9px;
   color: var(--text-muted);
+  flex-shrink: 0;
   transition: transform 0.15s;
 }
 
@@ -2574,6 +2808,7 @@ button.swarm-board-link:focus-visible {
 
 .tool-call-icon {
   font-size: 11px;
+  flex-shrink: 0;
 }
 
 .tool-call-name {
@@ -2581,6 +2816,16 @@ button.swarm-board-link:focus-visible {
   font-family: var(--font-mono);
   font-weight: 600;
   font-size: 12px;
+  flex-shrink: 0;
+}
+
+.tool-call-meta {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  opacity: 0.7;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tool-call-summary {
@@ -2592,6 +2837,7 @@ button.swarm-board-link:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  min-width: 0;
 }
 
 .tool-call[open] .tool-call-summary {
@@ -2600,8 +2846,10 @@ button.swarm-board-link:focus-visible {
 
 .tool-call-content {
   border-top: 1px solid var(--line);
-  max-height: 250px;
+  max-height: 280px;
   overflow-y: auto;
+  overflow-x: auto;
+  min-width: 0;
 }
 
 .tool-call-content pre {
@@ -2609,6 +2857,104 @@ button.swarm-board-link:focus-visible {
   padding: 10px 12px;
   background: var(--bg-darker);
   font-size: 12px;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+/* Structured bot tool call body: compact key/value rows + readable prose blocks. */
+.tool-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 12px;
+  background: var(--bg-darker);
+  font-size: 12px;
+}
+
+.tool-kv-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.tool-kv-key {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 62px;
+  flex-shrink: 0;
+}
+
+.tool-kv-val {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.tool-kv-val code {
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.tool-kv-text {
+  border-top: 1px solid var(--line);
+  background: var(--bg-darker);
+  min-width: 0;
+}
+
+.tool-kv-text:first-child {
+  border-top: 0;
+}
+
+.tool-kv-text-label {
+  padding: 5px 12px 2px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.tool-kv-pre {
+  margin: 0;
+  padding: 4px 12px 9px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.tool-kv-markdown,
+.tool-result-markdown {
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--bg-darker);
+  max-height: 300px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.tool-kv-list {
+  margin: 0;
+  padding: 4px 12px 9px 26px;
+  font-size: 12px;
+  color: var(--text);
+}
+.tool-kv-list li {
+  overflow-wrap: anywhere;
+}
+
+.tool-result-empty {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-darker);
+  font-style: italic;
 }
 
 /* Per-turn tool activity accordion — finished tool-only assistant messages
@@ -2625,6 +2971,7 @@ button.swarm-board-link:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   cursor: pointer;
   font-size: 12px;
   color: var(--text-muted);
@@ -2649,6 +2996,8 @@ button.swarm-board-link:focus-visible {
 
 .tool-group-label {
   font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tool-group-preview {
@@ -2659,6 +3008,7 @@ button.swarm-board-link:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  min-width: 0;
 }
 
 /* Open group: contents hang off a soft indent guide (same idiom as the
@@ -2694,6 +3044,7 @@ button.swarm-board-link:focus-visible {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   cursor: pointer;
   list-style: none;
   color: var(--text-muted);
@@ -2707,6 +3058,7 @@ button.swarm-board-link:focus-visible {
   content: '▶';
   font-size: 9px;
   color: var(--text-muted);
+  flex-shrink: 0;
   transition: transform 0.15s;
 }
 
@@ -2716,6 +3068,7 @@ button.swarm-board-link:focus-visible {
 
 .tool-result-icon {
   font-size: 12px;
+  flex-shrink: 0;
 }
 
 .tool-result .tool-result-icon {
@@ -2730,12 +3083,16 @@ button.swarm-board-link:focus-visible {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tool-result-meta {
   font-size: 10px;
   color: var(--text-muted);
   opacity: 0.6;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .tool-result-meta.error-badge {
@@ -2752,6 +3109,7 @@ button.swarm-board-link:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  min-width: 0;
 }
 
 .tool-result-details[open] .tool-result-preview {
@@ -2975,13 +3333,26 @@ pre.tool-code code.hljs {
 }
 
 .tool-result-content pre.tool-code {
-  max-height: 240px;
+  max-height: 280px;
   color: var(--text-bright);
+  overflow-x: auto;
+  white-space: pre;
+  word-wrap: normal;
+  max-width: 100%;
+}
+
+.tool-result-content pre.tool-code:has(> code.language-json) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .tool-result-content .code-block + .eval-activity,
 .tool-result-content .code-block + pre,
-.tool-result-content .eval-activity + pre {
+.tool-result-content .eval-activity + pre,
+.tool-result-content .eval-activity + .code-block,
+.tool-result-content .eval-activity + .tool-result-markdown,
+.tool-result-content .eval-activity + .tool-result-empty {
   border-top: 1px solid var(--line);
 }
 
