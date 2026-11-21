@@ -66,6 +66,8 @@ export interface SessionBounceBounds {
   intervalMs?: number;
   maxOperations?: number;
   maxTargets?: number;
+  /** Told of each target once it ends: completed, skipped, failed or cancelled. */
+  settled?(target: SessionBounceTarget): void;
 }
 
 /** Isolated queue seam; production policy is implemented by createSessionBounceRuntime. */
@@ -131,7 +133,7 @@ const ACTIVE: Partial<Record<SessionBounceStatus, true>> = { waiting: true, exec
 // Process-local by design: stopping the server abandons waiting work, never
 // serializes runtime authority for a future process to accidentally inherit.
 export function createSessionBounces<Authority extends object, Runtime = unknown>({
-  catalog, capture, inspect, execute, intervalMs = 2000, maxOperations = 100, maxTargets = 200,
+  catalog, capture, inspect, execute, intervalMs = 2000, maxOperations = 100, maxTargets = 200, settled,
 }: SessionBounceQueueOptions<Authority, Runtime>): SessionBounces {
   const operations: BounceOperationSnapshot<Authority>[] = [];
   const reserved = new Set<string>();
@@ -147,10 +149,13 @@ export function createSessionBounces<Authority extends object, Runtime = unknown
       if (!operations[i].targets.some(t => ACTIVE[t.status])) operations.splice(i, 1);
     }
   };
-  const settle = (target: SessionBounceTarget, status: SessionBounceStatus, reason: string | null = null) => {
+  const settle = (target: CapturedBounceTarget<Authority>, status: SessionBounceStatus, reason: string | null = null) => {
     target.status = status;
     target.reason = reason;
-    if (!ACTIVE[status]) reserved.delete(target.sessionId);
+    if (ACTIVE[status]) return;
+    reserved.delete(target.sessionId);
+    const { authority, ...ended } = target;
+    settled?.(ended);
   };
   async function check(target: { authority: Authority }, mode: SessionBounceMode): Promise<SessionBounceInspection<Runtime>> {
     try { return await inspect(target.authority, mode); }

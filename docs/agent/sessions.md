@@ -199,6 +199,11 @@ must exit, including idle kept-alive children.** Unknown safety state or
 incomplete descendant discovery also blocks. Old bridges lacking safety
 reporting require a manual upgrade/restart first.
 
+A bot's Restart waits for its run (a code mode script is part of it) and for
+input queued behind it, not for the workers it watches, whose watches resume
+after the restart. When pi-dish starts, it queues a Restart by itself for each
+bot whose relay records another build than the server's, or none.
+
 Runtime identity and safety are rechecked before execution, using the
 existing restart ownership proofs. Restart cannot atomically lock external
 TUI input: do not start a new turn there while maintenance is executing.

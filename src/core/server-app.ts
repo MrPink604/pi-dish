@@ -2,6 +2,7 @@ import express = require('express');
 import fs = require('fs');
 import path = require('path');
 import os = require('os');
+import { setTimeout as delay } from 'timers/promises';
 import stt = require('./stt');
 import terminal = require('./terminal');
 import tmux = require('./tmux');
@@ -57,6 +58,7 @@ import { createAgySessionHandlers } from './agy-session-handlers';
 import { createBotHandlers, type BotControl } from './bot-handlers';
 import { BOTS_SETTING, botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
 import { botRoute, deliverStartingBot, deliverToBot, startBot, startBots } from './bot-supervisor';
+import { codeBuild } from './code-build';
 import { createKnowledgeHandlers } from './knowledge-handlers';
 import { KNOWLEDGE_SETTING, openKnowledgeBase, type KnowledgeBase } from './knowledge';
 import { canonicalSessionId } from './session-key';
@@ -157,11 +159,35 @@ export function startServer(rootDirectory: string): Server {
 
   async function liveOrWake(sessionId: string): Promise<LiveSession | null> {
     const live = await getLiveSession(sessionId);
-    if (live || !await hibernation.wake(sessionId)) return live;
+    if (live) return live;
+    if (!await hibernation.wake(sessionId)) return wakeBot(sessionId);
     const woken = await getLiveSession(sessionId);
     // A hibernated bridge needs its hello before the caller may drive it.
     if (woken instanceof BridgeSession) await woken.waitForHello({ timeout: 5000 });
     return woken;
+  }
+
+  /**
+   * An active bot whose relay is down (restarting onto new code, or crashed) is started, and its relay waited for
+   * up to a minute, so input sent meanwhile reaches it once it is back. Null for anything else.
+   */
+  async function wakeBot(sessionId: string): Promise<LiveSession | null> {
+    const route = routeIdentity(sessionId);
+    const bot = route?.harnessId === 'bot' && botsRun ? bots()?.get(route.nativeSessionId) : undefined;
+    if (bot?.status !== 'active') return null;
+    const deadline = Date.now() + 60_000;
+    let started = false;
+    for (;;) {
+      // Refused while a restart is under way; the restarted relay is then the one waited for.
+      if (!started) { try { await botControl.start(bot); started = true; } catch {} }
+      const live = await getLiveSession(sessionId).catch(() => null);
+      if (live?.alive) {
+        if (live instanceof BridgeSession) await live.waitForHello({ timeout: 5000 });
+        return live;
+      }
+      if (Date.now() >= deadline) return null;
+      await delay(500);
+    }
   }
 
   const messageHold = createMessageHold({
@@ -294,7 +320,12 @@ export function startServer(rootDirectory: string): Server {
   }
 
   const sessionCommandHandlers = createSessionCommandHandlers({
-    getLiveSession,
+    // A bot whose relay just went down (restarting, or crashed) can leave a claim that no longer answers; it is
+    // woken like a bot with none.
+    getLiveSession: id => getLiveSession(id).catch((error: unknown) => {
+      if (routeIdentity(id)?.harnessId === 'bot') return null;
+      throw error;
+    }),
     supports: liveSessionSupports,
     expandRefs: (message, refs) => expandSessionRefs(message, refs, sessionRefDeps()),
     hold: messageHold,
@@ -519,10 +550,19 @@ export function startServer(rootDirectory: string): Server {
   });
 
   const lifecycleActions = createSessionLifecycleActions({ operations: sessionOperations, ownership });
+  // Bots whose relay runs other code than this server, by route, while their restart waits in the queue.
+  const staleBots = new Map<string, string>();
   const sessionBounces = createSessionBounceRuntime({
     operations: sessionOperations,
     ownership,
     catalog: () => { invalidateRegistryCache(); return catalog.getActiveSessions(); },
+    settled: target => {
+      const name = staleBots.get(target.sessionId);
+      if (name === undefined) return;
+      staleBots.delete(target.sessionId);
+      if (target.status === 'completed') console.error(`bot ${name}: restarted onto build ${codeBuild()}`);
+      else console.error(`bot ${name} was not restarted and stays on its old code (${target.status}): ${target.reason || 'no reason given'}`);
+    },
   });
 
   const hibernation = createSessionHibernation({
@@ -670,7 +710,12 @@ export function startServer(rootDirectory: string): Server {
       if (botsRun) await startBot(bot, { resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line) });
     },
     route: botRoute,
-    deliver: async (bot, delivery) => botsRun && !!await deliverToBot(bot.id, { ...delivery }),
+    deliver: async (bot, delivery) => {
+      if (!botsRun) return false;
+      if (bot.status !== 'active') return !!await deliverToBot(bot.id, { ...delivery });
+      // A relay that is down (restarting onto new code, or crashed) is started and takes it once it is back.
+      return deliverStartingBot(bot.id, { ...delivery }, () => botControl.start(bot)).then(() => true, () => false);
+    },
     stop: async bot => {
       if (!botsRun) return;
       const { status, body } = await sessionOperations.closeSessionById(botRoute(bot.id));
@@ -765,7 +810,22 @@ export function startServer(rootDirectory: string): Server {
       // Each active bot runs without anyone asking; `PI_DISH_BOTS=off` keeps them stopped (tests).
       const registry = botsRun ? bots() : null;
       if (registry) {
-        void startBots({ registry, resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line) });
+        const build = codeBuild();
+        void startBots({
+          registry, build, resume: id => sessionOperations.resumeSessionById(id), log: line => console.error(line),
+          // A relay from another build, or one that recorded none, restarts through the bounce queue once it is idle.
+          restartStale: (bot, holder) => {
+            const route = botRoute(bot.id);
+            console.error(`bot ${bot.name}: relay ${holder.pid} runs build ${holder.build ?? '(none recorded)'} and pi-dish runs ${build}; restarting it once it is idle`);
+            let target;
+            try { target = sessionBounces.enqueue('restart', [route]).targets[0]; } catch (error) {
+              console.error(`bot ${bot.name} was not restarted and stays on its old code: ${errorMessage(error)}`);
+              return;
+            }
+            if (target.status === 'skipped') console.error(`bot ${bot.name} was not restarted and stays on its old code: ${target.reason}`);
+            else staleBots.set(route, bot.name);
+          },
+        });
       }
       // Prime roots live in the daemon roster, not the bridge registry, so poll it.
       getPrimeDaemon().start();

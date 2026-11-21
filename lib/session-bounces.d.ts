@@ -54,6 +54,8 @@ export interface SessionBounceBounds {
     intervalMs?: number;
     maxOperations?: number;
     maxTargets?: number;
+    /** Told of each target once it ends: completed, skipped, failed or cancelled. */
+    settled?(target: SessionBounceTarget): void;
 }
 /** Isolated queue seam; production policy is implemented by createSessionBounceRuntime. */
 export interface SessionBounceQueueOptions<Authority extends object, Runtime = unknown> extends SessionBounceBounds {
@@ -96,7 +98,7 @@ export interface SessionBounceRuntimeOptions extends SessionBounceBounds, Sessio
     /** Catalog observations only; capture, inspection, and execution belong to this module. */
     catalog(): readonly SessionBounceCatalogRow[];
 }
-export declare function createSessionBounces<Authority extends object, Runtime = unknown>({ catalog, capture, inspect, execute, intervalMs, maxOperations, maxTargets, }: SessionBounceQueueOptions<Authority, Runtime>): SessionBounces;
+export declare function createSessionBounces<Authority extends object, Runtime = unknown>({ catalog, capture, inspect, execute, intervalMs, maxOperations, maxTargets, settled, }: SessionBounceQueueOptions<Authority, Runtime>): SessionBounces;
 export declare function lifecycleBlockers(state: unknown, live: LiveSession | null | undefined): string[];
 /** Checked ownership, live-safety and final-guard policy shared by bulk operations and hibernation. */
 export declare function createSessionLifecycleActions({ operations, ownership }: SessionLifecycleActionOptions): SessionLifecycleActions;

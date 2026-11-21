@@ -54,6 +54,22 @@ test('waiting targets execute only once after blockers clear; duplicates and unk
     assert.equal(result.status, 'completed');
     assert.equal(result.replacementId, 'replacement');
 });
+test('each target is reported once when it ends, with its outcome and reason', async () => {
+    const ended = [];
+    const { scheduler, runtime } = fixture({ settled: target => ended.push(target) });
+    const first = scheduler.enqueue('restart', ['parent']);
+    await scheduler.tick();
+    assert.deepEqual(ended, [], 'a waiting target is not reported');
+    runtime.blockers = [];
+    await scheduler.tick();
+    await scheduler.tick();
+    assert.deepEqual(ended, [{ sessionId: 'parent', name: 'Parent', harnessId: 'omp', status: 'completed', reason: null, replacementId: 'replacement' }]);
+    scheduler.cancel(first.id);
+    runtime.blockers = ['Working'];
+    const second = scheduler.enqueue('restart', ['parent']);
+    scheduler.cancel(second.id);
+    assert.deepEqual(ended.slice(1), [{ sessionId: 'parent', name: 'Parent', harnessId: 'omp', status: 'cancelled', reason: 'Cancelled before execution.' }]);
+});
 test('replaced runtime and revoked ownership are skipped, never inherited by queued work', async () => {
     const { scheduler, runtime, actions } = fixture();
     scheduler.enqueue('restart', ['parent']);

@@ -1055,6 +1055,21 @@ where you create, edit and retire them. A bot can change its own name,
 identity and places (each change shows in its chat with an undo), create
 sub-bots, and talk to the bots in its family; only you can change its model.
 
+A bot moves onto new code by itself. Its relay runs in a tmux pane of its own
+and outlives a pi-dish restart, so after a deploy it still runs the code it
+started with. Each relay records the build it started from in
+`~/.pi/dish/bots/<id>/relay.lock`: a hash of `lib/*.js`, `package.json` and
+`package-lock.json`. When pi-dish starts and finds a relay of another build, or
+one that recorded none, it queues a Restart for it in Settings → **Bounce
+agents**, which waits until the bot is idle: no run in progress (a code mode
+script is part of its run) and no input queued. Workers the bot is watching do
+not hold it up; their watches resume after the restart. The bot's chat then
+shows "Restarted onto new pi-dish code", which the model does not see, and a
+restart that cannot be done is logged with its reason, the bot staying on its
+old code. A message, routine run or room post that arrives while a relay is
+down starts the bot and is delivered once it is back. Bounce agents restarts a
+bot by hand in the same way.
+
 ### Knowledge base
 
 Bots keep what they learn in a knowledge base: Markdown topic pages under
