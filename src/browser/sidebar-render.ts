@@ -19,7 +19,9 @@ export interface SidebarRenderOptions {
   closeConfirm: string | null; closeBusy: string | null; multiHost: boolean; hosts: readonly SidebarHost[];
   /** The registry's bots, and the one whose retire button waits for its second tap. */
   bots: readonly SidebarBot[]; botRetireArmed: string | null;
-  /** The host id where `bots` live (the serving host); inferred from `hosts` when omitted. */
+  /** The host id where `bots` live (the bots-capable host); inferred from `hosts` when omitted. */
+  botsHostId?: string | null;
+  /** Legacy fallback when a caller assumes bots live on `self` and omits `botsHostId`. */
   selfHostId?: string | null;
   unread: (row: SessionEntry) => boolean; hostChip: (id?: string | null) => string;
 }
@@ -74,6 +76,7 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
     options.indexing ? 1 : 0, options.contextMetric, options.multiHost ? 1 : 0,
     options.selected ? sessionRefKey(options.selected) : null,
     options.selectedSpawn, options.closeConfirm, options.closeBusy, options.botRetireArmed,
+    options.botsHostId ?? null,
     options.selfHostId ?? null,
     JSON.stringify(options.bots),
     new Date(now).setHours(0, 0, 0, 0),
@@ -477,13 +480,17 @@ function renderSessions() {
     </div>`;
   }
   // Bots have their own group, nested under their parents with their workers, ahead of the sessions; a search ranks them with the rest.
-  const selfHostId = options.selfHostId ?? options.hosts.find(host => host.self)?.hostId ?? null;
+  const botsHostId = options.botsHostId
+    ?? options.hosts.find(host => host.capabilities?.bots === true)?.hostId
+    ?? options.selfHostId
+    ?? options.hosts.find(host => host.self)?.hostId
+    ?? null;
   const bridgePool = options.tab === 'active' && !options.query
     ? previous.filter(session => !session.isActive && !session.subagentLive
       && (asksAutomation || !isAutomationSession(session))
       && (!scopeParsed || evaluateSessionQuery(scopeParsed, session)))
     : undefined;
-  const botSessionTree = options.query ? null : buildBotSessionTree(options.bots, filtered, selfHostId, bridgePool);
+  const botSessionTree = options.query ? null : buildBotSessionTree(options.bots, filtered, botsHostId, bridgePool);
   const sessionsShown = botSessionTree?.botCount
     ? filtered.filter(session => !botSessionTree.claimed.has(sessionRefKey(session)))
     : filtered;

@@ -1,4 +1,4 @@
-import { errorMessage, readJson, sendJson, type ApiRequest } from './api-client';
+import { errorMessage, readJson, sameCapturedHost, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import { escapeHtml } from '../core/helper-format';
 import { finite, record } from '../core/helper-values';
 import { sessionRefKey } from './helper-identity';
@@ -8,6 +8,14 @@ import type { SessionFamily } from './shared-helper-types';
 
 type BotPlace = { label: string; host: string | null; cwd: string };
 
+export interface BotHost extends HostEndpoint {
+  readonly hostId: string | null;
+  readonly self?: boolean;
+  readonly capabilities?: Readonly<Record<string, boolean | undefined>> | null;
+}
+
+type CapturedBotHost = Readonly<{ hostId: string | null; base: string; token: string | null }>;
+
 export const BOT_COLLAPSE_PREFIX = 'bot:';
 export const BOT_CLOSED_PREFIX = 'bot-closed:';
 export function botCollapseKey(botId: string): string { return BOT_COLLAPSE_PREFIX + botId; }
@@ -15,7 +23,7 @@ export function botClosedKey(botId: string): string { return BOT_CLOSED_PREFIX +
 
 const HOST_QUALIFIED_PARENT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(.+)$/i;
 
-/** A bot as the sidebar shows it; bots live on the host that serves this page. */
+/** A bot as the sidebar shows it; bots live on whichever host in the fleet runs the registry. */
 export interface SidebarBot {
   readonly id: string; readonly parentId: string | null; readonly name: string; readonly status: string;
   readonly model: string; readonly thinking: string | null; readonly identity: string; readonly places: readonly BotPlace[];
@@ -143,7 +151,7 @@ function familyHasLiveMember(family: SessionFamily<SessionEntry>): boolean {
 export function buildBotSessionTree(
   bots: readonly SidebarBot[],
   sessions: readonly SessionEntry[],
-  selfHostId?: string | null,
+  botsHostId?: string | null,
   bridgePool?: readonly SessionEntry[] | null,
 ): BotSessionTree {
   const liveBots = bots.filter(bot => bot.status !== 'retired');
@@ -155,7 +163,7 @@ export function buildBotSessionTree(
     botByRoute.set(bot.id, bot);
   }
 
-  let botHost: string | null = selfHostId || null;
+  let botHost: string | null = botsHostId || null;
   if (!botHost) {
     const matched = sessions.find(session => session.harnessId === 'bot' && botByRoute.has(session.id));
     botHost = matched?.host || null;
@@ -357,8 +365,8 @@ function findInFamily(node: SessionFamily<SessionEntry>, targetKey: string, ance
 
 /** Locate a bot or worker session in the bot tree and return the containers to expand to reveal it. */
 export function findBotRevealPath(bots: readonly SidebarBot[], sessions: readonly SessionEntry[], targetKey: string,
-  selfHostId?: string | null): BotRevealPath | null {
-  const tree = buildBotSessionTree(bots, sessions, selfHostId);
+  botsHostId?: string | null): BotRevealPath | null {
+  const tree = buildBotSessionTree(bots, sessions, botsHostId);
   const walk = (node: BotTreeNode, ancestorBots: readonly string[]): BotRevealPath | null => {
     if (node.session && sessionRefKey(node.session) === targetKey) {
       return { expandBots: [...ancestorBots], expandClosedBot: null, expandFamilies: [] };
@@ -401,29 +409,104 @@ export function parsePlaces(text: string): BotPlace[] {
 
 /**
  * The Bots group's data and actions: the registry list, the New bot form and the same form to edit a bot, retiring a
- * bot (tap twice), and the undo of a change a bot made, shown in its chat.
+ * bot (tap twice), and the undo of a change a bot made, shown in its chat. Requests target whichever host in the fleet
+ * advertises `capabilities.bots` (self when serving the hub, or the remote hub when viewing from a peer).
  */
 export function createBots(options: {
-  document: Document; request: ApiRequest; render: () => void; refresh: () => Promise<unknown>;
-  select: (sessionId: string) => void; status: (message: string, type?: string) => void;
+  document: Document; request: ApiRequest; hosts: () => readonly BotHost[];
+  render: () => void; refresh: () => Promise<unknown>;
+  onLoaded?: () => void;
+  select: (sessionId: string, hostId: string | null) => void; status: (message: string, type?: string) => void;
 }) {
   const { document } = options;
   const lifetime = new AbortController();
-  let bots: SidebarBot[] = [], armed: string | null = null, armedTimer: ReturnType<typeof setTimeout> | null = null;
-  let loading: Promise<void> | null = null, disposed = false;
+  let bots: SidebarBot[] = [], botsHostId: string | null = null, activeHost: CapturedBotHost | null = null;
+  let armed: string | null = null, armedTimer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight: { seq: number; endpoint: CapturedBotHost; promise: Promise<void> } | null = null;
+  let loadSeq = 0, disposed = false;
 
-  function load(): Promise<void> {
-    loading ??= (async () => {
-      try {
-        const response = await options.request(null, '/api/bots');
-        const next = response.ok ? decodeBots(await readJson(response)) : [];
-        if (!disposed && JSON.stringify(next) !== JSON.stringify(bots)) { bots = next; options.render(); }
-      } catch {} finally { loading = null; }
-    })();
-    return loading;
+  function capture(host: BotHost): CapturedBotHost {
+    return Object.freeze({ hostId: host.hostId || null, base: host.base, token: host.token ?? null });
+  }
+
+  function resolveHost(): CapturedBotHost | null {
+    const entry = options.hosts().find(host => host.capabilities?.bots === true);
+    return entry ? capture(entry) : null;
+  }
+
+  function hostGoneOrDisabled(prior: CapturedBotHost): boolean {
+    const match = options.hosts().find(host =>
+      (prior.hostId !== null && host.hostId === prior.hostId) || host.base === prior.base);
+    if (!match) return true;
+    // Keep cached bots while a peer's capabilities are unknown (e.g. probe timeout); clear once bots are explicitly off.
+    return !!match.capabilities && match.capabilities.bots !== true;
   }
 
   function disarm() { clearTimeout(armedTimer ?? undefined); armedTimer = null; armed = null; }
+
+  function clear() {
+    const changed = bots.length > 0 || botsHostId !== null || armed !== null;
+    bots = [];
+    botsHostId = null;
+    activeHost = null;
+    disarm();
+    closeForm();
+    if (!disposed && changed) options.render();
+  }
+
+  function load(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    const target = resolveHost();
+    if (!target) {
+      loadSeq++;
+      inFlight = null;
+      if (activeHost && hostGoneOrDisabled(activeHost)) clear();
+      return Promise.resolve();
+    }
+    if (activeHost && (activeHost.hostId !== target.hostId || activeHost.base !== target.base)) clear();
+    if (inFlight && sameCapturedHost(inFlight.endpoint, target)) return inFlight.promise;
+    const seq = ++loadSeq;
+    const promise = (async () => {
+      try {
+        const response = await options.request(target, '/api/bots', { timeoutMs: 10000 });
+        if (disposed || seq !== loadSeq || !sameCapturedHost(resolveHost(), target)) return;
+        if (response.ok) {
+          const next = decodeBots(await readJson(response));
+          if (disposed || seq !== loadSeq || !sameCapturedHost(resolveHost(), target)) return;
+          const hadBots = bots.length > 0 && activeHost !== null && activeHost.hostId === target.hostId && activeHost.base === target.base;
+          const changed = botsHostId !== target.hostId || JSON.stringify(next) !== JSON.stringify(bots);
+          activeHost = target;
+          botsHostId = target.hostId;
+          if (changed) {
+            bots = next;
+            if (!hadBots && next.length > 0) options.onLoaded?.();
+            options.render();
+          }
+        } else if (response.status === 501 || response.status === 404) {
+          clear();
+        }
+      } catch {} finally {
+        if (inFlight?.seq === seq) inFlight = null;
+      }
+    })();
+    inFlight = { seq, endpoint: target, promise };
+    return promise;
+  }
+
+  /** Called when the effective host list changes: loads once a bots host appears or changes, clears if removed. */
+  function sync(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    const target = resolveHost();
+    if (!target) {
+      loadSeq++;
+      inFlight = null;
+      if (activeHost && hostGoneOrDisabled(activeHost)) clear();
+      return Promise.resolve();
+    }
+    if (activeHost && sameCapturedHost(activeHost, target)) return Promise.resolve();
+    if (inFlight && sameCapturedHost(inFlight.endpoint, target)) return inFlight.promise;
+    return load();
+  }
 
   async function retire(id: string) {
     const bot = bots.find(row => row.id === id);
@@ -431,10 +514,17 @@ export function createBots(options: {
       disarm(); armed = id; armedTimer = setTimeout(() => { disarm(); options.render(); }, 3000); options.render(); return;
     }
     disarm(); options.render();
+    const target = resolveHost();
+    if (!target) {
+      options.status('Retire failed: Bots host is unavailable', 'error');
+      return;
+    }
     try {
-      await sendJson(options.request, null, `/api/bots/${encodeURIComponent(id)}/retire`, {});
+      await sendJson(options.request, target, `/api/bots/${encodeURIComponent(id)}/retire`, {});
+      if (disposed) return;
       options.status(`Retired ${bot?.name ?? 'the bot'}`);
     } catch (error) {
+      if (disposed) return;
       options.status(`Retire failed: ${errorMessage(error)}`, 'error');
     }
     await load(); await options.refresh();
@@ -443,14 +533,21 @@ export function createBots(options: {
   async function undo(button: HTMLButtonElement) {
     const { botId, revision, fields } = button.dataset;
     if (!botId || !revision) return;
+    const target = resolveHost();
+    if (!target) {
+      options.status('Undo failed: Bots host is unavailable', 'error');
+      return;
+    }
     button.disabled = true;
     try {
-      await sendJson(options.request, null, `/api/bots/${encodeURIComponent(botId)}/restore`, {
+      await sendJson(options.request, target, `/api/bots/${encodeURIComponent(botId)}/restore`, {
         revision: Number(revision) - 1, fields: (fields || '').split(',').filter(Boolean),
       });
+      if (disposed) return;
       button.textContent = 'Undone';
       await load();
     } catch (error) {
+      if (disposed) return;
       button.disabled = false;
       options.status(`Undo failed: ${errorMessage(error)}`, 'error');
     }
@@ -460,6 +557,8 @@ export function createBots(options: {
 
   /** The New bot form, or with `bot` the same form filled in to edit it: the user's own change, any field. */
   function openForm(bot?: SidebarBot) {
+    const captured = resolveHost();
+    if (!captured) return;
     closeForm();
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay'; overlay.id = 'botNewModal';
@@ -494,6 +593,11 @@ export function createBots(options: {
       event.preventDefault();
       const error = overlay.querySelector<HTMLElement>('#botFormError')!, submit = overlay.querySelector<HTMLButtonElement>('#botCreateBtn')!;
       error.textContent = '';
+      const current = resolveHost();
+      if (!current || current.hostId !== captured.hostId || current.base !== captured.base) {
+        error.textContent = 'Bots host changed; reopen the form.';
+        return;
+      }
       let body: Record<string, unknown>;
       try {
         body = { name: value('botName'), identity: value('botIdentity'), places: parsePlaces(value('botPlaces')) };
@@ -504,13 +608,19 @@ export function createBots(options: {
       if (value('botParent') || bot) body.parentId = value('botParent') || null;
       submit.disabled = true;
       try {
-        const saved = await sendJson(options.request, null, bot ? `/api/bots/${encodeURIComponent(bot.id)}` : '/api/bots', body, bot ? 'PATCH' : 'POST');
+        const saved = await sendJson(options.request, current, bot ? `/api/bots/${encodeURIComponent(bot.id)}` : '/api/bots', body, bot ? 'PATCH' : 'POST');
+        if (disposed) return;
         const row = decodeBots({ bots: [record(saved) ? saved.bot : null] })[0];
         closeForm();
         await load(); await options.refresh();
+        if (disposed) return;
         if (bot) options.status(`Saved ${row?.name ?? bot.name}`);
-        else if (row) options.select(row.sessionId);
+        else if (row) {
+          const created = bots.find(entry => entry.id === row.id) ?? row;
+          options.select(created.sessionId, current.hostId);
+        }
       } catch (problem) {
+        if (disposed) return;
         error.textContent = errorMessage(problem); submit.disabled = false;
       }
     });
@@ -531,10 +641,10 @@ export function createBots(options: {
       } else if (button.classList.contains('bot-retire-btn')) void retire(button.dataset.botId || '');
       else void undo(button);
     }, { capture: true, signal: lifetime.signal });
-    void load();
+    void sync();
   }
 
-  function dispose() { disposed = true; disarm(); lifetime.abort(); closeForm(); }
+  function dispose() { disposed = true; loadSeq++; inFlight = null; disarm(); lifetime.abort(); closeForm(); }
 
-  return { get list(): readonly SidebarBot[] { return bots; }, get armed() { return armed; }, load, mount, dispose };
+  return { get list(): readonly SidebarBot[] { return bots; }, get hostId(): string | null { return botsHostId; }, get armed() { return armed; }, load, sync, mount, dispose };
 }

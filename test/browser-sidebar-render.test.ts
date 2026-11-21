@@ -124,6 +124,39 @@ test('bot workers (local, remote, and sub-bot workers) nest under their owning b
   assert.match(searched, /ranked-segment[\s\S]*?data-id="w-remote"/);
 });
 
+test('bots hosted on a peer group the peer bot sessions, peer workers, and self-local workers into Bots', () => {
+  const DESKTOP = '33333333-3333-4333-8333-333333333333';
+  const HUB = '11111111-1111-4111-8111-111111111111';
+  const bot = (id: string, name: string, parentId: string | null = null) => ({
+    id, name, parentId, status: 'active', model: 'claude-code/claude-opus-5-5', thinking: null, identity: name, places: [], sessionId: `route-${id}`,
+  });
+  const hosts = [
+    { hostId: DESKTOP, self: true, label: 'desktop', capabilities: { sessions: true }, state: 'reachable', key: 'self', color: '#fa1', dot: '', hasCache: true },
+    { hostId: HUB, self: false, label: 'beelink', capabilities: { sessions: true, bots: true }, state: 'reachable', key: HUB, color: '#1af', dot: '', hasCache: true },
+  ];
+  const bots = [bot('fleet', 'Fleet')];
+  const active = [
+    { id: 'route-fleet', host: HUB, name: 'Fleet', harnessId: 'bot', cwd: '/home', isActive: true, lastActivity: 1000 },
+    { id: 'w-hub', host: HUB, name: 'hub-worker', cwd: '/repo', parentId: 'route-fleet', parentSource: 'pi-dish-launch', isActive: true, lastActivity: 2000 },
+    { id: 'w-desktop', host: DESKTOP, name: 'desktop-worker', cwd: '/work', parentId: `${HUB}:route-fleet`, parentSource: 'pi-dish-launch', isActive: true, lastActivity: 1500 },
+    { id: 'desktop-ordinary', host: DESKTOP, name: 'Desktop ordinary', cwd: '/work', isActive: true, lastActivity: 1200 },
+    { id: 'hub-ordinary', host: HUB, name: 'Hub ordinary', cwd: '/repo', isActive: true, lastActivity: 1100 },
+  ];
+  const hostChip = (id?: string | null) => id === HUB ? '<span class="host-chip">beelink</span>' : id === DESKTOP ? '<span class="host-chip">desktop</span>' : '';
+
+  for (const overrides of [{ botsHostId: HUB, selfHostId: DESKTOP }, { selfHostId: DESKTOP }]) {
+    const html = render({ active, tab: 'active', multiHost: true, hosts, bots, hostChip, ...overrides }).html;
+    const botsSeg = html.slice(html.indexOf('bots-segment'), html.indexOf('host-section'));
+    const restSeg = html.slice(html.indexOf('host-section'));
+    assert.match(botsSeg, /data-id="route-fleet" data-host="11111111-1111-4111-8111-111111111111"/);
+    assert.match(botsSeg, /data-id="w-hub" data-host="11111111-1111-4111-8111-111111111111"/);
+    assert.match(botsSeg, /data-id="w-desktop" data-host="33333333-3333-4333-8333-333333333333"/);
+    assert.doesNotMatch(restSeg, /route-fleet|w-hub|w-desktop/, 'bot and workers leave both host sections');
+    assert.match(restSeg, /data-id="desktop-ordinary"/);
+    assert.match(restSeg, /data-id="hub-ordinary"/);
+  }
+});
+
 test('sidebar presents decoded optional fields and retains explicit null family boundaries', () => {
   const parent = { id: 'parent', name: '<parent>', cwd: '/repo' };
   const implicitChild = { id: 'child', parentId: 'parent', cwd: '/repo', name: 'implicit child' };

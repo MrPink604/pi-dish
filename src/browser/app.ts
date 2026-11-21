@@ -214,10 +214,12 @@ const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscover
     migrateClientKeys();
     if (newSessionController.isOpen()) newSessionController.renderHosts();
     void pushNotifications.sync();
+    void bots.sync();
   },
   onFleet: data => {
     hostDirectory.setFleet(data);
     seedHostConnFromFleet();
+    void bots.sync();
   },
   onIdentified: (...args) => {
     if (hostDirectory.applyDescriptor(...args) && newSessionController.isOpen()) newSessionController.renderHosts();
@@ -236,6 +238,7 @@ function hostsChanged() {
   renderHostsSection();
   routinesController.updateButton();
   composerSpeech.updateButton();
+  void bots.sync();
   renderSessions();
   startDiscoveredHosts?.();
 }
@@ -544,12 +547,16 @@ const sidebarControls: ReturnType<typeof createSidebarControls> = createSidebarC
   select: (id, host) => sessionView.select(id, { host }), pending: id => sessionView.pending(id), create: (cwd, host) => newSessionController.create(cwd, host),
   finishClose: (id, host, owner) => sessionInfo.finishClose(id, host, owner), refresh: loadPrevious,
   ref: session => sessionRefFor(session), copy: copyTextToClipboard, status: setStatus,
-  bots: () => bots.list, selfHostId: () => hostDirectory.self.hostId,
+  bots: () => bots.list, botsHostId: () => bots.hostId,
 });
 
 const bots = createBots({
-  document, request, render: () => renderSessions(), refresh: () => sidebarLists.refresh(),
-  select: id => { void sessionView.select(id, { host: hostDirectory.self.hostId }); }, status: setStatus,
+  document, request, hosts: effectiveHosts, render: () => renderSessions(), refresh: () => sidebarLists.refresh(),
+  onLoaded: () => {
+    const current = sessionState.currentSession;
+    if (current) sidebarControls.reveal(current.id, current.host || null);
+  },
+  select: (id, host) => { void sessionView.select(id, { host }); }, status: setStatus,
 });
 
 function keyForSessionId(id: string) { return sessionKey(sessionState.sessionHostId(id), id); }
@@ -572,7 +579,7 @@ function renderSessions() {
       contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: sessionView.spawnId,
       expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
       closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
-      bots: bots.list, botRetireArmed: bots.armed, selfHostId: hostDirectory.self.hostId,
+      bots: bots.list, botRetireArmed: bots.armed, botsHostId: bots.hostId, selfHostId: hostDirectory.self.hostId,
       unread: sidebarActivity.unread, hostChip,
       hosts: effectiveHosts().map(host => {
         const cache = hostSessionLoader.getCache(host);
@@ -714,6 +721,7 @@ const hostSettings: ReturnType<typeof createHostSettings> = createHostSettings({
     if (newSessionController.isOpen()) newSessionController.renderHosts();
     pruneHostCaches();
     renderHostsSection();
+    void bots.sync();
     renderSessions();
   },
   refreshSessions, renderNewSessionHosts: (...args) => newSessionController.renderHosts(...args),

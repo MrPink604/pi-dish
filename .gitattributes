@@ -380,6 +380,7 @@ test/browser/api-boundary.spec.js linguist-generated=true
 test/browser/app-shell.spec.js linguist-generated=true
 test/browser/artifact-comments.spec.js linguist-generated=true
 test/browser/bot-display.spec.js linguist-generated=true
+test/browser/bots.spec.js linguist-generated=true
 test/browser/bounce.spec.js linguist-generated=true
 test/browser/composer-autocomplete.spec.js linguist-generated=true
 test/browser/composer-drafts.spec.js linguist-generated=true

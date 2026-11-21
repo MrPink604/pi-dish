@@ -109,6 +109,7 @@
     "test/browser-fleet-view.test.ts",
     "test/browser/fleet-view.spec.ts",
     "test/browser/agy-tasks-swarm.spec.ts",
-    "test/browser/bot-display.spec.ts"
+    "test/browser/bot-display.spec.ts",
+    "test/browser/bots.spec.ts"
   ]
 }

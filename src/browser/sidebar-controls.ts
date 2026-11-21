@@ -15,7 +15,7 @@ export function createSidebarControls(options: {
   refresh: () => Promise<unknown>;
   finishClose: (id: string, host: string | null, owner: SelectionOwner | null) => Promise<unknown>;
   ref: (session: SessionEntry) => string; copy: (text: string) => Promise<unknown>; status: (message: string, type?: string) => void;
-  bots?: () => readonly SidebarBot[]; selfHostId?: () => string | null;
+  bots?: () => readonly SidebarBot[]; botsHostId?: () => string | null; selfHostId?: () => string | null;
 }) {
   const { document, storage, sessionState } = options, window = document.defaultView!;
   const list = document.getElementById('sessionList')!;
@@ -138,7 +138,7 @@ export function createSidebarControls(options: {
     const all = sessions(), key = sessionKey(host, id);
     const botList = options.bots?.() ?? [];
     if (botList.length) {
-      const botPath = findBotRevealPath(botList, all, key, options.selfHostId?.() ?? null);
+      const botPath = findBotRevealPath(botList, all, key, options.botsHostId?.() ?? options.selfHostId?.() ?? null);
       if (botPath) {
         let collapsedChanged = false, expandedChanged = false;
         for (const botId of botPath.expandBots) {
