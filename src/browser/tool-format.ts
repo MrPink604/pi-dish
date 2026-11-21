@@ -22,7 +22,9 @@ export interface EvalCell {
 }
 /** OMP eval result details: per-cell status, timing and host-tool activity. */
 export interface EvalToolDetails { readonly kind: 'eval'; readonly cells: readonly EvalCell[] }
-export type ToolDetails = BashToolDetails | WaitToolDetails | EvalToolDetails;
+/** A bot's code mode result details: the tool calls its script made, as eval activity rows. */
+export interface CodemodeToolDetails { readonly kind: 'codemode'; readonly calls: readonly EvalEvent[] }
+export type ToolDetails = BashToolDetails | WaitToolDetails | EvalToolDetails | CodemodeToolDetails;
 
 /** OMP's `wait` returns a still-running snapshot after this cap even if no job settled. */
 export const WAIT_SAFETY_CAP_MS = 30 * 60_000;
@@ -60,6 +62,13 @@ export function decodeToolDetails(toolName: string | undefined, value: unknown):
       id: String(job.id), type: string(job.type), status: string(job.status) || 'unknown', label: string(job.label),
       durationMs: number(job.durationMs), exitCode: number(job.exitCode), resultText: string(job.resultText), errorText: string(job.errorText),
       agentId: string(job.agentUrlId) ?? (job.type === 'task' ? string(job.id) : undefined),
+    }] : []) };
+  }
+  if (toolName === 'codemode' && Array.isArray(value.calls)) {
+    return { kind: 'codemode', calls: value.calls.flatMap((call: unknown): EvalEvent[] => record(call) && string(call.name) ? [{
+      op: String(call.name), text: string(call.args) && truncate(String(call.args), 200),
+      facts: [...(call.status === 'ok' ? [] : [String(call.status)]), ...(finite(call.durationMs) ? [formatSpan(call.durationMs)] : [])],
+      error: string(call.error),
     }] : []) };
   }
   if (toolName === 'eval' && Array.isArray(value.cells)) {
@@ -102,6 +111,7 @@ export function toolCallBodyHtml(name: string | undefined, args: Readonly<Record
     return `<pre class="tool-command"><code>${escapeHtml(args.command)}</code></pre>` +
       (meta.length ? `<div class="tool-command-meta">${meta.join('<span class="tool-meta-sep">·</span>')}</div>` : '');
   }
+  if (name === 'codemode' && typeof args.code === 'string') return evalCodeHtml(args.code, 'javascript');
   if ((name === 'eval' || name === 'ipython' || name === 'python_repl') && typeof args.code === 'string') {
     const language = name === 'eval' ? string(args.language) : 'python';
     const meta: string[] = [];
@@ -121,7 +131,7 @@ export function toolCallBodyHtml(name: string | undefined, args: Readonly<Record
 /** Source block a live panel shows above its output (eval cells, bash commands). */
 export function toolSourceText(name: string, args: unknown, intent?: string) {
   if (name === 'bash' || name === 'Bash') return record(args) && typeof args.command === 'string' ? args.command : '';
-  if (name !== 'eval' && name !== 'ipython' && name !== 'python_repl') return '';
+  if (name !== 'eval' && name !== 'ipython' && name !== 'python_repl' && name !== 'codemode') return '';
   if (record(args) && typeof args.code === 'string' && args.code) return args.code;
   return typeof intent === 'string' && intent.trim() ? intent.trim() : '';
 }
@@ -161,7 +171,8 @@ export function evalTitle(details: EvalToolDetails) {
   return details.cells.map(cell => cell.title).filter(Boolean).join(' · ');
 }
 
-function evalActivityHtml(events: readonly EvalEvent[]) {
+/** Host-tool activity rows: an eval cell's events, or the tool calls a code mode script made. */
+export function evalActivityHtml(events: readonly EvalEvent[]) {
   if (!events.length) return '';
   return '<div class="eval-activity">' + events.map(event =>
     `<div class="eval-event${event.error ? ' error' : ''}"><span class="eval-event-op">${escapeHtml(event.op)}</span>` +

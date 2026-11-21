@@ -2,7 +2,7 @@ import type { SessionState, SelectionOwner } from './session-state';
 import { record, finite } from '../core/helper-values';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { parseIpythonResult, getToolSummary, getToolOutputText } from '../core/helper-content';
-import { decodeToolDetails, toolSourceText, bashResultChipsHtml, bashJobAttrs, jobTimeoutMs, waitJobsHtml, formatSpan, evalBodyHtml, evalDurationMs, evalResultChipsHtml, WAIT_SAFETY_CAP_MS } from './tool-format';
+import { decodeToolDetails, toolSourceText, bashResultChipsHtml, bashJobAttrs, jobTimeoutMs, waitJobsHtml, formatSpan, evalBodyHtml, evalActivityHtml, evalDurationMs, evalResultChipsHtml, WAIT_SAFETY_CAP_MS } from './tool-format';
 import type { ToolDetails, WaitJob } from './tool-format';
 interface ToolResultData { content?: unknown; details?: unknown }
 interface ToolEvent { toolCallId: string; toolName?: string; args?: unknown; intent?: string; startedAt?: string | number; partialResult?: ToolResultData; result?: ToolResultData; isError: boolean }
@@ -151,6 +151,7 @@ function buildLiveToolPanel(toolCallId: string, toolName: string, args: unknown,
     : (!isComplete ? '<div class="live-tool-output"><span class="live-tool-cursor"></span></div>' : '');
   const outputHtml = waitJobs ? '<div class="live-wait-jobs">' + waitJobsHtml(waitJobs) + '</div>'
     : details?.kind === 'eval' && details.cells.length ? '<div class="live-eval">' + evalBodyHtml(details, '', false) + '</div>' + (details.cells.length > 1 ? '' : textHtml)
+    : details?.kind === 'codemode' ? evalActivityHtml(details.calls) + textHtml
     : textHtml;
 
   return '<details class="live-tool-panel ' + stateClass + '" data-tool-call-id="' + escapeHtml(toolCallId) + '"' +

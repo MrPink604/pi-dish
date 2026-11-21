@@ -5,7 +5,7 @@ import type { createResponseDetails } from './response-details';
 import { escapeHtml, truncate } from '../core/helper-format';
 import { assistantRoleHtml, formatTime, formatThinkingPreview, isGeminiAssistant } from './helper-format';
 import { sessionSupports } from './helper-identity';
-import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, evalTitle, evalBodyHtml, jobDeliveryOutputs, formatSpan } from './tool-format';
+import { toolCallBodyHtml, bashResultChipsHtml, bashJobAttrs, waitJobsHtml, waitStatusSummary, evalResultChipsHtml, evalTitle, evalBodyHtml, evalActivityHtml, jobDeliveryOutputs, formatSpan } from './tool-format';
 import type { WaitJob } from './tool-format';
 import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
 import { splitSessionRefContext } from '../core/helper-refs';
@@ -321,6 +321,7 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   const outputHtml = `<pre>${escapeHtml(truncate(content, 2000))}</pre>`;
   const bodyHtml = waitJobs ? waitJobsHtml(waitJobs)
     : evalDetails ? evalBodyHtml(evalDetails, outputHtml, true)
+    : details?.kind === 'codemode' ? evalActivityHtml(details.calls) + outputHtml
     : outputHtml;
 
   return `<div${attrs} class="message tool-result ${isError ? 'error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}"${details?.kind === 'bash' ? bashJobAttrs(details) : ''}>

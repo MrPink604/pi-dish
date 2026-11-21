@@ -204,6 +204,10 @@ test('getToolSummary surfaces eval cell title or code, not the language', () => 
     assert.equal(H.getToolSummary('eval', { language: 'js', title: '   ', code: 'console.log(1)' }), 'console.log(1)');
     assert.equal(H.getToolSummary('eval', null), '');
 });
+test('getToolSummary shows a bot code mode script by its first line of code', () => {
+    assert.equal(H.getToolSummary('codemode', { code: '// @options: {"timeout_ms": 60000}\n// idle sessions\nconst hosts = await tools.sessions({ action: "hosts" });' }), 'const hosts = await tools.sessions({ action: "hosts" });');
+    assert.equal(H.getToolSummary('codemode', { code: '// only a comment' }), '');
+});
 test('parseIpythonResult unwraps BashResult reprs only when complete', () => {
     assert.deepEqual(H.parseIpythonResult("BashResult(exit_code=0, output='hello\\n', duration=0.017216796055436134)"), { exitCode: 0, output: 'hello\n', durationMs: 17 });
     assert.deepEqual(H.parseIpythonResult('BashResult(exit_code=1, output=\'boom: it\\\'s done\\n\', duration=1.5)'), { exitCode: 1, output: "boom: it's done\n", durationMs: 1500 });

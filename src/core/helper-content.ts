@@ -39,6 +39,11 @@ export function getToolSummary(toolName: string, args: unknown) {
     if (title) return truncate(title, 60);
     return ipythonCodeSummary(args.code);
   }
+  // A bot's code mode script: its first line of code, past comments and the options line.
+  if (toolName === 'codemode') {
+    const line = typeof args.code === 'string' ? args.code.split('\n').map(text => text.trim()).find(text => text && !text.startsWith('//')) : '';
+    return line ? truncate(line, 60) : '';
+  }
   if (['Read', 'read', 'Edit', 'edit', 'Write', 'write'].includes(toolName)) return typeof args.path === 'string' ? args.path : '';
   if (toolName === 'invoke_subagent') {
     const role = typeof args.Role === 'string' ? args.Role.trim() : '';
