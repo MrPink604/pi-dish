@@ -153,6 +153,16 @@ const PROCESS_START_TIME = processStartTime(process.pid);
 const ROOT = path.join(os.homedir(), ".pi", "dish");
 const REGISTRY_DIR = path.join(ROOT, "sessions");
 const DEFAULT_SOCKET_DIR = path.join(ROOT, "sockets");
+
+function replaceFile(file: string, data: string): void {
+  const tmp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, file);
+  } finally {
+    try { fs.unlinkSync(tmp); } catch {}
+  }
+}
 const SOCKET_DIR_OVERRIDE = process.env.PI_DISH_SOCKET_DIR || null;
 // Opt-in projection churn logging (PI_DISH_BRIDGE_DEBUG=1). Writes to a file
 // rather than stderr because harness TUIs own the pane, and records whether the
@@ -1780,7 +1790,10 @@ export function createBridge(descriptor: BridgeDescriptor) {
     const sig = JSON.stringify(entry);
     if (sig === lastRegistrySig) return;
     try {
-      fs.writeFileSync(registryPath, JSON.stringify({ ...entry, updatedAt: new Date().toISOString() }, null, 2));
+      // Readers authorize lifecycle operations from this file while event
+      // handlers refresh it. Atomic replacement prevents a transient partial
+      // JSON read from being cached as "Session not active".
+      replaceFile(registryPath, JSON.stringify({ ...entry, updatedAt: new Date().toISOString() }, null, 2));
       lastRegistrySig = sig;
     } catch (e) {
       // best effort
