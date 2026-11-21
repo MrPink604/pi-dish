@@ -266,7 +266,7 @@ test('native canonical lineage precedes launch hints, self parents are suppresse
   assert.equal(row.routineId, 'routine');
   assert.equal(row.routineInvocationId, 'invocation');
   assert.equal(present(result.byId.get(detached.routeId)).parentSource, 'pi-dish-launch');
-  assert.equal(present(result.byId.get(detached.routeId)).familyParentId, null);
+  assert.equal(present(result.byId.get(detached.routeId)).familyParentId, parent.routeId);
   assert.equal(present(result.byId.get(self.routeId)).parentId, null);
   assert.equal(present(result.byId.get(parent.routeId)).routine, undefined);
   assert.equal(present(result.byId.get(other.routeId)).parentId, null);
@@ -289,7 +289,7 @@ test('store annotation ingress rejects malformed consumed values and folds encod
   const workerRow = present(catalog.byId.get(workerSrc.routeId));
   assert.equal(workerRow.parentId, `${remoteHost}:${botRoute}`);
   assert.equal(workerRow.parentSource, 'pi-dish-launch');
-  assert.equal(workerRow.familyParentId, null);
+  assert.equal(workerRow.familyParentId, `${remoteHost}:${botRoute}`);
   const routines = decodeRoutineAnnotations(new Map([
     [encodeSessionKey('pi', checkedNativeId('child')), { routineName: '', routineId: '', id: '' }],
     ['bad', { routineName: 123, routineId: 'routine', id: 'invocation' }],
@@ -327,6 +327,32 @@ test('catalog rows mark transcripts inside a private root and leave ordinary row
   // A live claim with no file yet cannot prove containment.
   const pending = registeredSessionObservation({}, context(privateSrc, null, { source: null }));
   assert.equal(buildActiveSession(pending, { ...options, harnesses }).private, undefined);
+});
+
+test('activeOnly catalog preserves bridge ancestors in previous without marking them subagentLive', () => {
+  const root = source('pi', checkedNativeId('bridge-root'));
+  const mid = source('pi', checkedNativeId('bridge-mid'));
+  const leaf = source('pi', checkedNativeId('bridge-leaf'));
+  const launchParents = decodeLaunchParents({
+    [mid.routeId]: { sourceSessionId: root.routeId },
+    [leaf.routeId]: { sourceSessionId: mid.routeId },
+  });
+  const result = compose({
+    activeOnly: true,
+    active: [
+      registeredSessionObservation({ sessionFile: root.file, name: 'Root', cwd: '/orch' }, context(root, info({ cwd: '/orch' }))),
+      registeredSessionObservation({ sessionFile: leaf.file, name: 'Leaf', cwd: '/repo' }, context(leaf, info({ cwd: '/repo' }))),
+    ],
+    history: [
+      history(mid, info({ name: 'Mid', cwd: '/mid' }), { liveChild: false, bridge: true }),
+    ],
+    launchParents,
+  });
+  assert.equal(result.children.length, 0);
+  assert.deepEqual(result.previous.map(row => row.id), [mid.routeId]);
+  assert.equal(result.previous[0]?.subagentLive, undefined);
+  assert.equal(result.previous[0]?.familyParentId, root.routeId);
+  assert.equal(present(result.byId.get(leaf.routeId)).familyParentId, mid.routeId);
 });
 
 export {};

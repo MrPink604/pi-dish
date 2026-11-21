@@ -398,7 +398,7 @@ test('collectTreeSessions gathers all descendant sessions', () => {
   assert.equal(H.collectTreeSessions(tree[0]).length, 3);
 });
 
-test('buildSessionFamilies keeps parents first and sorts whole blocks by newest descendant', () => {
+test('buildSessionFamilies keeps parents first across workspaces and sorts whole blocks by newest descendant', () => {
   const sessions = [
     { id: 'parent', cwd: '/w', lastActivity: '2026-01-01T00:00:00Z' },
     { id: 'child', parentId: 'parent', cwd: '/w', lastActivity: '2026-01-05T00:00:00Z' },
@@ -407,11 +407,54 @@ test('buildSessionFamilies keeps parents first and sorts whole blocks by newest 
     { id: 'other-cwd', parentId: 'parent', cwd: '/elsewhere', lastActivity: '2026-01-06T00:00:00Z' },
   ];
   const roots = H.buildSessionFamilies(sessions);
-  assert.deepEqual(roots.map((root: unknown) => property(property(root, 'session'), 'id')), ['other-cwd', 'parent', 'standalone']);
-  assert.equal(roots[1].activity, Date.parse('2026-01-05T00:00:00Z'));
-  assert.equal(roots[1].size, 3);
-  assert.deepEqual(roots[1].children.map((child: unknown) => property(property(child, 'session'), 'id')), ['child']);
-  assert.deepEqual(H.flattenSessionFamilies([roots[1]]).map((s: unknown) => property(s, 'id')), ['parent', 'child', 'grandchild']);
+  assert.deepEqual(roots.map((root: unknown) => property(property(root, 'session'), 'id')), ['parent', 'standalone']);
+  assert.equal(roots[0].activity, Date.parse('2026-01-06T00:00:00Z'));
+  assert.equal(roots[0].size, 4);
+  assert.deepEqual(roots[0].children.map((child: unknown) => property(property(child, 'session'), 'id')), ['other-cwd', 'child']);
+  assert.deepEqual(H.flattenSessionFamilies([roots[0]]).map((s: unknown) => property(s, 'id')), ['parent', 'other-cwd', 'child', 'grandchild']);
+});
+
+test('buildSessionFamilies links cross-host parents when loaded and falls back to roots when parent host is offline', () => {
+  const HUB = '11111111-1111-4111-8111-111111111111';
+  const PEER = '22222222-2222-4222-8222-222222222222';
+  const sessions = [
+    { id: 'orch', host: HUB, cwd: '/orch', lastActivity: 1000 },
+    { id: 'worker', host: PEER, cwd: '/srv/gpu', parentId: `${HUB}:orch`, familyParentId: null, lastActivity: 2000 },
+    { id: 'sub', host: PEER, cwd: '/srv/gpu', parentId: 'worker', lastActivity: 3000 },
+  ];
+  const online = H.buildSessionFamilies(sessions);
+  assert.equal(online.length, 1);
+  assert.equal(H.sessionRefKey(online[0].session), `${HUB} orch`);
+  assert.equal(H.sessionRefKey(online[0].children[0].session), `${PEER} worker`);
+  assert.equal(H.sessionRefKey(online[0].children[0].children[0].session), `${PEER} sub`);
+  assert.equal(online[0].size, 3);
+
+  // If HUB is offline (not in list), PEER's worker+sub stay visible as a normal family root.
+  const hubOffline = H.buildSessionFamilies(sessions.slice(1));
+  assert.equal(hubOffline.length, 1);
+  assert.equal(H.sessionRefKey(hubOffline[0].session), `${PEER} worker`);
+  assert.equal(hubOffline[0].children.length, 1);
+});
+
+test('buildSessionFamilies bridges closed intermediate parents without pulling in unanchored closed ancestors', () => {
+  const active = [
+    { id: 'root', cwd: '/orch', isActive: true, lastActivity: 1000 },
+    { id: 'leaf', parentId: 'mid', cwd: '/repo', isActive: true, lastActivity: 3000 },
+    { id: 'solo', parentId: 'closed-only', cwd: '/repo', isActive: true, lastActivity: 2000 },
+  ];
+  const closedPool = [
+    { id: 'mid', parentId: 'root', cwd: '/mid', isActive: false, lastActivity: 1500 },
+    { id: 'closed-only', parentId: 'older-closed', cwd: '/repo', isActive: false, lastActivity: 900 },
+    { id: 'older-closed', cwd: '/repo', isActive: false, lastActivity: 800 },
+  ];
+  const roots = H.buildSessionFamilies(active, { bridgePool: closedPool });
+  assert.deepEqual(roots.map(r => r.session.id), ['root', 'solo']);
+  assert.equal(roots[0].children.length, 1);
+  assert.equal(roots[0].children[0].session.id, 'mid');
+  assert.equal(roots[0].children[0].bridge, true);
+  assert.equal(roots[0].children[0].children[0].session.id, 'leaf');
+  assert.equal(roots[0].size, 2, 'bridge row does not inflate real session count');
+  assert.deepEqual(H.flattenSessionFamilies([roots[0]]).map(s => s.id), ['root', 'leaf']);
 });
 
 test('session family cycles degrade to standalone roots', () => {

@@ -89,7 +89,7 @@ export interface AgyTranscriptActivity {
  */
 export declare function inspectAgyTranscriptActivity(conversationId: string): AgyTranscriptActivity;
 /** True when any subagent, swarm worker, or non-daemon task of `sessionId` is actively running. */
-export declare function hasActiveAgyBrainWork(nativeSessionId: string): boolean;
+export declare function hasActiveAgyBrainWork(nativeSessionId: string, visited?: Set<string>): boolean;
 /**
  * Convert an Antigravity brain `transcript.jsonl` into standard Pi-v3
  * `SessionEntries` so `session-files.ts`, `session-index.ts`, `Subagents`,

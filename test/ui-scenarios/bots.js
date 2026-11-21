@@ -51,8 +51,11 @@ const bots = async ({ desktop, check, base, emit, fs, path, tmpHome, SESSION_ID,
         check(await desktop.locator(`.session-item[data-id="${closedWorkerId}"]`).count() === 0, 'closed worker starts collapsed');
         await desktop.click(`.bot-closed-toggle[data-bot-closed="${fleet.id}"]`);
         await desktop.waitForSelector(`.bot-closed-list .session-item[data-id="${closedWorkerId}"]`, { timeout: 5000 });
-        check(await desktop.locator(`.bots-segment .session-item[data-id="${BETA_ID}"]`).count() === 0
-            && await desktop.locator(`.session-item[data-id="${BETA_ID}"]`).count() === 1, 'sessions no bot started stay outside the Bots group');
+        const independentId = '2026-07-05T00-03-00-uiswitch';
+        check(await desktop.locator(`.bots-segment .session-item[data-id="${independentId}"]`).count() === 0
+            && await desktop.locator(`.session-item[data-id="${independentId}"]`).count() === 1, 'sessions no bot started stay outside the Bots group');
+        check(await desktop.locator(`.session-item[data-id="${BETA_ID}"]`).count()
+            === await desktop.locator(`.bots-segment .session-item[data-id="${BETA_ID}"]`).count(), 'cross-workspace child of a bot worker stays nested inside Bots instead of leaking out');
         await desktop.click('#tabActive');
     }
     finally {

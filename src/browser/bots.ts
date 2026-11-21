@@ -1,8 +1,8 @@
 import { errorMessage, readJson, sendJson, type ApiRequest } from './api-client';
 import { escapeHtml } from '../core/helper-format';
 import { finite, record } from '../core/helper-values';
-import { sessionKey, sessionRefKey } from './helper-identity';
-import { buildSessionFamilies, flattenSessionFamilies, sessionFamilyParentId } from './helper-sessions';
+import { sessionRefKey } from './helper-identity';
+import { buildSessionFamilies, flattenSessionFamilies, resolveParentKey, sessionFamilyParentId } from './helper-sessions';
 import type { SessionEntry } from './session-state';
 import type { SessionFamily } from './shared-helper-types';
 
@@ -99,7 +99,12 @@ function familyHasLiveMember(family: SessionFamily<SessionEntry>): boolean {
  * each owning its local and cross-host worker sessions plus their descendant
  * sessions) and the remaining unclaimed sessions.
  */
-export function buildBotSessionTree(bots: readonly SidebarBot[], sessions: readonly SessionEntry[], selfHostId?: string | null): BotSessionTree {
+export function buildBotSessionTree(
+  bots: readonly SidebarBot[],
+  sessions: readonly SessionEntry[],
+  selfHostId?: string | null,
+  bridgePool?: readonly SessionEntry[] | null,
+): BotSessionTree {
   const liveBots = bots.filter(bot => bot.status !== 'retired');
   if (!liveBots.length) return { roots: [], claimed: new Set(), botCount: 0 };
 
@@ -120,7 +125,15 @@ export function buildBotSessionTree(bots: readonly SidebarBot[], sessions: reado
 
   const botSessionById = new Map<string, SessionEntry>();
   const claimed = new Set<string>();
+  const hostByLower = new Map<string, string>();
+  const registerHost = (host?: string | null) => {
+    if (host) {
+      const lower = host.toLowerCase();
+      if (!hostByLower.has(lower)) hostByLower.set(lower, host);
+    }
+  };
   for (const session of sessions) {
+    registerHost(session.host);
     if (session.harnessId !== 'bot') continue;
     const owner = botByRoute.get(session.id);
     if (!owner) continue;
@@ -151,8 +164,18 @@ export function buildBotSessionTree(bots: readonly SidebarBot[], sessions: reado
     if (!claimed.has(key)) nonBotSessions.push(session);
   }
 
+  const poolByKey = new Map<string, SessionEntry>();
+  for (const session of bridgePool || []) {
+    if (!session?.id) continue;
+    registerHost(session.host);
+    const key = sessionRefKey(session);
+    if (!sessionsByKey.has(key) && !claimed.has(key) && !poolByKey.has(key)) poolByKey.set(key, session);
+  }
+
   const workerSessionsByBot = new Map<string, SessionEntry[]>();
   const workerOwnerByKey = new Map<string, string>();
+  const bridgePoolByBot = new Map<string, Map<string, SessionEntry>>();
+  const bridgeRootsByBot = new Map<string, Set<string>>();
   const addWorker = (botId: string, session: SessionEntry) => {
     const key = sessionRefKey(session);
     workerOwnerByKey.set(key, botId);
@@ -161,27 +184,59 @@ export function buildBotSessionTree(bots: readonly SidebarBot[], sessions: reado
     if (list) list.push(session);
     else workerSessionsByBot.set(botId, [session]);
   };
+  const addBridge = (botId: string, key: string, session: SessionEntry, isRoot: boolean) => {
+    let map = bridgePoolByBot.get(botId);
+    if (!map) { map = new Map(); bridgePoolByBot.set(botId, map); }
+    map.set(key, session);
+    workerOwnerByKey.set(key, botId);
+    if (isRoot) {
+      let set = bridgeRootsByBot.get(botId);
+      if (!set) { set = new Set(); bridgeRootsByBot.set(botId, set); }
+      set.add(key);
+    }
+  };
 
   for (const session of nonBotSessions) {
     const owner = parentBotOf(session);
     if (owner) addWorker(owner.id, session);
   }
 
-  // Claim same-host, same-workspace subagents/children of already-claimed workers.
+  // Claim descendants of already-claimed workers across workspaces and hosts,
+  // walking through closed intermediate parents in `bridgePool` when present.
   let progressed = true;
   while (progressed) {
     progressed = false;
     for (const session of nonBotSessions) {
       const key = sessionRefKey(session);
       if (workerOwnerByKey.has(key)) continue;
-      const parentId = sessionFamilyParentId(session);
-      if (!parentId) continue;
-      const parentKey = sessionKey(session.host, parentId);
-      const ownerBotId = workerOwnerByKey.get(parentKey);
-      if (!ownerBotId) continue;
-      const parent = sessionsByKey.get(parentKey);
-      if (!parent || (parent.cwd || '~') !== (session.cwd || '~')) continue;
-      addWorker(ownerBotId, session);
+      const chain: [string, SessionEntry][] = [];
+      const seen = new Set<string>([key]);
+      let cursor: SessionEntry | undefined = session;
+      let resolvedBotId: string | null = null;
+      let topPoolKey: string | null = null;
+      while (cursor) {
+        const directBot = cursor === session ? null : parentBotOf(cursor);
+        if (directBot) {
+          resolvedBotId = directBot.id;
+          topPoolKey = sessionRefKey(cursor);
+          break;
+        }
+        const parentKey = resolveParentKey(cursor.host, sessionFamilyParentId(cursor), hostByLower);
+        if (!parentKey || seen.has(parentKey)) break;
+        seen.add(parentKey);
+        const ownerBotId = workerOwnerByKey.get(parentKey);
+        if (ownerBotId) {
+          resolvedBotId = ownerBotId;
+          break;
+        }
+        const pooled = poolByKey.get(parentKey);
+        if (!pooled) break;
+        chain.push([parentKey, pooled]);
+        cursor = pooled;
+      }
+      if (!resolvedBotId) continue;
+      for (const [bKey, bSession] of chain) addBridge(resolvedBotId, bKey, bSession, bKey === topPoolKey);
+      addWorker(resolvedBotId, session);
       progressed = true;
     }
   }
@@ -198,7 +253,11 @@ export function buildBotSessionTree(bots: readonly SidebarBot[], sessions: reado
   const buildNode = (bot: SidebarBot, depth: number): BotTreeNode => {
     visited.add(bot.id);
     const session = botSessionById.get(bot.id) ?? null;
-    const families = buildSessionFamilies(workerSessionsByBot.get(bot.id) ?? []);
+    const botBridges = bridgePoolByBot.get(bot.id);
+    const families = buildSessionFamilies(workerSessionsByBot.get(bot.id) ?? [], {
+      bridgePool: botBridges ? [...botBridges.values()] : undefined,
+      bridgeRoots: bridgeRootsByBot.get(bot.id),
+    });
     const activeWorkers: SessionFamily<SessionEntry>[] = [];
     const closedWorkers: SessionFamily<SessionEntry>[] = [];
     for (const family of families) {

@@ -9,9 +9,11 @@ const sidebar = async ({ desktop, registryState, check, SKILL_SESSION_ID, CWD, B
     check(familyRootId === registryState.sessionId, 'parent anchors the session family block');
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
     await desktop.waitForSelector(`.session-item[data-id="${SKILL_SESSION_ID}"]`, { timeout: 2000 });
+    const independentId = '2026-07-03T00-00-00-uismoke4';
     const familyIds = await desktop.locator(`.session-family-root[data-family-id="${registryState.sessionId}"] .session-item`)
         .evaluateAll(rows => rows.map(row => row.dataset.id));
-    check(JSON.stringify(familyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID]), 'expanded family keeps the parent first with its child directly beneath');
+    check(JSON.stringify(familyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID, BETA_ID]), 'expanded family keeps the parent first with same- and cross-workspace children beneath');
+    check((await desktop.locator(`.session-item[data-id="${BETA_ID}"] .session-item-cwd`).textContent() || '').endsWith('/proj-beta'), 'cross-workspace child displays its cwd hint inside the family');
     check(await desktop.evaluate((id) => JSON.parse(localStorage.getItem('pi-dish-expanded-session-families') || '[]')
         .some((key) => parseSessionKey(key).sessionId === id), registryState.sessionId), 'family expansion persists device-locally');
     await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
@@ -77,30 +79,30 @@ const sidebar = async ({ desktop, registryState, check, SKILL_SESSION_ID, CWD, B
     await desktop.waitForSelector('.pinned-segment', { timeout: 2000 });
     check(await desktop.evaluate(() => document.querySelector('#sessionList .session-segment')?.classList.contains('pinned-segment')), 'pinned section renders at the top');
     check(await desktop.locator(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`).count() === 0, 'pinned family remains collapsed by default');
-    await pinToggle(BETA_ID);
+    await pinToggle(independentId);
     await desktop.waitForFunction(() => document.querySelectorAll('.pinned-segment > .session-family-root').length === 2, null, { timeout: 2000 });
     check(await desktop.locator('.pinned-segment .session-drag-handle').count() === 2, 'pinned families carry one drag handle each');
     check(await desktop.locator('.pinned-segment .session-item-cwd').count() === 2, 'pinned rows show their workspace');
-    // Expand the pinned parent, then drag beta above it: the child must move
-    // with the parent wrapper rather than becoming an independently sorted row.
+    // Expand the pinned parent, then drag the independent session above it: the children must move
+    // with the parent wrapper rather than becoming independently sorted rows.
     await desktop.click(`.pinned-segment .session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
     await desktop.waitForSelector(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`);
     // Polls can replace rows between protocol calls. Locator actions re-resolve
     // detached elements and wait for visibility before issuing pointer input.
-    await desktop.locator(`.pinned-segment .session-item[data-id="${BETA_ID}"] .session-drag-handle`)
+    await desktop.locator(`.pinned-segment .session-item[data-id="${independentId}"] .session-drag-handle`)
         .dragTo(desktop.locator(`.pinned-segment .session-item[data-id="${registryState.sessionId}"]`), {
         targetPosition: { x: 20, y: 2 }, steps: 5, timeout: 5000,
     });
-    await desktop.waitForFunction((want) => JSON.stringify([...document.querySelectorAll('.pinned-segment > .session-family-root')].map((el) => el.dataset.familyId)) === want, JSON.stringify([BETA_ID, registryState.sessionId]), { timeout: 2000 });
+    await desktop.waitForFunction((want) => JSON.stringify([...document.querySelectorAll('.pinned-segment > .session-family-root')].map((el) => el.dataset.familyId)) === want, JSON.stringify([independentId, registryState.sessionId]), { timeout: 2000 });
     const draggedFamilyIds = await desktop.locator(`.pinned-segment .session-family-root[data-family-id="${registryState.sessionId}"] .session-item`)
         .evaluateAll(rows => rows.map(row => row.dataset.id));
-    check(JSON.stringify(draggedFamilyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID]), 'drag handle moves the expanded family as one block');
+    check(JSON.stringify(draggedFamilyIds) === JSON.stringify([registryState.sessionId, SKILL_SESSION_ID, BETA_ID]), 'drag handle moves the expanded family as one block');
     check(JSON.stringify(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]')
         .map((key) => parseSessionKey(key).sessionId))) ===
-        JSON.stringify([BETA_ID, registryState.sessionId]), 'manual family order persisted to localStorage');
+        JSON.stringify([independentId, registryState.sessionId]), 'manual family order persisted to localStorage');
     // Collapse, then unpin both; the section disappears and families rejoin.
     await desktop.click(`.pinned-segment .session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
-    await pinToggle(BETA_ID);
+    await pinToggle(independentId);
     await pinToggle(registryState.sessionId);
     await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
     // A filtered result can contain only the child. Pinning that fragment must
@@ -116,18 +118,23 @@ const sidebar = async ({ desktop, registryState, check, SKILL_SESSION_ID, CWD, B
     check(await desktop.locator(`.pinned-segment .session-item[data-id="${SKILL_SESSION_ID}"]`).count() === 0, 'filtered child pin restores the whole family in its collapsed state');
     await pinToggle(SESSION_ID);
     await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
-    // Cross-workspace lineage is navigation-only: pinning its filtered child
-    // must not toggle or absorb the independently pinned parent.
-    await pinToggle(SESSION_ID);
+    // Cross-workspace children belong to the same family, so pinning a filtered
+    // cross-workspace child resolves to its parent family; unrelated sessions pin independently.
     await desktop.fill('#filterInput', 'beta answer');
     await desktop.waitForSelector(`.ranked-segment .session-item[data-id="${BETA_ID}"]`, { timeout: 5000 });
     await pinToggle(BETA_ID);
     check(JSON.stringify(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]')
         .map((key) => parseSessionKey(key).sessionId))) ===
-        JSON.stringify([SESSION_ID, BETA_ID]), 'cross-workspace filtered child pins independently');
+        JSON.stringify([SESSION_ID]), 'cross-workspace filtered child pins its parent family');
+    await desktop.fill('#filterInput', 'rollout notes only');
+    await desktop.waitForSelector(`.ranked-segment .session-item[data-id="${independentId}"]`, { timeout: 5000 });
+    await pinToggle(independentId);
+    check(JSON.stringify(await desktop.evaluate(() => JSON.parse(localStorage.getItem('pi-dish-pinned-sessions') || '[]')
+        .map((key) => parseSessionKey(key).sessionId))) ===
+        JSON.stringify([SESSION_ID, independentId]), 'unrelated filtered session pins independently');
     await desktop.fill('#filterInput', '');
     await desktop.waitForFunction(() => document.querySelectorAll('.pinned-segment > .session-family-root').length === 2, null, { timeout: 5000 });
-    await pinToggle(BETA_ID);
+    await pinToggle(independentId);
     await pinToggle(SESSION_ID);
     await desktop.waitForFunction(() => !document.querySelector('.pinned-segment'), null, { timeout: 2000 });
 };

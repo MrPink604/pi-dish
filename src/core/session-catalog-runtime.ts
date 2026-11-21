@@ -25,6 +25,7 @@ import {
   spawnAllowsManagedClose, spawnAllowsRestart,
 } from './session-ownership';
 import { record as isRecord } from './helper-values';
+import { parseHostQualifiedCaller } from './session-key';
 import { AGY_BRAIN_PROFILE_ID } from './agy-brain';
 import type { SessionOwnership } from './session-ownership';
 import type { AdvertisedCapabilities, BridgeRegistryEntry, HarnessId, NativeSessionId } from './contracts';
@@ -317,13 +318,51 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     const liveChildren = liveSubsessionCandidates(active.map(observation => ({
       id: observation.id, harnessId: observation.harnessId, sessionFile: observation.claimedFile,
     })));
+    const launchParents = decodeLaunchParents(sessionProvenance.readLaunches());
     const history: CatalogHistoryObservation[] = [];
     let indexing = false, discoveryTruncated = false, discoverySkipped = 0;
     if (activeOnly) {
+      const visibleIds = new Set<string>([
+        ...active.map(observation => observation.id),
+        ...liveChildren.map(source => source.routeId),
+      ]);
       for (const source of liveChildren) {
         if (history.length >= SUBSESSION_ROW_CAP) break;
         try {
           history.push({ source, info: sessionIndex.getSessionInfo(source), liveChild: true, advice: historicalAdvice(source, true) });
+        } catch {}
+      }
+      // Include closed intermediate parents between two live sessions (or below a
+      // cross-host ancestor) so the Active tab can render bridge rows without a full scan.
+      const bridgeIds = new Set<string>();
+      for (const id of visibleIds) {
+        const chain: string[] = [];
+        const visited = new Set<string>([id]);
+        let cursor = launchParents.get(id as never) || null;
+        while (cursor && chain.length < 16 && !visited.has(cursor)) {
+          visited.add(cursor);
+          if (visibleIds.has(cursor) || parseHostQualifiedCaller(cursor)) {
+            for (const step of chain) bridgeIds.add(step);
+            break;
+          }
+          chain.push(cursor);
+          cursor = launchParents.get(cursor) || null;
+        }
+      }
+      let bridgesAdded = 0;
+      for (const bridgeId of bridgeIds) {
+        if (bridgesAdded >= 32) break;
+        try {
+          const resolved = ownership.resolveSessionCandidate(bridgeId);
+          if (!resolved) continue;
+          const candidate: DiscoveryCandidate = {
+            ...resolved,
+            dirName: path.basename(path.dirname(resolved.file)),
+            depth: 0,
+            identitySource: 'basename',
+          };
+          history.push({ source: candidate, info: sessionIndex.getSessionInfo(resolved), liveChild: false, bridge: true, advice: historicalAdvice(resolved, false) });
+          bridgesAdded += 1;
         } catch {}
       }
     } else {
@@ -346,7 +385,7 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
     }
     return composeSessionCatalog({
       active, history, activeOnly, indexing, discoveryTruncated, discoverySkipped, hidePrivate: !includePrivate,
-      launchParents: decodeLaunchParents(sessionProvenance.readLaunches()),
+      launchParents,
       routines: decodeRoutineAnnotations(routinesStore.invocationsBySessionId()),
     }, options);
   }

@@ -338,4 +338,120 @@ test('the user moves a top-level bot under another: its parent, family, room and
   assert.equal((await call(handlers.update, { id: fleet.id }, { parentId: a.id })).status, 200, 'one level higher fits');
 });
 
+test('cross-cwd and cross-host children nest once under their parent with host/cwd hints, falling back when parent host is offline', () => {
+  const HUB = '11111111-1111-4111-8111-111111111111';
+  const PEER = '22222222-2222-4222-8222-222222222222';
+  const hosts = [
+    { hostId: HUB, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+    { hostId: PEER, self: false, label: 'tycho', state: 'reachable', key: 'tycho', color: '#fa1', dot: '', hasCache: true },
+  ];
+  const hostChip = (id?: string | null) => id === PEER ? '<span class="host-chip">tycho</span>' : id === HUB ? '<span class="host-chip">beelink</span>' : '';
+  const active = [
+    { id: 'orch', host: HUB, name: 'ORCH', cwd: '/orch', isActive: true, lastActivity: 1000 },
+    { id: 'w-cwd', host: HUB, name: 'Repo Worker', cwd: '/repo', parentId: 'orch', isActive: true, lastActivity: 2000 },
+    { id: 'w-sub', host: HUB, name: 'Same CWD Sub', cwd: '/repo', parentId: 'w-cwd', isActive: true, lastActivity: 2500 },
+    { id: 'w-remote', host: PEER, name: 'GPU Worker', cwd: '/srv/gpu', parentId: `${HUB}:w-cwd`, isActive: true, lastActivity: 3000 },
+    { id: 'w-deep', host: PEER, name: 'Deep Child', cwd: '/srv/gpu', parentId: 'w-remote', isActive: true, lastActivity: 3500 },
+    { id: 'w-deepest', host: PEER, name: 'Deepest Leaf', cwd: '/srv/gpu', parentId: 'w-deep', isActive: true, lastActivity: 4000 },
+  ];
+  const expanded = new Set([`${HUB} orch`, `${HUB} w-cwd`, `${PEER} w-remote`, `${PEER} w-deep`]);
+  const onlineHtml = render({ active, tab: 'active', view: 'workspace', multiHost: true, hosts, expanded, hostChip }).html;
+  assert.equal(onlineHtml.split('data-id="w-cwd"').length, 2, 'cross-cwd child appears once');
+  assert.equal(onlineHtml.split('data-id="w-remote"').length, 2, 'cross-host child appears once');
+  assert.doesNotMatch(onlineHtml, /data-cwd="[^"]*\/repo"/, 'cross-cwd child does not create its own workspace group');
+  assert.doesNotMatch(onlineHtml, /data-host-section="host:tycho"/, 'cross-host child leaves peer section empty when nested under hub');
+  // Cross-cwd child gets cwd hint (no host chip); cross-host child gets both host chip and cwd hint; depth 4 gets depth-capped + L4 badge.
+  const wCwdCard = onlineHtml.slice(onlineHtml.indexOf('data-id="w-cwd"'), onlineHtml.indexOf('data-id="w-remote"'));
+  assert.match(wCwdCard, /session-item-cwd">\/repo<\/span>/);
+  assert.doesNotMatch(wCwdCard, /host-chip/);
+  const wRemoteCard = onlineHtml.slice(onlineHtml.indexOf('data-id="w-remote"'), onlineHtml.indexOf('data-id="w-deep"'));
+  assert.match(wRemoteCard, /<span class="host-chip">tycho<\/span>/);
+  assert.match(wRemoteCard, /session-item-cwd">\/srv\/gpu<\/span>/);
+  assert.match(onlineHtml, /session-family-children depth-capped[\s\S]*?data-id="w-deepest"[\s\S]*?session-depth-badge[^>]*>L4<\/span>/,
+    'depth 4 keeps depth-3 indent and shows an L4 marker');
+
+  // When HUB is offline (no HUB sessions loaded), PEER's worker+leaf stay visible in PEER's host section.
+  const offlineHosts = [
+    { ...hosts[0], state: 'backoff', hasCache: false },
+    hosts[1],
+  ];
+  const offlineHtml = render({
+    active: active.filter(s => s.host === PEER), tab: 'active', view: 'workspace', multiHost: true,
+    hosts: offlineHosts, expanded: new Set([`${PEER} w-remote`]), hostChip,
+  }).html;
+  assert.match(offlineHtml, /data-host-section="host:tycho"[\s\S]*?data-id="w-remote"[\s\S]*?data-id="w-deep"/);
+});
+
+test('4-level bot hierarchy caps worker indent at depth 3 and keeps cross-cwd/cross-host worker descendants under the bot', () => {
+  const HUB = '11111111-1111-4111-8111-111111111111';
+  const PEER = '22222222-2222-4222-8222-222222222222';
+  const bot = (id: string, name: string, parentId: string | null) => ({
+    id, name, parentId, status: 'active', model: 'claude-code/claude-opus-5-5', thinking: null, identity: name, places: [], sessionId: `route-${id}`,
+  });
+  const bots = [bot('b1', 'RootBot', null), bot('b2', 'SubBot', 'b1'), bot('b3', 'SubSubBot', 'b2'), bot('b4', 'LeafBot', 'b3')];
+  const hosts = [
+    { hostId: HUB, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+    { hostId: PEER, self: false, label: 'tycho', state: 'reachable', key: 'tycho', color: '#fa1', dot: '', hasCache: true },
+  ];
+  const hostChip = (id?: string | null) => id === PEER ? '<span class="host-chip">tycho</span>' : '';
+  const active = [
+    { id: 'route-b1', host: HUB, name: 'RootBot', harnessId: 'bot', cwd: '/home', isActive: true },
+    { id: 'route-b2', host: HUB, name: 'SubBot', harnessId: 'bot', cwd: '/home', isActive: true },
+    { id: 'route-b3', host: HUB, name: 'SubSubBot', harnessId: 'bot', cwd: '/home', isActive: true },
+    { id: 'route-b4', host: HUB, name: 'LeafBot', harnessId: 'bot', cwd: '/home', isActive: true },
+    { id: 'w4', host: HUB, name: 'Level4 Worker', cwd: '/repo', parentId: 'route-b4', isActive: true },
+    { id: 'w4-sub', host: PEER, name: 'Remote Grandchild', cwd: '/srv/other', parentId: `${HUB}:w4`, isActive: true },
+  ];
+  const html = render({
+    active, tab: 'active', multiHost: true, hosts, selfHostId: HUB, bots, hostChip,
+    expanded: new Set([`${HUB} w4`]),
+  }).html;
+  assert.deepEqual([...html.matchAll(/data-bot-id="(\w+)" style="padding-left:(\d+)px"/g)].map(m => [m[1], m[2]]),
+    [['b1', '0'], ['b2', '14'], ['b3', '28'], ['b4', '42']], '4 bot levels render at 0/14/28/42px');
+  assert.match(html, /bot-worker-node" style="padding-left:42px"[\s\S]*?data-id="w4"[\s\S]*?session-depth-badge[^>]*>L4<\/span>/,
+    'worker under level-4 bot caps indent at 42px and shows L4 badge');
+  assert.match(html, /session-family-children depth-capped[\s\S]*?data-id="w4-sub"[\s\S]*?session-depth-badge[^>]*>L5<\/span>[\s\S]*?<span class="host-chip">tycho<\/span>/,
+    'cross-host, cross-cwd child of bot worker stays inside Bots with L5 badge and host chip');
+  assert.doesNotMatch(html, /host-section/, 'nothing leaks out of the Bots section');
+});
+
+test('Active tab renders closed intermediate parents as dimmed bridge rows instead of orphaning active grandchildren', () => {
+  const HUB = '11111111-1111-4111-8111-111111111111';
+  const bot = { id: 'fleet', name: 'Fleet', parentId: null, status: 'active', model: 'claude-code/claude-opus-5-5', thinking: null, identity: 'Fleet', places: [], sessionId: 'route-fleet' };
+  const active = [
+    { id: 'route-fleet', host: HUB, name: 'Fleet', harnessId: 'bot', cwd: '/home', isActive: true, lastActivity: 1000 },
+    { id: 'bot-leaf', host: HUB, name: 'Bot Active Leaf', cwd: '/repo', parentId: 'bot-mid', isActive: true, lastActivity: 4000 },
+    { id: 'orch', host: HUB, name: 'ORCH', cwd: '/orch', isActive: true, lastActivity: 1000 },
+    { id: 'orch-leaf', host: HUB, name: 'ORCH Active Leaf', cwd: '/repo', parentId: 'orch-mid', isActive: true, lastActivity: 5000 },
+  ];
+  const previous = [
+    { id: 'bot-mid', host: HUB, name: 'Closed Bot Worker', cwd: '/repo', parentId: 'route-fleet', isActive: false, lastActivity: 2000 },
+    { id: 'orch-mid', host: HUB, name: 'Closed Middle', cwd: '/mid', parentId: 'orch', isActive: false, lastActivity: 2000 },
+    { id: 'unused-closed', host: HUB, name: 'Unrelated Closed', cwd: '/orch', parentId: 'orch', isActive: false, lastActivity: 1500 },
+  ];
+  const html = render({
+    active, previous, tab: 'active', selfHostId: HUB, bots: [bot],
+    expanded: new Set([`${HUB} orch`]),
+  }).html;
+  assert.match(html, /data-bot-children="fleet"[\s\S]*?session-item-bridge" data-id="bot-mid"[\s\S]*?session-bridge-chip[^>]*>closed<\/span>[\s\S]*?data-id="bot-leaf"/,
+    'closed worker bridges active grandchild under its bot on Active tab');
+  assert.match(html, /data-id="orch"[\s\S]*?session-item-bridge" data-id="orch-mid"[\s\S]*?data-id="orch-leaf"/,
+    'closed intermediate parent bridges active grandchild under ORCH on Active tab');
+  assert.doesNotMatch(html, /unused-closed/, 'closed leaves without active descendants stay hidden on Active');
+});
+
+test('collapsed host, workspace, and date group headers bubble up askPending ahead of working and unread', () => {
+  const HUB = '11111111-1111-4111-8111-111111111111';
+  const hosts = [{ hostId: HUB, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true }];
+  const active = [
+    { id: 's1', host: HUB, name: 'Asking', cwd: '/repo', isActive: true, askPending: true, turnInProgress: true, lastActivity: Date.now() },
+  ];
+  const collapsedHost = render({ active, multiHost: true, hosts, collapsed: new Set(['host:self']) }).html;
+  assert.match(collapsedHost, /host-section-header[\s\S]*?session-item-status asking"[^>]*>\?<\/span>/);
+  const collapsedWs = render({ active, multiHost: true, hosts, collapsed: new Set([`${HUB} /repo`]) }).html;
+  assert.match(collapsedWs, /workspace-group-header[\s\S]*?session-item-status asking"[^>]*>\?<\/span>/);
+  const collapsedDate = render({ active, view: 'recent', collapsed: new Set(['date:today']) }).html;
+  assert.match(collapsedDate, /workspace-group-header[\s\S]*?session-item-status asking"[^>]*>\?<\/span>/);
+});
+
 export {};

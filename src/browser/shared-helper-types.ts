@@ -1,6 +1,6 @@
 export interface WorkspaceNode<T> { label: string; path: string; sessions: readonly T[] | null; children: WorkspaceNode<T>[]; count: number; order: number }
 export interface WorkspaceBranch<T> { label: string; path: string; sessions: readonly T[] | null; children: Map<string, WorkspaceBranch<T>>; order: number }
-export interface SessionFamily<T> { session: T; children: SessionFamily<T>[]; activity: number; size: number; order: number }
+export interface SessionFamily<T> { session: T; children: SessionFamily<T>[]; activity: number; size: number; order: number; bridge?: boolean }
 export interface Relation { readonly kind?: string | null }
 export interface RuntimeInfo { readonly kind?: string; readonly pid?: number | null; readonly server?: string | null; readonly tmuxSession?: string | null; readonly windowIndex?: number | null; readonly windowName?: string | null }
 export interface ResponseMetadata {

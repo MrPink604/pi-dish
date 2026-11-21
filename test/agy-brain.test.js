@@ -460,3 +460,44 @@ test('background task lifecycle ignores quoted foreign task ids, honors cancella
     assert.equal(schedAct.working, false, 'subagent sleeping on a schedule timer is not reported as working');
     assert.equal(schedAct.currentAction, 'Waiting on schedule');
 });
+test('parseAgyBrainEntries resolves 3-deep sub-subagent parents to real brain transcripts instead of missing mirrors', () => {
+    const rootId = 'aaaaaaaa-1111-4111-8111-111111111111';
+    const sub1Id = 'bbbbbbbb-2222-4222-8222-222222222222';
+    const sub2Id = 'cccccccc-3333-4333-8333-333333333333';
+    // Root has a mirror in ~/.pi/dish/agy/sessions/<root>.jsonl; Sub1 and Sub2 live only in brain/.
+    const rootMirror = path.join(tmpHome, '.pi', 'dish', 'agy', 'sessions', `${rootId}.jsonl`);
+    writeJsonl(rootMirror, [
+        { type: 'session', version: 3, id: rootId, cwd: '/repo', timestamp: '2026-11-20T11:00:00Z' },
+    ]);
+    writeJson(path.join(brainRoot, rootId, '.system_generated', 'subagents', `${sub1Id}.json`), {
+        conversationId: sub1Id,
+        subagentDescriptor: { typeName: 'self', role: 'Middle Agent' },
+        state: 'SUBAGENT_STATE_ALIVE',
+        workspaceUris: ['file:///repo'],
+    });
+    const sub1Transcript = (0, test_types_js_1.present)(agyBrain.agyBrainTranscriptPath(sub1Id), 'sub1 transcript');
+    writeJsonl(sub1Transcript, [
+        { step_index: 0, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: '2026-11-20T11:01:00Z', content: 'Delegated to leaf.' },
+    ]);
+    writeJson(path.join(brainRoot, sub1Id, '.system_generated', 'subagents', `${sub2Id}.json`), {
+        conversationId: sub2Id,
+        subagentDescriptor: { typeName: 'research', role: 'Deep Researcher' },
+        state: 'SUBAGENT_STATE_ALIVE',
+        workspaceUris: ['file:///repo/worktree'],
+    });
+    const sub2Transcript = (0, test_types_js_1.present)(agyBrain.agyBrainTranscriptPath(sub2Id), 'sub2 transcript');
+    writeJsonl(sub2Transcript, [
+        {
+            step_index: 0,
+            type: 'PLANNER_RESPONSE',
+            status: 'RUNNING',
+            created_at: '2026-11-20T11:02:00Z',
+            tool_calls: [{ name: 'read_file', args: { Path: JSON.stringify('/repo/worktree/a.ts') } }],
+        },
+    ]);
+    const sub1Header = (0, test_types_js_1.record)((0, test_types_js_1.records)(agyBrain.parseAgyBrainEntries(fs.readFileSync(sub1Transcript, 'utf8'), sub1Transcript))[0]);
+    assert.equal(sub1Header.parentSession, rootMirror, 'depth-1 subagent points at root mirror');
+    const sub2Header = (0, test_types_js_1.record)((0, test_types_js_1.records)(agyBrain.parseAgyBrainEntries(fs.readFileSync(sub2Transcript, 'utf8'), sub2Transcript))[0]);
+    assert.equal(sub2Header.parentSession, sub1Transcript, 'depth-2 sub-subagent points at parent brain transcript');
+    assert.equal(agyBrain.hasActiveAgyBrainWork(rootId), true, 'active work bubbles up from depth-2 sub-subagent');
+});

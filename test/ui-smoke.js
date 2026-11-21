@@ -2569,9 +2569,9 @@ let remoteHost = null;
             check(await desktop.evaluate(() => localStorage.getItem('pi-dish-active-scopes')) === JSON.stringify(['No beta']), 'active scope persisted to localStorage');
             const serverFilters = await fetch(`${base}/api/settings`).then(r => r.json());
             check(JSON.stringify(serverFilters.savedFilters) === JSON.stringify([{ name: 'No beta', query: '-beta' }]), 'scope definition persisted server-side');
-            // Toggling the chip off restores the hidden session.
+            // Toggling the chip off restores the hidden sessions.
             await desktop.click('.scope-chip');
-            await desktop.waitForSelector(`.session-item[data-id="${BETA_ID}"]`, { timeout: 5000 });
+            await desktop.waitForSelector(`.session-item[data-id="${RANK_ID}"]`, { timeout: 5000 });
             check(await desktop.locator('.scope-hidden-note').count() === 0, 'inactive scope stops filtering');
             // Recent view: date buckets instead of the workspace tree, rows carry cwd.
             await desktop.click('#viewToggle');
@@ -2600,6 +2600,10 @@ let remoteHost = null;
             // older messages. Pages loaded deliberately stay warm across a brief
             // session switch, including the earliest page a filtered search may need.
             console.log('transcript history retention:');
+            if (await desktop.locator(`.session-item[data-id="${BETA_ID}"]`).count() === 0) {
+                await desktop.click(`.session-item[data-id="${registryState.sessionId}"] .session-family-toggle`);
+                await desktop.waitForSelector(`.session-item[data-id="${BETA_ID}"]`, { timeout: 5000 });
+            }
             await desktop.click(`.session-item[data-id="${BETA_ID}"]`);
             await desktop.waitForFunction(() => document.querySelectorAll('#messages [data-msg-index]').length === 50, null, { timeout: 5000 });
             await desktop.evaluate(() => { fixtureElement(document.getElementById('messages'), "document.getElementById('messages')").scrollTop = 0; });

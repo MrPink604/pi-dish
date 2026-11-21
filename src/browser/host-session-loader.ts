@@ -106,10 +106,29 @@ export function createHostSessionLoader(options: HostSessionLoaderOptions) {
         if (data.indexing) options.onIndexing();
       }
       const active = data.active.map(sessionEntryFromRow);
+      let nextPrevious: readonly SessionEntry[];
+      if (withPrevious) {
+        nextPrevious = data.previous.map(sessionEntryFromRow);
+      } else {
+        nextPrevious = mergeLiveSubagents(cached.previous, data.children?.map(sessionEntryFromRow));
+        if (data.previous?.length) {
+          const bridges = new Map(data.previous.map(raw => {
+            const row = sessionEntryFromRow(raw);
+            return [row.id, row];
+          }));
+          const updated = nextPrevious.map(session => {
+            const bridge = bridges.get(session.id);
+            if (!bridge) return session;
+            bridges.delete(session.id);
+            return { ...session, ...bridge };
+          });
+          for (const bridge of bridges.values()) updated.push(bridge);
+          nextPrevious = updated;
+        }
+      }
       const next: SessionLists = {
         active: withPrevious ? active : mergeActiveHints(active, cached.active),
-        previous: withPrevious ? data.previous.map(sessionEntryFromRow)
-          : mergeLiveSubagents(cached.previous, data.children?.map(sessionEntryFromRow)),
+        previous: nextPrevious,
       };
       // Unread bookkeeping must finish before the state writer renders rows.
       options.beforePublish(host, next, wireQuery);

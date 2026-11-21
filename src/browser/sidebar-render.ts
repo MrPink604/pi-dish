@@ -6,7 +6,7 @@ import { escapeHtml } from '../core/helper-format';
 import { countLabel, cacheExpiryPresentation, contextClass, formatTokens, formatRelativeTime, shortCwd } from './helper-format';
 import { shortModelName } from './helper-usage';
 import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDisplayLabel, sortHostSections, hostSectionKey } from './helper-identity';
-import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
+import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
 import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, evaluateSessionQuery, scoreSessionMatch } from '../core/helper-query';
 import { hibernationSummary } from './hibernation';
 import { botClosedKey, botCollapseKey, buildBotSessionTree, type BotSessionTree, type BotTreeNode, type SidebarBot } from './bots';
@@ -29,12 +29,13 @@ export interface SidebarProjection {
   readonly count: number;
   readonly html: string;
 }
+const MAX_VISUAL_INDENT_DEPTH = 3;
 interface RowOptions {
-  familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean;
-  pinnedRow?: boolean; showCwd?: boolean; botActions?: string;
+  familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; visualDepth?: number; familyPinned?: boolean;
+  pinnedRow?: boolean; showCwd?: boolean; showHost?: boolean; bridge?: boolean; botActions?: string;
   botToggle?: string; forceLeaf?: boolean; statusOverride?: readonly SessionEntry[]; timeOverride?: number;
 }
-interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean; forceLeaf?: boolean }
+interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean; forceLeaf?: boolean; baseDepth?: number }
 export function harnessBadgeInnerHtml(info: ReturnType<typeof harnessBadgeInfo>) {
   const icon = info.icon
     ? `<img class="harness-badge-icon" src="${escapeHtml(info.icon)}" alt="">`
@@ -197,9 +198,15 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const isPinned = opts.familyPinned ?? pinnedRoots.has(canonicalRootKey);
   const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin family' : 'Pin family to top'}">📌</button>`;
   const familyToggle = opts.botToggle !== undefined ? opts.botToggle
-    : hasChildren
-      ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}" title="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}"><span>${familyExpanded ? '▾' : '▸'}</span><small>${familyNode!.size - 1}</small></button>`
-      : (((opts.familyDepth || 0) > 0 || opts.forceLeaf) ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '');
+    : opts.bridge
+      ? '<span class="session-family-leaf session-bridge-marker" aria-hidden="true">↳</span>'
+      : hasChildren
+        ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}" title="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}"><span>${familyExpanded ? '▾' : '▸'}</span><small>${familyNode!.size - 1}</small></button>`
+        : (((opts.familyDepth || 0) > 0 || opts.forceLeaf) ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '');
+  const visualDepth = opts.visualDepth ?? opts.familyDepth ?? 0;
+  const depthBadge = visualDepth > MAX_VISUAL_INDENT_DEPTH
+    ? `<span class="session-depth-badge" title="Nesting depth ${visualDepth}">L${visualDepth}</span>`
+    : '';
   // Read confirm/busy from options so a poll re-render keeps an armed confirm.
   const closeArmed = options.closeConfirm === key;
   const closeBusy = options.closeBusy === key;
@@ -223,17 +230,21 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const privateChip = session.private
     ? '<span class="private-chip" title="Private session — hidden until the PIN is entered; stored outside backed-up session folders">private</span>'
     : '';
-  // Pinned rows get a drag handle; out-of-group rows get a cwd hint.
+  const bridgeChip = opts.bridge
+    ? '<span class="session-bridge-chip" title="Closed intermediate parent kept visible to anchor active descendants">closed</span>'
+    : '';
+  // Pinned rows get a drag handle; out-of-group and cross-cwd child rows get a cwd hint.
   const dragHandle = opts.pinnedRow ? '<span class="session-drag-handle" title="Drag to reorder">⠿</span>' : '';
   const cwdHint = (opts.pinnedRow || opts.showCwd) ? `<span class="session-item-cwd">${escapeHtml(shortCwd(session.cwd || '~'))}</span>` : '';
-  // Out-of-group rows name their host; in the tree the group header does.
+  // Out-of-group and cross-host child rows name their host; in the tree the group header does.
   let hostChip = '';
-  if (opts.pinnedRow || opts.showCwd) {
+  if (opts.showHost ?? (opts.pinnedRow || opts.showCwd)) {
     const host = session.host || null;
     if (!hostChips.has(host)) hostChips.set(host, options.hostChip(host));
     hostChip = hostChips.get(host)!;
   }
   const staleHost = downHosts.has(session.host || null) ? ' stale-host' : '';
+  const bridgeClass = opts.bridge ? ' session-item-bridge' : '';
   // Snippet explains content-only matches; only positive plain terms are highlighted.
   const snippetLine = session.searchSnippet
     ? `<div class="session-item-snippet">${highlightTokens(session.searchSnippet, queryTokens)}</div>`
@@ -243,9 +254,9 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
     : '';
 
   const html = `
-    <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}${staleHost}" data-id="${escapeHtml(session.id)}"${session.host ? ` data-host="${escapeHtml(session.host)}"` : ''}>
+    <div class="session-item ${activeClass} ${inactiveClass}${closeBusy ? ' closing' : ''}${staleHost}${bridgeClass}" data-id="${escapeHtml(session.id)}"${session.host ? ` data-host="${escapeHtml(session.host)}"` : ''}>
       <div class="session-item-header">
-        ${dragHandle}${familyToggle}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
+        ${dragHandle}${familyToggle}${depthBadge}${liveDot}<span class="session-item-name" title="${escapeHtml(session.id)}">${escapeHtml(displayName)}</span>
         <span class="session-item-time">${timeAgo}</span>
         ${opts.botActions || ''}${pinBtn}${closeBtn}
       </div>
@@ -255,7 +266,7 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
         ${cacheHtml}<span class="session-item-context ${ctxClass}" title="${escapeHtml(ctxTitle)}">${escapeHtml(ctxText)}</span>
       </div>
       <div class="session-item-tags${hostChip ? ' with-host' : ''}">
-        ${hostChip}${harnessBadge}${routineChip}${hibernationChip}${privateChip}${cwdHint}
+        ${hostChip}${harnessBadge}${bridgeChip}${routineChip}${hibernationChip}${privateChip}${cwdHint}
       </div>
       ${snippetLine}
     </div>
@@ -268,21 +279,30 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
 }
 
 function renderSessionFamily(node: SessionFamily<SessionEntry>, opts: FamilyOptions = {}, depth = 0, rootId = node.session.id,
-  rootKey = sessionRefKey(node.session)): string {
-  const expanded = node.children.length > 0 && options.expanded.has(sessionRefKey(node.session));
+  rootKey = sessionRefKey(node.session), parentSession: SessionEntry | null = null): string {
+  const expanded = node.children.length > 0 && (node.bridge ? true : options.expanded.has(sessionRefKey(node.session)));
+  const visualDepth = (opts.baseDepth ?? 0) + depth;
+  const diffHost = depth > 0 && (node.session.host || null) !== (parentSession?.host || null);
+  const diffCwd = depth > 0 && (node.session.cwd || '~') !== (parentSession?.cwd || '~');
   const row = renderSessionItem(node.session, {
     familyNode: node,
     // Avoids findSession's linear scan per row.
     familyRootKey: rootKey,
     familyDepth: depth,
+    visualDepth,
     familyPinned: !!opts.pinnedFamily,
     pinnedRow: !!opts.pinnedFamily && depth === 0,
-    showCwd: !!opts.showCwd && depth === 0,
+    showCwd: depth === 0 ? !!opts.showCwd : diffCwd,
+    showHost: depth === 0 ? (!!opts.showCwd || !!opts.pinnedFamily) : diffHost,
+    bridge: !!node.bridge,
     forceLeaf: !!opts.forceLeaf && depth === 0,
   });
+  const childrenClass = visualDepth + 1 > MAX_VISUAL_INDENT_DEPTH
+    ? 'session-family-children depth-capped'
+    : 'session-family-children';
   const children = expanded
-    ? `<div class="session-family-children">${node.children.map(child =>
-        renderSessionFamily(child, opts, depth + 1, rootId, rootKey)).join('')}</div>`
+    ? `<div class="${childrenClass}">${node.children.map(child =>
+        renderSessionFamily(child, opts, depth + 1, rootId, rootKey, node.session)).join('')}</div>`
     : '';
   const classes = depth === 0 ? 'session-family session-family-root' : 'session-family session-family-child';
   const familyAttr = depth === 0 ? ` data-family-id="${escapeHtml(rootId)}" data-family-key="${escapeHtml(rootKey)}"` : '';
@@ -328,6 +348,20 @@ function aggregatedStatusDot(sessions: readonly SessionEntry[]): string {
   return '';
 }
 
+/** Collapsed group headers (hosts, workspaces, date buckets) surface the highest-priority signal. */
+function groupHeaderStatusDot(sessions: readonly SessionEntry[]): string {
+  if (sessions.some(s => s.askPending)) {
+    return '<span class="session-item-status asking" title="Waiting for an answer to a question">?</span>';
+  }
+  if (sessions.some(s => s.turnInProgress || s.compacting)) {
+    return '<span class="session-item-status working" title="Agent working"></span>';
+  }
+  if (sessions.some(options.unread)) {
+    return '<span class="session-item-status unread" title="New activity"></span>';
+  }
+  return '';
+}
+
 /** The Bots group: each bot under its parent, with its workers and sub-bots collapsible beneath it. */
 function renderBotsSegment(tree: BotSessionTree) {
   function renderBotBranch(node: BotTreeNode): string {
@@ -347,21 +381,24 @@ function renderBotsSegment(tree: BotSessionTree) {
       ? `<button type="button" class="session-family-toggle bot-tree-toggle" data-bot-toggle="${escapeHtml(bot.id)}" aria-expanded="${!isCollapsed}" aria-label="${escapeHtml(toggleLabel)}" title="${escapeHtml(toggleLabel)}"><span>${isCollapsed ? '▸' : '▾'}</span><small>${node.descendantCount}</small></button>`
       : undefined;
 
+    const botIndent = Math.min(depth, MAX_VISUAL_INDENT_DEPTH) * 14;
     const row = session
       ? renderSessionItem(session, {
           familyDepth: depth,
+          visualDepth: depth,
           botActions: actions,
           botToggle: toggleHtml,
           statusOverride: isCollapsed ? node.allSessions : undefined,
           timeOverride: isCollapsed && node.activity > 0 ? node.activity : undefined,
         })
-      : `<div class="bot-item bot-stopped">${toggleHtml ?? (depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '')}${isCollapsed ? aggregatedStatusDot(node.allSessions) : ''}<span class="bot-item-name">${escapeHtml(bot.name)}</span><span class="bot-item-state">not running</span>${actions}</div>`;
+      : `<div class="bot-item bot-stopped">${toggleHtml ?? (depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '')}${depth > MAX_VISUAL_INDENT_DEPTH ? `<span class="session-depth-badge" title="Nesting depth ${depth}">L${depth}</span>` : ''}${isCollapsed ? aggregatedStatusDot(node.allSessions) : ''}<span class="bot-item-name">${escapeHtml(bot.name)}</span><span class="bot-item-state">not running</span>${actions}</div>`;
 
     let childrenHtml = '';
     if (hasChildren && !isCollapsed) {
-      const workerIndent = (depth + 1) * 14;
+      const workerDepth = depth + 1;
+      const workerIndent = Math.min(workerDepth, MAX_VISUAL_INDENT_DEPTH) * 14;
       const activeHtml = node.activeWorkers.map(worker =>
-        `<div class="bot-worker-node" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true })}</div>`
+        `<div class="bot-worker-node" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true, baseDepth: workerDepth })}</div>`
       ).join('');
       let closedHtml = '';
       if (node.closedWorkers.length) {
@@ -374,14 +411,14 @@ function renderBotsSegment(tree: BotSessionTree) {
           + `</button></div>`;
         if (closedExpanded) {
           closedHtml += `<div class="bot-closed-list">${node.closedWorkers.map(worker =>
-            `<div class="bot-worker-node bot-worker-closed" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true })}</div>`
+            `<div class="bot-worker-node bot-worker-closed" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true, baseDepth: workerDepth })}</div>`
           ).join('')}</div>`;
         }
       }
       const subBotsHtml = node.children.map(renderBotBranch).join('');
       childrenHtml = `<div class="bot-children" data-bot-children="${escapeHtml(bot.id)}">${activeHtml}${closedHtml}${subBotsHtml}</div>`;
     }
-    return `<div class="bot-branch" data-bot-branch="${escapeHtml(bot.id)}"><div class="bot-node" data-bot-id="${escapeHtml(bot.id)}" style="padding-left:${depth * 14}px">${row}</div>${childrenHtml}</div>`;
+    return `<div class="bot-branch" data-bot-branch="${escapeHtml(bot.id)}"><div class="bot-node" data-bot-id="${escapeHtml(bot.id)}" style="padding-left:${botIndent}px">${row}</div>${childrenHtml}</div>`;
   }
   // Its own classes: the workspace tree's headers collapse and count as path groups.
   return `<div class="bots-segment">
@@ -441,7 +478,10 @@ function renderSessions() {
   }
   // Bots have their own group, nested under their parents with their workers, ahead of the sessions; a search ranks them with the rest.
   const selfHostId = options.selfHostId ?? options.hosts.find(host => host.self)?.hostId ?? null;
-  const botSessionTree = options.query ? null : buildBotSessionTree(options.bots, filtered, selfHostId);
+  const bridgePool = options.tab === 'active' && !options.query
+    ? previous.filter(session => !session.isActive && !session.subagentLive)
+    : undefined;
+  const botSessionTree = options.query ? null : buildBotSessionTree(options.bots, filtered, selfHostId, bridgePool);
   const sessionsShown = botSessionTree?.botCount
     ? filtered.filter(session => !botSessionTree.claimed.has(sessionRefKey(session)))
     : filtered;
@@ -469,7 +509,10 @@ function renderSessions() {
       ${ranked.map(({ session }) => renderSessionItem(session, { showCwd: true })).join('')}
     </div>`;
   } else {
-    const families = buildSessionFamilies(sessionsShown);
+    const unclaimedBridgePool = bridgePool && botSessionTree?.botCount
+      ? bridgePool.filter(session => !botSessionTree.claimed.has(sessionRefKey(session)))
+      : bridgePool;
+    const families = buildSessionFamilies(sessionsShown, { bridgePool: unclaimedBridgePool });
     const [pinnedFamilies, restFamilies] = partitionPinnedFamilies(families, options.pinned);
     if (pinnedFamilies.length > 0) {
       html += `<div class="session-segment pinned-segment">
@@ -484,7 +527,7 @@ function renderSessions() {
       // A family sits in its newest member's bucket so it isn't split.
       html += groupSessionsByDate(restFamilies).map(renderDateBucket).join('');
     } else {
-      html += renderWorkspaceTrees(flattenSessionFamilies(restFamilies));
+      html += renderWorkspaceTrees(restFamilies);
     }
   }
   // Down hosts with no cached rows would otherwise vanish silently.
@@ -510,17 +553,36 @@ function workspaceGroupKey(hostId: string | null, path: string) {
 // Hosts with their own section; offline notes skip them so nothing is announced twice.
 let hostSectionsShown: Set<string> | null = null;
 
+/** Group session families by their root session's workspace, keeping newest-descendant recency. */
+function groupFamiliesByWorkspace(families: readonly SessionFamily<SessionEntry>[], collapsedSet?: ReadonlySet<string>) {
+  const groups = new Map<string, SessionFamily<SessionEntry>[]>();
+  for (const family of families) {
+    const key = family.session.cwd || '~';
+    let group = groups.get(key);
+    if (!group) { group = []; groups.set(key, group); }
+    group.push(family);
+  }
+  for (const [, list] of groups) {
+    list.sort((a, b) => b.activity - a.activity || a.order - b.order);
+  }
+  const collapsed = (cwd: string) => (collapsedSet?.has(cwd) ? 1 : 0);
+  return [...groups.entries()].sort((a, b) =>
+    collapsed(a[0]) - collapsed(b[0])
+    || b[1][0].activity - a[1][0].activity);
+}
+
 /** Multi-host: one section per host, self first then by label (not recency, so headings stay put). */
-function renderWorkspaceTrees(list: readonly SessionEntry[]) {
+function renderWorkspaceTrees(families: readonly SessionFamily<SessionEntry>[]) {
   if (!options.multiHost) {
-    const tree = buildWorkspaceTree(groupByWorkspace(list, options.collapsed), options.collapsed);
+    const tree = buildWorkspaceTree(groupFamiliesByWorkspace(families, options.collapsed), options.collapsed);
     return tree.map(node => renderWorkspaceNode(node)).join('');
   }
   hostSectionsShown = new Set();
   let html = '';
   for (const host of sortHostSections(options.hosts)) {
     const hostId = host.hostId || null;
-    const mine = list.filter(s => (s.host || null) === hostId);
+    const mine = families.filter(family => (family.session.host || null) === hostId);
+    const mineSessions = flattenSessionFamilies(mine);
     const down = hostIsDown(host);
     // A down host keeps its heading so its absence is explained in place.
     if (!mine.length && !down) continue;
@@ -529,9 +591,9 @@ function renderWorkspaceTrees(list: readonly SessionEntry[]) {
     const isCollapsed = options.collapsed.has(key);
     let body = '';
     if (!isCollapsed) {
-      // groupByWorkspace/buildWorkspaceTree only ask `has(path)`; strip the host prefix.
+      // groupFamiliesByWorkspace/buildWorkspaceTree only ask `has(path)`; strip the host prefix.
       const collapsedView = hostId ? new Set([...options.collapsed].filter(key => key.startsWith(hostId + ' ')).map(key => key.slice((hostId + ' ').length))) : options.collapsed;
-      body = buildWorkspaceTree(groupByWorkspace(mine, collapsedView), collapsedView)
+      body = buildWorkspaceTree(groupFamiliesByWorkspace(mine, collapsedView), collapsedView)
         .map(node => renderWorkspaceNode(node, { hostId })).join('');
       if (!mine.length) {
         body = `<div class="host-section-empty">${escapeHtml(host.state === 'blocked'
@@ -539,11 +601,7 @@ function renderWorkspaceTrees(list: readonly SessionEntry[]) {
       }
     }
     // A collapsed section must not hide activity.
-    let headerDot = '';
-    if (isCollapsed && mine.length) {
-      if (mine.some(s => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
-      else if (mine.some(options.unread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
-    }
+    const headerDot = isCollapsed && mineSessions.length ? groupHeaderStatusDot(mineSessions) : '';
     const stateNote = down
       ? `<span class="host-section-state">${host.state === 'blocked' ? 'needs a token' : 'unreachable'}</span>`
       : '';
@@ -552,7 +610,7 @@ function renderWorkspaceTrees(list: readonly SessionEntry[]) {
         <span class="host-section-chevron">${isCollapsed ? '▸' : '▾'}</span>
         ${host.dot}
         <span class="host-section-name">${escapeHtml(hostDisplayLabel(host))}</span>
-        ${stateNote}${headerDot}<span class="host-section-count">${mine.length}</span>
+        ${stateNote}${headerDot}<span class="host-section-count">${mineSessions.length}</span>
       </div>
       ${isCollapsed ? '' : `<div class="host-section-body">${body}</div>`}
     </div>`;
@@ -572,28 +630,24 @@ function hostOfflineNotesHtml() {
 }
 
 /** Collapsing hides the subtree, so the header surfaces the best descendant signal. */
-function renderWorkspaceNode(node: WorkspaceNode<SessionEntry>, opts: { hostId?: string | null } = {}): string {
+function renderWorkspaceNode(node: WorkspaceNode<SessionFamily<SessionEntry>>, opts: { hostId?: string | null } = {}): string {
   const hostId = opts.hostId || null;
   const groupKey = workspaceGroupKey(hostId, node.path);
   const isCollapsed = options.collapsed.has(groupKey);
-  let headerDot = '';
-  if (isCollapsed) {
-    const all = collectTreeSessions(node);
-    if (all.some(s => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
-    else if (all.some(options.unread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
-  }
+  const allSessions = flattenSessionFamilies(collectTreeSessions(node));
+  const headerDot = isCollapsed ? groupHeaderStatusDot(allSessions) : '';
   let body = '';
   if (!isCollapsed) {
     if (node.children.length) {
       body = `<div class="workspace-children">${node.children.map(child => renderWorkspaceNode(child, { hostId })).join('')}</div>`;
     }
-    body += buildSessionFamilies(node.sessions || []).map(family => renderSessionFamily(family)).join('');
+    body += (node.sessions || []).map(family => renderSessionFamily(family)).join('');
   }
   return `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
     <div class="workspace-group-header" data-cwd="${escapeHtml(groupKey)}">
       <span class="workspace-group-chevron">${isCollapsed ? '▸' : '▾'}</span>
       <span class="workspace-group-label" title="${escapeHtml(node.path)}">${escapeHtml(node.label)}</span>
-      ${headerDot}<span class="workspace-group-count">${node.count}</span>
+      ${headerDot}<span class="workspace-group-count">${allSessions.length}</span>
       <button class="workspace-new-btn" data-path="${escapeHtml(node.path)}"${hostId ? ` data-host="${escapeHtml(hostId)}"` : ''} title="New session in ${escapeHtml(node.path)}">+</button>
     </div>
     ${body}
@@ -605,11 +659,7 @@ function renderDateBucket(bucket: { key: string; label: string; sessions: readon
   const key = 'date:' + bucket.key;
   const isCollapsed = options.collapsed.has(key);
   const bucketMembers = flattenSessionFamilies(bucket.sessions);
-  let headerDot = '';
-  if (isCollapsed) {
-    if (bucketMembers.some(s => s.turnInProgress || s.compacting)) headerDot = '<span class="session-item-status working" title="Agent working"></span>';
-    else if (bucketMembers.some(options.unread)) headerDot = '<span class="session-item-status unread" title="New activity"></span>';
-  }
+  const headerDot = isCollapsed ? groupHeaderStatusDot(bucketMembers) : '';
   const body = isCollapsed ? '' : bucket.sessions.map(family => renderSessionFamily(family, { showCwd: true })).join('');
   return `<div class="session-segment${isCollapsed ? ' collapsed' : ''}">
     <div class="workspace-group-header" data-cwd="${escapeHtml(key)}">

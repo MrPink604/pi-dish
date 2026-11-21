@@ -553,7 +553,9 @@ export function inspectAgyTranscriptActivity(conversationId: string): AgyTranscr
 }
 
 /** True when any subagent, swarm worker, or non-daemon task of `sessionId` is actively running. */
-export function hasActiveAgyBrainWork(nativeSessionId: string): boolean {
+export function hasActiveAgyBrainWork(nativeSessionId: string, visited = new Set<string>()): boolean {
+  if (visited.has(nativeSessionId)) return false;
+  visited.add(nativeSessionId);
   const restartMs = readLastServerRestartMs(nativeSessionId);
   const subs = readAgySubagentDescriptors(nativeSessionId);
   for (const sub of subs) {
@@ -565,6 +567,7 @@ export function hasActiveAgyBrainWork(nativeSessionId: string): boolean {
     }
     const act = inspectAgyTranscriptActivity(sub.conversationId);
     if (act.working) return true;
+    if (hasActiveAgyBrainWork(sub.conversationId, visited)) return true;
   }
   const tasks = readAgyBackgroundTasks(nativeSessionId, true);
   return tasks.some(task => task.status === 'running' && !task.isDaemon);
@@ -596,8 +599,12 @@ function parseSystemMessage(raw: string): { sender: string; content: string; noi
   return { sender, content, noisy: isNoisySwarmWake(content) };
 }
 
-function defaultParentMirrorFor(parentId: string): string {
-  return path.join(dishDir(), 'agy', 'sessions', `${parentId}.jsonl`);
+function resolveAgyParentSessionPath(parentId: string): string | null {
+  const mirror = path.join(dishDir(), 'agy', 'sessions', `${parentId}.jsonl`);
+  if (fs.existsSync(mirror)) return mirror;
+  const transcript = agyBrainTranscriptPath(parentId);
+  if (transcript && fs.existsSync(transcript)) return transcript;
+  return null;
 }
 
 /**
@@ -616,7 +623,7 @@ export function parseAgyBrainEntries(
     : null;
   const parentSession = hint?.parentSession !== undefined
     ? hint.parentSession
-    : parentDesc ? defaultParentMirrorFor(parentDesc.parentId) : null;
+    : parentDesc ? resolveAgyParentSessionPath(parentDesc.parentId) : null;
   const cwd = hint?.cwd ?? parentDesc?.cwd ?? null;
   const displayName = hint?.name ?? parentDesc?.label ?? null;
 

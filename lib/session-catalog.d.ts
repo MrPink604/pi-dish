@@ -28,6 +28,7 @@ export interface CatalogHistoryObservation {
     readonly source: DiscoveryCandidate;
     readonly info: Readonly<SessionInfo>;
     readonly liveChild: boolean;
+    readonly bridge?: boolean;
     readonly advice: CatalogAdvice;
 }
 export interface CatalogRoutineAnnotation {

@@ -3,7 +3,7 @@ import { applyLearnedCacheExpiry } from './cache-lifetime';
 import type { ServedCacheExpiry } from './cache-lifetime';
 import { loadCacheRetentionConfig } from './cache-retention';
 import { hasPendingAskDialog } from './extension-ui-state';
-import { canonicalCallerId, canonicalSessionId, encodeSessionKey } from './session-key';
+import { canonicalCallerId, canonicalSessionId, encodeSessionKey, parseHostQualifiedCaller } from './session-key';
 import { isPrivateSessionFile } from './private-sessions';
 import { record as isRecord } from './helper-values';
 import { asRecord } from './wire-protocol';
@@ -39,6 +39,7 @@ export interface CatalogHistoryObservation {
   readonly source: DiscoveryCandidate;
   readonly info: Readonly<SessionInfo>;
   readonly liveChild: boolean;
+  readonly bridge?: boolean;
   readonly advice: CatalogAdvice;
 }
 export interface CatalogRoutineAnnotation {
@@ -280,6 +281,9 @@ function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advic
   }
   const isAgyBrain = source.profileId === AGY_BRAIN_PROFILE_ID;
   const agyWorking = liveChild && isAgyBrain ? inspectAgyTranscriptActivity(source.nativeSessionId).working : false;
+  const parentSession = isAgyBrain
+    ? (source.parentSession || info.parentSession || null)
+    : (info.parentSession || source.parentSession || null);
   return {
     ...identityFields(source.harnessId, source.nativeSessionId, options),
     capabilities: { ...advice.capabilities, ...(liveChild ? { resume: false } : {}) }, closeMode: advice.closeMode,
@@ -289,9 +293,10 @@ function projectHistory(source: SessionSource, raw: Readonly<SessionInfo>, advic
     cacheExpiry: info.cacheExpiry, messageCount: info.messageCount || 0, lastActivity: info.lastActivity, isActive: false,
     ...(liveChild ? { subagentLive: true } : {}),
     ...(agyWorking ? { turnInProgress: true } : {}),
-    cwd, sessionFile: source.file, parentSession: info.parentSession || source.parentSession || null,
-    parentSessionSource: !info.parentSession && source.parentSession
-      ? (isAgyBrain ? 'agy-brain-subagent' : 'omp-subsession-layout') : null,
+    cwd, sessionFile: source.file, parentSession,
+    parentSessionSource: isAgyBrain && parentSession
+      ? 'agy-brain-subagent'
+      : (!info.parentSession && source.parentSession ? 'omp-subsession-layout' : null),
     ...(isPrivateSessionFile(options.harnesses.get(source.harnessId), source.file) ? { private: true } : {}),
   };
 }
@@ -325,11 +330,11 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
     }
   }
   for (const history of input.history) {
-    if (seen.has(history.source.routeId) || (input.activeOnly && !history.liveChild)) continue;
+    if (seen.has(history.source.routeId) || (input.activeOnly && !history.liveChild && !history.bridge)) continue;
     const row = buildHistoricalSession(history, options, { cwdFallback: !input.activeOnly });
     if (input.hidePrivate && row.private) continue;
     seen.add(row.id);
-    (input.activeOnly ? children : previous).push(row);
+    (input.activeOnly && history.liveChild ? children : previous).push(row);
   }
   active.sort((a, b) => activityTime(b) - activityTime(a));
   previous.sort((a, b) => activityTime(b) - activityTime(a));
@@ -350,11 +355,13 @@ function composeSessionCatalog(input: SessionCatalogInput, options: SessionCatal
     }
     const launchParent = input.launchParents.get(session.id) || null;
     const parentId = nativeParent || launchParent;
-    session.parentId = parentId && parentId !== session.id ? parentId : null;
+    const resolvedParentId = parentId && parentId !== session.id ? parentId : null;
+    session.parentId = resolvedParentId;
     session.parentSource = nativeParent ? session.parentSessionSource || 'pi-session-header'
       : launchParent ? 'pi-dish-launch' : null;
-    const parent = parentId && parentId !== session.id ? byId.get(parentId) : undefined;
-    session.familyParentId = parent && (parent.cwd || '~') === (session.cwd || '~') ? parent.id : null;
+    const parent = resolvedParentId ? byId.get(resolvedParentId) : undefined;
+    const allowUnresolvedFamily = input.activeOnly || !!(resolvedParentId && parseHostQualifiedCaller(resolvedParentId));
+    session.familyParentId = parent ? parent.id : (allowUnresolvedFamily ? resolvedParentId : null);
     const routine = input.routines.get(session.id);
     if (routine) {
       session.routine = routine.routine;

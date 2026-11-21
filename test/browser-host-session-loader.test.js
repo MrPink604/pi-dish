@@ -193,6 +193,21 @@ for (const hint of [undefined, null, '']) {
         assert.equal(at((0, test_types_js_1.present)(loader.getCache(host)).active, 0).familyParentId, hint);
     });
 }
+test('active-only polls retain closed bridge rows sent in previous alongside live children', async () => {
+    const { loader, calls } = fixture();
+    const pending = loader.load(host, undefined, false, 1);
+    at(calls, 0).resolve({
+        active: [{ id: 'root' }, { id: 'leaf', parentId: 'mid', familyParentId: 'mid' }],
+        previous: [{ id: 'mid', parentId: 'root', familyParentId: 'root', isActive: false }],
+        children: [{ id: 'sub', parentId: 'leaf', subagentLive: true }],
+    });
+    await pending;
+    const cached = (0, test_types_js_1.present)(loader.getCache(host));
+    const byId = new Map(cached.previous.map(row => [row.id, row]));
+    assert.equal(byId.get('mid')?.isActive, false);
+    assert.equal(byId.get('mid')?.subagentLive, undefined);
+    assert.equal(byId.get('sub')?.subagentLive, true);
+});
 test('acknowledged metadata survives failed fan-out and partial child replay through sidebar publication', async () => {
     const calls = [];
     const hosts = [{ hostId: 'self', base: '', self: true }, host];

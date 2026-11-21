@@ -1,7 +1,7 @@
 import type { SessionState, SessionEntry, SelectionOwner } from './session-state';
 import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
 import { sessionKey, sessionRefKey, parseSessionKey } from './helper-identity';
-import { buildSessionFamilies } from './helper-sessions';
+import { buildSessionFamilies, resolveParentKey, sessionFamilyParentId } from './helper-sessions';
 import { escapeHtml } from '../core/helper-format';
 import type { SessionFamily } from './shared-helper-types';
 import type { SidebarProjection } from './sidebar-render';
@@ -123,8 +123,9 @@ export function createSidebarControls(options: {
     const byKey = new Map(rows.map(row => [sessionRefKey(row), row]));
     for (const [member, visibleRoot] of map) {
       let canonical = visibleRoot, cursor = byKey.get(visibleRoot); const seen = new Set([canonical]);
-      while (cursor?.familyParentId) {
-        const parent = sessionKey(cursor.host, cursor.familyParentId); if (seen.has(parent)) break;
+      while (cursor) {
+        const parent = resolveParentKey(cursor.host, sessionFamilyParentId(cursor));
+        if (!parent || seen.has(parent)) break;
         canonical = parent; seen.add(canonical); cursor = byKey.get(canonical);
       }
       map.set(member, canonical);
@@ -170,8 +171,9 @@ export function createSidebarControls(options: {
     for (const [member, root] of roots) if (root === canonical) aliases.add(member);
     const visible = new Set(Array.from(list.querySelectorAll<HTMLElement>('.session-item[data-id]')).map(row => sessionKey(row.dataset.host, row.dataset.id)));
     for (const member of aliases) {
-      const { hostId, sessionId } = parseSessionKey(member), parentId = sessionState.findSession(sessionId, hostId)?.familyParentId;
-      const parentKey = sessionKey(hostId, parentId); if (typeof parentId === 'string' && parentId && !visible.has(parentKey)) aliases.add(parentKey);
+      const { hostId, sessionId } = parseSessionKey(member), row = sessionState.findSession(sessionId, hostId);
+      const parentKey = resolveParentKey(hostId, sessionFamilyParentId(row));
+      if (parentKey && !visible.has(parentKey)) aliases.add(parentKey);
     }
     const wasPinned = pinned.some(pin => aliases.has(pin)); pinned = pinned.filter(pin => !aliases.has(pin)); if (!wasPinned) pinned.push(canonical);
     savePins(); render();

@@ -118,36 +118,112 @@ export function collectTreeSessions<T>(node: WorkspaceNode<T>, out: T[] = []) {
 }
 
 
+const HOST_QUALIFIED_PARENT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(.+)$/i;
+
+export function parseParentSessionRef(host?: string | null, parentId?: string | null): { hostId: string | null; sessionId: string } | null {
+  if (!parentId) return null;
+  const qualified = HOST_QUALIFIED_PARENT.exec(parentId);
+  if (qualified) return { hostId: qualified[1].toLowerCase(), sessionId: qualified[2] };
+  return { hostId: host || null, sessionId: parentId };
+}
+
+export function resolveParentKey(host?: string | null, parentId?: string | null, hostByLower?: ReadonlyMap<string, string>): string | null {
+  const ref = parseParentSessionRef(host, parentId);
+  if (!ref) return null;
+  const resolvedHost = ref.hostId ? (hostByLower?.get(ref.hostId.toLowerCase()) ?? ref.hostId) : null;
+  return sessionKey(resolvedHost, ref.sessionId);
+}
+
 export function sessionFamilyParentId(session?: HelperSession | null) {
-  return Object.prototype.hasOwnProperty.call(session || {}, 'familyParentId')
-    ? session?.familyParentId : session?.parentId;
+  if (Object.prototype.hasOwnProperty.call(session || {}, 'familyParentId')) {
+    if (session?.familyParentId) return session.familyParentId;
+    if (session?.parentId && HOST_QUALIFIED_PARENT.test(session.parentId)) return session.parentId;
+    return session?.familyParentId;
+  }
+  return session?.parentId;
 }
 
 /**
- * Same-host, same-workspace families from advisory `parentId` hints; blocks sort
- * by newest descendant activity. Missing/cross-workspace parents and cycles become roots.
+ * Recursive session families from advisory `parentId` hints across workspaces and hosts;
+ * blocks sort by newest descendant activity. Missing parents and cycles become roots.
+ * Optional `bridgePool` inserts closed intermediate parents only when they connect a
+ * visible descendant to a visible ancestor (or a key in `bridgeRoots`).
  */
-export function buildSessionFamilies<T extends HelperSession>(list?: readonly T[] | null) {
+export function buildSessionFamilies<T extends HelperSession>(
+  list?: readonly T[] | null,
+  options?: { bridgePool?: readonly T[] | null; bridgeRoots?: ReadonlySet<string> | null },
+) {
   const nodes = new Map<string, SessionFamily<T>>();
+  const hostByLower = new Map<string, string>();
+  const registerHost = (host?: string | null) => {
+    if (host) {
+      const lower = host.toLowerCase();
+      if (!hostByLower.has(lower)) hostByLower.set(lower, host);
+    }
+  };
   (list || []).forEach((session, order) => {
     if (session?.id && !nodes.has(sessionRefKey(session))) {
+      registerHost(session.host);
       nodes.set(sessionRefKey(session), { session, children: [], activity: 0, size: 1, order });
     }
   });
 
-  const attached = new Set();
+  if (options?.bridgePool?.length) {
+    const poolByKey = new Map<string, T>();
+    for (const session of options.bridgePool) {
+      if (!session?.id) continue;
+      registerHost(session.host);
+      const key = sessionRefKey(session);
+      if (!nodes.has(key) && !poolByKey.has(key)) poolByKey.set(key, session);
+    }
+    const bridgeRoots = options.bridgeRoots;
+    let bridgeOrder = nodes.size;
+    const ensureBridge = (key: string, session: T) => {
+      if (!nodes.has(key)) {
+        nodes.set(key, { session, children: [], activity: 0, size: 0, order: bridgeOrder++, bridge: true });
+      }
+    };
+    for (const node of [...nodes.values()]) {
+      const chain: [string, T][] = [];
+      const seen = new Set<string>([sessionRefKey(node.session)]);
+      let cursor: T | undefined = node.session;
+      while (cursor) {
+        const parentKey = resolveParentKey(cursor.host, sessionFamilyParentId(cursor), hostByLower);
+        if (!parentKey || seen.has(parentKey)) break;
+        seen.add(parentKey);
+        if (nodes.has(parentKey)) {
+          for (const [bKey, bSession] of chain) ensureBridge(bKey, bSession);
+          break;
+        }
+        const pooled = poolByKey.get(parentKey);
+        if (!pooled) break;
+        chain.push([parentKey, pooled]);
+        if (bridgeRoots?.has(parentKey)) {
+          for (const [bKey, bSession] of chain) ensureBridge(bKey, bSession);
+          break;
+        }
+        cursor = pooled;
+      }
+    }
+  }
+
+  const parentOf = (session: T): SessionFamily<T> | undefined => {
+    const key = resolveParentKey(session.host, sessionFamilyParentId(session), hostByLower);
+    return key ? nodes.get(key) : undefined;
+  };
+
+  const attached = new Set<string>();
   for (const node of nodes.values()) {
-    const parent = nodes.get(sessionKey(node.session.host, sessionFamilyParentId(node.session)));
-    if (!parent || parent === node || (parent.session.cwd || '~') !== (node.session.cwd || '~')) continue;
+    const parent = parentOf(node.session);
+    if (!parent || parent === node) continue;
     // Walk the chain first so A→B→A cycles can't drop both nodes or recurse forever.
-    let cursor: SessionFamily<T> | null = parent;
-    const seen = new Set();
+    let cursor: SessionFamily<T> | undefined = parent;
+    const seen = new Set<SessionFamily<T>>();
     let cyclic = false;
     while (cursor && !seen.has(cursor)) {
       if (cursor === node) { cyclic = true; break; }
       seen.add(cursor);
-      const next = nodes.get(sessionKey(cursor.session.host, sessionFamilyParentId(cursor.session)));
-      cursor = next && (next.session.cwd || '~') === (cursor.session.cwd || '~') ? next : null;
+      cursor = parentOf(cursor.session);
     }
     if (cyclic) continue;
     parent.children.push(node);
@@ -159,13 +235,14 @@ export function buildSessionFamilies<T extends HelperSession>(list?: readonly T[
     return finite(value) ? value : 0;
   };
   const finalize = (node: SessionFamily<T>): SessionFamily<T> => {
-    node.activity = activityMs(node.session);
-    node.size = 1;
+    node.activity = node.bridge ? 0 : activityMs(node.session);
+    node.size = node.bridge ? 0 : 1;
     for (const child of node.children) {
       finalize(child);
       node.activity = Math.max(node.activity, child.activity);
       node.size += child.size;
     }
+    if (node.bridge && node.activity === 0) node.activity = activityMs(node.session);
     node.children.sort((a, b) => b.activity - a.activity || a.order - b.order);
     return node;
   };
@@ -176,7 +253,7 @@ export function buildSessionFamilies<T extends HelperSession>(list?: readonly T[
 
 export function flattenSessionFamilies<T>(families?: readonly SessionFamily<T>[] | null, out: T[] = []) {
   for (const family of families || []) {
-    out.push(family.session);
+    if (!family.bridge) out.push(family.session);
     flattenSessionFamilies(family.children, out);
   }
   return out;
@@ -195,8 +272,8 @@ export function partitionPinnedFamilies<T extends HelperSession>(families?: read
   for (const root of families || []) {
     const parentId = sessionFamilyParentId(root.session);
     if (!parentId) continue;
-    const parentKey = sessionKey(root.session.host, parentId);
-    if (rootByMember.has(parentKey)) continue;
+    const parentKey = resolveParentKey(root.session.host, parentId);
+    if (!parentKey || rootByMember.has(parentKey)) continue;
     const roots = rootsByMissingParent.get(parentKey) || [];
     roots.push(root);
     rootsByMissingParent.set(parentKey, roots);

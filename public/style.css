@@ -783,12 +783,53 @@ body.sidebar-open {
   cursor: grabbing;
 }
 
-/* Same-workspace parent/child session blocks. Parents stay first; descendants
-   indent under a soft guide and default collapsed via JS expansion state. */
+/* Parent/child session blocks. Parents stay first; descendants indent up to 3
+   levels under a soft guide, keeping depth-3 indent with a badge past level 3. */
 .session-family-children {
   margin-left: 14px;
   padding-left: 5px;
   border-left: 1px solid var(--line);
+}
+
+.session-family-children.depth-capped {
+  margin-left: 0;
+  padding-left: 0;
+  border-left: none;
+}
+
+.session-depth-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0 3px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.session-item.session-item-bridge {
+  opacity: 0.62;
+  border-left: 1px dashed var(--line);
+}
+
+.session-item.session-item-bridge:hover {
+  opacity: 0.85;
+}
+
+.session-bridge-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.3;
+  color: var(--text-muted);
 }
 
 .session-family-child > .session-item {

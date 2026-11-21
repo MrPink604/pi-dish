@@ -897,7 +897,7 @@ test('pi-dish launch provenance adds neutral related-session navigation', async 
   const launched = present(records(listed.body.previous).find((s) => s.id === REAL_CWD_ID))
   assert.equal(launched.parentId, SESSION_ID, 'list rows carry advisory pi-dish launch parent');
   assert.equal(launched.parentSource, 'pi-dish-launch');
-  assert.equal(launched.familyParentId, null, 'cross-workspace launch remains visually independent');
+  assert.equal(launched.familyParentId, SESSION_ID, 'cross-workspace launch stays linked to its parent family');
   const source = await get(`/api/sessions/${SESSION_ID}/related`);
   assert.ok(records(source.body.relations).some((r) => r.kind === 'startedHere' && record(r.session).id === REAL_CWD_ID));
   const child = await get(`/api/sessions/${REAL_CWD_ID}/related`);
@@ -1079,6 +1079,79 @@ test('prime RLM subagents join the catalog and the lineage tree', async () => {
       'the flat relations endpoint sees prime parents too');
   } finally {
     fs.rmSync(primeDir, { recursive: true, force: true });
+    await get('/api/sessions');
+  }
+});
+
+test('3-deep Antigravity brain sub-subagents resolve parents in /api/sessions and /lineage', async () => {
+  const agySessionsDir = path.join(tmpHome, '.pi', 'dish', 'agy', 'sessions');
+  const brainDir = path.join(tmpHome, '.gemini', 'antigravity-cli', 'brain');
+  const rootNative = '11111111-aaaa-4111-8111-111111111111';
+  const sub1Native = '22222222-bbbb-4222-8222-222222222222';
+  const sub2Native = '33333333-cccc-4333-8333-333333333333';
+  const rootFile = path.join(agySessionsDir, `${rootNative}.jsonl`);
+  const sub1File = path.join(brainDir, sub1Native, '.system_generated', 'logs', 'transcript.jsonl');
+  const sub2File = path.join(brainDir, sub2Native, '.system_generated', 'logs', 'transcript.jsonl');
+  const writeJson = (file: string, data: unknown) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(data));
+  };
+  const writeJsonl = (file: string, rows: unknown[]) => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  };
+  writeJsonl(rootFile, [
+    { type: 'session', version: 3, id: rootNative, cwd: '/orch', timestamp: '2026-11-20T12:00:00Z' },
+    { type: 'message', id: 'm1', parentId: null, message: { role: 'user', content: [{ type: 'text', text: 'root task' }] } },
+  ]);
+  writeJson(path.join(brainDir, rootNative, '.system_generated', 'subagents', `${sub1Native}.json`), {
+    conversationId: sub1Native,
+    subagentDescriptor: { typeName: 'self', role: 'Level 1 Worker' },
+    state: 'SUBAGENT_STATE_ALIVE',
+    workspaceUris: ['file:///repo'],
+  });
+  writeJsonl(sub1File, [
+    { step_index: 0, type: 'USER_INPUT', status: 'DONE', created_at: '2026-11-20T12:01:00Z', content: 'level 1 work' },
+  ]);
+  writeJson(path.join(brainDir, sub1Native, '.system_generated', 'subagents', `${sub2Native}.json`), {
+    conversationId: sub2Native,
+    subagentDescriptor: { typeName: 'research', role: 'Level 2 Sub-subagent' },
+    state: 'SUBAGENT_STATE_ALIVE',
+    workspaceUris: ['file:///repo/worktree'],
+  });
+  writeJsonl(sub2File, [
+    { step_index: 0, type: 'USER_INPUT', status: 'DONE', created_at: '2026-11-20T12:02:00Z', content: 'level 2 deep work' },
+  ]);
+  const rootRoute = encodeSessionKey('agy', checkedNativeId(rootNative));
+  const sub1Route = encodeSessionKey('agy', checkedNativeId(sub1Native));
+  const sub2Route = encodeSessionKey('agy', checkedNativeId(sub2Native));
+  try {
+    const listed = await get('/api/sessions');
+    const prev = records(listed.body.previous);
+    const sub1 = present(prev.find(session => session.id === sub1Route), 'sub1 in sessions');
+    const sub2 = present(prev.find(session => session.id === sub2Route), 'sub2 in sessions');
+    assert.equal(sub1.parentId, rootRoute);
+    assert.equal(sub1.familyParentId, rootRoute);
+    assert.equal(sub2.parentId, sub1Route, 'depth-3 agy sub-subagent must not orphan to null');
+    assert.equal(sub2.familyParentId, sub1Route);
+
+    const lineageFromRoot = await get(`/api/sessions/${encodeURIComponent(rootRoute)}/lineage`);
+    assert.equal(lineageFromRoot.status, 200, JSON.stringify(lineageFromRoot.body));
+    const tree = record(lineageFromRoot.body.tree);
+    const childNode = present(records(tree.children)[0], 'sub1 in lineage');
+    const gcNode = present(records(childNode.children)[0], 'sub2 in lineage');
+    assert.equal(record(tree.session).id, rootRoute);
+    assert.equal(record(childNode.session).id, sub1Route);
+    assert.equal(record(gcNode.session).id, sub2Route);
+    assert.equal(lineageFromRoot.body.members, 3);
+
+    const lineageFromLeaf = await get(`/api/sessions/${encodeURIComponent(sub2Route)}/lineage`);
+    assert.equal(lineageFromLeaf.status, 200);
+    assert.equal(record(record(lineageFromLeaf.body.tree).session).id, rootRoute, 'leaf lineage walks all the way to root');
+    assert.equal(lineageFromLeaf.body.members, 3);
+  } finally {
+    fs.rmSync(agySessionsDir, { recursive: true, force: true });
+    fs.rmSync(brainDir, { recursive: true, force: true });
     await get('/api/sessions');
   }
 });
