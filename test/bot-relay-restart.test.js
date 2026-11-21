@@ -224,6 +224,8 @@ test('a stale relay in a run is restarted only once the run ends', { timeout: 18
     assert.equal(said(home, before.id, 'echo 1: Take your time.'), 0);
     fs.rmSync(path.join(home, 'hold'));
     await until(() => relayLock(home, before.id)?.pid !== before.pid && relayLock(home, before.id)?.build === before.build, 'the restart follows the run');
+    // The new relay takes the lock before it writes the restart line.
+    await until(() => chat(home, before.id).some(entry => entry.kind === 'bot-restart'), 'the new relay writes the restart line');
     const kinds = chat(home, before.id).map(entry => entry.kind === 'assistant' ? entry.text : entry.kind);
     assert.deepEqual(kinds.slice(-2), ['echo 1: Take your time.', 'bot-restart'], 'the run answered before the relay restarted');
     await untilAsync(async () => (await bounces(server.base)).some(target => target.status === 'completed'), 'the restart completes');
