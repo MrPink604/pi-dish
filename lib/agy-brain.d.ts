@@ -263,7 +263,7 @@ export declare function readAgySessionTasks(nativeSessionId: string, options?: {
 export interface AgyBrainArtifact {
     name: string;
     path: string;
-    kind: 'markdown' | 'html' | 'image';
+    kind: 'markdown' | 'html' | 'image' | 'video';
     size: number;
     updatedAt: string;
     summary: string;

@@ -3,6 +3,7 @@ import type { SessionSource } from './session-source';
 import { record } from './helper-values';
 import { searchHomeDirs, getDirChildren, isPathCompletionToken, completePath, searchFiles } from './file-search';
 import { resolveFileMention, readFileForViewer } from './file-mention';
+import { sendRangedFile } from './range-response';
 import { agyBrainDir, readAgyBrainArtifactMeta } from './agy-brain';
 import { readSessionMessages } from './session-files';
 import { createDiffView } from './git-diff';
@@ -102,9 +103,11 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
       const { resolved, file } = prepared;
       res.setHeader('Cache-Control', 'private, no-cache');
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      const safeImageMime = file.image && file.image.mimeType !== 'image/svg+xml'
-        ? file.image.mimeType : 'text/plain; charset=utf-8';
-      res.type(safeImageMime).sendFile(resolved.absPath);
+      const mimeType = file.video
+        ? file.video.mimeType
+        : file.image && file.image.mimeType !== 'image/svg+xml'
+          ? file.image.mimeType : 'text/plain; charset=utf-8';
+      sendRangedFile(req, res, resolved.absPath, { mimeType, size: file.size, mtimeMs: file.mtime });
     } catch (error) {
       res.status(500).json({ error: record(error) ? error.message : undefined });
     }
@@ -117,6 +120,8 @@ export function createFileHandlers(ports: FileHandlerPorts): FileHandlers {
       const { cwd, resolved, mention, file, artifact } = prepared;
       if (file.image) {
         file.image.url = `/api/sessions/${encodeURIComponent(req.params.id)}/file/content?path=${encodeURIComponent(mention)}&v=${file.mtime}-${file.size}`;
+      } else if (file.video) {
+        file.video.url = `/api/sessions/${encodeURIComponent(req.params.id)}/file/content?path=${encodeURIComponent(mention)}&v=${file.mtime}-${file.size}`;
       }
       res.json({
         path: resolved.absPath,

@@ -11,8 +11,10 @@ import {
   parseUserSourceEntries, renderUserSourceHeaderHtml, parseInjectedBotMessage, renderBotNoticeHtml,
   formatBotChangeLineHtml, parseCodemodeResult, formatCodemodeOutput, formatJsonToolOutput,
 } from './bot-display';
-import { extractImageBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
+import { extractImageBlocks, extractVideoBlocks, extractTextContent, messageHasVisibleText, getToolSummary, parseIpythonResult } from '../core/helper-content';
+import { mediaFileName } from '../core/helper-media';
 import { splitSessionRefContext } from '../core/helper-refs';
+import { renderVideoPlayerHtml } from './video-player';
 export function createMessageRenderer(options: {
   document: Document; sessionState: SessionState; details: ReturnType<typeof createResponseDetails>;
   // Peek renders another session's trace: main-session share/details buttons
@@ -56,6 +58,31 @@ function imageBlocksHtml(content: unknown, alt = 'image') {
     return `<img class="msg-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${loading}>`;
   }).join('');
   return `<div class="msg-images">${imgs}</div>`;
+}
+
+function videoBlocksHtml(content: unknown) {
+  const videos = extractVideoBlocks(content);
+  if (!videos.length) return '';
+  const sessionId = options.sessionState.currentSession?.id || null;
+  const players = videos.flatMap(video => {
+    let src = '';
+    if (video.url) {
+      src = /^(?:https?:|blob:|\/\/)/i.test(video.url) ? video.url : options.assetUrl(renderHost(), video.url);
+    } else if (video.path && sessionId) {
+      src = options.assetUrl(renderHost(), `/api/sessions/${encodeURIComponent(sessionId)}/file/content?path=${encodeURIComponent(video.path)}`);
+    } else if (video.data) {
+      src = `data:${video.mimeType};base64,${video.data}`;
+    }
+    if (!src) return [];
+    return [renderVideoPlayerHtml({
+      src,
+      name: video.name || mediaFileName(video.path || video.url || '', 'video'),
+      mimeType: video.mimeType,
+      variant: 'inline',
+      filePath: video.path ?? null,
+    })];
+  }).join('');
+  return players ? `<div class="msg-videos">${players}</div>` : '';
 }
 
 // Share URL deep-linked via ?targetId=<JSONL entry id>; only JSONL-backed
@@ -219,6 +246,7 @@ function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
   }
   const { text, refs } = splitSessionRefContext(rawText);
   const imagesHtml = imageBlocksHtml(msg.content, 'attached image');
+  const videosHtml = videoBlocksHtml(msg.content);
   const chipsHtml = sessionRefChipsHtml(msg.sessionRefs || refs);
   const sourceEntries = parseUserSourceEntries(text);
   const bodyHtml = sourceEntries
@@ -227,7 +255,7 @@ function renderUserMessage(msg: RenderMessage, time: string, attrs = '') {
     : (text ? `<div class="markdown-body">${displayModelMentions(options.markdown(text))}</div>` : '');
   return `<div${attrs} class="message user">
     <div class="message-header"><span class="message-role user">❯</span>${time ? `<span class="message-time">${time}</span>` : ''}${messageActionsHtml(msg, 'user')}</div>
-    <div class="message-content user-content">${bodyHtml}${imagesHtml}${chipsHtml}</div>
+    <div class="message-content user-content">${bodyHtml}${imagesHtml}${videosHtml}${chipsHtml}</div>
   </div>`;
 }
 
@@ -249,6 +277,7 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
   }
   
   const imagesHtml = imageBlocksHtml(msg.content, 'assistant image');
+  const videosHtml = videoBlocksHtml(msg.content);
   let errorHtml = '';
   if (msg.errorMessage) {
     errorHtml = `<div class="message-content message-error"><div class="markdown-body"><strong>Error:</strong> ${escapeHtml(msg.errorMessage)}</div></div>`;
@@ -273,7 +302,7 @@ function renderAssistantMessage(msg: RenderMessage, time: string, opts: { stream
       ${messageActionsHtml(msg, 'assistant')}
     </div>
     ${thinkingHtml}${toolCallsHtml}
-    ${textHtml || imagesHtml ? `<div class="message-content">${textHtml ? `<div class="markdown-body">${linkifySwarmBoard(textHtml)}</div>` : ''}${imagesHtml}</div>` : ''}
+    ${textHtml || imagesHtml || videosHtml ? `<div class="message-content">${textHtml ? `<div class="markdown-body">${linkifySwarmBoard(textHtml)}</div>` : ''}${imagesHtml}${videosHtml}</div>` : ''}
     ${errorHtml}
   </div>`;
 }
@@ -341,11 +370,14 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
   const isLong = lineCount > 5 || charCount > 400 || codemodeCallCount > 3;
   const preview = waitJobs ? waitStatusSummary(waitJobs) : (formatted ? formatted.preview : truncate(rawLines[0], 80));
   const showLines = lineCount > 5 && !waitJobs;
-  // A tool result carrying an image opens by default regardless of line count
+  // A tool result carrying an image or video opens by default regardless of line count
   // and flags it in the header meta.
   const images = extractImageBlocks(msg.content);
   const imageCount = images.length;
   const imagesHtml = imageBlocksHtml(msg.content, 'tool result image');
+  const videos = extractVideoBlocks(msg.content);
+  const videoCount = videos.length;
+  const videosHtml = videoBlocksHtml(msg.content);
   // A wait snapshot reads as job rows (status, run time, output) instead of
   // the model-facing markdown dump of the same data.
   const outputHtml = formatted ? formatted.html : `<pre>${escapeHtml(truncate(content, 2000))}</pre>`;
@@ -355,18 +387,19 @@ function renderToolResult(msg: RenderMessage, attrs = '') {
     : outputHtml;
 
   return `<div${attrs} class="message tool-result ${codemodeFailed ? 'error' : ''}" data-timestamp="${escapeHtml(String(timestamp))}"${details?.kind === 'bash' ? bashJobAttrs(details) : ''}>
-    <details class="tool-result-details" ${((!isLong && !waitJobs) || imageCount) ? 'open' : ''}>
+    <details class="tool-result-details" ${((!isLong && !waitJobs) || imageCount || videoCount) ? 'open' : ''}>
       <summary class="tool-result-header">
         <span class="tool-result-icon">${codemodeFailed ? '✗' : '✓'}</span>
         <span class="tool-result-name">${escapeHtml(msg.toolName || 'result')}</span>
         ${title ? `<span class="tool-result-title">${escapeHtml(title)}</span>` : ''}
         ${showLines ? `<span class="tool-result-meta">${lineCount} lines</span>` : ''}
         ${imageCount ? `<span class="tool-result-meta">${imageCount === 1 ? 'image' : imageCount + ' images'}</span>` : ''}
+        ${videoCount ? `<span class="tool-result-meta">${videoCount === 1 ? 'video' : videoCount + ' videos'}</span>` : ''}
         ${exitBadge}${resultChips}
         ${codemodeFailed && !statusShown ? '<span class="tool-result-meta error-badge">error</span>' : ''}
         ${(isLong && !title) || waitJobs ? `<span class="tool-result-preview">${escapeHtml(preview)}</span>` : ''}
       </summary>
-      <div class="tool-result-content">${bodyHtml}${imagesHtml}</div>
+      <div class="tool-result-content">${bodyHtml}${imagesHtml}${videosHtml}</div>
     </details>
   </div>`;
 }
@@ -557,6 +590,6 @@ function upsertLiveCustomMessage(message: RenderMessage, { streaming = false } =
 }
 
 return { message: renderMessageHtml, user: renderUserMessage, assistant: renderAssistantMessage, custom: renderCustomMessage,
-  images: imageBlocksHtml, thinking: renderThinkingBlock, tool: renderToolCall, upsertCustom: upsertLiveCustomMessage,
+  images: imageBlocksHtml, videos: videoBlocksHtml, thinking: renderThinkingBlock, tool: renderToolCall, upsertCustom: upsertLiveCustomMessage,
   dispose() { disposed = true; } };
 }

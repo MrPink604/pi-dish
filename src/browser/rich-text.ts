@@ -10,6 +10,7 @@ import { SESSION_REF_TOKEN_RE } from '../core/helper-refs';
 import type { StreamingBlockState, StreamingFrame } from './streaming-render';
 import { record } from '../core/helper-values';
 import { createTableControls } from './table-controls';
+import { createVideoControls, type VideoEnhanceContext } from './video-player';
 
 declare const katex: KatexRenderer | undefined;
 const MATH_PENDING_CLASS = 'math-pending', MATH_SOURCE_ATTR = 'data-math-source';
@@ -70,6 +71,7 @@ function stablePrefixEnd(source: string, tokens: readonly MarkdownToken[]) {
 }
 export function createRichText(options: { document: Document; marked: MarkedRuntime | null; highlight: () => HighlightRuntime | null;
   assets: ReturnType<typeof createBrowserAssets>; diagrams: ReturnType<typeof createDiagrams>; sessionState: SessionState;
+  assetUrl?: (host: string | null | undefined, path: string) => string;
   retainedRoots?: () => readonly ParentNode[];
   matchRef: (ref: string) => Pick<SessionEntry, 'id' | 'host' | 'name'> | null | undefined;
   copy: (text: string) => Promise<unknown>; status: (message: string, type?: string) => void;
@@ -96,6 +98,7 @@ export function createRichText(options: { document: Document; marked: MarkedRunt
   }, { signal: events.signal });
   let disposed = false, mathAssetsPromise: Promise<void> | null = null, highlightAssetsPromise: Promise<HighlightRuntime> | null = null;
   const tables = createTableControls({ document });
+  const videos = createVideoControls({ document, sessionState, assetUrl: options.assetUrl });
   options.marked?.use({
     breaks: true,
     gfm: true,
@@ -189,7 +192,7 @@ function linkSessionRefs(html: string) {
 // Post-render pass over final markdown only (streaming skips it to stay cheap, and
 // half a diagram is not parseable); must stay idempotent. The wrapper div keeps
 // the copy button pinned while the <pre> scrolls horizontally.
-function applyHighlight(el?: ParentNode | null) {
+function applyHighlight(el?: ParentNode | null, videoContext?: VideoEnhanceContext) {
   const root = el || document.getElementById('messages');
   if (disposed || !root) return;
   const pendingHighlight: { code: HTMLElement; source: string }[] = [];
@@ -234,6 +237,7 @@ function applyHighlight(el?: ParentNode | null) {
   hydrateMath(root);
   options.diagrams.render(root);
   linkifyFilePaths(root);
+  videos.enhance(root, videoContext);
   tables.enhance(root);
 }
 
@@ -256,7 +260,7 @@ function linkifyFilePaths(root: ParentNode) {
     return link;
   };
   root.querySelectorAll<HTMLElement>('.markdown-body code, .tool-call-summary, .live-tool-summary').forEach(el => {
-    if (el.closest('pre') || el.classList.contains('file-link') || el.children.length) return;
+    if (el.closest('pre, .video-player') || el.classList.contains('file-link') || el.children.length) return;
     const text = (el.textContent || '').trim();
     if (el.tagName === 'CODE' && el.parentNode && !el.closest('a') && ARTIFACT_PATH_RE.test(text)) {
       // The span moves inside its link; reinsert at its old position.
@@ -271,7 +275,7 @@ function linkifyFilePaths(root: ParentNode) {
   // Bare-file-path and file:// hrefs would navigate to a 404 or be blocked:
   // strip the href and let the delegated click open the file viewer (data-file-path).
   root.querySelectorAll<HTMLAnchorElement>('.markdown-body a[href]').forEach(link => {
-    if (link.classList.contains('file-link') || link.classList.contains('published-link')) return;
+    if (link.closest('.video-player') || link.classList.contains('file-link') || link.classList.contains('published-link')) return;
     const href = (link.getAttribute('href') || '').trim();
     if (ARTIFACT_PATH_RE.test(href)) {
       link.classList.add('published-link');
@@ -301,7 +305,7 @@ function linkifyFilePaths(root: ParentNode) {
       acceptNode(n) {
         // .diagram-render holds an SVG: a <span> spliced into an SVG <text>
         // renders nothing, so a linkified label would silently vanish.
-        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .session-ref-link, .katex, .math-block, .math-pending, .diagram-render')
+        return n.parentElement && !n.parentElement.closest('code, a, pre, .file-link, .session-ref-link, .katex, .math-block, .math-pending, .diagram-render, .video-player')
           ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
       },
     });
@@ -387,5 +391,5 @@ function linkifyFilePaths(root: ParentNode) {
     ]).then(() => { const runtime = options.highlight(); if (!runtime) throw new Error('Syntax highlighter did not load'); return runtime; })
       .catch(error => { highlightAssetsPromise = null; throw error; });
   }
-  return { format: formatMarkdown, stream: streamMarkdown, highlight: applyHighlight, dispose() { disposed = true; events.abort(); tables.dispose(); copies = new WeakMap(); for (const timer of copyTimers) clearTimeout(timer); copyTimers.clear(); } };
+  return { format: formatMarkdown, stream: streamMarkdown, highlight: applyHighlight, dispose() { disposed = true; events.abort(); tables.dispose(); videos.dispose(); copies = new WeakMap(); for (const timer of copyTimers) clearTimeout(timer); copyTimers.clear(); } };
 }

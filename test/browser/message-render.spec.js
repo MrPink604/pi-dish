@@ -221,3 +221,58 @@ const fixtures_js_1 = require("./fixtures.js");
         streamNoText: false,
     });
 });
+(0, fixtures_js_1.test)('transcript video attachment blocks render in user, assistant (static and streaming), and tool result messages', async ({ page, fleet }) => {
+    await fleet.select(fleet.peer);
+    const result = await page.evaluate(() => {
+        const parse = (html) => {
+            const tpl = document.createElement('template');
+            tpl.innerHTML = html.trim();
+            return fixtureElement(tpl.content.firstElementChild, 'rendered message');
+        };
+        const userEl = parse(fixtureApp.features.messageRenderer.message({
+            role: 'user',
+            content: [{ type: 'video', url: '/api/sessions/s1/messages/m1/media/0', mimeType: 'video/mp4', name: 'bug.mp4' }],
+        }));
+        const assistantEl = parse(fixtureApp.features.messageRenderer.message({
+            role: 'assistant',
+            content: [{ type: 'video', path: 'recordings/demo.webm', mimeType: 'video/webm' }],
+        }));
+        const toolEl = parse(fixtureApp.features.messageRenderer.message({
+            role: 'toolResult',
+            toolName: 'record',
+            content: [
+                { type: 'text', text: 'line1\nline2\nline3\nline4\nline5\nline6\nline7' },
+                { type: 'video', url: '/api/sessions/s1/messages/t1/media/1', mimeType: 'video/quicktime' },
+            ],
+        }));
+        const root = fixtureElement(document.getElementById('messages'), '#messages');
+        root.innerHTML = '';
+        fixtureApp.features.streamingRenderer.render({
+            role: 'assistant',
+            content: [{ type: 'video', url: '/api/sessions/s1/messages/s1/media/0', mimeType: 'video/mp4' }],
+        });
+        const streamMsg = fixtureElement(root.querySelector('.message.assistant.streaming'), 'streaming video msg');
+        const out = {
+            userSrc: userEl.querySelector('video.msg-video')?.getAttribute('src') ?? null,
+            assistantSrc: assistantEl.querySelector('video.msg-video')?.getAttribute('src') ?? null,
+            assistantNoText: assistantEl.classList.contains('no-text'),
+            toolOpen: toolEl.querySelector('details.tool-result-details')?.hasAttribute('open') ?? false,
+            toolBadges: [...toolEl.querySelectorAll('.tool-result-meta')].map(el => el.textContent),
+            toolVideoCount: toolEl.querySelectorAll('video.msg-video').length,
+            streamVideoCount: streamMsg.querySelectorAll('video.msg-video').length,
+            streamNoText: streamMsg.classList.contains('no-text'),
+        };
+        fixtureApp.features.streamingRenderer.cancel();
+        return out;
+    });
+    (0, fixtures_js_1.expect)(result).toEqual({
+        userSrc: `${fleet.peer.base}/api/sessions/s1/messages/m1/media/0`,
+        assistantSrc: `${fleet.peer.base}/api/sessions/${encodeURIComponent(await page.evaluate(() => fixtureCurrentSession().id))}/file/content?path=${encodeURIComponent('recordings/demo.webm')}`,
+        assistantNoText: false,
+        toolOpen: true,
+        toolBadges: ['8 lines', 'video'],
+        toolVideoCount: 1,
+        streamVideoCount: 1,
+        streamNoText: false,
+    });
+});

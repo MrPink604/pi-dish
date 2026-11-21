@@ -740,7 +740,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
   function admitHttpAction(requestedId: string, method: string): SessionOperationResponse | null {
     let id: string;
     try { id = canonicalSessionId(requestedId); } catch { return null; }
-    if (method !== 'GET' && bounceActionLocks.has(id)) {
+    if (method !== 'GET' && method !== 'HEAD' && bounceActionLocks.has(id)) {
       return sessionOperationResponse(noAction(409, 'A safe bulk operation is executing for this session; wait for its result.'));
     }
     return null;

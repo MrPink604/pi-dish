@@ -327,6 +327,56 @@ async function diagrams(page) {
         return !!live && live.innerHTML === reference.innerHTML;
     }, markdown)).toBe(true);
 });
+(0, fixtures_js_1.test)('video embeds, links, and media paths in markdown render inline players for the owning host', async ({ page, fleet }) => {
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/file/content?*`, route => {
+        const reqPath = new URL(route.request().url()).searchParams.get('path') ?? '';
+        if (reqPath === 'missing.mp4')
+            return route.fulfill({ status: 404, json: { error: 'Not found' } });
+        return route.fulfill({ status: 200, headers: { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes' }, body: Buffer.from('bad-codec-bytes') });
+    });
+    await page.route('https://media.example.test/external.webm', route => route.fulfill({
+        status: 200, headers: { 'Content-Type': 'video/webm' }, body: Buffer.from('bad-codec-bytes'),
+    }));
+    const markdown = [
+        '![Walkthrough](demo.mp4)',
+        '',
+        'Repeated link [Watch demo](demo.mp4), another [Clip](clips/take.mov), bare `out/screen.m4v`, and missing.mp4.',
+        '',
+        'External: [Remote clip](https://media.example.test/external.webm).',
+    ].join('\n');
+    await page.route(`${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/messages?**`, route => route.fulfill({
+        json: { messages: [{ role: 'assistant', index: 0, content: markdown }], session: {} },
+    }));
+    await fleet.select(fleet.peer);
+    // `missing.mp4` (inferred bare prose path with 404 HEAD) collapses quietly,
+    // while `demo.mp4` (deduplicated), `clips/take.mov`, `out/screen.m4v`, and the external URL remain.
+    const players = page.locator('#messages .video-player');
+    await (0, fixtures_js_1.expect)(players).toHaveCount(4);
+    const srcs = await players.evaluateAll(nodes => nodes.map(node => node.getAttribute('data-video-src')));
+    (0, fixtures_js_1.expect)(srcs).toEqual([
+        `${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/file/content?path=demo.mp4`,
+        `${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/file/content?path=${encodeURIComponent('clips/take.mov')}`,
+        `${fleet.peer.base}/api/sessions/${fixtures_js_1.ROOT}/file/content?path=${encodeURIComponent('out/screen.m4v')}`,
+        'https://media.example.test/external.webm',
+    ]);
+    await (0, fixtures_js_1.expect)(page.locator('#messages img')).toHaveCount(0);
+    // Every rendered <video> uses preload="metadata" and never autoplays.
+    (0, fixtures_js_1.expect)(await page.locator('#messages video').evaluateAll(nodes => nodes.map(node => ({
+        preload: node.getAttribute('preload'),
+        autoplay: node.hasAttribute('autoplay'),
+        controls: node.hasAttribute('controls'),
+        playsinline: node.hasAttribute('playsinline'),
+    })))).toEqual([
+        { preload: 'metadata', autoplay: false, controls: true, playsinline: true },
+        { preload: 'metadata', autoplay: false, controls: true, playsinline: true },
+        { preload: 'metadata', autoplay: false, controls: true, playsinline: true },
+        { preload: 'metadata', autoplay: false, controls: true, playsinline: true },
+    ]);
+    // Existing files with unsupported codecs show the clear fallback with Open/Download links,
+    // while the prose file link for `missing.mp4` stays clickable in the transcript.
+    await (0, fixtures_js_1.expect)(players.first().locator('.video-fallback')).toBeVisible();
+    await (0, fixtures_js_1.expect)(page.locator('#messages .file-link', { hasText: 'missing.mp4' })).toHaveCount(1);
+});
 (0, fixtures_js_1.test)('streamed math keeps an inert placeholder until the bundle lands, then hydrates in place', async ({ page, fleet }) => {
     let script = null, styles = null;
     await page.route('**/vendor/katex.min.js', route => { script = route; });

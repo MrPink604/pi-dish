@@ -421,6 +421,25 @@ export function acpToolResult(
     if (img) { images.push(img); continue; }
     const block = isRecord(item.content) ? item.content : item;
     if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+    else if (block.type === 'resource_link' && typeof block.uri === 'string' && block.uri) {
+      const mime = text(block.mimeType).toLowerCase();
+      if (mime.startsWith('video/') || /\.(?:mp4|m4v|webm|mov|ogv|mkv)(?:[?#]|$)/i.test(block.uri)) {
+        let target = block.uri;
+        if (/^file:\/\//i.test(target)) {
+          try { target = decodeURIComponent(new URL(target).pathname); } catch {}
+        }
+        parts.push(target);
+      }
+    } else if (block.type === 'resource' && isRecord(block.resource) && typeof block.resource.uri === 'string' && block.resource.uri) {
+      const mime = text(block.resource.mimeType).toLowerCase();
+      if (mime.startsWith('video/') || /\.(?:mp4|m4v|webm|mov|ogv|mkv)(?:[?#]|$)/i.test(block.resource.uri)) {
+        let target = block.resource.uri;
+        if (/^file:\/\//i.test(target)) {
+          try { target = decodeURIComponent(new URL(target).pathname); } catch {}
+        }
+        parts.push(target);
+      }
+    }
   }
   const raw = isRecord(value.rawOutput) ? value.rawOutput : {};
   const output = text(raw.output);

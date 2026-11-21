@@ -8,6 +8,7 @@ import { renderDiffViewHtml } from './file-view-render';
 import { renderDiffHtml } from './helper-markdown';
 import { escapeHtml } from '../core/helper-format';
 import { shortCwd } from './helper-format';
+import { pauseAndUnloadVideos, renderVideoPlayerHtml, type VideoEnhanceContext } from './video-player';
 function resolveRelativePosixPath(baseFilePath: string, rel: string): string {
   const dir = baseFilePath.includes('/') ? baseFilePath.slice(0, baseFilePath.lastIndexOf('/')) : '';
   const combined = rel.startsWith('/') ? rel : `${dir}/${rel}`;
@@ -23,7 +24,7 @@ function resolveRelativePosixPath(baseFilePath: string, rel: string): string {
 export function createFileViews(options: {
   document: Document; sessionState: SessionState; request: ApiRequest; host: (id: string | null) => HostEndpoint | null;
   assetUrl?: (host: string | null | undefined, path: string) => string;
-  markdown: (text: string) => string; highlight: (root: HTMLElement) => void; copy: (text: string) => Promise<unknown>;
+  markdown: (text: string) => string; highlight: (root: HTMLElement, context?: VideoEnhanceContext) => void; copy: (text: string) => Promise<unknown>;
   status: (message: string, type?: string) => void; refreshArtifacts: (owner: SelectionOwner) => void;
   closeComments: () => void; clearComments: () => void; refreshComments: () => void; markComments: () => void;
 }) {
@@ -60,7 +61,9 @@ export function createFileViews(options: {
     file.generation++; file.owner = null; file.endpoint = null; file.sessionId = null; file.raw = null; file.path = null; file.relPath = null;
     fileEvents.abort(); pageEvents.abort(); pageSequence++; copySequence++;
     for (const timer of timers) clearTimeout(timer); timers.clear();
-    element('sessionView').classList.remove('file-open'); element('fileViewBody').innerHTML = '';
+    const viewBody = element('fileViewBody');
+    pauseAndUnloadVideos(viewBody, { unload: true });
+    element('sessionView').classList.remove('file-open'); viewBody.innerHTML = '';
     const raw = element<HTMLAnchorElement>('fileViewRaw'); raw.style.display = 'none'; raw.removeAttribute('href');
     const publish = element<HTMLButtonElement>('fileViewPublish'); publish.disabled = false; publish.style.display = 'none';
     const proceed = document.getElementById('fileViewProceed') as HTMLButtonElement | null;
@@ -139,7 +142,8 @@ export function createFileViews(options: {
         if (!ownsFile(id, generation) || file.path !== data.path || sequence !== pageSequence) return;
         const page = decodePublishedPages(value).find(page => page.root === data.path); if (page) renderPage(page, id, generation);
       }).catch(() => {});
-      const size = data.size >= 10240 ? `${Math.round(data.size / 1024)} KB` : `${data.size} B`;
+      const size = data.size >= 1024 * 1024 ? `${(data.size / (1024 * 1024)).toFixed(1)} MB`
+        : data.size >= 10240 ? `${Math.round(data.size / 1024)} KB` : `${data.size} B`;
       path.textContent = `${shortCwd(data.path)} · ${size}${data.truncated ? ' · truncated preview' : ''}`; path.title = data.path;
       const proceedBtn = document.getElementById('fileViewProceed') as HTMLButtonElement | null;
       if (proceedBtn && data.artifact?.requestFeedback && sessionState.currentSession?.isActive) {
@@ -171,12 +175,24 @@ export function createFileViews(options: {
           : `data:${data.image.mimeType};base64,${data.image.data}`;
         body.innerHTML = `<img class="file-view-img" src="${escapeHtml(src)}" decoding="async" alt="">`; return;
       }
+      if (data.video) {
+        const src = data.video.url
+          ? (options.assetUrl ? options.assetUrl(owner.host, data.video.url) : endpoint.base + data.video.url)
+          : rawLink.href;
+        body.innerHTML = renderVideoPlayerHtml({
+          src,
+          name: data.path.split('/').pop() || 'video',
+          mimeType: data.video.mimeType,
+          variant: 'viewer',
+        });
+        return;
+      }
       file.raw = data.content;
       const ext = data.path.match(/\.([A-Za-z0-9]+)$/)?.[1]?.toLowerCase();
       if (ext === 'md' || ext === 'markdown') {
         body.innerHTML = `<div class="markdown-body">${options.markdown(data.content)}</div>`;
-        // Rewrite local markdown image paths (absolute, file://, or relative to the
-        // opened file) to the session-scoped file content endpoint so brain images load.
+        // Rewrite local markdown image/video paths (absolute, file://, or relative to the
+        // opened file) to the session-scoped file content endpoint so brain media loads.
         body.querySelectorAll<HTMLImageElement>('img[src]').forEach(img => {
           const rawSrc = (img.getAttribute('src') || '').trim();
           if (!rawSrc || /^(?:https?:|data:|blob:|\/\/|\/api\/)/i.test(rawSrc)) return;
@@ -187,12 +203,13 @@ export function createFileViews(options: {
           }
           const absImg = resolveRelativePosixPath(data.path, localPath.split(/[?#]/)[0]);
           const contentPath = `/api/sessions/${encodeURIComponent(id)}/file/content?path=${encodeURIComponent(absImg)}`;
+          img.dataset.filePath = absImg;
           img.src = options.assetUrl ? options.assetUrl(owner.host, contentPath) : endpoint.base + contentPath;
           img.decoding = 'async';
         });
       }
       else body.innerHTML = `<div class="markdown-body"><pre><code${ext ? ` class="language-${escapeHtml(ext)}"` : ''}${data.content.length > 80000 ? ' data-highlighted="skip"' : ''}>${escapeHtml(data.content)}</code></pre></div>`;
-      options.highlight(body); options.refreshComments();
+      options.highlight(body, { host: owner.host, sessionId: id, baseFilePath: data.path }); options.refreshComments();
     } catch (e) { if (ownsFile(id, generation)) body.innerHTML = `<div class="error">${escapeHtml(errorMessage(e))}</div>`; }
   }
   async function openDiff() { if (disposed || !sessionState.currentSession) return; closeFile(); element('sessionView').classList.add('diff-open'); element('btnDiff').classList.add('active'); await loadDiff(); }

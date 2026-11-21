@@ -46,6 +46,13 @@ export interface ImageBlock {
     readonly data?: string;
     readonly mimeType: string;
 }
+export interface VideoBlock {
+    readonly url?: string;
+    readonly data?: string;
+    readonly path?: string;
+    readonly mimeType: string;
+    readonly name?: string;
+}
 export interface KatexRenderer {
     renderToString(source: string, options: {
         displayMode: boolean;

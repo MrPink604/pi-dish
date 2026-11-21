@@ -25,6 +25,7 @@ function tailMarker(body: HTMLElement) {
 export function createStreamingRenderer(options: {
   document: Document; sessionState: SessionState; markdown: (text: string) => string;
   images?: (content: readonly (MessageBlock | string)[], alt: string) => string;
+  videos?: (content: readonly (MessageBlock | string)[]) => string;
   stream?: (previous: StreamingBlockState | null, text: string) => StreamingFrame | null;
   pinned: (root: HTMLElement) => boolean; scroll: (root: HTMLElement) => void; jump: (root: HTMLElement) => void;
 }) {
@@ -174,6 +175,20 @@ function renderStreamingMessage(message: RenderMessage, owner = sessionState.cap
       }
       if (!blockEl) return;
       const signature = `${block.url || ''}:${block.mimeType || ''}:${(block.data || '').length}`;
+      if (sources.get(blockEl) !== signature) {
+        sources.set(blockEl, signature);
+        blockEl.innerHTML = html;
+      }
+    } else if (block.type === 'video') {
+      const html = options.videos ? options.videos([block]) : '';
+      if (!html) return;
+      if (!blockEl) {
+        el.insertAdjacentHTML('beforeend',
+          `<div class="message-content" data-block-index="${i}" data-block-type="video"></div>`);
+        blockEl = el.querySelector<HTMLElement>(`[data-block-index="${i}"]`);
+      }
+      if (!blockEl) return;
+      const signature = `${block.url || ''}:${block.path || ''}:${block.mimeType || ''}:${(block.data || '').length}`;
       if (sources.get(blockEl) !== signature) {
         sources.set(blockEl, signature);
         blockEl.innerHTML = html;

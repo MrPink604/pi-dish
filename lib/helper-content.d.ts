@@ -1,5 +1,5 @@
 // Generated from src/core/helper-content.ts; edit that source and run npm run build:core.
-import type { ImageBlock } from './helper-types';
+import type { ImageBlock, VideoBlock } from './helper-types';
 export declare function extractTextContent(content: unknown): string;
 /** Text blocks only: extractTextContent joins non-text blocks as empty lines, so it can't equal a prompt's echo once an image is attached. */
 export declare function extractTextBlocks(content: unknown): string;
@@ -21,3 +21,5 @@ export declare function messageHasVisibleText(msg: unknown): boolean;
 export declare function getToolOutputText(partialResult: unknown): string;
 /** Live events carry `{ data, mimeType }`; history pages project bytes to `{ url, mimeType }`. mimeType defaults to image/png. */
 export declare function extractImageBlocks(content: unknown): ImageBlock[];
+/** Extract explicit video blocks or video-typed file/attachment blocks from message content. */
+export declare function extractVideoBlocks(content: unknown): VideoBlock[];

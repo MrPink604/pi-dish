@@ -8,6 +8,7 @@ import { escapeHtml } from '../core/helper-format';
 import { createTranscriptCache } from './transcript-cache';
 import type { TranscriptCursors } from './transcript-cache';
 import { splitToolGroupRanges } from './message-groups';
+import { pauseAndUnloadVideos } from './video-player';
 export interface TranscriptPage {
   readonly messages: readonly RenderMessage[];
   readonly session: Readonly<SessionTranscriptPatch>;
@@ -204,6 +205,7 @@ export function createTranscript(options: {
   }
   function stash() {
     const selected = sessionState.currentSession; if (disposed || !selected || !loaded || loaded.key !== sessionRefKey(selected)) return;
+    pauseAndUnloadVideos(container);
     cache.stash(loaded.key, loaded.base, cursors, container);
   }
   function restore(id: string) {

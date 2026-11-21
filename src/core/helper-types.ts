@@ -24,6 +24,7 @@ export interface SessionQueryTerm { readonly neg: boolean; readonly field: strin
 export interface SessionQuery { terms: SessionQueryTerm[]; since: number | null; before: number | null }
 export interface RefContextEntry { readonly ref: string; readonly name?: string; readonly host?: string; readonly cwd?: string; readonly isActive?: boolean | null }
 export interface ImageBlock { readonly url?: string; readonly data?: string; readonly mimeType: string }
+export interface VideoBlock { readonly url?: string; readonly data?: string; readonly path?: string; readonly mimeType: string; readonly name?: string }
 export interface KatexRenderer { renderToString(source: string, options: { displayMode: boolean; throwOnError: false }): string }
 export interface MathToken { type: string; raw: string; text: string; display?: boolean }
 export interface MathExtension { name: string; level: 'block' | 'inline'; start(source: string): number | undefined; tokenizer(source: string): MathToken | undefined; renderer(token: MathToken): string }

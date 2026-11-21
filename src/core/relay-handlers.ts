@@ -156,7 +156,7 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   const PROXY_PAGE_TOKEN_PATH_RE = /^\/pages\/([^/]+)$/;
   const PUBLIC_ARTIFACT_TIMEOUT_MS = 10_000;
   // Allowlist so the hub's origin/credentials never leak into a peer's logs.
-  const PUBLIC_FORWARD_HEADERS = ['accept', 'accept-language', 'range', 'if-none-match', 'if-modified-since', 'user-agent'];
+  const PUBLIC_FORWARD_HEADERS = ['accept', 'accept-language', 'range', 'if-range', 'if-none-match', 'if-modified-since', 'user-agent'];
   // Set by a hub fronting this page from a listener with no /api (see serveFleetArtifact).
   const PAGE_COMMENTS_HEADER = 'x-pi-dish-page-comments';
   // Marks every hub→peer public-artifact request; the receiver answers from its

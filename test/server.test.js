@@ -1595,6 +1595,126 @@ test('GET /file returns image metadata while a resource route serves the bytes',
     assert.equal(res.headers.get('content-type'), 'image/png');
     assert.deepEqual(Buffer.from(await res.arrayBuffer()), TINY_PNG);
 });
+test('GET /file returns video metadata and serves Range requests (206/416/HEAD/If-Range) with path safety', async () => {
+    const payload = Buffer.alloc(4096);
+    for (let i = 0; i < payload.length; i++)
+        payload[i] = i % 251;
+    const videoFiles = [
+        ['demo.mp4', 'video/mp4'],
+        ['demo.m4v', 'video/mp4'],
+        ['demo.webm', 'video/webm'],
+        ['demo.mov', 'video/quicktime'],
+        ['demo.ogv', 'video/ogg'],
+        ['demo.mkv', 'video/x-matroska'],
+    ];
+    for (const [name] of videoFiles)
+        fs.writeFileSync(path.join(realCwd, name), payload);
+    fs.writeFileSync(path.join(tmpHome, 'secret.mp4'), payload);
+    for (const [name, expectedMime] of videoFiles) {
+        const { status, body } = await get(`/api/sessions/${REAL_CWD_ID}/file?path=${encodeURIComponent(name)}`);
+        assert.equal(status, 200, name);
+        const video = (0, test_types_js_1.record)(body.video);
+        assert.equal(video.mimeType, expectedMime);
+        assert.ok(typeof video.url === 'string' && video.url.includes('/file/content?path='), `${name} carries a content URL`);
+        // Full response advertises Accept-Ranges and never compresses video.
+        const full = await rawGet(text(video.url), { 'Accept-Encoding': 'gzip' });
+        assert.equal(full.status, 200);
+        assert.equal(full.headers['content-type'], expectedMime);
+        assert.equal(full.headers['accept-ranges'], 'bytes');
+        assert.equal(full.headers['content-encoding'], undefined, 'video stream must not be gzip-compressed');
+        assert.equal(full.headers['content-length'], String(payload.length));
+        assert.deepEqual(full.body, payload);
+    }
+    const mp4Url = `/api/sessions/${REAL_CWD_ID}/file/content?path=demo.mp4`;
+    // iOS Safari mandatory initial 2-byte probe (`bytes=0-1`).
+    const probe = await rawGet(mp4Url, { Range: 'bytes=0-1' });
+    assert.equal(probe.status, 206);
+    assert.equal(probe.headers['accept-ranges'], 'bytes');
+    assert.equal(probe.headers['content-type'], 'video/mp4');
+    assert.equal(probe.headers['content-range'], `bytes 0-1/${payload.length}`);
+    assert.equal(probe.headers['content-length'], '2');
+    assert.deepEqual(probe.body, payload.subarray(0, 2));
+    // Mid-stream seek, open-ended range, and suffix range.
+    const mid = await rawGet(mp4Url, { Range: 'bytes=100-149' });
+    assert.equal(mid.status, 206);
+    assert.equal(mid.headers['content-range'], `bytes 100-149/${payload.length}`);
+    assert.deepEqual(mid.body, payload.subarray(100, 150));
+    const tail = await rawGet(mp4Url, { Range: 'bytes=4080-' });
+    assert.equal(tail.status, 206);
+    assert.equal(tail.headers['content-range'], `bytes 4080-${payload.length - 1}/${payload.length}`);
+    assert.deepEqual(tail.body, payload.subarray(4080));
+    const suffix = await rawGet(mp4Url, { Range: 'bytes=-12' });
+    assert.equal(suffix.status, 206);
+    assert.equal(suffix.headers['content-range'], `bytes ${payload.length - 12}-${payload.length - 1}/${payload.length}`);
+    assert.deepEqual(suffix.body, payload.subarray(payload.length - 12));
+    // Unsatisfiable range -> 416 with total size.
+    const badRange = await rawGet(mp4Url, { Range: `bytes=${payload.length + 10}-` });
+    assert.equal(badRange.status, 416);
+    assert.equal(badRange.headers['content-range'], `bytes */${payload.length}`);
+    assert.equal(badRange.body.length, 0);
+    // If-Range: matching ETag yields 206, stale ETag falls back to 200 full body.
+    const etag = String(probe.headers.etag || '');
+    assert.ok(etag.startsWith('"'));
+    const matched = await rawGet(mp4Url, { Range: 'bytes=0-9', 'If-Range': etag });
+    assert.equal(matched.status, 206);
+    assert.deepEqual(matched.body, payload.subarray(0, 10));
+    const mismatched = await rawGet(mp4Url, { Range: 'bytes=0-9', 'If-Range': '"stale-etag"' });
+    assert.equal(mismatched.status, 200);
+    assert.deepEqual(mismatched.body, payload);
+    // HEAD returns range headers with empty body.
+    const headRes = await fetch(base + mp4Url, { method: 'HEAD', headers: { Range: 'bytes=0-1' } });
+    assert.equal(headRes.status, 206);
+    assert.equal(headRes.headers.get('accept-ranges'), 'bytes');
+    assert.equal(headRes.headers.get('content-range'), `bytes 0-1/${payload.length}`);
+    assert.equal(headRes.headers.get('content-length'), '2');
+    assert.equal((await headRes.arrayBuffer()).byteLength, 0);
+    // Existing path-safety checks still reject traversal / outside-cwd video paths.
+    assert.equal((await fetch(`${base}/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent('../../secret.mp4')}`)).status, 404);
+    assert.equal((await fetch(`${base}/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent(path.join(tmpHome, 'secret.mp4'))}`)).status, 404);
+});
+test('published file pages and transcript video attachments serve video with Range support', async () => {
+    const bytes = Buffer.from('0123456789abcdefghijklmnopqrstuvwxyz');
+    const videoPath = path.join(realCwd, 'published-clip.mp4');
+    fs.writeFileSync(videoPath, bytes);
+    const published = await post('/api/pages', {
+        path: videoPath, sessionId: REAL_CWD_ID, renderer: 'file',
+    });
+    assert.equal(published.status, 200);
+    const pageRes = await fetch(base + text(published.body.path));
+    assert.equal(pageRes.status, 200);
+    assert.match(pageRes.headers.get('content-security-policy') ?? '', /media-src 'self' http: https:/);
+    const html = await pageRes.text();
+    assert.match(html, /<video[^>]+controls[^>]+playsinline[^>]+preload="metadata"/);
+    assert.doesNotMatch(html, /\bautoplay\b/i);
+    const videoSrc = (0, test_types_js_1.present)((0, test_types_js_1.present)(html.match(/<video[^>]+src="([^"]+)"/))[1]).replace(/&amp;/g, '&');
+    const ranged = await rawGet(videoSrc, { Range: 'bytes=4-9' });
+    assert.equal(ranged.status, 206);
+    assert.equal(ranged.headers['content-type'], 'video/mp4');
+    assert.equal(ranged.headers['accept-ranges'], 'bytes');
+    assert.equal(ranged.headers['content-range'], `bytes 4-9/${bytes.length}`);
+    assert.deepEqual(ranged.body, bytes.subarray(4, 10));
+    await del(`/api/pages/${published.body.token}`);
+    // Transcript video attachment block projected to /media/:blockIndex with Range support.
+    const vidSessionId = '2026-07-04T15-00-00-vidblk01';
+    fs.writeFileSync(path.join(sessionDir, `${vidSessionId}.jsonl`), [
+        { type: 'session', version: 3, id: vidSessionId, cwd: realCwd, timestamp: '2026-07-04T15:00:00.000Z' },
+        { type: 'message', id: 'vidmsg01', parentId: null, message: { role: 'assistant', content: [
+                    { type: 'text', text: 'Attached video' },
+                    { type: 'video', data: bytes.toString('base64'), mimeType: 'video/webm' },
+                ] } },
+    ].map(e => JSON.stringify(e)).join('\n') + '\n');
+    const listRes = await get(`/api/sessions/${vidSessionId}/messages`);
+    assert.equal(listRes.status, 200);
+    const blocks = (0, test_types_js_1.records)((0, test_types_js_1.records)(listRes.body.messages)[0]?.content);
+    const projected = blocks.find(b => b.type === 'video');
+    assert.ok(projected && typeof projected.url === 'string');
+    assert.equal(projected.data, undefined, 'base64 video bytes stay out of message JSON');
+    const mediaRange = await rawGet(text(projected.url), { Range: 'bytes=0-3' });
+    assert.equal(mediaRange.status, 206);
+    assert.equal(mediaRange.headers['content-type'], 'video/webm');
+    assert.equal(mediaRange.headers['accept-ranges'], 'bytes');
+    assert.deepEqual(mediaRange.body, bytes.subarray(0, 4));
+});
 test('GET /file content serves the raw source of text previews inline', async () => {
     const resource = `/api/sessions/${REAL_CWD_ID}/file/content?path=${encodeURIComponent('deep/nest/findings.md')}`;
     const res = await fetch(base + resource);

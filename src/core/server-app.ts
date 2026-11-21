@@ -304,6 +304,7 @@ export function startServer(rootDirectory: string): Server {
   app.put('/api/settings', featureHandlers.updateSettings);
 
   app.get('/api/sessions/:id/messages/:messageId/images/:blockIndex', sessionReadHandlers.image);
+  app.get('/api/sessions/:id/messages/:messageId/media/:blockIndex', sessionReadHandlers.media);
   app.get('/api/sessions/:id/messages', sessionReadHandlers.messages);
   app.get('/api/sessions/:id/search', sessionReadHandlers.search);
 

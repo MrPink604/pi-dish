@@ -21,7 +21,7 @@ interface ToolPanel { owner: SelectionOwner; el: HTMLDetailsElement; startTime: 
 export function createLiveTools(options: {
   document: Document; sessionState: SessionState; started: (id: string, name: string) => void; finished: (id: string) => void;
   pinned: (root: HTMLElement) => boolean; scroll: (root: HTMLElement) => void; jump: (root: HTMLElement) => void;
-  images: (content: unknown, alt: string) => string; mood: (tool: string, args: unknown) => void;
+  images: (content: unknown, alt: string) => string; videos?: (content: unknown) => string; mood: (tool: string, args: unknown) => void;
 }) {
   const { document, sessionState } = options; let disposed = false;
   const liveToolPanels = new Map<string, ToolPanel>(), retained = new WeakMap<HTMLDetailsElement, ToolPanel>();
@@ -266,10 +266,10 @@ function updateLiveToolPanel(data: ToolEvent) {
   }
 
   const output = multiCell ? '' : getToolOutputText(partialResult);
-  // Images derive idempotently from the latest partial result — the whole
-  // `.msg-images` row is replaced each update so images never accumulate.
+  // Images/videos derive idempotently from the latest partial result.
   const imagesHtml = options.images(partialResult && partialResult.content, 'tool result image');
-  if (!output && !imagesHtml) return;
+  const videosHtml = options.videos ? options.videos(partialResult && partialResult.content) : '';
+  if (!output && !imagesHtml && !videosHtml) return;
 
   const container = document.getElementById('messages');
   const wasPinned = container ? options.pinned(container) : false;
@@ -295,6 +295,12 @@ function updateLiveToolPanel(data: ToolEvent) {
     else entry.el.insertAdjacentHTML('beforeend', imagesHtml);
     entry.el.setAttribute('open', '');
   }
+  if (videosHtml) {
+    const existing = entry.el.querySelector('.msg-videos');
+    if (existing) existing.outerHTML = videosHtml;
+    else entry.el.insertAdjacentHTML('beforeend', videosHtml);
+    entry.el.setAttribute('open', '');
+  }
 
   // Follow output only while the user hasn't scrolled away.
   if (outputEl) outputEl.scrollTop = outputEl.scrollHeight;
@@ -318,11 +324,12 @@ function finalizeLiveToolPanel(data: ToolEvent) {
   if (!entry?.el) return;
 
   const output = getToolOutputText(result);
-  const imagesHtml = options.images(result && result.content, 'tool result image');
+  const mediaHtml = options.images(result && result.content, 'tool result image')
+    + (options.videos ? options.videos(result && result.content) : '');
   const durationMs = entry.startTime ? (Date.now() - entry.startTime) : null;
   const details = decodeToolDetails(resolvedName, result?.details);
 
-  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, imagesHtml, intent, details);
+  const newHtml = buildLiveToolPanel(toolCallId, resolvedName, resolvedArgs, output, isError, true, durationMs, mediaHtml, intent, details);
   const tmp = document.createElement('div');
   tmp.innerHTML = newHtml;
   const newEl = tmp.firstElementChild as HTMLDetailsElement;

@@ -14,6 +14,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const file_mention_1 = require("../lib/file-mention");
+const range_response_1 = require("../lib/range-response");
+const helper_media_1 = require("../lib/helper-media");
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-mention-'));
 const home = path.join(root, 'home');
 const cwd = path.join(home, 'proj');
@@ -123,5 +125,46 @@ test('readFileForViewer: text, truncation flag, binary rejection, images', () =>
     assert.ok('image' in img && img.image);
     assert.equal(img.image.mimeType, 'image/png');
     assert.equal(img.image.data, pngBytes.toString('base64'), 'PNG served as base64 despite NUL bytes');
+    const expectedVideos = [
+        ['clip.mp4', 'video/mp4'],
+        ['movie.m4v', 'video/mp4'],
+        ['capture.webm', 'video/webm'],
+        ['iphone.MOV', 'video/quicktime'],
+        ['sample.ogv', 'video/ogg'],
+        ['recording.mkv', 'video/x-matroska'],
+    ];
+    for (const [name, expectedMime] of expectedVideos) {
+        const vidPath = path.join(cwd, name);
+        const bytes = Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x00]);
+        fs.writeFileSync(vidPath, bytes);
+        const vid = (0, file_mention_1.readFileForViewer)(vidPath);
+        assert.ok('video' in vid && vid.video, `${name} returns video metadata`);
+        assert.equal(vid.video.mimeType, expectedMime);
+        assert.equal(vid.size, bytes.length);
+    }
+});
+test('videoMimeForPath and parseByteRange handle video extensions and RFC 9110 byte ranges', () => {
+    assert.equal((0, helper_media_1.videoMimeForPath)('demo.mp4?v=1#t=2'), 'video/mp4');
+    assert.equal((0, helper_media_1.videoMimeForPath)('dir/clip.m4v:10'), 'video/mp4');
+    assert.equal((0, helper_media_1.videoMimeForPath)('https://example.com/a.WEBM'), 'video/webm');
+    assert.equal((0, helper_media_1.videoMimeForPath)('notes.txt'), null);
+    assert.equal((0, helper_media_1.videoMimeForPath)('.mp4'), null);
+    assert.equal((0, helper_media_1.isVideoPath)('clip.mkv'), true);
+    assert.equal((0, helper_media_1.isVideoPath)('clip.png'), false);
+    // iOS Safari initial probe + open/suffix/clamped/invalid ranges
+    assert.deepEqual((0, range_response_1.parseByteRange)('bytes=0-1', 100), { start: 0, end: 1 });
+    assert.deepEqual((0, range_response_1.parseByteRange)('bytes=10-20', 100), { start: 10, end: 20 });
+    assert.deepEqual((0, range_response_1.parseByteRange)('bytes=50-', 100), { start: 50, end: 99 });
+    assert.deepEqual((0, range_response_1.parseByteRange)('bytes=-10', 100), { start: 90, end: 99 });
+    assert.deepEqual((0, range_response_1.parseByteRange)('bytes=-500', 100), { start: 0, end: 99 });
+    assert.deepEqual((0, range_response_1.parseByteRange)('bytes=0-9999', 100), { start: 0, end: 99 });
+    assert.equal((0, range_response_1.parseByteRange)('bytes=100-', 100), 'unsatisfiable');
+    assert.equal((0, range_response_1.parseByteRange)('bytes=20-10', 100), 'unsatisfiable');
+    assert.equal((0, range_response_1.parseByteRange)('bytes=-0', 100), 'unsatisfiable');
+    assert.equal((0, range_response_1.parseByteRange)('bytes=0-0', 0), 'unsatisfiable');
+    assert.equal((0, range_response_1.parseByteRange)('bytes=0-1, 4-5', 100), null);
+    assert.equal((0, range_response_1.parseByteRange)('items=0-1', 100), null);
+    assert.equal((0, range_response_1.parseByteRange)('bytes=abc-def', 100), null);
+    assert.equal((0, range_response_1.parseByteRange)(undefined, 100), null);
 });
 test.after(() => fs.rmSync(root, { recursive: true, force: true }));

@@ -14,7 +14,7 @@ export interface SessionStats {
 export interface PublishedPage { readonly token: string; readonly path: string; readonly url: string; readonly title: string; readonly root: string; readonly missing: boolean; readonly createdAt: number }
 export interface SessionShare { readonly path: string; readonly url: string }
 export interface BrainArtifact {
-  readonly name: string; readonly path: string; readonly kind: 'markdown' | 'html' | 'image';
+  readonly name: string; readonly path: string; readonly kind: 'markdown' | 'html' | 'image' | 'video';
   readonly size: number; readonly updatedAt: string; readonly summary: string;
   readonly requestFeedback: boolean; readonly artifactType: string;
 }
@@ -48,7 +48,7 @@ export function decodeBrainArtifacts(value: unknown): BrainArtifact[] {
   const list = record(value) && Array.isArray(value.artifacts) ? value.artifacts : Array.isArray(value) ? value : [];
   return list.flatMap((item: unknown): BrainArtifact[] => {
     if (!record(item) || typeof item.path !== 'string' || !item.path) return [];
-    const kind = item.kind === 'html' || item.kind === 'image' ? item.kind : 'markdown';
+    const kind = item.kind === 'html' || item.kind === 'image' || item.kind === 'video' ? item.kind : 'markdown';
     return [{
       name: text(item.name) || item.path.split('/').pop() || 'artifact',
       path: item.path,

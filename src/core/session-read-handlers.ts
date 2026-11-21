@@ -11,6 +11,8 @@ import { primeLiveSession } from './live-sessions';
 import type { CatalogRuntime } from './session-catalog-runtime';
 import { errorMessage } from './http-boundary';
 import { extractTextContent, getToolSummary } from './helper-content.js';
+import { isVideoMimeType } from './helper-media';
+import { sendRangedBuffer } from './range-response';
 import { collectActivePath, walkBranchTree } from './helper-tree';
 import { refreshHarnessPricing } from './harness-pricing';
 import * as piSDK from './pi-sdk';
@@ -40,6 +42,7 @@ type ReadHandler = RequestHandler<Record<string, string>, unknown, unknown,
 
 export interface SessionReadHandlers {
   image: ReadHandler;
+  media: ReadHandler;
   messages: ReadHandler;
   search: ReadHandler;
   stats: ReadHandler;
@@ -52,7 +55,7 @@ export interface SessionReadHandlers {
 const VALID_ENTRY_ID_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,198}[A-Za-z0-9])?$/;
 const BLOB_REF_RE = /^blob:sha256:([0-9a-f]{64})$/;
 
-/** Copy only the projected image blocks; never mutate the borrowed parser cache. */
+/** Copy only the projected image/video blocks; never mutate the borrowed parser cache. */
 function messageForClient(sessionId: string, message: SessionMessage, index: number) {
   if (!Array.isArray(message.content)) return { ...message, index };
   let changed = false;
@@ -60,14 +63,25 @@ function messageForClient(sessionId: string, message: SessionMessage, index: num
     ? message.id : String(index);
   const content = message.content.map((value: unknown, blockIndex: number) => {
     const block = asRecord(value);
-    if (block.type !== 'image' || typeof block.data !== 'string' || !block.data) return value;
-    changed = true;
-    const { data: _data, ...metadata } = block;
-    return {
-      ...metadata,
-      mimeType: block.mimeType || 'image/png',
-      url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/images/${blockIndex}`,
-    };
+    if (block.type === 'image' && typeof block.data === 'string' && block.data) {
+      changed = true;
+      const { data: _data, ...metadata } = block;
+      return {
+        ...metadata,
+        mimeType: block.mimeType || 'image/png',
+        url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/images/${blockIndex}`,
+      };
+    }
+    if (block.type === 'video' && typeof block.data === 'string' && block.data) {
+      changed = true;
+      const { data: _data, ...metadata } = block;
+      return {
+        ...metadata,
+        mimeType: isVideoMimeType(block.mimeType) ? block.mimeType : 'video/mp4',
+        url: `/api/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(resourceId)}/media/${blockIndex}`,
+      };
+    }
+    return value;
   });
   return { ...message, ...(changed ? { content } : {}), index };
 }
@@ -208,11 +222,11 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
     return piSDK.exportSessionHtml(session.file, outputPath, session.profileId, { shareSnapshot });
   }
 
-  const image: ReadHandler = (req, res) => {
+  function serveMessageMediaBlock(req: Parameters<ReadHandler>[0], res: Parameters<ReadHandler>[1], allowVideo: boolean) {
     const messageId = req.params.messageId;
     const blockIndex = Number(req.params.blockIndex);
     if (!VALID_ENTRY_ID_RE.test(messageId) || !Number.isInteger(blockIndex) || blockIndex < 0) {
-      res.status(400).json({ error: 'valid message id and image index required' });
+      res.status(400).json({ error: allowVideo ? 'valid message id and media index required' : 'valid message id and image index required' });
       return;
     }
     const session = findSessionSource(req.params.id);
@@ -224,16 +238,28 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
     }
     const content = message?.content;
     const block = asRecord(content == null ? undefined : Reflect.get(Object(content), String(blockIndex)));
-    if (block.type !== 'image' || typeof block.data !== 'string' || !block.data) {
-      res.status(404).json({ error: 'Image not found' }); return;
+    const isImage = block.type === 'image';
+    const isVideo = allowVideo && block.type === 'video';
+    if ((!isImage && !isVideo) || typeof block.data !== 'string' || !block.data) {
+      res.status(404).json({ error: allowVideo ? 'Media not found' : 'Image not found' }); return;
     }
     const bytes = imageBlockBytes(session, block.data);
-    if (!bytes) { res.status(404).json({ error: 'Image not found' }); return; }
-    const mimeType = typeof block.mimeType === 'string' && /^image\/[A-Za-z0-9.+-]+$/.test(block.mimeType)
-      ? block.mimeType : 'image/png';
+    if (!bytes) { res.status(404).json({ error: allowVideo ? 'Media not found' : 'Image not found' }); return; }
+    const mimeType = isVideo
+      ? (isVideoMimeType(block.mimeType) ? block.mimeType.trim().toLowerCase() : 'video/mp4')
+      : (typeof block.mimeType === 'string' && /^image\/[A-Za-z0-9.+-]+$/.test(block.mimeType)
+          ? block.mimeType : 'image/png');
     res.setHeader('Cache-Control', 'private, no-cache');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (isVideo) {
+      sendRangedBuffer(req, res, bytes, { mimeType });
+      return;
+    }
     res.type(mimeType).send(bytes);
-  };
+  }
+
+  const image: ReadHandler = (req, res) => serveMessageMediaBlock(req, res, false);
+  const media: ReadHandler = (req, res) => serveMessageMediaBlock(req, res, true);
 
   const messages: ReadHandler = async (req, res) => {
     const sessionId = req.params.id;
@@ -439,5 +465,5 @@ export function createSessionReadHandlers({ ownership, catalog, findSessionSourc
     } catch (error) { res.status(500).json({ error: errorMessage(error) }); }
   };
 
-  return { image, messages, search, stats, tree, export: exportHandler, exportSessionHtml, getOmpShareSnapshot };
+  return { image, media, messages, search, stats, tree, export: exportHandler, exportSessionHtml, getOmpShareSnapshot };
 }

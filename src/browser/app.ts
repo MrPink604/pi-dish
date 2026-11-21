@@ -782,7 +782,7 @@ const sessionInfo: ReturnType<typeof createSessionInfo> = createSessionInfo({
 
 const fileViews: ReturnType<typeof createFileViews> = createFileViews({
   document, sessionState, request, host: hostEntryFor, assetUrl: hostAssetUrl,
-  markdown: text => richText.format(text), highlight: root => richText.highlight(root), copy: copyTextToClipboard,
+  markdown: text => richText.format(text), highlight: (root, context) => richText.highlight(root, context), copy: copyTextToClipboard,
   status: setStatus, refreshArtifacts: owner => sessionInfo.refreshArtifacts(owner),
   closeComments: () => anchoredCommentController.close(), clearComments: () => anchoredCommentController.set([]),
   refreshComments: () => anchoredCommentController.refresh(), markComments: () => anchoredCommentController.applyMarks(),
@@ -819,7 +819,7 @@ const subagentsController: ReturnType<typeof createSubagentsView> = createSubage
 const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools({
   document, sessionState, started: (id, name) => sessionActivity.toolStarted(id, name),
   finished: id => sessionActivity.toolFinished(id), ...chromeScroll,
-  images: (content, alt) => messageRenderer.images(content, alt), mood: (name, args) => moodController.fromTool(name, args),
+  images: (content, alt) => messageRenderer.images(content, alt), videos: content => messageRenderer.videos(content), mood: (name, args) => moodController.fromTool(name, args),
 });
 
 
@@ -964,6 +964,7 @@ function finalizeRender(container: HTMLElement, { stripLive = true, inserted }: 
 const streamingRenderer: ReturnType<typeof createStreamingRenderer> = createStreamingRenderer({
   document, sessionState, markdown: text => richText.format(text), ...chromeScroll,
   images: (content, alt) => messageRenderer.images(content, alt),
+  videos: content => messageRenderer.videos(content),
   stream: (previous, text) => richText.stream(previous, text),
 });
 
@@ -989,7 +990,7 @@ const diagramRenderer: ReturnType<typeof createDiagrams> = createDiagrams({
 });
 const richText: ReturnType<typeof createRichText> = createRichText({
   document, marked: typeof marked === 'undefined' ? null : marked, highlight: () => typeof hljs === 'undefined' ? null : hljs,
-  assets: browserAssets, diagrams: diagramRenderer, sessionState, copy: copyTextToClipboard, status: setStatus,
+  assets: browserAssets, diagrams: diagramRenderer, sessionState, assetUrl: hostAssetUrl, copy: copyTextToClipboard, status: setStatus,
   retainedRoots: () => transcriptController.retainedRoots(),
   matchRef: ref => sessionReferences.match(ref),
 });

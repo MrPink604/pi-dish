@@ -1,6 +1,7 @@
-import type { ImageBlock } from './helper-types';
+import type { ImageBlock, VideoBlock } from './helper-types';
 import { record } from './helper-values';
 import { truncate } from './helper-format';
+import { isVideoMimeType, videoMimeForPath } from './helper-media';
 import { decodeRouteSessionId, SESSION_UUID_TAIL_RE } from './helper-refs';
 
 function compactToolRef(raw: unknown) {
@@ -248,6 +249,8 @@ export function messageHasVisibleText(msg: unknown) {
   return Array.isArray(msg.content) && msg.content.some((b: unknown) => record(b) && (
     (b.type === 'text' && typeof b.text === 'string' && !!b.text)
     || (b.type === 'image' && ((typeof b.url === 'string' && !!b.url) || (typeof b.data === 'string' && !!b.data)))
+    || ((b.type === 'video' || ((b.type === 'file' || b.type === 'attachment') && (isVideoMimeType(b.mimeType) || videoMimeForPath(b.path || b.url) !== null)))
+      && ((typeof b.url === 'string' && !!b.url) || (typeof b.data === 'string' && !!b.data) || (typeof b.path === 'string' && !!b.path)))
   ));
 }
 
@@ -270,6 +273,30 @@ export function extractImageBlocks(content: unknown) {
     const mimeType = typeof block.mimeType === 'string' && block.mimeType ? block.mimeType : 'image/png';
     if (typeof block.url === 'string' && block.url) out.push({ url: block.url, mimeType });
     else if (typeof block.data === 'string' && block.data) out.push({ data: block.data, mimeType });
+  }
+  return out;
+}
+
+/** Extract explicit video blocks or video-typed file/attachment blocks from message content. */
+export function extractVideoBlocks(content: unknown) {
+  if (!Array.isArray(content)) return [];
+  const out: VideoBlock[] = [];
+  const blocks: unknown[] = content;
+  for (const block of blocks) {
+    if (!record(block)) continue;
+    const url = typeof block.url === 'string' && block.url ? block.url : undefined;
+    const data = typeof block.data === 'string' && block.data ? block.data : undefined;
+    const filePath = typeof block.path === 'string' && block.path ? block.path : undefined;
+    const name = typeof block.name === 'string' && block.name ? block.name : undefined;
+    const rawMime = isVideoMimeType(block.mimeType) ? block.mimeType.trim().toLowerCase() : null;
+    const inferredMime = videoMimeForPath(filePath || url || name);
+    const isVideoBlock = block.type === 'video'
+      || ((block.type === 'file' || block.type === 'attachment') && (rawMime !== null || inferredMime !== null));
+    if (!isVideoBlock) continue;
+    const mimeType = rawMime || inferredMime || 'video/mp4';
+    if (url) out.push({ url, mimeType, ...(filePath ? { path: filePath } : {}), ...(name ? { name } : {}) });
+    else if (filePath) out.push({ path: filePath, mimeType, ...(name ? { name } : {}) });
+    else if (data) out.push({ data, mimeType, ...(name ? { name } : {}) });
   }
   return out;
 }

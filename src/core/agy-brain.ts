@@ -1711,7 +1711,7 @@ export function readAgySessionTasks(
 export interface AgyBrainArtifact {
   name: string;
   path: string;
-  kind: 'markdown' | 'html' | 'image';
+  kind: 'markdown' | 'html' | 'image' | 'video';
   size: number;
   updatedAt: string;
   summary: string;
@@ -1739,6 +1739,12 @@ const ARTIFACT_EXT_KIND: Readonly<Record<string, AgyBrainArtifact['kind']>> = {
   '.webp': 'image',
   '.gif': 'image',
   '.svg': 'image',
+  '.mp4': 'video',
+  '.m4v': 'video',
+  '.webm': 'video',
+  '.mov': 'video',
+  '.ogv': 'video',
+  '.mkv': 'video',
 };
 
 const SKIPPED_BRAIN_ENTRIES = new Set(['.system_generated', 'scratch', '.user_uploaded']);

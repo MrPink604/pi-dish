@@ -90,6 +90,119 @@ test('stale diff snapshot refreshes once and failed patch remains retryable', as
   await expect(page.locator('.diff-patch')).toContainText('new'); expect(patches).toBe(3);
 });
 
+test('file view plays videos with speed/frame controls, shows codec fallback on error, and upgrades markdown video embeds', async ({ page, fleet }) => {
+  await fleet.select(fleet.peer);
+  // Synthesize a tiny real WebM in-browser so loadedmetadata, speed, and frame stepping exercise a real decoded stream.
+  const webmB64 = await page.evaluate(async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64; canvas.height = 36;
+    const ctx = fixtureElement(canvas.getContext('2d'), 'canvas 2d context');
+    const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
+    const recorder = new MediaRecorder(canvas.captureStream(15), { mimeType: mime });
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    const done = new Promise<void>(resolve => { recorder.onstop = () => resolve(); });
+    recorder.start();
+    for (let i = 0; i < 8; i++) {
+      ctx.fillStyle = i % 2 ? '#2563eb' : '#10b981';
+      ctx.fillRect(0, 0, 64, 36);
+      await new Promise(resolve => setTimeout(resolve, 40));
+    }
+    recorder.stop();
+    await done;
+    const bytes = new Uint8Array(await new Blob(chunks, { type: mime }).arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]!);
+    return btoa(bin);
+  });
+  const webmBytes = Buffer.from(webmB64, 'base64');
+
+  await page.route('**/api/sessions/*/file?*', route => {
+    const reqPath = new URL(route.request().url()).searchParams.get('path') ?? '';
+    if (reqPath === 'demo.webm') {
+      return route.fulfill({
+        json: {
+          path: '/fixture/demo.webm', relPath: 'demo.webm', size: 2 * 1024 * 1024, mtime: 10,
+          video: { url: `/api/sessions/${ROOT}/file/content?path=demo.webm&v=10-2097152`, mimeType: 'video/webm' },
+        },
+      });
+    }
+    if (reqPath === 'unsupported.mkv') {
+      return route.fulfill({
+        json: {
+          path: '/fixture/unsupported.mkv', relPath: 'unsupported.mkv', size: 128, mtime: 12,
+          video: { url: `/api/sessions/${ROOT}/file/content?path=unsupported.mkv&v=12-128`, mimeType: 'video/x-matroska' },
+        },
+      });
+    }
+    if (reqPath === 'notes.md') {
+      return route.fulfill({
+        json: {
+          path: '/fixture/docs/notes.md', relPath: 'docs/notes.md', size: 64, mtime: 11, truncated: false,
+          content: '# Notes\n\n![Walkthrough](../clips/demo.webm)\n',
+        },
+      });
+    }
+    return route.fulfill({ json: preview(reqPath) });
+  });
+  await page.route('**/api/sessions/*/file/content?*', route => {
+    const reqPath = new URL(route.request().url()).searchParams.get('path') ?? '';
+    if (reqPath.endsWith('unsupported.mkv')) {
+      return route.fulfill({
+        status: 200,
+        headers: { 'Content-Type': 'video/x-matroska', 'Accept-Ranges': 'bytes' },
+        body: Buffer.from('not-a-real-codec-payload'),
+      });
+    }
+    return route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'video/webm', 'Accept-Ranges': 'bytes' },
+      body: webmBytes,
+    });
+  });
+
+  await page.evaluate(() => fixtureApp.features.fileViews.openFile('demo.webm'));
+  const player = page.locator('#fileViewBody .file-view-video-player');
+  const video = player.locator('video.file-view-video');
+  await expect(player).toHaveCount(1);
+  await expect(video).toHaveAttribute('preload', 'metadata');
+  await expect(video).toHaveAttribute('controls', '');
+  await expect(video).toHaveAttribute('playsinline', '');
+  expect(await video.getAttribute('autoplay')).toBeNull();
+  expect(await video.getAttribute('src')).toBe(`${fleet.peer.base}/api/sessions/${ROOT}/file/content?path=demo.webm&v=10-2097152`);
+  await expect(page.locator('#fileViewPath')).toContainText('2.0 MB');
+  await expect(player).toHaveAttribute('data-video-state', 'ready');
+  await expect(player.locator('.video-meta')).toContainText('64×36');
+  await expect(player.locator('.video-fallback')).toBeHidden();
+
+  // Speed and frame-stepping controls update playbackRate and currentTime.
+  await player.locator('.video-speed').selectOption('1.5');
+  expect(await video.evaluate(node => (node as HTMLVideoElement).playbackRate)).toBe(1.5);
+  await player.locator('.video-step-fwd').click();
+  expect(await video.evaluate(node => (node as HTMLVideoElement).currentTime)).toBeGreaterThan(0.02);
+  await player.locator('.video-step-back').click();
+  expect(await video.evaluate(node => (node as HTMLVideoElement).currentTime)).toBeLessThan(0.01);
+
+  // Unsupported codec error reveals the fallback card with Open and Download links and hides <video>.
+  await page.evaluate(() => fixtureApp.features.fileViews.openFile('unsupported.mkv'));
+  const badPlayer = page.locator('#fileViewBody .file-view-video-player');
+  await expect(badPlayer.locator('.video-fallback')).toBeVisible();
+  await expect(badPlayer.locator('video.file-view-video')).toBeHidden();
+  await expect(badPlayer.locator('.video-fallback-open')).toHaveAttribute('href', `${fleet.peer.base}/api/sessions/${ROOT}/file/content?path=unsupported.mkv&v=12-128`);
+  await expect(badPlayer.locator('.video-fallback-download')).toHaveAttribute('download', 'unsupported.mkv');
+
+  // Closing the viewer unloads the video cleanly.
+  await page.evaluate(() => fixtureApp.features.fileViews.closeFile());
+  await expect(page.locator('#fileViewBody video')).toHaveCount(0);
+
+  // Opening a markdown file upgrades relative video image embeds to playable video elements.
+  await page.evaluate(() => fixtureApp.features.fileViews.openFile('notes.md'));
+  const mdVideo = page.locator('#fileViewBody .msg-video-player video.msg-video');
+  await expect(mdVideo).toHaveCount(1);
+  expect(await mdVideo.getAttribute('src')).toBe(`${fleet.peer.base}/api/sessions/${ROOT}/file/content?path=${encodeURIComponent('/fixture/clips/demo.webm')}`);
+  await expect(page.locator('#fileViewBody img')).toHaveCount(0);
+});
+
 test('file view disposal retires publish, copy and diff patch actions', async ({ page, fleet }) => {
   await fleet.select(fleet.self); await fileRoutes(page); let writes = 0;
   await page.route('**/api/pages', route => { if (route.request().method() === 'POST') writes++; return route.fulfill({ json: [] }); });

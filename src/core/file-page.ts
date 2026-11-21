@@ -5,6 +5,7 @@ import hljs from 'highlight.js';
 import * as katex from 'katex';
 import { createMathExtensions } from './helper-markdown.js';
 import { escapeHtml } from './helper-format';
+import { mediaFileName, videoMimeForPath } from './helper-media';
 import type { FileViewerFile } from './file-mention';
 
 export interface FilePageOptions {
@@ -65,6 +66,16 @@ const markdown = new Marked({
         .filter(Boolean).join(' ');
       return `<pre><code${classes ? ` class="${classes}"` : ''}>${rendered.html}</code></pre>\n`;
     },
+    image(href, title, text) {
+      const safeHref = sanitizeMarkdownUrl(href);
+      if (safeHref !== '#' && videoMimeForPath(safeHref)) {
+        const label = text || mediaFileName(safeHref);
+        const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+        return `<figure class="video-player msg-video-player"><div class="video-stage"><video class="video-el msg-video" controls playsinline preload="metadata" src="${escapeHtml(safeHref)}"${titleAttr}><a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener">Open ${escapeHtml(label)}</a></video></div><figcaption class="video-toolbar"><span class="video-meta">${escapeHtml(label)}</span><div class="video-controls"><a class="video-btn video-download" href="${escapeHtml(safeHref)}" target="_blank" rel="noopener">Open</a><a class="video-btn video-download" href="${escapeHtml(safeHref)}" download="${escapeHtml(mediaFileName(safeHref))}">Download</a></div></figcaption></figure>`;
+      }
+      const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+      return `<img src="${escapeHtml(safeHref)}" alt="${escapeHtml(text || '')}"${titleAttr}>`;
+    },
   },
   walkTokens(token) {
     if (token.type === 'link' || token.type === 'image') token.href = sanitizeMarkdownUrl(token.href);
@@ -78,6 +89,19 @@ export function renderFilePage({ token, root, title, file }: FilePageOptions): s
   if (file.image) {
     const src = `/page/${encodeURIComponent(token)}?content=1&v=${file.mtime}-${file.size}`;
     content = `<img class="file-view-img" src="${escapeHtml(src)}" decoding="async" alt="">`;
+  } else if (file.video) {
+    const src = `/page/${encodeURIComponent(token)}?content=1&v=${file.mtime}-${file.size}`;
+    const fileName = path.basename(root);
+    content = `<figure class="video-player file-view-video-player">`
+      + `<div class="video-stage"><video class="video-el file-view-video" controls playsinline preload="metadata" src="${escapeHtml(src)}">`
+      + `<a href="${escapeHtml(src)}" target="_blank" rel="noopener">Open ${escapeHtml(fileName)}</a>`
+      + `</video></div>`
+      + `<figcaption class="video-toolbar">`
+      + `<span class="video-meta" title="${escapeHtml(fileName)}">${escapeHtml(fileName)} · ${escapeHtml(file.video.mimeType)}</span>`
+      + `<div class="video-controls">`
+      + `<a class="video-btn video-download" href="${escapeHtml(src)}" target="_blank" rel="noopener">Open</a>`
+      + `<a class="video-btn video-download" href="${escapeHtml(src)}" download="${escapeHtml(fileName)}">Download</a>`
+      + `</div></figcaption></figure>`;
   } else {
     const ext = path.extname(root).slice(1).toLowerCase();
     if (ext === 'md' || ext === 'markdown') {

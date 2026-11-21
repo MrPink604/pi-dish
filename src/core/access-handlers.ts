@@ -145,8 +145,9 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     filter(req, res) {
       if (req.path.endsWith('/stream')) return false;
       if (req.path.startsWith('/hosts/')) return false;
+      if (req.headers.range || res.statusCode === 206) return false;
       const type = String(res.getHeader('Content-Type') || '');
-      if (type.startsWith('text/event-stream')) return false;
+      if (type.startsWith('text/event-stream') || type.startsWith('video/')) return false;
       return compression.filter(req, res);
     },
   });
@@ -162,8 +163,9 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (origin && allowedOrigins().includes(origin)) {
       res.header('Access-Control-Allow-Origin', origin);
       res.header('Vary', 'Origin');
-      res.header('Access-Control-Allow-Headers', `Authorization, Content-Type, ${PRIVATE_UNLOCK_HEADER}`);
-      res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      res.header('Access-Control-Allow-Headers', `Authorization, Content-Type, Range, If-Range, ${PRIVATE_UNLOCK_HEADER}`);
+      res.header('Access-Control-Expose-Headers', 'Accept-Ranges, Content-Range, Content-Length');
+      res.header('Access-Control-Allow-Methods', 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS');
       if (req.method === 'OPTIONS') { res.status(204).end(); return; }
     }
     next();

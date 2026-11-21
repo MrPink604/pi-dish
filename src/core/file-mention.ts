@@ -9,6 +9,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { searchFiles } from './file-search';
 import { record } from './helper-values';
+import { IMAGE_MIME_BY_EXT, VIDEO_MIME_BY_EXT } from './helper-media';
 import { matchCommandPaths } from './command-paths';
 
 export interface ExtraFileRoot {
@@ -40,12 +41,18 @@ export interface FileViewerImageData {
   url?: string;
 }
 
+export interface FileViewerVideoData {
+  mimeType: string;
+  url?: string;
+}
+
 export interface FileViewerText {
   content: string;
   truncated: boolean;
   size: number;
   mtime: number;
   image?: never;
+  video?: never;
 }
 
 export interface FileViewerImage {
@@ -54,6 +61,16 @@ export interface FileViewerImage {
   mtime: number;
   content?: never;
   truncated?: never;
+  video?: never;
+}
+
+export interface FileViewerVideo {
+  video: FileViewerVideoData;
+  size: number;
+  mtime: number;
+  content?: never;
+  truncated?: never;
+  image?: never;
 }
 
 export interface FileViewerError {
@@ -61,7 +78,7 @@ export interface FileViewerError {
   status: 413 | 415;
 }
 
-export type FileViewerFile = FileViewerText | FileViewerImage;
+export type FileViewerFile = FileViewerText | FileViewerImage | FileViewerVideo;
 export type FileViewerResult = FileViewerFile | FileViewerError;
 
 export interface FileViewerOptions {
@@ -76,10 +93,6 @@ const MAX_JOIN_BASES = 200;
 
 const MAX_TEXT_BYTES = 500 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const IMAGE_MIME: Record<string, string> = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
-};
 
 /** Strips quotes/brackets, trailing punctuation, a leading @, and a trailing :line[:col] (returned separately); expands ~. */
 export function normalizeMention(raw: unknown, home: string): NormalizedMention {
@@ -205,7 +218,8 @@ export async function resolveFileMention(rawMention: unknown, { cwd, messages, h
 /** Base64 is the default for library callers; HTTP routes opt into no bytes or a Buffer. */
 export function readFileForViewer(absPath: string, { imageData = 'base64' }: FileViewerOptions = {}): FileViewerResult {
   const stats = fs.statSync(absPath);
-  const mime = IMAGE_MIME[path.extname(absPath).toLowerCase()];
+  const ext = path.extname(absPath).toLowerCase();
+  const mime = Object.hasOwn(IMAGE_MIME_BY_EXT, ext) ? IMAGE_MIME_BY_EXT[ext] : undefined;
   if (mime) {
     if (stats.size > MAX_IMAGE_BYTES) return { error: 'Image too large to preview', status: 413 };
     const image: FileViewerImageData = { mimeType: mime };
@@ -213,6 +227,13 @@ export function readFileForViewer(absPath: string, { imageData = 'base64' }: Fil
     else if (imageData === 'buffer') image.buffer = fs.readFileSync(absPath);
     return {
       image,
+      size: stats.size, mtime: stats.mtimeMs,
+    };
+  }
+  const videoMime = Object.hasOwn(VIDEO_MIME_BY_EXT, ext) ? VIDEO_MIME_BY_EXT[ext] : undefined;
+  if (videoMime) {
+    return {
+      video: { mimeType: videoMime },
       size: stats.size, mtime: stats.mtimeMs,
     };
   }

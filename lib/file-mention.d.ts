@@ -23,12 +23,17 @@ export interface FileViewerImageData {
     buffer?: Buffer;
     url?: string;
 }
+export interface FileViewerVideoData {
+    mimeType: string;
+    url?: string;
+}
 export interface FileViewerText {
     content: string;
     truncated: boolean;
     size: number;
     mtime: number;
     image?: never;
+    video?: never;
 }
 export interface FileViewerImage {
     image: FileViewerImageData;
@@ -36,12 +41,21 @@ export interface FileViewerImage {
     mtime: number;
     content?: never;
     truncated?: never;
+    video?: never;
+}
+export interface FileViewerVideo {
+    video: FileViewerVideoData;
+    size: number;
+    mtime: number;
+    content?: never;
+    truncated?: never;
+    image?: never;
 }
 export interface FileViewerError {
     error: string;
     status: 413 | 415;
 }
-export type FileViewerFile = FileViewerText | FileViewerImage;
+export type FileViewerFile = FileViewerText | FileViewerImage | FileViewerVideo;
 export type FileViewerResult = FileViewerFile | FileViewerError;
 export interface FileViewerOptions {
     imageData?: 'base64' | 'buffer' | false;

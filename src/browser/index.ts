@@ -71,6 +71,7 @@ export { decodeTranscriptTree, projectTranscriptTree, transcriptTreeDescend, tra
 
 export { createBrowserAssets } from './browser-assets';
 export { createRichText } from './rich-text';
+export { createVideoControls, renderVideoPlayerHtml, pauseAndUnloadVideos } from './video-player';
 export { createDiagrams } from './diagrams';
 export { copyTextToClipboard } from './clipboard';
 

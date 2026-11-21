@@ -11,6 +11,7 @@ import { registryIdentity, routeIdentity, routeSessionId } from './session-owner
 import { asRecord } from './wire-protocol';
 import { readFileForViewer } from './file-mention';
 import { renderFilePage } from './file-page';
+import { sendRangedFile } from './range-response';
 import { readOmpExportData } from './omp-export';
 import { isolateArtifact } from './artifact-isolation';
 import type { SessionSource } from './session-source';
@@ -592,16 +593,18 @@ export function createPublicationHandlers(ports: PublicationPorts): PublicationH
       return res.status(file.status || 415).type('text/plain').send('File cannot be previewed');
     }
     if (req.query.content != null) {
-      if (!file.image) return notFound();
-      const safeMime = file.image.mimeType !== 'image/svg+xml'
-        ? file.image.mimeType : 'text/plain; charset=utf-8';
+      if (!file.image && !file.video) return notFound();
+      const safeMime = file.video
+        ? file.video.mimeType
+        : file.image && file.image.mimeType !== 'image/svg+xml'
+          ? file.image.mimeType : 'text/plain; charset=utf-8';
       res.setHeader('Cache-Control', 'public, no-cache');
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      return res.type(safeMime).sendFile(root, (err) => { if (err) notFound(); });
+      return sendRangedFile(req, res, root, { mimeType: safeMime, size: file.size, mtimeMs: file.mtime, onError: notFound });
     }
     res.setHeader('Cache-Control', 'public, no-cache');
     // Appended to the sandbox servePage already set: both policies apply.
-    res.append('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self' http: https:; base-uri 'none'; form-action 'none'");
+    res.append('Content-Security-Policy', "default-src 'none'; style-src 'self'; img-src 'self' http: https:; media-src 'self' http: https:; base-uri 'none'; form-action 'none'");
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.type('html').send(renderFilePage({

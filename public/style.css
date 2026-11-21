@@ -6508,6 +6508,184 @@ img.msg-image {
 
 .file-view-img { max-width: 100%; display: block; margin: 0 auto; }
 
+/* Video playback (file viewer, standalone file pages, and inline transcript media) */
+.msg-videos {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.video-player {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-darker);
+  overflow: hidden;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.msg-videos .video-player {
+  margin: 0;
+}
+
+.msg-video-player {
+  width: min(100%, 560px);
+}
+
+.file-view-video-player {
+  width: 100%;
+  margin: 0 auto;
+}
+
+.video-stage {
+  position: relative;
+  background: #000;
+  width: 100%;
+  max-width: 100%;
+}
+
+video.video-el {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  background: #000;
+}
+
+video.video-el[hidden] {
+  display: none;
+}
+
+video.msg-video {
+  max-height: 360px;
+}
+
+video.file-view-video {
+  max-height: 75vh;
+}
+
+.video-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-darker);
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+
+.video-meta {
+  flex: 1 1 80px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.video-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 100%;
+}
+
+.video-btn,
+.video-speed {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+  padding: 3px 6px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  box-sizing: border-box;
+}
+
+.video-btn.file-link,
+.markdown-body .video-btn {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.video-btn:hover:not(:disabled),
+.video-speed:hover:not(:disabled),
+.markdown-body .video-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.video-btn:disabled,
+.video-speed:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.video-fallback {
+  padding: 16px 12px;
+  background: var(--bg-card);
+  color: var(--text);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.video-fallback[hidden] {
+  display: none;
+}
+
+.video-fallback-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-bright);
+}
+
+.video-fallback-detail {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+.video-fallback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.video-fallback-actions a,
+.markdown-body .video-fallback-actions a.btn-small {
+  color: var(--text-on-accent);
+  text-decoration: none;
+}
+
+.tool-result-content .msg-videos {
+  margin-top: 8px;
+}
+
 /* A file published from the viewer uses the same reading surface as the
    in-app takeover, but as the entire public document: no app chrome,
    controls, scripts, or comment affordances. */
@@ -8606,6 +8784,11 @@ mark.comment-mark {
 
 @media (max-width: 768px) {
   .diff-view-body, .file-view-body { padding: 8px 10px 16px; }
+  .msg-video-player { width: 100%; }
+  video.msg-video { max-height: 260px; }
+  video.file-view-video { max-height: 60dvh; }
+  .video-toolbar { padding: 5px 6px; gap: 4px; }
+  .video-btn, .video-speed { padding: 3px 5px; font-size: 11px; }
 }
 
 /* Extension status strip under the session-header badges. Collapsed it is

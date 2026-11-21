@@ -18,6 +18,7 @@ export interface SessionExportOptions {
 type ReadHandler = RequestHandler<Record<string, string>, unknown, unknown, Record<string, unknown>, Record<string, unknown>>;
 export interface SessionReadHandlers {
     image: ReadHandler;
+    media: ReadHandler;
     messages: ReadHandler;
     search: ReadHandler;
     stats: ReadHandler;
