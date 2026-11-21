@@ -84,6 +84,8 @@ const sessionDir = path.join(tmpHome, '.pi', 'agent', 'sessions', '--home-user-p
 const registryDir = path.join(tmpHome, '.pi', 'dish', 'sessions');
 fs.mkdirSync(sessionDir, { recursive: true });
 fs.mkdirSync(registryDir, { recursive: true });
+// Bots are off unless a host's settings turn them on.
+fs.writeFileSync(path.join(tmpHome, '.pi', 'dish', 'settings.json'), JSON.stringify({ bots: true }) + '\n');
 // A valid 1x1 transparent PNG — a `read` on an image yields a text block plus
 // this {type:'image'} block; the transcript must render it as an img.msg-image.
 const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';

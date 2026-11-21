@@ -141,6 +141,9 @@ function loadSqlite(): SqliteModule {
   return sqlite;
 }
 
+/** The key in `~/.pi/dish/settings.json` that turns bots on for this host; they are off without it. */
+export const BOTS_SETTING = 'bots';
+
 /** True where this Node build can open the registry. */
 export function botRegistryAvailable(): boolean {
   try { loadSqlite(); return true; } catch { return false; }

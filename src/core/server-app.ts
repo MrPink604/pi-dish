@@ -55,7 +55,7 @@ import { getPrimeDaemon } from './prime-daemon';
 import { createAgyImportRuntime } from './agy-import';
 import { createAgySessionHandlers } from './agy-session-handlers';
 import { createBotHandlers, type BotControl } from './bot-handlers';
-import { botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
+import { BOTS_SETTING, botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
 import { botRoute, deliverStartingBot, deliverToBot, startBot, startBots } from './bot-supervisor';
 import { createKnowledgeHandlers } from './knowledge-handlers';
 import { KNOWLEDGE_SETTING, openKnowledgeBase, type KnowledgeBase } from './knowledge';
@@ -645,12 +645,15 @@ export function startServer(rootDirectory: string): Server {
   app.get('/api/routines/:id/invocations', routineHandlers.listInvocations);
   app.get('/api/routine-invocations/:id', routineHandlers.getInvocation);
 
-  // Opened on first use: a Node build without node:sqlite never loads it.
+  // Bots run on the one host whose settings turn them on, read when pi-dish starts: without this every
+  // host opened a registry and started a Fleet of its own. Opened on first use, so a Node build without
+  // node:sqlite never loads it.
+  const botsOn = readDishSettings()[BOTS_SETTING] === true;
   let botRegistry: BotRegistry | null | undefined;
   function bots(): BotRegistry | null {
     if (botRegistry !== undefined) return botRegistry;
     botRegistry = null;
-    if (!botRegistryAvailable()) return null;
+    if (!botsOn || !botRegistryAvailable()) return null;
     try {
       const opened = openBotRegistry();
       opened.seedFleet();

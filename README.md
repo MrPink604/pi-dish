@@ -1034,6 +1034,27 @@ There is no scripting, chaining, or outbound notification: the event source
 lives outside pi-dish and polls the invocation it started. Agents read the
 contract from `/api/agent-docs/routines`.
 
+### Bots
+
+A bot is a long-lived agent that is the standing contact for one scope: the
+fleet, a project, a personal area. It talks with you, starts ordinary sessions
+to do the work, relays what they report, and keeps a notebook that carries
+over when it starts a fresh context window. It has no shell and edits no
+files itself. Bots run on one host, the one whose `~/.pi/dish/settings.json`
+turns them on:
+
+```json
+{ "bots": true }
+```
+
+The setting is read when pi-dish starts. That host keeps the registry in
+`~/.pi/dish/bots.sqlite`, creates a first bot named Fleet, and starts every
+active bot with the server; every other host answers `/api/bots` with 501 and
+does not advertise `bots`. Bots appear in their own group in the sidebar,
+where you create, edit and retire them. A bot can change its own name,
+identity and places (each change shows in its chat with an undo), create
+sub-bots, and talk to the bots in its family; only you can change its model.
+
 ### Knowledge base
 
 Bots keep what they learn in a knowledge base: Markdown topic pages under

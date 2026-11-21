@@ -93,6 +93,8 @@ export interface BotRegistry {
 }
 export declare const DEFAULT_BOT_MODEL = "claude-code/claude-opus-5-5";
 export declare const FLEET_IDENTITY: string;
+/** The key in `~/.pi/dish/settings.json` that turns bots on for this host; they are off without it. */
+export declare const BOTS_SETTING = "bots";
 /** True where this Node build can open the registry. */
 export declare function botRegistryAvailable(): boolean;
 /** Validates an edit; unknown fields are refused so a typo never passes silently. */

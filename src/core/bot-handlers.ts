@@ -47,7 +47,7 @@ export interface BotHandlers {
 /** A chain of room posts, questions and answers stops here: the post that would be one more is refused. */
 export const ROOM_HOP_CAP = 4;
 
-const UNAVAILABLE = 'Bots need node:sqlite, which this host\u2019s Node build lacks.';
+const UNAVAILABLE = 'Bots are off on this host: they run where "bots": true is set in ~/.pi/dish/settings.json and Node has node:sqlite.';
 /** The fields a bot may change on itself or a descendant; its own model is the user's. */
 const BOT_EDITABLE: readonly string[] = ['name', 'identity', 'places', 'thinking', 'model'];
 

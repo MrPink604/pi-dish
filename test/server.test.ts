@@ -544,6 +544,14 @@ test('live subagent sessions surface under their live parent on the Active tab',
   }
 });
 
+test('a host whose settings do not turn bots on opens no registry and starts no Fleet', async () => {
+  const bots = await get('/api/bots');
+  assert.equal(bots.status, 501);
+  assert.match(String(bots.body.error), /"bots": true/);
+  assert.equal(record((await get('/api/host')).body.capabilities).bots, undefined);
+  assert.equal(fs.existsSync(path.join(tmpHome, '.pi', 'dish', 'bots.sqlite')), false);
+});
+
 test('GET /api/host/health reports capacity plus live sessions and subagents from the catalog', async () => {
   const numeric = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
   const before = await get('/api/host/health');
