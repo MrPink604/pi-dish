@@ -1051,9 +1051,14 @@ The setting is read when pi-dish starts. That host keeps the registry in
 `~/.pi/dish/bots.sqlite`, creates a first bot named Fleet, and starts every
 active bot with the server; every other host answers `/api/bots` with 501 and
 does not advertise `bots`. Bots appear in their own group in the sidebar,
-where you create, edit and retire them. A bot can change its own name,
-identity and places (each change shows in its chat with an undo), create
-sub-bots, and talk to the bots in its family; only you can change its model.
+where you create, edit, move (the edit form's Parent) and retire them. A bot
+can change its own name, identity and places (each change shows in its chat
+with an undo), create sub-bots, either from a copy of its conversation or
+fresh, and talk to the bots in its family. It sees itself, its ancestors and
+its descendants with its `bots` tool, and may move a descendant within its own
+subtree, retire one and bring it back; only you can change its own model,
+parent or status. Bots nest at most four levels. A family's room holds the
+messages of every family that has moved into it, and they leave with it.
 
 A bot moves onto new code by itself. Its relay runs in a tmux pane of its own
 and outlives a pi-dish restart, so after a deploy it still runs the code it

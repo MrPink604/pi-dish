@@ -124,7 +124,12 @@ export function createBots(options: {
     closeForm();
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay'; overlay.id = 'botNewModal';
-    const parents = bots.filter(row => row.status !== 'retired');
+    // An edit cannot put a bot under itself or one of its own sub-bots; the server refuses that and the nesting limit.
+    const inside = (row: SidebarBot) => {
+      for (let at: SidebarBot | undefined = row; at; at = at.parentId ? bots.find(other => other.id === at!.parentId) : undefined) if (at.id === bot?.id) return true;
+      return false;
+    };
+    const parents = bots.filter(row => row.status !== 'retired' && !inside(row));
     const thinking = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh']
       .map(level => `<option${bot?.thinking === level ? ' selected' : ''}>${level}</option>`).join('');
     overlay.innerHTML = `<form class="modal bot-form" id="botNewForm">
@@ -134,9 +139,9 @@ export function createBots(options: {
         <label>Identity <textarea id="botIdentity" required rows="6" placeholder="You are … the standing contact for …">${escapeHtml(bot?.identity ?? '')}</textarea></label>
         <label>Model <input id="botModel" value="${escapeHtml(bot?.model ?? 'claude-code/claude-opus-5-5')}" autocomplete="off"></label>
         <label>Thinking <select id="botThinking"><option value="">default</option>${thinking}</select></label>
-        ${bot ? '' : `<label>Parent <select id="botParent"><option value="">none (top level)</option>${parents.map(row => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name)}</option>`).join('')}</select></label>`}
+        <label>Parent <select id="botParent"><option value="">none (top level)</option>${parents.map(row => `<option value="${escapeHtml(row.id)}"${bot?.parentId === row.id ? ' selected' : ''}>${escapeHtml(row.name)}</option>`).join('')}</select></label>
         <label>Places <textarea id="botPlaces" rows="3" placeholder="notes: ~/notes&#10;services: tycho:/srv">${escapeHtml(bot ? formatPlaces(bot.places) : '')}</textarea></label>
-        ${bot ? '<p class="bot-form-note">A new model restarts the bot. A new identity, places or thinking level take effect at its next context window.</p>' : ''}
+        ${bot ? '<p class="bot-form-note">A new model restarts the bot. A new identity, places or thinking level take effect at its next context window. A new parent moves the bot with its sub-bots, and its room becomes its new family\'s.</p>' : ''}
         <div class="bot-form-error" id="botFormError" role="alert"></div>
       </div>
       <div class="modal-footer"><button type="submit" class="btn" id="botCreateBtn">${bot ? 'Save' : 'Create and start'}</button></div>
@@ -155,9 +160,9 @@ export function createBots(options: {
         body = { name: value('botName'), identity: value('botIdentity'), places: parsePlaces(value('botPlaces')) };
       } catch (problem) { error.textContent = errorMessage(problem); return; }
       if (value('botModel')) body.model = value('botModel');
-      // An edit sets every field: "default" clears the thinking level.
+      // An edit sets every field: "default" clears the thinking level, and "none" makes the bot top level.
       if (value('botThinking') || bot) body.thinking = value('botThinking') || null;
-      if (value('botParent')) body.parentId = value('botParent');
+      if (value('botParent') || bot) body.parentId = value('botParent') || null;
       submit.disabled = true;
       try {
         const saved = await sendJson(options.request, null, bot ? `/api/bots/${encodeURIComponent(bot.id)}` : '/api/bots', body, bot ? 'PATCH' : 'POST');
