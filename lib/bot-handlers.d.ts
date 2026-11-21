@@ -30,6 +30,18 @@ export interface BotControl {
     route(id: string): string;
     /** Hands a message to the bot's relay; false when it is not running. */
     deliver(bot: BotRow, delivery: BotDelivery): Promise<boolean>;
+    /** Whether the bot's relay runs, and when the bot last answered (ISO), from its transcript. */
+    state(bot: BotRow): {
+        running: boolean;
+        lastTurnAt: string | null;
+    };
+}
+/** A bot as the `bots` tool lists it: the registry row without its identity, how it stands to the caller, and whether it runs. */
+export interface RosterBot extends Omit<BotRow, 'identity' | 'createdAt' | 'updatedAt'> {
+    parentName: string | null;
+    relation: 'self' | 'ancestor' | 'descendant';
+    running: boolean;
+    lastTurnAt: string | null;
 }
 export interface BotHandlers {
     list: RouteHandler;
@@ -39,6 +51,8 @@ export interface BotHandlers {
     retire: RouteHandler;
     revisions: RouteHandler;
     restore: RouteHandler;
+    roster: RouteHandler;
+    rosterShow: RouteHandler;
     roomPost: RouteHandler;
     roomRead: RouteHandler;
     ask: RouteHandler;
@@ -46,4 +60,9 @@ export interface BotHandlers {
 }
 /** A chain of room posts, questions and answers stops here: the post that would be one more is refused. */
 export declare const ROOM_HOP_CAP = 4;
+/**
+ * One line per changed field, as a bot's change is shown in its chat and in a revision: a parent by name, an
+ * identity by its length, anything else as JSON.
+ */
+export declare function changeLines(fields: readonly string[], before: BotRow | null, after: BotRow, nameOf: (id: string) => string): string[];
 export declare function createBotHandlers(registry: () => BotRegistry | null, control: BotControl): BotHandlers;

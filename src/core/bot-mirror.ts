@@ -42,6 +42,18 @@ export function readBotMirrorHeader(file: string): BotMirrorHeader {
   return { id: header.id, cwd: typeof header.cwd === 'string' ? header.cwd : '', name: String(header.bot.name ?? '') };
 }
 
+/** When the bot last answered: the time of the newest model message in its mirror, or null for none or no mirror. */
+export function lastBotTurn(file: string): string | null {
+  let lines: string[];
+  try { lines = tail(file).split('\n'); } catch { return null; }
+  for (let index = lines.length - 1; index >= 0; index--) {
+    let entry: unknown;
+    try { entry = JSON.parse(lines[index]); } catch { continue; }
+    if (isRecord(entry) && entry.type === 'message' && isRecord(entry.message) && entry.message.role === 'assistant' && typeof entry.timestamp === 'string') return entry.timestamp;
+  }
+  return null;
+}
+
 export class BotMirror {
   readonly file: string;
   private parentId: string | null = null;

@@ -12,7 +12,7 @@ const { BotMirror } = require('../lib/bot-mirror');
 const runtimeModule = require('../lib/bot-runtime');
 const { openBotRuntime, settledWorker, newContextRefusal, composeHandoff } = runtimeModule;
 const { openBotRegistry } = require('../lib/bot-registry');
-const { createBotHandlers, ROOM_HOP_CAP } = require('../lib/bot-handlers');
+const { createBotHandlers, changeLines, ROOM_HOP_CAP } = require('../lib/bot-handlers');
 const BOT = {
     id: '0b0c5a1e-0000-4000-8000-000000000001', parentId: null, name: 'Fleet', status: 'active', model: 'faux/faux-1',
     thinking: null, identity: 'You are Fleet, the contact for the fleet.', places: [], revision: 1,
@@ -30,7 +30,8 @@ async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bot-'));
     const faux = await import('@earendil-works/pi-ai/providers/faux');
     const { createModels } = await import('@earendil-works/pi-ai/models');
-    const provider = faux.fauxProvider({ models: [{ id: 'faux-1', contextWindow }] });
+    // faux-2 is a second model for a bot told to run on another one.
+    const provider = faux.fauxProvider({ models: [{ id: 'faux-1', contextWindow }, { id: 'faux-2', contextWindow }] });
     const models = createModels();
     models.setProvider(provider.provider);
     const requests = [];
@@ -427,7 +428,8 @@ test('bot_update records the change against the turn, shows it with what an undo
         calls.push([path, body]);
         const changes = body.changes;
         const after = { ...BOT, ...changes, revision: 2 };
-        return { bot: after, revision: 2, fields: Object.keys(changes), before: BOT };
+        const fields = Object.keys(changes);
+        return { bot: after, revision: 2, fields, before: BOT, lines: changeLines(fields, BOT, after, id => id), moved: [] };
     };
     const bot = await openTestBot(t, noSessions, { api });
     const call = (args) => bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('bot_update', args)], { stopReason: 'toolUse' });
@@ -471,23 +473,26 @@ function hubOf(handlers, calls = []) {
     return async (pathname, body) => {
         calls.push([pathname, body]);
         const url = new URL(pathname, 'http://hub');
-        const [api, bots, id, action] = url.pathname.split('/').filter(Boolean);
+        const [api, bots, id, action, other] = url.pathname.split('/').filter(Boolean);
         const handler = api !== 'api' || bots !== 'bots' ? undefined
             : !id ? (body ? handlers.create : handlers.list)
                 : action === 'room' ? (body ? handlers.roomPost : handlers.roomRead)
-                    : action === 'ask' ? handlers.ask : action === 'answer' ? handlers.answer : undefined;
+                    : action === 'roster' ? (other ? handlers.rosterShow : handlers.roster)
+                        : action === 'edit' ? handlers.edit
+                            : action === 'ask' ? handlers.ask : action === 'answer' ? handlers.answer : undefined;
         if (!handler)
             throw new Error(`unexpected API call: ${pathname}`);
-        const answer = await callRoute(handler, id ? { id: decodeURIComponent(id) } : {}, body ?? {}, Object.fromEntries(url.searchParams));
+        const params = { ...(id ? { id: decodeURIComponent(id) } : {}), ...(other ? { bot: decodeURIComponent(other) } : {}) };
+        const answer = await callRoute(handler, params, body ?? {}, Object.fromEntries(url.searchParams));
         if (answer.status >= 400)
             throw new Error(String(answer.body.error));
         return answer.body;
     };
 }
 /** Hands deliveries to the bots running in this process, as pi-dish hands them to their relays. */
-function botControl(running, deliveries, start = async () => { }) {
+function botControl(running, deliveries, start = async () => { }, stop = async () => { }) {
     return {
-        start, stop: async () => { }, route: id => id,
+        start, stop, route: id => id,
         async deliver(bot, delivery) {
             deliveries.push({ to: bot.name, kind: delivery.kind, hop: delivery.data.hop });
             const harness = running.get(bot.id);
@@ -496,6 +501,7 @@ function botControl(running, deliveries, start = async () => { }) {
             await harness.runtime.deliver(delivery);
             return true;
         },
+        state: bot => ({ running: running.has(bot.id), lastTurnAt: running.has(bot.id) ? '2026-11-20T10:00:00.000Z' : null }),
     };
 }
 const toolCall = (bot, name, args) => bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall(name, args)], { stopReason: 'toolUse' });

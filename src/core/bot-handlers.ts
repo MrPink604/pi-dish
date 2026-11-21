@@ -28,6 +28,16 @@ export interface BotControl {
   route(id: string): string;
   /** Hands a message to the bot's relay; false when it is not running. */
   deliver(bot: BotRow, delivery: BotDelivery): Promise<boolean>;
+  /** Whether the bot's relay runs, and when the bot last answered (ISO), from its transcript. */
+  state(bot: BotRow): { running: boolean; lastTurnAt: string | null };
+}
+
+/** A bot as the `bots` tool lists it: the registry row without its identity, how it stands to the caller, and whether it runs. */
+export interface RosterBot extends Omit<BotRow, 'identity' | 'createdAt' | 'updatedAt'> {
+  parentName: string | null;
+  relation: 'self' | 'ancestor' | 'descendant';
+  running: boolean;
+  lastTurnAt: string | null;
 }
 
 export interface BotHandlers {
@@ -38,6 +48,8 @@ export interface BotHandlers {
   retire: RouteHandler;
   revisions: RouteHandler;
   restore: RouteHandler;
+  roster: RouteHandler;
+  rosterShow: RouteHandler;
   roomPost: RouteHandler;
   roomRead: RouteHandler;
   ask: RouteHandler;
@@ -48,8 +60,25 @@ export interface BotHandlers {
 export const ROOM_HOP_CAP = 4;
 
 const UNAVAILABLE = 'Bots are off on this host: they run where "bots": true is set in ~/.pi/dish/settings.json and Node has node:sqlite.';
-/** The fields a bot may change on itself or a descendant; its own model is the user's. */
-const BOT_EDITABLE: readonly string[] = ['name', 'identity', 'places', 'thinking', 'model'];
+/** The fields a bot may change on itself or a descendant; its own model, parent and status are the user's. */
+const BOT_EDITABLE: readonly string[] = ['name', 'identity', 'places', 'thinking', 'model', 'parentId', 'status'];
+const NOT_ON_ITSELF: readonly string[] = ['model', 'parentId', 'status'];
+
+/**
+ * One line per changed field, as a bot's change is shown in its chat and in a revision: a parent by name, an
+ * identity by its length, anything else as JSON.
+ */
+export function changeLines(fields: readonly string[], before: BotRow | null, after: BotRow, nameOf: (id: string) => string): string[] {
+  if (!before) return ['created'];
+  return fields.map((field) => {
+    if (field === 'parentId') {
+      const parent = (row: BotRow) => row.parentId ? nameOf(row.parentId) : '(top level)';
+      return `parent: ${parent(before)} → ${parent(after)}`;
+    }
+    const show = (row: BotRow) => field === 'identity' ? `${row.identity.length} characters` : JSON.stringify(row[field as keyof BotRow]);
+    return `${field}: ${show(before)} → ${show(after)}`;
+  });
+}
 
 function optionalText(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -74,11 +103,38 @@ export function createBotHandlers(registry: () => BotRegistry | null, control: B
     return { ...message, fromName: name(message.from), toNames: message.to.map(name) };
   }
 
-  /** A model change takes a new relay: the model is fixed when the runtime opens. */
-  async function applied(before: BotRow, after: BotRow): Promise<void> {
-    if (after.status !== 'active' || before.model === after.model) return;
-    await control.stop(before);
-    await control.start(after);
+  /**
+   * Starts or stops the relay a change calls for: a retired bot stops, a bot brought back starts, and a model change
+   * takes a new relay, since the model is fixed when the runtime opens. The change is recorded either way; a relay
+   * that does not follow answers 502 with what was changed.
+   */
+  async function applied(res: Parameters<RouteHandler>[1], before: BotRow, after: BotRow, payload: Record<string, unknown>): Promise<void> {
+    try {
+      if (after.status === 'retired' && before.status !== 'retired') await control.stop(before);
+      else if (after.status === 'active' && before.status !== 'active') await control.start(after);
+      else if (after.status === 'active' && before.model !== after.model) {
+        await control.stop(before);
+        await control.start(after);
+      }
+    } catch (error) {
+      const verb = after.status === 'retired' ? 'its relay did not stop' : 'it did not start';
+      res.status(502).json({ ...payload, error: `Changed ${after.name}, but ${verb}: ${errorMessage(error)}` });
+      return;
+    }
+    res.json(payload);
+  }
+
+  /** The bots `viewer` may see: itself, its ancestors and its descendants, retired ones included. */
+  function roster(bots: BotRegistry, viewer: string): RosterBot[] {
+    const above = bots.lineage(viewer);
+    const all = bots.list();
+    const name = (id: string) => all.find(row => row.id === id)?.name ?? id;
+    return all.flatMap((row): RosterBot[] => {
+      const relation = row.id === viewer ? 'self' : above.includes(row.id) ? 'ancestor' : bots.lineage(row.id).includes(viewer) ? 'descendant' : null;
+      if (!relation) return [];
+      const { identity: _identity, createdAt: _created, updatedAt: _updated, ...entry } = row;
+      return [{ ...entry, parentName: row.parentId ? name(row.parentId) : null, relation, ...control.state(row) }];
+    });
   }
 
   return {
@@ -116,16 +172,18 @@ export function createBotHandlers(registry: () => BotRegistry | null, control: B
       if (!bots) return res.status(501).json({ error: UNAVAILABLE });
       const before = bots.get(req.params.id);
       if (!before) return res.status(404).json({ error: 'Bot not found' });
-      let bot: BotRow;
+      let changed: { bot: BotRow; moved: BotRow[] };
       try {
-        bot = bots.update(req.params.id, requestBody(req), { actor: 'user' });
+        changed = bots.change(req.params.id, requestBody(req), { actor: 'user' });
       } catch (error) {
         return res.status(400).json({ error: errorMessage(error) });
       }
-      await applied(before, bot);
-      res.json({ bot });
+      await applied(res, before, changed.bot, changed);
     },
-    /** A bot's own change: `by` is the bot making it, which must be the bot itself or an ancestor. */
+    /**
+     * A bot's own change: `by` is the bot making it, which must be the bot itself or an ancestor. Its own model,
+     * parent and status are the user's; a descendant may move only within `by`'s own subtree.
+     */
     async edit(req, res) {
       const bots = registry();
       if (!bots) return res.status(501).json({ error: UNAVAILABLE });
@@ -143,15 +201,33 @@ export function createBotHandlers(registry: () => BotRegistry | null, control: B
       if (by === before.id && changes.model !== undefined) {
         return res.status(403).json({ error: 'Refused: you cannot change your own model. Tell the user: they can change it with "edit" on your row in the Bots list.' });
       }
-      let bot: BotRow;
+      const own = NOT_ON_ITSELF.filter(field => by === before.id && changes[field] !== undefined);
+      if (own.length) {
+        return res.status(403).json({ error: `Refused: you cannot change your own ${own.map(field => field === 'parentId' ? 'parent' : field).join(' or ')}. Only the user can, from the Bots list.` });
+      }
+      if (changes.status !== undefined && changes.status !== 'retired' && changes.status !== 'active') {
+        return res.status(400).json({ error: 'A bot sets status to "retired" (retire) or "active" (bring back).' });
+      }
+      if (changes.parentId !== undefined) {
+        const parent = typeof changes.parentId === 'string' ? bots.get(changes.parentId) : null;
+        if (!parent || !bots.lineage(parent.id).includes(by)) {
+          return res.status(403).json({ error: `Refused: a bot can move ${before.name} only under itself or one of its own descendants.` });
+        }
+      }
+      let changed: { bot: BotRow; moved: BotRow[] };
       try {
-        bot = bots.update(before.id, changes as BotPatch, { actor: by, turn: optionalText(body.turn) ?? null });
+        changed = bots.change(before.id, changes as BotPatch, { actor: by, turn: optionalText(body.turn) ?? null });
       } catch (error) {
         return res.status(400).json({ error: errorMessage(error) });
       }
+      const { bot, moved } = changed;
       const fields = bot.revision === before.revision ? [] : bots.revisions(bot.id).at(-1)!.fields;
-      await applied(before, bot);
-      res.json({ bot, revision: bot.revision, fields, before });
+      const name = (id: string) => bots.get(id)?.name ?? id;
+      const lines = changeLines(fields, before, bot, name);
+      await applied(res, before, bot, {
+        bot, revision: bot.revision, fields, before, lines,
+        moved: moved.map(row => ({ id: row.id, name: row.name, parentId: row.parentId, parentName: row.parentId ? name(row.parentId) : null })),
+      });
     },
     async retire(req, res) {
       const bots = registry();
@@ -160,12 +236,7 @@ export function createBotHandlers(registry: () => BotRegistry | null, control: B
       if (!current) return res.status(404).json({ error: 'Bot not found' });
       if (current.status === 'retired') return res.status(409).json({ error: `${current.name} is already retired` });
       const result = bots.retire(current.id, { actor: 'user' });
-      try {
-        await control.stop(current);
-      } catch (error) {
-        return res.status(502).json({ ...result, error: `Retired ${current.name}, but its relay did not stop: ${errorMessage(error)}` });
-      }
-      res.json(result);
+      await applied(res, current, result.bot, result);
     },
     revisions(req, res) {
       const bots = registry();
@@ -184,14 +255,42 @@ export function createBotHandlers(registry: () => BotRegistry | null, control: B
       if (fields !== undefined && !(Array.isArray(fields) && fields.every(field => typeof field === 'string'))) {
         return res.status(400).json({ error: 'fields must be a list of field names' });
       }
+      if (!bots.revisions(before.id).some(row => row.revision === revision)) return res.status(404).json({ error: `${before.name} has no revision ${revision}` });
       let bot: BotRow;
       try {
         bot = bots.restore(before.id, revision, { actor: 'user' }, fields);
       } catch (error) {
-        return res.status(404).json({ error: errorMessage(error) });
+        return res.status(400).json({ error: errorMessage(error) });
       }
-      await applied(before, bot);
-      res.json({ bot });
+      await applied(res, before, bot, { bot });
+    },
+    /** The bots `:id` may see, as its `bots` tool lists them. */
+    roster(req, res) {
+      const bots = registry();
+      if (!bots) return res.status(501).json({ error: UNAVAILABLE });
+      if (!bots.get(req.params.id)) return res.status(404).json({ error: 'Bot not found' });
+      res.json({ bots: roster(bots, req.params.id) });
+    },
+    /** One bot `:id` may see, by id or name: its whole entry and its revisions, each with what it changed. */
+    rosterShow(req, res) {
+      const bots = registry();
+      if (!bots) return res.status(501).json({ error: UNAVAILABLE });
+      if (!bots.get(req.params.id)) return res.status(404).json({ error: 'Bot not found' });
+      const wanted = String(req.params.bot ?? '').trim();
+      const seen = roster(bots, req.params.id);
+      const matches = seen.filter(row => row.id === wanted || row.name.toLowerCase() === wanted.toLowerCase());
+      const found = matches.find(row => row.status !== 'retired') ?? matches[0];
+      if (!found) return res.status(404).json({ error: `No bot "${wanted}" among the bots you can see: ${seen.map(row => row.name).join(', ')}.` });
+      const row = bots.get(found.id)!;
+      const name = (id: string) => bots.get(id)?.name ?? id;
+      res.json({
+        bot: { ...found, identity: row.identity, createdAt: row.createdAt, updatedAt: row.updatedAt },
+        revisions: bots.revisions(row.id).map(revision => ({
+          revision: revision.revision, by: revision.actor === 'user' || revision.actor === 'pi-dish' ? revision.actor : name(revision.actor),
+          turn: revision.turn, fields: revision.fields, at: revision.createdAt,
+          changes: changeLines(revision.fields, revision.before, revision.after, name),
+        })),
+      });
     },
     /** `:id` posts to its family's room; only the bots named in `to` are woken. */
     async roomPost(req, res) {

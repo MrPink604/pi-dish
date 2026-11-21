@@ -72,7 +72,7 @@ export interface NewBot {
 }
 
 /** A top-level bot is at depth 1; a bot below this depth is refused. */
-export const MAX_BOT_DEPTH = 3;
+export const MAX_BOT_DEPTH = 4;
 
 /** A post to a family's room: who sent it, the bots it wakes, and the chain of replies it belongs to. */
 export interface RoomMessage {
@@ -98,6 +98,12 @@ export interface BotRegistry {
   /** Creates an active bot with its first revision; an id that exists returns that bot unchanged. */
   create(input: NewBot, source: ChangeSource): BotRow;
   update(id: string, patch: BotPatch, source: ChangeSource): BotRow;
+  /**
+   * `update`, with the sub-bots a change of status moved: retiring a bot moves its children up to its parent, and
+   * bringing it back moves back each one whose last change was that move. A new parent must be active, must not
+   * be the bot or one of its descendants, and must leave the bot's subtree within `MAX_BOT_DEPTH`.
+   */
+  change(id: string, patch: BotPatch, source: ChangeSource): { bot: BotRow; moved: BotRow[] };
   /** Archives a bot and moves its children up to its parent, each move a revision of the child. */
   retire(id: string, source: ChangeSource): { bot: BotRow; moved: BotRow[] };
   /** The ids from a bot up to its top-level ancestor, the bot first; its length is the bot's depth. */
@@ -105,7 +111,10 @@ export interface BotRegistry {
   /** Every bot that is not retired in the family of the top-level bot `family`. */
   family(family: string): BotRow[];
   post(message: Omit<RoomMessage, 'id' | 'createdAt'>): RoomMessage;
-  /** A family's newest room messages, oldest first. */
+  /**
+   * A family's newest room messages, oldest first: those posted in the family, and in every family that has since
+   * moved into it, so a family's history follows it when its top bot moves under another, and back when it moves out.
+   */
   room(family: string, limit: number): RoomMessage[];
   revisions(id: string): BotRevision[];
   /** Puts an old revision's row back as a new revision: every editable field, or only `fields`. */
@@ -314,8 +323,66 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
     return after;
   }
 
-  function apply(id: string, change: (current: BotRow) => BotRow, source: ChangeSource): BotRow {
-    return transaction(() => applyIn(id, change, source));
+  function children(id: string): BotRow[] {
+    return db.prepare('SELECT * FROM bots WHERE parent_id = ? ORDER BY rowid').all(id).map(rowOf);
+  }
+
+  /** The levels a bot and its descendants take, retired ones included: 1 for a bot without sub-bots. */
+  function height(id: string): number {
+    return 1 + Math.max(0, ...children(id).map(child => height(child.id)));
+  }
+
+  /** Why `bot` cannot move under `parentId`, or null when it can. */
+  function moveRefusal(bot: BotRow, parentId: string | null): string | null {
+    if (parentId === null) return null;
+    const parent = get(parentId);
+    if (!parent || parent.status === 'retired') return `no active bot ${parentId} to be the parent`;
+    const above = lineage(parentId);
+    if (above.includes(bot.id)) {
+      return `Refused: ${parent.id === bot.id ? `a bot cannot be its own parent` : `${parent.name} is one of ${bot.name}'s own sub-bots, so ${bot.name} cannot move under it`}.`;
+    }
+    const levels = height(bot.id);
+    const depth = above.length + levels;
+    if (depth <= MAX_BOT_DEPTH) return null;
+    return `Refused: ${parent.name} is ${above.length} level${above.length === 1 ? '' : 's'} deep, so ${bot.name}${levels > 1 ? ` and its sub-bots` : ''} would reach level ${depth} under it, and bots nest at most ${MAX_BOT_DEPTH} levels.`;
+  }
+
+  /** The bots whose last change was a move off `id`: those a retire of `id` moved up, and nothing has changed since. */
+  function movedOff(id: string): BotRow[] {
+    return db.prepare(`SELECT bots.*, bot_revisions.before AS moved_from FROM bots JOIN bot_revisions
+      ON bot_revisions.bot_id = bots.id AND bot_revisions.revision = bots.revision
+      WHERE bots.status != 'retired' AND bot_revisions.fields = '["parentId"]' ORDER BY bots.rowid`).all()
+      .filter(raw => typeof raw.moved_from === 'string' && (JSON.parse(raw.moved_from) as BotRow).parentId === id)
+      .map(rowOf);
+  }
+
+  function change(id: string, patch: BotPatch, source: ChangeSource): { bot: BotRow; moved: BotRow[] } {
+    const valid = validateBotPatch(patch);
+    return transaction(() => {
+      const current = get(id);
+      if (!current) throw new Error(`no bot ${id}`);
+      const parentId = valid.parentId === undefined ? current.parentId : valid.parentId;
+      if (parentId !== current.parentId) {
+        const refusal = moveRefusal(current, parentId);
+        if (refusal) throw new Error(refusal);
+      }
+      const status = valid.status ?? current.status;
+      const retiring = status === 'retired' && current.status !== 'retired';
+      const returning = current.status === 'retired' && status !== 'retired';
+      const parent = parentId === null ? null : get(parentId);
+      if (returning && parent?.status === 'retired') {
+        throw new Error(`Refused: ${current.name}'s parent ${parent.name} is retired. Bring ${parent.name} back first, or give ${current.name} another parent as it comes back.`);
+      }
+      // Retiring moves the bot's sub-bots up to its parent; bringing it back moves back those still where that left them.
+      const movedUp = retiring
+        ? children(id).filter(child => child.status !== 'retired').map(child => applyIn(child.id, row => ({ ...row, parentId }), source))
+        : [];
+      const bot = applyIn(id, row => ({ ...row, ...valid }), source);
+      const movedBack = returning
+        ? movedOff(id).filter(child => !moveRefusal(child, id)).map(child => applyIn(child.id, row => ({ ...row, parentId: id }), source))
+        : [];
+      return { bot, moved: [...movedUp, ...movedBack] };
+    });
   }
 
   return {
@@ -367,18 +434,11 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
       });
     },
     update(id, patch, source) {
-      const valid = validateBotPatch(patch);
-      return apply(id, current => ({ ...current, ...valid }), source);
+      return change(id, patch, source).bot;
     },
+    change,
     retire(id, source) {
-      return transaction(() => {
-        const current = get(id);
-        if (!current) throw new Error(`no bot ${id}`);
-        const children = db.prepare("SELECT * FROM bots WHERE parent_id = ? AND status != 'retired' ORDER BY rowid").all(id).map(rowOf);
-        const moved = children.map(child => applyIn(child.id, row => ({ ...row, parentId: current.parentId }), source));
-        const bot = applyIn(id, row => ({ ...row, status: 'retired' }), source);
-        return { bot, moved };
-      });
+      return change(id, { status: 'retired' }, source);
     },
     lineage,
     family(family) {
@@ -392,7 +452,12 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
       return { ...message, id: Number(result.lastInsertRowid), createdAt };
     },
     room(family, limit) {
-      return db.prepare('SELECT * FROM room_messages WHERE family = ? ORDER BY id DESC LIMIT ?').all(family, limit).reverse().map((raw) => {
+      // A message is filed under the family it was posted in; that family's top bot may since have moved.
+      const families = db.prepare('SELECT id FROM bots ORDER BY rowid').all().map(raw => String(raw.id))
+        .filter(id => lineage(id).at(-1) === family);
+      if (!families.includes(family)) families.push(family);
+      return db.prepare(`SELECT * FROM room_messages WHERE family IN (${families.map(() => '?').join(', ')}) ORDER BY id DESC LIMIT ?`)
+        .all(...families, limit).reverse().map((raw) => {
         const value = raw as Record<string, string | number>;
         return {
           id: Number(value.id), family: String(value.family), from: String(value.sender), to: JSON.parse(String(value.recipients)) as string[],
@@ -421,7 +486,7 @@ export function openBotRegistry(file: string = registryFile(), { readOnly = fals
       const old = JSON.parse(String(raw.after)) as BotRow;
       const patch: BotPatch = {};
       for (const field of PATCH_FIELDS) if (!fields || fields.includes(field)) Object.assign(patch, { [field]: old[field] });
-      return apply(id, current => ({ ...current, ...patch }), source);
+      return change(id, patch, source).bot;
     },
     close: () => db.close(),
   };

@@ -8,6 +8,8 @@ export interface BotMirrorHeader {
 }
 /** The bot id a mirror belongs to; throws when the file is not a bot mirror. */
 export declare function readBotMirrorHeader(file: string): BotMirrorHeader;
+/** When the bot last answered: the time of the newest model message in its mirror, or null for none or no mirror. */
+export declare function lastBotTurn(file: string): string | null;
 export declare class BotMirror {
     readonly file: string;
     private parentId;

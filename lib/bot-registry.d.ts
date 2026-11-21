@@ -50,7 +50,7 @@ export interface NewBot {
     places?: BotPlace[];
 }
 /** A top-level bot is at depth 1; a bot below this depth is refused. */
-export declare const MAX_BOT_DEPTH = 3;
+export declare const MAX_BOT_DEPTH = 4;
 /** A post to a family's room: who sent it, the bots it wakes, and the chain of replies it belongs to. */
 export interface RoomMessage {
     id: number;
@@ -74,6 +74,15 @@ export interface BotRegistry {
     /** Creates an active bot with its first revision; an id that exists returns that bot unchanged. */
     create(input: NewBot, source: ChangeSource): BotRow;
     update(id: string, patch: BotPatch, source: ChangeSource): BotRow;
+    /**
+     * `update`, with the sub-bots a change of status moved: retiring a bot moves its children up to its parent, and
+     * bringing it back moves back each one whose last change was that move. A new parent must be active, must not
+     * be the bot or one of its descendants, and must leave the bot's subtree within `MAX_BOT_DEPTH`.
+     */
+    change(id: string, patch: BotPatch, source: ChangeSource): {
+        bot: BotRow;
+        moved: BotRow[];
+    };
     /** Archives a bot and moves its children up to its parent, each move a revision of the child. */
     retire(id: string, source: ChangeSource): {
         bot: BotRow;
@@ -84,7 +93,10 @@ export interface BotRegistry {
     /** Every bot that is not retired in the family of the top-level bot `family`. */
     family(family: string): BotRow[];
     post(message: Omit<RoomMessage, 'id' | 'createdAt'>): RoomMessage;
-    /** A family's newest room messages, oldest first. */
+    /**
+     * A family's newest room messages, oldest first: those posted in the family, and in every family that has since
+     * moved into it, so a family's history follows it when its top bot moves under another, and back when it moves out.
+     */
     room(family: string, limit: number): RoomMessage[];
     revisions(id: string): BotRevision[];
     /** Puts an old revision's row back as a new revision: every editable field, or only `fields`. */

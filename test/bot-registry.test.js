@@ -177,7 +177,7 @@ test('a routine\u2019s run to a bot that is not running starts it and is deliver
     // A relay that never comes up fails the delivery.
     await assert.rejects(deliverStartingBot('fleet', {}, async () => { }, { waitMs: 5, everyMs: 1, deliver: async () => null }), /did not take the message within 0s/);
 });
-test('bots nest at most three levels, and a retry with the same id finds the bot it made', t => {
+test('bots nest at most four levels, and a retry with the same id finds the bot it made', t => {
     const { registry } = tempRegistry(t);
     const fleet = registry.seedFleet();
     const child = registry.create({ name: 'Hosts', identity: 'You watch the hosts.', parentId: fleet.id }, { actor: fleet.id, turn: 't1' });
@@ -188,9 +188,11 @@ test('bots nest at most three levels, and a retry with the same id finds the bot
     const grandchild = registry.create({ id, name: 'Disks', identity: 'You watch the disks.', parentId: child.id }, { actor: child.id });
     assert.deepEqual(registry.lineage(grandchild.id), [grandchild.id, child.id, fleet.id]);
     assert.deepEqual(registry.create({ id, name: 'Other', identity: 'x', parentId: child.id }, { actor: child.id }), grandchild, 'a retried create returns the bot unchanged');
-    assert.throws(() => registry.create({ name: 'Too deep', identity: 'x', parentId: grandchild.id }, { actor: grandchild.id }), /Refused: Disks is already 3 levels deep, and bots nest at most 3 levels/);
+    const fourth = registry.create({ name: 'SMART', identity: 'You read SMART data.', parentId: grandchild.id }, { actor: grandchild.id });
+    assert.equal(registry.lineage(fourth.id).length, 4);
+    assert.throws(() => registry.create({ name: 'Too deep', identity: 'x', parentId: fourth.id }, { actor: fourth.id }), /Refused: SMART is already 4 levels deep, and bots nest at most 4 levels/);
     assert.throws(() => registry.create({ name: '', identity: 'x' }, { actor: 'user' }), /name must be a non-empty string/);
-    assert.equal(registry.list().length, 3);
+    assert.equal(registry.list().length, 4);
 });
 test('retiring a bot archives it and moves its children up to its parent, each with a revision', t => {
     const { registry } = tempRegistry(t);
@@ -236,6 +238,7 @@ test('the routes create and start a bot, refuse a bot its own model, and retire 
         start: async (bot) => { started.push(bot.name); },
         stop: async (bot) => { stopped.push(bot.name); },
         deliver: async () => false,
+        state: () => ({ running: false, lastTurnAt: null }),
     });
     const created = await call(handlers.create, {}, { name: 'Personal', identity: 'You are Personal.', places: [{ cwd: '~/notes', label: 'notes' }] });
     assert.equal(created.status, 201);
@@ -261,4 +264,106 @@ test('the routes create and start a bot, refuse a bot its own model, and retire 
     assert.deepEqual(retired.body.moved.map(row => [row.name, row.parentId]), [['Child', null]]);
     assert.deepEqual(stopped, ['Child', 'Personal']);
     assert.equal((await call(handlers.retire, { id: personal.id })).status, 409);
+});
+/** The routes over a registry, recording which relays a change starts and stops. */
+function routes(registry, running = {}) {
+    const relays = [];
+    const handlers = createBotHandlers(() => registry, {
+        route: id => `bot:${id}`,
+        start: async (bot) => { relays.push(`start ${bot.name}`); },
+        stop: async (bot) => { relays.push(`stop ${bot.name}`); },
+        deliver: async () => false,
+        state: bot => ({ running: bot.id in running, lastTurnAt: running[bot.id] ?? null }),
+    });
+    return { handlers, relays };
+}
+const make = (registry, name, parentId = null) => registry.create({ name, identity: `You are ${name}.`, parentId }, { actor: 'user' });
+test('a bot moves a descendant within its own subtree, and is refused outside it, for a cycle and past the nesting limit', async (t) => {
+    const { registry } = tempRegistry(t);
+    const chief = make(registry, 'Chief');
+    const fleet = make(registry, 'Fleet', chief.id);
+    const hosts = make(registry, 'Hosts', fleet.id);
+    const backups = make(registry, 'Backups', chief.id);
+    const nightly = make(registry, 'Nightly', backups.id);
+    const tapes = make(registry, 'Tapes', nightly.id);
+    const personal = make(registry, 'Personal');
+    const { handlers } = routes(registry);
+    const edit = (by, target, parent) => call(handlers.edit, { id: target.id }, { by: by.id, turn: `${by.id}/7`, changes: { parentId: parent.id } });
+    const moved = await edit(chief, hosts, backups);
+    assert.equal(moved.status, 200);
+    assert.deepEqual(moved.body.lines, ['parent: Fleet → Backups']);
+    assert.deepEqual(moved.body.fields, ['parentId']);
+    const revision = registry.revisions(hosts.id).at(-1);
+    assert.deepEqual([revision.actor, revision.turn], [chief.id, `${chief.id}/7`]);
+    assert.equal((await edit(fleet, fleet, chief)).status, 403, 'a bot cannot move itself');
+    assert.match(String((await edit(fleet, fleet, chief)).body.error), /cannot change your own parent/);
+    const outside = await edit(chief, personal, chief);
+    assert.deepEqual([outside.status, outside.body.error], [403, 'Refused: Personal is not you or one of your descendants.']);
+    const up = await edit(backups, nightly, chief);
+    assert.deepEqual([up.status, up.body.error], [403, 'Refused: a bot can move Nightly only under itself or one of its own descendants.'], 'not under its own ancestor');
+    const cycle = await edit(chief, backups, tapes);
+    assert.deepEqual([cycle.status, cycle.body.error], [400, 'Refused: Tapes is one of Backups\'s own sub-bots, so Backups cannot move under it.']);
+    const deep = await edit(chief, fleet, tapes);
+    assert.deepEqual([deep.status, deep.body.error], [400, 'Refused: Tapes is 4 levels deep, so Fleet would reach level 5 under it, and bots nest at most 4 levels.']);
+    assert.equal(registry.get(fleet.id).parentId, chief.id, 'a refused move changes nothing');
+});
+test('a bot retires a descendant and brings it back: its relay stops and starts, and its sub-bots move up and back', async (t) => {
+    const { registry } = tempRegistry(t);
+    const chief = make(registry, 'Chief');
+    const backups = make(registry, 'Backups', chief.id);
+    const nightly = make(registry, 'Nightly', backups.id);
+    const { handlers, relays } = routes(registry);
+    const status = (by, target, value) => call(handlers.edit, { id: target.id }, { by: by.id, turn: `${by.id}/1`, changes: { status: value } });
+    assert.match(String((await status(backups, backups, 'retired')).body.error), /cannot change your own status/);
+    assert.equal((await status(chief, backups, 'paused')).status, 400);
+    const retired = await status(chief, backups, 'retired');
+    assert.equal(retired.status, 200);
+    assert.deepEqual(retired.body.lines, ['status: "active" → "retired"']);
+    assert.deepEqual(retired.body.moved, [{ id: nightly.id, name: 'Nightly', parentId: chief.id, parentName: 'Chief' }]);
+    assert.deepEqual(relays, ['stop Backups']);
+    assert.equal(registry.get(nightly.id).parentId, chief.id);
+    assert.deepEqual(registry.revisions(nightly.id).at(-1).actor, chief.id);
+    const back = await status(chief, backups, 'active');
+    assert.equal(back.status, 200);
+    assert.deepEqual(back.body.lines, ['status: "retired" → "active"']);
+    assert.deepEqual(back.body.moved, [{ id: nightly.id, name: 'Nightly', parentId: backups.id, parentName: 'Backups' }]);
+    assert.deepEqual(relays, ['stop Backups', 'start Backups']);
+    // The chat's undo of a retire is a restore of the status, which brings the bot back the same way.
+    const again = await status(chief, backups, 'retired');
+    await call(handlers.restore, { id: backups.id }, { revision: Number(again.body.revision) - 1, fields: ['status'] });
+    assert.equal(registry.get(backups.id).status, 'active');
+    assert.equal(registry.get(nightly.id).parentId, backups.id);
+    assert.deepEqual(relays, ['stop Backups', 'start Backups', 'stop Backups', 'start Backups']);
+    // A sub-bot moved again since the retire stays where it is; a bot whose parent is retired waits for it.
+    await status(chief, backups, 'retired');
+    await call(handlers.edit, { id: nightly.id }, { by: chief.id, changes: { name: 'Nightly runs' } });
+    await status(chief, backups, 'active');
+    assert.equal(registry.get(nightly.id).parentId, chief.id);
+    await status(chief, nightly, 'retired');
+    await call(handlers.update, { id: nightly.id }, { parentId: backups.id });
+    await status(chief, backups, 'retired');
+    const orphan = await status(chief, nightly, 'active');
+    assert.deepEqual([orphan.status, orphan.body.error], [400, 'Refused: Nightly runs\'s parent Backups is retired. Bring Backups back first, or give Nightly runs another parent as it comes back.']);
+});
+test('a bot sees itself, its ancestors and its descendants on the roster, with how each runs, and nothing elsewhere in the tree', async (t) => {
+    const { registry } = tempRegistry(t);
+    const chief = make(registry, 'Chief');
+    const fleet = make(registry, 'Fleet', chief.id);
+    const backups = make(registry, 'Backups', fleet.id);
+    make(registry, 'Personal', chief.id);
+    const other = make(registry, 'Other');
+    const { handlers } = routes(registry, { [backups.id]: '2026-11-20T10:00:00.000Z' });
+    const listed = await call(handlers.roster, { id: fleet.id });
+    const bots = listed.body.bots;
+    assert.deepEqual(bots.map(row => [row.name, row.relation, row.parentName, row.running, row.lastTurnAt]), [
+        ['Chief', 'ancestor', null, false, null],
+        ['Fleet', 'self', 'Chief', false, null],
+        ['Backups', 'descendant', 'Fleet', true, '2026-11-20T10:00:00.000Z'],
+    ], 'Personal, a sibling, and Other, another family, are not on it');
+    assert.deepEqual(Object.keys(bots[2]).sort(), ['id', 'lastTurnAt', 'model', 'name', 'parentId', 'parentName', 'places', 'relation', 'revision', 'running', 'status', 'thinking']);
+    assert.equal((await call(handlers.rosterShow, { id: fleet.id, bot: other.name })).status, 404);
+    await call(handlers.edit, { id: backups.id }, { by: fleet.id, turn: 't', changes: { name: 'Archive' } });
+    const shown = await call(handlers.rosterShow, { id: fleet.id, bot: 'archive' });
+    assert.equal(shown.body.bot.identity, 'You are Backups.');
+    assert.deepEqual(shown.body.revisions.map(row => [row.revision, row.by, row.changes]), [[1, 'user', ['created']], [2, 'Fleet', ['name: "Backups" → "Archive"']]]);
 });

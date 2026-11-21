@@ -57,7 +57,8 @@ import { createAgyImportRuntime } from './agy-import';
 import { createAgySessionHandlers } from './agy-session-handlers';
 import { createBotHandlers, type BotControl } from './bot-handlers';
 import { BOTS_SETTING, botRegistryAvailable, openBotRegistry, type BotRegistry } from './bot-registry';
-import { botRoute, deliverStartingBot, deliverToBot, startBot, startBots } from './bot-supervisor';
+import { botRoute, deliverStartingBot, deliverToBot, liveBotRelay, startBot, startBots } from './bot-supervisor';
+import { lastBotTurn } from './bot-mirror';
 import { codeBuild } from './code-build';
 import { createKnowledgeHandlers } from './knowledge-handlers';
 import { KNOWLEDGE_SETTING, openKnowledgeBase, type KnowledgeBase } from './knowledge';
@@ -722,6 +723,10 @@ export function startServer(rootDirectory: string): Server {
       // 404: it was not running.
       if (status >= 400 && status !== 404) throw new Error(isRecord(body) && typeof body.error === 'string' ? body.error : `close answered ${status}`);
     },
+    state: bot => ({
+      running: botsRun && liveBotRelay(path.join(dishDir(), 'bots', bot.id)) !== null,
+      lastTurnAt: lastBotTurn(path.join(getHarness('bot')!.rootPath(), `${bot.id}.jsonl`)),
+    }),
   };
   const botHandlers = createBotHandlers(bots, botControl);
   app.get('/api/bots', botHandlers.list);
@@ -731,6 +736,8 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/bots/:id/retire', botHandlers.retire);
   app.get('/api/bots/:id/revisions', botHandlers.revisions);
   app.post('/api/bots/:id/restore', botHandlers.restore);
+  app.get('/api/bots/:id/roster', botHandlers.roster);
+  app.get('/api/bots/:id/roster/:bot', botHandlers.rosterShow);
   app.post('/api/bots/:id/room', botHandlers.roomPost);
   app.get('/api/bots/:id/room', botHandlers.roomRead);
   app.post('/api/bots/:id/ask', botHandlers.ask);

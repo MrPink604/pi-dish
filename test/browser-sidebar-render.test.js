@@ -4,6 +4,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { openBotRegistry } = require('../lib/bot-registry');
+const { createBotHandlers } = require('../lib/bot-handlers');
 const context = (0, browser_vm_js_1.browserSandbox)();
 const { renderSidebar } = context.PiDishBrowser;
 function options(overrides = {}) {
@@ -205,4 +210,61 @@ test('the cache countdown rolls its minute while sub-minute polls reuse the proj
 });
 test('the sidebar without a memo still builds an independent projection', () => {
     assert.notEqual(render(), render());
+});
+test('the user moves a top-level bot under another: its parent, family, room and sidebar place change, and undo moves it back', async (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bots-'));
+    const registry = openBotRegistry(path.join(dir, 'bots.sqlite'));
+    t.after(() => { registry.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+    const handlers = createBotHandlers(() => registry, {
+        route: id => `route-${id}`, start: async () => { }, stop: async () => { }, deliver: async () => false,
+        state: () => ({ running: false, lastTurnAt: null }),
+    });
+    const call = async (handler, params, body = {}) => {
+        let status = 200;
+        let sent = {};
+        const res = { status(code) { status = code; return res; }, json(value) { sent = value; return res; } };
+        await handler({ params, body }, res, () => { });
+        return { status, body: sent };
+    };
+    const make = (name, parentId = null) => registry.create({ name, identity: `You are ${name}.`, parentId }, { actor: 'user' });
+    const fleet = registry.seedFleet();
+    const backups = make('Backups', fleet.id);
+    const chief = make('Chief');
+    registry.post({ family: fleet.id, from: fleet.id, to: [backups.id], text: 'before the move', chain: 'c1', hop: 1 });
+    registry.post({ family: chief.id, from: chief.id, to: [], text: 'chief alone', chain: 'c2', hop: 1 });
+    /** The Bots group as the sidebar draws it from `/api/bots`: each bot's name and depth. */
+    const sidebar = async () => {
+        const { html } = render({ bots: (await call(handlers.list, {})).body.bots });
+        return [...html.matchAll(/class="bot-node" data-bot-id="([^"]+)" style="padding-left:(\d+)px"/g)]
+            .map(match => `${registry.get(match[1]).name}@${Number(match[2]) / 14}`);
+    };
+    assert.deepEqual(await sidebar(), ['Fleet@0', 'Backups@1', 'Chief@0']);
+    const moved = await call(handlers.update, { id: fleet.id }, { parentId: chief.id });
+    assert.equal(moved.status, 200);
+    assert.equal(moved.body.bot.parentId, chief.id);
+    assert.deepEqual(registry.lineage(backups.id), [backups.id, fleet.id, chief.id], 'its sub-bots come with it');
+    assert.deepEqual(registry.family(chief.id).map(row => row.name), ['Fleet', 'Backups', 'Chief']);
+    assert.deepEqual(registry.family(fleet.id), [], 'Fleet heads no family of its own now');
+    const revision = registry.revisions(fleet.id).at(-1);
+    assert.deepEqual([revision.actor, revision.fields, revision.before?.parentId, revision.after.parentId], ['user', ['parentId'], null, chief.id]);
+    assert.deepEqual(await sidebar(), ['Chief@0', 'Fleet@1', 'Backups@2']);
+    // Its family's room history comes with it: the room of the family it joined holds both.
+    assert.deepEqual(registry.room(chief.id, 10).map(message => message.text), ['before the move', 'chief alone']);
+    const undone = await call(handlers.restore, { id: fleet.id }, { revision: revision.revision - 1, fields: ['parentId'] });
+    assert.equal(undone.status, 200);
+    assert.equal(registry.get(fleet.id).parentId, null);
+    assert.deepEqual(registry.revisions(fleet.id).at(-1).fields, ['parentId']);
+    assert.deepEqual(await sidebar(), ['Fleet@0', 'Backups@1', 'Chief@0']);
+    assert.deepEqual(registry.room(fleet.id, 10).map(message => message.text), ['before the move'], 'and leaves with it');
+    assert.deepEqual(registry.room(chief.id, 10).map(message => message.text), ['chief alone']);
+    // The user cannot make a cycle or pass the nesting limit either.
+    const cycle = await call(handlers.update, { id: fleet.id }, { parentId: backups.id });
+    assert.deepEqual([cycle.status, cycle.body.error], [400, 'Refused: Backups is one of Fleet\'s own sub-bots, so Fleet cannot move under it.']);
+    const self = await call(handlers.update, { id: fleet.id }, { parentId: fleet.id });
+    assert.match(String(self.body.error), /a bot cannot be its own parent/);
+    const a = make('A', chief.id);
+    const b = make('B', a.id);
+    const deep = await call(handlers.update, { id: fleet.id }, { parentId: b.id });
+    assert.deepEqual([deep.status, deep.body.error], [400, 'Refused: B is 3 levels deep, so Fleet and its sub-bots would reach level 5 under it, and bots nest at most 4 levels.']);
+    assert.equal((await call(handlers.update, { id: fleet.id }, { parentId: a.id })).status, 200, 'one level higher fits');
 });
