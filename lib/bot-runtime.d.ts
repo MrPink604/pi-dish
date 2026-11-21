@@ -92,7 +92,9 @@ export interface HandoffInput {
 export declare function composeHandoff({ windowNumber, closed, tail, request, workers, forced }: HandoffInput): string;
 /** A sub-bot's start, written by its parent into the sub-bot's directory and read once by its first relay. */
 export declare const FORK_SEED = "fork.json";
+/** A sub-bot that starts from a copy of its parent's conversation. */
 export interface ForkSeed {
+    fresh?: false;
     parentId: string;
     parentName: string;
     /** The parent's instructions for its current window, which the sub-bot keeps until its first rollover. */
@@ -109,6 +111,14 @@ export interface ForkSeed {
         head?: 'self';
     }[];
 }
+/** A sub-bot that starts with an empty conversation and its own identity: only its purpose comes from its parent. */
+export interface FreshSeed {
+    fresh: true;
+    parentId: string;
+    parentName: string;
+    purpose: string;
+}
+export type BotSeed = ForkSeed | FreshSeed;
 /** What pi-dish hands this bot: a room post, a question from another family, the answer to one, or a routine's run. */
 export interface BotInput {
     kind: 'room' | 'ask' | 'answer' | 'routine';
@@ -118,6 +128,8 @@ export interface BotInput {
 }
 /** A sub-bot's first message: its purpose, and that the conversation above it is its parent's. */
 export declare function composePurpose(parent: string, child: string, purpose: string): string;
+/** A fresh sub-bot's first message: its purpose, with nothing of its parent's conversation before it. */
+export declare function composeFreshPurpose(parent: string, child: string, purpose: string): string;
 export interface BotModels {
     models: Models;
     close(): Promise<void>;

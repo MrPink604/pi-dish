@@ -25,6 +25,7 @@ import type { JsonValue } from '@earendil-works/chord/json' with { 'resolution-m
 import type { CodemodeRunOptions } from '@earendil-works/pi-codemode' with { 'resolution-mode': 'import' };
 import type { Message, Models, Provider, AssistantMessage } from '@earendil-works/pi-ai' with { 'resolution-mode': 'import' };
 import type { BotPlace, BotRow } from './bot-registry';
+import type { RosterBot } from './bot-handlers';
 import type { BotMirror } from './bot-mirror';
 import { record as isRecord } from './helper-values';
 import type { KnowledgeSearch, KnowledgeWriteResult } from './knowledge';
@@ -222,7 +223,9 @@ export function composeHandoff({ windowNumber, closed, tail, request, workers, f
 /** A sub-bot's start, written by its parent into the sub-bot's directory and read once by its first relay. */
 export const FORK_SEED = 'fork.json';
 
+/** A sub-bot that starts from a copy of its parent's conversation. */
 export interface ForkSeed {
+  fresh?: false;
   parentId: string;
   parentName: string;
   /** The parent's instructions for its current window, which the sub-bot keeps until its first rollover. */
@@ -234,6 +237,16 @@ export interface ForkSeed {
   /** The parent's current window up to its last request, entry for entry. */
   entries: { kind: string; model?: Message[]; data?: Durable.EntryRecord['data']; head?: 'self' }[];
 }
+
+/** A sub-bot that starts with an empty conversation and its own identity: only its purpose comes from its parent. */
+export interface FreshSeed {
+  fresh: true;
+  parentId: string;
+  parentName: string;
+  purpose: string;
+}
+
+export type BotSeed = ForkSeed | FreshSeed;
 
 /** What pi-dish hands this bot: a room post, a question from another family, the answer to one, or a routine's run. */
 export interface BotInput {
@@ -248,6 +261,16 @@ export function composePurpose(parent: string, child: string, purpose: string): 
   return [
     `[pi-dish: you are "${child}", a new bot that ${parent} created just now as its sub-bot. Everything above is ${parent}'s conversation up to that moment. Its requests, its workers and its tool calls are ${parent}'s, not yours: do not continue or repeat any of them. You have no workers; reports from ${parent}'s workers go to ${parent} only.`,
     `You keep ${parent}'s identity until your first new context window, which brings your own identity and an empty notebook of your own. Open it soon: until you do, every request carries ${parent}'s whole conversation. Within your first few turns, write what you need to keep into your notebook with context_notes and call new_context.]`,
+    '',
+    `Your purpose, from ${parent}:`,
+    purpose.trim(),
+  ].join('\n');
+}
+
+/** A fresh sub-bot's first message: its purpose, with nothing of its parent's conversation before it. */
+export function composeFreshPurpose(parent: string, child: string, purpose: string): string {
+  return [
+    `[pi-dish: you are "${child}", a new bot that ${parent} created just now as its sub-bot. You start fresh: your instructions hold your own identity and an empty notebook, and nothing of ${parent}'s conversation is here. Write what you need to keep into your notebook with context_notes as you learn it.]`,
     '',
     `Your purpose, from ${parent}:`,
     purpose.trim(),
@@ -283,6 +306,15 @@ const PREAMBLE = [
   'family (your parent, your sub-bots and theirs) shares a room: room_post wakes only the bots you name, room_read shows',
   'the recent messages. ask_bot puts one question to a bot in another family; its answer arrives once as a message. A',
   'chain of bot messages is capped at a few hops, so post only what needs an answer and never just to acknowledge.',
+  '',
+  'The roster: the bots tool lists the bots you can see (you, your ancestors and your descendants) and shows one bot\'s',
+  'whole entry with its revisions; look before you change anything, and do not guess a bot\'s name or place. You have',
+  'authority over your descendants only. bot_update with parent moves a descendant under you or another of your',
+  'descendants, with status "retired" retires one (it stops, and its sub-bots move up to its parent), and with status',
+  '"active" brings a retired one back. Your own model, parent and status are the user\'s. bot_create starts a sub-bot',
+  'from a copy of this conversation; give it fresh: true when its area is unrelated to this conversation, so it starts',
+  'with its own identity and none of what is here. Bots nest at most four levels. Tell the user what you changed;',
+  'each change shows in the chat with its undo.',
   '',
   'Schedules: when the user wants something done on a schedule ("check the backups every morning"), the schedule tool',
   'creates a routine that wakes you: at each time it sends you its prompt as a message starting "[routine". Write the',
@@ -1157,6 +1189,14 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     return bots.find(row => row.status !== 'retired' && (row.id === wanted || row.name.toLowerCase() === name)) ?? null;
   }
 
+  /** A bot this one can see (itself, an ancestor or a descendant) by name or id; a retired one only when no other matches. */
+  async function rosterBot(wanted: string): Promise<RosterBot | null> {
+    const { bots } = await hub(`/api/bots/${bot.id}/roster`) as { bots: RosterBot[] };
+    const name = wanted.trim().toLowerCase();
+    const matches = bots.filter(row => row.id === wanted || row.name.toLowerCase() === name);
+    return matches.find(row => row.status !== 'retired') ?? matches[0] ?? null;
+  }
+
   /**
    * The current window as a sub-bot starts from it: from its handoff up to the newest model response, which holds
    * the call creating the sub-bot and any call beside it. What is copied is exactly what this bot's last request
@@ -1190,14 +1230,16 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
 
   const botCreate = durable.defineTool({
     name: 'bot_create',
-    description: 'Create a sub-bot under you: a long-lived bot that is the standing contact for a narrower area. It starts from this conversation as it stood before this call, so it knows what you know, and its purpose arrives as its first message. It keeps your identity until its first new context window, where it takes the identity you give here and a notebook of its own. It runs on your model. Bots nest at most three levels deep.',
+    description: 'Create a sub-bot under you: a long-lived bot that is the standing contact for a narrower area. By default it starts from this conversation as it stood before this call, so it knows what you know, and keeps your identity until its first new context window, where it takes the identity you give here and a notebook of its own. With fresh, it starts with an empty conversation and that identity from its first turn: use it for an area this conversation has nothing to do with. Either way its purpose arrives as its first message. It runs on your model unless you name one. Bots nest at most four levels deep.',
     // Bot changes stay deliberate: the model's own, each shown to the user.
     callers: ['model'],
     parameters: obj({
       name: str({ description: 'Its name' }),
       purpose: str({ description: 'What it is for and what to do first; its first message' }),
-      identity: str({ description: 'Its standing identity from its first new window on: who it is, what it is the contact for, how it works' }),
+      identity: str({ description: 'Its standing identity: who it is, what it is the contact for, how it works. A fresh bot has it from its first turn, a copy from its first new window' }),
       places: placesParameter,
+      fresh: opt(bool({ description: 'Start it with an empty conversation and its own identity instead of a copy of this conversation' })),
+      model: opt(str({ description: 'provider/model-id; omitted: your model' })),
     }),
     // A rerun finds its own child id: the registry creates a bot once per id.
     replay: 'safe',
@@ -1206,11 +1248,16 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       const self = options.loadBot();
       const childDir = path.join(options.botsDir, childId);
       if (!await api.memo<boolean>('seeded', callContext)) {
-        const agent = await api.agent(callContext);
-        const seed: ForkSeed = {
-          parentId: bot.id, parentName: self.name, instructions: agent.instructions ?? '', thinkingLevel: agent.thinkingLevel,
-          purpose: composePurpose(self.name, args.name, args.purpose), entries: await forkEntries(),
-        };
+        let seed: BotSeed;
+        if (args.fresh) {
+          seed = { fresh: true, parentId: bot.id, parentName: self.name, purpose: composeFreshPurpose(self.name, args.name, args.purpose) };
+        } else {
+          const agent = await api.agent(callContext);
+          seed = {
+            parentId: bot.id, parentName: self.name, instructions: agent.instructions ?? '', thinkingLevel: agent.thinkingLevel,
+            purpose: composePurpose(self.name, args.name, args.purpose), entries: await forkEntries(),
+          };
+        }
         fs.mkdirSync(childDir, { recursive: true, mode: 0o700 });
         const file = path.join(childDir, FORK_SEED);
         fs.writeFileSync(`${file}.tmp`, JSON.stringify(seed), { mode: 0o600 });
@@ -1220,7 +1267,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       let created: { bot: BotRow };
       try {
         created = await hub('/api/bots', {
-          id: childId, parentId: bot.id, name: args.name, identity: args.identity, model: self.model,
+          id: childId, parentId: bot.id, name: args.name, identity: args.identity, model: args.model ?? self.model,
           ...(self.thinking ? { thinking: self.thinking } : {}), places: args.places ?? [], by: bot.id, turn: (await currentChain()).turn,
         } as ProtocolRecord) as { bot: BotRow };
       } catch (error) {
@@ -1229,7 +1276,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         if (!message.startsWith('Created ')) fs.rmSync(childDir, { recursive: true, force: true });
         return refusal(message);
       }
-      return text(`Created sub-bot "${created.bot.name}". It starts from this conversation and is reading its purpose now; it reports to the user in its own chat. Reach it with room_post.`);
+      const start = args.fresh ? 'It starts fresh, with its own identity and none of this conversation,' : 'It starts from this conversation';
+      return text(`Created sub-bot "${created.bot.name}" on ${created.bot.model}. ${start} and is reading its purpose now; it reports to the user in its own chat. Reach it with room_post.`);
     },
   });
 
@@ -1393,10 +1441,13 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     }
   }
 
-  type Change = { bot: BotRow; revision: number; fields: string[]; before: BotRow };
+  type Change = {
+    bot: BotRow; revision: number; fields: string[]; before: BotRow; lines: string[];
+    moved: { id: string; name: string; parentName: string | null }[];
+  };
   const botUpdate = durable.defineTool({
     name: 'bot_update',
-    description: 'Change your own entry or a descendant bot\'s: its name, identity, places or thinking level, or a descendant\'s model. You cannot change your own model; only the user can. Every change is recorded, shown to the user with an undo, and a changed identity, places or thinking level takes effect at that bot\'s next context window.',
+    description: 'Change your own entry or a descendant bot\'s: its name, identity, places or thinking level; or, for a descendant only, its model, its parent (move it under you or another of your descendants) or its status ("retired" retires it: it stops and its sub-bots move up to its parent; "active" brings a retired one back). Your own model, parent and status are the user\'s. Every change is recorded, shown to the user with an undo, and a changed identity, places or thinking level takes effect at that bot\'s next context window.',
     // Bot changes stay deliberate: the model's own, each with its undo.
     callers: ['model'],
     parameters: obj({
@@ -1408,20 +1459,25 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       }), { description: 'Where the bot works; replaces the whole list' })),
       thinking: opt(str({ description: 'Thinking level: off, minimal, low, medium, high or xhigh' })),
       model: opt(str({ description: 'provider/model-id; only for a descendant' })),
+      parent: opt(str({ description: 'Name or id of its new parent: you or another of your descendants; only for a descendant' })),
+      status: opt(oneOf(['retired', 'active'] as const, { description: '"retired" retires a descendant, "active" brings a retired one back' })),
     }),
     // A rerun would write a second revision.
     replay: 'unsafe',
     execute: async (args) => {
       let target = bot.id;
       if (args.bot) {
-        const { bots } = await hub('/api/bots') as { bots: BotRow[] };
-        const wanted = args.bot.trim().toLowerCase();
-        const found = bots.find(row => row.status !== 'retired' && (row.id === args.bot || row.name.toLowerCase() === wanted));
-        if (!found) return refusal(`There is no bot named "${args.bot}".`);
+        const found = await rosterBot(args.bot);
+        if (!found) return refusal(`There is no bot named "${args.bot}" among the bots you can see (you, your ancestors and your descendants).`);
         target = found.id;
       }
       const changes: Record<string, unknown> = {};
-      for (const field of ['name', 'identity', 'places', 'thinking', 'model'] as const) if (args[field] !== undefined) changes[field] = args[field];
+      for (const field of ['name', 'identity', 'places', 'thinking', 'model', 'status'] as const) if (args[field] !== undefined) changes[field] = args[field];
+      if (args.parent !== undefined) {
+        const parent = await rosterBot(args.parent);
+        if (!parent) return refusal(`There is no bot named "${args.parent}" among the bots you can see, so it cannot be the new parent.`);
+        changes.parentId = parent.id;
+      }
       if (!Object.keys(changes).length) return refusal('Name at least one field to change.');
       if (target === bot.id && changes.model !== undefined) {
         return refusal('Refused: you cannot change your own model. Tell the user: only they can change it, with "edit" on your row in pi-dish\'s Bots list.');
@@ -1435,20 +1491,94 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       const own = target === bot.id;
       const who = own ? 'your' : `${change.before.name}'s`;
       if (!change.fields.length) return text(`Nothing changed: ${who} entry already says that.`);
-      const lines = change.fields.map(field => {
-        const show = (row: BotRow) => field === 'identity' ? `${row.identity.length} characters` : JSON.stringify(row[field as keyof BotRow]);
-        return `${field}: ${show(change.before)} → ${show(change.bot)}`;
-      });
       const later = change.fields.filter(field => field === 'identity' || field === 'places' || field === 'thinking');
+      const name = change.bot.name;
+      const status = change.fields.includes('status') ? change.bot.status : null;
       const notes = [
-        later.length ? `The new ${later.join(', ')} take${later.length === 1 ? 's' : ''} effect at ${own ? 'your' : 'its'} next context window, not in this one.` : '',
-        change.fields.includes('model') ? `${change.bot.name} restarts on the new model.` : '',
+        later.length && status !== 'retired' ? `The new ${later.join(', ')} take${later.length === 1 ? 's' : ''} effect at ${own ? 'your' : 'its'} next context window, not in this one.` : '',
+        change.fields.includes('model') && change.bot.status === 'active' ? `${name} restarts on the new model.` : '',
+        status === 'retired' ? `${name} is retired and stopped.` : status === 'active' ? `${name} is back and starting.` : '',
+        change.moved.length
+          ? `${status === 'retired' ? 'Its sub-bots moved up' : 'Its former sub-bots moved back'}: ${change.moved.map(row => `${row.name} (now ${row.parentName ? `under ${row.parentName}` : 'at the top level'})`).join(', ')}.`
+          : '',
         'The user sees the change and can undo it.',
       ].filter(Boolean);
       return {
-        ...text(`Changed ${who} entry (revision ${change.revision}):\n${lines.join('\n')}\n${notes.join(' ')}`),
-        details: { botChange: { botId: change.bot.id, botName: change.bot.name, revision: change.revision, fields: change.fields, lines } },
+        ...text(`Changed ${who} entry (revision ${change.revision}):\n${change.lines.join('\n')}\n${notes.join(' ')}`),
+        details: { botChange: { botId: change.bot.id, botName: name, revision: change.revision, fields: change.fields, lines: change.lines } },
       };
+    },
+  });
+
+  const rosterFields = {
+    id: str(), name: str(), parentId: nullable(str()), parentName: nullable(str()),
+    relation: oneOf(['self', 'ancestor', 'descendant'] as const, { description: 'How it stands to you' }),
+    status: str({ description: 'active, paused or retired' }), model: str(), thinking: nullable(str()),
+    places: arr(obj({ host: nullable(str()), cwd: str(), label: str() })), revision: num(),
+    running: bool({ description: 'Whether its relay runs now' }), lastTurnAt: nullable(str({ description: 'ISO time of its last answer' })),
+  };
+  type ShownBot = RosterBot & { identity: string; createdAt: string; updatedAt: string };
+  type ShownRevision = { revision: number; by: string; turn: string | null; fields: string[]; at: string; changes: string[] };
+  const rosterLine = (row: RosterBot) => [
+    `${row.name}${row.relation === 'self' ? ' (you)' : ''}`,
+    row.status === 'active' ? (row.running ? 'running' : 'not running') : row.status,
+    row.model, ...(row.thinking ? [`thinking ${row.thinking}`] : []), `revision ${row.revision}`,
+    ...(row.lastTurnAt ? [`last turn ${when(Date.parse(row.lastTurnAt))}`] : []),
+    ...(row.places.length ? [`places: ${row.places.map(place => place.label).join(', ')}`] : []),
+  ].join(' · ');
+  const botsTool = durable.defineTool({
+    name: 'bots',
+    description: 'The roster of bots you can see: you, your ancestors and your descendants, retired ones included. "list" shows each with its parent, status, model, thinking, places, revision, whether it runs and its last turn; "show" gives one bot\'s whole entry, identity included, and its revisions with what each changed.',
+    parameters: obj({
+      action: oneOf(['list', 'show'] as const),
+      bot: opt(str({ description: 'For show: the bot\'s name or id' })),
+    }),
+    structuredOutputSchema: union([
+      obj({ action: lit('list'), bots: arr(obj(rosterFields), { description: 'In tree order, each after its parent' }) }),
+      obj({
+        action: lit('show'),
+        bot: obj({ ...rosterFields, identity: str(), createdAt: str(), updatedAt: str() }),
+        revisions: arr(obj({
+          revision: num(), by: str({ description: '"user", "pi-dish" or the name of the bot that made it' }), turn: nullable(str()),
+          fields: arr(str()), at: str({ description: 'ISO time' }), changes: arr(str({ description: 'One line per changed field' })),
+        }), { description: 'Oldest first' }),
+      }),
+    ]),
+    replay: 'safe',
+    execute: async (args) => {
+      // The hub's answers are parsed JSON, so they are JSON values as they stand.
+      const asJson = (value: object): JsonValue => value as unknown as JsonValue;
+      try {
+        if (args.action === 'show') {
+          if (!args.bot) return refusal('show needs the bot\'s name or id.');
+          const shown = await hub(`/api/bots/${bot.id}/roster/${encodeURIComponent(args.bot)}`) as { bot: ShownBot; revisions: ShownRevision[] };
+          const entry = shown.bot;
+          const recent = shown.revisions.slice(-20);
+          return both([
+            `${rosterLine(entry)}`,
+            `Id: ${entry.id}. Parent: ${entry.parentName ?? '(top level)'}. Created ${entry.createdAt}.`,
+            ...(entry.places.length ? ['Places:', ...entry.places.map(place => `- ${place.label}: ${place.host ? `${place.host}:` : ''}${place.cwd}`)] : []),
+            '', 'Identity:', entry.identity, '',
+            `Revisions${shown.revisions.length > recent.length ? ` (the last ${recent.length} of ${shown.revisions.length})` : ''}:`,
+            ...recent.map(revision => `${revision.revision}. ${revision.at} by ${revision.by}: ${revision.changes.join('; ')}`),
+          ].join('\n'), asJson({ action: 'show', bot: entry, revisions: shown.revisions }));
+        }
+        const { bots } = await hub(`/api/bots/${bot.id}/roster`) as { bots: RosterBot[] };
+        const ids = new Set(bots.map(row => row.id));
+        const ordered: { row: RosterBot; depth: number }[] = [];
+        const walk = (parent: string | null, depth: number) => {
+          for (const row of bots) {
+            if ((row.parentId && ids.has(row.parentId) ? row.parentId : null) !== parent) continue;
+            ordered.push({ row, depth });
+            walk(row.id, depth + 1);
+          }
+        };
+        walk(null, 0);
+        return both(ordered.map(({ row, depth }) => `${'  '.repeat(depth)}- ${rosterLine(row)}`).join('\n'),
+          asJson({ action: 'list', bots: ordered.map(({ row }) => row) }));
+      } catch (error) {
+        return refusal(error instanceof Error ? error.message : String(error));
+      }
     },
   });
 
@@ -1471,7 +1601,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   const BotExtension = durable.defineExtension({
     name: 'bot',
     sections: [durable.section('bot-rules', () => PREAMBLE, { tag: false })],
-    tools: [spawnWorker, sessionsTool, contextNotes, newContext, history, kbSearch, kbRead, kbWrite, botUpdate, botCreate, roomPost, roomRead, askBot, scheduleTool],
+    tools: [spawnWorker, sessionsTool, contextNotes, newContext, history, kbSearch, kbRead, kbWrite, botsTool, botUpdate, botCreate, roomPost, roomRead, askBot, scheduleTool],
     tasks: [WorkerWatch],
     hooks: [reminder],
   });
@@ -1500,38 +1630,40 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     settings: { compaction: { enabled: false } },
     onReport: (report) => log(`durable ${report.kind}: ${report.error instanceof Error ? report.error.message : String(report.error)}`),
   }, ctx);
-  // A sub-bot's first start: its parent wrote where it starts from into its directory.
+  // A sub-bot's first start: its parent wrote where it starts from into its directory. A fresh one starts from its own
+  // identity like any new bot, with only its purpose; a fork from a copy of its parent's window.
   const seedFile = path.join(path.dirname(options.storageFile), FORK_SEED);
-  const seed = fs.existsSync(seedFile) ? JSON.parse(fs.readFileSync(seedFile, 'utf8')) as ForkSeed : null;
+  const seed = fs.existsSync(seedFile) ? JSON.parse(fs.readFileSync(seedFile, 'utf8')) as BotSeed : null;
+  const fork = seed && !seed.fresh ? seed : null;
   root = await harness.root(ctx, {
-    // A sub-bot keeps its parent's instructions and thinking level until its first rollover, so its first request
-    // repeats the parent's last one.
-    agent: seed
-      ? { model: modelRef, thinkingLevel: seed.thinkingLevel as Durable.AgentChange['thinkingLevel'], instructions: seed.instructions }
+    // A forked sub-bot keeps its parent's instructions and thinking level until its first rollover, so its first
+    // request repeats the parent's last one.
+    agent: fork
+      ? { model: modelRef, thinkingLevel: fork.thinkingLevel as Durable.AgentChange['thinkingLevel'], instructions: fork.instructions }
       : {
           model: modelRef,
           ...(bot.thinking ? { thinkingLevel: bot.thinking as Durable.AgentChange['thinkingLevel'] } : {}),
           instructions: composeInstructions(bot.identity, '', bot.places),
         },
   });
-  if (seed) {
+  if (fork) {
     const started = (await root.entries({ order: 'ascending' }, 1, undefined, ctx)).items.length > 0;
     if (!started) {
       await root.commit(async (tx) => {
-        for (const entry of seed.entries) await tx.appendEntry(root!.id, entry as Durable.EntryDraft);
+        for (const entry of fork.entries) await tx.appendEntry(root!.id, entry as Durable.EntryDraft);
         // Questions the parent took are the parent's to answer.
         const asks = await tx.doc(AsksDoc, root!.id);
-        for (const entry of seed.entries) {
+        for (const entry of fork.entries) {
           const askId = entry.kind === 'bot.ask' && isRecord(entry.data) ? entry.data.askId : undefined;
-          if (typeof askId === 'string') asks.answered[askId] = `by ${seed.parentName}`;
+          if (typeof askId === 'string') asks.answered[askId] = `by ${fork.parentName}`;
         }
       }, ctx);
     }
     // The parent's conversation is not this bot's to show: the transcript starts at a marker after it.
-    const copied = (await root.entries({ order: 'ascending' }, seed.entries.length, undefined, ctx)).items.at(-1);
+    const copied = (await root.entries({ order: 'ascending' }, fork.entries.length, undefined, ctx)).items.at(-1);
     if (copied && copied.id > mirror.lastEntryId) {
-      mirror.appendCustom(copied.id, 'bot-forked', `Started from ${seed.parentName}'s conversation; its purpose follows.`,
-        { parentId: seed.parentId, parentName: seed.parentName });
+      mirror.appendCustom(copied.id, 'bot-forked', `Started from ${fork.parentName}'s conversation; its purpose follows.`,
+        { parentId: fork.parentId, parentName: fork.parentName });
     }
   }
   // The model is the user's choice in the registry; the instructions stay those of the open window.

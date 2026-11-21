@@ -892,3 +892,114 @@ test('a run, a script in it and input queued behind it keep a bot from restartin
     await severalPolls();
     assert.equal(reportsOf(bot).length, 1, 'once');
 });
+// The roster ------------------------------------------------------------------
+test('a bot lists the roster: itself, its ancestors and its descendants with their fields, and nothing elsewhere in the tree', async (t) => {
+    const registry = tempRegistry(t);
+    const chief = newBot(registry, 'Chief');
+    const fleet = newBot(registry, 'Fleet', chief.id);
+    const backups = newBot(registry, 'Backups', fleet.id);
+    newBot(registry, 'Personal', chief.id);
+    newBot(registry, 'Other');
+    const running = new Map();
+    const hub = hubOf(createBotHandlers(() => registry, botControl(running, [])));
+    const bot = await openTestBot(t, noSessions, { row: () => registry.get(fleet.id), api: hub });
+    running.set(fleet.id, bot);
+    bot.respond(script(bot, 'const { bots } = await tools.bots({ action: "list" }); return { bots };'), toolCall(bot, 'bots', { action: 'show', bot: 'backups' }), bot.faux.fauxAssistantMessage('Three bots.'));
+    await bot.runtime.prompt('Who is on the roster?', 'followUp');
+    await until(() => said(bot, 'Three bots.'), 'the run ends');
+    const [listed, shown] = toolResults(bot);
+    const { bots } = returned(listed);
+    assert.deepEqual(bots.map(row => [row.name, row.relation, row.parentName, row.running, row.lastTurnAt]), [
+        ['Chief', 'ancestor', null, false, null],
+        ['Fleet', 'self', 'Chief', true, '2026-11-20T10:00:00.000Z'],
+        ['Backups', 'descendant', 'Fleet', false, null],
+    ], 'Personal, a sibling, and Other, another family, are not on it');
+    assert.deepEqual(bots[2], {
+        id: backups.id, name: 'Backups', parentId: fleet.id, parentName: 'Fleet', relation: 'descendant', status: 'active',
+        model: 'faux/faux-1', thinking: null, places: [], revision: 1, running: false, lastTurnAt: null,
+    });
+    assert.equal(shown.isError, false);
+    assert.match(textOf(shown), /^Backups · not running · faux\/faux-1 · revision 1\nId: \S+\. Parent: Fleet\./);
+    assert.match(textOf(shown), /\nIdentity:\nYou are Backups\.\n\nRevisions:\n1\. \S+ by user: created$/);
+});
+test('bot_update moves a descendant within its subtree and shows the move with its undo; outside it, a cycle and the nesting limit are refused', async (t) => {
+    const registry = tempRegistry(t);
+    const chief = newBot(registry, 'Chief');
+    const fleet = newBot(registry, 'Fleet', chief.id);
+    const hosts = newBot(registry, 'Hosts', fleet.id);
+    const backups = newBot(registry, 'Backups', chief.id);
+    const nightly = newBot(registry, 'Nightly', backups.id);
+    newBot(registry, 'Tapes', nightly.id);
+    newBot(registry, 'Personal');
+    const hub = hubOf(createBotHandlers(() => registry, botControl(new Map(), [])));
+    const bot = await openTestBot(t, noSessions, { row: () => registry.get(chief.id), api: hub });
+    const update = (args) => toolCall(bot, 'bot_update', args);
+    bot.respond(update({ bot: 'Hosts', parent: 'Backups' }), update({ bot: 'Personal', name: 'Mine' }), update({ bot: 'Backups', parent: 'Tapes' }), update({ bot: 'Fleet', parent: 'Tapes' }), update({ parent: 'Backups' }), bot.faux.fauxAssistantMessage('Moved Hosts.'));
+    await bot.runtime.prompt('Put Hosts under Backups', 'followUp');
+    await until(() => said(bot, 'Moved Hosts.'), 'the run ends');
+    const [moved, outside, cycle, deep, own] = toolResults(bot);
+    assert.match(textOf(moved), /^Changed Hosts's entry \(revision 2\):\nparent: Fleet → Backups\nThe user sees the change and can undo it\.$/);
+    assert.equal(registry.get(hosts.id).parentId, backups.id);
+    assert.deepEqual(bot.mirrorLines().find(line => line.customType === 'bot-change')?.details, {
+        botId: hosts.id, botName: 'Hosts', revision: 2, fields: ['parentId'], lines: ['parent: Fleet → Backups'],
+    });
+    for (const result of [outside, cycle, deep, own])
+        assert.equal(result.isError, true);
+    assert.match(textOf(outside), /^There is no bot named "Personal" among the bots you can see/);
+    assert.equal(textOf(cycle), 'Refused: Tapes is one of Backups\'s own sub-bots, so Backups cannot move under it.');
+    assert.equal(textOf(deep), 'Refused: Tapes is 4 levels deep, so Fleet would reach level 5 under it, and bots nest at most 4 levels.');
+    assert.match(textOf(own), /^Refused: you cannot change your own parent/);
+    assert.deepEqual([registry.get(backups.id).parentId, registry.get(fleet.id).parentId], [chief.id, chief.id], 'a refused move changes nothing');
+});
+test('a bot retires a descendant and brings it back with bot_update, each a recorded change; the relay stops and starts and its sub-bot moves up and back', async (t) => {
+    const registry = tempRegistry(t);
+    const chief = newBot(registry, 'Chief');
+    const backups = newBot(registry, 'Backups', chief.id);
+    newBot(registry, 'Nightly', backups.id);
+    const relays = [];
+    const hub = hubOf(createBotHandlers(() => registry, botControl(new Map(), [], async (row) => { relays.push(`start ${row.name}`); }, async (row) => { relays.push(`stop ${row.name}`); })));
+    const bot = await openTestBot(t, noSessions, { row: () => registry.get(chief.id), api: hub });
+    bot.respond(toolCall(bot, 'bot_update', { bot: 'Backups', status: 'retired' }), toolCall(bot, 'bot_update', { bot: 'Backups', status: 'active' }), bot.faux.fauxAssistantMessage('Backups is back.'));
+    await bot.runtime.prompt('Retire Backups, then bring it back', 'followUp');
+    await until(() => said(bot, 'Backups is back.'), 'the run ends');
+    const [retired, back] = toolResults(bot);
+    assert.equal(textOf(retired), 'Changed Backups\'s entry (revision 2):\nstatus: "active" → "retired"\nBackups is retired and stopped. Its sub-bots moved up: Nightly (now under Chief). The user sees the change and can undo it.');
+    assert.equal(textOf(back), 'Changed Backups\'s entry (revision 3):\nstatus: "retired" → "active"\nBackups is back and starting. Its former sub-bots moved back: Nightly (now under Backups). The user sees the change and can undo it.');
+    assert.deepEqual(relays, ['stop Backups', 'start Backups']);
+    assert.deepEqual(registry.revisions(backups.id).slice(1).map(revision => [revision.actor, revision.fields, revision.after.status]), [[chief.id, ['status'], 'retired'], [chief.id, ['status'], 'active']]);
+    assert.deepEqual(bot.mirrorLines().filter(line => line.customType === 'bot-change').map(line => line.details.revision), [2, 3]);
+});
+test('bot_create with fresh starts a child whose first request holds its own identity and none of its creator\u2019s conversation, on the model given', async (t) => {
+    const registry = tempRegistry(t);
+    const botsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bots-dir-'));
+    t.after(() => fs.rmSync(botsDir, { recursive: true, force: true }));
+    const personal = registry.create({ name: 'Personal', identity: 'You are Personal, the contact for personal matters.', model: 'faux/faux-1' }, { actor: 'user' });
+    let child;
+    const hub = (pathname, body) => routes(pathname, body);
+    const routes = hubOf(createBotHandlers(() => registry, botControl(new Map(), [], async (row) => {
+        child = await openTestBot(t, noSessions, { botsDir, row: () => registry.get(row.id), api: hub, responses: faux => [faux.fauxAssistantMessage('Ready.')] });
+    })));
+    const parent = await openTestBot(t, noSessions, { botsDir, row: () => registry.get(personal.id), api: hub });
+    parent.respond(parent.faux.fauxAssistantMessage('Noted: Dr Molar.'), parent.faux.fauxAssistantMessage([parent.faux.fauxToolCall('bot_create', {
+            name: 'Garden', purpose: 'Plan the vegetable beds.', identity: 'You are Garden, the contact for the garden.', fresh: true, model: 'faux/faux-2',
+        })], { stopReason: 'toolUse' }), parent.faux.fauxAssistantMessage('Created Garden.'));
+    await parent.runtime.prompt('My dentist is Dr Molar', 'followUp');
+    await until(() => said(parent, 'Noted: Dr Molar.'), 'the parent answers');
+    await parent.runtime.prompt('Make a bot for the garden', 'followUp');
+    await until(() => !!child && said(child, 'Ready.') && said(parent, 'Created Garden.'), 'the fresh bot answers its purpose');
+    const garden = registry.list().find(row => row.name === 'Garden');
+    assert.deepEqual([garden.parentId, garden.model], [personal.id, 'faux/faux-2']);
+    assert.match(textOf(toolResults(parent).at(-1)), /^Created sub-bot "Garden" on faux\/faux-2\. It starts fresh, with its own identity and none of this conversation,/);
+    const first = child.requests[0];
+    assert.match(systemText(first), /You are Garden, the contact for the garden\./);
+    assert.doesNotMatch(systemText(first), /You are Personal/);
+    const conversation = first.filter(message => message.role !== 'system');
+    assert.equal(conversation.length, 1, 'its purpose is its whole conversation');
+    assert.match(textOf(conversation[0]), /^\[pi-dish: you are "Garden", a new bot that Personal created just now as its sub-bot\. You start fresh/);
+    assert.match(textOf(conversation[0]), /Your purpose, from Personal:\nPlan the vegetable beds\.$/);
+    for (const parentText of ['Dr Molar', 'Make a bot for the garden'])
+        assert.ok(!JSON.stringify(first).includes(parentText), `${parentText} stayed with Personal`);
+    assert.deepEqual(child.mirrorLines().filter(line => line.customType).map(line => line.customType), ['bot-purpose']);
+    assert.ok(child.mirrorLines().some(line => line.type === 'model_change' && line.modelId === 'faux-2'), 'it runs on the model given');
+    assert.ok(!fs.existsSync(path.join(botsDir, garden.id, 'fork.json')), 'the start is read once');
+});
