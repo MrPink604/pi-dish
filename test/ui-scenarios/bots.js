@@ -1,6 +1,6 @@
 // Generated test/tool from test/ui-scenarios/bots.ts; edit that source and run npm run build:tests.
 "use strict";
-const bots = async ({ desktop, check, base, emit, SESSION_ID }) => {
+const bots = async ({ desktop, check, base, emit, fs, path, tmpHome, SESSION_ID, BETA_ID }) => {
     // Bots do not run under test (PI_DISH_BOTS=off): rows are created and retired, relays never start.
     console.log('bots:');
     const list = async () => (await (await fetch(`${base}/api/bots`)).json()).bots;
@@ -21,6 +21,47 @@ const bots = async ({ desktop, check, base, emit, SESSION_ID }) => {
     const node = `.bot-node[data-bot-id="${smoke.id}"]`;
     await desktop.waitForSelector(node, { timeout: 10000 });
     check(await desktop.locator(node).getAttribute('style') === 'padding-left:14px', 'the new bot is nested under Fleet');
+    // Sessions launched by a bot nest under that bot (active directly, closed in a collapsed drawer on All),
+    // collapsible via the bot's toggle, while ordinary sessions stay in the workspace list.
+    const closedWorkerId = '2026-07-03T00-00-00-uismoke4';
+    const provenanceFile = path.join(tmpHome, '.pi', 'dish', 'session-provenance.json');
+    const priorProvenance = fs.existsSync(provenanceFile) ? fs.readFileSync(provenanceFile, 'utf8') : null;
+    try {
+        fs.mkdirSync(path.dirname(provenanceFile), { recursive: true });
+        fs.writeFileSync(provenanceFile, JSON.stringify({
+            version: 1,
+            launches: {
+                [SESSION_ID]: { sourceSessionId: fleet.sessionId, operationId: null, createdAt: Date.now() },
+                [closedWorkerId]: { sourceSessionId: fleet.sessionId, operationId: null, createdAt: Date.now() - 1000 },
+            },
+        }));
+        await desktop.evaluate(() => fixtureApp.features.sidebarLists.refresh());
+        await desktop.waitForSelector(`.bot-children[data-bot-children="${fleet.id}"] .session-item[data-id="${SESSION_ID}"]`, { timeout: 10000 });
+        check(await desktop.locator(`.session-item[data-id="${SESSION_ID}"]`).count() === 1, 'active worker appears once, nested under Fleet');
+        // Collapsing Fleet hides both its worker and its sub-bot; clicking again expands them.
+        await desktop.click(`.bot-tree-toggle[data-bot-toggle="${fleet.id}"]`);
+        await desktop.waitForSelector(`.bot-children[data-bot-children="${fleet.id}"]`, { state: 'detached', timeout: 5000 });
+        check(await desktop.locator(`.session-item[data-id="${SESSION_ID}"]`).count() === 0
+            && await desktop.locator(node).count() === 0, 'collapsing Fleet hides its worker and sub-bot');
+        await desktop.click(`.bot-tree-toggle[data-bot-toggle="${fleet.id}"]`);
+        await desktop.waitForSelector(`.bot-children[data-bot-children="${fleet.id}"] .session-item[data-id="${SESSION_ID}"]`, { timeout: 5000 });
+        // On All, closed workers sit in a collapsed drawer under Fleet while non-bot sessions stay in workspaces.
+        await desktop.click('#tabAll');
+        await desktop.waitForSelector(`.bot-closed-toggle[data-bot-closed="${fleet.id}"]`, { timeout: 10000 });
+        check(await desktop.locator(`.session-item[data-id="${closedWorkerId}"]`).count() === 0, 'closed worker starts collapsed');
+        await desktop.click(`.bot-closed-toggle[data-bot-closed="${fleet.id}"]`);
+        await desktop.waitForSelector(`.bot-closed-list .session-item[data-id="${closedWorkerId}"]`, { timeout: 5000 });
+        check(await desktop.locator(`.bots-segment .session-item[data-id="${BETA_ID}"]`).count() === 0
+            && await desktop.locator(`.session-item[data-id="${BETA_ID}"]`).count() === 1, 'sessions no bot started stay outside the Bots group');
+        await desktop.click('#tabActive');
+    }
+    finally {
+        if (priorProvenance === null)
+            fs.rmSync(provenanceFile, { force: true });
+        else
+            fs.writeFileSync(provenanceFile, priorProvenance);
+        await desktop.evaluate(() => fixtureApp.features.sidebarLists.refresh());
+    }
     // Edit opens the same form filled in with the bot's entry, its parent included, and saves the user's change.
     await desktop.hover(node);
     await desktop.click(`${node} .bot-edit-btn`);

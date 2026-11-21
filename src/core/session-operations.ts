@@ -233,9 +233,9 @@ export function createSessionOperations(observations: SessionOperationObservatio
         return createSession(options);
       })
       .then(sessionId => {
+        if (options.sourceSessionId) recordSessionLaunch(sessionId, options.sourceSessionId, spawnId);
         operation = { status: 'ready', createdAt, sessionId };
         sessionSpawnOperations.set(spawnId, operation);
-        if (options.sourceSessionId) recordSessionLaunch(sessionId, options.sourceSessionId, spawnId);
       })
       .catch(error => {
         console.error('Failed to create session:', error);

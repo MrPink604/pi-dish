@@ -203,3 +203,101 @@ async function setup(page) {
     });
     (0, fixtures_js_1.expect)(result).toEqual({ before: 'self old', patched: 'self old', after: 'self new', peer: 'peer peer-parent', pinned: ['self new'] });
 });
+(0, fixtures_js_1.test)('bot tree toggles collapse/expand, closed-worker drawer toggles, and reveal expands hidden bot workers', async ({ page, fleet }) => {
+    await setup(page);
+    const result = await page.evaluate(() => {
+        const HUB = '11111111-1111-4111-8111-111111111111';
+        const PEER = '22222222-2222-4222-8222-222222222222';
+        window.customSidebar.dispose();
+        const state = window.controlsState;
+        const botList = [
+            { id: 'fleet', parentId: null, name: 'Fleet', status: 'active', model: 'claude-code/claude-opus-5-5', thinking: null, identity: 'Fleet', places: [], sessionId: 'route-fleet' },
+            { id: 'hosts', parentId: 'fleet', name: 'Hosts', status: 'active', model: 'claude-code/claude-opus-5-5', thinking: null, identity: 'Hosts', places: [], sessionId: 'route-hosts' },
+        ];
+        state.setSessionLists([
+            {
+                hostId: HUB,
+                active: [
+                    { id: 'route-fleet', name: 'Fleet', harnessId: 'bot', cwd: '/home', isActive: true },
+                    { id: 'route-hosts', name: 'Hosts', harnessId: 'bot', cwd: '/home', isActive: true },
+                ],
+                previous: [
+                    { id: 'w-closed', name: 'Closed check', cwd: '/repo', parentId: 'route-hosts', isActive: false },
+                ],
+            },
+            {
+                hostId: PEER,
+                active: [
+                    { id: 'w-remote', name: 'Remote worker', cwd: '/srv', parentId: `${HUB}:route-fleet`, isActive: true },
+                ],
+            },
+        ]);
+        const controls = PiDishBrowser.createSidebarControls({
+            document, sessionState: state,
+            storage: { getItem: key => window.controlStorage.get(key) ?? null, setItem: (key, value) => window.controlStorage.set(key, value) },
+            request: async () => new Response('{}'), host: () => ({ base: '' }),
+            render: () => {
+                controls.updateList(PiDishBrowser.renderSidebar({
+                    ...state.sessions, selected: null, tab: 'all', view: 'workspace', query: '', queriedFor: '', scope: '', indexing: false,
+                    contextMetric: 'percent', pending: [], selectedSpawn: null,
+                    expanded: controls.expanded, collapsed: controls.collapsed, pinned: controls.pinned, roots: controls.familyRoots(),
+                    closeConfirm: null, closeBusy: null, multiHost: true,
+                    hosts: [
+                        { hostId: HUB, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+                        { hostId: PEER, self: false, label: 'tycho', state: 'reachable', key: 'tycho', color: '#fa1', dot: '', hasCache: true },
+                    ],
+                    bots: botList, botRetireArmed: null, selfHostId: HUB, unread: () => false, hostChip: id => id === PEER ? '<span>tycho</span>' : '',
+                }));
+            },
+            closeSidebar() { }, select: (id, host) => window.controlsLog.selected.push({ id, host }),
+            pending() { }, create() { }, refresh: async () => { }, finishClose: async () => { },
+            ref: row => `${row.host}/${row.id}`, copy: async () => { }, status() { },
+            bots: () => botList, selfHostId: () => HUB,
+        });
+        window.customSidebar = controls;
+        controls.mount();
+        const render = () => controls.updateList(PiDishBrowser.renderSidebar({
+            ...state.sessions, selected: null, tab: 'all', view: 'workspace', query: '', queriedFor: '', scope: '', indexing: false,
+            contextMetric: 'percent', pending: [], selectedSpawn: null,
+            expanded: controls.expanded, collapsed: controls.collapsed, pinned: controls.pinned, roots: controls.familyRoots(),
+            closeConfirm: null, closeBusy: null, multiHost: true,
+            hosts: [
+                { hostId: HUB, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+                { hostId: PEER, self: false, label: 'tycho', state: 'reachable', key: 'tycho', color: '#fa1', dot: '', hasCache: true },
+            ],
+            bots: botList, botRetireArmed: null, selfHostId: HUB, unread: () => false, hostChip: id => id === PEER ? '<span>tycho</span>' : '',
+        }));
+        render();
+        const initialRemoteVisible = !!document.querySelector('[data-id="w-remote"]');
+        const initialClosedVisible = !!document.querySelector('[data-id="w-closed"]');
+        // Clicking Fleet's toggle collapses its subtree without selecting Fleet.
+        fixtureElement(document.querySelector('[data-bot-toggle="fleet"]'), 'fleet toggle').click();
+        const afterCollapseRemote = !!document.querySelector('[data-id="w-remote"]');
+        const selectedAfterToggle = window.controlsLog.selected.length;
+        // Revealing a closed worker under a nested sub-bot expands ancestor bots AND the closed drawer.
+        controls.reveal('w-closed', HUB);
+        render();
+        const afterRevealClosed = !!document.querySelector('[data-id="w-closed"]');
+        const expandedKeys = [...controls.expanded];
+        // Clicking closed-worker toggle collapses it again, and migrate preserves bot-closed keys.
+        fixtureElement(document.querySelector('[data-bot-closed="hosts"]'), 'closed toggle').click();
+        const afterCloseDrawer = !!document.querySelector('[data-id="w-closed"]');
+        controls.reveal('w-closed', HUB);
+        controls.migrate(HUB);
+        const migratedExpanded = [...controls.expanded];
+        return {
+            initialRemoteVisible, initialClosedVisible, afterCollapseRemote, selectedAfterToggle,
+            afterRevealClosed, expandedKeys, afterCloseDrawer, migratedExpanded,
+        };
+    });
+    (0, fixtures_js_1.expect)(result).toEqual({
+        initialRemoteVisible: true,
+        initialClosedVisible: false,
+        afterCollapseRemote: false,
+        selectedAfterToggle: 0,
+        afterRevealClosed: true,
+        expandedKeys: ['bot-closed:hosts'],
+        afterCloseDrawer: false,
+        migratedExpanded: ['bot-closed:hosts'],
+    });
+});

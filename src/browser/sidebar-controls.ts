@@ -5,6 +5,7 @@ import { buildSessionFamilies } from './helper-sessions';
 import { escapeHtml } from '../core/helper-format';
 import type { SessionFamily } from './shared-helper-types';
 import type { SidebarProjection } from './sidebar-render';
+import { BOT_CLOSED_PREFIX, botClosedKey, botCollapseKey, findBotRevealPath, type SidebarBot } from './bots';
 
 /** Sidebar preferences and row actions own their DOM, timers and captured host endpoints. */
 export function createSidebarControls(options: {
@@ -14,6 +15,7 @@ export function createSidebarControls(options: {
   refresh: () => Promise<unknown>;
   finishClose: (id: string, host: string | null, owner: SelectionOwner | null) => Promise<unknown>;
   ref: (session: SessionEntry) => string; copy: (text: string) => Promise<unknown>; status: (message: string, type?: string) => void;
+  bots?: () => readonly SidebarBot[]; selfHostId?: () => string | null;
 }) {
   const { document, storage, sessionState } = options, window = document.defaultView!;
   const list = document.getElementById('sessionList')!;
@@ -40,7 +42,9 @@ export function createSidebarControls(options: {
     const focused = document.activeElement instanceof HTMLElement && list.contains(document.activeElement) ? document.activeElement : null;
     let focusKey: string | null = null;
     if (focused) for (const [key, row] of renderedRows) if (row.element.contains(focused)) { focusKey = key; break; }
-    const focusSelector = focused && ['.session-pin-btn', '.session-close-btn', '.session-family-toggle'].find(selector => focused.matches(selector));
+    const focusSelector = focused && ['.session-pin-btn', '.session-close-btn', '.bot-tree-toggle', '.session-family-toggle'].find(selector => focused.matches(selector));
+    const focusedBotToggle = focused?.matches('.bot-tree-toggle') ? focused.dataset.botToggle || null : null;
+    const focusedBotClosed = focused?.matches('.bot-closed-toggle') ? focused.dataset.botClosed || null : null;
     const template = document.createElement('template');
     template.innerHTML = changed.map(row => row.html).join('');
     const elements = Array.from(template.content.children) as HTMLElement[];
@@ -76,6 +80,10 @@ export function createSidebarControls(options: {
     layout = projection.layout; renderedRows = next;
     if (focusKey && focusSelector && document.activeElement !== focused) {
       renderedRows.get(focusKey)?.element.querySelector<HTMLElement>(focusSelector)?.focus({ preventScroll: true });
+    } else if (focusedBotToggle && document.activeElement !== focused) {
+      Array.from(list.querySelectorAll<HTMLElement>('.bot-tree-toggle')).find(button => button.dataset.botToggle === focusedBotToggle)?.focus({ preventScroll: true });
+    } else if (focusedBotClosed && document.activeElement !== focused) {
+      Array.from(list.querySelectorAll<HTMLElement>('.bot-closed-toggle')).find(button => button.dataset.botClosed === focusedBotClosed)?.focus({ preventScroll: true });
     } else if (focused?.matches('.workspace-new-btn') && document.activeElement !== focused) {
       Array.from(list.querySelectorAll<HTMLElement>('.workspace-new-btn')).find(button =>
         button.dataset.path === focused.dataset.path && button.dataset.host === focused.dataset.host)?.focus({ preventScroll: true });
@@ -92,9 +100,14 @@ export function createSidebarControls(options: {
   function migrate(host: string) {
     if (disposed) return;
     const qualify = (key: string) => parseSessionKey(key).hostId === null ? sessionKey(host, key) : key;
-    pinned = pinned.map(qualify); savePins(); const next = [...expanded].map(qualify); expanded.clear(); for (const key of next) expanded.add(key); saveExpanded();
+    pinned = pinned.map(qualify); savePins();
+    const next = [...expanded].map(key => key.startsWith(BOT_CLOSED_PREFIX) ? key : qualify(key));
+    expanded.clear(); for (const key of next) expanded.add(key); saveExpanded();
   }
   function toggleGroup(key: string) { if (disposed) return; if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key); write('pi-dish-collapsed-groups', collapsed); render(); }
+  function toggleBotClosed(botId: string) {
+    if (disposed) return; const key = botClosedKey(botId); if (expanded.has(key)) expanded.delete(key); else expanded.add(key); saveExpanded(); render();
+  }
   function toggleFamily(id: string, host = sessionState.sessionHostId(id)) {
     if (disposed) return; const key = sessionKey(host, id); if (expanded.has(key)) expanded.delete(key); else expanded.add(key); saveExpanded(); render();
   }
@@ -120,13 +133,35 @@ export function createSidebarControls(options: {
     return map;
   }
   function reveal(id: string, host = sessionState.sessionHostId(id)) {
-    if (disposed) return; const key = sessionKey(host, id), roots = buildSessionFamilies(sessions());
+    if (disposed) return;
+    const all = sessions(), key = sessionKey(host, id);
+    const botList = options.bots?.() ?? [];
+    if (botList.length) {
+      const botPath = findBotRevealPath(botList, all, key, options.selfHostId?.() ?? null);
+      if (botPath) {
+        let collapsedChanged = false, expandedChanged = false;
+        for (const botId of botPath.expandBots) {
+          if (collapsed.delete(botCollapseKey(botId))) collapsedChanged = true;
+        }
+        if (botPath.expandClosedBot) {
+          const closedKey = botClosedKey(botPath.expandClosedBot);
+          if (!expanded.has(closedKey)) { expanded.add(closedKey); expandedChanged = true; }
+        }
+        for (const familyKey of botPath.expandFamilies) {
+          if (!expanded.has(familyKey)) { expanded.add(familyKey); expandedChanged = true; }
+        }
+        if (collapsedChanged) write('pi-dish-collapsed-groups', collapsed);
+        if (expandedChanged) saveExpanded();
+        return;
+      }
+    }
+    const roots = buildSessionFamilies(all);
     function find(node: SessionFamily<SessionEntry>, ancestors: string[]): string[] | null {
       if (sessionRefKey(node.session) === key) return ancestors;
       for (const child of node.children) { const found = find(child, [...ancestors, sessionRefKey(node.session)]); if (found) return found; }
       return null;
     }
-    for (const root of roots) { const ancestors = find(root, []); if (ancestors) { for (const key of ancestors) expanded.add(key); saveExpanded(); return; } }
+    for (const root of roots) { const ancestors = find(root, []); if (ancestors) { for (const ancestor of ancestors) expanded.add(ancestor); saveExpanded(); return; } }
   }
   function togglePin(id: string, displayedRoot = id, members = [id], host = sessionState.sessionHostId(id)) {
     if (disposed) return;
@@ -228,6 +263,8 @@ export function createSidebarControls(options: {
     list.addEventListener('click', event => {
       if (!(event.target instanceof Element) || !list.contains(event.target)) return;
       const target = event.target, item = target.closest<HTMLElement>('.session-item'), id = item?.dataset.id, host = item?.dataset.host || null;
+      const botToggle = target.closest<HTMLElement>('.bot-tree-toggle'); if (botToggle) { if (botToggle.dataset.botToggle) toggleGroup(botCollapseKey(botToggle.dataset.botToggle)); return; }
+      const botClosedToggle = target.closest<HTMLElement>('.bot-closed-toggle'); if (botClosedToggle) { if (botClosedToggle.dataset.botClosed) toggleBotClosed(botClosedToggle.dataset.botClosed); return; }
       const familyToggle = target.closest<HTMLElement>('.session-family-toggle'); if (familyToggle) { if (familyToggle.dataset.familyId) toggleFamily(familyToggle.dataset.familyId, host); return; }
       if (target.closest('.session-pin-btn')) {
         if (id && item) { const family = item.closest<HTMLElement>('.session-family-root'); const members = family ? Array.from(family.querySelectorAll<HTMLElement>('.session-item[data-id]')).map(row => row.dataset.id!).filter(Boolean) : [id]; togglePin(id, family?.dataset.familyId || id, members, host); } return;

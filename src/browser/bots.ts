@@ -1,8 +1,19 @@
 import { errorMessage, readJson, sendJson, type ApiRequest } from './api-client';
 import { escapeHtml } from '../core/helper-format';
-import { record } from '../core/helper-values';
+import { finite, record } from '../core/helper-values';
+import { sessionKey, sessionRefKey } from './helper-identity';
+import { buildSessionFamilies, flattenSessionFamilies, sessionFamilyParentId } from './helper-sessions';
+import type { SessionEntry } from './session-state';
+import type { SessionFamily } from './shared-helper-types';
 
 type BotPlace = { label: string; host: string | null; cwd: string };
+
+export const BOT_COLLAPSE_PREFIX = 'bot:';
+export const BOT_CLOSED_PREFIX = 'bot-closed:';
+export function botCollapseKey(botId: string): string { return BOT_COLLAPSE_PREFIX + botId; }
+export function botClosedKey(botId: string): string { return BOT_CLOSED_PREFIX + botId; }
+
+const HOST_QUALIFIED_PARENT = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(.+)$/i;
 
 /** A bot as the sidebar shows it; bots live on the host that serves this page. */
 export interface SidebarBot {
@@ -44,6 +55,225 @@ export function botTree(bots: readonly SidebarBot[]): { bot: SidebarBot; depth: 
   };
   walk(null, 0);
   return out;
+}
+
+export interface BotTreeNode {
+  readonly bot: SidebarBot;
+  readonly depth: number;
+  readonly session: SessionEntry | null;
+  readonly activeWorkers: readonly SessionFamily<SessionEntry>[];
+  readonly closedWorkers: readonly SessionFamily<SessionEntry>[];
+  readonly children: readonly BotTreeNode[];
+  readonly activeWorkerCount: number;
+  readonly closedWorkerCount: number;
+  readonly subBotCount: number;
+  readonly descendantCount: number;
+  readonly allSessions: readonly SessionEntry[];
+  readonly activity: number;
+}
+
+export interface BotSessionTree {
+  readonly roots: readonly BotTreeNode[];
+  /** Keys (`sessionRefKey`) of every bot session and worker session placed in this tree. */
+  readonly claimed: ReadonlySet<string>;
+  readonly botCount: number;
+}
+
+export interface BotRevealPath {
+  readonly expandBots: readonly string[];
+  readonly expandClosedBot: string | null;
+  readonly expandFamilies: readonly string[];
+}
+
+function activityMs(session: SessionEntry): number {
+  const value = new Date(session.lastActivity || 0).getTime();
+  return finite(value) ? value : 0;
+}
+
+function familyHasLiveMember(family: SessionFamily<SessionEntry>): boolean {
+  return flattenSessionFamilies([family]).some(session => session.isActive || session.subagentLive);
+}
+
+/**
+ * Partition visible sessions into a bot hierarchy (up to 4 levels of bots,
+ * each owning its local and cross-host worker sessions plus their descendant
+ * sessions) and the remaining unclaimed sessions.
+ */
+export function buildBotSessionTree(bots: readonly SidebarBot[], sessions: readonly SessionEntry[], selfHostId?: string | null): BotSessionTree {
+  const liveBots = bots.filter(bot => bot.status !== 'retired');
+  if (!liveBots.length) return { roots: [], claimed: new Set(), botCount: 0 };
+
+  const botById = new Map<string, SidebarBot>();
+  const botByRoute = new Map<string, SidebarBot>();
+  for (const bot of liveBots) {
+    botById.set(bot.id, bot);
+    botByRoute.set(bot.sessionId, bot);
+    botByRoute.set(bot.id, bot);
+  }
+
+  let botHost: string | null = selfHostId || null;
+  if (!botHost) {
+    const matched = sessions.find(session => session.harnessId === 'bot' && botByRoute.has(session.id));
+    botHost = matched?.host || null;
+  }
+  const botHostLower = botHost ? botHost.toLowerCase() : null;
+
+  const botSessionById = new Map<string, SessionEntry>();
+  const claimed = new Set<string>();
+  for (const session of sessions) {
+    if (session.harnessId !== 'bot') continue;
+    const owner = botByRoute.get(session.id);
+    if (!owner) continue;
+    const sessionHostLower = session.host ? session.host.toLowerCase() : null;
+    if (botHostLower !== null && sessionHostLower !== null && sessionHostLower !== botHostLower) continue;
+    if (!botSessionById.has(owner.id)) botSessionById.set(owner.id, session);
+    claimed.add(sessionRefKey(session));
+  }
+
+  const parentBotOf = (session: SessionEntry): SidebarBot | null => {
+    const parentId = session.parentId;
+    if (!parentId) return null;
+    const qualified = HOST_QUALIFIED_PARENT.exec(parentId);
+    if (qualified) {
+      if (botHostLower === null || qualified[1].toLowerCase() !== botHostLower) return null;
+      return botByRoute.get(qualified[2]) ?? null;
+    }
+    const sessionHostLower = session.host ? session.host.toLowerCase() : null;
+    if (sessionHostLower !== botHostLower) return null;
+    return botByRoute.get(parentId) ?? null;
+  };
+
+  const sessionsByKey = new Map<string, SessionEntry>();
+  const nonBotSessions: SessionEntry[] = [];
+  for (const session of sessions) {
+    const key = sessionRefKey(session);
+    if (!sessionsByKey.has(key)) sessionsByKey.set(key, session);
+    if (!claimed.has(key)) nonBotSessions.push(session);
+  }
+
+  const workerSessionsByBot = new Map<string, SessionEntry[]>();
+  const workerOwnerByKey = new Map<string, string>();
+  const addWorker = (botId: string, session: SessionEntry) => {
+    const key = sessionRefKey(session);
+    workerOwnerByKey.set(key, botId);
+    claimed.add(key);
+    const list = workerSessionsByBot.get(botId);
+    if (list) list.push(session);
+    else workerSessionsByBot.set(botId, [session]);
+  };
+
+  for (const session of nonBotSessions) {
+    const owner = parentBotOf(session);
+    if (owner) addWorker(owner.id, session);
+  }
+
+  // Claim same-host, same-workspace subagents/children of already-claimed workers.
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const session of nonBotSessions) {
+      const key = sessionRefKey(session);
+      if (workerOwnerByKey.has(key)) continue;
+      const parentId = sessionFamilyParentId(session);
+      if (!parentId) continue;
+      const parentKey = sessionKey(session.host, parentId);
+      const ownerBotId = workerOwnerByKey.get(parentKey);
+      if (!ownerBotId) continue;
+      const parent = sessionsByKey.get(parentKey);
+      if (!parent || (parent.cwd || '~') !== (session.cwd || '~')) continue;
+      addWorker(ownerBotId, session);
+      progressed = true;
+    }
+  }
+
+  const childrenByParent = new Map<string | null, SidebarBot[]>();
+  for (const bot of liveBots) {
+    const parent = bot.parentId && botById.has(bot.parentId) ? bot.parentId : null;
+    const list = childrenByParent.get(parent);
+    if (list) list.push(bot);
+    else childrenByParent.set(parent, [bot]);
+  }
+
+  const visited = new Set<string>();
+  const buildNode = (bot: SidebarBot, depth: number): BotTreeNode => {
+    visited.add(bot.id);
+    const session = botSessionById.get(bot.id) ?? null;
+    const families = buildSessionFamilies(workerSessionsByBot.get(bot.id) ?? []);
+    const activeWorkers: SessionFamily<SessionEntry>[] = [];
+    const closedWorkers: SessionFamily<SessionEntry>[] = [];
+    for (const family of families) {
+      if (familyHasLiveMember(family)) activeWorkers.push(family);
+      else closedWorkers.push(family);
+    }
+    const children = (childrenByParent.get(bot.id) ?? [])
+      .filter(child => !visited.has(child.id))
+      .map(child => buildNode(child, depth + 1));
+
+    const activeWorkerSessions = flattenSessionFamilies(activeWorkers);
+    const closedWorkerSessions = flattenSessionFamilies(closedWorkers);
+    const activeWorkerCount = activeWorkerSessions.length;
+    const closedWorkerCount = closedWorkerSessions.length;
+    const subBotCount = children.reduce((sum, child) => sum + 1 + child.subBotCount, 0);
+    const descendantCount = activeWorkerCount + closedWorkerCount
+      + children.reduce((sum, child) => sum + 1 + child.descendantCount, 0);
+    const allSessions = [
+      ...(session ? [session] : []),
+      ...activeWorkerSessions,
+      ...closedWorkerSessions,
+      ...children.flatMap(child => child.allSessions),
+    ];
+    let activity = session ? activityMs(session) : 0;
+    for (const worker of activeWorkers) activity = Math.max(activity, worker.activity);
+    for (const worker of closedWorkers) activity = Math.max(activity, worker.activity);
+    for (const child of children) activity = Math.max(activity, child.activity);
+    return {
+      bot, depth, session, activeWorkers, closedWorkers, children,
+      activeWorkerCount, closedWorkerCount, subBotCount, descendantCount, allSessions, activity,
+    };
+  };
+
+  const roots = (childrenByParent.get(null) ?? []).map(bot => buildNode(bot, 0));
+  return { roots, claimed, botCount: liveBots.length };
+}
+
+function findInFamily(node: SessionFamily<SessionEntry>, targetKey: string, ancestors: readonly string[]): string[] | null {
+  if (sessionRefKey(node.session) === targetKey) return [...ancestors];
+  const next = [...ancestors, sessionRefKey(node.session)];
+  for (const child of node.children) {
+    const found = findInFamily(child, targetKey, next);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Locate a bot or worker session in the bot tree and return the containers to expand to reveal it. */
+export function findBotRevealPath(bots: readonly SidebarBot[], sessions: readonly SessionEntry[], targetKey: string,
+  selfHostId?: string | null): BotRevealPath | null {
+  const tree = buildBotSessionTree(bots, sessions, selfHostId);
+  const walk = (node: BotTreeNode, ancestorBots: readonly string[]): BotRevealPath | null => {
+    if (node.session && sessionRefKey(node.session) === targetKey) {
+      return { expandBots: [...ancestorBots], expandClosedBot: null, expandFamilies: [] };
+    }
+    const withSelf = [...ancestorBots, node.bot.id];
+    for (const worker of node.activeWorkers) {
+      const families = findInFamily(worker, targetKey, []);
+      if (families) return { expandBots: withSelf, expandClosedBot: null, expandFamilies: families };
+    }
+    for (const worker of node.closedWorkers) {
+      const families = findInFamily(worker, targetKey, []);
+      if (families) return { expandBots: withSelf, expandClosedBot: node.bot.id, expandFamilies: families };
+    }
+    for (const child of node.children) {
+      const found = walk(child, withSelf);
+      if (found) return found;
+    }
+    return null;
+  };
+  for (const root of tree.roots) {
+    const found = walk(root, []);
+    if (found) return found;
+  }
+  return null;
 }
 
 /** Turns `label: host:/path` or `label: ~/path` lines into places. */

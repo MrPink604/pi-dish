@@ -248,9 +248,21 @@ test('native canonical lineage precedes launch hints, self parents are suppresse
     assert.equal(sessionForClient(row).routine, 'Nightly');
 });
 test('store annotation ingress rejects malformed consumed values and folds encoded Pi aliases', () => {
-    const parents = decodeLaunchParents({ [encodeSessionKey('pi', (0, test_types_js_1.nativeId)('child'))]: { sourceSessionId: encodeSessionKey('pi', (0, test_types_js_1.nativeId)('parent')) },
-        malformed: { sourceSessionId: '../escape' }, ignored: null });
-    assert.deepEqual([...parents], [['child', 'parent']]);
+    const remoteHost = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+    const botRoute = encodeSessionKey('bot', (0, test_types_js_1.nativeId)('bot-1'));
+    const parents = decodeLaunchParents({
+        [encodeSessionKey('pi', (0, test_types_js_1.nativeId)('child'))]: { sourceSessionId: encodeSessionKey('pi', (0, test_types_js_1.nativeId)('parent')) },
+        'remote-worker': { sourceSessionId: `${remoteHost}:${botRoute}` },
+        'bad-remote': { sourceSessionId: `${remoteHost}:../escape` },
+        malformed: { sourceSessionId: '../escape' }, ignored: null,
+    });
+    assert.deepEqual([...parents], [['child', 'parent'], ['remote-worker', `${remoteHost}:${botRoute}`]]);
+    const workerSrc = source('pi', (0, test_types_js_1.nativeId)('remote-worker'));
+    const catalog = compose({ history: [history(workerSrc, info({ cwd: '/srv' }))], launchParents: parents });
+    const workerRow = (0, test_types_js_1.present)(catalog.byId.get(workerSrc.routeId));
+    assert.equal(workerRow.parentId, `${remoteHost}:${botRoute}`);
+    assert.equal(workerRow.parentSource, 'pi-dish-launch');
+    assert.equal(workerRow.familyParentId, null);
     const routines = decodeRoutineAnnotations(new Map([
         [encodeSessionKey('pi', (0, test_types_js_1.nativeId)('child')), { routineName: '', routineId: '', id: '' }],
         ['bad', { routineName: 123, routineId: 'routine', id: 'invocation' }],

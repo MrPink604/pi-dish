@@ -9,7 +9,7 @@ import { sessionKey, sessionRefKey, sessionSupports, harnessBadgeInfo, hostDispl
 import { buildSessionFamilies, flattenSessionFamilies, partitionPinnedFamilies, groupSessionsByDate, groupByWorkspace, buildWorkspaceTree, collectTreeSessions } from './helper-sessions';
 import { parseSessionQuery, positiveQueryTokens, highlightTokens, queryAsksForAutomation, isAutomationSession, applyHostTerms, evaluateSessionQuery, scoreSessionMatch } from '../core/helper-query';
 import { hibernationSummary } from './hibernation';
-import { botTree, type SidebarBot } from './bots';
+import { botClosedKey, botCollapseKey, buildBotSessionTree, type BotSessionTree, type BotTreeNode, type SidebarBot } from './bots';
 export interface SidebarHost extends HelperHost { state: string; key: string; color: string; dot: string; hasCache: boolean }
 export interface SidebarRenderOptions {
   active: readonly SessionEntry[]; previous: readonly SessionEntry[]; selected: SessionEntry | null;
@@ -19,6 +19,8 @@ export interface SidebarRenderOptions {
   closeConfirm: string | null; closeBusy: string | null; multiHost: boolean; hosts: readonly SidebarHost[];
   /** The registry's bots, and the one whose retire button waits for its second tap. */
   bots: readonly SidebarBot[]; botRetireArmed: string | null;
+  /** The host id where `bots` live (the serving host); inferred from `hosts` when omitted. */
+  selfHostId?: string | null;
   unread: (row: SessionEntry) => boolean; hostChip: (id?: string | null) => string;
 }
 export interface SidebarProjection {
@@ -27,8 +29,12 @@ export interface SidebarProjection {
   readonly count: number;
   readonly html: string;
 }
-interface RowOptions { familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean; pinnedRow?: boolean; showCwd?: boolean; botActions?: string }
-interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean }
+interface RowOptions {
+  familyNode?: SessionFamily<SessionEntry>; familyRootKey?: string; familyDepth?: number; familyPinned?: boolean;
+  pinnedRow?: boolean; showCwd?: boolean; botActions?: string;
+  botToggle?: string; forceLeaf?: boolean; statusOverride?: readonly SessionEntry[]; timeOverride?: number;
+}
+interface FamilyOptions { pinnedFamily?: boolean; showCwd?: boolean; forceLeaf?: boolean }
 export function harnessBadgeInnerHtml(info: ReturnType<typeof harnessBadgeInfo>) {
   const icon = info.icon
     ? `<img class="harness-badge-icon" src="${escapeHtml(info.icon)}" alt="">`
@@ -67,6 +73,7 @@ function sidebarFingerprint(options: SidebarRenderOptions): readonly unknown[] {
     options.indexing ? 1 : 0, options.contextMetric, options.multiHost ? 1 : 0,
     options.selected ? sessionRefKey(options.selected) : null,
     options.selectedSpawn, options.closeConfirm, options.closeBusy, options.botRetireArmed,
+    options.selfHostId ?? null,
     JSON.stringify(options.bots),
     new Date(now).setHours(0, 0, 0, 0),
   ];
@@ -156,8 +163,8 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const familyNode = opts.familyNode || null;
   const hasChildren = !!familyNode?.children?.length;
   const familyExpanded = hasChildren && options.expanded.has(key);
-  const statusSessions = hasChildren && !familyExpanded
-    ? flattenSessionFamilies(familyNode ? [familyNode] : []) : [session];
+  const statusSessions = opts.statusOverride ?? (hasChildren && !familyExpanded
+    ? flattenSessionFamilies(familyNode ? [familyNode] : []) : [session]);
   // One dot, best signal wins: asking > working > unread > live > live subagent.
   // Collapsed parents aggregate descendants so hidden children stay visible.
   let liveDot = '';
@@ -185,13 +192,14 @@ function renderSessionItem(session: SessionEntry, opts: RowOptions = {}) {
   const cacheHtml = cache
     ? `<span class="session-item-cache${cache.severity ? ` ${cache.severity}` : ''}" title="${escapeHtml(cache.detail)}" aria-label="${escapeHtml(cache.detail)}">${escapeHtml(cache.compact)}</span>`
     : '';
-  const timeAgo = formatRelativeTime(hasChildren ? familyNode!.activity : session.lastActivity);
+  const timeAgo = formatRelativeTime(opts.timeOverride !== undefined ? opts.timeOverride : hasChildren ? familyNode!.activity : session.lastActivity);
   const canonicalRootKey = canonical(opts.familyRootKey || key);
   const isPinned = opts.familyPinned ?? pinnedRoots.has(canonicalRootKey);
   const pinBtn = `<button class="session-pin-btn${isPinned ? ' pinned' : ''}" title="${isPinned ? 'Unpin family' : 'Pin family to top'}">📌</button>`;
-  const familyToggle = hasChildren
-    ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}" title="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}"><span>${familyExpanded ? '▾' : '▸'}</span><small>${familyNode!.size - 1}</small></button>`
-    : ((opts.familyDepth || 0) > 0 ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '');
+  const familyToggle = opts.botToggle !== undefined ? opts.botToggle
+    : hasChildren
+      ? `<button class="session-family-toggle" data-family-id="${escapeHtml(session.id)}" aria-expanded="${familyExpanded}" aria-label="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}" title="${familyExpanded ? 'Collapse' : 'Show'} ${familyNode!.size - 1} child session${familyNode!.size === 2 ? '' : 's'}"><span>${familyExpanded ? '▾' : '▸'}</span><small>${familyNode!.size - 1}</small></button>`
+      : (((opts.familyDepth || 0) > 0 || opts.forceLeaf) ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '');
   // Read confirm/busy from options so a poll re-render keeps an armed confirm.
   const closeArmed = options.closeConfirm === key;
   const closeBusy = options.closeBusy === key;
@@ -270,6 +278,7 @@ function renderSessionFamily(node: SessionFamily<SessionEntry>, opts: FamilyOpti
     familyPinned: !!opts.pinnedFamily,
     pinnedRow: !!opts.pinnedFamily && depth === 0,
     showCwd: !!opts.showCwd && depth === 0,
+    forceLeaf: !!opts.forceLeaf && depth === 0,
   });
   const children = expanded
     ? `<div class="session-family-children">${node.children.map(child =>
@@ -299,25 +308,88 @@ function renderPendingSessionItem(spawnId: string, spawn: PendingSessionSpawn) {
   `;
 }
 
-/** The Bots group: each bot under its parent, its session row when it has one, an edit button, and a retire button that asks twice. */
-function renderBotsSegment(tree: readonly { bot: SidebarBot; depth: number }[], sessions: readonly SessionEntry[]) {
-  const byRoute = new Map(sessions.filter(session => session.harnessId === 'bot').map(session => [session.id, session]));
-  const nodes = tree.map(({ bot, depth }) => {
-    const session = byRoute.get(bot.sessionId) || byRoute.get(bot.id);
+/** One status dot for a collapsed stopped-bot placeholder; mirrors renderSessionItem's priority. */
+function aggregatedStatusDot(sessions: readonly SessionEntry[]): string {
+  if (sessions.some(s => s.askPending)) {
+    return '<span class="session-item-status asking" title="Waiting for an answer to a question">?</span>';
+  }
+  if (sessions.some(s => s.compacting || s.turnInProgress)) {
+    return '<span class="session-item-status working" title="Bot family working"></span>';
+  }
+  if (sessions.some(options.unread)) {
+    return '<span class="session-item-status unread" title="New activity in bot family"></span>';
+  }
+  if (options.tab === 'all' && sessions.some(s => s.isActive)) {
+    return '<span class="live-dot" title="Active worker or sub-bot"></span>';
+  }
+  if (sessions.some(s => s.subagentLive)) {
+    return '<span class="live-dot" title="Subagent still loaded in a worker"></span>';
+  }
+  return '';
+}
+
+/** The Bots group: each bot under its parent, with its workers and sub-bots collapsible beneath it. */
+function renderBotsSegment(tree: BotSessionTree) {
+  function renderBotBranch(node: BotTreeNode): string {
+    const { bot, depth, session } = node;
+    const hasChildren = node.descendantCount > 0;
+    const isCollapsed = hasChildren && options.collapsed.has(botCollapseKey(bot.id));
     const armed = options.botRetireArmed === bot.id;
     const actions = `<button class="bot-edit-btn" data-bot-id="${escapeHtml(bot.id)}" title="Edit ${escapeHtml(bot.name)}: name, identity, model, thinking and places">edit</button>`
       + `<button class="bot-retire-btn${armed ? ' confirm' : ''}" data-bot-id="${escapeHtml(bot.id)}" title="${armed ? 'Tap again: ' : ''}Retire ${escapeHtml(bot.name)}: archive it, stop it, and move its sub-bots up">${armed ? 'retire?' : 'retire'}</button>`;
-    const row = session ? renderSessionItem(session, { familyDepth: depth, botActions: actions })
-      : `<div class="bot-item bot-stopped">${depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : ''}<span class="bot-item-name">${escapeHtml(bot.name)}</span><span class="bot-item-state">not running</span>${actions}</div>`;
-    return `<div class="bot-node" data-bot-id="${escapeHtml(bot.id)}" style="padding-left:${depth * 14}px">${row}</div>`;
-  });
+
+    const summaryParts: string[] = [];
+    if (node.activeWorkerCount) summaryParts.push(countLabel(node.activeWorkerCount, 'worker'));
+    if (node.closedWorkerCount) summaryParts.push(countLabel(node.closedWorkerCount, 'closed worker'));
+    if (node.subBotCount) summaryParts.push(countLabel(node.subBotCount, 'sub-bot'));
+    const toggleLabel = `${isCollapsed ? 'Show' : 'Collapse'} ${summaryParts.join(', ')}`;
+    const toggleHtml = hasChildren
+      ? `<button type="button" class="session-family-toggle bot-tree-toggle" data-bot-toggle="${escapeHtml(bot.id)}" aria-expanded="${!isCollapsed}" aria-label="${escapeHtml(toggleLabel)}" title="${escapeHtml(toggleLabel)}"><span>${isCollapsed ? '▸' : '▾'}</span><small>${node.descendantCount}</small></button>`
+      : undefined;
+
+    const row = session
+      ? renderSessionItem(session, {
+          familyDepth: depth,
+          botActions: actions,
+          botToggle: toggleHtml,
+          statusOverride: isCollapsed ? node.allSessions : undefined,
+          timeOverride: isCollapsed && node.activity > 0 ? node.activity : undefined,
+        })
+      : `<div class="bot-item bot-stopped">${toggleHtml ?? (depth ? '<span class="session-family-leaf" aria-hidden="true">↳</span>' : '')}${isCollapsed ? aggregatedStatusDot(node.allSessions) : ''}<span class="bot-item-name">${escapeHtml(bot.name)}</span><span class="bot-item-state">not running</span>${actions}</div>`;
+
+    let childrenHtml = '';
+    if (hasChildren && !isCollapsed) {
+      const workerIndent = (depth + 1) * 14;
+      const activeHtml = node.activeWorkers.map(worker =>
+        `<div class="bot-worker-node" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true })}</div>`
+      ).join('');
+      let closedHtml = '';
+      if (node.closedWorkers.length) {
+        const closedExpanded = options.expanded.has(botClosedKey(bot.id));
+        const closedLabel = countLabel(node.closedWorkerCount, 'closed worker');
+        closedHtml = `<div class="bot-closed-workers" data-bot-closed-group="${escapeHtml(bot.id)}" style="padding-left:${workerIndent}px">`
+          + `<button type="button" class="bot-closed-toggle" data-bot-closed="${escapeHtml(bot.id)}" aria-expanded="${closedExpanded}" title="${closedExpanded ? 'Hide' : 'Show'} ${escapeHtml(closedLabel)}">`
+          + `<span class="bot-closed-chevron">${closedExpanded ? '▾' : '▸'}</span>`
+          + `<span class="bot-closed-label">${escapeHtml(closedLabel)}</span>`
+          + `</button></div>`;
+        if (closedExpanded) {
+          closedHtml += `<div class="bot-closed-list">${node.closedWorkers.map(worker =>
+            `<div class="bot-worker-node bot-worker-closed" style="padding-left:${workerIndent}px">${renderSessionFamily(worker, { showCwd: true, forceLeaf: true })}</div>`
+          ).join('')}</div>`;
+        }
+      }
+      const subBotsHtml = node.children.map(renderBotBranch).join('');
+      childrenHtml = `<div class="bot-children" data-bot-children="${escapeHtml(bot.id)}">${activeHtml}${closedHtml}${subBotsHtml}</div>`;
+    }
+    return `<div class="bot-branch" data-bot-branch="${escapeHtml(bot.id)}"><div class="bot-node" data-bot-id="${escapeHtml(bot.id)}" style="padding-left:${depth * 14}px">${row}</div>${childrenHtml}</div>`;
+  }
   // Its own classes: the workspace tree's headers collapse and count as path groups.
   return `<div class="bots-segment">
     <div class="bots-header">
-      <span class="bots-label">Bots</span><span class="bots-count">${tree.length}</span>
+      <span class="bots-label">Bots</span><span class="bots-count">${tree.botCount}</span>
       <button class="bot-new-btn" title="Create a bot">+ New bot</button>
     </div>
-    ${nodes.join('')}
+    ${tree.roots.map(renderBotBranch).join('')}
   </div>`;
 }
 
@@ -367,17 +439,21 @@ function renderSessions() {
       ${pending.map(([id, spawn]) => renderPendingSessionItem(id, spawn)).join('')}
     </div>`;
   }
-  // Bots have their own group, nested under their parents, ahead of the sessions; a search ranks them with the rest.
-  const liveBots = options.query ? [] : botTree(options.bots.filter(bot => bot.status !== 'retired'));
-  const botRoutes = new Set(liveBots.flatMap(({ bot }) => [bot.id, bot.sessionId]));
-  const sessionsShown = liveBots.length ? filtered.filter(session => !(session.harnessId === 'bot' && botRoutes.has(session.id))) : filtered;
-  if (liveBots.length) html += renderBotsSegment(liveBots, filtered);
+  // Bots have their own group, nested under their parents with their workers, ahead of the sessions; a search ranks them with the rest.
+  const selfHostId = options.selfHostId ?? options.hosts.find(host => host.self)?.hostId ?? null;
+  const botSessionTree = options.query ? null : buildBotSessionTree(options.bots, filtered, selfHostId);
+  const sessionsShown = botSessionTree?.botCount
+    ? filtered.filter(session => !botSessionTree.claimed.has(sessionRefKey(session)))
+    : filtered;
+  if (botSessionTree?.botCount) html += renderBotsSegment(botSessionTree);
   if (sessionsShown.length === 0 && pending.length === 0) {
-    // With a query, `active` is server-filtered: empty means "no matches".
-    const msg = options.tab === 'active'
-      ? (active.length === 0 && !options.query ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
-      : (visible.length === 0 && !options.query ? 'No sessions found' : 'No matches');
-    html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
+    if (!botSessionTree?.botCount || options.query || options.scope) {
+      // With a query, `active` is server-filtered: empty means "no matches".
+      const msg = options.tab === 'active'
+        ? (active.length === 0 && !options.query ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
+        : (visible.length === 0 && !options.query ? 'No sessions found' : 'No matches');
+      html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
+    }
   } else if (options.query) {
     // Search results are one flat ranked list; server searchScore (which counts
     // transcript hits) wins where present, recency breaks ties.

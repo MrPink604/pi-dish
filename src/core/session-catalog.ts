@@ -3,7 +3,7 @@ import { applyLearnedCacheExpiry } from './cache-lifetime';
 import type { ServedCacheExpiry } from './cache-lifetime';
 import { loadCacheRetentionConfig } from './cache-retention';
 import { hasPendingAskDialog } from './extension-ui-state';
-import { canonicalSessionId, encodeSessionKey } from './session-key';
+import { canonicalCallerId, canonicalSessionId, encodeSessionKey } from './session-key';
 import { isPrivateSessionFile } from './private-sessions';
 import { record as isRecord } from './helper-values';
 import { asRecord } from './wire-protocol';
@@ -187,7 +187,7 @@ function decodeLaunchParents(value: unknown): ReadonlyMap<SessionId, SessionId> 
   if (!isRecord(value)) return parents;
   for (const [child, raw] of Object.entries(value)) {
     if (!isRecord(raw)) continue;
-    try { parents.set(canonicalSessionId(child), canonicalSessionId(raw.sourceSessionId)); } catch { /* Invalid hint. */ }
+    try { parents.set(canonicalSessionId(child), canonicalCallerId(raw.sourceSessionId)); } catch { /* Invalid hint. */ }
   }
   return parents;
 }

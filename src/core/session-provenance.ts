@@ -1,7 +1,7 @@
 import type { SessionId } from './contracts';
 import { readStore, writeStore } from './dish-store';
 import hostIdentity = require('./host-identity');
-import { canonicalSessionId, resolveSessionRoute } from './session-key';
+import { canonicalCallerId, canonicalSessionId, parseHostQualifiedCaller, resolveSessionRoute } from './session-key';
 
 const STORE_FILE = 'session-provenance.json';
 const MAX_LAUNCHES = 5000;
@@ -16,18 +16,20 @@ function validId(value: unknown): value is string {
   try { resolveSessionRoute(value); return true; } catch { return false; }
 }
 
+function validCallerId(value: unknown): value is string {
+  try { canonicalCallerId(value); return true; } catch { return false; }
+}
+
 // The fleet-global caller form (`<hostId>:<sessionId>`, the provenance ref
 // form): valid whichever host receives it, so a client never has to know
 // whether the server it is talking to is its own.
-const HOST_QUALIFIED = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(.+)$/i;
-
 export function isHostQualified(value: unknown): value is string {
-  return typeof value === 'string' && HOST_QUALIFIED.test(value);
+  return parseHostQualifiedCaller(value) !== null;
 }
 
 function localize(value: string, selfHostId: string): string {
-  const match = HOST_QUALIFIED.exec(value);
-  return match && match[1].toLowerCase() === selfHostId.toLowerCase() ? match[2] : value;
+  const qualified = parseHostQualifiedCaller(value);
+  return qualified && qualified.hostId.toLowerCase() === selfHostId.toLowerCase() ? qualified.sessionId : value;
 }
 
 /**
@@ -48,10 +50,10 @@ export function readLaunches(): Record<string, LaunchProvenance> {
   for (const [sessionId, value] of Object.entries(source)) {
     if (!validId(sessionId) || !value || typeof value !== 'object') continue;
     const launch = value as Record<string, unknown>;
-    if (!validId(launch.sourceSessionId)) continue;
+    if (!validCallerId(launch.sourceSessionId)) continue;
     launches[canonicalSessionId(sessionId)] = {
       // Older servers stored their own sessions self-qualified; localize to keep links resolvable.
-      sourceSessionId: canonicalSessionId(localize(launch.sourceSessionId, selfHostId)),
+      sourceSessionId: canonicalCallerId(localize(launch.sourceSessionId, selfHostId)),
       operationId: validId(launch.operationId) ? launch.operationId : null,
       createdAt: typeof launch.createdAt === 'number' && Number.isFinite(launch.createdAt) ? launch.createdAt : 0,
     };
@@ -61,9 +63,9 @@ export function readLaunches(): Record<string, LaunchProvenance> {
 
 /** Record advisory launch provenance. It never grants authority. */
 export function recordLaunch(sessionId: unknown, sourceSessionId: unknown, operationId?: unknown): LaunchProvenance {
-  if (!validId(sessionId) || !validId(sourceSessionId)) throw new Error('valid session ids required');
+  if (!validId(sessionId) || !validCallerId(sourceSessionId)) throw new Error('valid session ids required');
   const canonicalId = canonicalSessionId(sessionId);
-  const canonicalSourceId = canonicalSessionId(localizeCallerId(sourceSessionId));
+  const canonicalSourceId = canonicalCallerId(localizeCallerId(sourceSessionId));
   const launches = readLaunches();
   launches[canonicalId] = {
     sourceSessionId: canonicalSourceId,
@@ -84,8 +86,8 @@ export function getLaunch(sessionId: unknown): LaunchProvenance | null {
 }
 
 export function getLaunchesFrom(sourceSessionId: unknown): Array<LaunchProvenance & { sessionId: string }> {
-  if (!validId(sourceSessionId)) return [];
-  const canonicalSourceId = canonicalSessionId(sourceSessionId);
+  if (!validCallerId(sourceSessionId)) return [];
+  const canonicalSourceId = canonicalCallerId(localizeCallerId(sourceSessionId));
   return Object.entries(readLaunches())
     .filter(([, value]) => value.sourceSessionId === canonicalSourceId)
     .map(([sessionId, value]) => ({ sessionId, ...value }))

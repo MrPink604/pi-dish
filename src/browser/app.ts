@@ -544,6 +544,7 @@ const sidebarControls: ReturnType<typeof createSidebarControls> = createSidebarC
   select: (id, host) => sessionView.select(id, { host }), pending: id => sessionView.pending(id), create: (cwd, host) => newSessionController.create(cwd, host),
   finishClose: (id, host, owner) => sessionInfo.finishClose(id, host, owner), refresh: loadPrevious,
   ref: session => sessionRefFor(session), copy: copyTextToClipboard, status: setStatus,
+  bots: () => bots.list, selfHostId: () => hostDirectory.self.hostId,
 });
 
 const bots = createBots({
@@ -571,7 +572,7 @@ function renderSessions() {
       contextMetric: displayPreferences.contextMetric, pending: [...pendingSessionSpawns.entries()], selectedSpawn: sessionView.spawnId,
       expanded: sidebarControls.expanded, collapsed: sidebarControls.collapsed, pinned: sidebarControls.pinned, roots: sidebarFamilyRootMap,
       closeConfirm: sidebarControls.closeConfirm, closeBusy: sidebarControls.closeBusy, multiHost: isMultiHost(),
-      bots: bots.list, botRetireArmed: bots.armed,
+      bots: bots.list, botRetireArmed: bots.armed, selfHostId: hostDirectory.self.hostId,
       unread: sidebarActivity.unread, hostChip,
       hosts: effectiveHosts().map(host => {
         const cache = hostSessionLoader.getCache(host);

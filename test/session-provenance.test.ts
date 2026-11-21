@@ -69,3 +69,34 @@ test('broken sidecars and invalid ids degrade safely', () => {
   assert.deepEqual(provenance.readLaunches(), {});
   assert.throws(() => provenance.recordLaunch('../bad', 'source', 'op'), /valid session ids/);
 });
+
+test('host-qualified encoded routes (such as cross-host bots) persist and localize cleanly', () => {
+  const remoteHost = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+  const botNativeId = '0b0c5a1e-0000-4000-8000-000000000001';
+  assert.ok(validSessionId(botNativeId));
+  const botRoute = encodeSessionKey('bot', botNativeId);
+  const qualifiedBot = `${remoteHost}:${botRoute}`;
+
+  assert.equal(provenance.isHostQualified(qualifiedBot), true);
+  assert.equal(provenance.isHostQualified(`${remoteHost}:../escape`), false);
+
+  provenance.recordLaunch('remote-worker-1', qualifiedBot, 'op-remote-bot');
+  assert.equal(provenance.getLaunch('remote-worker-1')?.sourceSessionId, qualifiedBot);
+  assert.deepEqual(provenance.getLaunchesFrom(qualifiedBot).map(entry => entry.sessionId), ['remote-worker-1']);
+
+  // An encoded Pi alias qualified with a remote host folds its route part to raw Pi id.
+  const piNativeId = 'source-remote-pi';
+  assert.ok(validSessionId(piNativeId));
+  const qualifiedPiAlias = `${remoteHost}:${encodeSessionKey('pi', piNativeId)}`;
+  provenance.recordLaunch('remote-worker-2', qualifiedPiAlias, 'op-remote-pi');
+  assert.equal(provenance.getLaunch('remote-worker-2')?.sourceSessionId, `${remoteHost}:${piNativeId}`);
+
+  // Self-qualified bot route strips the local host id on write and read.
+  const hostIdentity: typeof import('../lib/host-identity.js') = require('../lib/host-identity.js');
+  const selfHost = hostIdentity.getHostId();
+  provenance.recordLaunch('local-worker-1', `${selfHost}:${botRoute}`, 'op-local-bot');
+  assert.equal(provenance.getLaunch('local-worker-1')?.sourceSessionId, botRoute);
+  assert.deepEqual(provenance.getLaunchesFrom(botRoute).map(entry => entry.sessionId), ['local-worker-1']);
+
+  assert.throws(() => provenance.recordLaunch('bad-child', `${remoteHost}:../escape`, 'op-bad'), /valid session ids/);
+});

@@ -7,6 +7,9 @@ import { getHarness } from './harnesses';
 const VERSION = '~sk1_';
 const SAFE_ID = /^[A-Za-z0-9._:-]+$/;
 const MAX_ID_LENGTH = 200;
+// Fleet-global caller ref (`<hostUuid>:<sessionRoute>`), valid for both legacy
+// Pi ids and `~sk1_` encoded cross-harness routes (such as bots, omp, agy).
+const HOST_QUALIFIED_CALLER = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(.+)$/i;
 
 function validId(id: unknown): id is NativeSessionId {
   return typeof id === 'string' && id.length > 0 && id.length <= MAX_ID_LENGTH && SAFE_ID.test(id);
@@ -49,4 +52,26 @@ function tryCanonicalSessionId(value: unknown): unknown {
   try { return canonicalSessionId(value); } catch { return value; }
 }
 
-export = { encodeSessionKey, decodeSessionKey, resolveSessionRoute, canonicalSessionId, tryCanonicalSessionId, validSessionId: validId, VERSION };
+/** Parse `<hostUuid>:<sessionRoute>` when the route part is a valid session route. */
+function parseHostQualifiedCaller(value: unknown): { hostId: string; sessionId: SessionId } | null {
+  if (typeof value !== 'string') return null;
+  const match = HOST_QUALIFIED_CALLER.exec(value);
+  if (!match) return null;
+  try {
+    return { hostId: match[1], sessionId: canonicalSessionId(match[2]) };
+  } catch {
+    return null;
+  }
+}
+
+/** Canonical form of a local or fleet-qualified caller id (`<hostUuid>:<route>`). */
+function canonicalCallerId(value: unknown): SessionId {
+  const qualified = parseHostQualifiedCaller(value);
+  if (qualified) return `${qualified.hostId}:${qualified.sessionId}` as SessionId;
+  return canonicalSessionId(value);
+}
+
+export = {
+  encodeSessionKey, decodeSessionKey, resolveSessionRoute, canonicalSessionId, tryCanonicalSessionId,
+  parseHostQualifiedCaller, canonicalCallerId, validSessionId: validId, VERSION,
+};

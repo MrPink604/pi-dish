@@ -271,6 +271,19 @@ test('a bogus local caller id is rejected, a host-qualified one is advisory-acce
   assert.ok(records(related.body.relations).every(relation => record(relation.session).id !== sessionId),
     'a foreign-host id must not resolve to a local session of the same name');
   await post(`/api/sessions/${encodeURIComponent(spawnedId)}/close`, {});
+
+  // Cross-host encoded routes (such as a bot on another host) survive record and catalog read.
+  const { encodeSessionKey }: typeof import('../lib/session-key.js') = require('../lib/session-key.js');
+  const botRoute = encodeSessionKey('bot', '0b0c5a1e-0000-4000-8000-000000000001' as never);
+  const qualifiedBot = `aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa:${botRoute}`;
+  const botWorker = await post('/api/sessions/new', { requestedBySessionId: qualifiedBot });
+  assert.equal(botWorker.status, 200, JSON.stringify(botWorker.body));
+  assert.ok(botWorker.body.operationId, 'host-qualified bot caller records an operation');
+  const botWorkerId = text(botWorker.body.id);
+  const activeRow = await findActive(botWorkerId);
+  assert.equal(activeRow?.parentId, qualifiedBot, 'session list exposes the cross-host bot parentId');
+  assert.equal(activeRow?.parentSource, 'pi-dish-launch');
+  await post(`/api/sessions/${encodeURIComponent(botWorkerId)}/close`, {});
 });
 
 test('a caller qualified with this host id is recorded as the local session it names', async () => {

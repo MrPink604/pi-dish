@@ -57,6 +57,70 @@ test('bots have their own group, each under its parent, and their sessions leave
     assert.match(group, /<button class="bot-edit-btn" data-bot-id="fleet"[^>]*>edit<\/button><button class="bot-retire-btn"/, 'a running bot\u2019s row has both');
     assert.equal(html.split('data-id="route-fleet"').length, 2, 'a bot\u2019s session row appears once, in the group');
 });
+test('bot workers (local, remote, and sub-bot workers) nest under their owning bot, collapsible with closed-worker drawer', () => {
+    const HUB = '11111111-1111-4111-8111-111111111111';
+    const PEER = '22222222-2222-4222-8222-222222222222';
+    const bot = (id, name, parentId, status = 'active') => ({
+        id, name, parentId, status, model: 'claude-code/claude-opus-5-5', thinking: null, identity: `You are ${name}.`, places: [], sessionId: `route-${id}`,
+    });
+    const hosts = [
+        { hostId: HUB, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+        { hostId: PEER, self: false, label: 'tycho', state: 'reachable', key: 'tycho', color: '#fa1', dot: '', hasCache: true },
+    ];
+    const bots = [bot('fleet', 'Fleet', null), bot('hosts', 'Hosts', 'fleet'), bot('retired', 'Retired', null, 'retired')];
+    const active = [
+        { id: 'route-fleet', host: HUB, name: 'Fleet', harnessId: 'bot', cwd: '/home', isActive: true, lastActivity: 1000 },
+        { id: 'route-hosts', host: HUB, name: 'Hosts', harnessId: 'bot', cwd: '/home', isActive: true, lastActivity: 900 },
+        { id: 'w-local', host: HUB, name: 'local-check', cwd: '/repo/a', parentId: 'route-fleet', parentSource: 'pi-dish-launch', isActive: true, turnInProgress: true, lastActivity: 2000 },
+        { id: 'w-remote', host: PEER, name: 'remote-gpu', cwd: '/srv/gpu', parentId: `${HUB}:route-fleet`, parentSource: 'pi-dish-launch', isActive: true, lastActivity: 1500 },
+        { id: 'w-sub', host: HUB, name: 'sub-worker', cwd: '/etc', parentId: 'route-hosts', parentSource: 'pi-dish-launch', isActive: true, lastActivity: 1400 },
+        { id: 'w-retired', host: HUB, name: 'orphan-worker', cwd: '/repo/a', parentId: 'route-retired', parentSource: 'pi-dish-launch', isActive: true, lastActivity: 1200 },
+        { id: 'ordinary', host: HUB, name: 'Ordinary work', cwd: '/repo/b', isActive: true, lastActivity: 1100 },
+        { id: 'peer-ordinary', host: PEER, name: 'Peer ordinary', cwd: '/srv/app', isActive: true, lastActivity: 1050 },
+    ];
+    const previous = [
+        { id: 'w-closed', host: HUB, name: 'old-check', cwd: '/repo/a', parentId: 'route-fleet', parentSource: 'pi-dish-launch', isActive: false, lastActivity: 500 },
+    ];
+    const hostChip = (id) => id === PEER ? '<span class="host-chip">tycho</span>' : '';
+    // Active tab: active local + remote workers nest under Fleet, sub-bot worker under Hosts; closed worker hidden;
+    // retired bot's worker and ordinary sessions stay in the flat workspace list.
+    const activeHtml = render({ active, previous, tab: 'active', multiHost: true, hosts, selfHostId: HUB, bots, hostChip }).html;
+    const botsSeg = activeHtml.slice(activeHtml.indexOf('bots-segment'), activeHtml.indexOf('host-section'));
+    const restSeg = activeHtml.slice(activeHtml.indexOf('host-section'));
+    assert.match(botsSeg, /data-bot-toggle="fleet" aria-expanded="true"/);
+    assert.match(botsSeg, /data-id="w-local"/);
+    assert.match(botsSeg, /data-id="w-remote" data-host="22222222-2222-4222-8222-222222222222"/);
+    assert.match(botsSeg, /<span class="host-chip">tycho<\/span>/, 'remote worker shows its host chip inside the Bots group');
+    assert.match(botsSeg, /data-bot-children="hosts"[\s\S]*?data-id="w-sub"/, 'sub-bot owns its own worker');
+    assert.ok(botsSeg.indexOf('data-id="w-local"') < botsSeg.indexOf('data-bot-id="hosts"'), 'a bot\u2019s own workers render directly under it before its sub-bots');
+    assert.doesNotMatch(botsSeg, /w-closed/, 'closed workers stay off the Active tab');
+    assert.doesNotMatch(restSeg, /w-local|w-remote|w-sub/, 'bot workers leave the workspace/host list');
+    assert.match(restSeg, /data-id="ordinary"/);
+    assert.match(restSeg, /data-id="peer-ordinary"/);
+    assert.match(restSeg, /data-id="w-retired"/, 'a retired bot\u2019s worker stays visible in the ordinary list');
+    // Collapsing Fleet hides its workers and sub-bots and aggregates the working pulse onto Fleet's row.
+    const collapsedHtml = render({
+        active, previous, tab: 'active', multiHost: true, hosts, selfHostId: HUB, bots, hostChip,
+        collapsed: new Set(['bot:fleet']),
+    }).html;
+    assert.match(collapsedHtml, /data-bot-toggle="fleet" aria-expanded="false"/);
+    assert.doesNotMatch(collapsedHtml, /data-id="w-local"|data-id="w-remote"|data-bot-id="hosts"|data-id="w-sub"/);
+    assert.match(collapsedHtml, /data-id="route-fleet"[\s\S]*?session-item-status working/, 'collapsed bot surfaces child working status');
+    // All tab: closed workers are tucked into a collapsed drawer by default and expand on demand.
+    const allCollapsed = render({ active, previous, tab: 'all', multiHost: true, hosts, selfHostId: HUB, bots, hostChip }).html;
+    assert.match(allCollapsed, /data-bot-closed="fleet" aria-expanded="false"[\s\S]*?1 closed worker/);
+    assert.doesNotMatch(allCollapsed, /data-id="w-closed"/);
+    const allExpanded = render({
+        active, previous, tab: 'all', multiHost: true, hosts, selfHostId: HUB, bots, hostChip,
+        expanded: new Set(['bot-closed:fleet']),
+    }).html;
+    assert.match(allExpanded, /data-bot-closed="fleet" aria-expanded="true"/);
+    assert.match(allExpanded, /bot-closed-list[\s\S]*?data-id="w-closed"/);
+    // Search flattens bots and workers into the ranked list.
+    const searched = render({ active, previous, tab: 'all', multiHost: true, hosts, selfHostId: HUB, bots, query: 'gpu' }).html;
+    assert.doesNotMatch(searched, /bots-segment/);
+    assert.match(searched, /ranked-segment[\s\S]*?data-id="w-remote"/);
+});
 test('sidebar presents decoded optional fields and retains explicit null family boundaries', () => {
     const parent = { id: 'parent', name: '<parent>', cwd: '/repo' };
     const implicitChild = { id: 'child', parentId: 'parent', cwd: '/repo', name: 'implicit child' };
