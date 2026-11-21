@@ -218,9 +218,9 @@ async function main(): Promise<void> {
           return respond(sock, cmd, true, { queued });
         }
         case 'deliver': {
-          // From pi-dish: a room post, a question from another family, an answer to this bot's question, or a routine's run.
+          // Durable input from pi-dish (room, cross-family conversation, routine, or CI).
           const { kind, requestId, text, data } = cmd;
-          if ((kind !== 'room' && kind !== 'ask' && kind !== 'answer' && kind !== 'routine') || typeof requestId !== 'string' || typeof text !== 'string' || !isRecord(data)) {
+          if ((kind !== 'room' && kind !== 'ask' && kind !== 'answer' && kind !== 'routine' && kind !== 'ci') || typeof requestId !== 'string' || typeof text !== 'string' || !isRecord(data)) {
             return respond(sock, cmd, false, undefined, 'deliver needs kind, requestId, text and data');
           }
           const queued = bot.busy;

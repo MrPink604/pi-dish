@@ -123,9 +123,9 @@ export interface FreshSeed {
     purpose: string;
 }
 export type BotSeed = ForkSeed | FreshSeed;
-/** What pi-dish hands this bot: a room post, a question from another family, the answer to one, or a routine's run. */
+/** A relayed room message, cross-family question or answer, routine run, or CI event. */
 export interface BotInput {
-    kind: 'room' | 'ask' | 'answer' | 'routine';
+    kind: 'room' | 'ask' | 'answer' | 'routine' | 'ci';
     requestId: string;
     text: string;
     data: Record<string, string | number>;

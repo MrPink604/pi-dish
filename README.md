@@ -1076,6 +1076,49 @@ old code. A message, routine run or room post that arrives while a relay is
 down starts the bot and is delivered once it is back. Bounce agents restarts a
 bot by hand in the same way.
 
+### GitHub Actions failure notifications
+
+The CI watcher is off by default. Enable it only on the bot hub (beelink
+in this fleet), in its private `~/.pi/dish/settings.json`:
+
+```json
+{
+  "bots": true,
+  "ciWatcher": {
+    "hostId": "<hostId from GET /api/host on the bot hub>",
+    "repos": [{ "repo": "MrPink604/pi-dish", "workflow": "Tests", "bot": "pi-dish", "recovery": true }]
+  }
+}
+```
+
+The exact host ID and `bots: true` must both match. Copying the settings to a
+peer does not start another watcher there. Omit `repos` for the example above;
+when listing repos explicitly, `workflow` (GitHub Actions display name), `bot`
+(an active bot name, case-insensitive), and `recovery` default as shown.
+List each repo once. Set `recovery: false` to report only failures.
+
+Give the pi-dish service on that host a fine-grained GitHub token with
+**Actions: read** and **Checks: read** for the watched repos. Set
+`PI_DISH_CI_GITHUB_TOKEN` in the service environment or `ciWatcher.token` in
+the private settings file (mode `0600`); the environment wins. With neither
+set, pi-dish uses `gh api` if the **local service account** has `gh` installed
+and authenticated. Authentication on a peer does not count. Restart pi-dish
+after changing settings or credentials. For beelink, provision the token
+instead of enabling the watcher on inference-build, which does not host the bots.
+
+The watcher checks the latest 100 runs of each workflow across all branches
+every 150 seconds, with conditional requests. Its first successful poll
+baselines completed runs instead of replaying them. State in
+`~/.pi/dish/ci-events.json` remembers runs and attempts across restarts. A new
+`failure` or `timed_out` attempt posts a `[CI failure]` message to the bot and
+to devices subscribed to Web Push on the hub. The bot message includes the
+repo, branch, commit SHA and title, run link, failed jobs and available test
+names from check annotations. Known rename and message-hold timing flakes are
+labelled only when they account for the whole failure. A newer green run on a
+failing branch sends one `[CI recovered]` message. Push opens the bot chat;
+normal notification focus and subscription rules still apply. If the bot
+relay is unavailable, the event stays queued without repeating the push.
+
 ### Knowledge base
 
 Bots keep what they learn in a knowledge base: Markdown topic pages under

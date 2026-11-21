@@ -27,7 +27,7 @@ export interface PushSessionRow {
 }
 export type PushEventKind = 'finished' | 'waiting';
 export interface PushPayload {
-    readonly kind: PushEventKind | 'test' | 'vault';
+    readonly kind: PushEventKind | 'test' | 'vault' | 'ci';
     readonly title: string;
     readonly body: string;
     readonly hostId: string;

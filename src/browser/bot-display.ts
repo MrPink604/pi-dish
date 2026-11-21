@@ -94,6 +94,7 @@ export type BotNoticeKind =
   | 'answer'
   | 'question'
   | 'routine'
+  | 'ci'
   | 'nudge'
   | 'context-window'
   | 'purpose'
@@ -258,6 +259,18 @@ export function parseInjectedBotMessage(customType: string | undefined, rawText:
       collapsible: !!body,
       defaultOpen: !long,
     };
+  }
+
+  if (customType === 'bot-ci') {
+    const header = /^\[CI (failure(?: — likely known flake)?|recovered)\]\s*/.exec(text);
+    if (header) {
+      const recovered = header[1] === 'recovered';
+      return {
+        kind: 'ci', icon: recovered ? '✓' : '!', label: 'GitHub Actions',
+        status: header[1], statusTone: recovered ? 'ok' : 'warn',
+        body: text.slice(header[0].length), collapsible: true, defaultOpen: true,
+      };
+    }
   }
 
   // 6. System nudges (user-role injections)

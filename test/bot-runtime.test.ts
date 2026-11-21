@@ -178,6 +178,24 @@ test('a prompt streams as bridge events and lands in the mirror before message_e
   assert.deepEqual(after, ['Hi', 'Hello from Fleet.', 'Again', 'Still here.']);
 });
 
+test('a CI attempt wakes the bot and is mirrored as one notice across relay restarts', async t => {
+  const bot = await openTestBot(t, noSessions);
+  const input = {
+    kind: 'ci' as const, requestId: 'ci:mrpink604/pi-dish:123:2',
+    text: '[CI failure]\nTests failed on main.', data: { repo: 'MrPink604/pi-dish', runId: 123, attempt: 2 },
+  };
+  bot.respond(bot.faux.fauxAssistantMessage('Received.'));
+  await bot.runtime.deliver(input);
+  await until(() => bot.events.some(event => event.event === 'agent_end'), 'the bot reacts to CI');
+  await bot.reopen();
+  await bot.runtime.deliver(input);
+  bot.respond(bot.faux.fauxAssistantMessage('Still here.'));
+  await bot.runtime.prompt('Continue', 'followUp');
+  await until(() => bot.requests.length >= 2 && !bot.runtime.busy, 'the bot drains its queue');
+  assert.deepEqual(bot.mirrorLines().filter(line => line.customType === 'bot-ci').map(textOf), [input.text]);
+  assert.equal(bot.requests.length, 2, 're-delivery did not start another CI turn');
+});
+
 test('a tool call maps to tool_execution events and its result to the mirror', async t => {
   const calls: string[][] = [];
   const bot = await openTestBot(t, async args => {
