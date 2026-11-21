@@ -108,6 +108,9 @@ export function createSessionStreamHandler(ports: SessionStreamPorts): RouteHand
     sub('turn_end', () => { clearPendingUpdate(); toolEvents.push('turn_end', {}); });
     // Aborted/errored turns can end without a paired turn_end.
     sub('agent_end', () => { clearPendingUpdate(); toolEvents.push('agent_end', {}); });
+    // Modern Pi may retry, compact or drain queued messages after agent_end.
+    // Expose its final-idle boundary so clients need not infer it from timing.
+    sub('agent_settled', (data) => send('agent_settled', data || {}));
 
     sub('message_end', (data) => {
       const message = messageForStream(isRecord(data) ? data.message : undefined);

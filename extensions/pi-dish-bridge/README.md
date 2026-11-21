@@ -52,7 +52,9 @@ The bridge also maintains private, durable lifecycle observations under
 `~/.pi/dish/recovery/observations/`, independently of server availability.
 These are separate from the disposable live registry. Stream deltas do not
 write checkpoints; persisted message/run boundaries do. Pi's `agent_settled`
-is the whole-run completion boundary, not individual `turn_end` events.
+is the whole-run completion boundary, not individual `turn_end` or `agent_end`
+events; the live bridge also keeps `turnInProgress` true and forwards that
+boundary until queued messages, retries, and compaction recovery are done.
 Unverifiable completion, compaction and generic shutdown retain uncertainty.
 
 The server owns recovery policy, exclusions and delivery attempts in separate

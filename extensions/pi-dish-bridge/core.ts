@@ -1757,6 +1757,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       bridgeInstanceId: instanceId,
       nativeSessionId: sessionId,
       recoveryObservation: true,
+      waitsForSettled: !!descriptor.piLifecycleEvents,
       capabilities,
       sessionId,
       sessionFile,
@@ -1901,6 +1902,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
       harnessId: descriptor.harnessId,
       bridgeInstanceId: instanceId,
       nativeSessionId: sessionId,
+      waitsForSettled: !!descriptor.piLifecycleEvents,
       capabilities,
       sessionId,
       sessionFile,
@@ -2875,8 +2877,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   // Pi's whole-run boundary includes retries, post-run auto-compaction and
   // queued continuations. Older hosts without this event remain uncertain.
-  if (descriptor.piLifecycleEvents) on("agent_settled", () => {
-    recoveryObserver.event("agent_settled");
+  if (descriptor.piLifecycleEvents) on("agent_settled", (event: HostObject, ctx: HostObject) => {
+    wrapExtensionUI(ctx);
+    lastCtx = ctx ?? lastCtx;
+    recoveryObserver.event("agent_settled", event);
+    turnInProgress = false;
+    refreshContextUsage(ctx);
+    writeRegistry();
+    broadcast({ type: "event", event: "agent_settled", data: event });
   });
   // Latest assistant outcome when it is a dropped error; a retry or fallback
   // model's next assistant message supersedes it before the run settles.
@@ -2925,11 +2933,15 @@ export function createBridge(descriptor: BridgeDescriptor) {
         assistantFirstTokenMs = null;
       }
       if (ev === "agent_start" || ev === "turn_start") admitPendingSends();
-      if (ev === "turn_start") {
+      if (ev === "agent_start" || ev === "turn_start") {
         turnInProgress = true;
         writeRegistry();
       } else if (ev === "turn_end" || ev === "agent_end") {
-        turnInProgress = false;
+        // Modern Pi can continue automatically after these low-level
+        // boundaries (queued messages, retries, compaction recovery). Keep it
+        // busy until agent_settled; older/wrapper hosts retain agent_end as
+        // their best available completion signal.
+        if (!descriptor.piLifecycleEvents) turnInProgress = false;
         refreshContextUsage(ctx);
         try {
           const name = sessionNameFrom(ctx) ?? null;

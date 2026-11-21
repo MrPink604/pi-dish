@@ -48,6 +48,7 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
     contextUsage: unknown;
     fastMode: unknown;
     turnInProgress: boolean;
+    waitsForSettled: boolean;
     compacting: boolean;
     queueState: unknown;
     sideChat: SideChatState;

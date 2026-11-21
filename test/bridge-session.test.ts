@@ -192,6 +192,26 @@ test('tracks compacting state from the hello and compaction events', async () =>
   await closeServer(server);
 });
 
+test('settled-aware bridges stay busy across low-level run boundaries', () => {
+  const settledAware = new BridgeSession(bridgeEntry({
+    sessionId: nativeId('settled-aware'), socketPath: '/unused', pid: process.pid, cwd: tmpDir,
+    waitsForSettled: true, turnInProgress: true,
+  }));
+  settledAware._handle({ type: 'event', event: 'agent_end', data: {} });
+  assert.equal(settledAware.turnInProgress, true, 'agent_end can still be followed by automatic work');
+  settledAware._handle({ type: 'event', event: 'agent_start', data: {} });
+  assert.equal(settledAware.turnInProgress, true);
+  settledAware._handle({ type: 'event', event: 'agent_settled', data: {} });
+  assert.equal(settledAware.turnInProgress, false, 'agent_settled is the final-idle boundary');
+
+  const legacy = new BridgeSession(bridgeEntry({
+    sessionId: nativeId('legacy-settle'), socketPath: '/unused', pid: process.pid, cwd: tmpDir,
+    turnInProgress: true,
+  }));
+  legacy._handle({ type: 'event', event: 'agent_end', data: {} });
+  assert.equal(legacy.turnInProgress, false, 'older bridges retain agent_end completion semantics');
+});
+
 test('tracks running tools, including update-only phases, until a completion boundary', () => {
   const sess = new BridgeSession({
     sessionId: nativeId('tool-state-session'), socketPath: '/unused', pid: process.pid, cwd: tmpDir,
@@ -310,6 +330,7 @@ test('alternate protocol-v2 connections reject every changed static claim field'
   const cases: Array<readonly [string, (claim: Claim) => Record<string, unknown>]> = [
     ['wrapper identity', claim => ({ wrapper: { ...claim.wrapper, wrapperVersion: 'different' } })],
     ['capabilities', claim => ({ capabilities: { ...claim.capabilities, reload: true } })],
+    ['settled boundary', () => ({ waitsForSettled: true })],
     ['socket path', claim => ({ socketPath: `${claim.socketPath}.different` })],
     ['contradictory outer harness', () => ({ harnessId: 'acme' })],
   ];

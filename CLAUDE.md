@@ -2089,7 +2089,10 @@ version-sensitive: a patch/shape mismatch disables queue editing (clear error)
 rather than breaking the bridge. The server replays `sess.queueState` (from the
 bridge hello / last `queue_update`) into every new SSE connection, and forwards
 delivered `role:'user'` `message_end`s mid-turn so a steer shows in the
-transcript before the `turn_end` JSONL catch-up.
+transcript before the `turn_end` JSONL catch-up. Pi's `agent_end` closes only
+one low-level run; the bridge keeps the session busy and forwards
+`agent_settled` as the final-idle boundary after queued messages, retries, and
+compaction recovery finish.
 
 Scroll pinning: streaming only follows while the viewport is near the bottom
 (`isPinnedToBottom`, 80px threshold). Sending a prompt or hitting

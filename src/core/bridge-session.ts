@@ -180,6 +180,7 @@ function sameRegistryClaim(left: unknown, right: unknown): boolean {
     && left.sessionFile === right.sessionFile
     && isDeepStrictEqual(left.wrapper || null, right.wrapper || null)
     && isDeepStrictEqual(left.capabilities || null, right.capabilities || null)
+    && left.waitsForSettled === right.waitsForSettled
     && hasOwn(left, 'spawnToken') === hasOwn(right, 'spawnToken')
     && (!hasOwn(left, 'spawnToken') || left.spawnToken === right.spawnToken);
 }
@@ -319,6 +320,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
   declare contextUsage: unknown;
   declare fastMode: unknown;
   declare turnInProgress: boolean;
+  declare waitsForSettled: boolean;
   declare compacting: boolean;
   declare queueState: unknown;
   declare sideChat: SideChatState;
@@ -352,6 +354,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     this.name = registryEntry.name || null;
     this.model = registryEntry.model || null;
     this.turnInProgress = !!registryEntry.turnInProgress;
+    this.waitsForSettled = registryEntry.waitsForSettled === true;
     this.compacting = !!registryEntry.compacting;
     this.queueState = null;
     this.sideChat = null;
@@ -474,6 +477,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
         if (isRecord(msg.capabilities)) this.capabilities = msg.capabilities;
       }
       this.turnInProgress = !!msg.turnInProgress;
+      this.waitsForSettled = msg.waitsForSettled === true || this.waitsForSettled;
       this.compacting = !!msg.compacting;
       if (msg.model) this.model = msg.model;
       if (msg.name) this.name = msg.name;
@@ -503,8 +507,9 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
         startedAt: typeof data.startedAt === 'number' || typeof data.startedAt === 'string' ? data.startedAt : undefined,
         args: data.args, partialResult: data.partialResult,
       });
-      if (ev === 'turn_start') this.turnInProgress = true;
-      else if (ev === 'turn_end' || ev === 'agent_end') this.turnInProgress = false;
+      if (ev === 'agent_start' || ev === 'turn_start') this.turnInProgress = true;
+      else if (ev === 'agent_settled') this.turnInProgress = false;
+      else if ((ev === 'turn_end' || ev === 'agent_end') && !this.waitsForSettled) this.turnInProgress = false;
       else if (ev === 'compaction_start') this.compacting = true;
       else if (ev === 'compaction_end') this.compacting = false;
       else if (ev === 'queue_update') this.queueState = frame.data;

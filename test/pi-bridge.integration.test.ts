@@ -518,7 +518,9 @@ test('steering queue cancellation preserves duplicate index and image identity',
         JSON.stringify(['duplicate queued steer', 'other queued steer']), 15000);
 
     present(holdRelease)();
-    await stream.waitFor((e: unknown) => eventName(e) === 'agent_end', 20000);
+    // agent_end closes only one low-level run; Pi may still drain steering,
+    // retry, or compact afterward. agent_settled is the final-idle boundary.
+    await stream.waitFor((e: unknown) => eventName(e) === 'agent_settled', 20000);
 
     // Exact queue order and image identity survive delivery: the first
     // duplicate (PNG) remains, while the selected second duplicate (GIF) is
