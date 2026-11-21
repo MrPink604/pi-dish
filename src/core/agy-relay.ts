@@ -25,7 +25,7 @@ import { createAcpSession, resumeAcpSession, type AcpSession } from './acp-sessi
 import { AGY_PROVIDER } from './acp-transcript';
 import { hasActiveAgyBrainWork } from './agy-brain';
 import { AGY_ACP_CAPABILITIES } from './session-capabilities';
-import { dishDir } from './dish-store';
+import { dishDir, replaceFile } from './dish-store';
 import { parseLaunchWords } from './harnesses';
 import { processIdentity } from './process-identity';
 import { removeExtensionUIDialog } from './extension-ui-state';
@@ -363,7 +363,10 @@ async function main(): Promise<void> {
     if (!socketReady) return;
     try {
       fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-      fs.writeFileSync(path.join(REGISTRY_DIR, `${session.id}.json`),
+      // Close authorization can read while a lifecycle event refreshes the
+      // claim. Replace atomically so it never mistakes a truncated JSON file
+      // for a vanished live bridge and refuses the owned pane with 409.
+      replaceFile(path.join(REGISTRY_DIR, `${session.id}.json`),
         JSON.stringify({ ...claim(), updatedAt: new Date().toISOString() }, null, 2));
       // The claim mirrors the lifecycle fields; name/model/thinking changes are
       // metadata and are recorded with the same observation.

@@ -485,7 +485,8 @@ test('steering queue cancellation preserves duplicate index and image identity',
         // Pin a turn open at the fake LLM, then queue a steer behind it.
         const held = new Promise(resolve => { holdArrived = resolve; });
         await post(`/api/sessions/${sessionId}/prompt`, { message: 'HOLD this turn' });
-        await stream.waitFor((e) => eventName(e) === 'turn_start', 20000);
+        const turnStart = await stream.waitFor((e) => eventName(e) === 'turn_start', 20000);
+        const turnStartIndex = stream.events.indexOf(turnStart);
         await held;
         for (const body of [
             { message: 'duplicate queued steer', images: [QUEUE_IMAGE_A] },
@@ -510,7 +511,11 @@ test('steering queue cancellation preserves duplicate index and image identity',
         (0, test_types_js_1.present)(holdRelease)();
         // agent_end closes only one low-level run; Pi may still drain steering,
         // retry, or compact afterward. agent_settled is the final-idle boundary.
-        await stream.waitFor((e) => eventName(e) === 'agent_settled', 20000);
+        // The fresh SSE stream can still receive the preceding test's delayed
+        // settlement before this turn starts, so require the boundary after this
+        // run's captured turn_start rather than matching any buffered event.
+        await stream.waitFor((e) => eventName(e) === 'agent_settled'
+            && stream.events.findIndex(candidate => candidate === e) > turnStartIndex, 20000);
         // Exact queue order and image identity survive delivery: the first
         // duplicate (PNG) remains, while the selected second duplicate (GIF) is
         // absent. Removing the core queue's first text match reverses this order
