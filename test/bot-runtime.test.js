@@ -10,7 +10,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { BotMirror } = require('../lib/bot-mirror');
 const runtimeModule = require('../lib/bot-runtime');
-const { openBotRuntime, settledWorker, newContextRefusal, composeHandoff, workerRefMatches, findOwnedWorker } = runtimeModule;
+const { openBotRuntime, settledWorker, newContextRefusal, composeHandoff, composeInstructions, formatKnowledgeIndex, formatKnowledgeIndexes, KB_INDEX_MAX_BYTES, workerRefMatches, findOwnedWorker, } = runtimeModule;
 const { openBotRegistry } = require('../lib/bot-registry');
 const { createBotHandlers, changeLines, ROOM_HOP_CAP } = require('../lib/bot-handlers');
 const BOT = {
@@ -68,32 +68,39 @@ async function openTestBot(t, sessions, { contextWindow = 200_000, api = noApi, 
 }
 const noSessions = async (args) => { throw new Error(`unexpected sessions call: ${args.join(' ')}`); };
 const noApi = async (path) => { throw new Error(`unexpected API call: ${path}`); };
-test('kb_search, kb_read and kb_write reach the knowledge routes, and a write carries the bot\u2019s name', async (t) => {
+test('kb_search, kb_read and kb_write reach the knowledge routes, and a write carries the bot\u2019s name and scope', async (t) => {
     const calls = [];
-    const api = async (path, body) => {
-        calls.push([path, body]);
-        if (path.startsWith('/api/knowledge/search')) {
-            return { total: 1, results: [{ path: 'topics/backups.md', lines: [{ line: 3, text: 'Backups go to aeor nightly.' }] }] };
+    const api = async (pathname, body) => {
+        if (pathname === '/api/knowledge/page' || pathname.startsWith('/api/knowledge/page?scope=bot&')) {
+            throw new Error('off');
         }
-        if (path === '/api/knowledge/page')
-            return { path: 'index.md', text: '# Knowledge\n\n- [Backups](topics/backups.md)\n' };
-        return { path: 'topics/tycho.md', created: true, commit: 'abc', pushed: false, pushError: 'git push: unreachable' };
+        calls.push([pathname, body]);
+        if (pathname === '/api/knowledge/pages') {
+            return { path: 'topics/tycho.md', scope: 'shared', created: true, revision: '112233445566', pageBytes: 80, commit: 'abc', pushed: false, pushError: 'git push: unreachable' };
+        }
+        if (pathname.startsWith('/api/knowledge/search')) {
+            return { total: 1, results: [{ path: 'topics/backups.md', scope: 'shared', lines: [{ line: 3, text: 'Backups go to aeor nightly.' }] }] };
+        }
+        return { path: 'index.md', scope: 'shared', revision: 'abcdef012345', text: '# Knowledge\n\n- [Backups](topics/backups.md): Nightly backups\n' };
     };
     const bot = await openTestBot(t, noSessions, { api });
     const call = (name, args) => bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall(name, args)], { stopReason: 'toolUse' });
-    bot.respond(call('kb_search', { query: 'backups aeor' }), call('kb_read', {}), call('kb_write', { page: 'tycho', text: 'tycho has the GPU.', source: 'nvidia-smi on tycho' }), bot.faux.fauxAssistantMessage('Noted.'));
+    bot.respond(call('kb_search', { query: 'backups aeor' }), call('kb_read', {}), call('kb_write', { page: 'tycho', scope: 'shared', text: 'tycho has the GPU.', source: 'nvidia-smi on tycho', summary: 'Tycho GPU workstation' }), bot.faux.fauxAssistantMessage('Noted.'));
     await bot.runtime.prompt('Where do backups go, and remember tycho has the GPU', 'followUp');
     await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message) === 'Noted.'), 'the run answers');
     assert.deepEqual(calls, [
-        ['/api/knowledge/search?q=backups%20aeor', undefined],
-        ['/api/knowledge/page', undefined],
-        ['/api/knowledge/pages', { page: 'tycho', mode: 'append', text: 'tycho has the GPU.', author: 'Fleet', source: 'nvidia-smi on tycho' }],
+        [`/api/knowledge/search?q=backups+aeor&botId=${BOT.id}&ancestors=1`, undefined],
+        [`/api/knowledge/page?botId=${BOT.id}&ancestors=1`, undefined],
+        ['/api/knowledge/pages', {
+                page: 'tycho', scope: 'shared', botId: BOT.id, botName: 'Fleet', mode: 'append',
+                text: 'tycho has the GPU.', author: 'Fleet', source: 'nvidia-smi on tycho', summary: 'Tycho GPU workstation',
+            }],
     ]);
     const results = bot.mirrorLines().filter(line => line.type === 'message' && line.message.role === 'toolResult')
         .map(line => textOf(line.message));
-    assert.equal(results[0], 'topics/backups.md\n  3: Backups go to aeor nightly.');
-    assert.equal(results[1], 'index.md:\n\n# Knowledge\n\n- [Backups](topics/backups.md)\n');
-    assert.equal(results[2], 'Saved: topics/tycho.md (a new page, added to the index). It is not on the remote yet (git push: unreachable); the next write pushes it.');
+    assert.equal(results[0], '[shared] topics/backups.md\n  3: Backups go to aeor nightly.');
+    assert.equal(results[1], '[shared] index.md (revision abcdef012345):\n\n# Knowledge\n\n- [Backups](topics/backups.md): Nightly backups\n');
+    assert.equal(results[2], 'Saved: topics/tycho.md (revision 112233445566) (a new page, added to the index). It is not on the remote yet (git push: unreachable); the next write pushes it.');
 });
 function textOf(message) {
     return runtimeModule.messageText(message);
@@ -471,8 +478,10 @@ test('a full window carries a reminder and is rolled over when the run ends', as
 });
 test('bot_update records the change against the turn, shows it with what an undo needs, and refuses the bot its own model', async (t) => {
     const calls = [];
-    const api = async (path, body) => {
-        calls.push([path, body]);
+    const api = async (pathname, body) => {
+        if (pathname.startsWith('/api/knowledge/'))
+            throw new Error('off');
+        calls.push([pathname, body]);
         const changes = body.changes;
         const after = { ...BOT, ...changes, revision: 2 };
         const fields = Object.keys(changes);
@@ -702,6 +711,8 @@ test('a routine\u2019s run arrives once as its own notice, and waits as a follow
 test('the schedule tool creates, lists and removes the bot\u2019s own routines, and passes on a refusal', async (t) => {
     const calls = [];
     const api = async (pathname, body) => {
+        if (pathname.startsWith('/api/knowledge/'))
+            throw new Error('off');
         calls.push([pathname, body]);
         if (pathname.endsWith('/routines/backups-nightly/remove')) {
             throw new Error('Refused: "backups-nightly" is another bot\u2019s schedule, not yours. You can remove only the schedules you made for yourself.');
@@ -779,7 +790,7 @@ test('a script sees sessions list and kb_search as structured values', async (t)
                 { ref: 'tycho/bbbb2222', name: 'NESTED-ONLY review', cwd: '/w', harness: 'omp', state: 'active', lastActivity: '2026-11-19T10:00:00.000Z', messages: 9, host: 'tycho' },
             ],
         },
-        kb: { total: 1, results: [{ path: 'topics/idle.md', lines: [{ line: 2, text: 'KB-LINE-ONLY in the script' }] }] },
+        kb: { total: 1, results: [{ path: 'topics/idle.md', scope: 'shared', lines: [{ line: 2, text: 'KB-LINE-ONLY in the script' }] }] },
     });
 });
 const settledJson = (text, totalMessages = 2) => JSON.stringify({ state: 'finished', totalMessages, message: { role: 'assistant', content: [{ type: 'text', text }] } });
@@ -796,7 +807,14 @@ test('a script waiting on its second call when the bot restarts finishes without
         // Still working when the relay goes down; its CLI is stopped with it.
         return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('stopped')), { once: true }));
     };
-    const bot = await openTestBot(t, port, { api: async (path) => { kbCalls.push(path); return KB; } });
+    const bot = await openTestBot(t, port, {
+        api: async (pathname) => {
+            if (pathname.startsWith('/api/knowledge/page'))
+                throw new Error('off');
+            kbCalls.push(pathname);
+            return KB;
+        },
+    });
     bot.respond(script(bot, [
         'const kb = await tools.kb_search({ query: "one" });',
         'const done = await tools.sessions({ action: "wait", ref: "ffff0000" });',
@@ -1049,4 +1067,237 @@ test('bot_create with fresh starts a child whose first request holds its own ide
     assert.deepEqual(child.mirrorLines().filter(line => line.customType).map(line => line.customType), ['bot-purpose']);
     assert.ok(child.mirrorLines().some(line => line.type === 'model_change' && line.modelId === 'faux-2'), 'it runs on the model given');
     assert.ok(!fs.existsSync(path.join(botsDir, garden.id, 'fork.json')), 'the start is read once');
+});
+// Knowledge index injection, dual scopes & 90% rescue rollover ----------------
+function instructionsText(messages) {
+    return messages
+        .filter(message => message.role === 'system')
+        .map(message => message.sections?.instructions ?? '')
+        .join('\n');
+}
+test('formatKnowledgeIndex and formatKnowledgeIndexes cap at 3072 bytes without cutting mid-line and split dual scopes fairly', () => {
+    assert.equal(formatKnowledgeIndex(''), null);
+    assert.equal(formatKnowledgeIndex('The knowledge base has no pages yet.\n'), '(no pages yet — write durable facts with kb_write)');
+    const makeIndex = (prefix, count) => '# Knowledge\n\nOne line per topic page.\n\n' +
+        Array.from({ length: count }, (_, i) => `- [${prefix} ${i}](topics/${prefix.toLowerCase()}-${i}.md): Summary for ${prefix} topic ${i} with enough description to grow past 3 KB`).join('\n') +
+        '\n';
+    const bigShared = makeIndex('Shared', 50);
+    const capped = formatKnowledgeIndex(bigShared);
+    assert.ok(Buffer.byteLength(capped, 'utf8') <= KB_INDEX_MAX_BYTES);
+    const lines = capped.split('\n');
+    assert.match(lines.at(-1), /^…and \d+ more pages \(call kb_read with no page for the full index, or kb_search\)\.$/);
+    for (const line of lines.slice(0, -1))
+        assert.match(line, /^- \[Shared \d+\]\(topics\/shared-\d+\.md\): /);
+    const bigBot = makeIndex('Bot', 50);
+    const dual = formatKnowledgeIndexes(bigShared, bigBot);
+    assert.ok(dual.bot && dual.shared);
+    const totalBytes = Buffer.byteLength(dual.bot, 'utf8') + Buffer.byteLength(dual.shared, 'utf8');
+    assert.ok(totalBytes <= KB_INDEX_MAX_BYTES, `combined ${totalBytes} <= ${KB_INDEX_MAX_BYTES}`);
+    assert.match(dual.bot.split('\n').at(-1), /^…and \d+ more pages \(call kb_read with scope "bot"/);
+    assert.match(dual.shared.split('\n').at(-1), /^…and \d+ more pages \(call kb_read with no page/);
+    const instructions = composeInstructions('You are Fleet.', '', [], dual);
+    assert.match(instructions, /<knowledge-index scope="bot">\n- \[Bot 0\]/);
+    assert.match(instructions, /<knowledge-index scope="shared">\n- \[Shared 0\]/);
+});
+test('<knowledge-index> injects both scopes capped at 3 KB, omits on 503, skips on reopen and non-fresh fork, and refreshes on rollover', async (t) => {
+    const bigIndex = (prefix) => '# Knowledge\n\n' + Array.from({ length: 45 }, (_, i) => `- [${prefix} ${i}](topics/${prefix.toLowerCase()}-${i}.md): Description of ${prefix} page number ${i} for truncation testing`).join('\n') + '\n';
+    let sharedIndex = bigIndex('Shared');
+    let botIndex = bigIndex('Bot');
+    const indexFetches = [];
+    const api = async (pathname) => {
+        if (pathname === '/api/knowledge/page') {
+            indexFetches.push(pathname);
+            return { path: 'index.md', scope: 'shared', revision: 'aaaaaaaaaaaa', text: sharedIndex };
+        }
+        if (pathname === `/api/knowledge/page?scope=bot&botId=${BOT.id}`) {
+            indexFetches.push(pathname);
+            return { path: `bots/${BOT.id}/index.md`, scope: 'bot', botId: BOT.id, revision: 'bbbbbbbbbbbb', text: botIndex };
+        }
+        throw new Error(`unexpected ${pathname}`);
+    };
+    const bot = await openTestBot(t, noSessions, { api });
+    assert.equal(indexFetches.length, 2, 'initial open fetches shared and bot indexes');
+    bot.respond(bot.faux.fauxAssistantMessage('Hi.'));
+    await bot.runtime.prompt('Hello', 'followUp');
+    await until(() => said(bot, 'Hi.'), 'first turn completes');
+    const sys1 = systemText(bot.requests[0]);
+    assert.match(sys1, /<knowledge-index scope=\\"bot\\">/);
+    assert.match(sys1, /<knowledge-index scope=\\"shared\\">/);
+    assert.match(sys1, /…and \d+ more pages/);
+    // Reopening an existing durable.sqlite must make ZERO /api/knowledge/page calls and keep open instructions unchanged.
+    indexFetches.length = 0;
+    sharedIndex = '# Knowledge\n\n- [Brand New](topics/brand-new.md): Added after window 1 opened\n';
+    botIndex = '# Fleet Knowledge\n\n- [Bot New](topics/bot-new.md): Added after window 1 opened\n';
+    await bot.reopen();
+    assert.deepEqual(indexFetches, [], 'reopening an existing durable.sqlite does not fetch KB index');
+    bot.respond(bot.faux.fauxAssistantMessage('Still window 1.'), toolCall(bot, 'context_notes', { action: 'write', text: 'Carry over.' }), toolCall(bot, 'new_context', { summary: 'Done with window 1' }), bot.faux.fauxAssistantMessage('Now window 2.'));
+    await bot.runtime.prompt('Still in window 1?', 'followUp');
+    await until(() => said(bot, 'Still window 1.'), 'reopened turn completes');
+    assert.doesNotMatch(systemText(bot.requests[1]), /Brand New/, 'open window instructions remain frozen across restart');
+    // Calling new_context fetches the updated shared + bot indexes for window 2.
+    await bot.runtime.prompt('Roll over now', 'followUp');
+    await until(() => said(bot, 'Now window 2.'), 'window 2 answers');
+    assert.equal(indexFetches.length, 2, 'rollover fetches updated indexes');
+    const sys2 = systemText(bot.requests.at(-1));
+    assert.match(sys2, /Brand New/);
+    assert.match(sys2, /Bot New/);
+    // When KB is off (503), <knowledge-index> is omitted cleanly from instructions.
+    const offBot = await openTestBot(t, noSessions, { api: async () => { throw new Error('The knowledge base is off (503)'); } });
+    offBot.respond(offBot.faux.fauxAssistantMessage('No KB.'));
+    await offBot.runtime.prompt('Hi', 'followUp');
+    await until(() => said(offBot, 'No KB.'), 'off-KB bot answers');
+    assert.doesNotMatch(instructionsText(offBot.requests[0]), /<knowledge-index/);
+    // Non-fresh forked sub-bot makes ZERO /api/knowledge/page calls and keeps parent instructions byte-identical;
+    // fresh sub-bot fetches and injects <knowledge-index>.
+    const registry = tempRegistry(t);
+    const botsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-dish-bots-kb-fork-'));
+    t.after(() => fs.rmSync(botsDir, { recursive: true, force: true }));
+    const parentRow = registry.create({ name: 'Parent', identity: 'You are Parent.', model: 'faux/faux-1' }, { actor: 'user' });
+    const kbCallsByBot = [];
+    let forkedChild;
+    let freshChild;
+    const routes = hubOf(createBotHandlers(() => registry, botControl(new Map(), [], async (row) => {
+        const childHarness = await openTestBot(t, noSessions, {
+            botsDir, row: () => registry.get(row.id), api: combinedHub,
+            responses: faux => [faux.fauxAssistantMessage(`${row.name} ready.`)],
+        });
+        if (row.name === 'Forked')
+            forkedChild = childHarness;
+        if (row.name === 'Fresh')
+            freshChild = childHarness;
+    })));
+    const combinedHub = async (pathname, body) => {
+        if (pathname.startsWith('/api/knowledge/page')) {
+            kbCallsByBot.push(pathname);
+            if (pathname.includes('scope=bot')) {
+                const id = new URL(pathname, 'http://hub').searchParams.get('botId');
+                return { path: `bots/${id}/index.md`, scope: 'bot', botId: id, text: 'This bot has no knowledge base pages yet.\n', revision: null };
+            }
+            return { path: 'index.md', scope: 'shared', text: '# Knowledge\n\n- [Hub](topics/hub.md): Beelink hub\n', revision: '1234567890ab' };
+        }
+        return routes(pathname, body);
+    };
+    const parentBot = await openTestBot(t, noSessions, { botsDir, row: () => registry.get(parentRow.id), api: combinedHub });
+    parentBot.respond(parentBot.faux.fauxAssistantMessage([parentBot.faux.fauxToolCall('bot_create', {
+            name: 'Forked', purpose: 'Handle fork.', identity: 'You are Forked.',
+        })], { stopReason: 'toolUse' }), parentBot.faux.fauxAssistantMessage('Created Forked.'), parentBot.faux.fauxAssistantMessage([parentBot.faux.fauxToolCall('bot_create', {
+            name: 'Fresh', purpose: 'Handle fresh.', identity: 'You are Fresh.', fresh: true,
+        })], { stopReason: 'toolUse' }), parentBot.faux.fauxAssistantMessage('Created Fresh.'));
+    kbCallsByBot.length = 0;
+    await parentBot.runtime.prompt('Create a forked child', 'followUp');
+    await until(() => !!forkedChild && said(forkedChild, 'Forked ready.') && said(parentBot, 'Created Forked.'), 'forked child answers');
+    assert.deepEqual(kbCallsByBot, [], 'non-fresh forked sub-bot makes zero KB index fetches on open');
+    assert.deepStrictEqual(forkedChild.requests[0].slice(0, -1), parentBot.requests[0], 'forked sub-bot keeps parent prefix byte-identical');
+    await parentBot.runtime.prompt('Create a fresh child', 'followUp');
+    await until(() => !!freshChild && said(freshChild, 'Fresh ready.') && said(parentBot, 'Created Fresh.'), 'fresh child answers');
+    assert.equal(kbCallsByBot.length, 2, 'fresh sub-bot fetches shared + bot indexes on open');
+    assert.match(systemText(freshChild.requests[0]), /<knowledge-index scope=\\"shared\\">[^]*Beelink hub/);
+    assert.match(systemText(freshChild.requests[0]), /<knowledge-index scope=\\"bot\\">/);
+});
+test('kb_read/kb_write/kb_search enforce required scope, expose revision to codemode, label scopes, and surface 409 conflicts and warnings', async (t) => {
+    const posted = [];
+    const api = async (pathname, body) => {
+        if (pathname === '/api/knowledge/page' || pathname.startsWith('/api/knowledge/page?scope=bot&'))
+            throw new Error('off');
+        if (pathname.startsWith('/api/knowledge/search')) {
+            return {
+                total: 3,
+                results: [
+                    { path: 'topics/beelink.md', scope: 'shared', lines: [{ line: 3, text: 'Hub host.' }] },
+                    { path: `bots/${BOT.id}/topics/notes.md`, scope: 'bot', botId: BOT.id, botName: 'Fleet', lines: [{ line: 3, text: 'Own note.' }] },
+                    { path: 'bots/chief-1/topics/policy.md', scope: 'bot', botId: 'chief-1', botName: 'Chief', lines: [{ line: 3, text: 'Ancestor note.' }] },
+                ],
+            };
+        }
+        if (pathname.startsWith('/api/knowledge/page?')) {
+            return { path: 'topics/beelink.md', scope: 'shared', revision: 'deadbeef1234', text: '# Beelink\n\nHub.\n' };
+        }
+        if (pathname === '/api/knowledge/pages') {
+            posted.push(body);
+            const b = body;
+            if (b.revision === 'stale0000000') {
+                throw new Error('Conflict: "topics/beelink.md" is at revision deadbeef1234, not "stale0000000".');
+            }
+            return {
+                path: 'topics/beelink.md', scope: 'shared', created: false, revision: 'faceb00c9999',
+                pageBytes: 17000, commit: 'abcdef', pushed: true,
+                warning: 'topics/beelink.md is now 17000 bytes (over the 16384-byte guideline).',
+            };
+        }
+        throw new Error(`unexpected ${pathname}`);
+    };
+    const bot = await openTestBot(t, noSessions, { api });
+    bot.respond(
+    // Missing scope refused before hitting hub, explaining bot vs shared.
+    toolCall(bot, 'kb_write', { page: 'beelink', text: 'fact', source: 'cmd', summary: 'Beelink' }), 
+    // kb_search labels shared, own bot, and read-only ancestor bot.
+    toolCall(bot, 'kb_search', { query: 'note' }), 
+    // kb_read returns revision in structuredOutput for codemode.
+    script(bot, 'return await tools.kb_read({ page: "beelink" });'), 
+    // kb_write with stale revision surfaces 409 conflict as isError: true.
+    toolCall(bot, 'kb_write', { page: 'beelink', scope: 'shared', mode: 'replace', text: '# Beelink\n\n(Source: x)', revision: 'stale0000000' }), 
+    // kb_write with current revision + droppedSources succeeds and prints Warning.
+    toolCall(bot, 'kb_write', {
+        page: 'beelink', scope: 'shared', mode: 'replace', text: '# Beelink\n\n(Source: x)',
+        summary: 'Updated hub summary', revision: 'deadbeef1234', droppedSources: ['old source'],
+    }), bot.faux.fauxAssistantMessage('All checked.'));
+    await bot.runtime.prompt('Exercise KB tools', 'followUp');
+    await until(() => said(bot, 'All checked.'), 'KB tool run completes');
+    const results = toolResults(bot);
+    assert.equal(results[0].isError, true);
+    assert.match(textOf(results[0]), /scope is required.*"bot".*"shared"/);
+    assert.equal(textOf(results[1]), [
+        '[shared] topics/beelink.md\n  3: Hub host.',
+        `[bot] bots/${BOT.id}/topics/notes.md\n  3: Own note.`,
+        '[bot: Chief, read-only] bots/chief-1/topics/policy.md\n  3: Ancestor note.',
+    ].join('\n\n'));
+    assert.deepEqual(returned(results[2]), {
+        path: 'topics/beelink.md', scope: 'shared', revision: 'deadbeef1234', text: '# Beelink\n\nHub.\n',
+    });
+    assert.equal(results[3].isError, true);
+    assert.match(textOf(results[3]), /Conflict: "topics\/beelink\.md" is at revision deadbeef1234/);
+    assert.equal(results[4].isError, false);
+    assert.match(textOf(results[4]), /Saved: topics\/beelink\.md \(revision faceb00c9999\)\. Warning: topics\/beelink\.md is now 17000 bytes/);
+    assert.deepEqual(posted[1], {
+        page: 'beelink', scope: 'shared', botId: BOT.id, botName: 'Fleet', mode: 'replace',
+        text: '# Beelink\n\n(Source: x)', author: 'Fleet',
+        summary: 'Updated hub summary', revision: 'deadbeef1234', droppedSources: ['old source'],
+    });
+});
+test('at 90%-96% with an unsaved notebook, pi-dish grants one durable rescue turn; saving and calling new_context rolls over cleanly', async (t) => {
+    // fauxProvider estimates tokens as ceil(chars / 4); with contextWindow = 100_000 and ~3k system tokens,
+    // a ~356k-char prompt lands cleanly at ~92% (>= 90% FORCED_RATIO and < 97% HARD_FORCED_RATIO).
+    const bot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
+    bot.respond(bot.faux.fauxAssistantMessage('Finished the task.'), 
+    // Rescue turn arrives: bot saves notebook and calls new_context.
+    bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('context_notes', { action: 'write', text: 'Rescued facts.' })], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage([bot.faux.fauxToolCall('new_context', { summary: 'Rescued before limit' })], { stopReason: 'toolUse' }), bot.faux.fauxAssistantMessage('Rolled over cleanly.'));
+    await bot.runtime.prompt(`Do some heavy work ${'w'.repeat(356_000)}`, 'followUp');
+    await until(() => said(bot, 'Rolled over cleanly.'), 'rescue turn completes rollover');
+    const limits = customs(bot, 'bot-context-limit');
+    assert.equal(limits.length, 1);
+    assert.match(limits[0], /^\[pi-dish: this context window is 9\d% full and your notebook has not been saved in this window\./);
+    const marker = bot.mirrorLines().find(line => line.customType === 'bot-context-window');
+    assert.ok(marker, 'window rolled over');
+    assert.match(textOf(marker), /1\. Rescued before limit/);
+    assert.doesNotMatch(textOf(marker), /WARNING:/, 'no unsaved warning when rescue succeeded');
+    assert.match(instructionsText(bot.requests.at(-1)), /Rescued facts\./);
+});
+test('ignoring the 90% rescue turn force-closes after one turn with an unsaved-notebook WARNING, and >=97% skips the rescue turn', async (t) => {
+    // Case 1: ~92% unsaved, bot ignores rescue turn -> force-closes after that one turn with WARNING.
+    const ignoringBot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
+    ignoringBot.respond(ignoringBot.faux.fauxAssistantMessage('First answer.'), ignoringBot.faux.fauxAssistantMessage('I ignored the rescue.'));
+    await ignoringBot.runtime.prompt(`Heavy work ${'w'.repeat(356_000)}`, 'followUp');
+    await until(() => ignoringBot.mirrorLines().some(line => line.customType === 'bot-context-window'), 'forced rollover after ignored rescue');
+    assert.equal(customs(ignoringBot, 'bot-context-limit').length, 1, 'at most one rescue turn per window');
+    const ignoredMarker = ignoringBot.mirrorLines().find(line => line.customType === 'bot-context-window');
+    assert.match(textOf(ignoredMarker), /WARNING: Window 1 was closed at the context limit without saving your notebook in that window\./);
+    assert.match(textOf(ignoredMarker), /history read or search on window 1/);
+    // Case 2: ~98% (>= HARD_FORCED_RATIO) unsaved -> skips rescue turn, force-closes immediately with WARNING.
+    const hardBot = await openTestBot(t, noSessions, { contextWindow: 100_000 });
+    hardBot.respond(hardBot.faux.fauxAssistantMessage('Spiked past 97%.'));
+    await hardBot.runtime.prompt(`Huge spike ${'w'.repeat(380_000)}`, 'followUp');
+    await until(() => hardBot.mirrorLines().some(line => line.customType === 'bot-context-window'), 'immediate forced rollover at >=97%');
+    assert.equal(customs(hardBot, 'bot-context-limit').length, 0, 'skips rescue turn at >=97%');
+    const hardMarker = hardBot.mirrorLines().find(line => line.customType === 'bot-context-window');
+    assert.match(textOf(hardMarker), /WARNING: Window 1 was closed at the context limit without saving your notebook in that window\./);
 });

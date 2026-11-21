@@ -759,7 +759,7 @@ export function startServer(rootDirectory: string): Server {
     if (knowledgeBase?.remote !== remote) knowledgeBase = openKnowledgeBase({ remote, dir: path.join(dishDir(), 'knowledge') });
     return knowledgeBase;
   }
-  const knowledgeHandlers = createKnowledgeHandlers(knowledge);
+  const knowledgeHandlers = createKnowledgeHandlers(knowledge, bots);
   app.get('/api/knowledge/search', knowledgeHandlers.search);
   app.get('/api/knowledge/page', knowledgeHandlers.read);
   app.post('/api/knowledge/pages', knowledgeHandlers.write);

@@ -3,15 +3,20 @@ import type * as Durable from '@earendil-works/pi-durable' with { 'resolution-mo
 import type { Message, Models, AssistantMessage } from '@earendil-works/pi-ai' with { 'resolution-mode': 'import' };
 import type { BotPlace, BotRow } from './bot-registry';
 import type { BotMirror } from './bot-mirror';
+import { type KnowledgeScope } from './knowledge';
 import type { ProtocolRecord } from './wire-protocol';
 /** The notebook's cap, in UTF-8 bytes. */
 export declare const NOTEBOOK_MAX_BYTES: number;
+/** Total UTF-8 byte cap for injected `<knowledge-index>` content (shared + bot combined). */
+export declare const KB_INDEX_MAX_BYTES: number;
 /** A window is sized to this many tokens even on a model with a larger context. */
 export declare const WINDOW_TOKEN_CAP = 200000;
 /** From this share of the window on, each request carries a reminder to roll over. */
 export declare const REMINDER_RATIO = 0.75;
-/** At this share the relay rolls the window over itself once the run ends. */
+/** At this share the relay requests one notebook rescue turn (or rolls over if already saved). */
 export declare const FORCED_RATIO = 0.9;
+/** At or above this share, forced rollover runs immediately without spending a rescue turn. */
+export declare const HARD_FORCED_RATIO = 0.97;
 /** A code mode script ends with an error after this long, whatever its options line asks for: the bot is busy while it runs. */
 export declare const SCRIPT_TIME_CAP_MS: number;
 /** Runs the pi-dish-sessions CLI as the bot; resolves with its stdout. `signal` stops it. */
@@ -64,18 +69,37 @@ export interface ClosedWindow {
     line: string;
     closedAt: string;
     forced: boolean;
+    notebookUnsaved?: boolean;
 }
 export interface BotMemory {
     notebook: string;
     /** How many windows were closed when the notebook was last saved; -1 for never. */
     notebookSavedIn: number;
+    /** Window index (`windows.length`) that already received its one 90%-limit rescue turn. */
+    limitRescueIn?: number;
     windows: ClosedWindow[];
     workers: Record<string, WorkerRecord>;
 }
 /** Why `new_context` is refused, or null when it may run. */
 export declare function newContextRefusal(memory: BotMemory, workSinceRollover: boolean): string | null;
+export interface KnowledgeIndexes {
+    bot?: string | null;
+    shared?: string | null;
+}
+/**
+ * Formats an `index.md` body for injection into `<knowledge-index>`, capped at
+ * `maxBytes` UTF-8 bytes without cutting mid-line and adding an "…and N more"
+ * trailer when truncated.
+ */
+export declare function formatKnowledgeIndex(indexMarkdown: string, maxBytes?: number, scope?: KnowledgeScope): string | null;
+/**
+ * Formats both shared and bot KB indexes under a single combined UTF-8 byte
+ * cap: each scope gets at least half when both are large, and any unused budget
+ * from one scope is available to the other.
+ */
+export declare function formatKnowledgeIndexes(sharedMarkdown: string | null, botMarkdown: string | null, totalMaxBytes?: number): KnowledgeIndexes;
 /** The instructions of a window: fixed when it opens, never rewritten inside it. */
-export declare function composeInstructions(identity: string, notebook: string, places?: readonly BotPlace[]): string;
+export declare function composeInstructions(identity: string, notebook: string, places?: readonly BotPlace[], knowledgeIndex?: string | KnowledgeIndexes | null): string;
 export interface HandoffInput {
     windowNumber: number;
     closed: readonly ClosedWindow[];
@@ -87,13 +111,15 @@ export interface HandoffInput {
     workers: readonly WorkerRecord[];
     /** True when the window was closed at the context limit after a run; false when the bot's own new_context closed it. */
     forced: boolean;
+    /** True when a forced rollover closed a window whose notebook was never saved during that window. */
+    notebookUnsaved?: boolean;
 }
 /**
  * The first message of a new window: what the bot needs that its notebook does not hold. The latest request is
  * shown with what became of it: a rollover the bot made while handling it is done, and must not be read as a request
  * to roll over again.
  */
-export declare function composeHandoff({ windowNumber, closed, tail, request, workers, forced }: HandoffInput): string;
+export declare function composeHandoff({ windowNumber, closed, tail, request, workers, forced, notebookUnsaved }: HandoffInput): string;
 /** A sub-bot's start, written by its parent into the sub-bot's directory and read once by its first relay. */
 export declare const FORK_SEED = "fork.json";
 /** A sub-bot that starts from a copy of its parent's conversation. */

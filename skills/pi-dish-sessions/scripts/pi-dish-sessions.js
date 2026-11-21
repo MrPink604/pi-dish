@@ -285,13 +285,19 @@ const COMMANDS = [
     },
     {
         name: 'kb',
-        usage: 'kb search <terms…> | kb read [page] [--host NAME] [--json]',
-        summary: 'Search or read the knowledge base: shared topic pages that bots keep, with sources.',
-        flags: [MAX_CHARS_FLAG, FULL_FLAG],
+        usage: 'kb search <terms…> | kb read [page] [--scope shared|bot] [--host NAME] [--json]',
+        summary: 'Search or read the knowledge base: shared topic pages (and the spawning bot\'s KB when launched by a bot).',
+        flags: [
+            ['--scope SCOPE', 'limit to "shared" or the spawning bot\'s "bot" KB'],
+            MAX_CHARS_FLAG,
+            FULL_FLAG,
+        ],
         example: 'kb search backups aeor',
         notes: [
-            '`search` lists the pages holding every term (case-insensitive) with their matching lines; `read` prints a',
-            'page (`beelink`, `topics/beelink.md`), or the index with no page. Writing is for bots; the CLI only reads.',
+            '`search` lists the pages holding every term (case-insensitive) with their matching lines, labelled by scope;',
+            '`read` prints a page (`beelink`, `topics/beelink.md`, or `bot:<slug>`, with its revision header), or the',
+            'topic index with one-line summaries when no page is named. When a bot spawned this session, its own KB is',
+            'included alongside the shared KB. Writing is for bots; the CLI only reads.',
             'The knowledge base lives on the hub. Without --host this host answers when it serves it, else the first',
             'fleet host that does, through this host\'s proxy; a host whose fleet lacks the hub cannot reach it.',
         ],
@@ -386,7 +392,7 @@ const VALUE_FLAGS = new Map([
     ['--model', 'model'], ['--name', 'name'], ['--prompt', 'prompt'], ['--limit', 'limit'],
     ['--host', 'host'], ['--before', 'before'], ['--max-chars', 'max_chars'], ['--fields', 'fields'],
     ['--days', 'days'], ['--sort', 'sort'], ['--thinking-level', 'thinking_level'],
-    ['--since', 'since'], ['--timeout', 'timeout'],
+    ['--since', 'since'], ['--timeout', 'timeout'], ['--scope', 'scope'],
 ]);
 const BOOL_FLAGS = new Map([
     ['--json', 'json'], ['--active', 'active'], ['--no-wait', 'no_wait'], ['--private', 'private'],
@@ -687,6 +693,71 @@ async function knowledgeHost(base, hostFlag) {
     const remote = serving.find(entry => core.fleetHost(entry).reachable) ?? serving[0];
     return remote ? String(core.fleetHost(remote).name) : null;
 }
+/**
+ * If this CLI is running inside a bot or a worker spawned by a bot (locally or
+ * cross-host via `<hubHostId>:~sk1_...` launch provenance), return that bot's
+ * stable id so `kb` commands can include its bot KB alongside shared pages.
+ */
+async function discoverSpawningBotId(base, explicitSession) {
+    const selfId = core.discoverSessionQuietly(explicitSession);
+    if (!selfId || typeof selfId !== 'string')
+        return null;
+    const botIdOf = (ref) => {
+        try {
+            const parsed = core.parseRef(ref);
+            const routeId = parsed.hostIdForm ? parsed.id : ref;
+            if (core.sessionHarnessId(routeId) !== 'bot')
+                return null;
+            return core.nativeSessionId(routeId);
+        }
+        catch {
+            return null;
+        }
+    };
+    const direct = botIdOf(selfId);
+    if (direct)
+        return direct;
+    try {
+        const { data } = await request(base, '/api/sessions?active=1');
+        const catalog = core.record(data ?? {});
+        const rows = [
+            ...core.sessionRows(catalog.active),
+            ...core.sessionRows(catalog.children),
+            ...core.sessionRows(catalog.previous),
+        ];
+        const byId = new Map();
+        for (const row of rows) {
+            const r = core.record(row);
+            if (typeof r.id === 'string')
+                byId.set(r.id, r);
+        }
+        let currentId = selfId;
+        const visited = new Set();
+        for (let depth = 0; depth < 8 && currentId && !visited.has(currentId); depth++) {
+            visited.add(currentId);
+            const row = byId.get(currentId);
+            const parentId = typeof row?.parentId === 'string' ? row.parentId : null;
+            if (!parentId)
+                break;
+            const found = botIdOf(parentId);
+            if (found)
+                return found;
+            currentId = parentId;
+        }
+    }
+    catch { }
+    return null;
+}
+function kbScopeTag(entry) {
+    const scope = entry.scope;
+    if (scope === 'bot') {
+        const botName = typeof entry.botName === 'string' && entry.botName.trim() ? entry.botName.trim() : '';
+        return botName ? `[bot: ${botName}]` : '[bot]';
+    }
+    if (scope === 'shared')
+        return '[shared]';
+    return '';
+}
 async function runKnowledge(base, hostFlag, args) {
     const [action, ...rest] = args.positional;
     if (action !== 'search' && action !== 'read')
@@ -694,19 +765,75 @@ async function runKnowledge(base, hostFlag, args) {
     const terms = rest.join(' ').trim();
     if (action === 'search' && !terms)
         throw new Error('kb search needs at least one term');
+    const scopeFlag = args.scope?.trim();
+    if (scopeFlag !== undefined && scopeFlag !== 'shared' && scopeFlag !== 'bot') {
+        throw new Error('--scope must be "shared" or "bot"');
+    }
+    const botId = await discoverSpawningBotId(base, args.session);
+    if (scopeFlag === 'bot' && !botId) {
+        throw new Error('--scope bot requires a session spawned by a bot');
+    }
     const host = await knowledgeHost(base, hostFlag);
+    const fetchKb = async (pathname) => {
+        try {
+            return (await api(base, host, pathname)).data;
+        }
+        catch (e) {
+            if (core.errorStatus(e) === 404 && !core.errorBody(e).error)
+                throw new Error(KB_UNSUPPORTED);
+            throw e;
+        }
+    };
+    if (action === 'read' && !rest[0] && !scopeFlag && botId) {
+        // Bot-spawned worker reading the index: show both shared and spawning bot's index, labelled.
+        const sharedData = await fetchKb('/api/knowledge/page');
+        let botData = null;
+        try {
+            botData = await fetchKb(`/api/knowledge/page?scope=bot&botId=${encodeURIComponent(botId)}`);
+        }
+        catch { }
+        if (args.json) {
+            return print({
+                ...(host ? { host } : {}),
+                ...core.record(sharedData ?? {}),
+                ...(botData ? { bot: core.record(botData) } : {}),
+            }, true);
+        }
+        const chars = outputBounds(args, null).chars;
+        if (host)
+            process.stdout.write(`# from ${host}\n`);
+        const sharedAnswer = core.record(sharedData ?? {});
+        const sharedText = String(sharedAnswer.text ?? '').trimEnd();
+        const parts = [`[shared]\n${sharedText}`];
+        if (botData) {
+            const botAnswer = core.record(botData);
+            const botLabel = kbScopeTag(botAnswer) || '[bot]';
+            const botText = String(botAnswer.text ?? '').trimEnd();
+            parts.push(`${botLabel}\n${botText}`);
+        }
+        return writeCapped(`${parts.join('\n\n')}\n`, chars, '--max-chars N or --full for more.');
+    }
+    const queryParts = [];
+    if (action === 'search') {
+        queryParts.push(`q=${encodeURIComponent(terms)}`);
+        if (scopeFlag)
+            queryParts.push(`scope=${encodeURIComponent(scopeFlag)}`);
+        if (botId)
+            queryParts.push(`botId=${encodeURIComponent(botId)}`);
+    }
+    else {
+        if (rest[0])
+            queryParts.push(`page=${encodeURIComponent(rest[0])}`);
+        if (scopeFlag)
+            queryParts.push(`scope=${encodeURIComponent(scopeFlag)}`);
+        if (botId)
+            queryParts.push(`botId=${encodeURIComponent(botId)}`);
+    }
+    const qs = queryParts.join('&');
     const pathname = action === 'search'
-        ? `/api/knowledge/search?q=${encodeURIComponent(terms)}`
-        : `/api/knowledge/page${rest[0] ? `?page=${encodeURIComponent(rest[0])}` : ''}`;
-    let data;
-    try {
-        ({ data } = await api(base, host, pathname));
-    }
-    catch (e) {
-        if (core.errorStatus(e) === 404 && !core.errorBody(e).error)
-            throw new Error(KB_UNSUPPORTED);
-        throw e;
-    }
+        ? `/api/knowledge/search?${qs}`
+        : `/api/knowledge/page${qs ? `?${qs}` : ''}`;
+    const data = await fetchKb(pathname);
     if (args.json)
         return print({ ...(host ? { host } : {}), ...core.record(data ?? {}) }, true);
     const chars = outputBounds(args, null).chars;
@@ -714,16 +841,31 @@ async function runKnowledge(base, hostFlag, args) {
         process.stdout.write(`# from ${host}\n`);
     const answer = core.record(data ?? {});
     if (action === 'read') {
+        const pagePath = String(answer.path ?? '');
+        const rev = typeof answer.revision === 'string' ? answer.revision : null;
+        const isBot = answer.scope === 'bot';
+        let header = '';
+        if (isBot && !pagePath.endsWith('/index.md')) {
+            const botTag = kbScopeTag(answer);
+            header = `# ${botTag} ${pagePath}${rev ? ` (revision ${rev})` : ''}\n`;
+        }
+        else if (rev && pagePath && pagePath !== 'index.md') {
+            header = `# ${pagePath} (revision ${rev})\n`;
+        }
         const text = String(answer.text ?? '');
-        return writeCapped(text.endsWith('\n') ? text : `${text}\n`, chars, '--max-chars N or --full for more.');
+        return writeCapped(`${header}${text.endsWith('\n') ? text : `${text}\n`}`, chars, '--max-chars N or --full for more.');
     }
     const results = wireArray(answer.results).map(hit => core.record(hit));
     if (!results.length)
         return void process.stdout.write('No matches.\n');
-    writeCapped(results.map(hit => `${hit.path}\n${wireArray(hit.lines).map(value => {
-        const line = core.record(value);
-        return `  ${line.line}: ${line.text}\n`;
-    }).join('')}`).join(''), chars, '--max-chars N or --full for more, or add a term.');
+    writeCapped(results.map(hit => {
+        const tag = kbScopeTag(hit);
+        const heading = tag ? `${tag} ${hit.path}` : String(hit.path);
+        return `${heading}\n${wireArray(hit.lines).map(value => {
+            const line = core.record(value);
+            return `  ${line.line}: ${line.text}\n`;
+        }).join('')}`;
+    }).join(''), chars, '--max-chars N or --full for more, or add a term.');
     if (Number(answer.total) > results.length)
         cutNotice(false, `${Number(answer.total) - results.length} more pages match; add a term to narrow it.`);
     process.stdout.write('# Read a page with: kb read <path>\n');

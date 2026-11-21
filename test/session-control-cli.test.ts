@@ -526,4 +526,92 @@ test('peer-session CLI kb searches and reads the knowledge base on whichever hos
   });
 });
 
+test('peer-session CLI kb prints revision headers and includes the spawning bot KB when launched by a bot', async t => {
+  const botId = '0b0c5a1e-0000-4000-8000-000000000001';
+  const botRoute = encodeSessionKey('bot', checkedNativeId(botId));
+  const hubUuid = '11111111-2222-4333-8444-555555555555';
+  const requests: string[] = [];
+  const server = http.createServer((req, res) => {
+    const url = req.url ?? '';
+    requests.push(url);
+    res.setHeader('Content-Type', 'application/json');
+    if (url === '/api/sessions?active=1') {
+      res.end(JSON.stringify({
+        active: [{ id: 'source-1', isActive: true, name: 'Worker', parentId: `${hubUuid}:${botRoute}` }],
+        previous: [],
+      }));
+      return;
+    }
+    if (url === '/api/hosts') {
+      res.end(JSON.stringify({ hosts: [
+        { self: true, label: 'self', reachable: true, capabilities: { sessions: true, knowledge: true } },
+      ] }));
+      return;
+    }
+    if (url.startsWith('/api/knowledge/search?')) {
+      res.end(JSON.stringify({
+        total: 2,
+        results: [
+          { path: 'topics/beelink.md', scope: 'shared', lines: [{ line: 3, text: 'Beelink runs pi-dish.' }] },
+          { path: `bots/${botId}/topics/workflow.md`, scope: 'bot', botId, botName: 'Fleet', lines: [{ line: 3, text: 'Check load first.' }] },
+        ],
+      }));
+      return;
+    }
+    if (url === `/api/knowledge/page?page=beelink&botId=${botId}`) {
+      res.end(JSON.stringify({ path: 'topics/beelink.md', scope: 'shared', revision: 'abcdef012345', text: '# Beelink\n\nHub host.\n' }));
+      return;
+    }
+    if (url === `/api/knowledge/page?page=bot%3Aworkflow&botId=${botId}`) {
+      res.end(JSON.stringify({ path: `bots/${botId}/topics/workflow.md`, scope: 'bot', botId, botName: 'Fleet', revision: '9876543210ab', text: '# Workflow\n\nCheck load.\n' }));
+      return;
+    }
+    if (url === '/api/knowledge/page') {
+      res.end(JSON.stringify({ path: 'index.md', scope: 'shared', revision: '111111111111', text: '# Knowledge\n\n- [Beelink](topics/beelink.md): Hub host\n' }));
+      return;
+    }
+    if (url === `/api/knowledge/page?scope=bot&botId=${botId}`) {
+      res.end(JSON.stringify({ path: `bots/${botId}/index.md`, scope: 'bot', botId, botName: 'Fleet', revision: '222222222222', text: '# Fleet Knowledge\n\n- [Workflow](topics/workflow.md): Fleet checks\n' }));
+      return;
+    }
+    res.statusCode = 404; res.end(JSON.stringify({ error: 'not found' }));
+  });
+  const base = await listenServer(server);
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())));
+
+  const searched = await run(['kb', 'search', 'beelink'], base);
+  assert.ok(requests.includes(`/api/knowledge/search?q=beelink&botId=${botId}`), 'passes spawning bot id discovered from cross-host parentId');
+  assert.equal(searched.stdout, [
+    '[shared] topics/beelink.md',
+    '  3: Beelink runs pi-dish.',
+    `[bot: Fleet] bots/${botId}/topics/workflow.md`,
+    '  3: Check load first.',
+    '# Read a page with: kb read <path>',
+    '',
+  ].join('\n'));
+
+  const readShared = await run(['kb', 'read', 'beelink'], base);
+  assert.equal(readShared.stdout, '# topics/beelink.md (revision abcdef012345)\n# Beelink\n\nHub host.\n');
+
+  const readSharedJson = await run(['kb', 'read', 'beelink', '--json'], base);
+  assert.equal(JSON.parse(readSharedJson.stdout).revision, 'abcdef012345');
+
+  const readBot = await run(['kb', 'read', 'bot:workflow'], base);
+  assert.equal(readBot.stdout, `# [bot: Fleet] bots/${botId}/topics/workflow.md (revision 9876543210ab)\n# Workflow\n\nCheck load.\n`);
+
+  const readIndexes = await run(['kb', 'read'], base);
+  assert.equal(readIndexes.stdout, [
+    '[shared]',
+    '# Knowledge',
+    '',
+    '- [Beelink](topics/beelink.md): Hub host',
+    '',
+    '[bot: Fleet]',
+    '# Fleet Knowledge',
+    '',
+    '- [Workflow](topics/workflow.md): Fleet checks',
+    '',
+  ].join('\n'));
+});
+
 export {};

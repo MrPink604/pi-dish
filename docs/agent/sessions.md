@@ -79,10 +79,15 @@ transcript window.
 
 `kb search <terms…>` lists the knowledge base pages that hold every term
 (case-insensitive) with their matching lines; `kb read [page]` prints a page
-(`beelink`, `topics/beelink.md`), or the index with no page. Bots write the
-pages, one per topic, and every entry ends with its source and the date it was
-added; look there before working something out again. There is no `kb write`:
-bots write with their own `kb_write` tool.
+(`beelink`, `topics/beelink.md`, or `bot:<slug>`, prefixed with its revision
+header), or the topic index with one-line summaries when no page is named. When
+the calling session was spawned by a bot, `kb search` and `kb read` include
+both the shared KB and that bot's own KB, labelled by scope (`--scope
+shared|bot` narrows it; `kb read <slug>` checks shared first and falls back to
+the spawning bot's KB). Bots write the pages, one per topic, and every entry
+ends with its source and the date it was added; look there before working
+something out again. There is no `kb write`: bots write with their own
+`kb_write` tool.
 
 The knowledge base lives on the hub (`knowledgeRemote` in its
 `~/.pi/dish/settings.json`), which advertises the `knowledge` capability.
