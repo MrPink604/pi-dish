@@ -93,6 +93,7 @@ export function createNewSession(options: {
   const cwd = () => cwdInput.value.trim();
   const selectedHarness = () => harnessSelect.value || harnessId || 'pi';
   const supports = (capability: string) => !host().capabilities || host().capabilities?.[capability] === true;
+  const supportsSpawnTargets = (harness = selectedHarness()) => supports('tmux') && harness !== 'agy';
   const hostOptions = () => options.hosts().filter(row => row.self || !options.hostDown(row));
   const error = (value: string) => { if (!disposed) element('nsError').textContent = value; };
   let modelPicker: ModelPicker | null = null;
@@ -112,7 +113,7 @@ export function createNewSession(options: {
     request, roleSummary: formatModelRoleSummary,
   });
   const directories = createDirectoryCatalog({ host, request });
-  const targets = createSpawnTargets({ host, supportsTmux: () => supports('tmux') && selectedHarness() !== 'agy', request,
+  const targets = createSpawnTargets({ host, supportsTmux: () => supportsSpawnTargets(), request,
     readSaved: () => storage.getItem('pi-dish-spawn-target'), save: key => storage.setItem('pi-dish-spawn-target', key),
     changed: () => targetPicker.sync(),
   });
@@ -131,7 +132,12 @@ export function createNewSession(options: {
     requestPicker: readHarnesses, requestBackground: readHarnesses,
     preferredHarness: () => storage.getItem(NEW_SESSION_HARNESS_KEY),
     onPreferredHarness: value => { if (!disposed) harnessId = value; },
-    onPickerChange: () => { if (disposed) return; renderHarnesses(); if (isOpen()) changeHarness(selectedHarness()); },
+    onPickerChange: () => {
+      if (disposed) return;
+      const previousHarness = selectedHarness();
+      renderHarnesses();
+      if (isOpen()) changeHarness(selectedHarness(), previousHarness);
+    },
     onCacheChange: () => { if (!disposed) options.harnessCacheChanged(); },
   });
   const harnessLabel = (id: string) => harnesses.rows().find(row => row.id === id)?.label || (id === 'pi' ? 'Pi' : id);
@@ -184,11 +190,13 @@ export function createNewSession(options: {
     renderHarnessInputs();
     renderPrivate();
   }
-  function changeHarness(value: string): void {
+  function changeHarness(value: string, previousHarness = selectedHarness()): void {
     if (disposed) return;
+    const previouslySupportedTargets = supportsSpawnTargets(previousHarness);
     harnessId = value || 'pi'; storage.setItem(NEW_SESSION_HARNESS_KEY, harnessId);
     preferences.restore(harnessId); models.clear(); renderHarnessInputs(); preferences.render(); renderPrivate();
-    void targets.load();
+    // Harness discovery may report more than once; only reload when target support actually changes.
+    if (previouslySupportedTargets !== supportsSpawnTargets()) void targets.load();
     refresh();
   }
   // Only harnesses with an alternate session root outside the backup set can
