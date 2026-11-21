@@ -167,7 +167,8 @@ export function createSidebarControls(options: {
   function togglePin(id: string, displayedRoot = id, members = [id], host = sessionState.sessionHostId(id)) {
     if (disposed) return;
     const roots = familyRoots(), key = sessionKey(host, id), canonical = roots.get(key) || key;
-    const aliases = new Set(members.map(member => sessionKey(host, member))); aliases.add(sessionKey(host, displayedRoot));
+    const toKey = (value: string) => parseSessionKey(value).hostId !== null ? value : sessionKey(host, value);
+    const aliases = new Set(members.map(toKey)); aliases.add(toKey(displayedRoot));
     for (const [member, root] of roots) if (root === canonical) aliases.add(member);
     const visible = new Set(Array.from(list.querySelectorAll<HTMLElement>('.session-item[data-id]')).map(row => sessionKey(row.dataset.host, row.dataset.id)));
     for (const member of aliases) {
@@ -269,7 +270,16 @@ export function createSidebarControls(options: {
       const botClosedToggle = target.closest<HTMLElement>('.bot-closed-toggle'); if (botClosedToggle) { if (botClosedToggle.dataset.botClosed) toggleBotClosed(botClosedToggle.dataset.botClosed); return; }
       const familyToggle = target.closest<HTMLElement>('.session-family-toggle'); if (familyToggle) { if (familyToggle.dataset.familyId) toggleFamily(familyToggle.dataset.familyId, host); return; }
       if (target.closest('.session-pin-btn')) {
-        if (id && item) { const family = item.closest<HTMLElement>('.session-family-root'); const members = family ? Array.from(family.querySelectorAll<HTMLElement>('.session-item[data-id]')).map(row => row.dataset.id!).filter(Boolean) : [id]; togglePin(id, family?.dataset.familyId || id, members, host); } return;
+        if (id && item) {
+          const family = item.closest<HTMLElement>('.session-family-root');
+          const members = family
+            ? Array.from(family.querySelectorAll<HTMLElement>('.session-item[data-id]'))
+                .map(row => sessionKey(row.dataset.host || null, row.dataset.id!))
+                .filter(Boolean)
+            : [sessionKey(host, id)];
+          togglePin(id, family?.dataset.familyKey || sessionKey(host, id), members, host);
+        }
+        return;
       }
       if (target.closest('.session-close-btn')) { event.stopPropagation(); if (id) closeClick(id, host); return; }
       if (target.closest('.session-drag-handle')) return;

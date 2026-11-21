@@ -125,6 +125,9 @@ export function createHostSessionLoader(options: HostSessionLoaderOptions) {
           for (const bridge of bridges.values()) updated.push(bridge);
           nextPrevious = updated;
         }
+        // A resumed bridge moves into `active`; drop its stale closed copy so search doesn't duplicate it.
+        const activeIds = new Set(active.map(session => session.id));
+        if (activeIds.size) nextPrevious = nextPrevious.filter(session => !activeIds.has(session.id));
       }
       const next: SessionLists = {
         active: withPrevious ? active : mergeActiveHints(active, cached.active),

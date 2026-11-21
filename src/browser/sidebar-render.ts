@@ -479,7 +479,9 @@ function renderSessions() {
   // Bots have their own group, nested under their parents with their workers, ahead of the sessions; a search ranks them with the rest.
   const selfHostId = options.selfHostId ?? options.hosts.find(host => host.self)?.hostId ?? null;
   const bridgePool = options.tab === 'active' && !options.query
-    ? previous.filter(session => !session.isActive && !session.subagentLive)
+    ? previous.filter(session => !session.isActive && !session.subagentLive
+      && (asksAutomation || !isAutomationSession(session))
+      && (!scopeParsed || evaluateSessionQuery(scopeParsed, session)))
     : undefined;
   const botSessionTree = options.query ? null : buildBotSessionTree(options.bots, filtered, selfHostId, bridgePool);
   const sessionsShown = botSessionTree?.botCount

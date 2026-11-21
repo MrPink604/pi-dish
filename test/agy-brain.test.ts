@@ -537,4 +537,23 @@ test('parseAgyBrainEntries resolves 3-deep sub-subagent parents to real brain tr
   const sub2Header = record(records(agyBrain.parseAgyBrainEntries(fs.readFileSync(sub2Transcript, 'utf8'), sub2Transcript))[0]);
   assert.equal(sub2Header.parentSession, sub1Transcript, 'depth-2 sub-subagent points at parent brain transcript');
   assert.equal(agyBrain.hasActiveAgyBrainWork(rootId), true, 'active work bubbles up from depth-2 sub-subagent');
+
+  // S8: symlinked transcript outside brain root is refused, and budget bounds recursive walks.
+  const escapeRootId = 'dddddddd-4444-4444-8444-444444444444';
+  const escapeSubId = 'eeeeeeee-5555-4555-8555-555555555555';
+  const outsideFile = path.join(tmpHome, 'outside-transcript.jsonl');
+  writeJsonl(outsideFile, [
+    { step_index: 0, type: 'PLANNER_RESPONSE', status: 'RUNNING', created_at: '2026-11-20T11:05:00Z', content: 'escaped' },
+  ]);
+  const escapedTranscript = present(agyBrain.agyBrainTranscriptPath(escapeSubId), 'escaped transcript');
+  fs.mkdirSync(path.dirname(escapedTranscript), { recursive: true });
+  fs.symlinkSync(outsideFile, escapedTranscript);
+  writeJson(path.join(brainRoot, escapeRootId, '.system_generated', 'subagents', `${escapeSubId}.json`), {
+    conversationId: escapeSubId,
+    subagentDescriptor: { typeName: 'research', role: 'Escaped' },
+    state: 'SUBAGENT_STATE_ALIVE',
+    workspaceUris: ['file:///repo'],
+  });
+  assert.equal(agyBrain.hasActiveAgyBrainWork(escapeRootId), false, 'symlinked transcript outside brain root is ignored');
+  assert.equal(agyBrain.hasActiveAgyBrainWork(rootId, new Set(), { remaining: 1 }), false, 'node budget bounds recursive walk');
 });

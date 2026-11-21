@@ -177,84 +177,121 @@ export function buildSessionFamilies<T extends HelperSession>(
       if (!nodes.has(key) && !poolByKey.has(key)) poolByKey.set(key, session);
     }
     const bridgeRoots = options.bridgeRoots;
-    let bridgeOrder = nodes.size;
-    const ensureBridge = (key: string, session: T) => {
-      if (!nodes.has(key)) {
-        nodes.set(key, { session, children: [], activity: 0, size: 0, order: bridgeOrder++, bridge: true });
+    const poolParentKey = new Map<string, string | null>();
+    for (const [key, session] of poolByKey) {
+      poolParentKey.set(key, resolveParentKey(session.host, sessionFamilyParentId(session), hostByLower));
+    }
+    // Memoized O(N) reachability: true iff a pool node chains up to a visible node or bridgeRoot.
+    const poolReachable = new Map<string, boolean>();
+    for (const startKey of poolByKey.keys()) {
+      if (poolReachable.has(startKey)) continue;
+      const trail: string[] = [];
+      const visiting = new Set<string>();
+      let cur: string | null = startKey;
+      let reaches = false;
+      while (cur) {
+        if (nodes.has(cur)) { reaches = true; break; }
+        const known = poolReachable.get(cur);
+        if (known !== undefined) { reaches = known; break; }
+        if (visiting.has(cur) || !poolByKey.has(cur)) { reaches = false; break; }
+        visiting.add(cur);
+        trail.push(cur);
+        if (bridgeRoots?.has(cur)) { reaches = true; break; }
+        cur = poolParentKey.get(cur) ?? null;
       }
-    };
-    for (const node of [...nodes.values()]) {
-      const chain: [string, T][] = [];
-      const seen = new Set<string>([sessionRefKey(node.session)]);
-      let cursor: T | undefined = node.session;
-      while (cursor) {
-        const parentKey = resolveParentKey(cursor.host, sessionFamilyParentId(cursor), hostByLower);
-        if (!parentKey || seen.has(parentKey)) break;
-        seen.add(parentKey);
-        if (nodes.has(parentKey)) {
-          for (const [bKey, bSession] of chain) ensureBridge(bKey, bSession);
-          break;
-        }
-        const pooled = poolByKey.get(parentKey);
+      for (const step of trail) poolReachable.set(step, reaches);
+    }
+    let bridgeOrder = nodes.size;
+    const visibleKeys = [...nodes.keys()];
+    for (const key of visibleKeys) {
+      const visible = nodes.get(key)!;
+      let cur = resolveParentKey(visible.session.host, sessionFamilyParentId(visible.session), hostByLower);
+      while (cur && !nodes.has(cur) && poolReachable.get(cur) === true) {
+        const pooled = poolByKey.get(cur);
         if (!pooled) break;
-        chain.push([parentKey, pooled]);
-        if (bridgeRoots?.has(parentKey)) {
-          for (const [bKey, bSession] of chain) ensureBridge(bKey, bSession);
-          break;
-        }
-        cursor = pooled;
+        nodes.set(cur, { session: pooled, children: [], activity: 0, size: 0, order: bridgeOrder++, bridge: true });
+        if (bridgeRoots?.has(cur)) break;
+        cur = poolParentKey.get(cur) ?? null;
       }
     }
   }
 
-  const parentOf = (session: T): SessionFamily<T> | undefined => {
-    const key = resolveParentKey(session.host, sessionFamilyParentId(session), hostByLower);
-    return key ? nodes.get(key) : undefined;
-  };
+  // Precompute parent key once per node, then detect cycles in a single O(N) 3-color pass.
+  const parentKeyByKey = new Map<string, string | null>();
+  for (const [key, node] of nodes) {
+    const parentKey = resolveParentKey(node.session.host, sessionFamilyParentId(node.session), hostByLower);
+    parentKeyByKey.set(key, parentKey && parentKey !== key && nodes.has(parentKey) ? parentKey : null);
+  }
+  const visitState = new Map<string, 1 | 2>();
+  const inCycle = new Set<string>();
+  for (const startKey of nodes.keys()) {
+    if (visitState.has(startKey)) continue;
+    const trail: string[] = [];
+    const trailIndex = new Map<string, number>();
+    let cur: string | null = startKey;
+    while (cur && !visitState.has(cur)) {
+      visitState.set(cur, 1);
+      trailIndex.set(cur, trail.length);
+      trail.push(cur);
+      cur = parentKeyByKey.get(cur) ?? null;
+    }
+    if (cur && visitState.get(cur) === 1) {
+      const cycleStart = trailIndex.get(cur)!;
+      for (let i = cycleStart; i < trail.length; i++) inCycle.add(trail[i]);
+    }
+    for (const step of trail) visitState.set(step, 2);
+  }
 
   const attached = new Set<string>();
-  for (const node of nodes.values()) {
-    const parent = parentOf(node.session);
-    if (!parent || parent === node) continue;
-    // Walk the chain first so A→B→A cycles can't drop both nodes or recurse forever.
-    let cursor: SessionFamily<T> | undefined = parent;
-    const seen = new Set<SessionFamily<T>>();
-    let cyclic = false;
-    while (cursor && !seen.has(cursor)) {
-      if (cursor === node) { cyclic = true; break; }
-      seen.add(cursor);
-      cursor = parentOf(cursor.session);
-    }
-    if (cyclic) continue;
+  for (const [key, node] of nodes) {
+    if (inCycle.has(key)) continue;
+    const parentKey = parentKeyByKey.get(key);
+    if (!parentKey) continue;
+    const parent = nodes.get(parentKey);
+    if (!parent) continue;
     parent.children.push(node);
-    attached.add(sessionRefKey(node.session));
+    attached.add(key);
   }
 
   const activityMs = (session: T) => {
     const value = new Date(session.lastActivity || 0).getTime();
     return finite(value) ? value : 0;
   };
-  const finalize = (node: SessionFamily<T>): SessionFamily<T> => {
+  const roots: SessionFamily<T>[] = [];
+  for (const [key, node] of nodes) {
+    if (!attached.has(key)) roots.push(node);
+  }
+  // Iterative post-order finalize so arbitrarily deep chains never overflow the call stack.
+  const order: SessionFamily<T>[] = [];
+  const stack: SessionFamily<T>[] = [...roots];
+  while (stack.length) {
+    const node = stack.pop()!;
+    order.push(node);
+    for (const child of node.children) stack.push(child);
+  }
+  for (let i = order.length - 1; i >= 0; i--) {
+    const node = order[i];
     node.activity = node.bridge ? 0 : activityMs(node.session);
     node.size = node.bridge ? 0 : 1;
     for (const child of node.children) {
-      finalize(child);
       node.activity = Math.max(node.activity, child.activity);
       node.size += child.size;
     }
     if (node.bridge && node.activity === 0) node.activity = activityMs(node.session);
     node.children.sort((a, b) => b.activity - a.activity || a.order - b.order);
-    return node;
-  };
-  const roots = [...nodes.values()].filter(node => !attached.has(sessionRefKey(node.session))).map(finalize);
+  }
   return roots.sort((a, b) => b.activity - a.activity || a.order - b.order);
 }
 
 
 export function flattenSessionFamilies<T>(families?: readonly SessionFamily<T>[] | null, out: T[] = []) {
-  for (const family of families || []) {
+  const stack: SessionFamily<T>[] = [];
+  const list = families || [];
+  for (let i = list.length - 1; i >= 0; i--) stack.push(list[i]);
+  while (stack.length) {
+    const family = stack.pop()!;
     if (!family.bridge) out.push(family.session);
-    flattenSessionFamilies(family.children, out);
+    for (let i = family.children.length - 1; i >= 0; i--) stack.push(family.children[i]);
   }
   return out;
 }

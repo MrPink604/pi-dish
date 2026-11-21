@@ -58,6 +58,9 @@ const CONTEXT_WINDOW_FALLBACKS = Object.entries(MODEL_CONTEXT_WINDOWS)
 
 const PRIME_ROSTER_STALE_MS = 1500;
 const SUBSESSION_ROW_CAP = 64;
+const BRIDGE_ATTEMPT_CAP = 32;
+const BRIDGE_INDEX_TTL_MS = 60_000;
+const BRIDGE_MISS_MAX = 512;
 
 export interface CatalogRuntimePorts {
   ownership: SessionOwnership;
@@ -111,6 +114,9 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
   let modelsCache: AvailableModel[] | null = null;
   let modelsCacheTime = 0;
   const contextWindowMemo = new Map<string, number>();
+  let bridgeIndex: { builtAt: number; byId: Map<string, DiscoveryCandidate> } | null = null;
+  let lastBridgeScanAt = 0;
+  const bridgeMisses = new Map<string, number>();
 
   function getContextWindow(modelId: string | null | undefined): number {
     if (!modelId) return DEFAULT_CONTEXT_WINDOW;
@@ -333,42 +339,67 @@ export function createCatalogRuntime(ports: CatalogRuntimePorts): CatalogRuntime
         } catch {}
       }
       // Include closed intermediate parents between two live sessions (or below a
-      // cross-host ancestor) so the Active tab can render bridge rows without a full scan.
-      const bridgeIds = new Set<string>();
+      // cross-host ancestor) from one shared history index, capping attempts (misses included).
+      const bridgeIds: string[] = [];
+      const bridgeIdSet = new Set<string>();
       for (const id of visibleIds) {
+        if (bridgeIds.length >= BRIDGE_ATTEMPT_CAP) break;
         const chain: string[] = [];
         const visited = new Set<string>([id]);
         let cursor = launchParents.get(id as never) || null;
         while (cursor && chain.length < 16 && !visited.has(cursor)) {
           visited.add(cursor);
           if (visibleIds.has(cursor) || parseHostQualifiedCaller(cursor)) {
-            for (const step of chain) bridgeIds.add(step);
+            for (const step of chain) {
+              if (bridgeIds.length >= BRIDGE_ATTEMPT_CAP) break;
+              if (!bridgeIdSet.has(step)) { bridgeIdSet.add(step); bridgeIds.push(step); }
+            }
             break;
           }
           chain.push(cursor);
           cursor = launchParents.get(cursor) || null;
         }
       }
-      let bridgesAdded = 0;
-      for (const bridgeId of bridgeIds) {
-        if (bridgesAdded >= 32) break;
-        try {
-          const resolved = ownership.resolveSessionCandidate(bridgeId);
-          if (!resolved) continue;
-          const candidate: DiscoveryCandidate = {
-            ...resolved,
-            dirName: path.basename(path.dirname(resolved.file)),
-            depth: 0,
-            identitySource: 'basename',
-          };
-          history.push({ source: candidate, info: sessionIndex.getSessionInfo(resolved), liveChild: false, bridge: true, advice: historicalAdvice(resolved, false) });
-          bridgesAdded += 1;
-        } catch {}
+      if (bridgeIds.length) {
+        const now = Date.now();
+        const isFreshMiss = (id: string) => {
+          const missedAt = bridgeMisses.get(id);
+          return missedAt !== undefined && now - missedAt < BRIDGE_INDEX_TTL_MS;
+        };
+        const hasUnseen = bridgeIds.some(id => !bridgeIndex?.byId.has(id) && !isFreshMiss(id));
+        if ((!bridgeIndex || hasUnseen) && (lastBridgeScanAt === 0 || now - lastBridgeScanAt >= BRIDGE_INDEX_TTL_MS)) {
+          try {
+            const discovery = discoverHarnessSessions();
+            sessionSources.refresh(discovery);
+            bridgeIndex = { builtAt: now, byId: new Map(discovery.candidates.map(candidate => [candidate.routeId, candidate])) };
+            bridgeMisses.clear();
+          } catch {}
+          lastBridgeScanAt = now;
+        }
+        const recordMiss = (id: string) => {
+          if (bridgeMisses.size >= BRIDGE_MISS_MAX) bridgeMisses.clear();
+          bridgeMisses.set(id, now);
+        };
+        for (const bridgeId of bridgeIds) {
+          if (isFreshMiss(bridgeId)) continue;
+          const candidate = bridgeIndex?.byId.get(bridgeId);
+          if (!candidate) { recordMiss(bridgeId); continue; }
+          try {
+            history.push({ source: candidate, info: sessionIndex.getSessionInfo(candidate), liveChild: false, bridge: true, advice: historicalAdvice(candidate, false) });
+          } catch {
+            bridgeIndex?.byId.delete(bridgeId);
+            recordMiss(bridgeId);
+          }
+        }
       }
     } else {
       try {
         const discovery = discoverHarnessSessions();
         sessionSources.refresh(discovery);
+        const now = Date.now();
+        bridgeIndex = { builtAt: now, byId: new Map(discovery.candidates.map(candidate => [candidate.routeId, candidate])) };
+        lastBridgeScanAt = now;
+        bridgeMisses.clear();
         discoveryTruncated = discovery.truncated;
         discoverySkipped = discovery.skipped;
         const activeIds = new Set(active.map(observation => observation.id));

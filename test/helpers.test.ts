@@ -455,6 +455,25 @@ test('buildSessionFamilies bridges closed intermediate parents without pulling i
   assert.equal(roots[0].children[0].children[0].session.id, 'leaf');
   assert.equal(roots[0].size, 2, 'bridge row does not inflate real session count');
   assert.deepEqual(H.flattenSessionFamilies([roots[0]]).map(s => s.id), ['root', 'leaf']);
+
+  // B2: when the closed intermediate parent is absent (cold Active load), the active leaf still stays visible.
+  const coldActive = H.buildSessionFamilies(active);
+  assert.deepEqual(coldActive.map(r => r.session.id), ['leaf', 'solo', 'root']);
+});
+
+test('buildSessionFamilies handles a 2,000-deep chain iteratively in linear time', () => {
+  const chain = [];
+  for (let i = 0; i < 2000; i++) {
+    chain.push({ id: `n-${i}`, parentId: i > 0 ? `n-${i - 1}` : null, cwd: '/w', lastActivity: i + 1 });
+  }
+  const start = Date.now();
+  const roots = H.buildSessionFamilies(chain);
+  const elapsed = Date.now() - start;
+  assert.equal(roots.length, 1);
+  assert.equal(roots[0].session.id, 'n-0');
+  assert.equal(roots[0].size, 2000);
+  assert.equal(H.flattenSessionFamilies(roots).length, 2000);
+  assert.ok(elapsed < 100, `expected linear-time 2,000-node build, took ${elapsed}ms`);
 });
 
 test('session family cycles degrade to standalone roots', () => {

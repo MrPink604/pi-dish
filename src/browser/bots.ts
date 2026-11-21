@@ -41,19 +41,60 @@ export function formatPlaces(places: readonly BotPlace[]): string {
   return places.map(place => `${place.label}: ${place.host ? `${place.host}:` : ''}${place.cwd}`).join('\n');
 }
 
-/** Bots in tree order, each with its depth; a bot whose parent is not listed is shown at the top. */
-export function botTree(bots: readonly SidebarBot[]): { bot: SidebarBot; depth: number }[] {
-  const ids = new Set(bots.map(bot => bot.id));
+/** Index valid non-cyclic bot parent edges; self-parents and cycles break cleanly into roots. */
+function indexBotChildren(bots: readonly SidebarBot[]): Map<string | null, SidebarBot[]> {
+  const byId = new Map(bots.map(bot => [bot.id, bot]));
+  const parentOf = new Map<string, string | null>();
+  for (const bot of bots) {
+    const parent = bot.parentId && bot.parentId !== bot.id && byId.has(bot.parentId) ? bot.parentId : null;
+    parentOf.set(bot.id, parent);
+  }
+  const state = new Map<string, 1 | 2>();
+  const inCycle = new Set<string>();
+  for (const bot of bots) {
+    if (state.has(bot.id)) continue;
+    const trail: string[] = [];
+    const trailIndex = new Map<string, number>();
+    let cur: string | null = bot.id;
+    while (cur && !state.has(cur)) {
+      state.set(cur, 1);
+      trailIndex.set(cur, trail.length);
+      trail.push(cur);
+      cur = parentOf.get(cur) ?? null;
+    }
+    if (cur && state.get(cur) === 1) {
+      const start = trailIndex.get(cur)!;
+      for (let i = start; i < trail.length; i++) inCycle.add(trail[i]);
+    }
+    for (const step of trail) state.set(step, 2);
+  }
   const children = new Map<string | null, SidebarBot[]>();
   for (const bot of bots) {
-    const parent = bot.parentId && ids.has(bot.parentId) ? bot.parentId : null;
-    children.set(parent, [...children.get(parent) ?? [], bot]);
+    const parent = inCycle.has(bot.id) ? null : (parentOf.get(bot.id) ?? null);
+    const list = children.get(parent);
+    if (list) list.push(bot);
+    else children.set(parent, [bot]);
   }
+  return children;
+}
+
+/** Bots in tree order, each with its depth; a bot whose parent is missing or cyclic is shown at the top. */
+export function botTree(bots: readonly SidebarBot[]): { bot: SidebarBot; depth: number }[] {
+  const children = indexBotChildren(bots);
   const out: { bot: SidebarBot; depth: number }[] = [];
+  const visited = new Set<string>();
   const walk = (parent: string | null, depth: number) => {
-    for (const bot of children.get(parent) ?? []) { out.push({ bot, depth }); walk(bot.id, depth + 1); }
+    for (const bot of children.get(parent) ?? []) {
+      if (visited.has(bot.id)) continue;
+      visited.add(bot.id);
+      out.push({ bot, depth });
+      walk(bot.id, depth + 1);
+    }
   };
   walk(null, 0);
+  for (const bot of bots) {
+    if (!visited.has(bot.id)) { visited.add(bot.id); out.push({ bot, depth: 0 }); }
+  }
   return out;
 }
 
@@ -108,10 +149,8 @@ export function buildBotSessionTree(
   const liveBots = bots.filter(bot => bot.status !== 'retired');
   if (!liveBots.length) return { roots: [], claimed: new Set(), botCount: 0 };
 
-  const botById = new Map<string, SidebarBot>();
   const botByRoute = new Map<string, SidebarBot>();
   for (const bot of liveBots) {
-    botById.set(bot.id, bot);
     botByRoute.set(bot.sessionId, bot);
     botByRoute.set(bot.id, bot);
   }
@@ -173,12 +212,10 @@ export function buildBotSessionTree(
   }
 
   const workerSessionsByBot = new Map<string, SessionEntry[]>();
-  const workerOwnerByKey = new Map<string, string>();
   const bridgePoolByBot = new Map<string, Map<string, SessionEntry>>();
   const bridgeRootsByBot = new Map<string, Set<string>>();
   const addWorker = (botId: string, session: SessionEntry) => {
     const key = sessionRefKey(session);
-    workerOwnerByKey.set(key, botId);
     claimed.add(key);
     const list = workerSessionsByBot.get(botId);
     if (list) list.push(session);
@@ -188,7 +225,6 @@ export function buildBotSessionTree(
     let map = bridgePoolByBot.get(botId);
     if (!map) { map = new Map(); bridgePoolByBot.set(botId, map); }
     map.set(key, session);
-    workerOwnerByKey.set(key, botId);
     if (isRoot) {
       let set = bridgeRootsByBot.get(botId);
       if (!set) { set = new Set(); bridgeRootsByBot.set(botId, set); }
@@ -196,58 +232,69 @@ export function buildBotSessionTree(
     }
   };
 
+  // Precompute parent links once and resolve bot ownership in a single O(N) memoized pass.
+  const nonBotByKey = new Map<string, SessionEntry>();
+  const parentKeyByKey = new Map<string, string | null>();
   for (const session of nonBotSessions) {
-    const owner = parentBotOf(session);
-    if (owner) addWorker(owner.id, session);
+    const key = sessionRefKey(session);
+    if (!nonBotByKey.has(key)) nonBotByKey.set(key, session);
+    parentKeyByKey.set(key, resolveParentKey(session.host, sessionFamilyParentId(session), hostByLower));
+  }
+  for (const [key, session] of poolByKey) {
+    parentKeyByKey.set(key, resolveParentKey(session.host, sessionFamilyParentId(session), hostByLower));
   }
 
-  // Claim descendants of already-claimed workers across workspaces and hosts,
-  // walking through closed intermediate parents in `bridgePool` when present.
-  let progressed = true;
-  while (progressed) {
-    progressed = false;
-    for (const session of nonBotSessions) {
-      const key = sessionRefKey(session);
-      if (workerOwnerByKey.has(key)) continue;
-      const chain: [string, SessionEntry][] = [];
-      const seen = new Set<string>([key]);
-      let cursor: SessionEntry | undefined = session;
-      let resolvedBotId: string | null = null;
-      let topPoolKey: string | null = null;
-      while (cursor) {
-        const directBot = cursor === session ? null : parentBotOf(cursor);
-        if (directBot) {
-          resolvedBotId = directBot.id;
-          topPoolKey = sessionRefKey(cursor);
-          break;
-        }
-        const parentKey = resolveParentKey(cursor.host, sessionFamilyParentId(cursor), hostByLower);
-        if (!parentKey || seen.has(parentKey)) break;
-        seen.add(parentKey);
-        const ownerBotId = workerOwnerByKey.get(parentKey);
-        if (ownerBotId) {
-          resolvedBotId = ownerBotId;
-          break;
-        }
-        const pooled = poolByKey.get(parentKey);
-        if (!pooled) break;
-        chain.push([parentKey, pooled]);
-        cursor = pooled;
+  const ownerByKey = new Map<string, string | null>();
+  const directPoolRootBot = new Map<string, string>();
+  const resolveOwner = (startKey: string): string | null => {
+    const cached = ownerByKey.get(startKey);
+    if (cached !== undefined) return cached;
+    const trail: string[] = [];
+    const visiting = new Set<string>();
+    let cur: string | null = startKey;
+    let resolved: string | null = null;
+    while (cur) {
+      const known = ownerByKey.get(cur);
+      if (known !== undefined) { resolved = known; break; }
+      if (visiting.has(cur)) { resolved = null; break; }
+      const entry = nonBotByKey.get(cur) ?? poolByKey.get(cur);
+      if (!entry) { resolved = null; break; }
+      visiting.add(cur);
+      trail.push(cur);
+      const directBot = parentBotOf(entry);
+      if (directBot) {
+        resolved = directBot.id;
+        if (poolByKey.has(cur)) directPoolRootBot.set(cur, directBot.id);
+        break;
       }
-      if (!resolvedBotId) continue;
-      for (const [bKey, bSession] of chain) addBridge(resolvedBotId, bKey, bSession, bKey === topPoolKey);
-      addWorker(resolvedBotId, session);
-      progressed = true;
+      cur = parentKeyByKey.get(cur) ?? null;
+    }
+    for (const step of trail) ownerByKey.set(step, resolved);
+    return resolved;
+  };
+
+  for (const session of nonBotSessions) {
+    const key = sessionRefKey(session);
+    const botId = resolveOwner(key);
+    if (!botId) continue;
+    addWorker(botId, session);
+    // Register only the closed pool ancestors actually needed to bridge this visible worker.
+    let cur = parentKeyByKey.get(key) ?? null;
+    const seen = new Set<string>([key]);
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      if (nonBotByKey.has(cur)) break;
+      const pooled = poolByKey.get(cur);
+      if (!pooled) break;
+      if (bridgePoolByBot.get(botId)?.has(cur)) break;
+      const isRoot = directPoolRootBot.get(cur) === botId;
+      addBridge(botId, cur, pooled, isRoot);
+      if (isRoot) break;
+      cur = parentKeyByKey.get(cur) ?? null;
     }
   }
 
-  const childrenByParent = new Map<string | null, SidebarBot[]>();
-  for (const bot of liveBots) {
-    const parent = bot.parentId && botById.has(bot.parentId) ? bot.parentId : null;
-    const list = childrenByParent.get(parent);
-    if (list) list.push(bot);
-    else childrenByParent.set(parent, [bot]);
-  }
+  const childrenByParent = indexBotChildren(liveBots);
 
   const visited = new Set<string>();
   const buildNode = (bot: SidebarBot, depth: number): BotTreeNode => {
@@ -292,6 +339,9 @@ export function buildBotSessionTree(
   };
 
   const roots = (childrenByParent.get(null) ?? []).map(bot => buildNode(bot, 0));
+  for (const bot of liveBots) {
+    if (!visited.has(bot.id)) roots.push(buildNode(bot, 0));
+  }
   return { roots, claimed, botCount: liveBots.length };
 }
 

@@ -437,3 +437,51 @@ test('collapsed host, workspace, and date group headers bubble up askPending ahe
     const collapsedDate = render({ active, view: 'recent', collapsed: new Set(['date:today']) }).html;
     assert.match(collapsedDate, /workspace-group-header[\s\S]*?session-item-status asking"[^>]*>\?<\/span>/);
 });
+test('bot cycles and self-parents break into visible roots without dropping claimed workers, and deep bot chains stay fast', () => {
+    const bot = (id, name, parentId) => ({
+        id, name, parentId, status: 'active', model: 'claude-code/claude-opus-5-5', thinking: null, identity: name, places: [], sessionId: `route-${id}`,
+    });
+    const bots = [bot('a', 'BotA', 'b'), bot('b', 'BotB', 'a'), bot('self', 'SelfBot', 'self'), bot('child', 'ChildOfA', 'a')];
+    const active = [
+        { id: 'route-a', name: 'BotA', harnessId: 'bot', cwd: '/home', isActive: true },
+        { id: 'route-b', name: 'BotB', harnessId: 'bot', cwd: '/home', isActive: true },
+        { id: 'route-self', name: 'SelfBot', harnessId: 'bot', cwd: '/home', isActive: true },
+        { id: 'w-a', name: 'WorkerA', cwd: '/repo', parentId: 'route-a', isActive: true },
+        { id: 'w-self', name: 'WorkerSelf', cwd: '/repo', parentId: 'route-self', isActive: true },
+    ];
+    const html = render({ active, tab: 'active', bots }).html;
+    assert.match(html, /data-bot-id="a" style="padding-left:0px"/);
+    assert.match(html, /data-bot-id="b" style="padding-left:0px"/);
+    assert.match(html, /data-bot-id="self" style="padding-left:0px"/);
+    assert.match(html, /data-bot-id="child" style="padding-left:14px"/);
+    assert.match(html, /data-id="w-a"/);
+    assert.match(html, /data-id="w-self"/);
+    // S6: saved scopes filter bridge rows too, leaving the active leaf visible rather than bypassing the scope.
+    const scopedHtml = render({
+        active: [
+            { id: 'orch', name: 'ORCH', cwd: '/orch', isActive: true, lastActivity: 1000 },
+            { id: 'leaf', name: 'Active Leaf', cwd: '/repo', parentId: 'mid', isActive: true, lastActivity: 3000 },
+        ],
+        previous: [
+            { id: 'mid', name: 'Secret Mid', cwd: '/secret', parentId: 'orch', isActive: false, lastActivity: 2000 },
+        ],
+        tab: 'active',
+        scope: '-secret',
+    }).html;
+    assert.doesNotMatch(scopedHtml, /data-id="mid"/, 'bridge row rejected by saved scope is not rendered');
+    assert.match(scopedHtml, /data-id="leaf"/, 'active leaf stays visible when its bridge is filtered out');
+    // B3: 2,000-deep worker chain under a bot resolves iteratively in linear time.
+    const deepBot = [bot('root', 'RootBot', null)];
+    const deepSessions = [{ id: 'route-root', name: 'RootBot', harnessId: 'bot', cwd: '/home', isActive: true, lastActivity: 1 }];
+    for (let i = 0; i < 2000; i++) {
+        deepSessions.push({
+            id: `w-${i}`, name: `W${i}`, harnessId: 'pi', cwd: '/repo',
+            parentId: i === 0 ? 'route-root' : `w-${i - 1}`, isActive: true, lastActivity: i + 2,
+        });
+    }
+    const start = Date.now();
+    const rendered = render({ active: deepSessions, tab: 'active', bots: deepBot }).html;
+    const elapsed = Date.now() - start;
+    assert.match(rendered, /data-bot-toggle="root"[\s\S]*?<small>2000<\/small>/);
+    assert.ok(elapsed < 150, `expected linear-time 2,000-node bot tree render, took ${elapsed}ms`);
+});

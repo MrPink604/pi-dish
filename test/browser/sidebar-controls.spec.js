@@ -301,3 +301,40 @@ async function setup(page) {
         migratedExpanded: ['bot-closed:hosts'],
     });
 });
+(0, fixtures_js_1.test)('pinning a cross-host child preserves an unrelated pinned session sharing the parent id on the child host', async ({ page, fleet }) => {
+    await setup(page);
+    const result = await page.evaluate(() => {
+        const HUB = '11111111-1111-4111-8111-111111111111';
+        const PEER = '22222222-2222-4222-8222-222222222222';
+        const state = window.controlsState, controls = window.customSidebar;
+        state.setSessionLists([
+            { hostId: HUB, active: [{ id: 'shared-id', name: 'Hub Root', cwd: '/orch', isActive: true }] },
+            { hostId: PEER, active: [
+                    { id: 'shared-id', name: 'Peer Unrelated', cwd: '/other', isActive: true },
+                    { id: 'peer-child', name: 'Peer Child', cwd: '/gpu', parentId: `${HUB}:shared-id`, isActive: true },
+                ] },
+        ]);
+        const render = () => controls.updateList(PiDishBrowser.renderSidebar({
+            ...state.sessions, selected: null, tab: 'active', view: 'workspace', query: '', queriedFor: '', scope: '', indexing: false,
+            contextMetric: 'percent', pending: [], selectedSpawn: null,
+            expanded: new Set([`${HUB} shared-id`]), collapsed: controls.collapsed, pinned: controls.pinned, roots: controls.familyRoots(),
+            closeConfirm: null, closeBusy: null, multiHost: true,
+            hosts: [
+                { hostId: HUB, self: true, label: 'beelink', state: 'reachable', key: 'self', color: '#1af', dot: '', hasCache: true },
+                { hostId: PEER, self: false, label: 'tycho', state: 'reachable', key: 'tycho', color: '#fa1', dot: '', hasCache: true },
+            ],
+            bots: [], botRetireArmed: null, selfHostId: HUB, unread: () => false, hostChip: () => '',
+        }));
+        controls.mount();
+        // Pin the unrelated peer session with id 'shared-id' first.
+        controls.togglePin('shared-id', `${PEER} shared-id`, [`${PEER} shared-id`], PEER);
+        render();
+        // Now click the pin button on the cross-host child nested under HUB's 'shared-id'.
+        fixtureElement(document.querySelector('[data-id="peer-child"] .session-pin-btn'), 'peer-child pin').click();
+        return [...controls.pinned];
+    });
+    (0, fixtures_js_1.expect)(result).toEqual([
+        '22222222-2222-4222-8222-222222222222 shared-id',
+        '11111111-1111-4111-8111-111111111111 shared-id',
+    ]);
+});

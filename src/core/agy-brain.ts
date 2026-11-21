@@ -552,14 +552,40 @@ export function inspectAgyTranscriptActivity(conversationId: string): AgyTranscr
   };
 }
 
+const MAX_ACTIVE_WORK_DEPTH = 16;
+const MAX_ACTIVE_WORK_NODES = 64;
+
+function containedRegularFile(file: string, rootDir: string): string | null {
+  try {
+    const stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    const realRoot = fs.realpathSync(rootDir);
+    const realFile = fs.realpathSync(file);
+    const rel = path.relative(realRoot, realFile);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    return file;
+  } catch {
+    return null;
+  }
+}
+
 /** True when any subagent, swarm worker, or non-daemon task of `sessionId` is actively running. */
-export function hasActiveAgyBrainWork(nativeSessionId: string, visited = new Set<string>()): boolean {
-  if (visited.has(nativeSessionId)) return false;
+export function hasActiveAgyBrainWork(
+  nativeSessionId: string,
+  visited = new Set<string>(),
+  budget: { remaining: number } = { remaining: MAX_ACTIVE_WORK_NODES },
+  depth = 0,
+): boolean {
+  if (depth > MAX_ACTIVE_WORK_DEPTH || budget.remaining <= 0 || visited.has(nativeSessionId)) return false;
   visited.add(nativeSessionId);
+  budget.remaining -= 1;
   const restartMs = readLastServerRestartMs(nativeSessionId);
   const subs = readAgySubagentDescriptors(nativeSessionId);
+  const root = agyBrainRoot();
   for (const sub of subs) {
+    if (budget.remaining <= 0) break;
     if (sub.swarmKilled || /KILLED|ERROR|FAILED|STOPPED|DEAD/i.test(sub.rawState)) continue;
+    if (!containedRegularFile(sub.transcriptFile, root)) continue;
     if (restartMs > 0) {
       try {
         if (fs.statSync(sub.transcriptFile).mtimeMs < restartMs) continue;
@@ -567,7 +593,7 @@ export function hasActiveAgyBrainWork(nativeSessionId: string, visited = new Set
     }
     const act = inspectAgyTranscriptActivity(sub.conversationId);
     if (act.working) return true;
-    if (hasActiveAgyBrainWork(sub.conversationId, visited)) return true;
+    if (hasActiveAgyBrainWork(sub.conversationId, visited, budget, depth + 1)) return true;
   }
   const tasks = readAgyBackgroundTasks(nativeSessionId, true);
   return tasks.some(task => task.status === 'running' && !task.isDaemon);
@@ -600,10 +626,12 @@ function parseSystemMessage(raw: string): { sender: string; content: string; noi
 }
 
 function resolveAgyParentSessionPath(parentId: string): string | null {
-  const mirror = path.join(dishDir(), 'agy', 'sessions', `${parentId}.jsonl`);
-  if (fs.existsSync(mirror)) return mirror;
+  if (!validSessionId(parentId)) return null;
+  const mirrorRoot = path.join(dishDir(), 'agy', 'sessions');
+  const mirror = path.join(mirrorRoot, `${parentId}.jsonl`);
+  if (containedRegularFile(mirror, mirrorRoot)) return mirror;
   const transcript = agyBrainTranscriptPath(parentId);
-  if (transcript && fs.existsSync(transcript)) return transcript;
+  if (transcript && containedRegularFile(transcript, agyBrainRoot())) return transcript;
   return null;
 }
 

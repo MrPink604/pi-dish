@@ -234,6 +234,17 @@ test('active-only polls retain closed bridge rows sent in previous alongside liv
   assert.equal(byId.get('mid')?.isActive, false);
   assert.equal(byId.get('mid')?.subagentLive, undefined);
   assert.equal(byId.get('sub')?.subagentLive, true);
+
+  // S7: once the closed bridge session is resumed and returns in `active`, its stale copy leaves `previous`.
+  const resumed = loader.load(host, undefined, false, 1);
+  at(calls, 1).resolve({
+    active: [{ id: 'root' }, { id: 'mid', parentId: 'root', isActive: true }, { id: 'leaf', parentId: 'mid' }],
+    previous: [],
+    children: [],
+  });
+  await resumed;
+  assert.equal(present(loader.getCache(host)).previous.some(row => row.id === 'mid'), false,
+    'resumed bridge row is pruned from cached previous so search cannot show a stale duplicate');
 });
 
 test('acknowledged metadata survives failed fan-out and partial child replay through sidebar publication', async () => {

@@ -60,9 +60,16 @@ const bots: UiScenario = async ({ desktop, check, base, emit, fs, path, tmpHome,
     const independentId = '2026-07-05T00-03-00-uiswitch';
     check(await desktop.locator(`.bots-segment .session-item[data-id="${independentId}"]`).count() === 0
       && await desktop.locator(`.session-item[data-id="${independentId}"]`).count() === 1, 'sessions no bot started stay outside the Bots group');
-    check(await desktop.locator(`.session-item[data-id="${BETA_ID}"]`).count()
-      === await desktop.locator(`.bots-segment .session-item[data-id="${BETA_ID}"]`).count(),
-      'cross-workspace child of a bot worker stays nested inside Bots instead of leaking out');
+    const workerToggle = desktop.locator(`.bots-segment .session-item[data-id="${SESSION_ID}"] .session-family-toggle`);
+    const expandedForCheck = (await workerToggle.getAttribute('aria-expanded')) !== 'true';
+    if (expandedForCheck) {
+      await workerToggle.click();
+      await desktop.waitForSelector(`.bots-segment .session-item[data-id="${BETA_ID}"]`, { timeout: 5000 });
+    }
+    check(await desktop.locator(`.bots-segment .session-item[data-id="${BETA_ID}"]`).count() === 1
+      && await desktop.locator(`.session-item[data-id="${BETA_ID}"]`).count() === 1,
+      'cross-workspace child of a bot worker renders once inside Bots instead of leaking out');
+    if (expandedForCheck) await workerToggle.click();
     await desktop.click('#tabActive');
   } finally {
     if (priorProvenance === null) fs.rmSync(provenanceFile, { force: true });
