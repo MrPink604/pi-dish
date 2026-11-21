@@ -36,7 +36,7 @@ export declare function messageText(message: unknown): string;
 export declare function settledWorker(session: unknown, window: unknown, since: number): SettledWorker | null;
 export interface WorkerRecord {
     name: string;
-    /** The short ref `list` shows, host-qualified for a remote worker. */
+    /** The full session id, host-qualified for a remote worker. */
     ref: string;
     /** The full session id the routes speak. */
     sessionId: string;
@@ -56,6 +56,10 @@ export interface WorkerRecord {
     /** When the watch ended: the session stopped, or 24 hours passed. */
     watchEndedAt?: string;
 }
+/** Whether a ref names this worker through any of the CLI's equivalent forms. */
+export declare function workerRefMatches(worker: WorkerRecord, wanted: string): boolean;
+/** Find one owned worker, including a list disambiguator such as `desktop/01a1fc02-0`. */
+export declare function findOwnedWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined;
 export interface ClosedWindow {
     line: string;
     closedAt: string;

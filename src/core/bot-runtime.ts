@@ -29,7 +29,7 @@ import type { RosterBot } from './bot-handlers';
 import type { BotMirror } from './bot-mirror';
 import { record as isRecord } from './helper-values';
 import type { KnowledgeSearch, KnowledgeWriteResult } from './knowledge';
-import { stableSessionRef } from './helper-refs';
+import { sessionRefAliases } from './helper-refs';
 import type { ProtocolRecord } from './wire-protocol';
 
 /** The notebook's cap, in UTF-8 bytes. */
@@ -107,7 +107,7 @@ export function settledWorker(session: unknown, window: unknown, since: number):
 
 export interface WorkerRecord {
   name: string;
-  /** The short ref `list` shows, host-qualified for a remote worker. */
+  /** The full session id, host-qualified for a remote worker. */
   ref: string;
   /** The full session id the routes speak. */
   sessionId: string;
@@ -128,22 +128,68 @@ export interface WorkerRecord {
   watchEndedAt?: string;
 }
 
+/** Full refs are durable handles; old records may still contain a short ref. */
+function fullWorkerRef(sessionId: string, host: string | null): string {
+  return host ? `${host}/${sessionId}` : sessionId;
+}
+
 /**
  * Version 1 workers kept the long ref and a `reportedAt`: their watch ended at
- * the one report, though the session may still be open.
+ * the one report, though the session may still be open. Version 2 changed to
+ * short refs, which were not durable when sessions shared a timestamp prefix;
+ * normalize both versions to the full id while retaining the rest of the record.
  */
 function migrateWorkers(value: unknown): Record<string, WorkerRecord> {
   const workers: Record<string, WorkerRecord> = {};
   for (const [dispatchId, raw] of Object.entries(isRecord(value) ? value : {})) {
-    const old = raw as { name: string; ref: string; harness: string; host: string | null; startedAt: string; reportedAt?: string };
-    const prefix = old.host ? `${old.host}/` : '';
-    const sessionId = prefix && old.ref.startsWith(prefix) ? old.ref.slice(prefix.length) : old.ref;
+    const old = isRecord(raw) ? raw : {};
+    const host = typeof old.host === 'string' && old.host ? old.host : null;
+    const storedRef = typeof old.ref === 'string' ? old.ref : '';
+    const prefix = host ? `${host}/` : '';
+    const sessionId = typeof old.sessionId === 'string' && old.sessionId
+      ? old.sessionId
+      : prefix && storedRef.startsWith(prefix) ? storedRef.slice(prefix.length) : storedRef;
+    const reportedAt = typeof old.reportedAt === 'string' ? old.reportedAt : undefined;
+    const reports = Number.isFinite(Number(old.reports)) ? Number(old.reports) : (reportedAt ? 1 : 0);
     workers[dispatchId] = {
-      name: old.name, ref: `${prefix}${stableSessionRef(sessionId)}`, sessionId, harness: old.harness, host: old.host,
-      startedAt: old.startedAt, reports: old.reportedAt ? 1 : 0, ...(old.reportedAt ? { watchEndedAt: old.reportedAt } : {}),
-    };
+      ...(old as Partial<WorkerRecord>),
+      name: String(old.name ?? ''), ref: fullWorkerRef(sessionId, host), sessionId,
+      harness: String(old.harness ?? 'pi'), host, startedAt: String(old.startedAt ?? ''), reports,
+      ...(reportedAt && !old.watchEndedAt ? { watchEndedAt: reportedAt } : {}),
+    } as WorkerRecord;
   }
   return workers;
+}
+
+function splitWorkerRef(value: string): { host: string | null; id: string } {
+  const slash = value.indexOf('/');
+  return slash > 0 ? { host: value.slice(0, slash), id: value.slice(slash + 1) } : { host: null, id: value };
+}
+
+/** Whether a ref names this worker through any of the CLI's equivalent forms. */
+export function workerRefMatches(worker: WorkerRecord, wanted: string): boolean {
+  const parsed = splitWorkerRef(wanted);
+  if (parsed.host && parsed.host !== 'self' && parsed.host !== worker.host) return false;
+  if (parsed.host === 'self' && worker.host !== null) return false;
+  const aliases = new Set([worker.sessionId, ...sessionRefAliases(worker.sessionId), splitWorkerRef(worker.ref).id]);
+  return [...aliases].some(alias => alias === parsed.id || alias.startsWith(parsed.id));
+}
+
+/** Find one owned worker, including a list disambiguator such as `desktop/01a1fc02-0`. */
+export function findOwnedWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined {
+  const entries = Object.entries(memory?.workers ?? {});
+  const parsed = splitWorkerRef(wanted);
+  const disambiguated = parsed.id.match(/^(.*)-(\d+)$/);
+  if (disambiguated) {
+    const base = parsed.host ? `${parsed.host}/${disambiguated[1]}` : disambiguated[1];
+    const candidates = entries.filter(([, worker]) => workerRefMatches(worker, base));
+    const index = Number(disambiguated[2]);
+    // Prefer the list's ordinal over a coincidental prefix such as
+    // `01a1fc02-1`, which may itself prefix one worker's UUID.
+    if (candidates.length && index < candidates.length) return candidates[index];
+  }
+  const direct = entries.filter(([, worker]) => workerRefMatches(worker, wanted));
+  return direct.length === 1 ? direct[0] : undefined;
 }
 
 export interface ClosedWindow {
@@ -489,7 +535,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
 
   const MemoryDoc = durable.defineDoc<BotMemory & Durable.JsonObject>({
     kind: 'bot.memory',
-    version: 2,
+    version: 3,
     scope: 'conversation',
     history: 'latest',
     fork: 'current',
@@ -754,8 +800,9 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         }, callContext);
       }
       const { sessionId, harness } = spawned;
-      // The short ref `list` shows: what the bot repeats to the user and watches by.
-      const ref = `${args.host ? `${args.host}/` : ''}${stableSessionRef(sessionId)}`;
+      // Keep the full id: a timestamp/uuid prefix can collide with sessions started
+      // on the same host, and this ref is also the watch's durable handle.
+      const ref = fullWorkerRef(sessionId, args.host ?? null);
       await api.commit(async (tx) => {
         const memory = await tx.doc(MemoryDoc, api.conversationId);
         if (memory.workers[dispatchId]) return;
@@ -771,10 +818,9 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     },
   });
 
-  /** A worker this bot started, by its ref or session id. */
+  /** A worker this bot started, by any equivalent CLI ref form. */
   function ownWorker(memory: BotMemory | undefined, wanted: string): [string, WorkerRecord] | undefined {
-    return Object.entries(memory?.workers ?? {}).find(([, worker]) => wanted === worker.ref || wanted === worker.sessionId
-      || (worker.host !== null && wanted === `${worker.host}/${worker.sessionId}`));
+    return findOwnedWorker(memory, wanted);
   }
 
   /** Closes a session this bot started; any other ref is refused. */
@@ -827,7 +873,9 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
   async function waitFor(ref: string, since: number | undefined, timeout: number | undefined, api: Durable.ToolExecutionApi,
     callContext: Context): Promise<Durable.ToolExecutionResult> {
     const secs = Math.min(Math.max(1, Math.floor(timeout ?? WAIT_DEFAULT_SECS)), WAIT_MAX_SECS);
-    const own = ownWorker(await api.snapshot(MemoryDoc, api.conversationId, callContext), ref)?.[0];
+    const found = ownWorker(await api.snapshot(MemoryDoc, api.conversationId, callContext), ref);
+    const own = found?.[0];
+    const targetRef = found?.[1].ref ?? ref;
     const mark = (change: (worker: WorkerRecord) => void) => own === undefined ? Promise.resolve() : api.commit(async (tx) => {
       const worker = (await tx.doc(MemoryDoc, api.conversationId)).workers[own];
       if (worker) change(worker);
@@ -836,7 +884,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
     await mark(worker => { worker.waitingUntil = api.now() + (secs + 30) * 1000; });
     let settled: { state: 'finished' | 'waiting'; totalMessages: number; text: string };
     try {
-      const argv = ['wait', ref, '--timeout', String(secs), '--json', ...(since === undefined ? [] : ['--since', String(Math.max(0, Math.floor(since)))])];
+      const argv = ['wait', targetRef, '--timeout', String(secs), '--json', ...(since === undefined ? [] : ['--since', String(Math.max(0, Math.floor(since)))])];
       const data: unknown = JSON.parse(await sessions(argv, callContext.abortSignal));
       const row = isRecord(data) ? data : {};
       settled = { state: row.state === 'waiting' ? 'waiting' : 'finished', totalMessages: Number(row.totalMessages) || 0, text: messageText(row.message) };
@@ -844,8 +892,8 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
       await mark(worker => { delete worker.waitingUntil; });
     }
     await mark(worker => { worker.seen = Math.max(worker.seen ?? 0, settled.totalMessages); });
-    return both(`# ${settled.state === 'waiting' ? 'waiting for an answer' : 'finished'}: ${ref} · ${settled.totalMessages} messages\n${settled.text}`,
-      { action: 'wait', ref, ...settled });
+    return both(`# ${settled.state === 'waiting' ? 'waiting for an answer' : 'finished'}: ${targetRef} · ${settled.totalMessages} messages\n${settled.text}`,
+      { action: 'wait', ref: targetRef, ...settled });
   }
 
   /** A session row of `list` or `search --json`, as a script sees it; `host` is the fleet host, absent for this one. */
@@ -989,8 +1037,11 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         return both(shown || '(no output)', { action: 'send', ref, response: JSON.parse(shown || 'null') as JsonValue });
       }
       const action = args.action;
+      const readRef = action === 'read' && args.ref
+        ? ownWorker(await api.snapshot(MemoryDoc, api.conversationId, callContext), args.ref)?.[1].ref ?? args.ref
+        : args.ref;
       const [textArgv, jsonArgv] = action === 'list' ? [['list', '--active', ...host, ...limit], ['list', '--active', ...host, ...(limit.length ? limit : ['--full'])]]
-        : action === 'read' ? [['read', need(args.ref, 'ref'), ...limit], ['show', need(args.ref, 'ref'), ...(limit.length ? limit : ['--limit', '30']), '--max-chars', '0']]
+        : action === 'read' ? [['read', need(readRef, 'ref'), ...limit], ['show', need(readRef, 'ref'), ...(limit.length ? limit : ['--limit', '30']), '--max-chars', '0']]
           : action === 'search' ? [['search', need(args.query, 'query'), ...(args.host ? host : ['--all-hosts']), ...limit], null]
             : [[action, ...(action === 'load' ? host : [])], null];
       // The model's text is the CLI's, as before; a script's value comes from the same command's JSON.
@@ -998,7 +1049,7 @@ export async function openBotRuntime(options: BotRuntimeOptions): Promise<BotRun
         fromScript(api) ? null : sessions(textArgv, signal),
         sessions([...(jsonArgv ?? textArgv), '--json'], signal),
       ]);
-      const value = sessionsValue(action, JSON.parse(data), args);
+      const value = sessionsValue(action, JSON.parse(data), { ...args, ...(readRef ? { ref: readRef } : {}) });
       return both(shown === null ? JSON.stringify(value) : shown.trim() || '(no output)', value);
     },
   });

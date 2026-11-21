@@ -8,10 +8,10 @@ import path = require('node:path');
 import type { BotRegistry, BotRow } from '../lib/bot-registry';
 import type { BotControl, BotHandlers } from '../lib/bot-handlers';
 import type { RouteHandler } from '../lib/http-boundary';
-import type { BotRuntime, HubApi, SessionsPort } from '../lib/bot-runtime';
+import type { BotRuntime, HubApi, SessionsPort, WorkerRecord } from '../lib/bot-runtime';
 const { BotMirror }: typeof import('../lib/bot-mirror') = require('../lib/bot-mirror');
 const runtimeModule: typeof import('../lib/bot-runtime') = require('../lib/bot-runtime');
-const { openBotRuntime, settledWorker, newContextRefusal, composeHandoff } = runtimeModule;
+const { openBotRuntime, settledWorker, newContextRefusal, composeHandoff, workerRefMatches, findOwnedWorker } = runtimeModule;
 const { openBotRegistry }: typeof import('../lib/bot-registry') = require('../lib/bot-registry');
 const { createBotHandlers, changeLines, ROOM_HOP_CAP }: typeof import('../lib/bot-handlers') = require('../lib/bot-handlers');
 
@@ -271,6 +271,27 @@ test('a relay restarted while a worker runs delivers the report once', async t =
 
 const WORKER_ID = '2026-11-20T10-07-13-963Z_01a1f86c-1111-4222-8333-444455556666';
 
+const workerRecord = (sessionId: string, host: string | null, ref = host ? `${host}/${sessionId}` : sessionId): WorkerRecord => ({
+  name: sessionId, ref, sessionId, harness: 'pi', host, startedAt: '', reports: 0,
+});
+
+test('worker ownership resolves full, unique, host-qualified and disambiguated refs without crossing hosts', () => {
+  const desktopA = workerRecord('2026-11-21T02-49-16-118Z_01a1fc02-1055-722e-84fc-ff1a34d00ade', 'desktop', 'desktop/01a1fc02');
+  const desktopB = workerRecord('2026-11-21T02-49-16-119Z_01a1fc02-2055-722e-84fc-ff1a34d00ade', 'desktop', 'desktop/01a1fc02');
+  const beelink = workerRecord('2026-11-21T02-49-16-120Z_01a1fc02-3055-722e-84fc-ff1a34d00ade', 'beelink', '01a1fc02');
+  const memory = { notebook: '', notebookSavedIn: -1, windows: [], workers: { a: desktopA, b: desktopB, c: beelink } };
+
+  assert.equal(workerRefMatches(desktopA, desktopA.sessionId), true);
+  assert.equal(workerRefMatches(desktopA, `desktop/${desktopA.sessionId}`), true);
+  assert.equal(workerRefMatches(beelink, 'beelink/01a1fc02'), true);
+  assert.equal(workerRefMatches(desktopA, 'beelink/01a1fc02'), false);
+  assert.equal(findOwnedWorker(memory, desktopA.sessionId)?.[0], 'a');
+  assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02'), undefined, 'an old short ref is refused when that host is ambiguous');
+  assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-0')?.[0], 'a');
+  assert.equal(findOwnedWorker(memory, 'desktop/01a1fc02-1')?.[0], 'b');
+  assert.equal(findOwnedWorker(memory, 'beelink/01a1fc02')?.[0], 'c', 'a legacy short ref remains usable when unique on its host');
+});
+
 /** A sessions port for one worker the test drives: it works until `answer`, and `close` stops it. */
 function scriptedWorker() {
   const calls: string[][] = [];
@@ -313,10 +334,10 @@ test('a worker that settles again with new messages reports again, each report o
   await bot.runtime.prompt('What time is it after a sleep?', 'followUp');
   await until(() => worker.polls() >= 1, 'the watcher polls');
   const started = bot.mirrorLines().find(line => line.type === 'message' && (line.message as Record<string, unknown>).role === 'toolResult');
-  assert.match(textOf(started?.message), /Ref: 01a1f86c\./, 'the short ref, not the session id');
+  assert.match(textOf(started?.message), new RegExp(`Ref: ${WORKER_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.`), 'the full session id is the durable ref');
   worker.answer('⏳ running in the background');
   await until(() => reportsOf(bot).length === 1, 'the interim note is reported');
-  assert.equal(reportsOf(bot)[0], '[worker report] "clock" (01a1f86c) finished.\n\n⏳ running in the background');
+  assert.equal(reportsOf(bot)[0], `[worker report] "clock" (${WORKER_ID}) finished.\n\n⏳ running in the background`);
   // The watch goes on after a report.
   const after = worker.polls();
   await until(() => worker.polls() > after + 1, 'the watcher keeps polling');
@@ -328,7 +349,7 @@ test('a worker that settles again with new messages reports again, each report o
   });
   bot.respond(relay(bot));
   await until(() => reportsOf(bot).length === 2, 'the real result is reported', 15_000);
-  assert.equal(reportsOf(bot)[1], '[worker report] "clock" (01a1f86c) finished another turn.\n\nFri Nov 20 12:01:15 UTC 2026');
+  assert.equal(reportsOf(bot)[1], `[worker report] "clock" (${WORKER_ID}) finished another turn.\n\nFri Nov 20 12:01:15 UTC 2026`);
   await until(() => bot.mirrorLines().filter(line => line.type === 'message' && textOf(line.message).startsWith('Relayed:')).length === 2, 'both are answered');
   await severalPolls();
   assert.equal(reportsOf(bot).length, 2, 'each report once');
@@ -350,7 +371,7 @@ test('a worker whose session closes ends the watch with a last report that says 
   await until(() => reportsOf(bot).length === 1, 'the answer is reported');
   worker.state.active = false;
   await until(() => reportsOf(bot).length === 2, 'the close is reported');
-  assert.equal(reportsOf(bot)[1], '[worker report] "check" (01a1f86c) has stopped.\n\nThe session is closed; it is no longer watched.');
+  assert.equal(reportsOf(bot)[1], `[worker report] "check" (${WORKER_ID}) has stopped.\n\nThe session is closed; it is no longer watched.`);
   const polls = worker.polls();
   await severalPolls();
   assert.equal(worker.polls(), polls, 'no polls after the watch ends');
@@ -376,16 +397,32 @@ test('a bot closes a worker it started and is refused for any other ref', async 
   const results = bot.mirrorLines().filter(line => line.type === 'message' && (line.message as Record<string, unknown>).role === 'toolResult')
     .map(line => line.message as Record<string, unknown>);
   assert.equal(results[1].isError, true);
-  assert.match(textOf(results[1]), /^Refused: deadbeef is not a worker you started.*Open workers: 01a1f86c\.$/);
+  assert.match(textOf(results[1]), new RegExp(`^Refused: deadbeef is not a worker you started.*Open workers: ${WORKER_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.$`));
   assert.equal(results[2].isError, false);
-  assert.equal(textOf(results[2]), 'Closed worker "check" (01a1f86c).');
-  assert.deepEqual(worker.calls.filter(args => args[0] === 'close'), [['close', '01a1f86c']], 'only its own worker is closed');
+  assert.equal(textOf(results[2]), `Closed worker "check" (${WORKER_ID}).`);
+  assert.deepEqual(worker.calls.filter(args => args[0] === 'close'), [['close', WORKER_ID]], 'only its own worker is closed');
   // The watch ends on the first poll that sees the closed session, and that poll may still be due.
   await severalPolls();
   const polls = worker.polls();
   await severalPolls();
   assert.equal(worker.polls(), polls, 'the watch has ended');
   assert.equal(reportsOf(bot).length, 1, 'its own close is not reported back');
+});
+
+test('a bot closes its worker through every equivalent ref form', async t => {
+  for (const ref of [WORKER_ID, `desktop/${WORKER_ID}`, 'desktop/01a1f86c', 'desktop/01a1f86c-0']) {
+    const worker = scriptedWorker();
+    const bot = await openTestBot(t, worker.port);
+    bot.respond(
+      toolCall(bot, 'spawn_worker', { name: 'check', brief: 'Check it.', host: 'desktop' }), bot.faux.fauxAssistantMessage('Started check.'),
+      toolCall(bot, 'sessions', { action: 'close', ref }), bot.faux.fauxAssistantMessage('Closed it.'),
+    );
+    await bot.runtime.prompt(`Close ${ref}`, 'followUp');
+    await until(() => worker.polls() >= 1, `the watcher polls for ${ref}`);
+    worker.answer('All good.');
+    await until(() => said(bot, 'Closed it.'), `the bot closes ${ref}`);
+    assert.deepEqual(worker.calls.filter(args => args[0] === 'close'), [['close', `desktop/${WORKER_ID}`]], ref);
+  }
 });
 
 test('closing an own worker that was already closed from outside marks it closed, and a close that fails otherwise does not', async t => {
@@ -415,7 +452,7 @@ test('closing an own worker that was already closed from outside marks it closed
   assert.equal(results[1].isError, true);
   assert.match(textOf(results[1]), /pi-dish is restarting/, 'a worker still running stays open');
   assert.notEqual(results[2].isError, true);
-  assert.equal(textOf(results[2]), 'Worker "check" (01a1f86c) had already been closed; it is now marked closed in your records.');
+  assert.equal(textOf(results[2]), `Worker "check" (${WORKER_ID}) had already been closed; it is now marked closed in your records.`);
   assert.match(textOf(results[3]), /Open workers: none\.$/, 'it is no longer among the open workers');
 });
 
@@ -997,8 +1034,8 @@ test('a worker whose answer a script waited for does not report it, and reports 
   );
   await bot.runtime.prompt('Ask a worker to say hello', 'followUp');
   await until(() => said(bot, 'It said hello.'), 'the script ends');
-  assert.deepEqual(returned(toolResults(bot)[0]), { ref: '01a1f86c', answer: 'QUICK-ANSWER' });
-  assert.deepEqual(worker.calls.find(args => args[0] === 'wait'), ['wait', '01a1f86c', '--timeout', '60', '--json']);
+  assert.deepEqual(returned(toolResults(bot)[0]), { ref: WORKER_ID, answer: 'QUICK-ANSWER' });
+  assert.deepEqual(worker.calls.find(args => args[0] === 'wait'), ['wait', WORKER_ID, '--timeout', '60', '--json']);
   const polled = worker.polls();
   await until(() => worker.polls() > polled + 2, 'the watch keeps polling');
   assert.deepEqual(reportsOf(bot), [], 'the answer the script took is not reported');
@@ -1006,7 +1043,7 @@ test('a worker whose answer a script waited for does not report it, and reports 
   worker.state.messages.push({ role: 'user', content: 'more' });
   worker.answer('LATER-ANSWER');
   await until(() => reportsOf(bot).length === 1, 'the next turn is reported');
-  assert.equal(reportsOf(bot)[0], '[worker report] "quick" (01a1f86c) finished.\n\nLATER-ANSWER');
+  assert.equal(reportsOf(bot)[0], `[worker report] "quick" (${WORKER_ID}) finished.\n\nLATER-ANSWER`);
 });
 
 test('a bot stored before code mode opens with the tool and the preamble of the code it runs now, and answers', async t => {
@@ -1080,7 +1117,7 @@ test('a run, a script in it and input queued behind it keep a bot from restartin
   await bot.reopen(() => worker.answer('Fri Nov 20 12:01:15 UTC 2026'));
   bot.respond(relay(bot));
   await until(() => reportsOf(bot).length === 1, 'the watch reports after the restart', 15_000);
-  assert.equal(reportsOf(bot)[0], '[worker report] "clock" (01a1f86c) finished.\n\nFri Nov 20 12:01:15 UTC 2026');
+  assert.equal(reportsOf(bot)[0], `[worker report] "clock" (${WORKER_ID}) finished.\n\nFri Nov 20 12:01:15 UTC 2026`);
   await until(() => bot.mirrorLines().some(line => line.type === 'message' && textOf(line.message).startsWith('Relayed:')), 'the report is answered');
   await severalPolls();
   assert.equal(reportsOf(bot).length, 1, 'once');
