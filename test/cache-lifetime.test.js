@@ -296,3 +296,20 @@ test('Gemini implicit caching learns from zero-cacheWrite misses, skips compacti
     assert.equal(carbon.probes.misses, 1, 'step 2 cold miss at 20m was mined from brain steps instead of masked by step 3');
     assert.equal(carbon.probes.hits, 1, 'step 3 warm hit at 5s was mined from brain steps');
 });
+test('a bot on Claude Code serves Anthropic\'s 1h window until its context window rolls over', () => {
+    // A bot mirror: claude-code/… through the Claude Code CLI, which writes the 1h tier.
+    const t0 = Date.now() - 10 * MIN;
+    const turn = (t, usage) => cacheMsg(t, usage, 'claude-code', 'claude-opus-5-5', 'claude-code-stream-json');
+    const rollover = { type: 'custom_message', customType: 'bot-context-window', timestamp: new Date(t0 + 2 * MIN).toISOString(),
+        content: [{ type: 'text', text: '[Context window 2.]' }], display: true };
+    const warm = SM.sessionInfoFromEntries([turn(t0, { write: 4_000, write1h: 4_000 }), turn(t0 + MIN, { read: 120_000, write: 400, write1h: 400 })]);
+    const served = (0, test_types_js_1.present)(CL.applyLearnedCacheExpiry(warm.cacheExpiry));
+    assert.equal(served.basis, 'fixed', 'Anthropic\'s documented window, not a learner estimate');
+    assert.equal(served.retention, '1h');
+    assert.equal(served.expiresAt, t0 + MIN + 60 * MIN);
+    const rolled = SM.sessionInfoFromEntries([turn(t0, { write: 4_000, write1h: 4_000 }), turn(t0 + MIN, { read: 120_000, write: 400, write1h: 400 }), rollover]);
+    assert.equal(rolled.cacheExpiry, null, 'the old window\'s prefix is never read again');
+    assert.equal(rolled.contextTokens, 0);
+    const next = SM.sessionInfoFromEntries([turn(t0, { write: 4_000, write1h: 4_000 }), rollover, turn(t0 + 3 * MIN, { read: 5_000, write: 9_000, write1h: 9_000 })]);
+    assert.equal((0, test_types_js_1.present)(next.cacheExpiry).expiresAt, t0 + 3 * MIN + 60 * MIN, 'the new window warms its own cache');
+});

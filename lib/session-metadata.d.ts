@@ -37,6 +37,16 @@ export declare function cacheIdentity(message: Record<string, unknown>): string;
 export declare function cacheTokens(usage: Record<string, unknown>, key: 'cacheRead' | 'cacheWrite' | 'cacheWrite1h'): number;
 export declare function hasCacheActivity(message: Record<string, unknown>): boolean;
 export declare function isHardCacheMiss(usage: unknown): boolean;
+/**
+ * Anthropic's own cache: its API, and the Claude Code CLI (`claude-code/…`, bots' default) that calls it. Third
+ * parties on its wire format (Kimi, GLM, …) run their own caches.
+ */
+export declare function isAnthropicCacheProvider(provider: string): boolean;
+/**
+ * An entry after which the next request starts a new prompt: a compaction, or a bot's context-window rollover
+ * (its mirror's `bot-context-window` notice). Nothing cached before it is read again.
+ */
+export declare function isContextReset(entry: Record<string, unknown>): boolean;
 export interface CacheTarget {
     readonly api: string;
     readonly provider: string;

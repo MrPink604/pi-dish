@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs';
 import { cacheRetentionRevision, loadCacheRetentionConfig } from './cache-retention.js';
-import { cacheExpiryForMessage, hasCacheActivity, isHardCacheMiss, sessionInfoFromEntries } from './session-metadata.js';
+import { cacheExpiryForMessage, hasCacheActivity, isContextReset, isHardCacheMiss, sessionInfoFromEntries } from './session-metadata.js';
 import { record as isRecord } from './helper-values.js';
 import { applyLearnedCacheExpiry } from './cache-lifetime.js';
 import type { CacheExpiry, SessionEntries, SessionInfo } from './session-metadata.js';
@@ -404,7 +404,7 @@ function parseMessageData(entries: SessionEntries, candidate?: SessionFileProfil
         cacheExpiry = null;
       }
       advanceServiceTierChange(entry, tiers);
-      if (entry.type === 'compaction') cacheExpiry = null;
+      if (isContextReset(entry)) cacheExpiry = null;
       let responseCacheExpiry: CacheExpiry | null = null;
       const rawMessage = entry.type === 'message' && entry.message ? fields(entry.message) : null;
       if (rawMessage?.role === 'assistant') {

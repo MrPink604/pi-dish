@@ -521,7 +521,8 @@ crossing, projections switch to the learned TTL (shown as `~` with a
 `learned` basis) — including providers with no built-in window at all, which
 otherwise show no countdown. Documented `fixed` retentions and your
 `cacheTtlOverrides` always win; the learner only replaces built-in guesses.
-Anthropic's published 5m/1h windows apply to Anthropic itself, not to other
+Anthropic's published 5m/1h windows apply to Anthropic itself and to the
+Claude Code CLI route (`claude-code/…`, bots' default model), not to other
 providers speaking its message API; the 1h tier is recognized from
 `cacheWrite1h` or, when a harness omits that split, from the write being
 billed at 2× base input. The fitted curve's slope doubles as

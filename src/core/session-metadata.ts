@@ -102,6 +102,22 @@ export function isHardCacheMiss(usage: unknown): boolean {
   return isRecord(usage) && cacheTokens(usage, 'cacheRead') === 0 && cacheTokens(usage, 'cacheWrite') > 0;
 }
 
+/**
+ * Anthropic's own cache: its API, and the Claude Code CLI (`claude-code/…`, bots' default) that calls it. Third
+ * parties on its wire format (Kimi, GLM, …) run their own caches.
+ */
+export function isAnthropicCacheProvider(provider: string): boolean {
+  return provider === 'anthropic' || provider === 'claude-code';
+}
+
+/**
+ * An entry after which the next request starts a new prompt: a compaction, or a bot's context-window rollover
+ * (its mirror's `bot-context-window` notice). Nothing cached before it is read again.
+ */
+export function isContextReset(entry: Record<string, unknown>): boolean {
+  return entry.type === 'compaction' || (entry.type === 'custom_message' && entry.customType === 'bot-context-window');
+}
+
 export interface CacheTarget {
   readonly api: string;
   readonly provider: string;
@@ -150,9 +166,8 @@ export function builtinCacheRetention(target: CacheTarget, long1h: boolean): { r
   if (provider === 'opencode-go' && /^deepseek-/i.test(model)) {
     return { retentionMs: 24 * 60 * 60_000, retention: '24h', basis: 'minimum' };
   }
-  // Only Anthropic itself: third parties on its wire format (Kimi, GLM, …) run
-  // their own caches, observed warm for hours; the learner answers for them.
-  if (provider === 'anthropic') {
+  // Only Anthropic itself; the learner answers for third parties on its wire format, observed warm for hours.
+  if (isAnthropicCacheProvider(provider)) {
     return long1h
       ? { retentionMs: 60 * 60_000, retention: '1h', basis: 'fixed' }
       : { retentionMs: 5 * 60_000, retention: '5m', basis: 'fixed' };
@@ -181,7 +196,7 @@ export function cacheExpiryForMessage(message: Record<string, unknown>, previous
   const identity = cacheIdentity(message);
   const target = resolveCacheTarget(message);
   const read = cacheTokens(usage, 'cacheRead');
-  const long = cacheTier1h(usage, target.provider === 'anthropic');
+  const long = cacheTier1h(usage, isAnthropicCacheProvider(target.provider));
   const startedAt = new Date((message.timestamp ?? fallbackTimestamp) as string | number | Date).getTime();
   if (!Number.isFinite(startedAt)) return null;
 
@@ -302,7 +317,7 @@ function accumulateSessionInfo(info: SessionInfo, entries: SessionEntries, candi
         }
       }
     }
-    if (entry.type === 'compaction') {
+    if (isContextReset(entry)) {
       info.contextTokens = 0;
       info.cacheExpiry = null;
     }

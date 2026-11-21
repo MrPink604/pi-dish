@@ -11,7 +11,7 @@ import path from 'node:path';
 import { dishDir, replaceFile } from './dish-store';
 import { MAX_TTL_MS, MIN_TTL_MS, configuredCacheRetention, loadCacheRetentionConfig } from './cache-retention';
 import type { CacheRetentionConfig } from './cache-retention';
-import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, entryModel, hasCacheActivity, resolveCacheTarget } from './session-metadata';
+import { builtinCacheRetention, cacheIdentity, cacheTier1h, cacheTokens, entryModel, hasCacheActivity, isAnthropicCacheProvider, isContextReset, resolveCacheTarget } from './session-metadata';
 import { record as isRecord } from './helper-values';
 import type { CacheExpiry, CacheExpiryBasis, SessionEntries } from './session-metadata';
 
@@ -387,7 +387,7 @@ function extractObservations(entries: SessionEntries, file: string,
   let currentModel: string | null = null;
   for (const raw of entries) {
     if (!isRecord(raw)) continue;
-    if (raw.type === 'compaction') { chain.clear(); continue; }
+    if (isContextReset(raw)) { chain.clear(); continue; }
     if (raw.type === 'model_change') {
       currentModel = entryModel(raw, profileId) ?? currentModel;
       continue;
@@ -430,7 +430,7 @@ function extractObservations(entries: SessionEntries, file: string,
     // A write sets the probed entry's tier; a pure read leaves it unchanged.
     chain.set(identity, {
       ts,
-      tier1h: wrote > 0 ? cacheTier1h(usage, target.provider === 'anthropic') : (anchor?.tier1h ?? false),
+      tier1h: wrote > 0 ? cacheTier1h(usage, isAnthropicCacheProvider(target.provider)) : (anchor?.tier1h ?? false),
       contextTokens,
     });
   }
