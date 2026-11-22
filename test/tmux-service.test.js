@@ -122,9 +122,8 @@ test('tmux service manager ignores the caller tmux socket', t => {
     const temp = fixtureRoot(t);
     const bin = path.join(temp, 'bin');
     const log = path.join(temp, 'tmux-env.log');
-    fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nif [ "\${TMUX+x}" = x ]; then\n  printf 'set:%s\\n' "$TMUX" >> "$TMUX_LOG"\nelse\n  printf 'unset\\n' >> "$TMUX_LOG"\nfi\nexit 0\n`, { mode: 0o755 });
-    fs.writeFileSync(path.join(bin, 'curl'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    const result = (0, node_child_process_1.spawnSync)(path.join(temp, 'scripts', 'pi-dish-tmux.sh'), ['status'], {
+    fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nif [ "\${TMUX+x}" = x ]; then\n  printf 'set:%s\\n' "$TMUX" >> "$TMUX_LOG"\nelse\n  printf 'unset\\n' >> "$TMUX_LOG"\nfi\nexit 1\n`, { mode: 0o755 });
+    const result = (0, node_child_process_1.spawnSync)(path.join(temp, 'scripts', 'pi-dish-tmux.sh'), ['stop'], {
         cwd: temp,
         env: {
             ...fixtureEnv(temp, 3333),
@@ -139,4 +138,31 @@ test('tmux service manager ignores the caller tmux socket', t => {
     });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), ['unset']);
+});
+test('status follows loopback HTTP health without querying tmux or Tailscale', t => {
+    const root = fixtureRoot(t);
+    const envFile = path.join(root, 'env');
+    fs.writeFileSync(envFile, 'PORT=4321\n');
+    const bin = path.join(root, 'bin');
+    for (const cmd of ['tmux', 'tailscale']) {
+        fs.writeFileSync(path.join(bin, cmd), '#!/bin/sh\nprintf "called\\n" >> "$TMUX_LOG"\nexit 1\n', { mode: 0o755 });
+    }
+    fs.writeFileSync(path.join(bin, 'curl'), [
+        '#!/bin/sh',
+        'case "$*" in',
+        '  *" http://127.0.0.1:4321/api/host") exit "$CURL_STATUS" ;;',
+        '  *) exit 99 ;;',
+        'esac',
+    ].join('\n'), { mode: 0o755 });
+    const env = { ...fixtureEnv(root, 0), HOST: undefined, PORT: undefined, PI_DISH_ENV_FILE: envFile };
+    const status = (code) => (0, node_child_process_1.spawnSync)(path.join(root, 'scripts', 'pi-dish-tmux.sh'), ['status'], {
+        env: { ...env, CURL_STATUS: code }, encoding: 'utf8',
+    });
+    const healthy = status('0');
+    assert.equal(healthy.status, 0, healthy.stderr);
+    assert.match(healthy.stdout, /healthy at http:\/\/127\.0\.0\.1:4321/);
+    const down = status('22');
+    assert.equal(down.status, 1);
+    assert.match(down.stderr, /not healthy at http:\/\/127\.0\.0\.1:4321/);
+    assert.equal(fs.existsSync(path.join(root, 'tmux-env.log')), false);
 });

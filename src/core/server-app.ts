@@ -86,6 +86,8 @@ import type { SessionBounceMode } from './session-bounces';
 export { observeServerStartup };
 export type { ServerStartupObserver } from './server-startup';
 
+type ReadinessCheck = { status: 'pending' | 'ok' } | { status: 'failed'; error: string };
+
 export function startServer(rootDirectory: string): Server {
   const app = express();
   const PORT = Number.isFinite(Number(process.env.PORT)) ? Number(process.env.PORT) : 3333;
@@ -93,6 +95,26 @@ export function startServer(rootDirectory: string): Server {
   // reaches the port can drive agents with shell access.
   const HOST = process.env.HOST || '127.0.0.1';
   const packageVersion: string = require(path.join(rootDirectory, 'package.json')).version;
+  const sha = codeBuild(rootDirectory);
+  const checks: Record<'startup' | 'nodePty' | 'codemode', ReadinessCheck> = {
+    startup: { status: 'pending' },
+    nodePty: { status: 'pending' },
+    codemode: { status: 'pending' },
+  };
+
+  async function checkCodemode(): Promise<void> {
+    try {
+      // The bot sandbox uses this loader on first execution. Import the runtime
+      // and compile the installed asset without starting a worker or a bot.
+      // A static import would prevent even /api/host from serving on failure.
+      const { loadQuickJSWasm } = await import('@earendil-works/pi-codemode');
+      await loadQuickJSWasm();
+      checks.codemode = { status: 'ok' };
+    } catch (error) {
+      checks.codemode = { status: 'failed', error: 'QuickJS sandbox or quickjs.wasm failed to load' };
+      console.error(`[readiness] codemode: ${errorMessage(error)}`);
+    }
+  }
 
   const accessHandlers = createAccessHandlers({
     version: packageVersion,
@@ -129,6 +151,10 @@ export function startServer(rootDirectory: string): Server {
   app.use('/api/page-comments', accessHandlers.pageCommentTransport);
   app.use('/api', accessHandlers.apiGate);
   app.get('/api/host', accessHandlers.host);
+  app.get('/api/ready', (_req: ApplicationRequest, res: ApplicationResponse) => {
+    const ready = checks.startup.status === 'ok' && checks.nodePty.status === 'ok' && checks.codemode.status === 'ok';
+    res.set('Cache-Control', 'no-store').status(ready ? 200 : 503).json({ ready, version: packageVersion, sha, checks });
+  });
   app.post('/api/auth/ticket', accessHandlers.ticket);
   app.get('/api/vault', vaultHandlers.overview);
   app.post('/api/vault/requests/:id/decision', vaultHandlers.decide);
@@ -884,6 +910,15 @@ export function startServer(rootDirectory: string): Server {
         .then(() => routineRunner.recoverAfterRestart())
         .then(() => { if (!recoveryStopped) routineRunner.start(); })
         .catch((error) => console.error(`Session restart recovery failed: ${errorMessage(error)}`));
+      checks.startup = { status: 'ok' };
+      const ptyFailure = terminal.terminalUnavailableReason();
+      if (ptyFailure) {
+        checks.nodePty = { status: 'failed', error: 'node-pty failed to load' };
+        console.error(`[readiness] ${ptyFailure}`);
+      } else {
+        checks.nodePty = { status: 'ok' };
+      }
+      void checkCodemode();
     },
     mountShareApp: shareApp => {
       shareApp.get('/share/:token', publicationHandlers.serveSharedSession);

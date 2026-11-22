@@ -31,6 +31,12 @@ TUI renders everything either way, so an incompatible call is **silently
 invisible** in pi-dish — nothing errors. This page is the contract; write to
 it and your UI appears in the web/phone client with zero extra work.
 
+## Tmux titles
+
+The bridge syncs a named agent session to its tmux session, window, and pane
+titles. Set `PI_DISH_NO_TMUX_TITLE=1` in the Pi or OMP process environment to
+leave all three unchanged. This does not disable naming the agent session itself.
+
 ## Socket directory
 
 The bridge normally creates its hashed control sockets under

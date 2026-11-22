@@ -84,6 +84,25 @@ test('installer allows only root URL dependencies when installing', t => {
     '--no-audit',
     '--no-fund',
   ]);
+
+  const staged = isolatedAgentDirs(t);
+  const extensions = path.join(staged.prime, 'extensions');
+  const previous = path.join(extensions, 'pi-dish-bridge');
+  const target = path.join(ROOT, 'extensions', 'pi-dish-bridge');
+  fs.mkdirSync(extensions, { recursive: true });
+  fs.symlinkSync(target, previous);
+  fs.unlinkSync(argsFile);
+
+  const depsOnly = runInstall(staged, {
+    HOME: temp,
+    PATH: `${path.dirname(fakeNpm)}${path.delimiter}${process.env.PATH ?? ''}`,
+    PI_DISH_NPM_ARGS: argsFile,
+  }, ['--deps-only']);
+  assert.equal(depsOnly.status, 0, depsOnly.stderr);
+  assert.equal(JSON.parse(fs.readFileSync(argsFile, 'utf8'))[0], 'ci');
+  assert.equal(fs.readlinkSync(previous), target);
+  assert.deepEqual(fs.readdirSync(staged.prime), ['extensions']);
+  for (const agentDir of [staged.pi, staged.omp, staged.agy]) assert.equal(fs.existsSync(agentDir), false);
 });
 
 test('installer links the correct bridge and every skill into Pi, OMP, Prime and Antigravity', t => {

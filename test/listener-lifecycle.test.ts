@@ -119,6 +119,61 @@ async function descriptor(host: string, port: number | string): Promise<Record<s
   return record(await response.json());
 }
 
+async function readiness(port: number) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/ready`, { signal: AbortSignal.timeout(3000) });
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  return { status: response.status, body: record(await response.json()) };
+}
+
+async function settledReadiness(port: number) {
+  const deadline = Date.now() + 5000;
+  do {
+    const result = await readiness(port);
+    if (record(record(result.body.checks).codemode).status !== 'pending') return result;
+    await delay(20);
+  } while (Date.now() < deadline);
+  return assert.fail('codemode readiness check did not settle');
+}
+
+test('HTTP readiness is unauthenticated and waits for the real WASM load', { timeout: 15000 }, async t => {
+  const server = boot(t, { PI_DISH_TOKEN: 'ready-fixture-token', PI_DISH_TEST_WASM: 'hold' });
+  const { address: { port } } = await server.wait(event => event.type === 'listening');
+  await server.wait(event => event.type === 'wasm-held');
+  const pending = await readiness(port);
+  assert.equal(pending.status, 503);
+  assert.equal(pending.body.ready, false);
+  assert.deepEqual(pending.body.checks, { startup: { status: 'ok' }, nodePty: { status: 'ok' }, codemode: { status: 'pending' } });
+  assert.equal(pending.body.version, (await descriptor('127.0.0.1', port)).version);
+  assert.match(String(pending.body.sha), /^[a-f0-9]{12}$/);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/api/config`)).status, 401);
+
+  server.child.send({ releaseWasm: true });
+  assert.deepEqual(await settledReadiness(port), {
+    status: 200,
+    body: { ready: true, version: pending.body.version, sha: pending.body.sha,
+      checks: { startup: { status: 'ok' }, nodePty: { status: 'ok' }, codemode: { status: 'ok' } } },
+  });
+});
+
+for (const failure of [
+  { check: 'nodePty', other: 'codemode', env: { PI_DISH_TEST_FAIL_PTY: '1' },
+    detail: 'node-pty failed to load', log: /\[readiness\] node-pty failed to load: Failed to load native module/ },
+  { check: 'codemode', other: 'nodePty', env: { PI_DISH_TEST_WASM: 'corrupt' },
+    detail: 'QuickJS sandbox or quickjs.wasm failed to load', log: /\[readiness\] codemode:/ },
+]) {
+  test(`HTTP readiness reports a broken ${failure.check} without breaking /api/host`, { timeout: 15000 }, async t => {
+    const server = boot(t, failure.env);
+    const { address: { port } } = await server.wait(event => event.type === 'listening');
+    const result = await settledReadiness(port);
+    assert.equal(result.status, 503);
+    assert.equal(result.body.ready, false);
+    assert.deepEqual(result.body.checks, { startup: { status: 'ok' }, [failure.other]: { status: 'ok' },
+      [failure.check]: { status: 'failed', error: failure.detail } });
+    assert.ok((await descriptor('127.0.0.1', port)).hostId);
+    assert.match(server.output(), failure.log);
+  });
+}
+
 async function stopAndRebind(t: test.TestContext, server: BootFixture, signal: NodeJS.Signals, listeners: ListenerEvent[]): Promise<void> {
   server.child.kill(signal);
   assert.deepEqual(await server.exited, { code: signal === 'SIGINT' ? 130 : 143, signal: null });
@@ -160,6 +215,9 @@ test('loopback stays usable while a missing interface waits for the real bind re
   await server.wait((event: ListenerEvent) => event.type === 'bind-failed');
   const alias = await server.wait((event: ListenerEvent) => event.address?.address === '127.0.0.1');
   const before = await descriptor('127.0.0.1', port);
+  const pending = await readiness(port);
+  assert.equal(pending.status, 503);
+  assert.deepEqual(record(pending.body.checks).startup, { status: 'pending' });
   assert.equal(server.events.some(event => event.address?.address === '127.0.0.2'), false);
   assert.match(server.output(), /not assigned yet; retrying/);
   const main = await server.wait((event: ListenerEvent) => event.address?.address === '127.0.0.2', 20000);
@@ -248,6 +306,7 @@ test('readiness waits for the full app, not a restricted share or an explicit ad
   const share = await server.wait((event: ListenerEvent) => event.type === 'listening');
   const shareResponse = await fetch(`http://127.0.0.1:${share.address.port}/api/host`);
   assert.equal(shareResponse.status, 404);
+  assert.equal((await fetch(`http://127.0.0.1:${share.address.port}/api/ready`)).status, 404);
   await delay(350);
   assert.equal(server.events.some(event => event.type === 'startup-ready'), false);
   server.child.send({ releaseMain: true });

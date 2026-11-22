@@ -99,10 +99,6 @@ load_endpoint() {
     set +a
   fi
 
-  if [[ -z ${HOST:-} ]]; then
-    HOST=$(tailscale ip -4)
-    HOST=${HOST%%$'\n'*}
-  fi
   PORT=${PORT:-3333}
 }
 
@@ -119,7 +115,7 @@ wait_until_healthy() {
   for _ in {1..100}; do
     if healthy; then
       printf 'pi-dish is healthy at http://%s:%s in tmux %s:%s\n' \
-        "$HOST" "$PORT" "$session" "$window"
+        "${HOST:-127.0.0.1}" "$PORT" "$session" "$window"
       return 0
     fi
     sleep 0.1
@@ -145,7 +141,7 @@ start_service() {
 
   if managed_window_exists && healthy; then
     printf 'pi-dish is already healthy at http://%s:%s in tmux %s:%s\n' \
-      "$HOST" "$PORT" "$session" "$window"
+      "${HOST:-127.0.0.1}" "$PORT" "$session" "$window"
   else
     stop_service
     if tmux has-session -t "=$session" 2>/dev/null; then
@@ -164,24 +160,25 @@ start_service() {
   return "$rc"
 }
 
-require_tmux
 case ${1:-} in
   start)
+    require_tmux
     start_service
     ;;
   restart)
+    require_tmux
     stop_service
     start_service
     ;;
   stop)
+    require_tmux
     stop_service
     ;;
   status)
-    if managed_window_exists && healthy; then
-      printf 'pi-dish is healthy at http://%s:%s in tmux %s:%s\n' \
-        "$HOST" "$PORT" "$session" "$window"
+    if healthy; then
+      printf 'pi-dish is healthy at http://127.0.0.1:%s\n' "$PORT"
     else
-      echo "pi-dish is not healthy in tmux $session:$window" >&2
+      printf 'pi-dish is not healthy at http://127.0.0.1:%s\n' "$PORT" >&2
       exit 1
     fi
     ;;

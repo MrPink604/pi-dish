@@ -208,6 +208,10 @@ destinations for an isolated install, and `./install.sh --links-only` skips
 links from `~/.prime/agent/extensions/` when they still point into this
 checkout.
 
+For a staging checkout, run `./install.sh --deps-only`. It only runs `npm ci`
+in that checkout: it does not create, update, or remove agent bridge or skill
+links, or install the optional Prime `uv` tool.
+
 `pi-dish-pages` teaches agents to publish HTML artifacts,
 `pi-dish-comments` gives them a small CLI-backed inbox for anchored feedback,
 and `pi-dish-sessions` lets an agent spawn and interact with ordinary peer Pi
@@ -768,6 +772,44 @@ server can be reconciled with `scripts/pi-dish-tmux.sh restart`; it uses the
 `pi-dish` session and `server` window by default.
 The manager always targets the default tmux server, even when invoked from
 inside a pane attached to another socket.
+`scripts/pi-dish-tmux.sh status` probes `http://127.0.0.1:$PORT/api/host`
+(`PORT` defaults to `3333`), regardless of the tmux session or window name.
+It exits `0` if the probe succeeds and `1` otherwise; it does not need Tailscale
+or tmux. Status is a liveness check, not a deployment readiness check.
+
+For deployment, probe `GET /api/ready` on the server (for example,
+`curl --fail-with-body http://127.0.0.1:3333/api/ready`). Like `/api/host`,
+it does not require a bearer token, and is not mounted on the restricted
+share listener. It returns `200` after post-listen initialization and the
+dependency checks succeed, or `503` while pending or on failure. Background
+cache warming, agent restoration, and bot launches do not gate readiness.
+The response has this shape:
+
+```json
+{
+  "ready": true,
+  "version": "1.0.0",
+  "sha": "0123456789ab",
+  "checks": {
+    "startup": { "status": "ok" },
+    "nodePty": { "status": "ok" },
+    "codemode": { "status": "ok" }
+  }
+}
+```
+
+`sha` is the server's 12-hex-digit SHA-256 build fingerprint, not a Git ref.
+Each check has `status: "pending"`, `"ok"`, or `"failed"`; a failed dependency
+also has an `error` string. The server logs the underlying loader error.
+`nodePty` checks the native binary even when the terminal UI is disabled;
+`codemode` loads the QuickJS sandbox and compiles its installed `quickjs.wasm`
+without launching a bot. Results are retained until restart. A lightweight
+SSH-deployed host bundle that intentionally omits native dependencies can
+still use `/api/host` for liveness.
+
+To preserve existing tmux titles for a coding agent, launch Pi or OMP with
+`PI_DISH_NO_TMUX_TITLE=1`. Agent session names still change normally; the
+bridge leaves tmux session, window, and pane titles alone.
 
 The composer's OMP fast-mode toggle also needs the updated bridge loaded in
 the agent process. Update the checkout targeted by the installed extension

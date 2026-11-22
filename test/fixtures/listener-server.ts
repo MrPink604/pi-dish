@@ -1,12 +1,38 @@
 // Observe real startup, with controlled missing-interface and delayed-alias
 // fixtures. Released listeners still bind real sockets.
 import net = require('node:net');
-import { errorMonitor } from 'node:events';
+import { errorMonitor, on } from 'node:events';
+import fs = require('node:fs/promises');
+import { syncBuiltinESMExports } from 'node:module';
 import { record as isRecord } from '../../lib/helper-values.js';
 const listen = net.Server.prototype.listen;
 let failedOnce = false;
 let observedError: Error | undefined;
 const send = (message: Record<string, unknown>) => { process.send?.(message); };
+
+if (process.env.PI_DISH_TEST_FAIL_PTY) {
+  const dlopen = process.dlopen;
+  process.dlopen = (module, filename, flags) => {
+    if (filename.endsWith('/pty.node')) throw new Error('fixture PTY binary could not load');
+    dlopen(module, filename, flags);
+  };
+}
+
+const wasmMode = process.env.PI_DISH_TEST_WASM;
+if (wasmMode) {
+  const readFile = fs.readFile;
+  fs.readFile = (async (...args: Parameters<typeof readFile>) => {
+    if (!String(args[0]).endsWith('/quickjs.wasm')) return readFile(...args);
+    if (wasmMode === 'corrupt') return Buffer.from('not a WASM module');
+    send({ type: 'wasm-held' });
+    for await (const [message] of on(process, 'message')) {
+      if (isRecord(message) && message.releaseWasm) break;
+    }
+    return readFile(...args);
+  }) as typeof fs.readFile;
+  syncBuiltinESMExports();
+}
+
 net.Server.prototype.listen = function (...args) {
   if (process.env.PI_DISH_TEST_BIND_FAIL_ONCE && args[1] === process.env.HOST && !failedOnce) {
     failedOnce = true;

@@ -1016,7 +1016,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
 
   let lastSyncedTmuxTitle: string | null = null;
   function syncTmuxTitle(title: string | null): void {
-    if (!title || !TMUX_LOCATION?.socket || !TMUX_LOCATION?.pane) return;
+    if (process.env.PI_DISH_NO_TMUX_TITLE === "1" || !title || !TMUX_LOCATION?.socket || !TMUX_LOCATION?.pane) return;
     const sanitized = String(title).replace(/[\r\n\t]+/g, " ").trim().slice(0, 80);
     if (!sanitized || sanitized === lastSyncedTmuxTitle) return;
     lastSyncedTmuxTitle = sanitized;

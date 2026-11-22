@@ -46,6 +46,7 @@ declare const terminals: Map<string, TerminalState>;
 export { terminals as _terminals };
 export declare function isTerminalEnabled(): boolean;
 export declare function isTerminalAvailable(): boolean;
+export declare function terminalUnavailableReason(): string | null;
 /** Frame callbacks follow the current PTY after restart, not the original one. */
 export declare function attachClient(sessionId: string, cwd: string | null | undefined, ws: WebSocket, opts?: TerminalOptions): TerminalState;
 export declare function detachClient(sessionId: string, ws: WebSocket): void;

@@ -47,7 +47,7 @@ export interface AccessHandlers {
 }
 
 const STREAM_PATH_RE = /^\/sessions\/[^/]+\/stream\/?$/;
-const HOST_PATH_RE = /^\/host\/?$/;
+const PROBE_PATH_RE = /^\/(?:host|ready)\/?$/;
 const PROXY_STREAM_PATH_RE = /^\/[^/]+\/api\/sessions\/[^/]+\/stream\/?$/;
 const TICKET_TTL_MS = 60_000;
 type TicketPurpose = 'stream' | 'terminal';
@@ -191,7 +191,7 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
       res.status(401).json({ error: 'Unauthorized: bearer token required' });
     };
   }
-  const apiGate = tokenGate(req => HOST_PATH_RE.test(req.path)
+  const apiGate = tokenGate(req => PROBE_PATH_RE.test(req.path)
     || (STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream')));
   const hostsGate = tokenGate(req => PROXY_STREAM_PATH_RE.test(req.path) && ticketValid(req.query.ticket, 'stream'));
   const host: TransportHandler = (_req, res) => { res.json(hostDescriptor()); };

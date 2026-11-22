@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ./install.sh [--links-only]
+Usage: ./install.sh [--links-only | --deps-only]
 
 Install pi-dish dependencies, link the Pi/OMP bridges and every skill into the
 default Pi, OMP, Prime, and Antigravity agent directories, and remove retired
@@ -11,14 +11,19 @@ Prime extension links. Set PI_AGENT_DIR, OMP_AGENT_DIR, PRIME_AGENT_DIR, or
 AGY_AGENT_DIR to override a destination (useful for isolated installs).
 
   --links-only  Skip npm ci and only reconcile bridge and skill links
+  --deps-only   Run npm ci only; do not create or remove agent links
 EOF
 }
 
 install_dependencies=1
+install_links=1
 while (($#)); do
   case "$1" in
     --links-only)
       install_dependencies=0
+      ;;
+    --deps-only)
+      install_links=0
       ;;
     -h|--help)
       usage
@@ -32,6 +37,10 @@ while (($#)); do
   esac
   shift
 done
+if ((!install_dependencies && !install_links)); then
+  echo "install.sh: --links-only and --deps-only are mutually exclusive" >&2
+  exit 2
+fi
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 pi_agent_dir=${PI_AGENT_DIR:-"$HOME/.pi/agent"}
@@ -67,6 +76,10 @@ if ((install_dependencies)); then
   # npm 12 disables URL dependencies by default. This direct, integrity-pinned
   # GitHub tarball is declared by package.json, so permit only root URLs.
   (cd -- "$root" && npm ci --allow-remote=root --no-audit --no-fund)
+fi
+
+if ((!install_links)); then
+  exit 0
 fi
 
 link_path "$root/extensions/pi-dish-bridge" \
