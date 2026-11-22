@@ -2,7 +2,8 @@ import type { RequestHandler } from 'express';
 import type { ParsedQs } from 'qs';
 import type { LiveSession, liveSessionSupports } from './session-ownership';
 import { messageHoldWindowMs, peerSender, type MessageHold } from './message-hold';
-import { errorMessage } from './http-boundary';
+import { errorMessage, httpError } from './http-boundary';
+import { asRecord } from './wire-protocol';
 
 type CommandHandler = RequestHandler<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 type CommandRequest = Parameters<CommandHandler>[0];
@@ -49,9 +50,10 @@ function sanitizeImages(images: unknown): ImageAttachment[] {
   return out;
 }
 
-/** HTTP admission only; lifecycle, routine and recovery delivery keep their owners. */
+/** HTTP admission plus server-originated text input; lifecycle, routine and recovery delivery keep their owners. */
 export function createSessionCommandHandlers(ports: SessionCommandPorts): {
   prompt: CommandHandler; steer: CommandHandler; followUp: CommandHandler;
+  deliverText(id: string, text: string): Promise<string | null>;
 } {
   async function deliver(req: CommandRequest, res: CommandResponse, operation: 'prompt' | 'steer' | 'followUp') {
     const body: CommandBody = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
@@ -100,9 +102,37 @@ export function createSessionCommandHandlers(ports: SessionCommandPorts): {
     }
   }
 
+  /**
+   * Input the server composes for a session (a published page's form answers):
+   * the composer's admission without refs, images or a peer hold. A hibernated
+   * session or a bot whose relay is down is woken. pi-dish never picks prompt
+   * or follow-up from its own (possibly stale) view of the turn: a bridge that
+   * offers `followUpIfBusy` decides at admission (OMP drains an idle follow-up
+   * only after an assistant or tool-result tail) and reports what happened;
+   * every other transport applies its own admission default to plain input.
+   * Resolves to null once the session took it, or to why that is unconfirmed.
+   */
+  async function deliverText(id: string, text: string): Promise<string | null> {
+    const session = await ports.getLiveSession(id) ?? await ports.wake(id);
+    if (!session) throw httpError('the session that published this page is not running', 409);
+    const followUp = ports.supports(session, 'followUp');
+    const prompt = ports.supports(session, 'prompt');
+    if (!followUp && !prompt) throw httpError('this session does not accept messages', 409);
+    const admission = 'promptOrFollowUp' in session ? session.promptOrFollowUp(text) : null;
+    if (!admission) {
+      await session.prompt(text, prompt ? {} : { deliverAs: 'followUp' });
+      return null;
+    }
+    const result = asRecord(await admission);
+    if (result.queued === true) return 'the session is compacting; the message waits in its queue';
+    if (result.admitted !== true) return 'the session did not confirm it took the message in time';
+    return null;
+  }
+
   return {
     prompt: (req, res) => deliver(req, res, 'prompt'),
     steer: (req, res) => deliver(req, res, 'steer'),
     followUp: (req, res) => deliver(req, res, 'followUp'),
+    deliverText,
   };
 }

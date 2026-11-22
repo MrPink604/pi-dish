@@ -14,6 +14,8 @@ export interface CreatePageOptions {
   title?: unknown;
   sessionId?: unknown;
   renderer?: unknown;
+  /** The session a form on this page answers to; once set it stays until the token rotates. */
+  formRecipient?: unknown;
 }
 
 /** A newly constructed persistence record, before a later untrusted disk read. */
@@ -22,6 +24,7 @@ export interface PageRecord {
   title: unknown;
   sessionId: unknown;
   renderer?: unknown;
+  formRecipient?: unknown;
   createdAt: number;
 }
 
@@ -31,6 +34,7 @@ export interface PageDto extends Record<string, unknown> {
   title?: unknown;
   sessionId: unknown;
   renderer?: unknown;
+  formRecipient?: unknown;
   createdAt?: unknown;
 }
 
@@ -53,9 +57,10 @@ function writePages(pages: Record<string, unknown>): void {
 }
 
 /** Re-publishing a resolved root reuses its token and refreshes its metadata. */
-export function createPage({ root, title = null, sessionId = null, renderer = null }: CreatePageOptions): string {
+export function createPage({ root, title = null, sessionId = null, renderer = null, formRecipient = null }: CreatePageOptions): string {
   const abs = path.resolve(root);
   sessionId = canonical(sessionId);
+  formRecipient = canonical(formRecipient);
   const pages = readPages();
   for (const [token, entry] of Object.entries(pages)) {
     if (entry && asRecord(entry).root === abs) {
@@ -63,13 +68,19 @@ export function createPage({ root, title = null, sessionId = null, renderer = nu
       const updated: PageDto = { ...existing, title: title ?? existing.title, sessionId: sessionId ?? canonical(existing.sessionId) };
       if (renderer) updated.renderer = renderer;
       else delete updated.renderer;
+      const recipient = formRecipient ?? canonical(existing.formRecipient);
+      if (recipient) updated.formRecipient = recipient;
       pages[token] = updated;
       writePages(pages);
       return token;
     }
   }
-  const token = crypto.randomBytes(16).toString('base64url');
-  const entry: PageRecord = { root: abs, title, sessionId, ...(renderer ? { renderer } : {}), createdAt: Date.now() };
+  // Never a leading "-", which a command line would read as an option.
+  let token: string;
+  do token = crypto.randomBytes(16).toString('base64url'); while (token.startsWith('-'));
+  const entry: PageRecord = {
+    root: abs, title, sessionId, ...(renderer ? { renderer } : {}), ...(formRecipient ? { formRecipient } : {}), createdAt: Date.now(),
+  };
   pages[token] = entry;
   writePages(pages);
   return token;
@@ -82,6 +93,15 @@ export function revokePage(token: string): boolean {
   delete pages[token];
   writePages(pages);
   return true;
+}
+
+/** Records a page's form recipient if none is set yet (a form added after publishing). */
+export function bindFormRecipient(token: string, sessionId: string): void {
+  const pages = readPages();
+  const entry = pages[token];
+  if (!entry || asRecord(entry).formRecipient) return;
+  pages[token] = { ...asRecord(entry), formRecipient: canonical(sessionId) };
+  writePages(pages);
 }
 
 export function getPage(token: string): PageDto | null {

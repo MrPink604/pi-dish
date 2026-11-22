@@ -1479,6 +1479,137 @@ IndexedDB or cookies. A CSP sandbox was chosen over a separate artifact
 origin/port because it needs no extra listener, DNS or proxy configuration
 and covers the relay and share listener uniformly.
 
+**Forms (`src/core/page-forms.ts`, `src/browser/forms-app.ts`).** A page
+document (an `.html` file root or a directory's `index.html`) may declare one
+`<script type="application/pi-dish-form">` JSON block, found by a small
+tolerant tag scan (comments skipped, every start tag's quoted attribute values
+read as text, raw-text and `<template>` content skipped up to a real end tag;
+only a script's own `type` attribute declares; SVG/CDATA/entity cases are
+documented limits). `POST /api/pages`
+validates it (strict keys; every error returned as `formErrors`; spec ≤ 256 KiB
+UTF-8; its `clientSpec` with every relative image resolved under the longest
+page route ≤ 512 KiB, grid shared options sent once; the whole form-view state
+with the largest answer set ≤ `MAX_FORM_RESPONSE_BYTES`), refuses a form page
+with no recorded or inferable session or with a private one, and records the
+page's `formRecipient`. A page bound to a recipient rotates its token whenever
+it is published for another session, whatever its HTML or renderer now (the
+old page is revoked and the new one created first, then the old answers and
+receipts are deleted; `replacedToken` returned). Page tokens never start with
+`-`. The response has
+`form.answerPath` (`/forms/<token>`). **The artifact carries no authority**:
+every `/page` view renders the block as disabled controls with no submit and no
+data beyond the page source; the owner view (main app `/page`, or a hub's main
+app that marks its relay with `x-pi-dish-forms: 1`) adds a plain "Answer in
+pi-dish" link. Answering happens only in `/forms/:token`, a server-rendered
+shell (CSP `frame-ancestors 'none'`, `X-Frame-Options: DENY`,
+`Cross-Origin-Opener-Policy: same-origin`, no-store) that loads
+`public/forms.js` and `/forms.css` (both `?v=`-versioned by content) and renders
+every agent string with `textContent`.
+`/api/page-forms` has the ordinary `/api` gate (parity with session input:
+bearer or auth proxy where configured, a trusted network otherwise), is outside
+the `allowedOrigins` CORS, and sits behind `sameOriginOnly`, which no browser
+cross-site or opaque request passes: `Origin: null` is always refused;
+`Sec-Fetch-Site`, when sent, must be `same-origin`; `Origin`, when sent, must
+equal the request's own scheme+host+port or one of `PI_DISH_PUBLIC_ORIGINS`
+(bare http(s) origins only, the rest dropped with a startup warning; never
+X-Forwarded-Host); a write with Fetch Metadata but no Origin (an older hub's
+Origin-stripping `/hosts` relay) is refused; every request must name its client
+in `FORM_CLIENT_HEADER` (`x-pi-dish-form-client: view | cli | relay`, which a
+cross-site page cannot add unpreflighted; this also covers that relay on plain
+HTTP, where browsers send no Fetch Metadata); writes must be JSON; responses are
+`private, no-store`. A hub applies it before the dedicated relays
+(`relayHandlers.pageForms('state' | 'receipt')`, and `pageComments(...)` for
+comments), mounted per route and building the owner URL from route params
+validated as opaque ids (`SUBMISSION_ID_RE`, comment ids) only, marked as a hop
+so the owner answers locally. A form relay finds
+an unmapped token by discovery (so a bare `/forms` link works), forwards only to
+a host whose probed descriptor advertises `PAGE_FORMS_CAPABILITY`
+(`pageFormsV2`), counts the body in bytes up to `PAGE_FORMS_RELAY_LIMIT` (comment
+replies keep their own 64 K limit, counted in UTF-16 units as before), and
+answers 502 for a body cut short; a HEAD passes on the owner's status and
+content metadata. The generic `/hosts/:name/api` proxy refuses
+any path that names `page-forms` as Express or a normalizing proxy would read it
+(case, repeated decoding, backslashes, doubled slashes). Public artifact relays
+re-encode page asset paths per segment, collapse redundant separators, and 404
+a segment that is, or any further decode of which is, a dot segment, a
+separator, a control character or a backslash-delimited dot part
+(`encodedAssetPath`); literal `%` and `\` names pass encoded. The page's form
+binding (`formRecipient`, recorded at publish or at the first accepted answer
+of a form added later, else its session) is gated by `privateSessions.refused`
+like `/api/sessions/:id`, and every stored submission or receipt is shown,
+retried or read only under the binding (and PIN policy) it was made for. The
+PIN unlock header is not forwarded by hubs: unlock tokens are per host, and
+private sessions cannot publish forms. A submit carries a client
+`submissionId`, the form's `fingerprint` (spec + destination) and
+`expectedRevision`; mismatches are 409 (`stale`, `revision`, `busy`) before
+anything is sent, and the state it would leave is measured as served (413 over
+the budget; answers count serialized). An accepted submission, **answers
+included**, is stored with a durable receipt (0600 `page-forms.json`; a failed
+write sends nothing), answered 202, and delivered in the background through
+`SessionCommandHandlers.deliverText` (wakes a hibernated session or a bot's
+relay). pi-dish never picks prompt or follow-up from its own view of the turn:
+a bridge that advertises `followUpIfBusy` gets `prompt` with that `deliverAs`
+and decides at admission from the host's own turn state (a follow-up mid-turn,
+else a prompt: OMP drains an idle follow-up only after an assistant or
+tool-result tail), answering `{ queued, admitted }`; `queued` (buffered while
+compacting) or `admitted: false` (the 10 s admission wait ran out) settles as
+`uncertain` and advances nothing. Older bridges and other transports get plain
+input and apply their own admission default. The store keeps the
+delivered `current` answer set apart from a bounded history, and a receipt for
+every id ever accepted (`MAX_RECEIPTS`), so a retry of any id returns its
+receipt and is never dispatched again. The store is read fail-closed
+(`readForms`/`formRecord`: only a missing file or an absent token is empty; an
+unreadable file, or a record that is malformed or inconsistent, such as an id
+without its receipt or a revision its current answer set does not carry,
+throws, so the API answers 500) and written with `replaceFileDurably`. The message's footer names
+`pi-dish-pages answers <token> --submission <id>`, readable as soon as the prompt
+arrives (it also finds the `current` set). For an OMP recipient
+(`routeIdentity(sessionId).harnessId === 'omp'`) every message line is literal
+for OMP's prompt syntax: a word-initial `^model`, an `@file` mention, a
+`+N[k|m]` turn budget and a standalone magic keyword (`ultrathink`, `chillax`,
+`orchestrate`, `workflowz`, `jevify`) each get a preceding `\`; other
+recipients get the text as written. Every message opens with `[`, so an
+answer's `/` or `!` never starts the prompt. The outcome is
+`delivered`, `failed` (a 409 admission refusal, or the host answering the
+command with a refusal: `PendingRequests({ refusals: true })` marks
+`hostRefused` for the bridge and pi RPC, whose prompt response is the admission
+answer, not ACP's) or `uncertain` (any other error, or a receipt left `delivering` by a
+restart, which `GET` lists in `unresolved` to every view); `finishSubmission`
+writes the outcome and the advanced revision together and never recreates an
+entry that revocation removed. When that write fails the outcome is held in
+memory, receipts report it, and the page admits no submission until a retried
+write lands. Every form API body is measured as sent; one over
+`MAX_FORM_RESPONSE_BYTES` (a live edit can grow a form) is replaced by a short
+413. A page switched to the file renderer for the same recipient keeps its
+answers and receipts. The owner view keeps one submission id until the server confirms
+or refuses it (a 2xx without a receipt, a proxy's page or a 5xx asks for that
+id's receipt and retries the same id). A pending submit belongs to the tab that
+made it (`sessionStorage`, which survives that tab's reloads); other tabs show
+only the server's state (`unresolved`). A receipt lookup is three-way: a receipt,
+`missing` (the API's own "no such submission"), or unknown, which leaves the
+submit pending to be checked again. A draft lives in the tab's
+`sessionStorage` (`pi-dish-form-draft:<token>`): it survives that tab's
+reload, not its closing, and a duplicated tab gets its own copy; keys earlier
+review builds left in `localStorage` are removed on load. A draft records the
+form fingerprint and revision it was made on and is restored as it is when the
+view mounts (after the form-state GET, before any receipt lookup). It is never
+rebased onto another view's answers: if its base is not the current revision,
+the edits stay in the controls with "The form changed since you started
+editing; check your answers", and the submit carries that base, so the
+server's `stale`/`revision` 409 refuses it. After that 409 the base stays
+stale and Submit is disabled; only a separate "Submit my answers over the
+newer ones" control moves the base and sends. It sits in a conflict notice at
+the top of the form body (scrolled to and focused; never in the sticky footer
+where Submit is) and is disabled for its first second, so no repeated Submit
+click (a double-click, at any width) can go over another view's answers. On
+this tab's own delivered receipt, the draft is cleared only if it equals what
+was sent; otherwise it and the controls stay as they are (a draft made on that
+submit's base moves onto its revision). A receipt older than the loaded
+revision never moves the form back (only the pending id it checked is
+cleared). The message escapes C0/C1, DEL, ALM, bidi and
+line-separator controls as `\xNN`/`\uNNNN`, caps each value at 2000 characters
+and the whole message, footer and omission marker included, at 32 KiB of UTF-8.
+
 ## Multi-host fleet (TASKS/multi-host.md; lib/host-identity.js, lib/remote-hosts.js)
 
 One pane of glass over several pi-dish hosts, t3code-shaped: **the client is

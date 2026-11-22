@@ -14,10 +14,11 @@ interface SessionCommandPorts {
     /** Resumes a hibernated session and returns it live; null when it was not hibernated. */
     wake(id: string): Promise<LiveSession | null>;
 }
-/** HTTP admission only; lifecycle, routine and recovery delivery keep their owners. */
+/** HTTP admission plus server-originated text input; lifecycle, routine and recovery delivery keep their owners. */
 export declare function createSessionCommandHandlers(ports: SessionCommandPorts): {
     prompt: CommandHandler;
     steer: CommandHandler;
     followUp: CommandHandler;
+    deliverText(id: string, text: string): Promise<string | null>;
 };
 export {};

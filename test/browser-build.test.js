@@ -30,6 +30,7 @@ test('browser build detects stale output and preserves it on type failure', () =
         fs.writeFileSync(source, 'export const answer: number = 42;');
         const commentsSource = path.join(root, 'src/browser/artifact-comments.ts');
         fs.writeFileSync(commentsSource, 'const pageAnswer: number = 7; console.log(pageAnswer);');
+        fs.writeFileSync(path.join(root, 'src/browser/forms-app.ts'), 'const formAnswer: number = 9; console.log(formAnswer);');
         const helpersSource = path.join(root, 'src/browser/shared-helpers.ts');
         fs.writeFileSync(helpersSource, 'export const fixtureHelper: number = 17;');
         fs.writeFileSync(path.join(root, 'src/browser/service-worker.ts'), 'const workerAnswer: number = 5; console.log(workerAnswer);');

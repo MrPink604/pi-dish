@@ -52,7 +52,7 @@ class RPCSession extends TransportSession {
     this.id = id;
     this.proc = proc;
     this.alive = true;
-    this.pending = new PendingRequests();
+    this.pending = new PendingRequests({ refusals: true });
     this.nextRequestId = 1;
     this.state = null;
     this.sessionFile = null;

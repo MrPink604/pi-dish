@@ -75,6 +75,12 @@ declare class BridgeSession extends EventEmitter<BridgeEvents> {
         timeout?: number | undefined;
     }): BridgeRequest;
     prompt(message: string, opts?: PromptOptions): BridgeRequest;
+    /**
+     * Input for a session that may be mid-turn (form answers): the bridge
+     * decides at admission, a follow-up during a turn, else a prompt, and
+     * answers `{ queued, admitted }`. Null when this bridge predates the mode.
+     */
+    promptOrFollowUp(message: string): BridgeRequest | null;
     steer(message: string, opts?: PromptOptions): BridgeRequest;
     abort(): BridgeRequest;
     compact(instructions?: string): BridgeRequest;

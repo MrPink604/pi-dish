@@ -27,16 +27,21 @@ const fail = makeFail('pi-dish-pages');
 const USAGE = `pi-dish-pages — publish an HTML file or directory as a pi-dish page.
 
 Usage: pi-dish-pages publish <path> [--title TEXT] [--via HUB] [--json]
+       pi-dish-pages answers [--] <token> [--submission ID]
 
 Flags:
-  --title TEXT   page title shown in pi-dish
-  --via HUB      also map the page on fleet hub HUB and print its link
-                 (default $PI_DISH_PUBLIC_VIA)
-  --json         the raw response, plus the hub mapping
-  --session ID   this caller's session id, when discovery cannot infer it
-  --url URL      pi-dish base URL (default $PI_DISH_URL, else http://127.0.0.1:3333)
+  --title TEXT     page title shown in pi-dish
+  --via HUB        also map the page on fleet hub HUB and print its link
+                   (default $PI_DISH_PUBLIC_VIA)
+  --json           the raw response, plus the hub mapping
+  --submission ID  one submission's answer set (the id a form response names)
+  --session ID     this caller's session id, when discovery cannot infer it
+  --url URL        pi-dish base URL (default $PI_DISH_URL, else http://127.0.0.1:3333)
 
 The page is served live from disk: after edits, refresh; do not re-publish.
+A page with a <script type="application/pi-dish-form"> block is validated on
+publish; its answers arrive in this session as a "[form response: …]" message,
+and \`answers <token>\` prints the latest delivered answer set.
 
 Example:
   pi-dish-pages publish "$PWD/plan.html" --title "Refactor plan"`;
@@ -66,10 +71,27 @@ async function publishViaHub(base: string, hub: string, page: unknown): Promise<
 async function main() {
   const argv = process.argv.slice(2);
   if (isHelp(argv)) return void process.stdout.write(USAGE + '\n');
+  // A page token is base64url and may begin with "-": it is the argument right
+  // after `answers` (or after `--`), taken before any option is parsed.
+  if (argv[0] === 'answers') {
+    const at = argv[1] === '--' ? 2 : 1;
+    const token = argv[at];
+    if (!token) return fail('answers needs a page token');
+    let options;
+    try { options = parseCommandLine(['answers', ...argv.slice(at + 1)], 'answers', ['submission']); } catch (error) { return fail(core.errorMessage(error)); }
+    const query = options.values.submission ? `?submission=${encodeURIComponent(options.values.submission)}` : '';
+    try {
+      const { data } = await request(defaultBase(options.url), `/api/page-forms/${encodeURIComponent(token)}${query}`,
+        { headers: { 'X-Pi-Dish-Form-Client': 'cli' } });
+      return core.print(data, true);
+    } catch (error) {
+      return fail(`could not read the answers for ${token}: ${core.errorMessage(error)}`);
+    }
+  }
   let args;
   try { args = parseCommandLine(argv, 'publish', ['title', 'via']); } catch (error) { return fail(core.errorMessage(error)); }
   if (args.command !== 'publish') {
-    return fail(`unknown command: ${args.command} (use publish; run --help for usage)`);
+    return fail(`unknown command: ${args.command} (use publish or answers; run --help for usage)`);
   }
   const target = args.positional[0];
   if (!target) return fail('publish needs a path');
@@ -95,23 +117,45 @@ async function main() {
 
   let hub: unknown = null;
   let hubError: string | null = null;
+  let hubForms = false;
   if (via) {
     try { hub = await publishViaHub(base, via, page); } catch (error) { hubError = core.errorMessage(error); }
+  }
+  if (hub && core.record(core.record(page ?? {}).form ?? {}).answerPath) {
+    // Only a hub that speaks this form protocol can relay answers to this host.
+    try {
+      const { data } = await request(base, hostPath(via!, '/api/host'));
+      hubForms = core.record(core.record(data ?? {}).capabilities ?? {}).pageFormsV2 === true;
+    } catch {}
   }
 
   const hubFields = hub ? core.record(hub) : null;
   if (args.json) {
     // `owner` is the name the hub knows *this* host by, which is what its
     // mapping is keyed on — handy when a fleet map disagrees with itself.
-    const mapping = hubFields ? { via, path: hubFields.path, url: hubFields.url, owner: hubFields.host || null } : null;
+    const mapping = hubFields ? { via, path: hubFields.path, url: hubFields.url, owner: hubFields.host || null, forms: hubForms } : null;
     core.print({ ...core.record(page ?? {}), hub: mapping, hubError }, true);
   } else {
     const pageFields = core.record(page);
-    process.stdout.write(`${pageFields.url || pageFields.path}\n`);
+    const form = core.record(pageFields.form ?? {});
+    if (typeof form.questions === 'number' && typeof form.answerPath === 'string') {
+      // Answers are given only in pi-dish's own form view; the page itself shows a read-only preview.
+      process.stdout.write(`${form.answerPath}\n`);
+      process.stdout.write(`form: ${form.questions} questions. Link the user to the path above: pi-dish's form view, `
+        + `where only the user can answer; answers arrive here as a "[form response: …]" message. `
+        + `The page (${pageFields.url || pageFields.path}) shows the form read-only.\n`);
+    } else {
+      process.stdout.write(`${pageFields.url || pageFields.path}\n`);
+    }
     if (hubFields) {
       process.stdout.write(hubFields.url
         ? `via ${via}: ${hubFields.url}\n`
         : `via ${via}: ${hubFields.path} (on ${via}'s own address — it hands out no absolute URL)\n`);
+      if (typeof form.answerPath === 'string') {
+        process.stdout.write(hubForms
+          ? `answer via ${via}: ${form.answerPath} on ${via}'s own address\n`
+          : `${via} runs a pi-dish that cannot take form answers: give the user the path above on this host\n`);
+      }
     }
   }
   // The local link is real either way; a failed hub mapping only costs public

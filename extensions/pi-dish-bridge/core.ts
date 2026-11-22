@@ -928,7 +928,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // A wrapper may opt into an operation that is absent on an older host.
   // Resolve that claim against the live public context before registration;
   // alternative hosts must fail closed rather than throwing at extension load.
-  const capabilities: Record<string, boolean> = { ...descriptor.capabilities, guardedReload: descriptor.selfPrime === true };
+  // followUpIfBusy: `prompt` takes deliverAs "followUpIfBusy" and answers whether the host admitted it.
+  const capabilities: Record<string, boolean> = { ...descriptor.capabilities, guardedReload: descriptor.selfPrime === true, followUpIfBusy: true };
 
   function emulationAvailable(builtin: EmulatedBuiltin, phase: "listing" | "execution"): boolean {
     if (builtin.requiresSideTurn && !descriptor.runSideTurn) return false;
@@ -2174,16 +2175,20 @@ export function createBridge(descriptor: BridgeDescriptor) {
     return content;
   }
 
+  // "followUpIfBusy" (pi-dish's form answers) is decided here, at admission,
+  // from the host's own turn state: a follow-up mid-turn, else a prompt. An
+  // idle OMP drains a queued follow-up only after an assistant or tool tail.
   function deliverAsOptions(deliverAs?: unknown): DeliveryOptions {
     if (deliverAs === "steer" || deliverAs === "followUp") return { deliverAs };
+    if (deliverAs === "followUpIfBusy") return turnInProgress ? { deliverAs: "followUp" } : {};
     if (turnInProgress) return { deliverAs: "steer" };
     return {};
   }
 
   // Single chokepoint for user-message sends: buffer while compacting, else
-  // hand off to pi with the usual mid-turn steer default. Returns whether the
-  // message was queued so callers can tell the client.
-  async function deliverUserMessage(content: UserContent, deliverAs?: unknown): Promise<{ queued: boolean }> {
+  // hand off to pi with the usual mid-turn steer default. Reports whether the
+  // message was queued (buffered here) and whether the host was seen to admit it.
+  async function deliverUserMessage(content: UserContent, deliverAs?: unknown): Promise<{ queued: boolean; admitted: boolean }> {
     let delivery = deliverAsOptions(deliverAs);
     const mentions = descriptor.harnessId === "omp" ? modelMentionSelectors(content) : [];
     if (mentions.length) {
@@ -2201,10 +2206,9 @@ export function createBridge(descriptor: BridgeDescriptor) {
     if (compacting) {
       compactionQueue.push(content);
       broadcastQueue();
-      return { queued: true };
+      return { queued: true, admitted: false };
     }
-    await sendToHost(content, delivery);
-    return { queued: false };
+    return { queued: false, admitted: await sendToHost(content, delivery) };
   }
 
   // OMP keeps the `^selector` verbatim when it is outside the session's model
@@ -2228,12 +2232,14 @@ export function createBridge(descriptor: BridgeDescriptor) {
   // show only in its TUI (send-observer.ts). A fresh prompt's promise settles
   // only when its whole turn ends, so wait until the host admits it (agent or
   // turn start, or the pre-prompt compaction check), the call settles, or
-  // PROMPT_ADMISSION_MS passes; past that the public API's answer stands.
-  async function sendToHost(content: UserContent, delivery: DeliveryOptions): Promise<void> {
+  // PROMPT_ADMISSION_MS passes; past that the public API's answer stands, and
+  // the result is false: the host was not seen to take it.
+  async function sendToHost(content: UserContent, delivery: DeliveryOptions): Promise<boolean> {
     let admit = () => {};
+    let timedOut = false;
     const admitted = new Promise<void>(resolve => { admit = resolve; });
     admissionWaiters.add(admit);
-    const timer = setTimeout(admit, PROMPT_ADMISSION_MS);
+    const timer = setTimeout(() => { timedOut = true; admit(); }, PROMPT_ADMISSION_MS);
     try {
       const promise = captureSendUserMessage(() => callHost(pi, "sendUserMessage", content, delivery));
       if (promise) {
@@ -2241,6 +2247,7 @@ export function createBridge(descriptor: BridgeDescriptor) {
           throw new Error(`${descriptor.name} did not accept the message: ${await refusalReason(error)}`);
         });
       }
+      return !timedOut;
     } finally {
       clearTimeout(timer);
       admissionWaiters.delete(admit);
@@ -2447,8 +2454,8 @@ export function createBridge(descriptor: BridgeDescriptor) {
           // deliverUserMessage applies the mid-turn steer default (matching the
           // RPC backend and this file's own run_command paths) and buffers the
           // send while compacting instead of racing pi's message rewrite.
-          const { queued } = await deliverUserMessage(content, cmd.deliverAs);
-          respond(true, { queued });
+          const { queued, admitted } = await deliverUserMessage(content, cmd.deliverAs);
+          respond(true, { queued, admitted });
           return;
         }
 

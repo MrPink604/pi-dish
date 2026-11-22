@@ -210,7 +210,7 @@ test('OMP bridge refuses a mention outside the session scope instead of sending 
     assert.equal(fs.existsSync(host.sendLogFile) ? fs.readFileSync(host.sendLogFile, 'utf8').trim() : '',
       '', 'nothing reaches the host for an unregisterable mention');
     // An in-scope mention still takes the expanding prompt path.
-    assert.deepEqual(await session.prompt('^openai/gpt-4o-mini'), { queued: false });
+    assert.deepEqual(await session.prompt('^openai/gpt-4o-mini'), { queued: false, admitted: true });
     const sent = fs.readFileSync(host.sendLogFile, 'utf8').trim().split('\n').map(line => record(JSON.parse(line)));
     assert.deepEqual(sent.map(entry => [entry.content, entry.options]), [['^openai/gpt-4o-mini', {}]]);
   } finally {
@@ -254,10 +254,28 @@ test('OMP bridge acknowledges an admitted prompt without waiting for its turn', 
   try {
     await session.connect();
     const started = Date.now();
-    assert.deepEqual(await session.prompt('start working'), { queued: false });
+    assert.deepEqual(await session.prompt('start working'), { queued: false, admitted: true });
     // The turn never ends in this fixture; only admission may release the
     // send, well before the bridge's fallback wait.
     assert.ok(Date.now() - started < 5000, 'acknowledged on agent start');
+  } finally {
+    session.close();
+    await host.close();
+  }
+});
+
+test('OMP bridge decides prompt or follow-up for followUpIfBusy at admission and reports it', async () => {
+  const host = await startFakeHost(false, { promptMode: 'admit' });
+  const session = new BridgeSession(host.claim);
+  try {
+    await session.connect();
+    assert.equal(session.capabilities.followUpIfBusy, true);
+    // Idle: an ordinary prompt, which OMP runs at once.
+    assert.deepEqual(await session.promptOrFollowUp('first answers'), { queued: false, admitted: true });
+    // That turn is still running in this fixture: the next waits as a follow-up it will drain.
+    assert.deepEqual(await session.promptOrFollowUp('second answers'), { queued: false, admitted: true });
+    const sent = fs.readFileSync(host.sendLogFile, 'utf8').trim().split('\n').map(line => record(JSON.parse(line)));
+    assert.deepEqual(sent.map(entry => [entry.content, entry.options]), [['first answers', {}], ['second answers', { deliverAs: 'followUp' }]]);
   } finally {
     session.close();
     await host.close();

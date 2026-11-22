@@ -1048,6 +1048,61 @@ only serves existing tokens (`/page/<token>` is available there alongside
 file mention in a transcript) has a 🌐 button, and the stats modal lists a
 session's pages with revoke.
 
+A page can ask for answers. An agent declares one form in its HTML with
+`<script type="application/pi-dish-form">{ "fields": [...] }</script>` (choice,
+image-pick grids, multiple choice, yes/no or approve, short and long text, each
+with an optional predicted `default`); publishing validates it, returns every
+error and returns the form's answer path, `/forms/<token>`. The page itself only
+shows a read-only preview, plus an "Answer in pi-dish" link when opened from the
+UI. The answer path is pi-dish's own form view: an app page that cannot be
+framed, prefills the defaults, marks what changed, keeps a draft across reloads
+and submits one message to the session or bot that published the page (its
+bridge sends a prompt when it is idle, a follow-up during a turn), changed
+fields first; resubmitting sends a revision. Each submission is stored before
+it is sent, and the message names it (`pi-dish-pages answers <token> --submission <id>`).
+Answers arrive as literal text: for an OMP session, OMP prompt syntax in them
+(`^model`, `@file`, `+500k`, `ultrathink` and the other magic keywords) is
+written with a leading `\`, so OMP does not act on it. A draft stays with its
+browser tab (it survives a reload, not closing the tab); if the form's answers
+changed since it was started, the edits stay, the submit is refused with a
+conflict message, and Submit stays disabled: sending them anyway takes the
+separate "Submit my answers over the newer ones" button. Retries with the same
+submission id never send twice; a receipt reports delivered, failed or
+uncertain, and an unsettled one shows to any view of the form. A page with a
+form (or one that has taken answers) gets a new token when it is published from a different
+session, even if its form is gone: the old link, its answers and receipts end.
+A hub's `/forms/<token>` link works even before the hub has served the page.
+Answers are kept in `~/.pi/dish/page-forms.json` (owner-only); if that file
+cannot be read, or a page's record in it is malformed, the form API answers 500
+rather than treating it as empty.
+The format reference is in `skills/pi-dish-pages/SKILL.md`.
+
+Who can answer a form is exactly who can drive the session it reports to:
+
+- **Authenticated access** (an auth proxy such as Cloudflare Access in front of
+  the UI, or `PI_DISH_TOKEN`): only signed-in users reach `/forms/<token>` and
+  `/api/page-forms`. Behind a proxy that changes the scheme or host (TLS ends at
+  the proxy, as with Cloudflare Tunnel), list the addresses users browse in
+  `PI_DISH_PUBLIC_ORIGINS` (comma-separated bare origins, e.g.
+  `PI_DISH_PUBLIC_ORIGINS=https://pi.example.com`; entries with a path,
+  credentials or another scheme are ignored with a startup warning), or the
+  form view's requests are refused as cross-origin.
+- **Trusted-network access** (no token, no proxy): anyone who can reach the port
+  can answer, as they can already prompt any session.
+- **Never**: a browser request from another origin or an opaque one (the
+  published page itself, any sandboxed or `data:` document), whatever cookies it
+  carries; a caller that does not send `X-Pi-Dish-Form-Client` (`view`, `cli`
+  or `relay`; the form view, the CLI and a hub's form relay send it); the
+  share-only listener; or the generic `/hosts/<name>/api` proxy (a
+  hub relays form calls only through its own `/api/page-forms`, to hosts that
+  advertise the `pageFormsV2` capability). A locked private session's form is
+  invisible, and private sessions cannot publish forms.
+- **Bearer-only limitation**: the form view runs on the UI's own origin but
+  does not attach the UI's stored host tokens. On a host that relies on
+  `PI_DISH_TOKEN` alone (no auth proxy), the view gets 401: answer through a
+  host that sits behind an auth proxy, or one without a token on a trusted
+  network.
+
 Tap or click a video preview's filename row to collapse it, or focus the row
 and press Enter or Space. Collapsing pauses playback; expanding does not resume
 it. The transcript and file viewer remember collapsed videos across live

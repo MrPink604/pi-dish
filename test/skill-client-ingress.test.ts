@@ -149,7 +149,7 @@ test('pages help exits 0 with usage instead of treating --help as a command', as
     assert.match(stdout, /--via HUB/);
   }
   await assert.rejects(run(process.execPath, [pageCli, 'frobnicate'], { env }), (error: unknown) =>
-    record(error).code === 1 && /unknown command: frobnicate \(use publish; run --help for usage\)/.test(errorMessage(error)));
+    record(error).code === 1 && /unknown command: frobnicate \(use publish or answers; run --help for usage\)/.test(errorMessage(error)));
 });
 
 test('CLI field consumers reject missing response bodies while raw JSON remains readable', async t => {

@@ -6,7 +6,17 @@ type RequestId = string | number;
  * drift apart.
  */
 declare class PendingRequests {
+    private readonly options;
     private readonly map;
+    /**
+     * `refusals`: the transport answers a command only to admit or refuse it
+     * (the pi bridge, pi RPC), so a failed response means it was not carried
+     * out; the error is marked `hostRefused`. ACP answers a prompt when its turn
+     * ends, after the agent may already have the input, so it does not set this.
+     */
+    constructor(options?: {
+        refusals?: boolean;
+    });
     /** Register a request under `id`; returns the promise its response settles. */
     track(id: RequestId, { timeout, label }?: {
         label?: string | undefined;

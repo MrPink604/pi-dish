@@ -8,7 +8,7 @@ export type HarnessId = 'pi' | 'omp' | 'prime' | 'agy' | 'bot';
 export type BridgeCapability = 'prompt' | 'steer' | 'followUp' | 'abort' | 'compact'
   | 'models' | 'setModel' | 'setThinking' | 'rename' | 'commands' | 'reload'
   | 'queueRead' | 'queueCancel' | 'treeRead' | 'treeNavigation' | 'extensionUI'
-  | 'shareSnapshot' | 'guardedReload' | 'sideChat' | 'fastMode' | 'login';
+  | 'shareSnapshot' | 'guardedReload' | 'sideChat' | 'fastMode' | 'login' | 'followUpIfBusy';
 
 /** One asynchronous answer inside the ephemeral side chat (never the transcript). */
 export type SideChatTurnStatus = 'running' | 'complete' | 'error' | 'cancelled';

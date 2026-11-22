@@ -564,9 +564,10 @@ content, every endpoint, or lifecycle authority.
 
 `src/browser/` compiles strictly using `tsconfig.browser.json`.
 `npm run build:browser` checks types, then uses the pinned esbuild dependency to
-emit six local entrypoints: `public/app.js`, `public/browser.js`,
-`public/helpers.js`, `public/artifact-comments.js`, `public/sw.js` (the service
-worker) and `public/theme-prepaint.js`.
+emit seven local entrypoints: `public/app.js`, `public/browser.js`,
+`public/helpers.js`, `public/artifact-comments.js`, `public/forms.js` (the
+published-page form view), `public/sw.js` (the service worker) and
+`public/theme-prepaint.js`.
 All entrypoints are validated before any generated output is written. The
 application entrypoint bundles ordinary imports from feature modules and helpers
 into an IIFE with private bindings. The production page loads `app.js` after the

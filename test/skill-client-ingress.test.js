@@ -140,7 +140,7 @@ test('pages help exits 0 with usage instead of treating --help as a command', as
         assert.match(stdout, /^Usage: pi-dish-pages publish <path>/m, argv.join(' '));
         assert.match(stdout, /--via HUB/);
     }
-    await assert.rejects(run(process.execPath, [pageCli, 'frobnicate'], { env }), (error) => (0, test_types_js_1.record)(error).code === 1 && /unknown command: frobnicate \(use publish; run --help for usage\)/.test((0, test_types_js_1.errorMessage)(error)));
+    await assert.rejects(run(process.execPath, [pageCli, 'frobnicate'], { env }), (error) => (0, test_types_js_1.record)(error).code === 1 && /unknown command: frobnicate \(use publish or answers; run --help for usage\)/.test((0, test_types_js_1.errorMessage)(error)));
 });
 test('CLI field consumers reject missing response bodies while raw JSON remains readable', async (t) => {
     const { env } = fixture(t);

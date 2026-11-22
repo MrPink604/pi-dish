@@ -366,7 +366,7 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     this.alive = false;
     this.sock = null;
     this._nextId = 1;
-    this._pending = new PendingRequests();
+    this._pending = new PendingRequests({ refusals: true });
     this.hello = null;
   }
 
@@ -590,6 +590,15 @@ class BridgeSession extends EventEmitter<BridgeEvents> {
     if (opts.deliverAs) params.deliverAs = opts.deliverAs;
     if (opts.images?.length) params.images = opts.images;
     return this.send('prompt', params, { timeout: 120000 });
+  }
+  /**
+   * Input for a session that may be mid-turn (form answers): the bridge
+   * decides at admission, a follow-up during a turn, else a prompt, and
+   * answers `{ queued, admitted }`. Null when this bridge predates the mode.
+   */
+  promptOrFollowUp(message: string): BridgeRequest | null {
+    if (this.capabilities.followUpIfBusy !== true) return null;
+    return this.send('prompt', { message, deliverAs: 'followUpIfBusy' }, { timeout: 120000 });
   }
   steer(message: string, opts: PromptOptions = {}) {
     const params: ProtocolRecord = { message };

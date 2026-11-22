@@ -10,6 +10,7 @@ import hostIdentity = require('./host-identity');
 import * as terminal from './terminal';
 import * as tmux from './tmux';
 import { PRIVATE_UNLOCK_HEADER } from './private-access';
+import { FORM_CLIENT_HEADER, PAGE_FORMS_CAPABILITY } from './page-forms';
 
 export type TransportRequest = express.Request<Record<string, string>, unknown, unknown, ParsedQs, Record<string, unknown>>;
 export type TransportResponse = express.Response<unknown, Record<string, unknown>>;
@@ -38,6 +39,7 @@ export interface AccessHandlers {
   jsonBody: TransportHandler;
   cors: TransportHandler;
   pageCommentTransport: TransportHandler;
+  sameOriginOnly: TransportHandler;
   apiGate: TransportHandler;
   hostsGate: TransportHandler;
   host: TransportHandler;
@@ -51,6 +53,29 @@ const PROBE_PATH_RE = /^\/(?:host|ready)\/?$/;
 const PROXY_STREAM_PATH_RE = /^\/[^/]+\/api\/sessions\/[^/]+\/stream\/?$/;
 const TICKET_TTL_MS = 60_000;
 type TicketPurpose = 'stream' | 'terminal';
+
+/**
+ * PI_DISH_PUBLIC_ORIGINS: comma-separated bare http(s) origins. Anything
+ * else (a path, query, credentials, another scheme, an unparsable value) is
+ * skipped with a warning rather than widened into something it does not name.
+ */
+export function parsePublicOrigins(value: string, warn: (message: string) => void): Set<string> {
+  const origins = new Set<string>();
+  for (const raw of value.split(',').map(entry => entry.trim()).filter(Boolean)) {
+    let url: URL;
+    try { url = new URL(raw); } catch { warn(`PI_DISH_PUBLIC_ORIGINS: ignoring "${raw}", not a URL`); continue; }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      warn(`PI_DISH_PUBLIC_ORIGINS: ignoring "${raw}", only http and https origins are allowed`);
+    } else if (url.username || url.password) {
+      warn(`PI_DISH_PUBLIC_ORIGINS: ignoring "${raw}", an origin carries no credentials`);
+    } else if (url.pathname !== '/' || url.search || url.hash) {
+      warn(`PI_DISH_PUBLIC_ORIGINS: ignoring "${raw}", an origin has no path, query or fragment`);
+    } else {
+      origins.add(url.origin);
+    }
+  }
+  return origins;
+}
 
 function readAuthToken(): string | null {
   const fromEnv = (process.env.PI_DISH_TOKEN || '').trim();
@@ -125,6 +150,8 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
       shares: true, pages: true, comments: true, skills: true, harnesses: true,
       resolve: true, docs: true, routines: true, recovery: true, sessionBounces: true,
       refAliases: true, cacheLifetimes: true, hostHealth: true, push: true, privateUnlock: true,
+      // The page-form protocol (owner view, receipts, fingerprints); bump the name on a breaking change.
+      [PAGE_FORMS_CAPABILITY]: true,
     };
     if (terminal.isTerminalEnabled()) capabilities.terminal = true;
     if (tmux.isTmuxAvailable()) capabilities.tmux = true;
@@ -159,6 +186,8 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
   const cors: TransportHandler = (req, res, next) => {
     // Never expose unauthenticated agent controls to another browser origin.
     if (!authToken) return next();
+    // Page forms answer pi-dish's own pages only, never an allowed other origin.
+    if (/^\/api\/page-forms(?:\/|$)/i.test(req.path)) return next();
     const origin = req.headers.origin;
     if (origin && allowedOrigins().includes(origin)) {
       res.header('Access-Control-Allow-Origin', origin);
@@ -185,6 +214,48 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     parsePlainJson(req, res, next);
   };
 
+  // Owner-only API (page forms): never cached, and no browser request from
+  // another origin, or from an opaque one (a sandboxed artifact, a data: or
+  // file: page: `Origin: null`), ever passes. Fetch Metadata, when sent, must
+  // say same-origin; an Origin, when sent, must equal this request's own
+  // origin or one of PI_DISH_PUBLIC_ORIGINS (the addresses an auth proxy
+  // serves this host at). A browser always sends Origin with a write, so a
+  // write that carries Fetch Metadata without one came through a proxy that
+  // strips Origin (an older hub's generic /hosts relay) and is refused. Every
+  // caller also names itself in FORM_CLIENT_HEADER (the view, the CLI, a hub's
+  // form relay), which a cross-site page cannot add unpreflighted; that covers
+  // the same relay on plain HTTP, where browsers send no Fetch Metadata. A
+  // write must be JSON.
+  const publicOrigins = parsePublicOrigins(process.env.PI_DISH_PUBLIC_ORIGINS || '', message => console.warn(`[pi-dish] ${message}`));
+  const sameOriginOnly: TransportHandler = (req, res, next) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    const site = req.headers['sec-fetch-site'];
+    const origin = req.headers.origin;
+    const write = req.method !== 'GET' && req.method !== 'HEAD';
+    const client = req.headers[FORM_CLIENT_HEADER];
+    const refused = origin === 'null'
+      || (client !== 'view' && client !== 'cli' && client !== 'relay')
+      || (site !== undefined && site !== 'same-origin')
+      || (origin !== undefined && !ownOrigin(origin, req))
+      || (write && site !== undefined && origin === undefined);
+    if (refused) {
+      // A same-origin page whose Origin is not recognized is pi-dish behind a proxy that rewrites the scheme or host.
+      const hint = site === 'same-origin' && origin && origin !== 'null'
+        ? ` (if pi-dish is served at ${origin}, add that origin to PI_DISH_PUBLIC_ORIGINS)` : '';
+      res.status(403).json({ error: `this API answers only pi-dish's own pages${hint}` });
+      return;
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD' && !req.is('application/json')) {
+      res.status(415).json({ error: 'expected application/json' }); return;
+    }
+    next();
+  };
+  function ownOrigin(origin: string, req: IncomingMessage): boolean {
+    if (publicOrigins.has(origin)) return true;
+    const scheme = 'encrypted' in req.socket && req.socket.encrypted ? 'https' : 'http';
+    try { return new URL(`${scheme}://${req.headers.host}`).origin === origin; } catch { return false; }
+  }
+
   function tokenGate(exempt: (req: TransportRequest) => boolean): TransportHandler {
     return (req, res, next) => {
       if (!authToken || req.method === 'OPTIONS' || exempt(req) || tokenMatches(bearerToken(req))) return next();
@@ -203,5 +274,5 @@ export function createAccessHandlers(ports: AccessPorts): AccessHandlers {
     if (!authToken) { res.json({ ticket: null }); return; }
     res.json(mintTicket(purpose));
   };
-  return { compression: compressed, jsonBody, cors, pageCommentTransport, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized };
+  return { compression: compressed, jsonBody, cors, pageCommentTransport, sameOriginOnly, apiGate, hostsGate, host, ticket, hostDescriptor, upgradeAuthorized };
 }

@@ -26,6 +26,7 @@ export interface AccessHandlers {
     jsonBody: TransportHandler;
     cors: TransportHandler;
     pageCommentTransport: TransportHandler;
+    sameOriginOnly: TransportHandler;
     apiGate: TransportHandler;
     hostsGate: TransportHandler;
     host: TransportHandler;
@@ -33,5 +34,11 @@ export interface AccessHandlers {
     hostDescriptor(): HostDescriptor;
     upgradeAuthorized(req: IncomingMessage, url: URL): boolean;
 }
+/**
+ * PI_DISH_PUBLIC_ORIGINS: comma-separated bare http(s) origins. Anything
+ * else (a path, query, credentials, another scheme, an unparsable value) is
+ * skipped with a warning rather than widened into something it does not name.
+ */
+export declare function parsePublicOrigins(value: string, warn: (message: string) => void): Set<string>;
 /** One startup-scoped auth owner; public listeners deliberately do not mount it. */
 export declare function createAccessHandlers(ports: AccessPorts): AccessHandlers;

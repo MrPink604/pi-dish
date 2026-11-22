@@ -7,6 +7,55 @@ import type { ArtifactKind, FleetArtifactRecord, FleetArtifactStore } from './fl
 import type { HostDescriptor, TransportRequest, TransportResponse, TransportHandler } from './access-handlers';
 import { isolateArtifact } from './artifact-isolation';
 import { asRecord } from './wire-protocol';
+import { FORM_CLIENT_HEADER, PAGE_FORMS_CAPABILITY, PAGE_FORMS_RELAY_LIMIT, SUBMISSION_ID_RE } from './page-forms';
+
+/**
+ * Whether a generic-proxy path reaches the owner's page-form routes as any
+ * hop could read it: Express matches routes case-insensitively, and a
+ * normalizing proxy may decode (repeatedly), turn backslashes into slashes and
+ * collapse repeated slashes. An undecodable path is treated as a match.
+ */
+export function namesPageForms(path: string): boolean {
+  let decoded = path;
+  for (let round = 0; round < 3; round++) {
+    let next: string;
+    try { next = decodeURIComponent(decoded); } catch { return true; }
+    if (next === decoded) break;
+    decoded = next;
+  }
+  return /(?:^|\/)page-forms(?:\/|$)/.test(decoded.replace(/\\/g, '/').replace(/\/{2,}/g, '/').toLowerCase());
+}
+
+/**
+ * A page asset path (already decoded by Express) re-encoded segment by segment
+ * for the owner, or null when a hop could read it as different path
+ * structure. Redundant separators collapse, as they do when the owner serves
+ * the file itself. A segment is refused when it, or any further decode of it,
+ * is a dot segment, holds a control character, decodes to a separator, or has
+ * a dot part between backslashes (some hops treat `\` as `/`). Literal `%` and
+ * `\` names otherwise pass, encoded.
+ */
+export function encodedAssetPath(rest: string): string | null {
+  if (rest === '' || rest === '/') return rest;
+  if (!rest.startsWith('/')) return null;
+  const segments = rest.slice(1).split('/').filter(segment => segment !== '');
+  if (segments.some(unsafeSegment)) return null;
+  const trailing = rest.endsWith('/') && segments.length ? '/' : '';
+  return `/${segments.map(encodeURIComponent).join('/')}${trailing}`;
+}
+
+function unsafeSegment(segment: string): boolean {
+  let reading = segment;
+  for (let round = 0; round < 4; round++) {
+    if (/[\u0000-\u001f\u007f]/.test(reading) || (round > 0 && reading.includes('/'))) return true;
+    if (reading.split('\\').some(part => part === '.' || part === '..')) return true;
+    let next: string;
+    try { next = decodeURIComponent(reading); } catch { return false; }
+    if (next === reading) return false;
+    reading = next;
+  }
+  return true;
+}
 
 /** Public fallback only; callers retain local-first artifact ownership. */
 export interface PublicArtifactRelay {
@@ -25,7 +74,10 @@ export interface RelayHandlers {
   listArtifacts: TransportHandler;
   removeArtifact: TransportHandler;
   hosts: TransportHandler;
-  pageComments: TransportHandler;
+  /** Page-comment relays, each building its owner URL from route params only. */
+  pageComments(route: 'list' | 'item' | 'delete'): TransportHandler;
+  /** Page-form relays: the state (optionally one `?submission=`) or one receipt. */
+  pageForms(route: 'state' | 'receipt'): TransportHandler;
   publicArtifacts: PublicArtifactRelay;
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean;
 }
@@ -43,6 +95,8 @@ interface FleetHostEntry {
   capabilities?: Record<string, boolean>;
   error?: unknown;
 }
+/** A relayed reply's cap and how a chunk counts toward it. */
+interface BodyLimit { max: number; count(chunk: string): number }
 const PROXY_TERMINAL_PATH_RE = /^\/hosts\/([^/]+)\/api\/sessions\/[^/]+\/terminal$/;
 const PROXY_RESPONSE_TIMEOUT_MS = 10_000;
 const HOSTS_PROBE_DEADLINE_MS = 3000;
@@ -108,6 +162,11 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     if (!remote) return res.status(404).type('text/plain').send('Not found');
     // The vault bridge belongs to the host's own listener; it is never a fleet route.
     if (/^\/vault\/bridge(?:\/|$)/.test(req.path)) return res.status(404).type('text/plain').send('Not found');
+    // Page forms are owner-only: only this host's dedicated relay (behind its
+    // same-origin check) may carry them, never the generic API proxy.
+    if (namesPageForms(req.path)) {
+      return res.status(403).json({ error: 'page forms are answered through /api/page-forms on this host, not the /hosts proxy' });
+    }
     proxyToRemote(remote, req, res, fleetArtifactHook(remote, req));
   };
 
@@ -415,7 +474,11 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     const remote = remoteHosts.getRemote(mapping.host);
     if (!remote) return notFound();
 
-    const rest = kind === 'page' ? (req.params[0] || (req.path.endsWith('/') ? '/' : '')) : '';
+    const rawRest = kind === 'page' ? (req.params[0] || (req.path.endsWith('/') ? '/' : '')) : '';
+    // Rebuilt from validated, re-encoded segments: a path a normalizing proxy
+    // could resolve elsewhere never leaves this host with the owner's credential.
+    const rest = encodedAssetPath(rawRest);
+    if (rest === null) return notFound();
     const documentRequest = kind === 'share' || rest === '' || rest === '/';
     const queryAt = req.originalUrl.indexOf('?');
     const query = queryAt >= 0 ? req.originalUrl.slice(queryAt) : '';
@@ -428,6 +491,8 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     // The overlay's calls are relative and need /api; ask the owner to skip
     // injection so this listener serves raw HTML as it does for local pages.
     if (kind === 'page' && !annotate) headers[PAGE_COMMENTS_HEADER] = 'off';
+    // This front serves pi-dish's /forms view, so the owner may link its form there.
+    if (kind === 'page' && annotate) headers['x-pi-dish-forms'] = '1';
 
     relayFirstResponse(
       remoteHosts.request(remote, { method: req.method === 'HEAD' ? 'HEAD' : 'GET', path: peerPath, headers }),
@@ -499,28 +564,75 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
   };
 
   // Feedback on a fronted page belongs to the owner host whose agent reads it.
-  const pageComments: TransportHandler = (req, res, next) => {
-    const token = req.params.token;
-    if (!fleetArtifacts.isValidToken(token) || ports.localPageExists(token)) return next();
-    const mapping = fleetArtifacts.get(token);
-    const remote = mapping?.kind === 'page' ? remoteHosts.getRemote(mapping.host) : null;
-    if (!remote) return next();
-    proxyCommentToOwner(remote, req, res, `/api/page-comments/${token}`);
-  };
+  // The owner URL is built from route params alone (never a request suffix).
+  // `capability`: what the owner must advertise first (an older host gets a 404).
+  function ownerPageRelay(build: (req: TransportRequest, token: string) => string | null, bodyLimit: BodyLimit,
+    capability: string | null = null): TransportHandler {
+    return (req, res, next) => {
+      const token = req.params.token;
+      // Another hub's relayed call: answered from this host's own pages only.
+      if (req.headers[ARTIFACT_HOP_HEADER] !== undefined) return next();
+      if (!fleetArtifacts.isValidToken(token) || ports.localPageExists(token)) return next();
+      const peerPath = build(req, token);
+      if (peerPath === null) return res.status(404).json({ error: 'not found' });
+      const relay = (mapping: FleetArtifactRecord | null) => {
+        const remote = mapping?.kind === 'page' ? remoteHosts.getRemote(mapping.host) : null;
+        if (!remote) return next();
+        if (!capability) return proxyToPageOwner(remote, req, res, peerPath, bodyLimit);
+        void remoteHosts.probe(remote).then((probe) => {
+          if (!probe.reachable) return res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name });
+          if (probe.descriptor?.capabilities?.[capability] !== true) {
+            return res.status(404).json({ error: `Host ${remote.name} runs a pi-dish that cannot take form answers`, host: remote.name });
+          }
+          proxyToPageOwner(remote, req, res, peerPath, bodyLimit);
+        });
+      };
+      const mapping = fleetArtifacts.get(token);
+      if (mapping || fleetArtifacts.isSuppressed(token)) return relay(mapping);
+      // A form view opened straight from a link: find the page's host first.
+      discoverOwner(token, 'page').then(relay, () => next());
+    };
+  }
+  // Ids are opaque tokens; anything else is refused here rather than relayed.
+  const COMMENT_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+  const segment = (value: unknown, pattern: RegExp) => typeof value === 'string' && pattern.test(value) ? value : null;
+  // Comment replies keep their long-standing limit, counted in UTF-16 units as
+  // it always was (a long CJK quote and comment fit); the form budget is bytes.
+  const COMMENT_BODY_LIMIT: BodyLimit = { max: FLEET_ARTIFACT_BODY_LIMIT, count: chunk => chunk.length };
+  const FORM_BODY_LIMIT: BodyLimit = { max: PAGE_FORMS_RELAY_LIMIT, count: chunk => Buffer.byteLength(chunk) };
+  const pageComments: RelayHandlers['pageComments'] = route => ownerPageRelay((req, token) => {
+    const base = `/api/page-comments/${encodeURIComponent(token)}`;
+    if (route === 'list') return base;
+    const id = segment(req.params.id, COMMENT_ID_RE);
+    return id && `${base}/${id}${route === 'delete' ? '/delete' : ''}`;
+  }, COMMENT_BODY_LIMIT);
+  // A form's spec, answers and receipts are budgeted under this (src/core/page-forms.ts).
+  const pageForms: RelayHandlers['pageForms'] = route => ownerPageRelay((req, token) => {
+    const base = `/api/page-forms/${encodeURIComponent(token)}`;
+    if (route === 'receipt') {
+      const id = segment(req.params.id, SUBMISSION_ID_RE);
+      return id && `${base}/receipts/${id}`;
+    }
+    if (req.query.submission === undefined) return base;
+    const submission = segment(req.query.submission, SUBMISSION_ID_RE);
+    return submission && `${base}?submission=${submission}`;
+  }, FORM_BODY_LIMIT, PAGE_FORMS_CAPABILITY);
 
   // Small JSON both ways with the body already parsed by express: the same
-  // buffered exception as artifact creation replies.
-  function proxyCommentToOwner(remote: Remote, req: TransportRequest, res: TransportResponse, peerBase: string) {
-    const rest = req.url === '/' ? '' : req.url;
+  // buffered exception as artifact creation replies. A body cut short is a 502,
+  // never a truncated or empty success.
+  function proxyToPageOwner(remote: Remote, req: TransportRequest, res: TransportResponse, peerPath: string, bodyLimit: BodyLimit) {
     const payload = req.method === 'GET' || req.method === 'HEAD' ? null : JSON.stringify(req.body ?? {});
-    const headers: OutgoingHttpHeaders = { accept: 'application/json', 'accept-encoding': 'identity' };
+    const headers: OutgoingHttpHeaders = {
+      accept: 'application/json', 'accept-encoding': 'identity', [ARTIFACT_HOP_HEADER]: '1', [FORM_CLIENT_HEADER]: 'relay',
+    };
     if (payload !== null) {
       headers['content-type'] = 'application/json';
       headers['content-length'] = String(Buffer.byteLength(payload));
     }
 
     relayFirstResponse(
-      remoteHosts.request(remote, { method: req.method, path: `${peerBase}${rest}`, headers }),
+      remoteHosts.request(remote, { method: req.method, path: peerPath, headers }),
       PROXY_RESPONSE_TIMEOUT_MS,
       (upstream) => {
         if (payload !== null) upstream.write(payload);
@@ -528,20 +640,39 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
       },
       (peerRes) => {
           let raw = '';
-          let overflow = false;
-          peerRes.setEncoding('utf8');
-          peerRes.on('data', (chunk) => {
-            if (overflow) return;
-            raw += chunk;
-            if (raw.length <= FLEET_ARTIFACT_BODY_LIMIT) return;
-            overflow = true;
+          let size = 0;
+          let done = false;
+          const fail = (error: string) => {
+            if (done) return;
+            done = true;
             peerRes.destroy();
-            res.status(502).json({ error: `Host ${remote.name} returned an oversized comment response`, host: remote.name });
+            if (!res.headersSent) res.status(502).json({ error: `Host ${remote.name} ${error}`, host: remote.name });
+          };
+          peerRes.setEncoding('utf8');
+          peerRes.on('data', (chunk: string) => {
+            if (done) return;
+            raw += chunk;
+            size += bodyLimit.count(chunk);
+            if (size > bodyLimit.max) fail('returned an oversized page response');
           });
+          peerRes.on('aborted', () => fail('sent an incomplete response'));
+          peerRes.on('error', () => fail('sent an incomplete response'));
           peerRes.on('end', () => {
-            if (!overflow) res.status(peerRes.statusCode!).type('application/json').send(raw || '{}');
+            if (done) return;
+            if (!peerRes.complete || (!raw && req.method !== 'HEAD')) return fail('sent an incomplete response');
+            done = true;
+            if (req.method === 'HEAD') {
+              // The owner's metadata for the body it would send.
+              res.status(peerRes.statusCode!);
+              for (const name of ['content-type', 'content-length', 'cache-control']) {
+                const value = peerRes.headers[name];
+                if (value !== undefined) res.setHeader(name, value);
+              }
+              res.end();
+              return;
+            }
+            res.status(peerRes.statusCode!).type('application/json').send(raw);
           });
-          peerRes.on('error', () => { try { res.end(); } catch {} });
       },
       (reason) => { res.status(502).json({ error: `Host ${remote.name} is unreachable`, host: remote.name, reason }); },
       remoteHosts.errorCode,
@@ -606,5 +737,5 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
         teardown();
       });
   }
-  return { rawApi, registerArtifact, listArtifacts, removeArtifact, hosts, pageComments, publicArtifacts: { serve: serveFleetArtifact }, upgrade };
+  return { rawApi, registerArtifact, listArtifacts, removeArtifact, hosts, pageComments, pageForms, publicArtifacts: { serve: serveFleetArtifact }, upgrade };
 }

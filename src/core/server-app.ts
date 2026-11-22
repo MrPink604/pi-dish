@@ -252,11 +252,9 @@ export function startServer(rootDirectory: string): Server {
   // Private rows and routes answer only to requests unlocked by the PIN.
   const privateAccess = createPrivateAccess();
   const privateUnlocked = (req: IncomingMessage) => privateAccess.unlocked(req);
-  const privateSessions = createPrivateSessionHandlers({
-    access: privateAccess,
-    sessionIsPrivate: sessionId => [...liveSourceObservations(sessionId), findSessionSource(sessionId)]
-      .some(entry => !!entry && isPrivateSessionFile(getHarness(entry.harnessId), entry.file)),
-  });
+  const sessionIsPrivate = (sessionId: string) => [...liveSourceObservations(sessionId), findSessionSource(sessionId)]
+    .some(entry => !!entry && isPrivateSessionFile(getHarness(entry.harnessId), entry.file));
+  const privateSessions = createPrivateSessionHandlers({ access: privateAccess, sessionIsPrivate });
   app.get('/api/private-sessions', privateSessions.status);
   app.put('/api/private-sessions/pin', privateSessions.setPin);
   app.post('/api/private-sessions/unlock', privateSessions.unlock);
@@ -283,6 +281,10 @@ export function startServer(rootDirectory: string): Server {
     reads: sessionReadHandlers,
     relay: relayHandlers.publicArtifacts,
     resourceRoot: rootDirectory,
+    // Built further down; only called once requests flow.
+    deliverMessage: (sessionId, text) => sessionCommandHandlers.deliverText(sessionId, text),
+    sessionIsPrivate,
+    privateRefused: privateSessions.refused,
   });
   const sessionLaunch = createSessionLaunch({ runHarnessModelCommand });
   const sessionOperations = createSessionOperations({
@@ -392,12 +394,19 @@ export function startServer(rootDirectory: string): Server {
   app.get('/share/:token', publicationHandlers.serveSharedSession);
 
   // Published pages reach their own comments only through these routes; GET/POST
-  // only so the overlay's cross-origin calls are never preflighted.
-  app.use('/api/page-comments/:token', relayHandlers.pageComments);
-  app.get('/api/page-comments/:token', publicationHandlers.listPageComments);
-  app.post('/api/page-comments/:token', publicationHandlers.createPageComment);
-  app.post('/api/page-comments/:token/:id', publicationHandlers.updatePageComment);
-  app.post('/api/page-comments/:token/:id/delete', publicationHandlers.deletePageComment);
+  // only so the overlay's cross-origin calls are never preflighted. A hub relays
+  // each route to the page's host by its params, never by a request suffix.
+  app.get('/api/page-comments/:token', relayHandlers.pageComments('list'), publicationHandlers.listPageComments);
+  app.post('/api/page-comments/:token', relayHandlers.pageComments('list'), publicationHandlers.createPageComment);
+  app.post('/api/page-comments/:token/:id', relayHandlers.pageComments('item'), publicationHandlers.updatePageComment);
+  app.post('/api/page-comments/:token/:id/delete', relayHandlers.pageComments('delete'), publicationHandlers.deletePageComment);
+  // A page's form: pi-dish's own form view reads and answers it here (also
+  // the agent's fetch). Same-origin, no-store and checked before a hub relays
+  // it to the page's host; the public listener mounts no /api.
+  app.use('/api/page-forms', accessHandlers.sameOriginOnly);
+  app.get('/api/page-forms/:token', relayHandlers.pageForms('state'), publicationHandlers.pageForm);
+  app.get('/api/page-forms/:token/receipts/:id', relayHandlers.pageForms('receipt'), publicationHandlers.pageFormReceipt);
+  app.post('/api/page-forms/:token', relayHandlers.pageForms('state'), publicationHandlers.submitPageForm);
 
   app.post('/api/comments', publicationHandlers.createComment);
   app.get('/api/comments/index', publicationHandlers.commentIndex);
@@ -414,6 +423,9 @@ export function startServer(rootDirectory: string): Server {
   // Public serving routes; every failure is a bare 404.
   app.get('/page/:token', publicationHandlers.page);
   app.get('/page/:token/*', publicationHandlers.pageAsset);
+  // pi-dish's own form view for a page: a trusted, unframeable app page. Main app only.
+  app.get('/forms.css', publicationHandlers.formStyles);
+  app.get('/forms/:token', publicationHandlers.formView);
 
   app.post('/api/sessions/:id/command', createSlashCommandHandler({ getLiveSession, locatePiPane }).command);
 

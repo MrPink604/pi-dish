@@ -69,6 +69,7 @@
     "test/comments-cli.test.ts",
     "test/skill-sessions-fleet.test.ts",
     "test/fleet-artifacts.test.ts",
+    "test/page-forms.test.ts",
     "test/omp-bridge-session-switch.test.ts",
     "test/omp-tree-bridge.test.ts",
     "test/session-refs.test.ts",
@@ -164,6 +165,7 @@
     "test/browser/api-boundary.spec.ts",
     "test/browser/reachability.spec.ts",
     "test/browser/artifact-comments.spec.ts",
+    "test/browser/page-forms.spec.ts",
     "test/browser/new-session-options.spec.ts",
     "test/browser/harness-settings.spec.ts",
     "test/browser/harness-discovery.spec.ts",
@@ -352,12 +354,13 @@
         "strategy": "bundles",
         "builder": "scripts/build-browser.ts",
         "checkCommand": "npm run build:browser -- --check",
-        "consumer": "public HTML, VM/parity tests, browser fixtures and ESLint consume five independent local browser/helper entrypoints; the browser registers the service worker bundle",
+        "consumer": "public HTML, VM/parity tests, browser fixtures and ESLint consume six independent local browser/helper entrypoints (the server's /forms view loads forms.js); the browser registers the service worker bundle",
         "entries": [
           {"source": "src/browser/app.ts", "output": "public/app.js"},
           {"source": "src/browser/theme-prepaint.ts", "output": "public/theme-prepaint.js"},
           {"source": "src/browser/index.ts", "output": "public/browser.js"},
           {"source": "src/browser/artifact-comments.ts", "output": "public/artifact-comments.js"},
+          {"source": "src/browser/forms-app.ts", "output": "public/forms.js"},
           {"source": "src/browser/service-worker.ts", "output": "public/sw.js"},
           {"source": "src/browser/shared-helpers.ts", "output": "public/helpers.js"}
         ]

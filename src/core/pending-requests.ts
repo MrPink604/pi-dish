@@ -13,6 +13,14 @@ interface PendingRequest {
 class PendingRequests {
   private readonly map = new Map<RequestId, PendingRequest>();
 
+  /**
+   * `refusals`: the transport answers a command only to admit or refuse it
+   * (the pi bridge, pi RPC), so a failed response means it was not carried
+   * out; the error is marked `hostRefused`. ACP answers a prompt when its turn
+   * ends, after the agent may already have the input, so it does not set this.
+   */
+  constructor(private readonly options: { refusals?: boolean } = {}) {}
+
   /** Register a request under `id`; returns the promise its response settles. */
   track(id: RequestId, { timeout = 0, label = 'request' } = {}): Promise<unknown> {
     return new Promise<unknown>((resolve, reject) => {
@@ -33,7 +41,10 @@ class PendingRequests {
     if (!pending) return false;
     this.map.delete(id);
     if (success) pending.resolve(data);
-    else pending.reject(new Error(error || fallbackError));
+    else {
+      const failure = new Error(error || fallbackError);
+      pending.reject(this.options.refusals ? Object.assign(failure, { hostRefused: true }) : failure);
+    }
     return true;
   }
 
