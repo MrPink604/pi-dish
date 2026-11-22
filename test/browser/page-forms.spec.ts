@@ -211,6 +211,47 @@ test('pi-dish\'s form view cannot be framed', async ({ page, fleet }) => {
   await tab.close();
 });
 
+// OSBG's published form, as its bot linked it: `[Aurel paint](/forms/<token>)`.
+const OSBG_SPEC = {
+  title: 'Aurel\'s colours',
+  intro: 'One pick: the colourway. Racing green is preselected as my guess.',
+  fields: [
+    { id: 'paint', type: 'choice', label: 'Which colourway is Aurel\'s', required: true, default: '3 Racing green', options: [
+      { value: '1 Service', image: 'a.png' }, { value: '2 Umber', image: 'b.png' }, { value: '3 Racing green', image: 'a.png' },
+      { value: '4 Oxblood', image: 'b.png' }, { value: '5 Night', image: 'a.png' },
+    ] },
+    { id: 'rule6', type: 'approve', label: 'New wording of style rule 6', yes: 'fine', no: 'change it', default: true },
+    { id: 'names', type: 'approve', label: 'Names: Halden Arsenal and Aurel Foundry', yes: 'keep both', no: 'replace', default: true },
+    { id: 'notes', type: 'longtext', label: 'Anything else?' },
+  ],
+};
+
+test('a /forms link in the transcript opens the live form view, not the file viewer', async ({ page, fleet }) => {
+  const { self } = fleet;
+  const published = await publish(self, 'osbg', `<!doctype html><html><body><h1>Your pick</h1><script type="application/pi-dish-form">${JSON.stringify(OSBG_SPEC)}</script></body></html>`);
+  const markdown = `Both forms still need your answers:\n1. [Aurel paint](/forms/${published.token})\n2. \`/forms/${published.token}\``;
+  await page.route(`${self.base}/api/sessions/${ROOT}/messages?**`, route => route.fulfill({
+    json: { messages: [{ role: 'assistant', index: 0, content: markdown }], session: {} },
+  }));
+  await fleet.select(self);
+  const links = page.locator('#messages a.published-link');
+  await expect(links).toHaveCount(2);
+  await expect(page.locator('#messages .file-link')).toHaveCount(0);
+  const opened = page.context().waitForEvent('page');
+  await links.first().click();
+  const tab = await opened;
+  await expect(tab).toHaveURL(`${self.base}/forms/${published.token}`);
+  await expect(page.locator('#sessionView.file-open')).toHaveCount(0);
+
+  await tab.setViewportSize({ width: 390, height: 844 });
+  const paint = tab.locator('#pdfApp form.pdf fieldset[data-q="paint"]');
+  await expect(paint.locator('input[value="3 Racing green"]')).toBeChecked();
+  await paint.locator('.pdf-opt', { has: tab.locator('input[value="2 Umber"]') }).click();
+  await expect(paint.locator('input[value="2 Umber"]')).toBeChecked();
+  await expect(tab.locator('#pdfApp .pdf-summary')).toHaveText('1 changed from default: paint → 2 Umber');
+  await tab.close();
+});
+
 test('an unconfirmed submit keeps its id: a retry sends the same submission once', async ({ page, fleet }) => {
   const { self } = fleet;
   const published = await publish(self, 'reconcile', formHtml());

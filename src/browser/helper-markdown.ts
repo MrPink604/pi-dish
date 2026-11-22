@@ -105,10 +105,11 @@ export var FILE_MENTION_RE = /^(?:~\/|\.{1,2}\/|\/)?[\w.@+-]+(?:\/[\w.@+-]+)*(?:
 export var FILE_EXT_RE = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
 
 /**
- * `/page/<token>` or `/share/<token>`: 22-char base64url tokens keep real
- * filesystem paths from matching. These are pi-dish URLs, never session files.
+ * `/page/<token>`, `/share/<token>` or `/forms/<token>`: 22-char base64url
+ * tokens keep real filesystem paths from matching. These are pi-dish URLs,
+ * never session files.
  */
-export var ARTIFACT_PATH_RE = /^\/(?:page\/[A-Za-z0-9_-]{22}(?:[/?#]\S*)?|share\/[A-Za-z0-9_-]{22}\/?)$/;
+export var ARTIFACT_PATH_RE = /^\/(?:page\/[A-Za-z0-9_-]{22}(?:[/?#]\S*)?|(?:share|forms)\/[A-Za-z0-9_-]{22}\/?)$/;
 
 
 export function looksLikeFilePath(text: unknown) {
