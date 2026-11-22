@@ -10,6 +10,8 @@ export const APP_ACTION_NAMES = [
   'refreshFleetView',
   'closeFleetView',
   'refreshSessions',
+  'reloadForReachability',
+  'signInForReachability',
   'openNewSessionView',
   'openSessionHarnessSettings',
   'openStatsModal',

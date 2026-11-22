@@ -1,5 +1,6 @@
 import { record } from '../core/helper-values';
-import type { ApiRequest } from './api-client';
+import { ApiHttpError, type ApiRequest } from './api-client';
+import { classifyOriginError, type OriginFailure } from './origin-reachability';
 import type { EffectiveHost } from './host-catalog';
 import type { HostConnectionEvent } from './host-connections';
 
@@ -27,6 +28,7 @@ export interface HostDiscoveryOptions {
   pollableHosts: () => readonly EffectiveHost[];
   sourceFor: (host: Readonly<EffectiveHost>) => HostDiscoverySource | null;
   onSelf: (descriptor: HostDescriptor) => void;
+  onSelfFailure?: (failure: OriginFailure | null) => void;
   onFleet: (fleet: HostFleet) => void;
   onIdentified: (host: EffectiveHost, source: HostDiscoverySource, descriptor: HostDescriptor) => void;
   onConnection: (host: Readonly<EffectiveHost>, event: HostConnectionEvent) => void;
@@ -46,6 +48,7 @@ export function createHostDiscovery(options: HostDiscoveryOptions) {
   const requests = new Map<HostDiscoverySource, object>();
   const now = options.now || Date.now;
   let selfSequence = 0;
+  let selfFailures = 0, retrySelfAt: number | null = null;
   let fleetSequence = 0;
   let fleetPublication = 0;
   let fleetPending: Promise<void> | null = null;
@@ -59,13 +62,25 @@ export function createHostDiscovery(options: HostDiscoveryOptions) {
 
   async function loadIdentity(): Promise<void> {
     const sequence = ++selfSequence;
+    retrySelfAt = null;
+    let descriptor: HostDescriptor | null;
     try {
-      // Deliberately separate from routed API requests: this defines self.
+      // Deliberately separate from routed peer requests: this defines self.
       const response = await options.requestSelf();
-      if (!response.ok) return;
-      const descriptor = decodeHostDescriptor(await response.json());
-      if (sequence === selfSequence && descriptor) options.onSelf(descriptor);
-    } catch {} // An older server keeps the host-less client key convention.
+      if (!response.ok) throw new ApiHttpError(`HTTP ${response.status}`, response.status);
+      descriptor = decodeHostDescriptor(await response.json());
+      if (!descriptor) throw new Error('Invalid self host descriptor');
+    } catch (error) {
+      if (sequence !== selfSequence) return;
+      selfFailures++;
+      retrySelfAt = now() + Math.min(5000 * 2 ** (selfFailures - 1), REFRESH_MS);
+      options.onSelfFailure?.(classifyOriginError(error) ?? 'server');
+      return;
+    }
+    if (sequence !== selfSequence) return;
+    selfFailures = 0;
+    options.onSelfFailure?.(null);
+    options.onSelf(descriptor);
   }
 
   async function identify(refresh = false): Promise<void> {
@@ -139,7 +154,9 @@ export function createHostDiscovery(options: HostDiscoveryOptions) {
   }
 
   function refreshSoon(): void {
-    if (now() - fleetRequestedAt < REFRESH_MS) return;
+    const at = now();
+    if (retrySelfAt !== null && at >= retrySelfAt) void loadIdentity();
+    if (at - fleetRequestedAt < REFRESH_MS) return;
     void loadFleet();
   }
 

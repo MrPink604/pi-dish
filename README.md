@@ -637,6 +637,13 @@ with credentials, so the proxy's session cookie lets it through; without that
 the manifest gets the login redirect and Android only creates a Chrome
 shortcut (Chrome's icon in the app switcher, no Settings → Apps entry).
 
+When pi-dish detects lost sign-in, it blocks the app with **Sign-in expired.**
+Tap **Tap to sign in again.** to open a top-level navigation so the proxy can
+sign you in. A plain outage shows **Can't reach server** without blocking the
+app. Host discovery, session lists, and open sessions retry in the background;
+cached sessions stay visible, and peer outages stay in their host status.
+Fleet distinguishes an unreachable host from one that needs an upgrade to report capacity.
+
 Settings → **Notifications** → **Turn on** subscribes this device. From then
 on each host pushes when one of its live sessions:
 

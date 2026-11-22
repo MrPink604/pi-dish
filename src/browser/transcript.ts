@@ -1,4 +1,5 @@
-import { errorMessage, responseError, type ApiRequest, type HostEndpoint } from './api-client';
+import { errorMessage, jsonResponse, type ApiRequest, type HostEndpoint } from './api-client';
+import { classifyOriginError, type OriginFailure } from './origin-reachability';
 import type { SessionState, SelectionOwner } from './session-state';
 import { decodeRenderMessage, type RenderMessage } from './message-data';
 import { decodeSessionTranscriptPatch, type SessionTranscriptPatch } from '../core/session-api';
@@ -30,12 +31,14 @@ export function createTranscript(options: {
   closeSearch: () => void; cancelStreaming: () => void; mood: (description: string, face: string) => void; updateMood: (messages: readonly RenderMessage[]) => void;
   pinned: (root: HTMLElement) => boolean; scroll: (root: HTMLElement) => void; jump: (root: HTMLElement) => void;
   consumeEcho: (id: string, content: unknown) => void;
+  originFailure?: (failure: OriginFailure | null) => void;
 }) {
   const { document, sessionState } = options, container = document.getElementById('messages')!;
   const cache = createTranscriptCache(document), requests = new Set<AbortController>();
   /** Retained indexed messages, and the context kept around the reader or a search hit. */
   const MAX_ACTIVE = 300, ACTIVE_CONTEXT = 25;
   let disposed = false, generation = 0, catchupSequence = 0, seekSequence = 0, older: symbol | null = null, olderFlight: Promise<void> | null = null, barEvents = new AbortController();
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let protectedRange: { start: number; end: number } | null = null;
   let cursors: TranscriptCursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 };
   let loaded: { key: string; base: string } | null = null;
@@ -50,15 +53,23 @@ export function createTranscript(options: {
     return !disposed && owner.generation === generation && sessionState.ownsSelection(owner.selection)
       && endpoint?.base === owner.endpoint.base && (endpoint.token || '') === (owner.endpoint.token || '');
   };
-  function retire() { generation++; catchupSequence++; older = null; olderFlight = null; protectedRange = null; windowFlights.clear(); barEvents.abort(); for (const request of requests) request.abort(); requests.clear(); }
+  function retire() {
+    generation++; catchupSequence++; older = null; olderFlight = null; protectedRange = null; windowFlights.clear(); barEvents.abort();
+    for (const request of requests) request.abort();
+    requests.clear();
+    if (retryTimer !== undefined) {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+      options.originFailure?.(null);
+    }
+  }
   function reset() { retire(); loaded = null; cursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 }; }
   async function page(owner: Owner, suffix: string) {
     const endpoint = options.host(owner.selection.host); if (!owns(owner) || !endpoint) throw new Error('Transcript ownership changed');
     const controller = new AbortController(); requests.add(controller);
     try {
       const response = await options.request({ ...owner.endpoint, token: endpoint.token }, `/api/sessions/${encodeURIComponent(owner.selection.id)}/messages?${suffix}`, { signal: controller.signal });
-      const value: unknown = await response.json(); if (!response.ok) throw new Error(responseError(response, value, `Transcript request failed (${response.status})`));
-      return decodeTranscriptPage(value);
+      return decodeTranscriptPage(await jsonResponse(response, `Transcript request failed (${response.status})`));
     } finally { requests.delete(controller); }
   }
   function barHtml() { return cursors.hasOlder ? `<div class="load-older-bar" id="loadOlderBar"><button class="load-older-btn">Load older messages (${cursors.oldestIndex ?? 0} earlier)</button></div>` : ''; }
@@ -224,11 +235,34 @@ export function createTranscript(options: {
     options.cancelStreaming(); options.closeSearch();
     if (restore(owner.selection.id)) { await catchup(selection); return; }
     loaded = null; container.innerHTML = '<div class="loading">Loading...</div>'; cursors = { oldestIndex: null, lastIndex: null, hasOlder: false, total: 0 }; options.mood('', '');
+    await loadTail(owner, 0);
+  }
+  async function loadTail(owner: Owner, failures: number) {
     try {
       const data = await page(owner, 'limit=50'); if (!owns(owner)) return;
       sessionState.mergeCurrentSession(owner.selection, data.session); loaded = { key: sessionRefKey(owner.selection), base: owner.endpoint.base };
       cursors = { oldestIndex: data.firstIndex, lastIndex: data.lastIndex, hasOlder: data.hasMore, total: data.totalMessages || 0 }; render(data.messages);
-    } catch (error) { if (owns(owner)) container.innerHTML = `<div class="error">Failed to load messages: ${escapeHtml(errorMessage(error))}</div>`; }
+      if (retryTimer !== undefined) {
+        retryTimer = undefined;
+        options.originFailure?.(null);
+      }
+    } catch (error) {
+      if (!owns(owner)) return;
+      const failure = owner.endpoint.base === '' && options.originFailure && classifyOriginError(error);
+      if (failure) {
+        options.originFailure?.(failure);
+        container.innerHTML = '<div class="error">Couldn’t load messages. Retrying…</div>';
+        retryTimer = setTimeout(() => {
+          if (owns(owner)) void loadTail(owner, failures + 1);
+        }, Math.min(3000 * 2 ** failures, 30000));
+      } else {
+        if (retryTimer !== undefined) {
+          retryTimer = undefined;
+          options.originFailure?.(null);
+        }
+        container.innerHTML = `<div class="error">Failed to load messages: ${escapeHtml(errorMessage(error))}</div>`;
+      }
+    }
   }
   async function loadOlder() {
     // Concurrent consumers join the existing request; the original operation
@@ -257,7 +291,8 @@ export function createTranscript(options: {
     } catch (error) { if (owns(owner) && older === operation && button?.isConnected) button.textContent = `Failed: ${errorMessage(error)} — retry`; }
   }
   async function catchup(selection = sessionState.captureSelection()): Promise<void> {
-    const owner = capture(selection); if (!owner) return; if (cursors.lastIndex == null) return load(selection);
+    const owner = capture(selection); if (!owner) return;
+    if (cursors.lastIndex == null) { if (retryTimer === undefined) return load(selection); return; }
     const sequence = ++catchupSequence, after = cursors.lastIndex;
     try {
       const data = await page(owner, 'after=' + after); if (!owns(owner) || sequence !== catchupSequence) return;

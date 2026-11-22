@@ -420,6 +420,7 @@ test/browser/production-composition.spec.js linguist-generated=true
 test/browser/prompt-delivery.spec.js linguist-generated=true
 test/browser/prompt-history.spec.js linguist-generated=true
 test/browser/queue-ownership.spec.js linguist-generated=true
+test/browser/reachability.spec.js linguist-generated=true
 test/browser/recovery.spec.js linguist-generated=true
 test/browser/rich-text.spec.js linguist-generated=true
 test/browser/routines.spec.js linguist-generated=true

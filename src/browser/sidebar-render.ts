@@ -498,9 +498,12 @@ function renderSessions() {
   if (sessionsShown.length === 0 && pending.length === 0) {
     if (!botSessionTree?.botCount || options.query || options.scope) {
       // With a query, `active` is server-filtered: empty means "no matches".
-      const msg = options.tab === 'active'
-        ? (active.length === 0 && !options.query ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
-        : (visible.length === 0 && !options.query ? 'No sessions found' : 'No matches');
+      const self = options.hosts.find(host => host.self);
+      const msg = self?.state === 'backoff' || self?.state === 'blocked'
+        ? 'Couldn’t load sessions. Retrying…'
+        : options.tab === 'active'
+          ? (active.length === 0 && !options.query ? 'No active sessions<br><span style="font-size:11px">Click "+ New Session" or resume one from All</span>' : 'No matches')
+          : (visible.length === 0 && !options.query ? 'No sessions found' : 'No matches');
       html += `<div class="empty-session"><p style="color: var(--text-muted); font-size: 13px; padding: 16px; text-align: center;">${msg}</p></div>`;
     }
   } else if (options.query) {

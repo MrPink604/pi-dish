@@ -6,6 +6,7 @@ import { sessionKey } from './helper-identity';
 import type { HostEndpoint } from './api-client';
 import type { SessionState, SelectionOwner } from './session-state';
 import type { ExtensionSession } from './extension-dialogs';
+import { classifyOriginError, type OriginFailure } from './origin-reachability';
 /** Stream event consumption does not confer the collaborators' other authority. */
 export interface MessageStreamActivity {
   readonly turn: boolean;
@@ -47,6 +48,7 @@ export function createMessageStream(options: {
   document: Document; sessionState: SessionState; endpoint: (host: string | null) => HostEndpoint; ticket: (host: HostEndpoint) => Promise<string>; source?: (url: string) => EventSource;
   /** Adds the private-session unlock query; EventSource cannot send its header. */
   withUnlock?: (url: string, base: string) => string;
+  originFailure?: (failure: OriginFailure | null) => void;
   activity: MessageStreamActivity; renderer: MessageStreamRenderer; streaming: MessageStreamRendering;
   tools: MessageStreamTools; delivery: MessageStreamDelivery; extensionUI: MessageStreamExtensionUI; sideChat: MessageStreamSideChat;
   status: (message: string, type?: string) => void; catchup: (owner: SelectionOwner) => unknown; refresh: () => unknown; artifacts: (owner: SelectionOwner) => unknown;
@@ -56,20 +58,45 @@ export function createMessageStream(options: {
 }) {
   const { document, sessionState, renderer, tools } = options;
   let source: EventSource | null = null, reconnect: ReturnType<typeof setTimeout> | null = null, connectionGeneration = 0, disposed = false;
+  let current: { owner: SelectionOwner; base: string } | null = null, failures = 0;
   function ownsConnection(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number) {
     return !disposed && generation === connectionGeneration && sessionState.ownsSelection(owner) && options.endpoint(owner.host).base === target.base;
   }
-  function stop() { connectionGeneration++; if (reconnect) clearTimeout(reconnect); reconnect = null; source?.close(); source = null; }
+  function disconnect() { connectionGeneration++; clearTimeout(reconnect ?? undefined); reconnect = null; source?.close(); source = null; }
+  function stop() {
+    disconnect();
+    if (current?.base === '') options.originFailure?.(null);
+    current = null;
+    failures = 0;
+  }
   async function start(owner = sessionState.captureSelection()) {
-    if (disposed || !owner || !sessionState.ownsSelection(owner)) return; stop();
-    const generation = connectionGeneration, target = Object.freeze({ ...options.endpoint(owner.host) });
+    if (disposed || !owner || !sessionState.ownsSelection(owner)) return;
+    const target = Object.freeze({ ...options.endpoint(owner.host) });
+    if (current?.base === target.base && sessionState.ownsSelection(current.owner)) disconnect();
+    else stop();
+    current = { owner, base: target.base };
+    return connect(owner, target, connectionGeneration);
+  }
+  function retry(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number, message: string, failure: OriginFailure) {
+    if (!ownsConnection(owner, target, generation)) return;
+    source?.close();
+    source = null;
+    options.status(message, 'error');
+    failures++;
+    if (target.base === '' && failures >= 2) options.originFailure?.(failure);
+    reconnect = setTimeout(() => {
+      reconnect = null;
+      if (ownsConnection(owner, target, generation)) void connect(owner, target, generation);
+    }, Math.min(3000 * 2 ** (failures - 1), 30000));
+  }
+  async function connect(owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number) {
     const path = `${target.base}/api/sessions/${encodeURIComponent(owner.id)}/stream`;
     const url = options.withUnlock?.(path, target.base) ?? path;
     if (!target.token) { open(url, owner, target, generation); return; }
     try {
       const ticket = await options.ticket(target); if (!ownsConnection(owner, target, generation)) return;
       open(`${url}${url.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`, owner, target, generation);
-    } catch { if (ownsConnection(owner, target, generation)) options.status('Stream failed', 'error'); }
+    } catch (error) { retry(owner, target, generation, 'Stream failed', classifyOriginError(error) ?? 'network'); }
   }
 function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>, generation: number) {
   if (!ownsConnection(owner, target, generation)) return;
@@ -91,7 +118,12 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
       ? [m.role, m.timestamp ?? null, m.content ?? null, m.errorMessage ?? null, m.customType ?? null, m.details ?? null]
       : [m.role, m.timestamp ?? null, m.content ?? null]);
 
-    evtSource.onopen = () => { if (ownsStream()) options.status(''); };
+    evtSource.onopen = () => {
+      if (!ownsStream()) return;
+      failures = 0;
+      if (target.base === '') options.originFailure?.(null);
+      options.status('');
+    };
 
     addOwnedListener('init', (e) => {
       try {
@@ -333,20 +365,15 @@ function open(url: string, owner: SelectionOwner, target: Readonly<HostEndpoint>
       options.extensionUI.end({ id: sessionId, host: hostId });
       options.status('Session ended');
       options.refresh();
+      stop();
     });
 
     evtSource.onerror = () => {
-      if (!ownsStream()) return;
-      if (evtSource.readyState === EventSource.CLOSED) {
-        options.status('Stream disconnected', 'error');
-        if (reconnect) clearTimeout(reconnect);
-        reconnect = setTimeout(() => { reconnect = null; if (ownsStream()) start(owner); }, 3000);
-      }
+      // A repeated failure can be an Access redirect; EventSource hides the HTTP response.
+      if (ownsStream()) retry(owner, target, generation, 'Stream disconnected', 'auth');
     };
   } catch (err) {
-    if (!ownsConnection(owner, target, generation)) return;
-    console.error('Stream failed:', err);
-    options.status('Stream failed', 'error');
+    retry(owner, target, generation, 'Stream failed', classifyOriginError(err) ?? 'network');
   }
 }
 

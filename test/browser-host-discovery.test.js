@@ -5,6 +5,7 @@ const test_types_js_1 = require("./test-types.js");
 const browser_vm_js_1 = require("./browser-vm.js");
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const promises_1 = require("node:timers/promises");
 const { createHostDiscovery, decodeHostDescriptor, reconcileHostCatalog } = (0, browser_vm_js_1.loadBrowser)();
 const response = (data, status = 200) => new Response(JSON.stringify(data), {
     status,
@@ -69,6 +70,33 @@ test('self identity accepts only the latest request and preserves older-server f
     (0, test_types_js_1.present)(calls[2]).resolve(response(null, 404));
     await missing;
     assert.equal(events.length, 1);
+});
+test('self discovery backs off after auth and server failures and clears on recovery', async () => {
+    const seen = [];
+    const { discovery, calls, setNow } = fixture({ onSelfFailure: failure => { seen.push(failure); } });
+    const fleet = discovery.loadFleet();
+    (0, test_types_js_1.present)(calls[0]).resolve(response(null, 404));
+    await fleet;
+    const identity = discovery.loadIdentity();
+    (0, test_types_js_1.present)(calls[1]).resolve(response(null, 403));
+    await identity;
+    setNow(104999);
+    discovery.refreshSoon();
+    assert.equal(calls.length, 2);
+    setNow(105000);
+    discovery.refreshSoon();
+    discovery.refreshSoon();
+    assert.equal(calls.length, 3);
+    (0, test_types_js_1.present)(calls[2]).resolve(response(null, 503));
+    await (0, promises_1.setImmediate)();
+    setNow(114999);
+    discovery.refreshSoon();
+    assert.equal(calls.length, 3);
+    setNow(115000);
+    discovery.refreshSoon();
+    (0, test_types_js_1.present)(calls[3]).resolve(response(descriptor('self')));
+    await (0, promises_1.setImmediate)();
+    assert.deepEqual(seen, ['auth', 'server', null]);
 });
 for (const failure of [false, true])
     test(`a superseded descriptor ${failure ? '401' : 'success'} cannot replace newer metadata or connection state`, async () => {

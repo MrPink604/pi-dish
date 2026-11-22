@@ -26,7 +26,14 @@
   <script src="vendor/marked.min.js" defer></script>
   <script src="app.js" defer></script>
 </head>
-<body>
+<body class="app-page">
+  <div class="reachability" role="status">
+    <button id="reachabilityBanner" type="button" data-app-click="reloadForReachability" hidden>Can't reach server. Tap to reload.</button>
+  </div>
+  <dialog id="reachabilitySignIn" class="reachability-sign-in" aria-labelledby="reachabilitySignInTitle">
+    <h2 id="reachabilitySignInTitle">Sign-in expired.</h2>
+    <button class="btn btn-primary" type="button" data-app-click="signInForReachability" autofocus>Tap to sign in again.</button>
+  </dialog>
   <div class="app">
     <!-- Sidebar Overlay -->
     <div class="sidebar-overlay" id="sidebarOverlay" data-toggle-sidebar></div>

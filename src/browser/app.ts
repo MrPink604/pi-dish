@@ -5,6 +5,7 @@ import { harnessBadgeInfo, hostDisplayLabel, hostSupportsCapability, hostSupport
 import { createHostView } from './host-view';
 import { createHostDirectory } from './host-directory';
 import { createHostTransport, createSessionApi, sendJson, type ApiRequest, type ApiUpload, type HostTarget } from './api-client';
+import { createOriginRequest, type OriginFailure } from './origin-reachability';
 import { createHostConnections, hostKeyOf } from './host-connections';
 import { createHostDiscovery } from './host-discovery';
 import { createHostPresentation, resolveColorToHex } from './host-presentation';
@@ -99,6 +100,26 @@ const apiTransport: ReturnType<typeof createHostTransport> = createHostTransport
 // Shared ports resolve the owner's method on every call: fixtures and tests
 // replace feature methods (e.g. `apiTransport.request`) at runtime.
 const request: ApiRequest = (host, path, options) => apiTransport.request(host, path, options);
+const requestOrigin = createOriginRequest(request, location.origin);
+const readHostApi: ApiRequest = (host, path, init) => (resolveHost(host).base === '' ? requestOrigin : request)(host, path, init);
+const reachabilityBanner = document.querySelector<HTMLButtonElement>('#reachabilityBanner');
+const signInOverlay = document.querySelector<HTMLDialogElement>('#reachabilitySignIn');
+signInOverlay?.addEventListener('cancel', event => event.preventDefault());
+signInOverlay?.addEventListener('keydown', event => event.stopPropagation());
+type ReachabilitySource = 'identity' | 'list' | 'transcript' | 'stream' | 'terminal';
+const reachabilityFailures: Record<ReachabilitySource, OriginFailure | null> = {
+  identity: null, list: null, transcript: null, stream: null, terminal: null,
+};
+function noteReachability(source: ReachabilitySource, failure: OriginFailure | null) {
+  if (reachabilityFailures[source] === failure) return;
+  reachabilityFailures[source] = failure;
+  const failures = Object.values(reachabilityFailures);
+  const signedOut = failures.includes('auth');
+  if (reachabilityBanner) reachabilityBanner.hidden = signedOut || !failures.some(Boolean);
+  if (signInOverlay && signedOut !== signInOverlay.open) {
+    if (signedOut) signInOverlay.showModal(); else signInOverlay.close();
+  }
+}
 const upload: ApiUpload = (host, path, body, onProgress) => apiTransport.upload(host, path, body, onProgress);
 // Hosts hide private sessions until this tab enters their PIN; a reload locks again.
 const privateSessions: PrivateSessions = createPrivateSessions({
@@ -139,7 +160,8 @@ function hostWsUrl(host: HostTarget, path: string) {
 // Token hosts mint a fresh single-purpose ticket per (re)connect: EventSource
 // cannot send headers, and a bearer token must never sit in a URL.
 async function mintHostTicket(host: HostTarget, purpose: string) {
-  const data = await sendJson(request, host, '/api/auth/ticket', { purpose });
+  const transport = resolveHost(host).base === '' ? requestOrigin : request;
+  const data = await sendJson(transport, host, '/api/auth/ticket', { purpose });
   if (!record(data) || typeof data.ticket !== 'string' || !data.ticket) throw new Error('no ticket');
   return data.ticket;
 }
@@ -205,8 +227,8 @@ let resolveHostFleetReady: () => void;
 const hostFleetReady = new Promise<void>(resolve => { resolveHostFleetReady = resolve; });
 let startDiscoveredHosts: (() => void) | null = null;
 const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscovery({
-  request,
-  requestSelf: () => fetch('/api/host'),
+  request: readHostApi,
+  requestSelf: () => requestOrigin(null, '/api/host', { timeoutMs: 8000 }),
   hosts: effectiveHosts,
   pollableHosts,
   sourceFor: hostDirectory.sourceFor,
@@ -216,7 +238,9 @@ const hostDiscovery: ReturnType<typeof createHostDiscovery> = createHostDiscover
     if (newSessionController.isOpen()) newSessionController.renderHosts();
     void pushNotifications.sync();
     void bots.sync();
+    if (startDiscoveredHosts) hostsChanged();
   },
+  onSelfFailure: failure => { noteReachability('identity', failure); fleetController.render(); },
   onFleet: data => {
     hostDirectory.setFleet(data);
     seedHostConnFromFleet();
@@ -557,6 +581,10 @@ const sidebarLists: ReturnType<typeof createSidebarLists> = createSidebarLists({
   hosts: effectiveHosts, pollable: pollableHosts, selfId: () => hostDirectory.self.hostId,
   query: () => sidebarQuery.query, all: () => sidebarQuery.tab === 'all', refreshFleet: () => { hostDiscovery.refreshSoon(); void bots.load(); },
   connection: noteHost,
+  origin: {
+    request: requestOrigin,
+    showFailure: failure => noteReachability('list', failure),
+  },
   askBlocked: (session, host) => extensionUI.toast(`${session.name || 'Unnamed'} is waiting for an answer`, 'warning', () => { void revealSession(session.id, host); }),
 });
 const hostSessionLoader = sidebarLists.loader;
@@ -572,7 +600,8 @@ const sidebarControls: ReturnType<typeof createSidebarControls> = createSidebarC
 });
 
 const bots = createBots({
-  document, request, hosts: effectiveHosts, render: () => renderSessions(), refresh: () => sidebarLists.refresh(),
+  document, request: (host, path, init) => (!init?.method ? readHostApi : request)(host, path, init),
+  hosts: effectiveHosts, render: () => renderSessions(), refresh: () => sidebarLists.refresh(),
   onLoaded: () => {
     const current = sessionState.currentSession;
     if (current) sidebarControls.reveal(current.id, current.host || null);
@@ -755,8 +784,9 @@ function renderHostsSection() {
 }
 
 const fleetController: ReturnType<typeof createFleetView> = createFleetView({
-  root: document.querySelector<HTMLElement>('.main')!, request, hosts: effectiveHosts,
+  root: document.querySelector<HTMLElement>('.main')!, request: readHostApi, hosts: effectiveHosts,
   connection: host => hostConnections.stateOf(host), supports: host => hostSupportsCapability(host, 'hostHealth', appConfig),
+  selfIdentityFailure: () => reachabilityFailures.identity,
   clientSessions: hostId => {
     const self = selfHostEntry();
     const rows = sessionState.sessions.active.filter(session => (session.host || null) === hostId || (!session.host && self?.hostId === hostId));
@@ -825,7 +855,8 @@ const anchoredCommentController: ReturnType<typeof createAnchoredComments> = cre
 
 
 const transcriptController: ReturnType<typeof createTranscript> = createTranscript({
-  document, sessionState, request, host: hostEntryFor,
+  document, sessionState, request: readHostApi, host: hostEntryFor,
+  originFailure: failure => noteReachability('transcript', failure),
   renderMessage: message => messageRenderer.message(message), finalize: (root, options) => finalizeRender(root, options),
   closeSearch: () => sessionSearch.close(), cancelStreaming: () => streamingRenderer.cancel(), mood: (description, face) => moodController.set(description, face),
   updateMood: messages => moodController.fromMessages(messages), ...chromeScroll,
@@ -857,6 +888,7 @@ const liveToolsController: ReturnType<typeof createLiveTools> = createLiveTools(
 
 const messageStreamController: ReturnType<typeof createMessageStream> = createMessageStream({ document, sessionState, endpoint: resolveHost, ticket: host => mintHostTicket(host, 'stream'),
   withUnlock: (url, base) => privateSessions.withUnlock(url, base),
+  originFailure: failure => noteReachability('stream', failure),
   get activity() { return sessionActivity; }, renderer: messageRenderer, get streaming() { return streamingRenderer; }, tools: liveToolsController, get delivery() { return promptDelivery; }, get extensionUI() { return extensionUI; }, get sideChat() { return sideChat; },
   status: setStatus, catchup: owner => transcriptController.catchup(owner), refresh: refreshSessions, artifacts: owner => sessionInfo.refreshArtifacts(owner),
   ...chromeScroll, follow: () => appChrome.following, highlight: root => richText.highlight(root),
@@ -1119,6 +1151,7 @@ const terminalController: ReturnType<typeof createTerminalController> = createTe
   createFitAddon: () => { const runtime = typeof FitAddon === 'undefined' ? null : FitAddon; const Ctor = typeof runtime === 'function' ? runtime : runtime?.FitAddon; return Ctor ? new Ctor() : null; },
   socket: url => new WebSocket(url), socketUrl: (host, path) => privateSessions.withUnlock(hostWsUrl(host, path), resolveHost(host).base),
   ticket: (host, purpose) => mintHostTicket(host, purpose),
+  originFailure: failure => noteReachability('terminal', failure),
   theme: () => terminalTheme(document), applySize: panel => panelResize.terminalSize(panel), confirm: message => confirm(message),
 });
 
@@ -1181,6 +1214,11 @@ createAppBindings({ document, actions: {
   refreshFleetView: () => fleetController.refresh(),
   closeFleetView: () => fleetController.close(),
   refreshSessions,
+  reloadForReachability: () => location.reload(),
+  signInForReachability: () => {
+    // An identical URL with a fragment can be a same-document navigation.
+    if (location.hash) location.reload(); else location.assign(location.href);
+  },
   openNewSessionView: () => newSessionController.open(),
   openSessionHarnessSettings: () => openSessionHarnessSettings(),
   openStatsModal: () => sessionInfo.openStats(),

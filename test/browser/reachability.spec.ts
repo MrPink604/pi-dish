@@ -1,0 +1,174 @@
+import { test, expect, heldRoute, ROOT } from './fixtures.js';
+
+const OFFLINE = "Can't reach server. Tap to reload.";
+const SIGN_IN = 'Sign-in expired. Tap to sign in again.';
+
+test.use({ instrumentApp: false });
+
+for (const mode of ['abort', 'redirect'] as const) {
+  test(`an initial ${mode} blocks the app until the origin recovers`, async ({ page, fleet }) => {
+    const sessions = `${fleet.self.base}/api/sessions?*`;
+    const descriptor = `${fleet.self.base}/api/host`;
+    const login = `${fleet.peer.base}/access-login`;
+    const overlay = page.locator('#reachabilitySignIn');
+    let followedLogin = false;
+    page.on('request', request => { if (request.url() === login) followedLogin = true; });
+    if (mode === 'redirect') {
+      await page.setViewportSize({ width: 390, height: 720 });
+      await page.route(descriptor, route => route.fulfill({ status: 302, headers: { location: login } }));
+    }
+    await page.route(sessions, route => mode === 'abort'
+      ? route.abort('failed')
+      : route.fulfill({ status: 302, headers: { location: login } }));
+    await page.clock.install();
+    await page.reload();
+    await expect(overlay).toBeVisible();
+    await expect(overlay).toHaveText(SIGN_IN);
+    await expect(overlay).toBeInViewport({ ratio: 1 });
+    await page.keyboard.press('Escape');
+    await expect(overlay).toBeVisible();
+    expect(await overlay.evaluate(dialog => dialog.matches(':modal'))).toBe(true);
+    await expect(page.locator('#sessionList .empty-session')).toHaveText('Couldn’t load sessions. Retrying…');
+    expect(followedLogin).toBe(false);
+
+    await page.unroute(sessions);
+    await page.unroute(descriptor);
+    await page.clock.runFor(11_000);
+    await expect(overlay).toBeHidden();
+    await expect(page.locator('#sessionList .empty-session')).toContainText('No active sessions');
+    if (mode === 'redirect') {
+      await page.getByRole('button', { name: 'Open session list' }).click();
+      await page.locator('#tabAll').click();
+      await expect(fleet.row(fleet.self)).toBeVisible();
+    }
+  });
+}
+
+test('sign-in starts a top-level navigation and preserves the current URL', async ({ page, fleet }) => {
+  const sessions = `${fleet.self.base}/api/sessions?*`;
+  const url = `${fleet.self.base}/?source=pwa#retained`;
+  await page.route(sessions, route => route.fulfill({ status: 401, json: { error: 'Signed out' } }));
+  await page.goto(url);
+  await expect(page.locator('#reachabilitySignIn')).toHaveText(SIGN_IN);
+  await page.unroute(sessions);
+  await Promise.all([
+    page.waitForRequest(request => request.isNavigationRequest() && new URL(request.url()).search === '?source=pwa'),
+    page.getByRole('button', { name: 'Tap to sign in again.' }).click(),
+  ]);
+  await expect(page).toHaveURL(url);
+  await expect(page.locator('#reachabilitySignIn')).toBeHidden();
+});
+
+test('polling ignores a single blip, backs off after repeated failures, and the banner reloads the document', async ({ page, fleet }) => {
+  const sessions = `${fleet.self.base}/api/sessions?*`;
+  const banner = page.locator('#reachabilityBanner');
+  await page.clock.install();
+  await Promise.all([
+    page.waitForResponse(response => response.url().startsWith(`${fleet.self.base}/api/sessions?`) && response.ok()),
+    page.reload(),
+  ]);
+  await expect(page.locator('#sessionList .empty-session')).toContainText('No active sessions');
+  let calls = 0;
+  await page.route(sessions, route => {
+    calls++;
+    return route.fulfill({ status: 502, json: { error: 'Bad Gateway' } });
+  });
+  await page.clock.fastForward(11_000);
+  await expect(page.locator('#sessionList .empty-session')).toHaveText('Couldn’t load sessions. Retrying…');
+  await expect(banner).toBeHidden();
+  await page.clock.fastForward(11_000);
+  await expect(banner).toHaveText(OFFLINE);
+  await page.clock.fastForward(11_000);
+  await expect.poll(() => calls).toBe(3);
+  await page.clock.fastForward(11_000);
+  expect(calls).toBe(3);
+
+  await page.unroute(sessions);
+  await Promise.all([
+    page.waitForRequest(request => request.isNavigationRequest() && request.url() === `${fleet.self.base}/`),
+    banner.click(),
+  ]);
+  await expect(page.locator('#sessionList .empty-session')).toContainText('No active sessions');
+  await expect(banner).toBeHidden();
+});
+
+test('failed self identity shows a reachability note in Fleet, then recovers capacity', async ({ page, fleet }) => {
+  const descriptor = `${fleet.self.base}/api/host`;
+  const overlay = page.locator('#reachabilitySignIn');
+  const self = page.locator('#fleetHosts .fleet-host').filter({ hasText: 'this server' });
+  const pending = heldRoute();
+  await page.route(descriptor, pending.hold);
+  await page.clock.install();
+  await page.reload();
+  const request = await pending.received;
+  await page.locator('#btnFleet').click();
+  await request.abort('failed');
+  await expect(overlay).toHaveText(SIGN_IN);
+  await expect(self).toContainText("Can't reach host — signed out.");
+  await expect(self).not.toContainText('Update pi-dish');
+
+  await page.unroute(descriptor);
+  await page.clock.runFor(11_000);
+  await expect(self.getByRole('meter', { name: 'CPU' })).toBeVisible();
+  await expect(overlay).toBeHidden();
+});
+
+test('opening a listed session surfaces a login redirect and reloads the transcript after recovery', async ({ page, fleet }) => {
+  const messages = `${fleet.self.base}/api/sessions/${ROOT}/messages?*`;
+  const overlay = page.locator('#reachabilitySignIn');
+  await page.clock.install();
+  await page.route(messages, route => route.fulfill({ status: 302, headers: { location: `${fleet.peer.base}/access-login` } }));
+  await fleet.select(fleet.self);
+  await expect(overlay).toHaveText(SIGN_IN);
+  await expect(page.locator('#messages')).toContainText('Couldn’t load messages. Retrying…');
+  await page.unroute(messages);
+  await page.clock.runFor(3100);
+  await expect(page.locator('#messages')).toContainText('self root transcript');
+  await expect(overlay).toBeHidden();
+});
+
+test.describe('live sessions', () => {
+  test.use({ liveSessions: true });
+
+  test('a failing self stream retries and recovers even while the session list works', async ({ page, fleet }) => {
+    const stream = `${fleet.self.base}/api/sessions/${ROOT}/stream`;
+    const overlay = page.locator('#reachabilitySignIn');
+    await page.clock.install();
+    await page.route(stream, route => route.abort('failed'));
+    await fleet.select(fleet.self);
+    await expect(page.locator('#status')).toHaveText('Stream disconnected');
+    await expect(overlay).toBeHidden();
+    await page.clock.runFor(3100);
+    await expect(overlay).toHaveText(SIGN_IN);
+    await expect(fleet.row(fleet.self)).toBeVisible();
+
+    await page.unroute(stream);
+    await page.clock.runFor(6100);
+    await expect(overlay).toBeHidden();
+  });
+
+  test('a failing self WebSocket feeds the banner and clears on reconnect', async ({ page, fleet }) => {
+    const overlay = page.locator('#reachabilitySignIn');
+    await page.route(`${fleet.self.base}/api/host`, route => route.fulfill({
+      json: { hostId: fleet.self.hostId, label: fleet.self.label, capabilities: { terminal: true } },
+    }));
+    let attempts = 0;
+    await page.routeWebSocket(`${fleet.self.base.replace(/^http/, 'ws')}/api/sessions/${ROOT}/terminal`, socket => {
+      if (++attempts <= 2) void socket.close({ code: 1011 });
+      else socket.send(JSON.stringify({ type: 'attach', replay: 'terminal recovered' }));
+    });
+    await page.clock.install();
+    await page.reload();
+    await fleet.select(fleet.self);
+    await page.locator('#btnTerminal').click();
+    await expect(page.locator('#terminalStatus')).toContainText('disconnected');
+    await expect(overlay).toBeHidden();
+    await page.clock.runFor(1100);
+    await expect(overlay).toHaveText(SIGN_IN);
+    await page.clock.runFor(2100);
+    await expect.poll(() => attempts).toBe(3);
+    await expect(overlay).toBeHidden();
+  });
+});
+
+export {};

@@ -3,7 +3,9 @@ import { present, record } from './test-types.js';
 import test = require('node:test');
 import assert = require('node:assert/strict');
 import http = require('node:http');
-const { createHostTransport, createSessionApi, setSessionModel, setSessionThinking, renameSession, sendJson, withFetchTimeout } = loadBrowser({ Headers, Response, AbortSignal, URLSearchParams });
+const { createHostTransport, createSessionApi, setSessionModel, setSessionThinking, renameSession, sendJson, withFetchTimeout,
+  classifyOriginResponse, classifyOriginError, createOriginRequest, ApiHttpError,
+} = loadBrowser({ Headers, Response, AbortSignal, URLSearchParams, TypeError, DOMException });
 
 test('browser transport snapshots host routing and preserves supported header/signal forms', async () => {
   const endpoint = { base: 'https://peer.invalid', token: 'fixture-token' };
@@ -104,6 +106,50 @@ test('session list ingress separates opaque extras and omits malformed presentat
   assert.equal(row.extras.host, undefined);
   assert.equal(row.extras.hostLabel, undefined);
   assert.equal(row.extras.contextPercent, undefined);
+});
+
+test('classifies auth signals separately from ordinary server outages', () => {
+  const origin = 'https://dish.example';
+  const html = { 'Content-Type': 'text/html; charset=utf-8' };
+  const cases = [
+    [Object.defineProperty(new Response(), 'type', { value: 'opaqueredirect' }), 'auth'],
+    [Object.defineProperty(new Response(), 'type', { value: 'opaque' }), 'auth'],
+    [Object.defineProperties(Response.json({}), {
+      redirected: { value: true }, url: { value: 'https://login.example/sign-in' },
+    }), 'auth'],
+    [Object.defineProperties(Response.json({}), {
+      redirected: { value: true }, url: { value: `${origin}/api/sessions` },
+    }), 'auth'],
+    [Object.defineProperty(Response.json({}), 'url', { value: 'https://login.example/sign-in' }), 'auth'],
+    [new Response('<html>', { headers: html }), 'auth'],
+    [new Response(null, { status: 401 }), 'auth'],
+    [new Response(null, { status: 403 }), 'auth'],
+    [new Response('<html>', { status: 502, headers: html }), 'auth'],
+    [Response.json({ error: 'Bad gateway' }, { status: 502 }), 'server'],
+    [Response.error(), 'network'],
+    [new Response(null, { status: 404 }), null],
+    [Response.json({ active: [], previous: [] }), null],
+  ] as const;
+  for (const [response, expected] of cases) assert.equal(classifyOriginResponse(response, origin), expected);
+});
+
+test('classifies fetch rejections and HTTP errors, not intentional cancellation', () => {
+  assert.equal(classifyOriginError(new TypeError('Failed to fetch')), 'auth');
+  assert.equal(classifyOriginError(new DOMException('Request timed out', 'TimeoutError')), 'network');
+  assert.equal(classifyOriginError(new DOMException('Request canceled', 'AbortError')), null);
+  assert.equal(classifyOriginError(new ApiHttpError('Denied', 403)), 'auth');
+  assert.equal(classifyOriginError(new ApiHttpError('Unavailable', 503)), 'server');
+});
+
+test('origin requests surface a manual redirect before parsing but preserve ordinary HTTP responses', async () => {
+  const opaque = Object.defineProperty(new Response(), 'type', { value: 'opaqueredirect' });
+  const unsupported = new Response(null, { status: 501 });
+  const request = createOriginRequest(async (_host, path, init) => {
+    assert.equal(init?.redirect, 'manual');
+    return path === '/api/sessions' ? opaque : unsupported;
+  }, 'https://dish.example');
+  await assert.rejects(createSessionApi(request).list(null, '/api/sessions'), error => classifyOriginError(error) === 'auth');
+  assert.equal((await request(null, '/api/bots')).status, 501);
 });
 
 export {};

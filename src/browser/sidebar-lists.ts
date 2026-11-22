@@ -9,15 +9,19 @@ import { stripQueryField } from '../core/helper-query';
 import { hostDisplayLabel } from './helper-identity';
 import { queryHosts } from './search-data';
 import type { createSidebarActivity } from './sidebar-activity';
+import { classifyOriginError, type OriginFailure } from './origin-reachability';
 export type SidebarListHost = SessionHost & HelperHost;
 /** Fan-out, polling and indexing timers share the current sidebar query generation. */
 export function createSidebarLists(options: {
   document: Document; request: ApiRequest; sessionState: SessionState; activity: ReturnType<typeof createSidebarActivity>;
   hosts: () => readonly SidebarListHost[]; pollable: () => readonly SidebarListHost[]; selfId: () => string | null;
   query: () => string; all: () => boolean; refreshFleet: () => void; connection: (host: SessionHost, event: HostConnectionEvent) => void;
+  origin?: { request: ApiRequest; showFailure: (failure: OriginFailure | null) => void };
   askBlocked?: (session: SessionEntry, host: string | null) => void;
 }) {
   const { document, sessionState } = options, api = createSessionApi(options.request);
+  const originApi = options.origin && createSessionApi(options.origin.request);
+  let loadedSelf = false, selfFailures = 0, retrySelfAt = 0;
   let disposed = false, sequence = 0, indexing = false, queriedFor = '';
   let indexingTimer: ReturnType<typeof setTimeout> | null = null, pollTimer: ReturnType<typeof setInterval> | null = null;
   let progress: HTMLElement | null = null;
@@ -39,10 +43,26 @@ export function createSidebarLists(options: {
   }
   function busy(value: boolean) { if (!disposed) document.querySelector('.sidebar-filter')?.classList.toggle('searching', value); }
   const loader = createHostSessionLoader({
-    requestList: (host, path, init) => api.list(host, path, init), currentSequence: () => sequence,
-    stripHostQuery: query => stripQueryField(query, 'host'), onConnection: (host, event) => { if (!disposed) options.connection(host, event); },
+    requestList: (host, path, init) => (host.self && originApi ? originApi : api).list(host, path, init),
+    currentSequence: () => sequence, stripHostQuery: query => stripQueryField(query, 'host'),
+    onConnection: (host, event) => {
+      if (disposed) return;
+      if (host.self && options.origin) {
+        if (event === 'success') {
+          loadedSelf = true;
+          selfFailures = retrySelfAt = 0;
+          options.origin.showFailure(null);
+        } else {
+          selfFailures++;
+          retrySelfAt = Date.now() + Math.min(5000 * 2 ** (selfFailures - 1), 60000);
+          const failure = event === 'blocked' ? 'auth' : classifyOriginError(event.error) ?? 'server';
+          if (!loadedSelf || selfFailures >= 2) options.origin.showFailure(failure);
+        }
+      }
+      options.connection(host, event);
+    },
     // Hidden tabs skip it; the visibility refresh re-reads the indexing bit.
-    onIndexing: () => { if (disposed || indexingTimer) return; indexingTimer = setTimeout(() => { indexingTimer = null; if (document.hidden) return; void refresh(); }, 1000); },
+    onIndexing: () => { if (disposed || indexingTimer) return; indexingTimer = setTimeout(() => { indexingTimer = null; if (document.hidden) return; void refresh(true); }, 1000); },
     beforePublish: (host, next, wireQuery) => {
       if (disposed) return; const hostId = host.hostId || null, selected = sessionState.currentSession;
       if (selected && !document.hidden && (selected.host || null) === hostId) { const fresh = next.active.find(row => row.id === selected.id) || next.previous.find(row => row.id === selected.id); if (fresh) options.activity.mark(selected, fresh.lastActivity); }
@@ -92,13 +112,22 @@ export function createSidebarLists(options: {
       }
     }
   }
-  async function load(query?: string, { withPrevious = options.all(), background = false } = {}) {
+  async function load(query?: string, { withPrevious = options.all(), background = false, respectBackoff = false } = {}) {
     if (disposed) return;
     const current = background ? sequence : ++sequence;
     if (!background) { busy(false); pendingHosts.clear(); }
-    const hosts = queryHosts(options.pollable(), query || '').filter(host => host.self || host.hostId);
+    const pollable = options.pollable();
+    const hosts = queryHosts(pollable, query || '').filter(host => host.self || host.hostId);
+    // Even a peer-only search needs an origin check to recover the banner.
+    if (respectBackoff && options.origin && !hosts.some(host => host.self)) {
+      const self = pollable.find(host => host.self);
+      if (self) hosts.push(self);
+    }
     renderProgress();
-    await Promise.allSettled(hosts.map(host => loadOne(host, query, withPrevious, current, background)));
+    await Promise.allSettled(hosts.map(host => {
+      if (respectBackoff && host.self && Date.now() < retrySelfAt) return;
+      return loadOne(host, query, withPrevious, current, background);
+    }));
   }
   /** Readiness is host-local; a slow peer or history scan must not hold a spawn. */
   async function loadHost(hostId: string | null, withPrevious = false, query?: string) {
@@ -107,10 +136,10 @@ export function createSidebarLists(options: {
     if (host) await loadOne(host, query, withPrevious, sequence);
   }
   function invalidate() { sequence++; loader.retireRequests(); pendingHosts.clear(); renderProgress(); }
-  function refresh() { if (disposed) return Promise.resolve(); options.refreshFleet(); return load(options.query() || undefined, { background: true }); }
+  function refresh(respectBackoff = false) { if (disposed) return Promise.resolve(); options.refreshFleet(); return load(options.query() || undefined, { background: true, respectBackoff }); }
   // Hidden documents skip background polls; a slept laptop shouldn't wake to a request burst.
-  function mount() { if (!disposed && !pollTimer) pollTimer = setInterval(() => { if (document.hidden) return; void refresh(); }, 10000); }
+  function mount() { if (!disposed && !pollTimer) pollTimer = setInterval(() => { if (document.hidden) return; void refresh(true); }, 10000); }
   function dispose() { if (disposed) return; busy(false); disposed = true; sequence++; clearInterval(pollTimer ?? undefined); clearTimeout(indexingTimer ?? undefined); pollTimer = indexingTimer = null; loader.prune(new Set()); pendingHosts.clear(); progress?.remove(); progress = null; }
   renderProgress();
-  return { loader, load, loadHost, refresh, publish, busy, invalidate, mount, dispose, get indexing() { return indexing; }, get queriedFor() { return queriedFor; } };
+  return { loader, load, loadHost, refresh: () => refresh(), publish, busy, invalidate, mount, dispose, get indexing() { return indexing; }, get queriedFor() { return queriedFor; } };
 }

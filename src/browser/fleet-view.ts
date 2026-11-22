@@ -3,6 +3,7 @@ import { escapeHtml } from '../core/helper-format';
 import { hostDisplayLabel } from './helper-identity';
 import { record, finite } from '../core/helper-values';
 import { countLabel } from './helper-format';
+import type { OriginFailure } from './origin-reachability';
 
 export interface FleetHost extends HostEndpoint {
   readonly hostId: string | null;
@@ -179,6 +180,7 @@ interface HostState { key: string; health?: FleetHealth; error?: string; receive
 export interface FleetViewOptions {
   root: HTMLElement; request: ApiRequest; hosts: () => readonly FleetHost[];
   connection: (host: FleetHost) => Connection; supports: (host: FleetHost) => boolean;
+  selfIdentityFailure?: () => OriginFailure | null;
   clientSessions: (hostId: string | null) => { live: number; working: number } | null;
   dot: (hostId: string | null) => string;
   noteConnection: (host: FleetHost, event: 'success' | 'blocked' | { type: 'failure'; error: unknown }) => void;
@@ -217,8 +219,13 @@ export function createFleetView(options: FleetViewOptions) {
     const meta = [version, health ? [health.platform, health.arch].filter(Boolean).join(' ') : '',
       health?.uptimeSec ? 'up ' + formatUptime(health.uptimeSec) : ''].filter(Boolean).join(' · ');
     let body: string;
-    if (health) body = fleetHealthHtml(health);
+    const identityFailure = host.self ? options.selfIdentityFailure?.() : null;
+    if (identityFailure) body = `<div class="fleet-host-note error">${identityFailure === 'auth'
+      ? "Can't reach host — signed out. Reload or sign in."
+      : "Can't reach host. Reload to try again."}</div>`;
+    else if (health) body = fleetHealthHtml(health);
     else if (offline) body = '';
+    else if (host.self && !host.hostId) body = '<div class="fleet-host-note">Loading…</div>';
     else if (!options.supports(host)) body = `<div class="fleet-host-note">Update pi-dish on this host to report capacity.</div>`;
     else if (state?.error) body = `<div class="fleet-host-note error">${escapeHtml(state.error)}</div>`;
     else body = '<div class="fleet-host-note">Loading…</div>';
@@ -249,7 +256,7 @@ export function createFleetView(options: FleetViewOptions) {
     const state = states.get(key) || { key };
     states.set(key, state);
     const connection = options.connection(host);
-    if (!options.supports(host) || connection === 'blocked') return;
+    if ((host.self && !host.hostId) || !options.supports(host) || connection === 'blocked') return;
     const owns = () => owner === generation && isOpen() && states.get(key) === state;
     try {
       const response = await options.request(endpoint, '/api/host/health', { timeoutMs: 8000 });

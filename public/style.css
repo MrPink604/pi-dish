@@ -133,11 +133,53 @@ body.sidebar-open {
   overflow: hidden;
 }
 
+.app-page {
+  display: flex;
+  flex-direction: column;
+}
+
 .app {
   display: flex;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  position: relative;
   overflow: hidden;
 }
+
+.reachability button {
+  width: 100%;
+  min-height: 44px;
+  padding: calc(env(safe-area-inset-top) + 8px) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  border: 0;
+  border-bottom: 1px solid var(--warning);
+  background: color-mix(in srgb, var(--bg-card) 86%, var(--warning));
+  color: var(--text-bright);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.reachability button:focus-visible {
+  outline: 2px solid var(--warning);
+  outline-offset: -3px;
+}
+
+.reachability-sign-in {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(420px, calc(100% - max(16px, env(safe-area-inset-left)) - max(16px, env(safe-area-inset-right))));
+  padding: 24px;
+  text-align: center;
+  border: 1px solid var(--warning);
+  border-radius: 12px;
+  background: var(--bg-card);
+  color: var(--text-bright);
+}
+
+.reachability-sign-in::backdrop { background: color-mix(in srgb, var(--bg-darker) 82%, transparent); }
+.reachability-sign-in h2 { margin-bottom: 16px; font-size: 20px; }
+.reachability-sign-in button { min-height: 44px; }
 
 /* Sidebar */
 .sidebar {
@@ -3969,7 +4011,7 @@ pre.tool-code code.hljs {
 
 .sidebar-overlay {
   display: none;
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
@@ -3993,7 +4035,7 @@ pre.tool-code code.hljs {
   }
 
   .sidebar {
-    position: fixed;
+    position: absolute;
     top: 0;
     left: 0;
     width: 88%;

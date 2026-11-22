@@ -7,6 +7,7 @@ import type { SessionState, SessionEntry, SelectionOwner } from './session-state
 import { shortCwd, tmuxPrefixSeq } from './helper-format';
 import { sessionKey } from './helper-identity';
 import { record, finite } from '../core/helper-values';
+import { classifyOriginError, type OriginFailure } from './origin-reachability';
 export type TerminalMode = 'shell' | 'tmux';
 export type TerminalInput = { type: 'input'; data: string } | { type: 'resize'; cols: number; rows: number } | { type: 'restart' };
 export type TerminalOutput = { type: 'attach'; replay: string; cwd: string; tmuxPrefix: string | null } | { type: 'output'; data: string } | { type: 'exit'; code: number | null } | { type: 'error'; error: string };
@@ -33,6 +34,7 @@ export function createTerminalController(options: {
   createTerminal: (options: ITerminalOptions) => Terminal | null; createFitAddon: () => FitAddon | null;
   socket: (url: string) => WebSocket; socketUrl: (host: Readonly<HostEndpoint>, path: string) => string;
   ticket: (host: Readonly<HostEndpoint>, purpose: 'terminal') => Promise<string>;
+  originFailure?: (failure: OriginFailure | null) => void;
   theme: () => ITheme; applySize: (panel: HTMLElement) => void; confirm: (message: string) => boolean;
 }) {
   const { document, storage, sessionState } = options, window = document.defaultView!;
@@ -126,7 +128,14 @@ export function createTerminalController(options: {
     if (!current.endpoint.token) { openSocket(current, url, sequence); return; }
     status(current.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
     void options.ticket(current.endpoint, 'terminal').then(ticket => { if (ready()) openSocket(current, `${url}${url.includes('?') ? '&' : '?'}ticket=${encodeURIComponent(ticket)}`, sequence); })
-      .catch(() => { if (ready()) status('connect failed', 'error'); });
+      .catch(error => { if (ready()) retry(current, sequence, classifyOriginError(error) ?? 'network'); });
+  }
+  function retry(current: TerminalState, sequence: number, failure: OriginFailure) {
+    const delay = Math.min(8000, 1000 * 2 ** current.attempts++);
+    status('disconnected — reconnecting…', 'reconnecting');
+    if (current.endpoint.base === '' && current.attempts >= 2) options.originFailure?.(failure);
+    clearTimeout(current.reconnectTimer);
+    current.reconnectTimer = setTimeout(() => { if (owns(current) && current.connection === sequence) connect(); }, delay);
   }
   function openSocket(current: TerminalState, url: string, sequence: number) {
     if (!owns(current) || sequence !== current.connection) return;
@@ -134,6 +143,7 @@ export function createTerminalController(options: {
     try { previous?.close(); } catch { /* Retired sockets cannot reconnect. */ }
     const active = () => owns(current) && current.ws === socket && current.connection === sequence;
     status(current.attempts ? 'reconnecting…' : 'connecting…', 'reconnecting');
+    socket.onopen = () => { if (active() && current.endpoint.base === '') options.originFailure?.(null); };
     socket.onmessage = event => {
       if (!active() || typeof event.data !== 'string') return;
       let message: TerminalOutput | null;
@@ -149,16 +159,14 @@ export function createTerminalController(options: {
       else { current.exited = true; status(message.error, 'error'); }
     };
     socket.onclose = () => {
-      if (!active() || current.exited) return;
-      const delay = Math.min(8000, 1000 * 2 ** current.attempts++); status('disconnected — reconnecting…', 'reconnecting');
-      clearTimeout(current.reconnectTimer);
-      current.reconnectTimer = setTimeout(() => { if (active()) connect(); }, delay);
+      if (active() && !current.exited) retry(current, sequence, 'auth');
     };
   }
   function close(): void {
     if (disposed) return;
     generation++; cancelOpen?.(); cancelOpen = null;
     const current = state; state = null;
+    if (current?.endpoint.base === '') options.originFailure?.(null);
     if (current) { clearTimeout(current.reconnectTimer); current.events.abort(); try { current.ws?.close(); } catch { /* Socket already gone. */ } current.term.dispose(); }
     setCtrl(false); status(); element('terminalPanel').style.display = 'none';
   }
