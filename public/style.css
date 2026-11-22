@@ -5909,6 +5909,69 @@ button.badge-context {
 
 .attachment-remove:hover { color: var(--error); }
 
+/* Non-image attachments: icon, name and size; an upload bar while sending */
+.attachment-chip {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 56px;
+  max-width: 220px;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.attachment-chip-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.attachment-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip-size {
+  flex: none;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.attachment-progress {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 5px;
+  height: 3px;
+  border: none;
+  border-radius: 2px;
+  background: var(--line);
+  appearance: none;
+  -webkit-appearance: none;
+}
+.attachment-progress::-webkit-progress-bar { background: var(--line); border-radius: 2px; }
+.attachment-progress::-webkit-progress-value { background: var(--accent); border-radius: 2px; }
+.attachment-progress::-moz-progress-bar { background: var(--accent); border-radius: 2px; }
+
+.input-area.drag-over .composer-box {
+  outline: 2px dashed var(--accent);
+  outline-offset: 2px;
+}
+
 /* Images inside transcript user messages */
 .msg-images {
   display: flex;

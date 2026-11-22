@@ -2563,15 +2563,35 @@ and outside-click policy remain with the shell.
   text only) tracks the content. Glyphs are stroke SVG, muted until hover; Stop
   is the only coloured one, Send the only filled one, and the readout stays muted
   until its tier colours it. `test/ui-scenarios/mobile.js` asserts the geometry.
-- **Image attachments**: paste or 📎-pick images; `prepareImageAttachment()`
-  downscales to a 1568px long edge / JPEG re-encode before base64ing (phone
-  photos are huge). Images ride the `images` field on `/prompt` and `/steer`
-  (pi ImageContent: `{type:'image', data, mimeType}`); the bridge extension
-  builds a content array for `pi.sendUserMessage`. A prompt may be
-  images-only (empty message allowed when images present, server + bridge
-  both handle it). `express.json` limit is raised to 30mb for this. User
-  messages render image blocks as thumbnails with a tap-to-zoom lightbox
-  (`img.msg-image`, delegation on document).
+- **Attachments** (`src/browser/composer-images.ts`): paste, drop on
+  `.input-area`, or 📎-pick any file (`#attachFileInput` has no `accept`, so
+  phone pickers offer Files). PNG/JPEG/GIF/WebP, and other images that
+  `createImageBitmap` decodes, become `ComposerImage`s: `prepare()` downscales
+  to a 1568px long edge / JPEG re-encode before base64ing (phone photos are
+  huge). Images ride the `images` field on `/prompt` and `/steer` (pi
+  ImageContent: `{type:'image', data, mimeType}`); the bridge extension builds a
+  content array for `pi.sendUserMessage`. A prompt may be images-only (empty
+  message allowed when images present, server + bridge both handle it).
+  `express.json` limit is raised to 30mb for this. User messages render image
+  blocks as thumbnails with a tap-to-zoom lightbox (`img.msg-image`, delegation
+  on document). Everything else stays a `ComposerFile` (a `File` plus name,
+  type, size; a chip in the strip) until send: `composer-submit.ts` reads
+  `GET /api/sessions/:id/uploads` (`maxBytes`) on the captured endpoint, then
+  streams each file with `apiTransport.upload` (XMLHttpRequest for progress;
+  `application/octet-stream`, name/type in the query so no body parser claims
+  it) and appends each reply's `reference` line — `[Attached file: <abs path>
+  (<mime>, <size>)]`, formatted once in `src/core/attachment-text.ts` — to the
+  message. Uploads run after the composer is cleared; failure restores the
+  whole payload, and a second send waits while one is in flight. Text is the
+  only carrier, so every harness reads the file with its own tools.
+  `upload-handlers.ts` writes `~/.pi/dish/uploads/<harness>-<native id>/<time>-<rand>/<safe name>`
+  (route id reduced to `[A-Za-z0-9_-]`, name to one component of ≤150 bytes),
+  pipes through a byte limiter (`PI_DISH_UPLOAD_MAX_MB`, default 512) to a
+  `.partial` then renames; any failure removes the upload's directory. Owned
+  listeners set `requestTimeout = 0` so long uploads survive; the route ends
+  one idle for 60s, and the `/hosts` proxy restarts its first-response timer
+  on every request-body chunk. Deleting a session deletes its upload folder;
+  there is no other retention.
 - **Autocomplete**: `/` slash commands at the start, `@` file mentions (fetched
   per keystroke from `/api/sessions/:id/files`), `#` session refs (resolved
   locally against `sessions`). One dropdown, one accept path

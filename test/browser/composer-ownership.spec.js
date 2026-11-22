@@ -6,7 +6,7 @@ fixtures_js_1.test.use({ liveSessions: true });
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const attachment = { name: 'fixture.png', mimeType: 'image/png', buffer: Buffer.from(PNG, 'base64') };
 async function attach(page) {
-    await page.locator('input[type=file][accept*="image"]').setInputFiles(attachment);
+    await page.locator('#attachFileInput').setInputFiles(attachment);
     await (0, fixtures_js_1.expect)(page.locator('#attachmentStrip img')).toHaveCount(1);
 }
 (0, fixtures_js_1.test)('drafts and attachments remain separate for matching ids on two hosts', async ({ page, fleet }) => {
@@ -66,7 +66,7 @@ for (const kind of ['prompt', 'command', 'steer', 'followUp']) {
                 });
             } });
     });
-    await page.locator('input[type=file][accept*="image"]').setInputFiles(attachment);
+    await page.locator('#attachFileInput').setInputFiles(attachment);
     await page.waitForFunction(() => !!window.finishImage);
     await fleet.select(fleet.peer);
     await page.evaluate(() => window.finishImage());

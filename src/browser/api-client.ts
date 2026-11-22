@@ -7,6 +7,8 @@ export interface HostEndpoint { base: string; token?: string | null }
 export type HostTarget = string | HostEndpoint | null;
 export interface RequestOptions extends RequestInit { timeoutMs?: number }
 export type ApiRequest = (host: HostTarget, path: string, options?: RequestOptions) => Promise<Response>;
+/** Streams `body` as `application/octet-stream`; resolves to the parsed JSON reply. */
+export type ApiUpload = (host: HostTarget, path: string, body: Blob, onProgress?: (loaded: number) => void) => Promise<unknown>;
 
 type CapturedHost = Readonly<HostEndpoint & { hostId: string | null }>;
 /** Absent credentials compare equal. */
@@ -51,20 +53,47 @@ export function createHostTransport(options: {
   /** Private-session unlock token for a host base, sent as `X-Pi-Dish-Private-Unlock`. */
   privateUnlock?: (base: string) => string | null;
 }) {
-  const request: ApiRequest = (host, path, init = {}) => {
-    // Resolve synchronously. Neither URL nor authorization is read after an await.
+  // Resolve synchronously. Neither URL nor authorization is read after an await.
+  function authorize(host: HostTarget) {
     const { base, token } = options.resolveHost(host);
+    const headers: [string, string][] = [];
     const unlock = options.privateUnlock?.(base);
+    if (token) headers.push(['Authorization', `Bearer ${token}`]);
+    if (unlock) headers.push(['X-Pi-Dish-Private-Unlock', unlock]);
+    return { base, headers };
+  }
+  const request: ApiRequest = (host, path, init = {}) => {
+    const { base, headers } = authorize(host);
     const requestInit = withFetchTimeout(init);
-    if (token || unlock) {
-      const headers = new Headers(requestInit.headers);
-      if (token) headers.set('Authorization', `Bearer ${token}`);
-      if (unlock) headers.set('X-Pi-Dish-Private-Unlock', unlock);
-      requestInit.headers = headers;
+    if (headers.length) {
+      const merged = new Headers(requestInit.headers);
+      for (const [name, value] of headers) merged.set(name, value);
+      requestInit.headers = merged;
     }
     return options.fetch(base + path, requestInit);
   };
-  return { request };
+  // XMLHttpRequest, not fetch: only it reports upload progress, and the Blob body
+  // streams from disk rather than being read into memory first.
+  const upload: ApiUpload = (host, path, body, onProgress) => {
+    const { base, headers } = authorize(host);
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', base + path);
+      for (const [name, value] of headers) xhr.setRequestHeader(name, value);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      if (onProgress) xhr.upload.onprogress = event => onProgress(event.loaded);
+      xhr.onload = () => {
+        let data: unknown = null;
+        try { data = JSON.parse(xhr.responseText); } catch {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+        else reject(new ApiHttpError(record(data) && typeof data.error === 'string' && data.error ? data.error : `upload failed (${xhr.status})`, xhr.status));
+      };
+      xhr.onerror = () => reject(new Error('upload failed: network error'));
+      xhr.onabort = () => reject(new Error('upload cancelled'));
+      xhr.send(body);
+    });
+  };
+  return { request, upload };
 }
 
 /** Parsed body of a successful response (`null` when unparseable); failures throw the server's error text. */

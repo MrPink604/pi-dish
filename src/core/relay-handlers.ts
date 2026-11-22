@@ -52,11 +52,13 @@ const HOP_BY_HOP_HEADERS: Record<string, true> = {
 };
 
 // The request promise includes SSH setup, so the timer arms only once it yields a
-// request; any response clears it for good (idle SSE streams included).
+// request; any response clears it for good (idle SSE streams included). While a
+// request body is still uploading, `progress` restarts it: the peer answers a
+// large upload only after its last byte.
 function relayFirstResponse(
   opening: Promise<ClientRequest>,
   timeoutMs: number,
-  send: (upstream: ClientRequest) => void,
+  send: (upstream: ClientRequest, progress: () => void) => void,
   respond: (peerRes: IncomingMessage) => void,
   onFailure: (reason: unknown) => void,
   classifyError: ((error: unknown) => unknown) | null,
@@ -77,7 +79,7 @@ function relayFirstResponse(
       settled = true;
       respond(peerRes);
     });
-    send(upstream);
+    send(upstream, () => { if (!settled) timer.refresh(); });
   }).catch(error);
 }
 
@@ -123,8 +125,9 @@ export function createRelayHandlers(ports: RelayPorts): RelayHandlers {
     relayFirstResponse(
       remoteHosts.request(remote, { method: req.method, path: `/api${req.url}`, headers }),
       PROXY_RESPONSE_TIMEOUT_MS,
-      (upstream) => {
+      (upstream, progress) => {
         req.on('aborted', () => { try { upstream.destroy(); } catch {} });
+        req.on('data', progress);
         req.pipe(upstream);
       },
       (peerRes) => {

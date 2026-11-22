@@ -1,7 +1,9 @@
 import { formatTime } from './helper-format';
 import { sessionRefKey } from './helper-identity';
 import { record } from '../core/helper-values';
-import { errorMessage, sendJson, type ApiRequest, type HostEndpoint } from './api-client';
+import { formatByteSize } from '../core/attachment-text';
+import { errorMessage, jsonResponse, sendJson, type ApiRequest, type ApiUpload, type HostEndpoint } from './api-client';
+import { isComposerFile, type ComposerAttachment, type ComposerImage } from './composer-images';
 import type { SessionState } from './session-state';
 import type { createComposerDrafts } from './composer-drafts';
 import type { createPromptDelivery } from './prompt-delivery';
@@ -14,7 +16,7 @@ import type { createSessionReferences } from './session-references';
 const OMP_MODEL_MENTION = /(?:^|\s)\^[^\s^]+(?=\s|$)/;
 export function createComposerSubmit(options: {
   document: Document; sessionState: SessionState; drafts: ReturnType<typeof createComposerDrafts>; delivery: ReturnType<typeof createPromptDelivery>;
-  activity: ReturnType<typeof createSessionActivity>; sideChat: SideChatController; request: ApiRequest; endpoint: (host: string | null) => HostEndpoint;
+  activity: ReturnType<typeof createSessionActivity>; sideChat: SideChatController; request: ApiRequest; upload: ApiUpload; endpoint: (host: string | null) => HostEndpoint;
   spawnId: () => string | null; spawnPending: () => boolean; refs: ReturnType<typeof createSessionReferences>['hints'];
   status: (text: string, type?: string) => void; openTree: () => void; hideAutocomplete: () => void; refresh: () => unknown;
   openTasks?: () => void; openSubagents?: () => void; openSwarm?: () => void; hasSwarm?: () => boolean;
@@ -27,6 +29,36 @@ export function createComposerSubmit(options: {
   async function send(endpoint: HostEndpoint, path: string, body?: unknown) {
     const value = await sendJson(options.request, endpoint, path, body), data = record(value) ? value : {};
     return { info: typeof data.info === 'string' ? data.info : '', result: { queued: record(data.result) && data.result.queued === true } };
+  }
+  /**
+   * Streams the non-image attachments to the owner's host and resolves to the
+   * message naming them. Runs after the composer is cleared, so a failure
+   * restores the whole payload, reports it and yields null.
+   */
+  async function withUploads(endpoint: HostEndpoint, sessionId: string, ownerKey: string, owns: () => boolean, message: string, attachments: readonly ComposerAttachment[]) {
+    const files = attachments.filter(isComposerFile);
+    const path = `/api/sessions/${encodeURIComponent(sessionId)}/uploads`;
+    const references: string[] = [];
+    // Shown (and blocking another send) from the limit check on.
+    const shown = composerDrafts.images.uploading(composerDrafts.ownerKey(ownerKey), files);
+    try {
+      const limits = await jsonResponse(await options.request(endpoint, path), 'this host cannot receive file attachments; update its pi-dish');
+      const maxBytes = record(limits) && typeof limits.maxBytes === 'number' ? limits.maxBytes : Infinity;
+      const oversized = files.find(file => file.size > maxBytes);
+      if (oversized) throw new Error(`${oversized.name} is ${formatByteSize(oversized.size)}; this host accepts files up to ${formatByteSize(maxBytes)} (PI_DISH_UPLOAD_MAX_MB)`);
+      for (const [index, file] of files.entries()) {
+        if (owns()) options.status(`Uploading ${file.name}${files.length > 1 ? ` (${index + 1}/${files.length})` : ''}...`, 'working');
+        const reply = await options.upload(endpoint, `${path}?${new URLSearchParams({ name: file.name, type: file.mimeType })}`, file.file, loaded => shown.progress(index, loaded));
+        if (!record(reply) || typeof reply.reference !== 'string') throw new Error(`${file.name}: the host did not confirm the upload`);
+        references.push(reply.reference);
+      }
+    } catch (error) {
+      if (disposed) return null;
+      composerDrafts.restorePayload(ownerKey, message, attachments);
+      if (owns()) options.status(`Upload failed: ${errorMessage(error)}`, 'error');
+      return null;
+    } finally { shown.done(); }
+    return disposed ? null : message ? `${message}\n\n${references.join('\n')}` : references.join('\n');
   }
   /** `/btw <q>` starts a side chat; plain text continues an open one. */
   function sideChatQuestion(message: string): { question: string; fresh: boolean } | 'usage' | null {
@@ -41,7 +73,7 @@ export function createComposerSubmit(options: {
   }
   async function askInSideChat(route: { question: string; fresh: boolean }, message: string, input: HTMLTextAreaElement, ownerKey: string, owns: () => boolean) {
     if (composerDrafts.images.current().length) {
-      options.status('Side chat messages cannot include images', 'error');
+      options.status('Side chat messages cannot include attachments', 'error');
       return;
     }
     input.value = '';
@@ -81,6 +113,10 @@ async function sendPrompt() {
   const ownerKey = sessionRefKey(owner);
   if (sessionActivity.isAborting(ownerKey)) {
     options.status('Wait for the current turn to finish stopping', 'working');
+    return;
+  }
+  if (composerDrafts.images.isUploading(composerDrafts.ownerKey(ownerKey))) {
+    options.status('Wait for the attachments to finish uploading', 'working');
     return;
   }
   // The side chat is independent of the main turn: /btw and follow-ups must
@@ -142,34 +178,44 @@ async function sendPrompt() {
   input.style.height = '';
   composerDrafts.record(message, ownerKey);
   composerDrafts.clearDraft(ownerKey);
-  const images = composerDrafts.images.take();
+  const attachments = composerDrafts.images.take();
+  const images = (attachments || []).filter((item): item is ComposerImage => !isComposerFile(item));
   const refs = options.refs(message);
   const hibernated = !sessionState.currentSession.isActive && !!sessionState.currentSession.hibernation;
-  options.status(hibernated ? 'Resuming hibernated session...' : 'Sending...', 'working');
+  // Without files the send stays synchronous up to the request, as before.
+  const text = attachments?.some(isComposerFile) ? await withUploads(endpoint, sessionId, ownerKey, owns, message, attachments) : message;
+  if (text === null) return;
+  // Uploads can outlast the selection; the prompt still goes to its owner, unseen.
+  const visible = owns();
+  if (visible) options.status(hibernated ? 'Resuming hibernated session...' : 'Sending...', 'working');
 
   const container = document.getElementById('messages')!;
-  const emptyState = container.querySelector('.empty-state');
-  if (emptyState) emptyState.remove();
-  const optimisticContent: MessageBlock[] = [];
-  if (message) optimisticContent.push({ type: 'text', text: message });
-  for (const img of images || []) optimisticContent.push({ type: 'image', data: img.data, mimeType: img.mimeType });
   const clientPromptId = delivery.nextId();
-  const template = document.createElement('template');
-  template.innerHTML = options.renderUser({
-    role: 'user', content: optimisticContent, timestamp: Date.now(), sessionRefs: refs,
-  }, formatTime(Date.now()), ` data-client-prompt-id="${clientPromptId}"`);
-  const optimisticElement = template.content.firstElementChild;
-  if (optimisticElement) container.appendChild(optimisticElement);
+  let optimisticElement: Element | null = null;
+  if (visible) {
+    const emptyState = container.querySelector('.empty-state');
+    if (emptyState) emptyState.remove();
+    const optimisticContent: MessageBlock[] = [];
+    if (text) optimisticContent.push({ type: 'text', text });
+    for (const img of images) optimisticContent.push({ type: 'image', data: img.data, mimeType: img.mimeType });
+    const template = document.createElement('template');
+    template.innerHTML = options.renderUser({
+      role: 'user', content: optimisticContent, timestamp: Date.now(), sessionRefs: refs,
+    }, formatTime(Date.now()), ` data-client-prompt-id="${clientPromptId}"`);
+    optimisticElement = template.content.firstElementChild;
+    if (optimisticElement) container.appendChild(optimisticElement);
+  }
   // pi re-emits this prompt as message_end when the turn starts; '' is valid
   // (images only). The stable id lets queue Edit remove exactly this bubble.
-  delivery.add(ownerKey, message, optimisticElement, clientPromptId);
-  options.follow();
-  options.scroll(container);
-
-  sessionActivity.setTurn(true);
+  delivery.add(ownerKey, text, optimisticElement, clientPromptId);
+  if (visible) {
+    options.follow();
+    options.scroll(container);
+    sessionActivity.setTurn(true);
+  }
 
   try {
-    const body: Record<string, unknown> = images ? { message, images } : { message };
+    const body: Record<string, unknown> = images.length ? { message: text, images } : { message: text };
     if (refs.length) body.refs = refs;
     const resp = await send(endpoint, `/api/sessions/${encodeURIComponent(sessionId)}/prompt`, body);
     if (!disposed) delivery.acknowledge(clientPromptId, !!resp.result?.queued);
@@ -185,7 +231,7 @@ async function sendPrompt() {
   } catch (error) {
     if (disposed) return; const e = { message: errorMessage(error) };
     delivery.discard(clientPromptId);
-    composerDrafts.restorePayload(ownerKey, message, images);
+    composerDrafts.restorePayload(ownerKey, message, attachments);
     if (owns()) {
       options.status(`Error: ${e.message}`, 'error');
       sessionActivity.setTurn(false);
@@ -218,6 +264,10 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
     options.status('Wait for the current turn to finish stopping', 'working');
     return;
   }
+  if (composerDrafts.images.isUploading(composerDrafts.ownerKey(ownerKey))) {
+    options.status('Wait for the attachments to finish uploading', 'working');
+    return;
+  }
   // Both Steer and Follow-up use this path, so an open side chat (or /btw)
   // must claim the text here before it becomes a steer or queued prompt.
   const route = sideChatQuestion(message);
@@ -234,11 +284,14 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
   input.style.height = '';
   composerDrafts.record(message, ownerKey);
   composerDrafts.clearDraft(ownerKey);
-  const images = composerDrafts.images.take();
-  options.status(steer ? 'Steering...' : 'Queueing follow-up...', 'working');
+  const attachments = composerDrafts.images.take();
+  const images = (attachments || []).filter((item): item is ComposerImage => !isComposerFile(item));
+  const text = attachments?.some(isComposerFile) ? await withUploads(endpoint, sessionId, ownerKey, owns, message, attachments) : message;
+  if (text === null) return;
+  if (owns()) options.status(steer ? 'Steering...' : 'Queueing follow-up...', 'working');
 
-  const body: Record<string, unknown> = steer ? { message } : { message, deliverAs: 'followUp' };
-  if (images) body.images = images;
+  const body: Record<string, unknown> = steer ? { message: text } : { message: text, deliverAs: 'followUp' };
+  if (images.length) body.images = images;
   const refs = options.refs(message);
   if (refs.length) body.refs = refs;
   try {
@@ -248,7 +301,7 @@ async function sendQueuedMessage(kind: 'steer' | 'followUp') {
     else options.status(steer ? 'Steered' : 'Queued for after this turn');
   } catch (error) {
     if (disposed) return; const e = { message: errorMessage(error) };
-    composerDrafts.restorePayload(ownerKey, message, images);
+    composerDrafts.restorePayload(ownerKey, message, attachments);
     if (owns()) {
       options.status(`${steer ? 'Steer' : 'Follow-up'} failed: ${e.message}`, 'error');
     }

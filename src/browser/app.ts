@@ -4,7 +4,7 @@ import { sessionRef } from '../core/helper-refs';
 import { harnessBadgeInfo, hostDisplayLabel, hostSupportsCapability, hostSupportsTerminal, parseSessionKey, sessionKey, sessionRefKey } from './helper-identity';
 import { createHostView } from './host-view';
 import { createHostDirectory } from './host-directory';
-import { createHostTransport, createSessionApi, sendJson, type ApiRequest, type HostTarget } from './api-client';
+import { createHostTransport, createSessionApi, sendJson, type ApiRequest, type ApiUpload, type HostTarget } from './api-client';
 import { createHostConnections, hostKeyOf } from './host-connections';
 import { createHostDiscovery } from './host-discovery';
 import { createHostPresentation, resolveColorToHex } from './host-presentation';
@@ -99,6 +99,7 @@ const apiTransport: ReturnType<typeof createHostTransport> = createHostTransport
 // Shared ports resolve the owner's method on every call: fixtures and tests
 // replace feature methods (e.g. `apiTransport.request`) at runtime.
 const request: ApiRequest = (host, path, options) => apiTransport.request(host, path, options);
+const upload: ApiUpload = (host, path, body, onProgress) => apiTransport.upload(host, path, body, onProgress);
 // Hosts hide private sessions until this tab enters their PIN; a reload locks again.
 const privateSessions: PrivateSessions = createPrivateSessions({
   document, request, label: host => hostDisplayLabel(host),
@@ -352,18 +353,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     composerDrafts.saveSoon();
   });
 
+  // Any pasted file attaches; text and HTML clipboard items keep pasting as text.
   promptInput.addEventListener('paste', (e) => {
     const files = Array.from(e.clipboardData?.items || [])
-      .filter((it) => it.type && it.type.startsWith('image/'))
+      .filter((it) => it.kind === 'file')
       .map((it) => it.getAsFile()).filter((file): file is File => file !== null);
     if (!files.length) return;
     e.preventDefault();
     composerDrafts.images.add(files);
   });
 
-  (document.getElementById('imageFileInput') as HTMLInputElement).addEventListener('change', (e) => {
+  (document.getElementById('attachFileInput') as HTMLInputElement).addEventListener('change', (e) => {
     const input = e.currentTarget as HTMLInputElement; composerDrafts.images.add(input.files || []);
     input.value = ''; // allow re-picking the same file
+  });
+
+  // Files dropped anywhere on the composer attach; other drags (text) keep their default.
+  const composerArea = document.querySelector<HTMLElement>('.input-area');
+  const carriesFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types || []).includes('Files');
+  composerArea?.addEventListener('dragover', (e) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    composerArea.classList.add('drag-over');
+  });
+  composerArea?.addEventListener('dragleave', (e) => {
+    if (!(e.relatedTarget instanceof Node) || !composerArea.contains(e.relatedTarget)) composerArea.classList.remove('drag-over');
+  });
+  composerArea?.addEventListener('drop', (e) => {
+    composerArea.classList.remove('drag-over');
+    if (!carriesFiles(e) || !e.dataTransfer?.files.length) return;
+    e.preventDefault();
+    composerDrafts.images.add(e.dataTransfer.files);
   });
 
   document.addEventListener('click', (e) => {
@@ -879,7 +900,7 @@ const sideChat: SideChatController = createSideChat({ document, sessionState, ma
   onChange: syncComposerMode });
 
 const composerSubmit: ReturnType<typeof createComposerSubmit> = createComposerSubmit({ document, sessionState, drafts: composerDrafts, delivery: promptDelivery, activity: sessionActivity, sideChat,
-  request, endpoint: resolveHost, spawnId: () => sessionView.spawnId, spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
+  request, upload, endpoint: resolveHost, spawnId: () => sessionView.spawnId, spawnPending: () => !!sessionView.spawnId && pendingSessionSpawns.has(sessionView.spawnId),
   refs: message => sessionReferences.hints(message), status: setStatus, openTree: () => transcriptTree.open(), hideAutocomplete: () => composerAutocomplete.hide(),
   openTasks: () => { const owner = sessionState.captureSelection(), endpoint = owner ? hostEntryFor(owner.host) : null; if (owner && endpoint) subagentsController.open(owner, endpoint, sessionRelationsController.data, { kind: 'tasks', initialTasks: sessionRelationsController.tasks }); },
   openSubagents: () => { const owner = sessionState.captureSelection(), endpoint = owner ? hostEntryFor(owner.host) : null; if (owner && endpoint) subagentsController.open(owner, endpoint, sessionRelationsController.data); },
@@ -1185,7 +1206,7 @@ createAppBindings({ document, actions: {
   panelOpenTreeModal: () => { appChrome.closePanel(); transcriptTree.open(); },
   panelOpenSessionHarnessSettings: () => { appChrome.closePanel(); openSessionHarnessSettings(); },
   panelExportSession: () => { appChrome.closePanel(); sessionControls.export(); },
-  attachImage: () => (document.getElementById('imageFileInput') as HTMLInputElement).click(),
+  attachFiles: () => (document.getElementById('attachFileInput') as HTMLInputElement).click(),
   abortTurn: () => composerSubmit.abortTurn(),
   sendSteer: () => composerSubmit.sendSteer(),
   sendFollowUp: () => composerSubmit.sendFollowUp(),

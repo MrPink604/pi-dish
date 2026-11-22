@@ -50,6 +50,7 @@
     "test/sessions-cli-bounds.test.ts",
     "test/message-hold.test.ts",
     "test/session-command-handlers.test.ts",
+    "test/upload-handlers.test.ts",
     "test/session-hibernation.test.ts",
     "test/push-notifications.test.ts",
     "test/ci-watcher.test.ts",

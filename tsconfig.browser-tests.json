@@ -84,6 +84,7 @@
     "test/browser/composer-drafts.spec.ts",
     "test/browser/prompt-history.spec.ts",
     "test/browser/composer-ownership.spec.ts",
+    "test/browser/file-attachments.spec.ts",
     "test/browser/composer-autocomplete.spec.ts",
     "test/browser/sidebar-controls.spec.ts",
     "test/browser/host-polls.spec.ts",

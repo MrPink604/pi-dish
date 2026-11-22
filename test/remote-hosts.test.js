@@ -472,6 +472,40 @@ test('the proxy reaches the peer with the peer\'s own credential', async () => {
     const page = (0, test_types_js_1.record)(await messages.json());
     assert.equal((0, test_types_js_1.records)(page.messages).length, 1);
 });
+test('a proxied upload outlasting the first-response timer streams into the peer\'s session uploads', async () => {
+    // Eleven chunks 1.1s apart, ~11s of real time (the timer runs in the hub child
+    // process, out of reach of fake clocks): the peer answers only after the last
+    // byte, past the hub's 10s first-response timer, which body progress must keep restarting.
+    const chunks = Array.from({ length: 11 }, (_, index) => `line ${index}\n`);
+    const content = chunks.join('');
+    const reply = await new Promise((resolve, reject) => {
+        const req = http.request(`${hub.base}/hosts/peer/api/sessions/${PEER_SESSION_ID}/uploads?name=${encodeURIComponent('../notes v1.txt')}&type=text%2Fplain`, {
+            method: 'POST', headers: { 'content-type': 'application/octet-stream', 'content-length': Buffer.byteLength(content) },
+        }, (res) => {
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => { body += chunk; });
+            res.on('end', () => resolve({ status: res.statusCode || 0, body }));
+        });
+        req.on('error', reject);
+        let sent = 0;
+        const next = () => {
+            req.write(chunks[sent++]);
+            if (sent === chunks.length)
+                req.end();
+            else
+                setTimeout(next, 1100);
+        };
+        next();
+    });
+    assert.equal(reply.status, 200, reply.body);
+    const stored = (0, test_types_js_1.record)(JSON.parse(reply.body));
+    const uploads = path.join(peer.home, '.pi', 'dish', 'uploads', `pi-${PEER_SESSION_ID}`);
+    assert.equal(path.dirname(path.dirname(String(stored.path))), uploads);
+    assert.equal(path.basename(String(stored.path)), 'notes v1.txt');
+    assert.equal(fs.readFileSync(String(stored.path), 'utf8'), content);
+    assert.equal(stored.reference, `[Attached file: ${String(stored.path)} (original name "../notes v1.txt", text/plain, ${content.length} B)]`);
+});
 test('proxied requests carry the peer token and nothing of the caller\'s', async () => {
     const res = await fetch(`${hub.base}/hosts/echo/api/sessions/abc/prompt?x=1`, {
         method: 'POST',

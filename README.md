@@ -67,8 +67,11 @@ Rules of thumb:
 - **Live streaming** — markdown renders live mid-stream via an incremental
   block renderer; tool activity folds into per-turn accordions; a working
   badge shows elapsed time and the currently running tool.
-- **Prompting** — send prompts, steer mid-run, or queue follow-ups. Paste or
-  attach images (downscaled client-side, phone photos are huge). Per-session
+- **Prompting** — send prompts, steer mid-run, or queue follow-ups. Paste, drop
+  or attach any file: images reach the model as images (downscaled
+  client-side, phone photos are huge), and everything else is uploaded to the
+  session's host and named in the prompt by path (see
+  [File attachments](#file-attachments)). Per-session
   drafts and prompt history (ArrowUp, or the composer's history button on
   touch; Settings → Sent prompts copies or clears it per session), `@file`
   fuzzy autocomplete, and `#` fuzzy autocomplete over your sessions — picking one inserts its ref, and the
@@ -543,6 +546,34 @@ still learning — the first activation check that has not passed, most often
 learner nothing to bracket. Tap a row for the fitted curve and every check.
 It reads `GET /api/cache-lifetimes` from each host advertising the
 `cacheLifetimes` capability; each host learns from its own sessions.
+
+### File attachments
+
+The composer's 📎 (or paste, or drag-and-drop onto the composer) accepts any
+file; on a phone the picker offers Files as well as Photos. PNG, JPEG, GIF
+and WebP images (and other images the browser can decode, re-encoded as
+JPEG) travel with the prompt as image content blocks, exactly as before.
+Every other file — text, code, PDF, audio, video, archives — shows as a chip
+with its name and size and is streamed to the **session's own host** when you
+send, with a progress bar on the chip. The prompt then names it on its own
+line, which every harness (pi, omp, Prime, agy, bots) reads with its own
+tools:
+
+```text
+[Attached file: /home/you/.pi/dish/uploads/pi-<session>/<time>-<id>/report.pdf (application/pdf, 2.1 MB)]
+```
+
+Files live under `~/.pi/dish/uploads/<harness>-<session id>/`, one
+directory per upload so the stored basename is the original name with unsafe
+characters replaced (the reference also quotes the original name when it
+had to change). They stay until the session's transcript is deleted from
+pi-dish, which deletes its upload folder too; otherwise clear old folders
+yourself. Uploads stream to disk, never into memory. The limit is 512 MB per
+file by default; set `PI_DISH_UPLOAD_MAX_MB` on each host to change it — the
+composer checks it before uploading and says which file is too large. Peer
+sessions upload to the peer, through the hub's `/hosts/<name>` proxy or
+directly, whichever the host already uses; a peer running an older pi-dish
+refuses with a message to update it.
 
 ### Speech to text (bring your own endpoint)
 

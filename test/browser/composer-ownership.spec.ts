@@ -5,7 +5,7 @@ const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwA
 const attachment = { name: 'fixture.png', mimeType: 'image/png', buffer: Buffer.from(PNG, 'base64') };
 
 async function attach(page: Page) {
-  await page.locator('input[type=file][accept*="image"]').setInputFiles(attachment);
+  await page.locator('#attachFileInput').setInputFiles(attachment);
   await expect(page.locator('#attachmentStrip img')).toHaveCount(1);
 }
 
@@ -62,7 +62,7 @@ test('an image finishing preparation after navigation belongs to its starting co
       });
     } });
   });
-  await page.locator('input[type=file][accept*="image"]').setInputFiles(attachment);
+  await page.locator('#attachFileInput').setInputFiles(attachment);
   await page.waitForFunction(() => !!window.finishImage);
   await fleet.select(fleet.peer);
   await page.evaluate(() => window.finishImage());

@@ -1,4 +1,4 @@
-import type { ComposerImage } from './composer-images';
+import type { ComposerAttachment } from './composer-images';
 import { createComposerImages } from './composer-images';
 import { pushPromptHistory } from './helper-format';
 export function mergeComposerText(existing: string, restored: string) { const current = existing.trim(); return !current || current === restored ? restored : `${existing}\n\n${restored}`; }
@@ -82,7 +82,7 @@ export function createComposerDrafts(options: {
     }
     images.migrate(from, to);
   }
-  function restorePayload(id: string, message: string, attachments: readonly ComposerImage[] | null) {
+  function restorePayload(id: string, message: string, attachments: readonly ComposerAttachment[] | null) {
     if (disposed || !id) return; const owner = ownerKey(id), saved = read(draftKey(owner)); write(owner, message ? mergeComposerText(saved, message) : saved);
     if (attachments?.length) images.append(owner, attachments);
     if (key === owner && message) { input().value = mergeComposerText(input().value, message); input().dispatchEvent(new Event('input', { bubbles: true })); input().focus(); }

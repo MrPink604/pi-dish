@@ -63,6 +63,9 @@ export function startListeners(options: ListenerOptions): Server {
 
   function createOwnedServer(): Server {
     const listener = createServer(app);
+    // File uploads stream for as long as bytes arrive (a phone uplink sending a
+    // video takes minutes); the upload route ends stalled ones by inactivity.
+    listener.requestTimeout = 0;
     listener.on('close', () => options.closeResources(shareServer));
     // Keep the terminal shutdown callback's native EventEmitter receiver.
     if (options.terminalShutdown) listener.on('close', options.terminalShutdown);

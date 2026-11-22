@@ -71,6 +71,7 @@ import { createPrivateAccess } from './private-access';
 import { createPrivateSessionHandlers } from './private-session-handlers';
 import { isPrivateSessionFile } from './private-sessions';
 import { createSessionDelete } from './session-delete';
+import { createUploadHandlers, uploadMaxBytes } from './upload-handlers';
 import { errorMessage, errorStatus, requestBody, type ApplicationRequest, type ApplicationResponse } from './http-boundary';
 import type { NextFunction } from 'express';
 import type { Server } from 'node:http';
@@ -369,6 +370,10 @@ export function startServer(rootDirectory: string): Server {
   app.post('/api/sessions/:id/prompt', sessionCommandHandlers.prompt);
   app.post('/api/sessions/:id/steer', sessionCommandHandlers.steer);
   app.post('/api/sessions/:id/follow-up', sessionCommandHandlers.followUp);
+  // Non-image attachments: streamed to `~/.pi/dish/uploads/<session>/` before the prompt names them.
+  const uploadHandlers = createUploadHandlers({ root: () => path.join(dishDir(), 'uploads'), maxBytes: () => uploadMaxBytes() });
+  app.get('/api/sessions/:id/uploads', uploadHandlers.limits);
+  app.post('/api/sessions/:id/uploads', uploadHandlers.upload);
 
   const mutationHandlers = createSessionMutationHandlers({ ownership, findSessionSource });
   app.post('/api/sessions/:id/queue/cancel', mutationHandlers.cancelQueued);
@@ -453,6 +458,7 @@ export function startServer(rootDirectory: string): Server {
   app.delete('/api/sessions/:id', (req: ApplicationRequest, res: ApplicationResponse) => {
     try {
       const result = deleteSession(req.params.id);
+      uploadHandlers.removeSession(req.params.id);
       hibernation.forget(req.params.id);
       res.json({ success: true, ...result });
     } catch (error) {
