@@ -127,7 +127,6 @@ class BridgeSocketConfigError extends LaunchError {
   }
 }
 
-export const HEADLESS_TMUX_SERVER = 'pi-dish';
 /** Spawn-registration poll bounds; see the interval rule in performTmuxLaunch. */
 const REGISTRY_POLL_MIN_MS = 20;
 const REGISTRY_POLL_MAX_MS = 300;
@@ -597,7 +596,7 @@ export function createSessionLaunch(observations: SessionLaunchObservations): Se
     const run = headlessSpawnChain.then(async (): Promise<LaunchOutcome> => {
       try {
         fs.mkdirSync(tmux.tmuxTmpdir(), { recursive: true, mode: 0o700 });
-        const socket = path.join(tmux.tmuxTmpdir(), HEADLESS_TMUX_SERVER);
+        const socket = tmux.headlessTmuxSocket();
         const sessionName = await generateHeadlessSessionName(socket, options.descriptor, options.name);
         return await spawnHarnessInTmux({ ...options, target: { socket, newTmuxSession: sessionName }, hidden: true });
       } catch (error) { return unclassifiedTmuxFailure(options.descriptor, error); }

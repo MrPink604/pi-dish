@@ -162,9 +162,46 @@ export function tmuxServerScopeArgv(socket: string, env: NodeJS.ProcessEnv = pro
   return [systemdRun, '--user', '--scope', '--quiet', '--collect', `--unit=${unit}`, '--', 'tmux'];
 }
 
-/** Run tmux `args`, which may start the server on `socket`; a new server gets its own scope. */
-async function runTmuxStartingServer(socket: string, args: readonly unknown[], timeout: number): Promise<string> {
-  const scope = await tmuxServerRunning(socket) ? null : tmuxServerScopeArgv(socket);
+/**
+ * pi-dish's own agent server reads no tmux.conf: plugins such as
+ * tmux-resurrect/continuum would restore the user's layout into it and can
+ * overwrite the first agent pane. Instead it sets what agent panes and the
+ * terminal viewer rely on; -q skips options an older tmux lacks.
+ */
+const HEADLESS_SERVER_OPTIONS: readonly (readonly string[])[] = [
+  // Viewer scrollback; a pane takes the limit in force when it is created.
+  ['set-option', '-gq', 'history-limit', '50000'],
+  // The wheel scrolls tmux instead of reaching the TUI as arrow keys.
+  ['set-option', '-gq', 'mouse', 'on'],
+  ['set-option', '-gq', 'status', 'on'],
+  // Esc reaches the TUI promptly; tmux before 3.5 waits 500 ms.
+  ['set-option', '-sq', 'escape-time', '10'],
+  ['set-option', '-gq', 'default-terminal', 'tmux-256color'],
+  // Truecolor and modified keys (Shift+Enter) through xterm-like viewers.
+  ['set-option', '-saq', 'terminal-features', 'xterm*:RGB:extkeys'],
+  ['set-option', '-sq', 'extended-keys', 'on'],
+  ['set-option', '-sq', 'extended-keys-format', 'csi-u'],
+  ['set-option', '-gq', 'focus-events', 'on'],
+];
+
+/**
+ * Run tmux `command` on `socket`, which may start its server. Only the cold
+ * path below creates a server: in its own scope, and for pi-dish's server
+ * without the user's tmux.conf.
+ */
+async function runTmuxStartingServer(socket: string, command: readonly unknown[], timeout: number): Promise<string> {
+  const own = path.resolve(socket) === path.resolve(headlessTmuxSocket());
+  const target = ['-S', socket, ...(own ? ['-f', '/dev/null'] : [])];
+  if (await tmuxServerRunning(socket)) {
+    // -N: a server that died since the check must not be replaced here.
+    try {
+      return await runFile('tmux', ['-N', ...target, ...command], timeout, '/');
+    } catch (error) {
+      if (await tmuxServerRunning(socket)) throw error;
+    }
+  }
+  const args = [...target, ...(own ? HEADLESS_SERVER_OPTIONS.flatMap(option => [...option, ';']) : []), ...command];
+  const scope = tmuxServerScopeArgv(socket);
   // tmux keeps its launching client's cwd for the lifetime of the server.
   // A staged update can unlink pi-dish's cwd; -c sets the pane cwd, not the server's.
   if (scope) {
@@ -196,6 +233,11 @@ export function tmuxTmpdir(): string {
   if (process.env.TMUX_TMPDIR) return process.env.TMUX_TMPDIR;
   const uid = typeof process.getuid === 'function' ? process.getuid() : '';
   return `/tmp/tmux-${uid}`;
+}
+
+/** pi-dish's own server for agents launched without a target. */
+export function headlessTmuxSocket(): string {
+  return path.join(tmuxTmpdir(), 'pi-dish');
 }
 
 /** Candidate tmux server sockets under the tmpdir; stale socket files are left for tmux to reject. */
@@ -248,11 +290,11 @@ export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, win
 
   let args: unknown[];
   if (newTmuxSessionName) {
-    args = ['-S', socket, 'new-session', '-d', '-s', newTmuxSessionName];
+    args = ['new-session', '-d', '-s', newTmuxSessionName];
     if (windowName) args.push('-n', windowName);
   } else if (tmuxSession) {
     // Do not steal the current window from an attached user.
-    args = ['-S', socket, 'new-window', '-d', '-t', tmuxSession];
+    args = ['new-window', '-d', '-t', tmuxSession];
     if (windowName) args.push('-n', windowName);
   } else {
     throw new Error('tmuxSession or newTmuxSessionName required');
@@ -263,7 +305,7 @@ export async function spawnInTmux({ socket, tmuxSession, newTmuxSessionName, win
 
   const out = newTmuxSessionName
     ? await runTmuxStartingServer(socket, args, 5000)
-    : await runTmux(args, { timeout: 5000 });
+    : await runTmux(['-S', socket, ...args], { timeout: 5000 });
   return { paneId: out.trim() };
 }
 
@@ -521,14 +563,15 @@ export async function paneAttachedClients(socket: string, paneId: string): Promi
 
 /**
  * Viewers get a throwaway grouped session (own current window, destroyed on
- * detach) so the desktop client's focus is not stolen.
+ * detach) so the desktop client's focus is not stolen. -N: a viewer arriving
+ * after the server died must not start a replacement that reads tmux.conf.
  */
 export async function attachPaneArgv(socket: string, paneId: string): Promise<string[] | null> {
   const loc = await paneLocation(socket, paneId);
   if (!loc) return null;
   const view = `dish-view-${Math.random().toString(36).slice(2, 8)}`;
   return [
-    'tmux', '-S', socket, 'new-session', '-t', `=${loc.tmuxSession}`, '-s', view, ';',
+    'tmux', '-N', '-S', socket, 'new-session', '-t', `=${loc.tmuxSession}`, '-s', view, ';',
     'set-option', 'destroy-unattached', 'on', ';',
     'select-window', '-t', paneId, ';',
     'select-pane', '-t', paneId,

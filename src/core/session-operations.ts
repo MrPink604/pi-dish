@@ -15,7 +15,7 @@ import { sourceForIdentity } from './session-source';
 import type { SessionSource } from './session-source';
 import { LifecycleInterruption, OwnershipRefusal, liveSessionSupports, recoveryRouteId, registryIdentity, routeIdentity, routeSessionId, sameProcessIdentity, sameTranscriptFile, validateRecoveryRecord } from './session-ownership';
 import type { BeforeLifecycleAction, LiveSession, SessionOwnership } from './session-ownership';
-import { HEADLESS_TMUX_SERVER, cleanupProcesses } from './session-launch';
+import { cleanupProcesses } from './session-launch';
 import type { CleanupEvidence, HarnessLaunchTarget, LaunchOutcome, ResumeUncertainty, SessionLaunch } from './session-launch';
 import * as recoveryStore from './session-recovery';
 import type { RecoveryControl, RecoveryRecord } from './session-recovery';
@@ -702,7 +702,7 @@ export function createSessionOperations(observations: SessionOperationObservatio
           args: descriptor.argv.resume({ file: sessionFile, model: resumeModel }),
           cwd,
           name: windowName,
-          hidden: path.resolve(spawn.socket) === path.resolve(path.join(tmux.tmuxTmpdir(), HEADLESS_TMUX_SERVER)),
+          hidden: path.resolve(spawn.socket) === path.resolve(tmux.headlessTmuxSocket()),
           restartPane: {
             sessionId, paneId: spawn.paneId,
             paneProcess: pane ? { pid: Number(pane.pid), startTime: String(pane.startTime) } : null,

@@ -106,7 +106,6 @@ export declare class LaunchError extends Error {
     readonly status: number;
     constructor(message: string, status: number);
 }
-export declare const HEADLESS_TMUX_SERVER = "pi-dish";
 export declare function cleanupProcesses(error: unknown): ProcessIdentity[] | null;
 export declare function createSessionLaunch(observations: SessionLaunchObservations): SessionLaunch;
 export {};

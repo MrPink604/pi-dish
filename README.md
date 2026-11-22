@@ -825,6 +825,15 @@ Both launch paths start new tmux servers from `/`, not the deployment directory;
 already ends in ` (deleted)`, a pi-dish restart won't repair that server. Drain
 its sessions before retiring that socket's server and letting pi-dish recreate it.
 When scanning for old server processes, it silently skips processes that have already exited.
+pi-dish's own `pi-dish` agent server starts with `-f /dev/null`, so it never
+reads your `~/.tmux.conf`: plugins such as tmux-resurrect/continuum would
+restore your saved layout into it and could take over the first agent pane.
+It sets what it relies on itself: `history-limit 50000`, `mouse on`,
+`status on`, `escape-time 10`, `default-terminal tmux-256color`, RGB and
+extended keys for `xterm*` clients, and `focus-events on`. Only a newly
+started server picks this up; servers on your own sockets keep your config.
+Opening the terminal view never starts a server; a launch starts one only
+through this path. Both rely on `tmux -N`, available since tmux 3.2.
 `scripts/pi-dish-tmux.sh status` probes `http://127.0.0.1:$PORT/api/host`
 (`PORT` defaults to `3333`), regardless of the tmux session or window name.
 It exits `0` if the probe succeeds and `1` otherwise; it does not need Tailscale

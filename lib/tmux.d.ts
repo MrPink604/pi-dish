@@ -84,6 +84,8 @@ export interface PaneCleanupError extends Error {
 export declare function tmuxServerScopeArgv(socket: string, env?: NodeJS.ProcessEnv): string[] | null;
 export declare function isTmuxAvailable(): boolean;
 export declare function tmuxTmpdir(): string;
+/** pi-dish's own server for agents launched without a target. */
+export declare function headlessTmuxSocket(): string;
 export declare function listServers(): Promise<TmuxServer[]>;
 export declare function isSocketAllowed(socket: unknown): socket is string;
 /** Open a detached window or session with child argv and tmux -e KEY=VALUE flags. */
@@ -125,7 +127,8 @@ export declare function paneExists(socket: string, paneId: string): Promise<bool
 export declare function paneAttachedClients(socket: string, paneId: string): Promise<number | null>;
 /**
  * Viewers get a throwaway grouped session (own current window, destroyed on
- * detach) so the desktop client's focus is not stolen.
+ * detach) so the desktop client's focus is not stolen. -N: a viewer arriving
+ * after the server died must not start a replacement that reads tmux.conf.
  */
 export declare function attachPaneArgv(socket: string, paneId: string): Promise<string[] | null>;
 export declare function getPrefixKey(socket: string): Promise<string | null>;

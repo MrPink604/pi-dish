@@ -1023,6 +1023,16 @@ cgroup would stop every agent pane with `pi-dish.service`. `scripts/pi-dish-tmux
 bootstraps the default server the same way. No user manager socket
 (`$XDG_RUNTIME_DIR/systemd/private`), no `systemd-run`, a refused scope, or
 `PI_DISH_TMUX_SCOPE=0` start tmux directly; the test environment sets the opt-out.
+The `pi-dish` socket's server (`tmux.headlessTmuxSocket()`) starts with
+`-f /dev/null` plus the `HEADLESS_SERVER_OPTIONS` chained before `new-session`
+(history-limit, mouse, status, escape-time, default-terminal, RGB/extended
+keys, focus-events; `-q` tolerates older tmux): a user tmux.conf with
+tmux-resurrect/continuum restored the user's layout into it and replaced the
+first agent pane. Servers on other sockets still read the user's config.
+Only that cold `runTmuxStartingServer` path creates servers: commands for a
+running server and the terminal viewer's grouped `new-session` use `tmux -N`
+(tmux ≥ 3.2), so a server that died meanwhile is never replaced by one that
+skipped the scope and options or read the user's config.
 `isSocketAllowed()` rejects any socket not directly under the tmux tmpdir (the
 same directory `listServers()` enumerates) — the server can be on 0.0.0.0, so
 an arbitrary `-S` path from the LAN must not get through. Placements persist in

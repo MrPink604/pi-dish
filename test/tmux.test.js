@@ -38,6 +38,9 @@ const tmuxTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-tmux-'));
 process.env.HOME = tmpHome;
 process.env.TMUX_TMPDIR = tmuxTmp;
 process.env.PORT = '0';
+// Stands in for a user tmux.conf (tmux-resurrect restored a whole layout into
+// pi-dish's server); servers on the user's sockets still read it.
+fs.writeFileSync(path.join(tmpHome, '.tmux.conf'), 'set -g @user-conf loaded\n');
 const TMUX_SOCKET = path.join(tmuxTmp, 's');
 // listServers probes every socket in TMUX_TMPDIR with tmux's binary protocol.
 // Keep the JSON supervisor outside that discovery root, like a separate service.
@@ -421,6 +424,7 @@ test('a tmux server can launch another harness after its starting release is rem
     const spawn = (0, test_types_js_1.present)(tmux.getSpawn(text(body.id)));
     assert.equal((await tmux.paneLocation(socket, spawn.paneId))?.tmuxSession, 'after-rollout');
     assert.equal((0, node_child_process_1.execFileSync)('tmux', ['-S', socket, 'display-message', '-p', '-t', spawn.paneId, '#{pane_current_path}'], { encoding: 'utf8' }).trim(), tmpHome);
+    assert.equal((0, node_child_process_1.execFileSync)('tmux', ['-S', socket, 'show-options', '-gqv', '@user-conf'], { encoding: 'utf8' }).trim(), 'loaded', 'a server on a user socket keeps the user tmux.conf');
 });
 test('OMP close kills and verifies only its exact pi-dish-owned pane process tree', { skip: !tmuxOk }, async () => {
     const created = await post('/api/sessions/new', {
@@ -1543,6 +1547,21 @@ test('a second headless spawn creates a separate independent session on the pi-d
     const loc = (0, test_types_js_1.present)(await tmux.paneLocation(socket, spawn.paneId));
     assert.ok(sessions.includes(loc.tmuxSession));
 });
+test('the hidden pi-dish server ignores the user tmux.conf and sets the options pi-dish relies on', { skip: !tmuxOk }, async () => {
+    const { status, body } = await post('/api/sessions/new', {});
+    assert.equal(status, 200, JSON.stringify(body));
+    const spawn = (0, test_types_js_1.present)(tmux.getSpawn(text(body.id)));
+    const socket = spawn.socket;
+    const tmuxOut = (...args) => (0, node_child_process_1.execFileSync)('tmux', ['-S', socket, ...args], { encoding: 'utf8' }).trim();
+    const argv = fs.readFileSync(`/proc/${tmuxOut('display-message', '-p', '#{pid}')}/cmdline`, 'utf8').split('\0');
+    assert.equal(argv[argv.indexOf('-f') + 1], '/dev/null', `server argv: ${argv.join(' ')}`);
+    assert.equal(tmuxOut('show-options', '-gqv', '@user-conf'), '', 'the user tmux.conf was not loaded');
+    assert.equal(tmuxOut('show-options', '-gv', 'history-limit'), '50000');
+    assert.equal(tmuxOut('show-options', '-gv', 'mouse'), 'on');
+    assert.equal(tmuxOut('show-options', '-sv', 'escape-time'), '10');
+    assert.equal(tmuxOut('show-options', '-sv', 'extended-keys'), 'on');
+    assert.equal(tmuxOut('display-message', '-p', '-t', spawn.paneId, '#{history_limit}'), '50000', 'agent panes get the scrollback limit');
+});
 test('hidden tmux timeout removes the pane before starting RPC fallback', { skip: !tmuxOk }, async () => {
     const id = '2026-07-09T09-00-00-hiddenfallback';
     const dir = path.join(tmpHome, '.pi', 'agent', 'sessions', 'hiddenfallback');
@@ -1768,6 +1787,26 @@ test('attachPaneArgv builds a grouped viewer; getPrefixKey reads the server pref
     assert.ok(argv.filter(a => a === paneId).length >= 2, 'selects the pi window and pane');
     assert.equal(await tmux.getPrefixKey(TMUX_SOCKET), 'C-b', 'config-less server default prefix');
     assert.equal(await tmux.attachPaneArgv(TMUX_SOCKET, '%9999'), null, 'gone pane yields null');
+});
+test('a viewer arriving after its server died never starts a replacement that reads tmux.conf', { skip: !tmuxOk }, async (t) => {
+    const socket = path.join(tmuxTmp, 'viewer');
+    const conf = path.join(tmpHome, '.tmux.conf');
+    const userConf = fs.readFileSync(conf, 'utf8');
+    t.after(() => {
+        fs.writeFileSync(conf, userConf);
+        try {
+            (0, node_child_process_1.execFileSync)('tmux', ['-S', socket, 'kill-server'], { stdio: 'ignore' });
+        }
+        catch { }
+    });
+    (0, node_child_process_1.execFileSync)('tmux', ['-S', socket, '-f', '/dev/null', 'new-session', '-d', '-s', 'work', 'sleep', '60']);
+    const paneId = (0, node_child_process_1.execFileSync)('tmux', ['-S', socket, 'list-panes', '-t', 'work', '-F', '#{pane_id}'], { encoding: 'utf8' }).trim();
+    const argv = (0, test_types_js_1.present)(await tmux.attachPaneArgv(socket, paneId));
+    (0, node_child_process_1.execFileSync)('tmux', ['-S', socket, 'kill-server']);
+    // Like tmux-resurrect, this config keeps any server that reads it alive with a layout.
+    fs.writeFileSync(conf, 'new-session -d -s user-layout\n');
+    assert.throws(() => (0, node_child_process_1.execFileSync)(argv[0], argv.slice(1), { stdio: 'ignore' }));
+    assert.throws(() => (0, node_child_process_1.execFileSync)('tmux', ['-S', socket, 'list-sessions'], { stdio: 'ignore' }), 'no server was started on the socket');
 });
 test('tmux-spawns.json persistence and prune', async () => {
     // Persist two mappings; one is "registered", one has a dead pane.
